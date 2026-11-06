@@ -91,12 +91,12 @@ async def production_mcp_session_factory(
     async def transport():
         if server.transport == "stdio":
             connection = cast(StdioConnection, server.connection)
+            command, args = connection["command"], connection["args"]
             if server.managed_launch is not None:
                 if installation_owner is None:
                     raise ValueError("受管 MCP launch 缺少原生 Backend 安装 owner")
-                command = await asyncio.to_thread(installation_owner.resolve, server.managed_launch, verify=True)
-                if connection["command"] != command:
-                    raise ValueError("受管 MCP 连接配置与已发布 generation 的实际启动命令不一致")
+                command, args = await asyncio.to_thread(installation_owner.resolve, server.managed_launch,
+                    command=command, args=args)
             env = dict(connection.get("env") or {})
             if server.private_env:
                 if workspace_root is None:
@@ -111,7 +111,7 @@ async def production_mcp_session_factory(
                     env[reference.input_key] = await asyncio.to_thread(store.resolve_env, reference,
                         server_id=server.server_id, input_key=reference.input_key, definition_digest=definition)
             async with mcp_stdio_transport(StdioServerParameters(
-                command=connection["command"], args=connection["args"],
+                command=command, args=args,
                 env=env, cwd=connection.get("cwd"),
             ), lifecycle.process, lifecycle.on_process_started) as streams:
                 yield streams

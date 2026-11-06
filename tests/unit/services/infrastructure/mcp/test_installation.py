@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import sqlite3
 import threading
+import venv
+import zipfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -43,6 +46,7 @@ from app.services.infrastructure.mcp.installation.owner import McpInstallationOw
 from app.services.infrastructure.mcp.installation.python import (
     InstallationUnavailable,
     StageCallback,
+    _run,
     artifact_digest,
     python_package,
 )
@@ -115,12 +119,50 @@ async def test_original_sdk_launch_rejects_artifact_changed_after_config_parse(p
     raw = {"transport": "stdio", "managed_launch": artifact.binding.model_dump()}
     server, = parse_mcp_server_configs({"servers": {"managed": raw}}, workspace_root=dependency.parent,
         installation_resolver=owner.artifact)
-    assert owner.resolve(artifact.binding, verify=True) == artifact.command
+    assert owner.resolve(artifact.binding, command=artifact.command) == (
+        str(Path(artifact.command).with_name("python.exe" if os.name == "nt" else "python")), ["-B", artifact.command])
     dependency.write_text("VALUE = 'tampered'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="制品内容已改变"):
         async with production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, installation_owner=owner):
             pytest.fail("被篡改的 generation 不得进入原 SDK session")
     assert owner.artifacts() == [artifact]
+    await owner.close()
+
+
+@pytest.mark.parametrize("archive", [False, True])
+async def test_managed_python_executes_original_script_or_launcher_archive(
+    tmp_path: Path, operation: McpInstallationOperationDTO, installation_store: InstallationStore,
+    prepared_artifact: tuple[McpInstalledArtifactDTO, Path], archive: bool,
+) -> None:
+    artifact, dependency = prepared_artifact
+    entry = Path(artifact.command)
+    venv.EnvBuilder(with_pip=False).create(entry.parent.parent)
+    script = "import json,os,sys; print(json.dumps({'argv':sys.argv,'cwd':os.getcwd(),'prefix':sys.prefix,'executable':sys.executable}))"
+    if archive:
+        # 生态 Windows launcher 的 PE 前缀不参与执行，原 ZIP 内的脚本仍由同一 Python 读取。
+        entry.write_bytes(b"MZ-original-launcher")
+        with zipfile.ZipFile(entry, "a") as package:
+            package.writestr("__main__.py", script)
+    else:
+        entry.write_text(script, encoding="utf-8")
+    artifact = artifact.model_copy(update={"binding": artifact.binding.model_copy(update={
+        "artifact_digest": artifact_digest(dependency.parent)})})
+    installation_store.publish(operation, artifact)
+    owner = McpInstallationOwner(home=tmp_path / "home", backend_id=artifact.binding.backend_id)
+    with pytest.raises(ValueError, match="实际启动入口不一致"):
+        owner.resolve(artifact.binding, command=artifact.command + ".other")
+    arguments = ["--label", "保留 空格", 'quote="value"']
+    command, args = owner.resolve(artifact.binding, command=artifact.command, args=arguments)
+    directory = tmp_path / "调用目录"
+    directory.mkdir()
+
+    async def progress(stage: str, output: str) -> None:
+        pass
+
+    actual = json.loads(await _run([command, *args], directory=directory, progress=progress, stage="verify"))
+    assert actual["argv"] == [artifact.command, *arguments] and Path(actual["cwd"]) == directory
+    assert Path(actual["prefix"]) == entry.parent.parent and Path(actual["executable"]).samefile(command)
+    assert artifact_digest(dependency.parent) == artifact.binding.artifact_digest
     await owner.close()
 
 
@@ -556,7 +598,9 @@ async def test_cold_owner_reuses_original_worker_progress_and_binding(tmp_path: 
         assert first.artifacts() == second.artifacts() == [completed.artifact]
         assert roots == [home / "artifacts/mcp" / first.backend_id / "generations" /
             completed.artifact.binding.installation_id / completed.artifact.binding.generation]
-        assert second.resolve(reused.artifact.binding, verify=True) == completed.artifact.command
+        assert second.resolve(reused.artifact.binding, command=completed.artifact.command) == (
+            str(Path(completed.artifact.command).with_name("python.exe" if os.name == "nt" else "python")),
+            ["-B", completed.artifact.command])
         assert await second.install(second_request, plan=second_plan, parameters=second_plan.parameters) == reused
         assert len(roots) == 1
     finally:

@@ -277,7 +277,7 @@ async def test_partial_removal_failure_is_durable_and_new_intent_can_finish_clea
     cold = McpInstallationOwner(home=case.home, backend_id=case.owner.backend_id)
     try:
         with pytest.raises(McpCandidateConflict, match='removal_failed'):
-            cold.resolve(artifact.binding, verify=True)
+            cold.resolve(artifact.binding, command=artifact.command)
         assert await cold.uninstall(case.request(artifact), actual_target=case.target) == operation
         assert Path(artifact.command).is_file()
         await cold.uninstall(case.request(artifact, 'explicit-cleanup'), actual_target=case.target)

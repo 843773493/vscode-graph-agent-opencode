@@ -117,7 +117,7 @@ class McpInstallationOwner:
             artifact = reservation.artifact
             if artifact is not None:
                 await progress("verify", "核验已有精确制品，复用原 generation；不重新下载或解析依赖\n")
-                await run_sync_shielded(self.resolve, artifact.binding, verify=True)
+                await run_sync_shielded(self.resolve, artifact.binding, command=artifact.command)
                 await progress("publish")
             else:
                 preparation = reservation.preparation
@@ -187,12 +187,18 @@ class McpInstallationOwner:
             raise ValueError("受管 MCP 制品发布路径丢失或与唯一安装记录不一致")
         return artifact
 
-    def resolve(self, binding: McpManagedLaunchDTO, *, verify: bool = False) -> str:
+    def resolve(self, binding: McpManagedLaunchDTO, *, command: str,
+        args: Sequence[str] = ()) -> tuple[str, list[str]]:
         artifact = self.artifact(binding)
+        if command != artifact.command:
+            raise ValueError("受管 MCP 连接配置与已发布 generation 的实际启动入口不一致")
         root = self._root / "generations" / binding.installation_id / binding.generation
-        if verify and artifact_digest(root) != binding.artifact_digest:
+        if artifact_digest(root) != binding.artifact_digest:
             raise ValueError("受管 MCP 制品内容已改变；拒绝启动，必须重新验证并发布新 generation")
-        return artifact.command
+        # Python 直接执行生态生成的脚本／Windows ZIP 入口，保留其 argv 与 entry point 语义。
+        # 避免 Windows console trampoline 内部再次启动长路径 Python 时触发 MAX_PATH。
+        python = Path(command).with_name("python.exe" if os.name == "nt" else "python")
+        return str(python), ["-B", command, *args]
 
     def register_workspace(self, root: Path, leases: ExternalResourceLeaseLedger) -> None:
         root = root.resolve(strict=True)
