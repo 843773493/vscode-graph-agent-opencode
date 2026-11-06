@@ -372,6 +372,17 @@ class RolloutViewAnchorMixin:
         current = self._checkpoint_row(connection, checkpoint_ns, checkpoint_id)
         if current is None:
             raise RuntimeError(f"Turn prefix 缺少持久 checkpoint header: {checkpoint_id}")
+        user_items = tuple(
+            strict_text(row[0], field="item_catalog.item_id")
+            for row in connection.execute(
+                "SELECT item.item_id FROM messages AS message JOIN item_catalog AS item "
+                "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
+                "WHERE message.message_sequence=?", (user_sequence,),
+            ).fetchall()
+        )
+        if not user_items:
+            raise RuntimeError(f"Turn prefix 用户消息缺少已提交 canonical item: sequence={user_sequence}")
+        placeholders = ",".join("?" for _ in user_items)
         visited: set[str] = set()
         while True:
             checkpoint_id = strict_text(current[0], field="checkpoints.checkpoint_id")
@@ -390,7 +401,13 @@ class RolloutViewAnchorMixin:
                 branch_id=strict_text(current[7], field="checkpoints.branch_id"),
                 messages_view_id=strict_text(channel[0], field="checkpoint_channels.context_view_id"),
             )
-            if user_sequence not in self._storage._view_message_sequences_from_connection(connection, messages_view_id):
+            # 这里只消费目标用户消息的成员关系，不逐层展开全部消息和工具配对。
+            # 其他历史数据的损坏留给实际消费或完整审计。
+            member = connection.execute(
+                f"SELECT 1 FROM context_view_items WHERE view_id=? AND item_id IN ({placeholders}) AND visible=1 LIMIT 1",
+                (messages_view_id, *user_items),
+            ).fetchone()
+            if member is None:
                 return checkpoint_id
             parent_id = strict_optional_text(current[5], field="checkpoints.parent_checkpoint_id")
             parent = self._checkpoint_row(connection, checkpoint_ns, parent_id) if parent_id is not None else None
