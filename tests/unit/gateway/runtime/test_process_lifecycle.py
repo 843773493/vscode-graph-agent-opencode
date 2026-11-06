@@ -269,3 +269,63 @@ def test_adopted_process_windows_surfaces_process_query_errors(
         AdoptedManagedProcess(pid=4321)._is_alive()
 
     assert isinstance(raised.value.__cause__, psutil.AccessDenied)
+
+
+def test_windows_service_identity_is_frozen_and_drives_liveness(
+    monkeypatch, managed_process_stub_factory, windows_process_tree_stub,
+) -> None:
+    tree = windows_process_tree_stub
+    tree.add_process(4321, parent_pid=None, starttime=1.0)
+    worker = tree.add_process(5001, parent_pid=4321, starttime=2.0)
+    monkeypatch.setattr(os, "name", "nt")
+    process = managed_process_stub_factory(timeout_once=False)
+    managed = ManagedProcess(process, _LogFile())
+    managed.confirm_service_identity(5001)
+    assert managed.pid == 5001 and managed.process.pid == 4321
+    assert managed.is_alive()
+    with pytest.raises(RuntimeError, match="已确认.*身份已变化"):
+        managed.confirm_service_identity(4321)
+    worker.starttime = 3.0
+    assert not managed.is_alive()
+    assert managed.pid == 5001
+    with pytest.raises(RuntimeError, match="已确认.*身份已变化"):
+        managed.confirm_service_identity(5001)
+
+
+@pytest.mark.parametrize("fault", ["foreign", "root-recycled", "root-exited", "worker-recycled", "access-denied"])
+def test_windows_service_identity_rejects_unowned_or_changed_processes(
+    monkeypatch, managed_process_stub_factory, windows_process_tree_stub, fault,
+) -> None:
+    tree = windows_process_tree_stub
+    root = tree.add_process(4321, parent_pid=None, starttime=1.0)
+    tree.add_process(5001, parent_pid=None if fault == "foreign" else 4321, starttime=2.0)
+    monkeypatch.setattr(os, "name", "nt")
+    managed = ManagedProcess(managed_process_stub_factory(timeout_once=False), _LogFile())
+    if fault == "root-recycled":
+        root.starttime = 9.0
+    elif fault == "root-exited":
+        root.alive = False
+    elif fault in {"worker-recycled", "access-denied"}:
+        def get_process(pid):
+            if pid == 5001:
+                if fault == "access-denied":
+                    raise psutil.AccessDenied(pid)
+                return SimpleNamespace(create_time=lambda: 3.0)
+            return tree.get_process(pid)
+        monkeypatch.setattr(psutil, "Process", get_process)
+    with pytest.raises(RuntimeError, match="不属于|已被替换|根已退出|已变化|创建时间失败") as caught:
+        managed.confirm_service_identity(5001)
+    assert managed.pid == 4321
+    if fault == "access-denied":
+        assert isinstance(caught.value.__cause__, psutil.AccessDenied)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX 服务须仍与原进程组根同 PID")
+def test_posix_service_identity_keeps_single_process_contract(managed_process_stub_factory) -> None:
+    managed = ManagedProcess(managed_process_stub_factory(timeout_once=False), _LogFile())
+    with pytest.raises(RuntimeError, match="与受管进程根不匹配"):
+        managed.confirm_service_identity(5001)
+    assert managed.pid == 4321
+    managed.confirm_service_identity(4321)
+    managed.confirm_service_identity(4321)
+    assert managed.pid == 4321 and managed.is_alive()

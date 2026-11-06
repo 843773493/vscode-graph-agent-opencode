@@ -94,6 +94,36 @@ class ProcessLogOwnership:
             self.write({**payload, "phase": "process", "pid": pid,
                         "created_at": process.create_time(), "group_start_marker": marker})
 
+    def confirm_service_process(
+        self, pid: int, created_at: float, *, root_pid: int, root_created_at: float,
+    ) -> None:
+        """原进程 owner 核实树归属后，原子冻结真实写入者与启动根。"""
+        with self.guard():
+            payload = self._owned()
+            if (payload.get("phase") != "process" or payload.get("pid") != root_pid
+                or payload.get("created_at") != root_created_at or "process_tree_root" in payload):
+                raise RuntimeError("日志启动根身份已变化，拒绝确认服务写入者")
+            self.write({**payload, "pid": pid, "created_at": created_at,
+                        "process_tree_root": {"pid": root_pid, "created_at": root_created_at}})
+
+    def process_tree_identity(self, pid: int) -> tuple[int, float, float]:
+        """返回已登记的树根 PID、根创建时间和服务写入者创建时间。"""
+        with self.guard():
+            payload = self._owned()
+            if payload.get("phase") != "process" or payload.get("pid") != pid:
+                raise RuntimeError("受管进程日志写入者不匹配")
+            writer_created_at = payload.get("created_at")
+            # 无扩展字段的原记录只表示根与 writer 为同一进程，不推导未知后代。
+            root = payload.get("process_tree_root", payload)
+            if not isinstance(root, dict):
+                raise TypeError("日志进程树根身份记录非法")
+            root_pid, root_created_at = root.get("pid"), root.get("created_at")
+            if (type(root_pid) is not int or root_pid <= 0
+                or (type(root_created_at) is not int and type(root_created_at) is not float)
+                or (type(writer_created_at) is not int and type(writer_created_at) is not float)):
+                raise RuntimeError("日志进程树身份记录不完整")
+            return root_pid, float(root_created_at), float(writer_created_at)
+
     def release(self) -> None:
         """只有原控制器或已核实整个进程组关闭的 owner 才可释放。"""
         with self.guard():

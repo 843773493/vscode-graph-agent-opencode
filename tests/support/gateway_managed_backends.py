@@ -27,9 +27,14 @@ class ProcessProbe:
     failure: Exception | None = None
     process: object = field(default_factory=object)
     pid: int = 100_000
+    confirmed_service_pids: list[int] = field(default_factory=list)
 
     def is_alive(self) -> bool:
         return self.alive
+
+    def confirm_service_identity(self, pid: int) -> None:
+        self.confirmed_service_pids.append(pid)
+        self.pid = pid
 
     def request_terminate(self) -> None:
         self.events.append(f"terminate:{self.name}")

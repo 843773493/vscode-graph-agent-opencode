@@ -6,6 +6,8 @@ import asyncio
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
@@ -53,6 +55,7 @@ from app.gateway.runtime.local_workspace import (
     workspace_config_proof_expectation,
 )
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from tests.support.gateway_managed_backends import ManagedBackendGraph, ProcessProbe
@@ -903,9 +906,10 @@ async def test_backend_restart_failure_keeps_old_generation(single_workspace_gra
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("service,port", [("terminal_manager", 42001), ("browser_manager", 42002)])
-async def test_gateway_adopts_matching_node_manager(local_http, service, port, tmp_path, monkeypatch) -> None:
+async def test_gateway_adopts_matching_node_manager(local_http, service, port, tmp_path, monkeypatch, windows_process_tree_stub) -> None:
     requests = []
-    ownership = object()
+    windows_process_tree_stub.add_process(43210, parent_pid=None, starttime=1.0)
+    ownership = SimpleNamespace(process_tree_identity=lambda pid: (pid, 1.0, 1.0))
     role = service.removesuffix("_manager")
     logging_state = {
         "service": role, "pid": 43210, "runtime_instance_id": "node-instance",
@@ -947,13 +951,14 @@ async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_ht
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", [None, "backend_id", "missing-backend-id", "generation", "manifest", "pid"])
-async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_controller_case, local_http, mismatch, tmp_path, monkeypatch) -> None:
+async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_controller_case, local_http, mismatch, tmp_path, monkeypatch, windows_process_tree_stub) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     contract = graph.owner.contract
     requests = []
     adopted_logs = []
-    ownership = object()
+    windows_process_tree_stub.add_process(43212, parent_pid=None, starttime=1.0)
+    ownership = SimpleNamespace(process_tree_identity=lambda pid: (pid, 1.0, 1.0))
     logging_state = {
         "service": "backend", "pid": 43212, "runtime_instance_id": "backend-instance",
         "applied_revision": None, "level": "info", "pretty": True, "log_sink": None,
@@ -1055,6 +1060,46 @@ async def test_full_health_proof_requires_all_mounts_same_process(
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     assert await verify_managed_backend_group(graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract)) == 7000
+
+
+@pytest.mark.asyncio
+async def test_started_backend_confirms_service_only_after_all_mounts(
+    workspace_runtime_controller_case, process_boundary, monkeypatch,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    process = ProcessProbe("new")
+    observed = []
+    health = process_boundary.health
+    async def observe(url, workspace_id, *args, **kwargs):
+        assert process.confirmed_service_pids == []
+        observed.append(workspace_id)
+        return await health(url, workspace_id, *args, **kwargs)
+    monkeypatch.setattr(local_workspace, "wait_for_workspace_health", observe)
+    assert await verify_managed_backend_group(
+        graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract), process=cast(ManagedProcess, process),
+    ) == 7000
+    assert observed == [UUID_A, UUID_B]
+    assert process.confirmed_service_pids == [7000]
+
+
+@pytest.mark.asyncio
+async def test_inconsistent_mount_pid_does_not_confirm_service(
+    workspace_runtime_controller_case, process_boundary, monkeypatch,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    process = ProcessProbe("new")
+    health = process_boundary.health
+    async def inconsistent(url, workspace_id, *args, **kwargs):
+        payload = await health(url, workspace_id, *args, **kwargs)
+        return {**payload, "process_id": 7001} if workspace_id == UUID_B else payload
+    monkeypatch.setattr(local_workspace, "wait_for_workspace_health", inconsistent)
+    with pytest.raises(RuntimeError, match="完整组响应来自不同进程"):
+        await verify_managed_backend_group(
+            graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract), process=cast(ManagedProcess, process),
+        )
+    assert process.confirmed_service_pids == []
 
 
 @pytest.mark.asyncio

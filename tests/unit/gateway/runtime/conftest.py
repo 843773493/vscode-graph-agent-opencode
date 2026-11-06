@@ -1,5 +1,6 @@
 """Gateway runtime 测试共用的轻量进程替身。"""
 
+import os
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -51,6 +52,11 @@ class WindowsProcessStub:
             raise psutil.NoSuchProcess(self.pid)
         return self.starttime
 
+    def status(self) -> str:
+        if not self.alive:
+            raise psutil.NoSuchProcess(self.pid)
+        return psutil.STATUS_RUNNING
+
     def terminate(self) -> None:
         self.terminate_calls += 1
         if self.exit_on_terminate:
@@ -63,7 +69,9 @@ class WindowsProcessStub:
 
 class WindowsProcessTreeStub:
     def __init__(self) -> None:
-        self.processes: dict[int, WindowsProcessStub] = {}
+        self.processes: dict[int, WindowsProcessStub] = {
+            os.getpid(): WindowsProcessStub(os.getpid(), None, psutil.Process().create_time()),
+        }
 
     def add_process(
         self,
@@ -85,7 +93,8 @@ class WindowsProcessTreeStub:
     def process_iter(self, *, attrs: list[str]) -> list[WindowsProcessStub]:
         return [process for process in self.processes.values() if process.alive]
 
-    def get_process(self, pid: int) -> WindowsProcessStub:
+    def get_process(self, pid: int | None = None) -> WindowsProcessStub:
+        pid = os.getpid() if pid is None else pid
         process = self.processes.get(pid)
         if process is None or not process.alive:
             raise psutil.NoSuchProcess(pid)

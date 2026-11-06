@@ -8,15 +8,17 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.backend_identity import load_or_create_backend_id
 from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
 )
+from app.core.path_utils import get_boxteam_home
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.local_workspace import (
     start_managed_backend_runtime,
-    wait_for_workspace_health,
+    verify_managed_backend_group,
 )
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -49,6 +51,7 @@ async def adopted_backend(
 ) -> AsyncIterator[_Backend]:
     workspace_root = Path(integration_workspace_root_path)
     workspace_id = load_or_create_workspace_id(workspace_root)
+    load_or_create_backend_id(get_boxteam_home())
     generation = "backend_generation_adoption"
     digest = mounted_workspace_manifest_digest((MountedWorkspace(workspace_id, workspace_root),))
     lease = E2EProcessLease(tmp_path / "backend-port.json", (integration_backend_port,))
@@ -60,8 +63,13 @@ async def adopted_backend(
             backend_generation=generation, port=integration_backend_port, log_dir=tmp_path / "logs",
         )
         try:
-            await wait_for_workspace_health(
-                f"http://127.0.0.1:{integration_backend_port}/api/v1/health", workspace_id, process.process,
+            await verify_managed_backend_group(
+                ManagedBackendContract(
+                    gateway_id=GATEWAY_ID, owner_id="backend_owner_adoption", generation=generation,
+                    members=(ManagedBackendMember(workspace_id),),
+                    backend_url=f"http://127.0.0.1:{integration_backend_port}",
+                ),
+                mounts=(MountedWorkspace(workspace_id, workspace_root),), process=process,
             )
             yield _Backend(process, workspace_root, workspace_id, integration_backend_port, generation, digest)
         finally:

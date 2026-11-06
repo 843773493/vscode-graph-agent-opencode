@@ -22,7 +22,7 @@ from app.gateway.runtime.process_lifecycle import (
     ManagedProcess,
     _spawn_logged_process,
 )
-from app.gateway.runtime.process_logs import ProcessLogStore
+from app.gateway.runtime.process_logs import ProcessLogOwnership, ProcessLogStore
 
 
 @pytest.fixture
@@ -291,6 +291,129 @@ def logged_process(tmp_path: Path):
     yield start
     for handle in handles:
         handle.close()
+
+
+@pytest.fixture
+def windows_service_log(tmp_path, monkeypatch, managed_process_stub_factory, windows_process_tree_stub):
+    tree = windows_process_tree_stub
+    root = tree.add_process(4321, parent_pid=None, starttime=1.0)
+    worker = tree.add_process(5001, parent_pid=4321, starttime=2.0)
+    store = ProcessLogStore(tmp_path / "logs")
+    stream = store.open("backend", 12345)
+    process = managed_process_stub_factory(timeout_once=False)
+    if os.name != "nt":
+        # 只模拟进程平台；日志仍使用宿主文件权限，不加载 Windows ACL。
+        monkeypatch.setattr(file_permissions, "_is_windows", lambda: False)
+        monkeypatch.setattr(file_permissions, "native_io_path", lambda path: path)
+    monkeypatch.setattr(os, "name", "nt")
+    stream.begin_spawn()
+    stream.ownership.bind_process(root.pid)
+    managed = ManagedProcess(process, stream)
+    stopped = []
+    def stop(pid, *, force):
+        stopped.append((pid, force))
+        assert pid == root.pid
+        root.alive = worker.alive = False
+        process.returncode = 0
+    monkeypatch.setattr("app.gateway.runtime.process_lifecycle._taskkill_process_tree", stop)
+    try:
+        yield store, managed, tree, stopped
+    finally:
+        stream.close()
+        stream.release_ownership()
+
+
+def test_windows_writer_and_root_survive_detach_adopt_and_complete_close(windows_service_log) -> None:
+    store, managed, tree, stopped = windows_service_log
+    stream = managed.log_file
+    sink = dict(stream.sink)
+    inode = stream.ownership.path.stat().st_ino
+    managed.confirm_service_identity(5001)
+    record = stream.ownership.read()
+    assert record["pid"] == 5001 and record["created_at"] == 2.0
+    assert record["process_tree_root"] == {"pid": 4321, "created_at": 1.0}
+    assert stream.sink == sink and stream.ownership.path.stat().st_ino == inode
+    managed.detach()
+    with pytest.raises(RuntimeError, match="写入者不匹配"):
+        store.adopt("backend", 12345, {"pid": 4321, "log_sink": sink})
+    ownership = store.adopt("backend", 12345, {"pid": 5001, "log_sink": sink})
+    adopted = AdoptedManagedProcess(5001, log_ownership=ownership)
+    assert adopted.pid == 5001 and adopted.is_alive()
+    adopted.close(timeout_seconds=0.01)
+    assert stopped == [(4321, False)]
+    assert not tree.processes[4321].alive
+    assert not tree.processes[5001].alive
+    assert not ownership.record_path.exists()
+    managed.close()
+
+
+def test_windows_single_pid_record_keeps_root_equal_to_writer(windows_service_log) -> None:
+    store, managed, _tree, stopped = windows_service_log
+    managed.confirm_service_identity(4321)
+    stream = managed.log_file
+    assert "process_tree_root" not in stream.ownership.read()
+    ownership = store.adopt("backend", 12345, {"pid": 4321, "log_sink": dict(stream.sink)})
+    adopted = AdoptedManagedProcess(4321, log_ownership=ownership)
+    adopted.close(timeout_seconds=0.01)
+    assert stopped == [(4321, False)]
+
+
+@pytest.mark.parametrize(("fault", "error_type"), [
+    ("foreign-root", RuntimeError), ("root-recycled", RuntimeError),
+    ("writer-recycled", RuntimeError), ("missing-root-pid", RuntimeError),
+    ("boolean-root-time", RuntimeError), ("boolean-writer-time", RuntimeError),
+    ("invalid-root", TypeError),
+])
+def test_windows_adoption_rejects_changed_or_incomplete_tree_identity(windows_service_log, fault, error_type) -> None:
+    store, managed, tree, stopped = windows_service_log
+    managed.confirm_service_identity(5001)
+    stream = managed.log_file
+    record = stream.ownership.read()
+    if fault == "foreign-root":
+        tree.add_process(6001, parent_pid=None, starttime=1.0)
+        record["process_tree_root"]["pid"] = 6001
+    elif fault == "root-recycled":
+        record["process_tree_root"]["created_at"] = 9.0
+    elif fault == "writer-recycled":
+        record["created_at"] = 9.0
+    elif fault == "missing-root-pid":
+        record["process_tree_root"].pop("pid")
+    elif fault == "boolean-root-time":
+        record["process_tree_root"]["created_at"] = True
+    elif fault == "boolean-writer-time":
+        record["created_at"] = True
+    else:
+        record["process_tree_root"] = None
+    stream.ownership.record_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(error_type, match="不属于|已被替换|已变化|不完整|非法"):
+        ownership = store.adopt("backend", 12345, {"pid": 5001, "log_sink": dict(stream.sink)})
+        AdoptedManagedProcess(5001, log_ownership=ownership)
+    assert stopped == [] and tree.processes[5001].alive
+
+
+def test_writer_publication_failure_retains_original_record_and_owned_descendants(
+    windows_service_log, monkeypatch,
+) -> None:
+    _store, managed, tree, stopped = windows_service_log
+    stream = managed.log_file
+    before = stream.ownership.record_path.read_bytes()
+    original = ProcessLogOwnership.write
+    failure = OSError(5, "writer publication failed")
+    def fail_publication(self, payload):
+        if "process_tree_root" in payload:
+            raise failure
+        original(self, payload)
+    monkeypatch.setattr(ProcessLogOwnership, "write", fail_publication)
+    with pytest.raises(OSError) as caught:
+        managed.confirm_service_identity(5001)
+    assert caught.value is failure
+    assert managed.pid == 4321 and stream.ownership.record_path.read_bytes() == before
+    tree.processes[4321].alive = False
+    managed.process.returncode = 0
+    managed.close(timeout_seconds=0.01)
+    assert tree.processes[5001].terminate_calls == 1
+    assert not tree.processes[5001].alive and stopped == []
+    assert not stream.ownership.record_path.exists()
 
 
 def test_active_writer_prevents_rotation_and_detach_preserves_ownership(logged_process) -> None:

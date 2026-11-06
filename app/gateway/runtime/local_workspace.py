@@ -28,7 +28,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
-from app.gateway.runtime.process_lifecycle import AdoptedManagedProcess
+from app.gateway.runtime.process_lifecycle import AdoptedManagedProcess, ManagedProcess
 from app.gateway.runtime.process_logs import ProcessLogOwnership, ProcessLogStore
 from app.gateway.runtime.process_ports import (
     allocate_local_port,
@@ -329,7 +329,7 @@ def _validate_group_health(
 
 
 async def verify_managed_backend_group(
-    contract: ManagedBackendContract, *, mounts: tuple[MountedWorkspace, ...], process: object | None = None,
+    contract: ManagedBackendContract, *, mounts: tuple[MountedWorkspace, ...], process: ManagedProcess | None = None,
     startup_contracts: dict[str, dict[str, object]] | None = None,
     request_timeout_seconds: float = 2, poll_interval_seconds: float = 0.5,
 ) -> int:
@@ -342,7 +342,7 @@ async def verify_managed_backend_group(
     for member, mount in zip(contract.members, mounts, strict=True):
         payload = await wait_for_workspace_health(
             f"{contract.backend_url.rstrip('/')}/api/v1/health", mount.workspace_id,
-            process, request_timeout_seconds=request_timeout_seconds,
+            process.process if process is not None else None, request_timeout_seconds=request_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
         process_id = _validate_group_health(
@@ -351,6 +351,8 @@ async def verify_managed_backend_group(
         )
     if process_id is None:
         raise RuntimeError("managed Backend 完整组没有成员")
+    if process is not None:
+        process.confirm_service_identity(process_id)
     return process_id
 
 
@@ -531,16 +533,18 @@ async def start_managed_backend_runtime(
                         config_fencing_token=str(startup["fencing_token"]))
                 if startup is not None else mount
             )
+        started = None
         if adopted is None:
-            owner.set_process(start_local_backend_process(
+            started = start_local_backend_process(
                 project_root=project_root, mounts=tuple(startup_mounts), backend_generation=contract.generation,
                 port=port, log_dir=log_dir,
                 logging_startup=registry.runtime_logging_startup(),
                 extra_env={"BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(list(default_skill_groups), ensure_ascii=False, separators=(",", ":"))},
                 debug_port=contract.debug_port, connection_drain_timeout_seconds=connection_drain_timeout_seconds,
-            ))
+            )
+            owner.set_process(started)
         await verify_managed_backend_group(
-            contract, mounts=tuple(ready_mounts), process=getattr(owner.process, "process", None), startup_contracts=startup_contracts,
+            contract, mounts=tuple(ready_mounts), process=started, startup_contracts=startup_contracts,
             request_timeout_seconds=health_request_timeout_seconds, poll_interval_seconds=health_poll_interval_seconds,
         )
         for member in contract.members:

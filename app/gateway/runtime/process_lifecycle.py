@@ -116,6 +116,25 @@ def _windows_process_tree_is_alive(
     return bool(descendant_start_times)
 
 
+def _verify_windows_service_process(
+    root_pid: int, root_start_time: float, pid: int, *,
+    expected_service_start_time: float | None = None,
+) -> tuple[float, WindowsProcessStartTimesByPid]:
+    actual_root_start_time, descendants = _capture_windows_process_tree(
+        root_pid, expected_root_start_time=root_start_time,
+    )
+    if actual_root_start_time != root_start_time:
+        raise RuntimeError(f"Windows 受管进程根已退出: pid={root_pid}")
+    service_start_time = root_start_time if pid == root_pid else descendants.get(pid)
+    if service_start_time is None:
+        raise RuntimeError(f"服务进程不属于受管进程树: pid={pid}, root_pid={root_pid}")
+    if (expected_service_start_time is not None and service_start_time != expected_service_start_time
+        or _windows_process_start_time(pid) != service_start_time
+        or _windows_process_start_time(root_pid) != root_start_time):
+        raise RuntimeError(f"Windows 服务进程身份在确认期间已变化: pid={pid}, root_pid={root_pid}")
+    return service_start_time, descendants
+
+
 def _terminate_windows_process_tree(
     descendant_start_times: WindowsProcessStartTimesByPid,
     *,
@@ -199,6 +218,8 @@ class ManagedProcess:
         default_factory=dict, init=False, repr=False
     )
     _windows_descendants_captured: bool = field(default=False, init=False, repr=False)
+    _service_pid: int | None = field(default=None, init=False, repr=False)
+    _service_start_time: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if os.name == "posix":
@@ -212,9 +233,38 @@ class ManagedProcess:
 
     @property
     def pid(self) -> int:
-        return self.process.pid
+        return self._service_pid if self._service_pid is not None else self.process.pid
+
+    def confirm_service_identity(self, pid: int) -> None:
+        """健康合同完整通过后，冻结原树中经过 OS 核验的实际服务身份。"""
+        if self._service_pid is not None:
+            if pid != self._service_pid or not self.is_alive():
+                raise RuntimeError("已确认的受管服务进程身份已变化")
+            return
+        if self.process.poll() is not None:
+            raise RuntimeError("受管进程在服务身份确认前已退出")
+        service_start_time = None
+        if os.name == "nt":
+            if self._windows_root_start_time is None:
+                raise RuntimeError("Windows 受管进程缺少启动根身份")
+            service_start_time, descendants = _verify_windows_service_process(
+                self.process.pid, self._windows_root_start_time, pid,
+            )
+            # 即使后续日志确认失败，原 owner 仍须记住已观察到的后代并负责回收。
+            self._windows_descendant_start_times.update(descendants)
+            if pid != self.process.pid and isinstance(self.log_file, ProcessLogFile):
+                self.log_file.ownership.confirm_service_process(
+                    pid, service_start_time, root_pid=self.process.pid,
+                    root_created_at=self._windows_root_start_time,
+                )
+        elif pid != self.process.pid:
+            raise RuntimeError("服务进程身份与受管进程根不匹配")
+        self._service_pid, self._service_start_time = pid, service_start_time
 
     def is_alive(self) -> bool:
+        if self._service_pid is not None and self._service_pid != self.process.pid:
+            assert self._service_start_time is not None
+            return _windows_process_tree_is_alive({self._service_pid: self._service_start_time})
         return self.process.poll() is None
 
     def request_terminate(self) -> None:
@@ -339,6 +389,8 @@ class AdoptedManagedProcess:
         default_factory=dict, init=False, repr=False
     )
     _windows_descendants_captured: bool = field(default=False, init=False, repr=False)
+    _windows_root_pid: int = field(default=0, init=False, repr=False)
+    _windows_service_start_time: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.pid <= 0:
@@ -348,7 +400,18 @@ class AdoptedManagedProcess:
                 self.pid
             )
         elif os.name == "nt":
-            self._windows_root_start_time = _windows_process_start_time(self.pid)
+            self._windows_root_pid = self.pid
+            if self.log_ownership is None:
+                self._windows_root_start_time = _windows_process_start_time(self.pid)
+                self._windows_service_start_time = self._windows_root_start_time
+            else:
+                root_pid, root_start, service_start = self.log_ownership.process_tree_identity(self.pid)
+                _, descendants = _verify_windows_service_process(
+                    root_pid, root_start, self.pid, expected_service_start_time=service_start,
+                )
+                self._windows_root_pid, self._windows_root_start_time = root_pid, root_start
+                self._windows_service_start_time = service_start
+                self._windows_descendant_start_times.update(descendants)
 
     def is_alive(self) -> bool:
         return self._is_alive()
@@ -359,8 +422,8 @@ class AdoptedManagedProcess:
         try:
             if os.name == "posix":
                 os.killpg(self.pid, signal.SIGTERM)
-            elif self._is_alive():
-                _taskkill_process_tree(self.pid, force=False)
+            elif self._windows_root_is_alive():
+                _taskkill_process_tree(self._windows_root_pid, force=False)
             else:
                 _terminate_windows_process_tree(
                     self._windows_descendant_start_times,
@@ -387,8 +450,8 @@ class AdoptedManagedProcess:
                 if os.name == "posix":
                     os.killpg(self.pid, signal.SIGKILL)
                 else:
-                    if self._is_alive():
-                        _taskkill_process_tree(self.pid, force=True)
+                    if self._windows_root_is_alive():
+                        _taskkill_process_tree(self._windows_root_pid, force=True)
                     _terminate_windows_process_tree(
                         self._windows_descendant_start_times,
                         force=True,
@@ -408,9 +471,9 @@ class AdoptedManagedProcess:
 
     def _is_alive(self) -> bool:
         if os.name == "nt":
-            if self._windows_root_start_time is not None:
+            if self._windows_service_start_time is not None:
                 return _windows_process_tree_is_alive(
-                    {self.pid: self._windows_root_start_time}
+                    {self.pid: self._windows_service_start_time}
                 )
             return _windows_process_is_alive(self.pid)
         try:
@@ -421,18 +484,23 @@ class AdoptedManagedProcess:
             raise PermissionError(f"无权检查已接管辅助服务 PID: {self.pid}") from error
         return True
 
+    def _windows_root_is_alive(self) -> bool:
+        if self._windows_root_start_time is not None:
+            return _windows_process_tree_is_alive({self._windows_root_pid: self._windows_root_start_time})
+        return _windows_process_is_alive(self._windows_root_pid)
+
     def _close_target_is_alive(self) -> bool:
         if os.name != "posix":
             if not self._windows_descendants_captured:
                 root_start_time, descendant_start_times = _capture_windows_process_tree(
-                    self.pid,
+                    self._windows_root_pid,
                     expected_root_start_time=self._windows_root_start_time,
                 )
                 if self._windows_root_start_time is None:
                     self._windows_root_start_time = root_start_time
                 self._windows_descendant_start_times.update(descendant_start_times)
                 self._windows_descendants_captured = True
-            return self._is_alive() or _windows_process_tree_is_alive(
+            return self._windows_root_is_alive() or _windows_process_tree_is_alive(
                 self._windows_descendant_start_times
             )
         if not self._group_closed:
