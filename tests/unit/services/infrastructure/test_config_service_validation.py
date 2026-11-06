@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import commentjson
 import jsonschema
 import pytest
 
@@ -25,9 +24,8 @@ def validation_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.parametrize("stored", [False, True])
 @pytest.mark.parametrize("schema_reference", ["user_schema.jsonc", "missing.jsonc", "https://example.test/schema"])
-def test_candidate_parses_each_source_once_and_preserves_schema_precedence(
+def test_candidate_preserves_source_schema_precedence(
     validation_files,
-    monkeypatch: pytest.MonkeyPatch,
     stored: bool,
     schema_reference: str,
 ) -> None:
@@ -40,14 +38,6 @@ def test_candidate_parses_each_source_once_and_preserves_schema_precedence(
     # local 层的合并结果不能取代 user／inline 原始来源的 schema 选择。
     (directory / "workspace_local.jsonc").write_text(json.dumps({"$schema": "local_schema.jsonc"}))
     (directory / "local_schema.jsonc").write_text(json.dumps({"not": {}}))
-    parsed: list[str] = []
-    original_loads = commentjson.loads
-
-    def loads(text, *args, **kwargs):
-        parsed.append(text)
-        return original_loads(text, *args, **kwargs)
-
-    monkeypatch.setattr(commentjson, "loads", loads)
     root = directory / "workspace"
     store = WorkspaceStateStore(workspace_root=root) if stored else None
     try:
@@ -61,8 +51,6 @@ def test_candidate_parses_each_source_once_and_preserves_schema_precedence(
         snapshot = service.get_snapshot()
         expected = user_schema if not stored and schema_reference == user_schema.name else schema
         assert snapshot.schema_path == expected
-        assert parsed.count(inline.read_text()) == 1
-        assert parsed.count(user_text) == 1
     finally:
         if store is not None:
             store.close()

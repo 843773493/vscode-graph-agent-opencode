@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
 
-import commentjson
+from commentjson.commentjson import parser as jsonc_parser
+from lark import Tree
+from lark.exceptions import UnexpectedCharacters
 from pydantic import AfterValidator, PlainSerializer
 
 from app.core.failures import report_failure
@@ -156,6 +158,21 @@ def verify_stable_config_file(snapshot: StableConfigFile) -> None:
         raise RuntimeError("配置文件在解析后发生变化，拒绝提交 source layer")
 
 
+def _jsonc_tree_text(tree: Tree) -> str:
+    """沿原 JSONC 语法树直接输出 JSON，避免通用 Reconstructor 逐节点重新解析。"""
+    kind, children = tree.data, tree.children
+    if kind in {"string", "number"}:
+        return str(children[0])
+    if kind in {"true", "false", "null"}:
+        return kind
+    if kind == "pair":
+        return ":".join(_jsonc_tree_text(child) for child in children)
+    opening, closing = {"array": ("[", "]"), "object": ("{", "}")}[kind]
+    return opening + ",".join(
+        _jsonc_tree_text(child) for child in children if isinstance(child, Tree)
+    ) + closing
+
+
 def parse_stable_config_file(
     snapshot: StableConfigFile,
 ) -> dict[str, object] | None:
@@ -172,7 +189,12 @@ def parse_stable_config_file(
             f"配置 UTF-8 解码失败: byte_start={error.start}, byte_end={error.end}: {error.reason}"
         ) from error
     try:
-        parsed = commentjson.loads(text)
+        try:
+            tree = jsonc_parser.parse(text)
+        except UnexpectedCharacters:
+            raise ValueError("Unable to parse text", text)
+        # 保留原 grammar 和标准 JSON 解码，数值、转义及归一化错误坐标不变。
+        parsed = json.loads(_jsonc_tree_text(tree))
     except Exception as error:
         # commentjson 的解析异常没有共同基类，且正文可能包含整份配置或 token。
         # 此边界只发布类型和结构化位置；原始原因完整保留，不在响应层截断或脱敏。
