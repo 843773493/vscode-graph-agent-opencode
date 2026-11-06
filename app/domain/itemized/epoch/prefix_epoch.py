@@ -496,17 +496,19 @@ def toolset_compatibility_key(tool_ref: ToolSetRef, *, policy_hash: str) -> str:
 
 def _check_source_conflicts(frames: Sequence[ProviderProfileItemFrame]) -> None:
     """同一 prefix epoch 内同一 tracked source revision 至多一个 body。"""
-    seen: dict[tuple[str, str], str] = {}
+    seen: dict[tuple[str, str], ProviderProfileItemFrame] = {}
     for frame in frames:
         for ref in frame.item_refs:
             if ref.ref_type != "source_item" or ref.source_tracking_at_seal != "tracked":
                 continue
             key = (ref.source_identity or "", ref.source_revision or "")
-            prior_hash = seen.get(key)
-            if prior_hash is None:
-                seen[key] = frame.frame_hash()
+            prior = seen.get(key)
+            if prior is None:
+                seen[key] = frame
                 continue
-            if prior_hash != frame.frame_hash():
+            # 唯一来源只需登记身份；发生重复时才计算正文摘要，保留两种冲突报错。
+            # frame 已冻结，避免正常追加为每个来源反复 hash 整块正文。
+            if prior.frame_hash() != frame.frame_hash():
                 raise SourceIdentityConflictError(
                     f"source identity {key[0]!r} revision {key[1]!r} 被以不一致正文"
                     "重复贡献,返回 source identity conflict"
