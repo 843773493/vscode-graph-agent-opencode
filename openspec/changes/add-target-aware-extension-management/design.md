@@ -104,7 +104,7 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 同一 BOXTEAM_HOME 的稳定 Backend 安装域允许多个真实 Backend 进程共享账本；schema 初始化仅短持锁，安装意图由 SQLite 唯一 reserve，不持生命周期独占锁。操作 owner 记录 PID 与进程创建时间；另一个活 Backend 不得中断原操作，只有确认原进程已退出时才将运行中记录标为 interrupted。相同意图始终返回原操作，不因重启重放，未发布目录不具备可启动 binding。
 
-工作区 stdio 配置以 `managed_launch` 精确引用 Backend／installation／generation／artifact digest，与显式 command 互斥；原安装 owner 解析已发布绝对 executable，原 SDK 启动准入再次核完整摘要，禁止动态 uvx／npx 解析替代。该 binding 随原连接 generation／retirement 保留；物理卸载由原安装 owner 核对工作区配置与资源账本引用，未知占用或未结清调用明确拒绝，版本不随安装指针迁投。原 Workbench InstallAction 仅发布制品并返回原发布事实，明确提示尚未配置；配置仍经原 source preflight／CAS 显式提交，连接 ready 由原 MCP owner 独立核实。新旧 stdio 连接的升级切换及真实旧调用验收仍待闭环，不以卸载保护代替。
+工作区 stdio 配置以 `managed_launch` 精确引用 Backend／installation／generation／artifact digest，与显式 command 互斥；原安装 owner 解析已发布绝对 executable，原 SDK 启动准入再次核完整摘要，禁止动态 uvx／npx 解析替代。该 binding 随原连接 generation／retirement 保留；物理卸载由原安装 owner 核对工作区配置与资源账本引用，未知占用或未结清调用明确拒绝，版本不随安装指针迁投。原 Workbench InstallAction 仅发布制品并返回原发布事实，明确提示尚未配置；配置仍经原 source preflight／CAS 显式提交，连接 ready 由原 MCP owner 独立核实。来源预检、保存与原候选准备共用旧版本占用检查；当前配置事务在锁外写盘及准备期间暂时拒绝相关旧连接的新资格，直到原提交或失败结算。已有资格／调用或未知结果未结清时明确拒绝升级并保留原配置和连接；结清后仍需重新显式提交。
 
 ### D5. 安装操作可追踪，更新与删除尊重已有引用
 

@@ -9,6 +9,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +17,8 @@ import psutil
 import pytest
 from langchain_mcp_adapters.sessions import StdioConnection
 
+from app.core.lifecycle import LifetimeScope
+from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
     McpCandidatePlanDTO,
@@ -26,8 +29,16 @@ from app.schemas.internal_v2.mcp import (
     McpInstalledArtifactDTO,
     McpManagedLaunchDTO,
 )
+from app.services.infrastructure.config.state import ConfigConflictError
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.candidate_source import native_mcp_platform
 from app.services.infrastructure.mcp.config import parse_mcp_server_configs
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionTargetResolutionError,
+)
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from app.services.infrastructure.mcp.installation.python import (
     InstallationUnavailable,
@@ -40,9 +51,11 @@ from app.services.infrastructure.mcp.installation.store import (
     InstallationStore,
     artifact_key,
 )
+from app.services.infrastructure.mcp.invocation import McpResourceUse
 from app.services.infrastructure.mcp.session_runtime import (
     production_mcp_session_factory,
 )
+from tests.support.mcp.session_doubles import FakeMcpSessionFactory
 
 
 @pytest.fixture
@@ -777,3 +790,100 @@ def test_managed_launch_requires_owner_and_cannot_override_command(binding: McpM
 def test_unsupported_installation_never_turns_into_dynamic_launcher(parameters: dict[str, object]) -> None:
     with pytest.raises(InstallationUnavailable):
         python_package({"identifier": "server", "version": "1.0.0", **parameters})
+
+
+@pytest.fixture
+async def managed_switch_case(published_artifact, installation_store, event_channel_service, tmp_path):
+    installation, first, _ = published_artifact
+    operation = McpInstallationOperationDTO(operation_id="upgrade", intent_digest="upgrade-intent",
+        status="running", stage="install", created_at=2, updated_at=2)
+    preparation = installation_store.reserve(operation,
+        key=artifact_key(first, identifier=first.identifier, version="2", entrypoint=first.entrypoint)).preparation
+    assert preparation is not None
+    generation = installation._root / "generations" / preparation.installation_id / preparation.generation
+    command = generation / ".venv" / ("Scripts/server.exe" if os.name == "nt" else "bin/server")
+    command.parent.mkdir(parents=True)
+    command.write_bytes(b"next published executable")
+    second = first.model_copy(update={"binding": first.binding.model_copy(update={
+        "installation_id": preparation.installation_id, "generation": preparation.generation,
+        "artifact_digest": artifact_digest(generation)}), "command": str(command), "version": "2"})
+    installation_store.publish(operation, second)
+    payloads = [{"servers": {"managed": {"enabled": True, "transport": "stdio",
+        "managed_launch": artifact.binding.model_dump()}}} for artifact in (first, second)]
+    ledger = ExternalResourceLeaseLedger()
+    factory = FakeMcpSessionFactory({"managed": ["echo"]})
+    owner = McpCatalogOwner(raw_config=payloads[0], workspace_root=tmp_path, event_service=event_channel_service,
+        leases=ledger, session_factory=factory, installation_owner=installation)
+    await owner.start()
+    try:
+        yield owner, ledger, payloads
+    finally:
+        await owner.shutdown()
+        await installation.close()
+
+
+@pytest.mark.parametrize("state", ["prepared", "invocation", "unknown", "cleanup_failed"])
+async def test_managed_version_rejects_unsettled_connection_before_any_side_effect(managed_switch_case, state):
+    owner, ledger, payloads = managed_switch_case
+    binding = owner.binding_snapshot()
+    target = binding.resolve("mcp__managed__echo")
+    runtime = owner._runtimes["managed"]
+    connection_ref = target.connection_ref
+    operation = software_tool_operation_id("mcp_call", "session", "thread", "model", "call")
+    use = McpResourceUse("holder", operation, "session", "thread", "model")
+    effects = []
+    scope = LifetimeScope("managed-version-rejection")
+    with owner.execution_handles.reserve_model_call(binding, session_id="session", thread_id="thread", model_call_id="model") as retain:
+        if state != "cleanup_failed":
+            retain([{"name": "invoke_extension_tool", "id": "call", "args": {"tool_name": "mcp__managed__echo"}}])
+    if state == "cleanup_failed":
+        ledger.update_external_state(connection_ref, lifetime_scope="workspace", status="running", cleanup_failed=True)
+    invocation = owner.execution_handles.execution_target(target, use) if state in {"invocation", "unknown"} else nullcontext()
+    with invocation as execution:
+        if execution is not None:
+            execution.started = True
+        if state != "unknown":
+            with pytest.raises(ConfigConflictError, match="未结清"), owner.guard_configuration(payloads[1]):
+                pytest.fail("未结旧版本不能进入来源 writer")
+            with pytest.raises(ConfigConflictError, match="未结清"):
+                await owner.prepare_config(payloads[1], scope, effects.append)
+            assert owner._runtimes["managed"] is runtime and runtime.running
+            assert owner.binding_snapshot() == binding and effects == []
+        if state == "invocation":
+            assert execution is not None
+            assert await execution.tool.ainvoke({"text": "old"}) == "echo:old"
+            execution.result_confirmed = True
+    if state == "unknown":
+        assert any(lease.status == "reconcile_required" for lease in ledger.leases_for_resource(connection_ref))
+        with pytest.raises(ConfigConflictError, match="未结清"):
+            await owner.prepare_config(payloads[1], scope, effects.append)
+        assert owner._runtimes["managed"] is runtime and runtime.running
+        assert owner.binding_snapshot() == binding and effects == []
+    await scope.close()
+
+
+async def test_managed_version_freezes_new_qualification_until_explicit_guard_finishes(managed_switch_case):
+    owner, ledger, payloads = managed_switch_case
+    binding = owner.binding_snapshot()
+
+    def reserve(model_id):
+        return owner.execution_handles.reserve_model_call(binding, session_id="session", thread_id="thread", model_call_id=model_id)
+
+    with pytest.raises(RuntimeError, match="来源保存失败"), owner.guard_configuration(payloads[1]):
+        with owner.guard_configuration(payloads[1]), pytest.raises(ExtensionTargetResolutionError), reserve("during-nested-guard"):
+            pytest.fail("配置事务期间不能增加旧连接资格")
+        with pytest.raises(ExtensionTargetResolutionError), reserve("after-nested-guard"):
+            pytest.fail("内层退出不能提前释放外层准入屏障")
+        raise RuntimeError("来源保存失败")
+    with reserve("after-failure") as retain:
+        retain([])
+    assert ledger.leases_for_resource(binding.resolve("mcp__managed__echo").connection_ref) == []
+    scope = LifetimeScope("managed-version-publication")
+    try:
+        publish, _ = await owner.prepare_config(payloads[1], scope, lambda _effect: None)
+        publish()
+        assert owner.server_configuration("managed").managed_launch.model_dump() == payloads[1]["servers"]["managed"]["managed_launch"]
+        with owner.execution_handles.reserve_model_call(owner.binding_snapshot(), session_id="session", thread_id="thread", model_call_id="new-version") as retain:
+            retain([])
+    finally:
+        await scope.close()

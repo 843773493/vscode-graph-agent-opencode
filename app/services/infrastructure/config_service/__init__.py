@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from _thread import RLock
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -155,6 +156,7 @@ class ConfigService(ConfigSourceLayersMixin,
         )
         self._mcp_tool_names: frozenset[str] | None = None
         self._mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None = None
+        self._mcp_configuration_guard: Callable[[object], AbstractContextManager[None]] = lambda _config: nullcontext()
         self._instruction_inputs = InstructionFileInputs(instruction_file_resolver)
         self._snapshot_store = ConfigSnapshotStore(
             candidate_builder=self._build_candidate_snapshot,

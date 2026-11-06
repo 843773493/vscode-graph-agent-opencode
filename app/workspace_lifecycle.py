@@ -288,6 +288,7 @@ class WorkspaceLifespan:
                 await container.workspace_service.start()
             with _workspace_startup_stage(container, "mcp_catalog_owner.start"):
                 await container.mcp_catalog_owner.start()
+            container.config_service.set_mcp_configuration_guard(container.mcp_catalog_owner.guard_configuration)
             with _workspace_startup_stage(container, "mcp_connections.start"):
                 container.mcp_connection_service.start()
             with _workspace_startup_stage(container, "workspace_file_resource_registry.start"):

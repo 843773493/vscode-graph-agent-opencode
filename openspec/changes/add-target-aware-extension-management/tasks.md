@@ -23,8 +23,8 @@
 - [ ] 2.4 实现有界进度、日志、意图指纹／幂等操作、取消及中断查询，暂存验证后发布；核同键异参数冲突、断流／重启不重放未知脚本，安装、配置与 ready 分阶段报告。
   - 2026-11-06 用户裁定：每个共享下载消费者独立取消并使用 `cancelled`；最后使用者取消才停止实际任务并核退出。跨进程取消意图归原 SQLite，由原执行者结算；已先提交发布保持 `succeeded`。须验独立取消、最后使用者退出、跨进程和发布竞争，尚未以本次裁定标记实现完成。
   - PyPI 原操作终态／取消结算／进程退出查询已完成定向切片，见2026-11-05证据；尚无用户取消入口及其它生态验收，整项保持未完成。
-- [ ] 2.5 实现同安装域精确版本复用、工作区引用、更新失败保留旧版及物理卸载检查；制品引用绑定原 connection generation，沿原退休／监督释放；验证 A1/A2、并发同意图、旧调用／cleanup_failed／结果未知保留和有引用拒绝卸载。
-  - 2026-11-06 用户裁定：旧调用、封存资格或结果未知未结清时拒绝切换，保留旧配置和原连接；结清后用户再次显式切换，不支持新旧 stdio 并行、不自动续做被拒绝的切换。后续验收按此边界修订，原“在途调用跨版本继续执行／stdio 并行策略待裁定”由此消解，阻止切换与旧版继续执行的实现和验收仍待完成。
+- [x] 2.5 实现同安装域精确版本复用、工作区引用、更新失败保留旧版及物理卸载检查；制品引用绑定原 connection generation，沿原退休／监督释放；验证 A1/A2、并发同意图、旧调用／cleanup_failed／结果未知保留和有引用拒绝卸载。
+  - 2026-11-06 用户裁定：旧调用、封存资格或结果未知未结清时拒绝切换，保留旧配置和原连接；结清后用户再次显式切换，不支持新旧 stdio 并行、不自动续做被拒绝的切换。后续验收按此边界修订，原“在途调用跨版本继续执行／stdio 并行策略待裁定”由此消解；下方2026-11-06切片已闭合该裁定。
   - 2026-11-05 已发布 PyPI 暖复用限定切片：原安装账本按完整来源、manifest／variant、平台、精确版本及入口匹配并全量校验原 generation；制品身份不含工作区 args／env 或 plan_digest，新 operation_id 保留独立意图和回执。真实 Gateway／Backend／uv／wheel 双工作区 1 passed／57.71 秒，覆盖 A1 发布后 A2 无新增索引或下载请求、仅一份制品与 generation、各自参数／cwd／环境／进程／连接，以及断开 A1 后 A2 原 connection_ref 仍 ready。原连接指纹已迁齐 managed_launch JSON 消费并保留 unmanaged 指纹与配置失效行为；31 项安装单测、8 项指纹／准入／重启对账单测及 Ruff／Pyright 通过。准确命令、源码指纹、原始失败与成功输出及补丁见 `out/tests/temp/extension_next_20261105/artifacts/warm-final-evidence.json`。冷态并发归并、工作区持久引用、旧调用／cleanup_failed／结果未知占用及物理卸载保护仍未完成，Windows／macOS 未验，整项保持未勾选。
 
   - 2026-11-05 冷态并发归并切片：同安装域按精确制品身份在原 SQLite 事务选定唯一 producer，各 operation 保留独立意图、ID 和回执，共享真实进度／失败／发布；进程退出整批 interrupted，原 ID 不重放，显式新意图才重试。v1→v2 迁移在原事务内核活进程、歧义和成功记录一致性，DDL 与升级语句均归 SQL。真实双 Backend／Gateway 的 warm、cold、cold-failure 三模式 3 passed／170.82 秒，核唯一下载／准备／generation、独立工作区参数与连接、403 原失败及新操作恢复；48 单测、Ruff 与真实 Pyright 通过。准确命令、源码指纹、原始输出与退出码见 `out/tests/temp/frozen_wire_20261105/artifacts/mcp-cold-root-evidence-001.json`；工作区持久引用、旧调用／结果未知占用及物理卸载保护仍未完成，整项保持未勾选。
@@ -33,6 +33,10 @@
 
   - 2026-11-05 generation 引用与卸载切片：原安装账本仅登记工作区 locator，引用从原 source／active／未终结 pending 及资源账本核实；首次引用与卸载共用安装事务，保留 disabled／遮蔽来源、旧连接、cleanup_failed 和未结清调用。卸载先提交 removing，再删除精确目录；失败／中断明确持久化，不允许启动或重放原意图。核心 Integration 14 passed／12.57 秒（SDK session 为明确替身），真实 Gateway 双工作区／uv wheel／真实进程 API 1 passed／121.32 秒，核 A1 移除后 A2 原配置及连接仍阻止卸载，退出和租约结清后才删除。精确合入后136项定向单元、Ruff及具名生产模块Pyright通过；正式构建与生成一致性复用代理同源码证据。完整命令、原始结果、源码指纹及混合文件边界见 `out/tests/temp/2026/11/05/mcp_generation_retention/artifacts/delivery-manifest.json` 和 `root-integration-002.json`。真实新generation升级、旧调用持续执行及失败保留仍待闭环；stdio并行策略已向用户澄清，2.5保持未勾，不以本片代替远端、卸载UI或原生矩阵。
   - 2026-11-05 同源新版切片：真实 Gateway／托管 Backend／本地 uv wheel 经同一 Thread 四次工具调用，验证 v2 安装失败和独立发布均不修改 v1 配置／连接，空闲后仅由原 candidate／CAS 显式切换至 v2；历史工具结果保持 v1，原 Process 已核退出、租约结清且两版制品仍发布。受保护单项 `1 passed / 135.47s / exit 0`，Ruff及正式 Workbench 构建通过；测试关闭裁剪 Provider 后遗留的网页 embedding 引用，未改生产切换策略。精确增量、源码指纹、原始失败与通过记录及进程回收见 `out/tests/temp/2026/11/05/mcp_generation_retention/artifacts/update-delivery-manifest.json`（SHA256 `22cb7e58746d0d6333797044b5a89af906ace735c314381ec0986969b4a4b147`）。在途调用跨版本继续执行及 stdio 并行策略仍待裁定，2.5保持未勾，不替代远端、UI或原生矩阵。
+
+
+  - 2026-11-06 升级准入闭环：原来源 preflight／CAS writer 和 MCP 候选准备复用原 retirement／资源账本，封存资格、调用、结果未知或 cleanup_failed 未结清时在来源写盘和旧 stdio 停止前明确冲突；同一配置事务暂时阻止新资格，失败／取消／发布结算后释放，不新增持久占用或并行策略。普通 unmanaged HTTP 热替换沿原合同。真实 Gateway／托管 Backend／uv wheel／产品 Thread 1 passed／163.75秒，核候选保存、通用来源预检和保存均409，原字节／层／active／连接／launch不变，旧工具继续返回原依赖；结清不自动切换，重新显式提交才启用新版，原进程退出、历史结果与两版制品保留。
+  - 当前安装／配置替换70项、制品保留14项及配置服务120项通过；私有来源2项在补齐原生安装 owner 的既有fixture接线后通过，未放宽断言。原保留测试已按裁定迁为在途及未知时拒绝切换、结清后显式切换、核旧进程退出后才卸载。Ruff具名模块通过，配置工具族原11条及Pyright原14条与完整HEAD基线相同，无新增。完整命令／源码指纹／首轮装具错误和120秒未完成回归原件见 `out/tests/temp/2026/11/06/mcp_version_switch/artifacts/verification.json`。结合前述A1/A2暖复用、冷归并、引用及物理卸载证据关闭2.5；2.3其它安装能力、2.4独立取消、远端／UI与原生矩阵仍按各自任务继续验收，不据此宣称整体完成。
 
 ## 3. MCP 与现有 Agent 唯一链路
 

@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -414,18 +414,22 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
             operation = exchange("GET", base + "/mcp/installation-operations/" + key, key + "-observe")
         return operation
 
-    def configure(plan: dict, artifact: dict, key: str) -> dict:
+    def configuration_request(plan: dict, artifact: dict, key: str) -> dict:
         document = exchange("GET", source_path, key + "-source")
         configuration = commentjson.loads(document["jsonc"])
         configuration["mcp"] = {"servers": {"updatable": {"enabled": True, "transport": "stdio", "managed_launch": artifact["binding"]}}}
         edit = {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"], "source_key": document["source_key"], "jsonc": json.dumps(configuration),
             "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
             "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"], "idempotency_key": key}
-        saved = exchange("PUT", base + "/mcp/candidate-configurations", key, {
+        return {
             "target": {"kind": "workspace", "gateway_id": target["gateway_id"], "workspace_id": workspace_id},
-            "server_id": "updatable", "plan": plan, "managed_launch": artifact["binding"], "source_edit": edit})
+            "server_id": "updatable", "plan": plan, "managed_launch": artifact["binding"], "source_edit": edit}
+
+    def configure(plan: dict, artifact: dict, key: str) -> dict:
+        request = configuration_request(plan, artifact, key)
+        saved = exchange("PUT", base + "/mcp/candidate-configurations", key, request)
         assert saved["edit"]["state"] == "active" and saved["edit"]["source_saved"] and saved["edit"]["layer_imported"]
-        assert saved["active_revision"] > document["active_revision"]
+        assert saved["active_revision"] > request["source_edit"]["expected_active_revision"]
         assert saved["effective"]["mcp"]["servers"]["updatable"]["managed_launch"] == artifact["binding"]
         return saved
 
@@ -441,7 +445,7 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
     session = exchange("POST", base + "/sessions", "update-session", {"title": "同来源制品显式升级"})
     probes: dict[str, dict] = {}
 
-    def invoke(phase: str, artifact: dict, dependency: str) -> dict:
+    def invoke(phase: str, artifact: dict, dependency: str, while_sealed: Callable[[], None] | None = None) -> dict:
         call_id = "update-probe-" + phase
         replies = [{"tool_calls": [{"index": 0, "id": call_id, "type": "function", "function": {
             "name": "invoke_extension_tool", "arguments": json.dumps({"tool_name": "mcp__updatable__installation_probe", "arguments": {}})}}]},
@@ -450,8 +454,16 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
             asset_id=f"update-{phase}-{index}", model="e2e-stub-model", url="https://opencode.ai/zen/v1/chat/completions",
             frames=chat_completion_frames(response_id=f"update-{phase}-{index}", model="e2e-stub-model", deltas=({"role": "assistant", **reply},),
                 finish_reason="tool_calls" if "tool_calls" in reply else "stop")).raw["interactions"])[0] for index, reply in enumerate(replies)])
+        if while_sealed is not None:
+            case.replay.control.arm(calls[0], "model.response_ready")
         accepted = exchange("POST", base + f"/sessions/{session['session_id']}/messages", "update-message-" + phase, {
             "message": {"content": "调用安装探针，读取当前精确制品的路径与依赖。"}, "run": {"mode": "single_agent", "agent_id": "default"}})
+        if while_sealed is not None:
+            try:
+                case.replay.control.acknowledged(calls[0], "model.response_ready", 20)
+                while_sealed()
+            finally:
+                case.replay.control.release(calls[0], "model.response_ready")
         deadline = time.monotonic() + 40
         while True:
             job = exchange("GET", base + f"/jobs/{accepted['job_id']}", "update-job-" + phase)
@@ -516,7 +528,26 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
     require_original("update-published-unconfigured")
     invoke("published-unconfigured", first, "locked-one")
 
-    # TODO(2.5)：未结调用切换策略待独立裁定；本场景只验证空闲连接的显式切换。
+    def reject_busy_switch() -> None:
+        leases = ExternalResourceLeaseLedger(state_path=ledger_path).leases_for_resource(first_ref)
+        assert any(lease.lease_id.startswith("mcp-prepared:v1:") for lease in leases)
+        assert all(lease.status == "active" for lease in leases)
+        request = configuration_request(second_plan, second, "update-busy-switch")
+        for endpoint, body, key in (
+            (base + "/mcp/candidate-configurations", request, "update-busy-candidate"),
+            (source_path + "/preflight", request["source_edit"], "update-busy-preflight"),
+            (source_path, request["source_edit"], "update-busy-source"),
+        ):
+            response = case.client.request("POST" if endpoint.endswith("/preflight") else "PUT", endpoint,
+                json=body, headers={"X-Request-ID": key})
+            assert response.status_code == 409, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"] == key
+            assert "未结清" in response.text
+            evidence.append({"method": response.request.method, "path": endpoint, "response": response.json(), "status": 409})
+            require_original(key)
+
+    invoke("busy-upgrade-rejected", first, "locked-one", reject_busy_switch)
+    require_original("update-settled-without-auto-switch")
     ledger = ExternalResourceLeaseLedger(state_path=ledger_path)
     assert ledger.leases_for_resource(first_ref) == []
     second_document = configure(second_plan, second, "update-configure-two")

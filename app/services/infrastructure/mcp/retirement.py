@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from _thread import RLock
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Literal
@@ -11,12 +13,14 @@ from typing import Literal
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.config import McpCleanupDTO
+from app.services.infrastructure.config.state import ConfigConflictError
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.session_runtime import McpServerRuntime
 
 
@@ -39,6 +43,43 @@ class McpConnectionRetirement:
         self._timeout_seconds = timeout_seconds
         self._retired: dict[str, _RetiredConnection] = {}
         self._publisher = publisher
+        self._version_switches: dict[str, int] = {}
+
+    @contextmanager
+    def reserve_version_switch(
+        self, previous: Sequence[McpServerConfig], proposed: Sequence[McpServerConfig],
+    ) -> Iterator[None]:
+        """只冻结当前配置事务的新准入，持有事实仍以原资源账本为准。"""
+        with self._lock:
+            before = {server.server_id: server for server in previous}
+            switching = {server.server_id for server in proposed
+                         if server.enabled and (old := before.get(server.server_id)) is not None
+                         and old.managed_launch != server.managed_launch
+                         and (old.managed_launch is not None or server.managed_launch is not None)}
+            if switching:
+                records = [record for record in self._leases.records_by_kind("mcp_connection")
+                           if record.mcp_server_id in switching]
+                leases = self._leases.leases_for_resources([record.resource_id for record in records])
+                conflicts = [record.resource_id for record in records
+                             if record.cleanup_failed or leases[record.resource_id]]
+                if conflicts:
+                    raise ConfigConflictError(f"MCP 旧版本仍有未结清资格、调用或清理失败，拒绝切换: {conflicts}")
+                for server_id in switching:
+                    self._version_switches[server_id] = self._version_switches.get(server_id, 0) + 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                for server_id in switching:
+                    remaining = self._version_switches[server_id] - 1
+                    if remaining:
+                        self._version_switches[server_id] = remaining
+                    else:
+                        del self._version_switches[server_id]
+
+    def switching_version(self, server_id: str) -> bool:
+        with self._lock:
+            return server_id in self._version_switches
 
     @property
     def timeout_seconds(self) -> int:

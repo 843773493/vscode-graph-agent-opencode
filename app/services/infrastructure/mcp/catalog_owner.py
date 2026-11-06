@@ -20,8 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from _thread import RLock
-from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -560,6 +560,7 @@ class McpCatalogOwner:
         runtime = self._runtimes.get(binding.server_id or "")
         target = self._tools_by_id.get(binding.target_id)
         if (binding.origin != "mcp" or not self._started or runtime is None
+                or self._retirement.switching_version(runtime.server.server_id)
                 or not runtime.running or target is None
                 or binding.connection_ref != self._connection_ref(runtime)
                 or (target.metadata or {}).get("mcp_connection_ref") != binding.connection_ref):
@@ -776,6 +777,7 @@ class McpCatalogOwner:
         sequences: dict[str, int] = {}
         published = False
         catalog_claimed = False
+        switch_guard = ExitStack()
 
         def release_catalog() -> None:
             nonlocal catalog_claimed
@@ -791,6 +793,7 @@ class McpCatalogOwner:
                     if failures:
                         raise BaseExceptionGroup("MCP 候选连接释放失败", failures)
             finally:
+                switch_guard.close()
                 release_catalog()
 
         scope.register(close_unpublished, label="mcp-unpublished-candidate")
@@ -802,6 +805,7 @@ class McpCatalogOwner:
             self._require_started()
             previous = {server.server_id: server for server in self._servers}
             changed = {key for key in previous.keys() | proposed.keys() if previous.get(key) != proposed.get(key)}
+            switch_guard.enter_context(self._retirement.reserve_version_switch(self._servers, servers))
             self._retirement.require_replaceable(changed)
             unchanged_ids = {key for key, tool in self._tools_by_id.items()
                              if (tool.metadata or {}).get("mcp_server_id") not in changed}
@@ -843,6 +847,7 @@ class McpCatalogOwner:
             try:
                 activate()
             finally:
+                switch_guard.close()
                 release_catalog()
 
         def activate() -> None:
@@ -882,6 +887,17 @@ class McpCatalogOwner:
                         self._handle_tools_list_changed(key, runtime.generation)
 
         return publish, frozenset(unchanged_ids | tools.keys())
+
+    @contextmanager
+    def guard_configuration(self, raw_config: object) -> Iterator[None]:
+        """来源写入前核原版本占用；锁外保存及准备期间拒绝新资格。"""
+        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root,
+            installation_resolver=self._installation_resolver)
+        with ExitStack() as guard:
+            with self._publication_lock:
+                self._require_started()
+                guard.enter_context(self._retirement.reserve_version_switch(self._servers, servers))
+            yield
 
     def server_configuration(self, server_id: str) -> McpServerConfig:
         with self._publication_lock:

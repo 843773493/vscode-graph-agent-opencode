@@ -211,6 +211,8 @@ class ConfigSourceEditMixin:
     ) -> ConfigSourcePreflightDTO:
         service = cast("ConfigService", self)
         _, candidate = self._preflight_source_edit(source_key, gateway_id, request)
+        with service._mcp_configuration_guard(candidate.to_dict().get("mcp")):
+            pass
         return ConfigSourcePreflightDTO(
             document=self.get_source_document(source_key=source_key, gateway_id=gateway_id),
             candidate=cast(dict[str, object], redact_source_payload(candidate.to_dict())),
@@ -262,8 +264,9 @@ class ConfigSourceEditMixin:
                 return True
 
         try:
-            await service.reload(candidate_applier=service._candidate_applier, idempotency_key=request.idempotency_key,
-                              before_build=save, source_edit=intent)
+            with service._mcp_configuration_guard(candidate.to_dict().get("mcp")):
+                await service.reload(candidate_applier=service._candidate_applier, idempotency_key=request.idempotency_key,
+                                  before_build=save, source_edit=intent)
         except ConfigRestartRequiredError:
             # 来源保存已完成；pending/restart 仍由原状态机持有，不伪造 active。
             pass

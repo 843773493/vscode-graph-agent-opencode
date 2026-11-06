@@ -112,6 +112,7 @@ async def test_catalog_secret_env_consumes_original_request_through_source_cas(p
     installation_target = McpInstallationTargetDTO(gateway_id=GATEWAY, backend_id=backend)
     home = tmp_path / "installation-home"
     installation = McpInstallationOwner(home=home, backend_id=backend)
+    state.bind_mcp_installations(installation)
     owner = McpCatalogOwner(raw_config={}, workspace_root=state.workspace_root, event_service=EventChannelService(),
         leases=ExternalResourceLeaseLedger(), installation_owner=installation)
     raw = {"server": {"name": "org.example/secure", "version": "1", "packages": [{

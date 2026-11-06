@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any
 
 from app.agents.custom_tools import load_custom_tool_factory
@@ -22,6 +23,11 @@ from configs.runtime import merge_json_objects
 class ConfigAgentToolsMixin:
     if TYPE_CHECKING:
         _mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None
+        _mcp_configuration_guard: Callable[[object], AbstractContextManager[None]]
+
+    def set_mcp_configuration_guard(self, guard: Callable[[object], AbstractContextManager[None]]) -> None:
+        """来源 writer 复用原 MCP owner 的版本切换准入，不持有第二份连接状态。"""
+        self._mcp_configuration_guard = guard
 
     def set_mcp_cleanup_provider(self, provider: Callable[[], tuple[McpCleanupDTO, ...]]) -> None:
         """装配只读诊断端口，原 MCP Owner 仍独占运行态。"""

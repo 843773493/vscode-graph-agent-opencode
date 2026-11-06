@@ -27,6 +27,7 @@ from app.schemas.internal_v2.mcp import (
     McpManagedLaunchDTO,
     McpUninstallationRequestDTO,
 )
+from app.services.infrastructure.config.state import ConfigConflictError
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -158,6 +159,18 @@ async def test_original_generation_and_unknown_invocation_retain_old_artifact(re
     scope = LifetimeScope('candidate')
     await catalog.start()
     try:
+        async def reject_switch() -> None:
+            rejected = LifetimeScope('rejected-version-switch')
+            effects = []
+            try:
+                with pytest.raises(ConfigConflictError, match='未结清'):
+                    await catalog.prepare_config(payload(new, enabled=True)['mcp'], rejected, effects.append)
+                assert effects == []
+                assert catalog.server_configuration('same-server').managed_launch == old.binding
+                assert catalog.binding_snapshot() == snapshot
+            finally:
+                await rejected.close()
+
         snapshot = catalog.binding_snapshot()
         target = snapshot.resolve('mcp__same-server__echo')
         assert target.connection_ref is not None
@@ -168,20 +181,30 @@ async def test_original_generation_and_unknown_invocation_retain_old_artifact(re
         use = McpResourceUse('holder', software_tool_operation_id('mcp_call', 'session', 'thread', 'model', 'call'), 'session', 'thread', 'model')
         with catalog.execution_handles.execution_target(target, use) as execution:
             execution.started = True
-            await execution.tool.ainvoke({'text': 'original-call'})
-            publish, _ = await catalog.prepare_config(payload(new, enabled=True)['mcp'], scope, lambda _effect: None)
-            publish()
-            assert catalog.server_configuration('same-server').managed_launch == new.binding
+            await reject_switch()
+            assert await execution.tool.ainvoke({'text': 'original-call'}) == 'echo:original-call'
+        await reject_switch()
         cold = ExternalResourceLeaseLedger(state_path=case.workspaces[0] / '.boxteam/resources.json')
         record = cold.get(target.connection_ref)
-        assert record is not None and record.managed_launch == old.binding and record.process is not None and record.process.exit_verified
+        assert record is not None and record.managed_launch == old.binding and record.process is not None
+        assert record.status == 'running' and not record.process.exit_verified
         lease, = cold.leases_for_resource(target.connection_ref)
         assert lease.status == 'reconcile_required' and lease.lease_id.startswith('mcp-invocation:')
         references = case.owner.references(old.binding.installation_id).references
-        assert [(ref.kind, ref.connection_ref, ref.lease_id) for ref in references] == [('lease', target.connection_ref, lease.lease_id)]
+        assert {(ref.kind, ref.connection_ref, ref.lease_id) for ref in references} == {
+            ('connection', target.connection_ref, None), ('lease', target.connection_ref, lease.lease_id)}
         with pytest.raises(McpArtifactInUse):
             await case.owner.uninstall(case.request(old), actual_target=case.target)
         await case.ledgers[0].settle(lease.lease_id)
+        assert catalog.server_configuration('same-server').managed_launch == old.binding
+        with pytest.raises(McpArtifactInUse):
+            await case.owner.uninstall(case.request(old), actual_target=case.target)
+        publish, _ = await catalog.prepare_config(payload(new, enabled=True)['mcp'], scope, lambda _effect: None)
+        publish()
+        assert catalog.server_configuration('same-server').managed_launch == new.binding
+        record = ExternalResourceLeaseLedger(state_path=case.workspaces[0] / '.boxteam/resources.json').get(target.connection_ref)
+        assert record is not None and record.process is not None and record.process.exit_verified and record.status == 'stopped'
+        assert case.owner.references(old.binding.installation_id).references == []
         await case.owner.uninstall(case.request(old), actual_target=case.target)
         await case.owner.close()
         assert case.owner.operation('uninstall').status == 'succeeded'
