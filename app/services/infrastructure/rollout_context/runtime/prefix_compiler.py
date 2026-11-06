@@ -33,15 +33,12 @@ from app.domain.itemized.epoch.source_protocol import (
     render_source_blocks,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
-from app.domain.itemized.hashing import (
-    contribution_content_hash,
-    payload_content_length,
-)
+from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    SourceBinding,
     ContributionResolver,
+    SourceBinding,
 )
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
@@ -68,6 +65,7 @@ def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContr
     root_placements = {
         source.descriptor.source_id: source.descriptor.root_placement for source in batch.sources
     } if batch.deltas else {}
+    # ContextContribution 校验摘要时已同时计算正文长度，producer 不再单独编码求长。
     contributions = [
         ContextContribution(
             contribution_id=full_source_id(source),
@@ -75,7 +73,6 @@ def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContr
             source_revision=source.revision,
             body=source.content,
             content_hash=contribution_content_hash("prompt", source.content),
-            content_length=payload_content_length("structured_content", source.content),
             source_binding=SourceBinding(source_ref=source.descriptor.source_id),
             root_placement=source.descriptor.root_placement,
         )
@@ -89,7 +86,6 @@ def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContr
             contribution_kind="notice",
             body=delta.content,
             content_hash=contribution_content_hash("notice", delta.content),
-            content_length=payload_content_length("structured_content", delta.content),
             source_binding=SourceBinding(source_ref=delta.source_id),
             root_placement=root_placements[delta.source_id],
         )
