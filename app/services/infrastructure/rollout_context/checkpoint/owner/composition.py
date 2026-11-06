@@ -349,6 +349,7 @@ class ContextPlanCompositionMixin:
             session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,
+            overlay_contribution_ids=active_overlay_contribution_ids,
             snapshot=snapshot,
         ):
             extensions = raw.get("extensions")
@@ -359,15 +360,9 @@ class ContextPlanCompositionMixin:
             contribution_id = _manifest_string(
                 raw.get("contribution_id"), field="contribution_id"
             )
-            # overlay contribution 是当前 active overlay 的 manifest backing
-            # record。旧 epoch 的同一 source ref 仍可能保留在 registry，
-            # 但不能进入当前 plan，否则 alias lookup 会把一个 ref 解析成
-            # 多条 contribution。active overlay 的 role/epoch 由 overlay
-            # registry 重新绑定，不能相信 stale metadata 自己声明的值。
+            # storage 已按当前选集筛选 backing；实际消费的绑定仍须与活动 overlay 一致。
             overlay_id = source_binding.overlay_id if source_binding is not None else None
             if overlay_id is not None:
-                if contribution_id not in active_overlay_contribution_ids:
-                    continue
                 role = source_binding.overlay_role
                 if role not in {"base", "delta"}:
                     raise ValueError(

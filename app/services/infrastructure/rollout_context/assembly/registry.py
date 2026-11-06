@@ -232,6 +232,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         thread_id: str,
         *,
         checkpoint_ns: str = "",
+        overlay_contribution_ids: set[str] | None = None,
         snapshot: RolloutReadSnapshot | None = None,
     ) -> tuple[dict[str, object], ...]:
         session_id = strict_text(session_id, field="list_context_contributions.session_id")
@@ -248,10 +249,14 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             with self._storage.read_connection(
                 session_id, thread_id, checkpoint_ns, snapshot=snapshot,
             ) as connection:
-                self._storage._require_v2_runtime(connection)
-                rows = connection.execute(
-                    'SELECT contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id'
-                ).fetchall()
+                query = 'SELECT contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions'
+                params: tuple[str, ...] = ()
+                # 普通组合只恢复当前 overlay backing；其他来源照常读取，显式全量读取不筛选。
+                # 筛选依据 typed binding，不能用 contribution ID 前缀或自由扩展推断来源。
+                if overlay_contribution_ids is not None:
+                    query += " WHERE json_extract(binding_manifest_json, '$.source_binding.overlay_id') IS NULL OR contribution_id IN (SELECT value FROM json_each(?))"
+                    params = (_json(sorted(overlay_contribution_ids)),)
+                rows = connection.execute(query + ' ORDER BY source_ordinal, contribution_id', params).fetchall()
         except RolloutNotMaterializedError:
             return ()
         result: list[dict[str, object]] = []
