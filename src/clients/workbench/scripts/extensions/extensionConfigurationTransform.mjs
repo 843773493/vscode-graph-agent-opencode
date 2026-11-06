@@ -53,6 +53,11 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
       if (this.settingsResource) this._onDidInitialize.fire(model);
       return model;`);
     let result = replaceOnce(source, source.slice(start, end), contents);
+    // 默认值／信任变化只重解析已加载正文；磁盘变化仍由原 watcher 刷新持久缓存。
+    result = replaceOnce(result, `const configurationModel = this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
+\t\tthis.updateCache();
+\t\treturn configurationModel;`,
+      'return this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });');
     // 目标来源不可用不能被原本面向本地缺省文件的空模型吞掉；文件缺失仍沿原缺省语义。
     result = replaceOnce(result, "this.logService.trace(`Error while resolving configuration file '${resource.toString()}': ${errors.getErrorMessage(error)}`);",
       `if ((resource.scheme === 'boxteam' || resource.scheme === 'boxteam-file')

@@ -13,6 +13,10 @@ const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
 await build({ stdin: { contents: `
 export { ConfigurationCache } from '${upstream}workbench/services/configuration/common/configurationCache.js';
 export { FolderConfiguration } from '${upstream}workbench/services/configuration/browser/configuration.js';
+export { DefaultConfiguration as RegistryDefaultConfiguration } from '${upstream}platform/configuration/common/configurations.js';
+export { Registry } from '${upstream}platform/registry/common/platform.js';
+export { ConfigurationScope, Extensions } from '${upstream}platform/configuration/common/configurationRegistry.js';
+export { WorkbenchState } from '${upstream}platform/workspace/common/workspace.js';
 export { UriIdentityService } from '${upstream}platform/uriIdentity/common/uriIdentityService.js';
 export { Event } from '${upstream}base/common/event.js';
 export { workspaceFileUri } from './src/clients/workbench/src/workspaceFiles.js';
@@ -25,7 +29,7 @@ export { VSBuffer } from '${upstream}base/common/buffer.js';
   plugins: [buildSourcePlugin(root, transform)], tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 const m = await import(pathToFileURL(bundle).href);
 const key = { type: 'folder', key: 'resource-A' };
-const receipt = { boundary: '真实ConfigurationCache、FileService与内存文件Provider；仅在createFolder边界延迟首次目录准备，不复制缓存实现', checks: [] };
+const receipt = { boundary: '真实ConfigurationCache、FolderConfiguration、Registry/DefaultConfiguration、FileService与内存Provider；默认值事件到FolderConfiguration.reparse由具名测试回调连接，目录准备和失败为明确装具，不复制缓存实现；不代表完整WorkspaceService编排、真实HTTP、IndexedDB或页面验收', checks: [] };
 
 async function fixture(callback) {
   const files = new m.FileService(new m.NullLogService());
@@ -182,6 +186,75 @@ test('真实非本地FolderConfiguration消费原缓存：更新／删除及另�
     } finally {
       for (const folder of folders) folder.dispose();
       saves.mockRestore(); removals.mockRestore(); identity.dispose(); provider.dispose();
+    }
+  });
+});
+
+test('真实默认值／scope／restricted变化和信任重解析只消费已加载正文，不重复读取或写缓存', async () => {
+  await fixture(async f => {
+    f.release();
+    const provider = new m.InMemoryFileSystemProvider(), registration = f.files.registerProvider('boxteam-file', provider);
+    const identity = new m.UriIdentityService(f.files), registry = m.Registry.as(m.Extensions.Configuration), log = new m.NullLogService();
+    const regular = 'configurationCacheProbe.regular', restricted = 'configurationCacheProbe.restricted', scoped = 'configurationCacheProbe.scoped';
+    const schema = (defaultValue, scope, restrictRegular) => ({ id: 'configuration-cache-reparse-probe', properties: {
+      [regular]: { type: 'number', default: defaultValue, scope: m.ConfigurationScope.RESOURCE, restricted: restrictRegular },
+      [restricted]: { type: 'string', default: 'safe-default', scope: m.ConfigurationScope.RESOURCE, restricted: true },
+      [scoped]: { type: 'string', default: 'scope-default', scope },
+    } });
+    let currentSchema = schema(1, m.ConfigurationScope.WINDOW, false), folder, defaults, defaultListener, reads, registered = false;
+    const initialWrite = Promise.withResolvers(), cacheOperations = [], readOperations = [], reparsed = [], expected = [], defaultChanges = [];
+    const save = f.cache.write.bind(f.cache);
+    const writes = spyOn(f.cache, 'write').mockImplementation((key, content) => {
+      const promise = save(key, content); cacheOperations.push(promise); initialWrite.resolve({ key, promise }); return promise;
+    });
+    const snapshot = model => ({ regular: model.getValue(regular), restricted: model.getValue(restricted), scoped: model.getValue(scoped), tasks: model.getValue('tasks.version') });
+    try {
+      registry.registerConfiguration(currentSchema); registered = true;
+      const root = 'boxteam://gateway-reparse/workspace/workspace-A/resources/files/root';
+      const uri = m.workspaceFileUri({ gatewayId: 'gateway-reparse', workspaceId: 'workspace-A' }, root, root), directory = m.URI.joinPath(uri, '.vscode');
+      const settings = m.URI.joinPath(directory, 'settings.json'); await f.files.createFolder(directory);
+      for (const name of ['tasks', 'launch', 'mcp']) await f.files.writeFile(m.URI.joinPath(directory, name + '.json'), m.VSBuffer.fromString(name === 'tasks' ? '{"version":"2.0.0","tasks":[]}' : '{}'));
+      // 初始文件事件先经原 Provider 派发，避免把种子写入的迟到通知计为重解析读取。
+      const seeded = m.Event.toPromise(m.Event.filter(provider.onDidChangeFile, changes => changes.some(change => change.resource.toString() === settings.toString())));
+      await f.files.writeFile(settings, m.VSBuffer.fromString(JSON.stringify({ [regular]: 17, [restricted]: 'workspace-command', [scoped]: 'from-file' }))); await seeded;
+      folder = new m.FolderConfiguration(true, { uri }, '.vscode', m.WorkbenchState.WORKSPACE, true, f.files, identity, log, f.cache);
+      const ready = m.Event.toPromise(folder.onDidChange); await folder.loadConfiguration(); await ready;
+      const cached = await initialWrite.promise; await cached.promise;
+      expect(snapshot(await folder.loadConfiguration())).toEqual({ regular: 17, restricted: 'workspace-command', scoped: undefined, tasks: '2.0.0' });
+      expect(JSON.parse(JSON.parse(await f.cache.read(cached.key)).content.settings)[restricted]).toBe('workspace-command');
+      defaults = new m.RegistryDefaultConfiguration(log); await defaults.initialize();
+      expect(defaults.configurationModel.getValue(regular)).toBe(1);
+      // 只替换 WorkspaceService 的事件编排；默认模型、重新解析和信任过滤均执行原 owner。
+      defaultListener = defaults.onDidChangeConfiguration(event => {
+        if (event.properties.includes(regular)) defaultChanges.push({ value: event.defaults.getValue(regular), model: snapshot(folder.reparse()) });
+      });
+      const baselineWrites = writes.mock.calls.length, read = f.files.readFile.bind(f.files);
+      reads = spyOn(f.files, 'readFile').mockImplementation((...args) => { const promise = read(...args); readOperations.push(promise); return promise; });
+      const variants = [
+        { value: 31, scope: m.ConfigurationScope.RESOURCE, restrictRegular: true, scoped: 'from-file', untrustedRegular: undefined },
+        { value: 32, scope: m.ConfigurationScope.WINDOW, restrictRegular: false, scoped: undefined, untrustedRegular: 17 },
+      ];
+      for (const variant of variants) {
+        const previous = currentSchema; currentSchema = schema(variant.value, variant.scope, variant.restrictRegular);
+        registry.updateConfigurations({ remove: [previous], add: [currentSchema] });
+        const trusted = { regular: 17, restricted: 'workspace-command', scoped: variant.scoped, tasks: '2.0.0' };
+        const untrusted = { ...trusted, regular: variant.untrustedRegular, restricted: undefined };
+        for (let index = 0; index < 3; index++) { reparsed.push(snapshot(folder.reparse())); expected.push(trusted); }
+        reparsed.push(snapshot(folder.updateWorkspaceTrust(false))); expected.push(untrusted);
+        for (let index = 0; index < 3; index++) { reparsed.push(snapshot(folder.reparse())); expected.push(untrusted); }
+        reparsed.push(snapshot(folder.updateWorkspaceTrust(true))); expected.push(trusted);
+      }
+      // 若旧实现启动了异步重读，先让原读写链收尾再断言，失败时也不向下个测试遗留任务。
+      await Promise.all(readOperations); await new Promise(resolve => setTimeout(resolve, 0)); await Promise.all(cacheOperations.slice(baselineWrites));
+      expect(defaultChanges).toEqual(variants.map(variant => ({ value: variant.value,
+        model: { regular: 17, restricted: 'workspace-command', scoped: variant.scoped, tasks: '2.0.0' } })));
+      expect(reparsed).toEqual(expected); expect(baselineWrites).toBeGreaterThan(0);
+      expect(reads).not.toHaveBeenCalled(); expect(writes.mock.calls).toHaveLength(baselineWrites);
+      receipt.checks.push('真实Registry默认值/scope/restricted事件及反复信任切换消费原正文，受限设置实际消失/恢复，零新增readFile/cache.write；原文件更新/删除链另测保留');
+    } finally {
+      defaultListener?.dispose(); defaults?.dispose(); folder?.dispose(); reads?.mockRestore(); writes.mockRestore();
+      if (registered) registry.deregisterConfigurations([currentSchema]);
+      identity.dispose(); registration.dispose(); provider.dispose();
     }
   });
 });

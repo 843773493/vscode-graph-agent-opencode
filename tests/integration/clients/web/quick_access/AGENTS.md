@@ -52,7 +52,7 @@ pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Work
 
 `change_documents.test.mjs` 使用真实只读 Provider、TextModelResolverService 和 TextResourceEditorModel，仅替换路由／HTTP及底层文本存取；核并发、版本、失败重试和最后引用释放。`test_change_documents.py` 复用 model_stream 通过真实执行创建更改，正式 Gateway 页面从会话资源打开原 Diff，验证分屏、完整补丁、旧引用归一及来源／Diff 刷新恢复，不预写历史或浏览器存储。
 
-`configuration_cache.test.mjs` 使用真实 ConfigurationCache、FolderConfiguration、FileService 和内存 Provider，经唯一文件投影核对非本地配置更新／删除；仅在目录准备边界延迟或拒绝操作，验证单条目顺序、失败传播与独立 key。该检查不替代真实 IndexedDB、页面刷新或打包 Electron；本地设置保存／刷新由 `test_workspace_metadata_bootstrap.py` 的真实入口验证。
+`configuration_cache.test.mjs` 使用真实 ConfigurationCache、FolderConfiguration、FileService 和内存 Provider，经唯一文件投影核对非本地配置更新／删除；在目录准备边界延迟或拒绝操作，验证单条目顺序、失败传播与独立 key。默认配置／schema 更新使用原 Registry／DefaultConfiguration，事件到 reparse 为具名编排回调，核反复重解析零新增读取／缓存写入及实际信任过滤；不代表完整 WorkspaceService 编排。该检查不替代真实 IndexedDB、页面刷新或打包 Electron；本地设置保存／刷新由 `test_workspace_metadata_bootstrap.py` 的真实入口验证。
 
 `test_configuration_cache.py` 经真实 Gateway 和正式 Workbench 验证原 Profile、A/B 配置归属及正常关闭恢复；故障变体只在独占资产副本的原 IndexedDB Provider 插入精确写入屏障，放行后继续原方法。保留全部资产指纹及唯一插入差异，不修改共享构建、预写 IndexedDB 或变异原型；插桩变体属于 Integration，不代替未修改发行产物或 Electron 验收。
 

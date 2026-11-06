@@ -36,7 +36,7 @@ Vite 依赖扫描只从本产品 index.html 开始，不扫描上游样例／测
 
 原 TextEditorService 的输入创建点统一归一项目只读引用；旧更改 FileEditorInput、历史和新打开都收敛为相同资源身份及原只读输入。转换仍走同一精确锚点管线并纳入实际转换源码类型检查，不在各消费者保留旧投影解析。
 
-ConfigurationCache 继续使用原 type／key、cacheHome 与单条目队列；目录准备和正文写入必须一起排队，防止迟到保存越过后发更新或删除。目录或写入失败保留原原因，不以返回成功掩盖；本地 workbench 设置仍不重复缓存，非本地配置由原消费者更新。
+ConfigurationCache 继续使用原 type／key、cacheHome 与单条目队列；目录准备和正文写入必须一起排队，防止迟到保存越过后发更新或删除。目录或写入失败保留原原因，不以返回成功掩盖；本地 workbench 设置仍不重复缓存，非本地配置由原消费者更新。FolderConfiguration 的默认值／scope／信任重解析只使用已加载正文，不重新读盘刷新原文缓存；首次 provider 就绪与真实文件变化仍由原 onDidFolderConfigurationChange 更新缓存。
 
 扩展 staging／发布的目录过滤仅检查复制源内部的相对路径；源码祖先目录名不得影响结果，路径分隔符使用当前平台约定。`extensions.test.mjs` 用真实文件复制验证祖先目录、内部测试／依赖排除及上游原件不变；不代替完整扩展编译与 Workbench 页面验收。
 
