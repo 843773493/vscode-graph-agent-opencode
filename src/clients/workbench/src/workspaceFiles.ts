@@ -19,7 +19,7 @@ import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_g
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
-import { getWorkspaceFileRoots, getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
+import { getWorkspaceFileRoots, getWorkspaceFiles, getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
 import { openWorkspaceFileIntentStore } from '../../web/src/state/workspaceFiles/intentStore.js';
@@ -405,7 +405,20 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   }
   // 此 provider 读取原字节并沿原文本合同保存；目录管理复用会话文件树的 operation receipt 链路。
   async mkdir(resource: URI): Promise<void> { await this.createEntry(resource, 'directory'); }
-  async readdir(): Promise<[string, FileType][]> { throw createFileSystemProviderError('请在 Thread 的文件资源中浏览目录', FileSystemProviderErrorCode.FileNotADirectory); }
+  async readdir(resource: URI): Promise<[string, FileType][]> {
+    const source = workspaceFileSource(resource), entries: [string, FileType][] = [];
+    let cursor: string | null | undefined;
+    do {
+      const page = await this.access(resource, workspaceKey => getWorkspaceFiles(0, source.path, workspaceKey, undefined, cursor));
+      if (page.directory_key?.workspace_id !== source.workspaceId) throw new Error('文件目录列表不属于请求工作区');
+      entries.push(...page.items!.map((item): [string, FileType] => [item.name, item.kind === 'directory' ? FileType.Directory : FileType.File]));
+      if (page.truncated && !page.next_cursor || page.next_cursor && page.next_cursor === cursor) {
+        throw new Error('文件目录列表未完整返回且没有可继续的分页游标');
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    return entries;
+  }
   async delete(): Promise<void> { throw new Error('文本资源不支持直接删除后端文件'); }
   async rename(): Promise<void> { throw new Error('文本资源不支持直接重命名后端文件'); }
 }

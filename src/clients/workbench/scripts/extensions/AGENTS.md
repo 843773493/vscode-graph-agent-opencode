@@ -14,6 +14,8 @@
 
 原窗口 Registry 是唯一扩展事实源；Host 集合由其派生且保持公开 ID 唯一。静态贡献候选必须先验证后启动 Host，主线程回调保留原代际准入。每 Backend 当前只有一个明确 default view，集合变更要求 reload；必要文档过滤不代表全部扩展 API 已完成隔离。测试及产物遵守根 AGENTS。
 
+VSIX 原命令 ID、菜单及拖放调用保持；只精确替换两条原 action 的安装处理与菜单门槛，不保留单 local／remote 安装回退。目标视图 getter 直接投影原运行位置 owner，不能另存安装目标；转换源码纳入同一真实类型检查和构建。
+
 Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成，MainThreadStorage 读写和通知使用同一身份；Web 保留原 profile 行为。目标文件型存储位置沿认证初始化映射，不把窗口状态库当目标文件系统。目标 Node 的跨设备 setKeysForSync 未迁齐消费者时从原公开 API 明确拒绝，不能写无人消费的声明。
 
 目标 SecretStorage 尚未接入消费侧 owner，Node 入口在秘密进入浏览器 RPC 前拒绝；主线程不读写或向目标宿主广播 Web 秘密。Web 原秘密 API 保持，明确拒绝不等同目标能力已实现。

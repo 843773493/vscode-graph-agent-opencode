@@ -19,3 +19,5 @@
 安装身份来自 API envelope，工作区集合来自原 IWorkspaceContextService；每个 Backend 当前只支持一个明确 default view，集合变更必须 reload。初始化位置只读已认证 binding，URI 只转换 typed 字段并复用 workspaceFiles 原投影；原宿主协议和代际撤销机制保持。测试和临时产物遵守根 AGENTS。
 
 目标配置与 workspace context 由每个 host 的原 WorkspaceService 同时持有；原 MainThread customer 从同一 child DI 取得它。profile／多根配置只访问认证 binding 的两个具名资源，folder 配置复用普通工作区文件链；不轮换窗口 RemoteAgent，不新增正文、保存基线或配置合并实现。共享配置 provider 只合并同一资源的有效传输引用，文件 RPC 仍核发起 host 的精确资源。
+
+原 VSIX 安装 action 从原扩展服务读取已有目标视图，文件选择前冻结 Backend／完整有序工作区集合，不再枚举库存或调用宿主发现；来源整批准入后才交唯一安装 API。进度与通知沿原服务，批次失败保留已核实回执，安装成功不宣称当前宿主已切版。此入口依赖原窗口视图已建立，仅安装权限的初始化仍是明确 TODO，不得据此宣称权限完全解耦。

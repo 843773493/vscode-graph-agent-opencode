@@ -17,7 +17,7 @@ import '../../web/node_modules/fake-indexeddb/auto/index.js';
 import { openWorkspaceFileIntentStore } from '../../web/src/state/workspaceFiles/intentStore.js';
 import { dispatchWorkspaceFileIntent, waitForWorkspaceFileOperation } from '../../web/src/state/workspaceFiles/dispatcher.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
-import type { WorkspaceFileOperationReceipt } from '../../web/src/types/backend.js';
+import type { WorkspaceFileList, WorkspaceFileOperationReceipt } from '../../web/src/types/backend.js';
 
 const owner = { gatewayId: 'gateway_file_test', workspaceId: 'workspace-a' };
 const ownerKey = gatewayWorkspaceKey(owner);
@@ -710,5 +710,78 @@ describe('后端文件目录根和稳定投影', () => {
       try { expect(await notified.promise).toContain('原 SSE 失败：watch-request'); }
       finally { second.dispose(); }
     } finally { first.dispose(); listener.dispose(); stream.mockRestore(); files.dispose(); }
+  });
+});
+
+describe('后端文件目录读取', () => {
+  function page(items: NonNullable<WorkspaceFileList['items']>, pagination: Partial<WorkspaceFileList> = {}): WorkspaceFileList {
+    return { path: root, root_path: root, directory_key: { workspace_id: owner.workspaceId, scope: 'workspace', root, path: root },
+      directory_revision: 7, items, truncated: false, limit: 500, ...pagination };
+  }
+
+  test('原FileService.resolve调用stat/readdir，多页名称、类型和完整workspace key保持', async () => {
+    const files = fileService(), resource = workspaceFileUri(owner, root, root), provider = files.getProvider(resource.scheme)!;
+    const stat = spyOn(provider, 'stat'), readdir = spyOn(provider, 'readdir');
+    const discovery = spyOn(gateway, 'workspaces').mockRejectedValue(new Error('目录读取不应枚举工作区'));
+    const request = spyOn(gateway, 'request').mockResolvedValue({ node: { uri: root, resource_shape: 'directory',
+      stat: { size: 0, modified_at_ms: 1200, changed_at_ms: 1100 } } });
+    const list = spyOn(fileApi, 'getWorkspaceFiles')
+      .mockResolvedValueOnce(page([{ name: '中文 🧪 目录', path: root + '/' + encodeURIComponent('中文 🧪 目录'), kind: 'directory' },
+        { name: '%2F.vsix', path: root + '/%252F.vsix', kind: 'file' }], { truncated: true, next_cursor: 'signed-cursor-one' }))
+      .mockResolvedValueOnce(page([{ name: '含#?@.vsix', path: root + '/%E5%90%AB%23%3F%40.vsix', kind: 'file' }],
+        { truncated: true, next_cursor: 'signed-cursor-two' }))
+      .mockResolvedValueOnce(page([{ name: '100%.vsix', path: root + '/100%25.vsix', kind: 'file' }]));
+    try {
+      const resolved = await files.resolve(resource, { resolveMetadata: false });
+      expect(resolved.isDirectory).toBe(true);
+      expect(resolved.children?.map(child => [child.name, child.isDirectory, child.isFile])).toEqual([
+        ['中文 🧪 目录', true, false], ['%2F.vsix', false, true], ['含#?@.vsix', false, true], ['100%.vsix', false, true],
+      ]);
+      for (const child of resolved.children!) {
+        expect(workspaceFileSource(child.resource)).toEqual({ ...owner, root, path: root + '/' + encodeURIComponent(child.name) });
+        expect(child.resource.query).toBe(''); expect(child.resource.fragment).toBe('');
+      }
+      expect(stat.mock.calls).toEqual([[resource]]); expect(readdir.mock.calls).toEqual([[resource]]);
+      expect(request.mock.calls).toEqual([[`/api/v1/workspaces/${owner.workspaceId}/resources/navigation`, {
+        method: 'POST', body: JSON.stringify({ uri: root, operation: 'describe' }),
+      }, ownerKey]]);
+      expect(list.mock.calls).toEqual([[0, root, ownerKey, undefined, undefined],
+        [0, root, ownerKey, undefined, 'signed-cursor-one'], [0, root, ownerKey, undefined, 'signed-cursor-two']]);
+      expect(discovery).not.toHaveBeenCalled();
+    } finally { stat.mockRestore(); readdir.mockRestore(); list.mockRestore(); discovery.mockRestore(); request.mockRestore(); files.dispose(); }
+  });
+
+  for (const [status, expected] of [[403, FileSystemProviderErrorCode.NoPermissions], [404, FileSystemProviderErrorCode.FileNotFound]] as const) {
+    test(`目录HTTP ${status}经原access映射明确拒绝，不返回空目录或枚举工作区`, async () => {
+      const files = fileService(), resource = workspaceFileUri(owner, root, root), provider = files.getProvider(resource.scheme)!;
+      const discovery = spyOn(gateway, 'workspaces').mockRejectedValue(new Error('目录错误不应触发工作区枚举'));
+      const list = spyOn(fileApi, 'getWorkspaceFiles').mockRejectedValue(new GatewayRequestError(status, 'Directory Error',
+        '目录读取失败：original-directory-request', '/api/v1/workspace/files', 'original-directory-request'));
+      try {
+        // 原FileService会将readdir失败转为空children；此处只证明provider的错误合同，不冒充对话框错误呈现。
+        const failure = await provider.readdir(resource).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error); expect(toFileSystemProviderErrorCode(failure)).toBe(expected);
+        expect((failure as Error).message).toContain('目录读取失败：original-directory-request');
+        expect(list.mock.calls).toEqual([[0, root, ownerKey, undefined, undefined]]); expect(discovery).not.toHaveBeenCalled();
+      } finally { list.mockRestore(); discovery.mockRestore(); files.dispose(); }
+    });
+  }
+
+  for (const continuation of ['missing', 'unchanged'] as const) test(`目录分页${continuation}续点时拒绝整批部分列表`, async () => {
+    const files = fileService(), resource = workspaceFileUri(owner, root, root), provider = files.getProvider(resource.scheme)!;
+    const discovery = spyOn(gateway, 'workspaces').mockRejectedValue(new Error('分页错误不应触发工作区枚举'));
+    const list = spyOn(fileApi, 'getWorkspaceFiles');
+    const partial = [{ name: 'partial.vsix', path: root + '/partial.vsix', kind: 'file' }];
+    if (continuation === 'unchanged') list.mockResolvedValueOnce(page(partial, { truncated: true, next_cursor: 'same-cursor' }));
+    list.mockResolvedValueOnce(page(partial, { truncated: true, next_cursor: continuation === 'missing' ? undefined : 'same-cursor' }))
+      .mockRejectedValue(new Error('分页无进展时不得继续读取'));
+    try {
+      const failure = await provider.readdir(resource).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error); expect((failure as Error).message).toContain('没有可继续的分页游标');
+      expect(list.mock.calls).toEqual(continuation === 'missing' ? [[0, root, ownerKey, undefined, undefined]] : [
+        [0, root, ownerKey, undefined, undefined], [0, root, ownerKey, undefined, 'same-cursor'],
+      ]);
+      expect(discovery).not.toHaveBeenCalled();
+    } finally { list.mockRestore(); discovery.mockRestore(); files.dispose(); }
   });
 });

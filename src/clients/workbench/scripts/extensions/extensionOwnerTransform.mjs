@@ -46,18 +46,18 @@ assertHostConfigurationFile(this.extHostContext.extensionHost, URI.revive(target
     let contents = `import type { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import type { IURITransformer } from '../../../../base/common/uriIpc.js';
 import type { ExtensionHostConnectionDTO } from ${JSON.stringify(join(root, '../web/src/types/protocol_generated/boxteam/gateway/v2/public.js'))};\n` + source;
-    contents = replaceOnce(contents, 'ExtensionIdentifier, ExtensionIdentifierMap,', 'ExtensionIdentifier, ExtensionInstallationTarget, ExtensionIdentifierMap,');
+    contents = replaceOnce(contents, 'ExtensionIdentifier, ExtensionIdentifierMap,', 'ExtensionIdentifier, ExtensionInstallationTarget, IExtensionWorkspaceView, ExtensionIdentifierMap,');
     contents = replaceOnce(contents, 'export interface IExtensionHost {', `export interface IExtensionHost {
   readonly binding?: ExtensionHostConnectionDTO;
   readonly customerInstantiationService?: IInstantiationService;
   readonly uriTransformer?: IURITransformer;`);
     contents = replaceOnce(contents, 'export interface IExtensionsStatus {', 'export interface IExtensionsStatus {\n  installationTarget: ExtensionInstallationTarget;');
     contents = replaceOnce(contents, 'export interface IMessage {', 'export interface IMessage {\n  installationTarget?: ExtensionInstallationTarget;');
-    contents = replaceOnce(contents, '\tgetExtension(id: string): Promise<IExtensionDescription | undefined>;', '\tgetExtension(id: string, target?: ExtensionInstallationTarget): Promise<IExtensionDescription | undefined>;\n  getExtensionHosts(): readonly IExtensionHost[];\n  getHostExtensions(host: IExtensionHost): readonly IExtensionDescription[];');
+    contents = replaceOnce(contents, '\tgetExtension(id: string): Promise<IExtensionDescription | undefined>;', '\tgetExtension(id: string, target?: ExtensionInstallationTarget): Promise<IExtensionDescription | undefined>;\n  getExtensionHosts(): readonly IExtensionHost[];\n  getExtensionWorkspaceViews(): readonly IExtensionWorkspaceView[];\n  getHostExtensions(host: IExtensionHost): readonly IExtensionDescription[];');
     contents = replaceOnce(contents, 'activateByEvent(activationEvent: string, activationKind?: ActivationKind): Promise<void>;', 'activateByEvent(activationEvent: string, activationKind?: ActivationKind, host?: IExtensionHost): Promise<void>;');
     contents = replaceOnce(contents, 'canAddExtension(extension: IExtensionDescription): boolean;', 'canAddExtension(extension: IExtension): boolean;');
     contents = replaceOnce(contents, 'canRemoveExtension(extension: IExtensionDescription): boolean;', 'canRemoveExtension(extension: IExtension): boolean;');
-    contents = replaceOnce(contents, '\tgetExtension() { return Promise.resolve(undefined); }', '\tgetExtension() { return Promise.resolve(undefined); }\n  getExtensionHosts(): readonly IExtensionHost[] { return []; }\n  getHostExtensions(): readonly IExtensionDescription[] { return []; }');
+    contents = replaceOnce(contents, '\tgetExtension() { return Promise.resolve(undefined); }', '\tgetExtension() { return Promise.resolve(undefined); }\n  getExtensionHosts(): readonly IExtensionHost[] { return []; }\n  getExtensionWorkspaceViews(): readonly IExtensionWorkspaceView[] { return []; }\n  getHostExtensions(): readonly IExtensionDescription[] { return []; }');
     contents = replaceOnce(contents, '\t\tvalidations: [],\n\t\tisValid: true,', '\t\tvalidations: extensionDescription.validations ?? [],\n\t\tisValid: extensionDescription.isValid ?? true,\n    installationTarget: extensionDescription.installationTarget,\n    enablementView: extensionDescription.enablementView,');
     contents = replaceOnce(contents, '\t\t...extension.manifest\n\t};', '\t\t...extension.manifest,\n    installationTarget: extension.installationTarget,\n    enablementView: extension.enablementView,\n    isValid: extension.isValid,\n    validations: extension.validations\n\t};');
     return contents;
@@ -141,6 +141,7 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
     return extension.installationTarget;
   }
   public getExtensionHosts(): readonly IExtensionHost[] { return this._extensionHostManagers.map(manager => manager.extensionHost); }
+  public getExtensionWorkspaceViews(): readonly IExtensionWorkspaceView[] { return this._runningLocations.remoteRunningLocations; }
   public getHostExtensions(host: IExtensionHost): readonly IExtensionDescription[] {
     return this.getExtensionHosts().includes(host)
       ? this._runningLocations.filterByRunningLocation(this._registry.getAllExtensionDescriptions(), host.runningLocation) : [];
