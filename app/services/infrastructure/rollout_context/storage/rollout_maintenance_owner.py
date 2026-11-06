@@ -46,6 +46,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
     MODEL_CALLS_ASSEMBLY_INDEX_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    SOURCE_OVERLAY_LOCATOR_INDEXES_SQL,
     TOOL_CALLS_MESSAGE_INDEX_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
@@ -614,4 +615,5 @@ class RolloutMaintenanceOwner(
                     connection.execute(MODEL_CALLS_ASSEMBLY_INDEX_SQL)
                     connection.execute(CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL)
                     connection.execute(CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL)
+                    execute_atomic_schema_sql(connection, SOURCE_OVERLAY_LOCATOR_INDEXES_SQL)
                 return manifest
