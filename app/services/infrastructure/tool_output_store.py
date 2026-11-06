@@ -275,14 +275,6 @@ def _file_matches_bytes(path: Path, expected: bytes) -> bool:
         return stream.read(1) == b""
 
 
-def _take_prefix_bytes(text: str, limit: int) -> str:
-    return text.encode("utf-8")[:limit].decode("utf-8", errors="ignore")
-
-
-def _take_suffix_bytes(text: str, limit: int) -> str:
-    return text.encode("utf-8")[-limit:].decode("utf-8", errors="ignore")
-
-
 def _iter_source_lines(text: str) -> Iterator[str]:
     """按 splitlines 的边界产出行，避免复制整份文本的行列表。"""
     if not text:
@@ -295,34 +287,31 @@ def _iter_source_lines(text: str) -> Iterator[str]:
         yield text[start:]
 
 
-def _bounded_preview(
+def _preview_parts(
     text: str,
     *,
-    marker: str,
     max_lines: int,
     max_bytes: int,
-) -> str:
-    separator = "\n\n"
-    fixed_bytes = len((separator + marker + separator).encode("utf-8"))
-    if fixed_bytes >= max_bytes:
-        raise ValueError("工具输出 marker 超过最大预览字节数")
-
-    available_lines = max_lines - marker.count("\n") - 4
-    head_line_count = (available_lines + 1) // 2
-    tail_line_count = available_lines // 2
+) -> tuple[bytes, bytes]:
+    """只抽取并编码一次首尾行，不随结构化预览的字节预算重复扫描正文。"""
+    head_line_count = (max_lines + 1) // 2
+    tail_line_count = max_lines // 2
     head_lines: list[str] = []
     tail_lines: deque[str] = deque(maxlen=max(0, tail_line_count))
     for line_index, line in enumerate(_iter_source_lines(text)):
         if line_index < head_line_count:
             head_lines.append(line)
         tail_lines.append(line)
-    head = "\n".join(head_lines)
-    tail = "\n".join(tail_lines) if tail_line_count else ""
+    head = "\n".join(head_lines).encode("utf-8")[:max_bytes]
+    tail = "\n".join(tail_lines).encode("utf-8") if tail_line_count else b""
+    return head, tail
 
-    available_bytes = max_bytes - fixed_bytes
-    head = _take_prefix_bytes(head, (available_bytes + 1) // 2)
-    tail = _take_suffix_bytes(tail, available_bytes // 2)
-    return f"{head.rstrip()}{separator}{marker}{separator}{tail.lstrip()}"
+
+def _format_preview(parts: tuple[bytes, bytes], marker: str, available_bytes: int) -> str:
+    head, tail = parts
+    head_text = head[:(available_bytes + 1) // 2].decode("utf-8", errors="ignore")
+    tail_text = tail[-(available_bytes // 2):].decode("utf-8", errors="ignore")
+    return f"{head_text.rstrip()}\n\n{marker}\n\n{tail_text.lstrip()}"
 
 
 def _bounded_structured_preview(
@@ -337,35 +326,24 @@ def _bounded_structured_preview(
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        return _bounded_preview(
-            text,
-            marker=marker,
-            max_lines=max_lines,
-            max_bytes=max_bytes,
-        )
-
-    if not isinstance(payload, dict) or not isinstance(payload.get("output"), str):
-        return _bounded_preview(
-            text,
-            marker=marker,
-            max_lines=max_lines,
-            max_bytes=max_bytes,
-        )
-
-    output = payload["output"]
+        payload = None
+    structured = isinstance(payload, dict) and isinstance(payload.get("output"), str)
     marker_bytes = len(("\n\n" + marker + "\n\n").encode("utf-8"))
+    if marker_bytes >= max_bytes:
+        raise ValueError("结构化工具输出的元数据超过最大预览字节数" if structured else "工具输出 marker 超过最大预览字节数")
+    parts = _preview_parts(
+        payload["output"] if structured else text,
+        max_lines=max_lines - marker.count("\n") - 4, max_bytes=max_bytes,
+    )
+    if not structured:
+        return _format_preview(parts, marker, max_bytes - marker_bytes)
     lower_bound = marker_bytes + 1
     upper_bound = max_bytes
     best: str | None = None
+    candidate_payload = dict(payload)
     while lower_bound <= upper_bound:
         preview_budget = (lower_bound + upper_bound) // 2
-        candidate_payload = dict(payload)
-        candidate_payload["output"] = _bounded_preview(
-            output,
-            marker=marker,
-            max_lines=max_lines,
-            max_bytes=preview_budget,
-        )
+        candidate_payload["output"] = _format_preview(parts, marker, preview_budget - marker_bytes)
         candidate = json.dumps(candidate_payload, ensure_ascii=False)
         if len(candidate.encode("utf-8")) <= max_bytes:
             best = candidate
