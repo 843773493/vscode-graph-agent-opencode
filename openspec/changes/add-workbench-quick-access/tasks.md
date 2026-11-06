@@ -117,6 +117,7 @@
 
 - [ ] 11.1 将项目业务动作注册为同一 Action／Command，迁齐原菜单、React 操作和 picker 消费者；目标优先显式参数，再发起 editor owner，仍不明确才选择。
 - [ ] 11.2 接入 `session `／`thread `／`resource `，覆盖 Skill／AGENTS／配置、附件／工具结果、变更的真实数据与能力，非文本交相应视图，不为各类再建通用状态机。
+  - `resource ` 已接入工作区根 AGENTS 的真实元数据发现和原只读 SourceDocuments 打开；复用唯一 URI parser，在同一次解析中传递明确来源 Gateway，保留工作区与目标组身份。共享树6项API／OpenAPI、30项Provider／原来源合同（253条断言）、51份实际转换源码类型检查及正式构建通过；独占快照真实Gateway双工作区页面核候选浏览／取消零正文读取、一次读取原正文、只读、侧边共享模型和删除源后的原404，pageErrors为空。远端Gateway仅HTTP合同装具，未验真实联邦／Electron；Skill、配置及其余类别继续未完成。精确源码、原始结果及复用边界见 `out/tests/temp/2026/11/05/resource_quick_access/artifacts/root-integration.json`。
 - [x] 11.3 接入 `automation ` 的任务详情、已有开始／暂停／继续／编辑／终止／删除／试运行及历史操作，按原状态和 revision 可用；暂停任务不冒充停止 turn，试运行不自动执行后续动作。
   - 原任务按钮与Quick Access共用具名Action／Command及唯一写入／权威回读结算；未打开详情可直接暂停、恢复、检查试运行或确认终止，详情／编辑／历史复用精确owner的原TaskView。后端无独立start／delete，不虚构API；Goal仅发现与展示，控制继续原Goal卡片。29项合同／159条断言与真实Gateway＋正式Workbench页面通过，核12个写回执、真实409、A/B隔离、关闭未受理浮层零写入及受理后不撤销／重放，pageErrors与多余写入均零。根集成51份实际转换的类型检查、正式Web构建和同29项短测通过；Web独立tsc仍有28条原诊断，无本片新增。精确补丁、源码指纹、失败原件与适用边界见 `out/tests/temp/2026/11/05/automation_quick_actions/artifacts/verification.json` 和 `root-integration.json`；综合动作／目录outbox、恢复与Electron验收继续由原未完成项追踪。
 - [x] 11.4 接入 `workspace ` 的真实控制面候选、范围选择与独立切换／连接／启动动作，执行时核验冻结目标，不因浏览候选启动后台服务。

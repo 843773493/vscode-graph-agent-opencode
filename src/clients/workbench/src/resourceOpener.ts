@@ -1,4 +1,5 @@
 import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
+import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { Disposable, type IReference } from '../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { ITextModelService, type IResolvedTextEditorModel } from '../upstream/src/vs/editor/common/services/resolverService.js';
@@ -17,6 +18,7 @@ import { sourceDocumentUri } from './sourceDocuments.js';
 
 export interface ResourceOpenOptions extends OpenOptions {
   boxteamTargetGroup?: number;
+  boxteamResourceOwner?: WorkspaceOwner;
 }
 
 /** 所有规范资源链接共用原 Opener；模板和归属仍由后端唯一 owner 解释。 */
@@ -36,14 +38,18 @@ export class ResourceOpener extends Disposable implements IOpener {
     const uri = typeof resource === 'string' ? resource : resource.toString();
     if (!/^boxteam:/i.test(uri)) return false;
     const groupId = options.boxteamTargetGroup ?? this.groups.activeGroup.id;
+    const resourceOwner = options.boxteamResourceOwner && { ...options.boxteamResourceOwner };
     const gatewayId = workspaceContext.getSnapshot().gatewayId;
     if (!gatewayId) throw new Error('尚未取得发起 Gateway 身份，无法打开资源');
     const address = await gateway.request<GatewayResourceAddressDTO>('/api/gateway/resource-addresses/parse', {
-      method: 'POST', body: JSON.stringify({ uri, local_gateway_id: gatewayId }),
+      method: 'POST', body: JSON.stringify({ uri, local_gateway_id: gatewayId, resource_gateway_id: resourceOwner?.gatewayId }),
     });
     if (workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('发起打开的 Gateway 身份已改变，请重新打开资源');
     if (address.scope !== 'workspace') throw new Error(`此资源尚未接入编辑器：${address.scope}/${address.kind}`);
     const owner = { gatewayId: address.gateway_id, workspaceId: address.scope_id };
+    if (resourceOwner && (owner.gatewayId !== resourceOwner.gatewayId || owner.workspaceId !== resourceOwner.workspaceId)) {
+      throw new Error('资源解析响应与明确的 Gateway／工作区归属不匹配');
+    }
     let input: ThreadInput | IResourceEditorInput;
     let reference: IReference<IResolvedTextEditorModel> | undefined;
     if (address.session_id || address.file_root_uri) {

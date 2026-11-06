@@ -4,16 +4,21 @@ import type { ITextModel } from '../upstream/src/vs/editor/common/model.js';
 import type { ILanguageService, ILanguageSelection } from '../upstream/src/vs/editor/common/languages/language.js';
 import type { IModelService } from '../upstream/src/vs/editor/common/services/model.js';
 import type { ITextModelService, ITextModelContentProvider } from '../upstream/src/vs/editor/common/services/resolverService.js';
-import { gateway } from '../src/agentApi.js';
+import { gateway, type WorkspaceTarget } from '../src/agentApi.js';
 import { SourceDocuments, sourceDocumentUri, sourceDocumentSource } from '../src/sourceDocuments.js';
 import { ResourceOpener } from '../src/resourceOpener.js';
 import { workspaceContext } from '../src/workspaceContext.js';
+import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import type { IOpenerService } from '../upstream/src/vs/platform/opener/common/opener.js';
 import type { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import type { IEditorGroupsService } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import type { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 
 const owner = { gatewayId: 'gateway-source', workspaceId: 'workspace-source' };
+const readyTarget: WorkspaceTarget = { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
+  name: '来源', backend_url: 'http://source.invalid', connection_kind: 'local', status: 'ready',
+  active: false, managed: true, removable: true, system_default: false, services: {},
+  checked_at: '2026-11-05T00:00:00Z', affected_workspace_ids: [], remote_gateways: [] };
 const uri = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/skills/skill-a/中文%20%25.md`;
 const resource = sourceDocumentUri(owner, uri);
 const result = { node: { uri, resource_shape: 'file' }, content: '# 原来源', content_encoding: 'utf-8', media_type: 'text', truncated: false };
@@ -50,14 +55,15 @@ describe('只读来源文档的原内容 Provider', () => {
   for (const source of sources) {
     test(`${source.name} 只向重新解析的 ready owner 发一次原导航读取，完整正文进入同一个模型`, async () => {
       const resource = sourceDocumentUri(owner, source.uri), fixture = setup(resource);
-      const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue({ workspace_id: 'new-route', status: 'ready' } as Awaited<ReturnType<typeof gateway.resolveWorkspaceTarget>>);
+      const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue(readyTarget);
       const request = spyOn(gateway, 'request').mockResolvedValue({ ...result, node: { ...result.node, uri: source.uri } });
       try {
         expect(await fixture.read()).toBe(fixture.model);
-        expect(resolve.mock.calls[0][0]).toEqual({ ...owner, uri: source.uri });
+        const expectedSource = { ...owner, uri: source.uri };
+        expect(resolve.mock.calls[0][0]).toEqual(expectedSource);
         expect(request.mock.calls).toHaveLength(1);
         expect(request.mock.calls[0][0]).toBe('/api/v1/resources/navigation');
-        expect(request.mock.calls[0][2]).toBe('new-route');
+        expect(request.mock.calls[0][2]).toBe(gatewayWorkspaceKey(owner));
         expect(JSON.parse(String(request.mock.calls[0][1]?.body))).toMatchObject({ uri: source.uri, operation: 'read', read_format: 'auto' });
         expect(fixture.created).toEqual([{ content: '# 原来源', uri: resource }]);
       } finally { fixture.documents.dispose(); resolve.mockRestore(); request.mockRestore(); }
@@ -66,7 +72,7 @@ describe('只读来源文档的原内容 Provider', () => {
 
   test('截断／非文本／错误归属不伪装为完整来源模型', async () => {
     const fixture = setup();
-    const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue({ workspace_id: 'route', status: 'ready' } as Awaited<ReturnType<typeof gateway.resolveWorkspaceTarget>>);
+    const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue(readyTarget);
     const request = spyOn(gateway, 'request');
     try {
       for (const [response, error] of [
@@ -84,7 +90,7 @@ describe('只读来源文档的原内容 Provider', () => {
 
   test('停止的工作区不读取、不自动启动、不产生模型', async () => {
     const fixture = setup();
-    const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue({ workspace_id: 'route', status: 'stopped' } as Awaited<ReturnType<typeof gateway.resolveWorkspaceTarget>>);
+    const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue({ ...readyTarget, status: 'offline', runtime_action: 'start_managed_backend' });
     const request = spyOn(gateway, 'request');
     try {
       await expect(fixture.read()).rejects.toThrow('请明确启动或连接');

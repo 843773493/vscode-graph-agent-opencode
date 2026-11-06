@@ -21,9 +21,13 @@ from app.api.deps import (
     get_terminal_resource_owner,
     get_text_mutations,
     get_workspace_resource_owner,
+    get_workspace_service,
     verify_local_token,
 )
-from app.core.resource_uri import ResourceUriGrammarError
+from app.core.resource_uri import (
+    ResourceUriGrammarError,
+    workspace_agent_spec_display_uri,
+)
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import FederationError
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
@@ -76,6 +80,7 @@ from app.services.infrastructure.workspace_files.text_owner import (
 from app.services.infrastructure.workspace_files.text_transfer import (
     unconfirmed_text_mutation,
 )
+from app.services.infrastructure.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/resources", tags=["resources"])
 
@@ -122,6 +127,19 @@ async def navigate_resource(
         raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
     except (OSError, UnicodeError) as error:
         raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
+
+
+@router.get("/agent-spec", response_model=APIResponse[ResourceNavigationResultDTO], summary="发现工作区根 AGENTS 来源")
+async def describe_agent_spec(
+    request: Request,
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[ResourceNavigation, Depends(get_resource_navigation)],
+    workspace: Annotated[WorkspaceService, Depends(get_workspace_service)],
+) -> APIResponse[ResourceNavigationResultDTO]:
+    # 只发现固定来源；不编译 runtime、不登记来源、不读取正文或激活上下文。
+    return await navigate_resource(ResourceNavigationRequest(
+        uri=workspace_agent_spec_display_uri(workspace.workspace_id), operation="describe",
+    ), request, _=_, request_id=request_id, owner=owner)
 
 
 @router.post("/text-mutations", response_model=APIResponse[TextMutationTransferDTO])
