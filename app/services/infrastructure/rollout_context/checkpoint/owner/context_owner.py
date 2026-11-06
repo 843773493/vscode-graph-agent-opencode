@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 
@@ -379,19 +380,22 @@ class ContextOwnerMixin(
                 capability_losses=losses if collect_capability_losses else None,
             )
         messages = self.project_message_attachment_refs(session_id, thread_id, messages)
-        tools: list[dict[str, object]] = []
-        if target_format is not None:
-            for entry in committed_plan.selection:
-                if entry.included and isinstance(entry.ref, ToolSetRef):
-                    tools.extend(
-                        project_tool_set_ref(entry.ref, target_format=target_format)
-                    )
         resources = (project_sealed_resource_refs(context.resource_activation)
                      if context.resource_activation is not None else ())
         native = self._project_native_context(
             session_id, thread_id, context, items, resolved_request_content,
             resource_refs=resources,
         ) if include_native else None
+        tools: list[dict[str, object]] = []
+        if target_format == "responses" and native is not None:
+            # 同次 Responses 只编码一次工具；返回副本保持两份投影可独立编辑。
+            tools = deepcopy(native["request"]["tools"])
+        elif target_format is not None:
+            for entry in committed_plan.selection:
+                if entry.included and isinstance(entry.ref, ToolSetRef):
+                    tools.extend(
+                        project_tool_set_ref(entry.ref, target_format=target_format)
+                    )
         return ContextProjectionResult(
             assembly=committed_snapshot, messages=messages, tools=tools,
             losses=tuple(losses), native=native, resource_refs=resources,

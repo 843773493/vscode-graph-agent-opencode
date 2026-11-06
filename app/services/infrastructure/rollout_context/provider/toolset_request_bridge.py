@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Mapping
 
 from app.domain.itemized.identity.refs import ToolSetRef, _tool_identity
@@ -29,12 +28,13 @@ def project_tool_set_ref(
             "detail-unavailable: protected/redacted ToolSetRef 没有可发送的 manifest: "
             f"{tool_set_ref.ref_id}"
         )
+    # tools getter 已隔离嵌套 JSON；本次 wire 只组装外层，不再复制整份 schema。
     by_identity = {_tool_identity(tool): tool for tool in tool_set_ref.tools}
     projected: list[dict[str, object]] = []
     for identity in tool_set_ref.tool_policy["wire_tool_order"]:
         tool = by_identity[identity]
         if tool.get("type") == "function" and isinstance(tool.get("function"), Mapping):
-            function = copy.deepcopy(dict(tool["function"]))
+            function = dict(tool["function"])
             projected.append(
                 {"type": "function", **function}
                 if target_format == "responses"
@@ -54,7 +54,7 @@ def project_tool_set_ref(
         function = {
             "name": name,
             "description": str(tool.get("description", "")),
-            "parameters": copy.deepcopy(dict(parameters)),
+            "parameters": dict(parameters),
         }
         if "strict" in tool:
             function["strict"] = tool["strict"]
