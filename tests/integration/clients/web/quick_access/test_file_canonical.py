@@ -53,6 +53,20 @@ def canonical_workspaces(request: pytest.FixtureRequest, integration_workspace_r
     return context, workspaces
 
 
+def assert_canonical_result(result_path: Path, workspaces: list[Path]) -> dict[str, object]:
+    """Web 与原生容器复用同一业务及磁盘字节验收。"""
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["phase"] == "complete" and result["pageErrors"] == []
+    assert result["threeEntriesOneDirtyModel"] and result["directResolverUsesDirtyModel"]
+    assert result["completeOwnerIsolation"] and result["logicalLinkIndependent"] and result["mixedSensitivityIndependent"]
+    assert result["normalReloadSaved"] and result["restoredConflictPreserved"]
+    assert result["caseOnlyRename"] == (os.name == "nt")
+    filename = "mIXED/DOC.json" if os.name == "nt" else "Mixed/Doc.json"
+    assert workspaces[0].joinpath(filename).read_bytes() == b'{"savedBase":2}\n'
+    assert workspaces[1].joinpath("Mixed/Doc.json").read_bytes() == b'{"otherOwner":2}\n'
+    return result
+
+
 async def test_file_identity_and_dirty_backup_recovery_through_real_gateway(
     request: pytest.FixtureRequest, canonical_workspaces: tuple[TestRunContext, list[Path]],
     search_gateway_port: int, web_workbench_assets: Path,
@@ -87,14 +101,6 @@ async def test_file_identity_and_dirty_backup_recovery_through_real_gateway(
             f"{completed.stdout.decode('utf-8', errors='backslashreplace')}\n"
             f"{completed.stderr.decode('utf-8', errors='backslashreplace')}\n{result_path}"
         )
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        assert result["phase"] == "complete" and result["pageErrors"] == []
-        assert result["threeEntriesOneDirtyModel"] and result["directResolverUsesDirtyModel"]
-        assert result["completeOwnerIsolation"] and result["logicalLinkIndependent"] and result["mixedSensitivityIndependent"]
-        assert result["normalReloadSaved"] and result["restoredConflictPreserved"]
-        assert result["caseOnlyRename"] == (os.name == "nt")
-        filename = "mIXED/DOC.json" if os.name == "nt" else "Mixed/Doc.json"
-        assert workspaces[0].joinpath(filename).read_bytes() == b'{"savedBase":2}\n'
-        assert workspaces[1].joinpath("Mixed/Doc.json").read_bytes() == b'{"otherOwner":2}\n'
+        assert_canonical_result(result_path, workspaces)
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)
