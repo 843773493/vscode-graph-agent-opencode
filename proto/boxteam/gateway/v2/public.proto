@@ -1007,6 +1007,35 @@ message ExtensionHostConnectionDTO {
   string client_id = 6;
   string generation = 7;
   string request_id = 8;
+  ExtensionHostInitializationDTO initialization = 9;
+}
+
+// file URI 是目标机器的原生操作参数；资源关联仍由 resource_uri 表示。
+message ExtensionHostEnvironmentDTO {
+  string app_root_uri = 1;
+  string global_storage_home_uri = 2;
+  string workspace_storage_home_uri = 3;
+}
+
+message ExtensionHostFolderDTO {
+  string workspace_id = 1;
+  string resource_uri = 2;
+  string native_uri = 3;
+  string name = 4;
+}
+
+message ExtensionHostWorkspaceDTO {
+  string id = 1;
+  string name = 2;
+  repeated ExtensionHostFolderDTO folders = 3;
+}
+
+message ExtensionHostInitializationDTO {
+  string os = 1;
+  uint32 parent_pid = 2;
+  ExtensionHostEnvironmentDTO environment = 3;
+  string logs_location_uri = 4;
+  ExtensionHostWorkspaceDTO workspace = 5;
 }
 
 // 实时读取不会启动 Backend 或宿主；已知 Backend 时必须保留身份约束。

@@ -994,6 +994,35 @@ export interface ExtensionHostConnectionDTO {
   client_id: string;
   generation: string;
   request_id: string;
+  initialization: ExtensionHostInitializationDTO | undefined;
+}
+
+/** file URI 是目标机器的原生操作参数；资源关联仍由 resource_uri 表示。 */
+export interface ExtensionHostEnvironmentDTO {
+  app_root_uri: string;
+  global_storage_home_uri: string;
+  workspace_storage_home_uri: string;
+}
+
+export interface ExtensionHostFolderDTO {
+  workspace_id: string;
+  resource_uri: string;
+  native_uri: string;
+  name: string;
+}
+
+export interface ExtensionHostWorkspaceDTO {
+  id: string;
+  name: string;
+  folders: ExtensionHostFolderDTO[];
+}
+
+export interface ExtensionHostInitializationDTO {
+  os: string;
+  parent_pid: number;
+  environment: ExtensionHostEnvironmentDTO | undefined;
+  logs_location_uri: string;
+  workspace: ExtensionHostWorkspaceDTO | undefined;
 }
 
 /** 实时读取不会启动 Backend 或宿主；已知 Backend 时必须保留身份约束。 */
@@ -7620,6 +7649,7 @@ function createBaseExtensionHostConnectionDTO(): ExtensionHostConnectionDTO {
     client_id: "",
     generation: "",
     request_id: "",
+    initialization: undefined,
   };
 }
 
@@ -7636,6 +7666,9 @@ export const ExtensionHostConnectionDTO: MessageFns<ExtensionHostConnectionDTO> 
       client_id: isSet(object.client_id) ? globalThis.String(object.client_id) : "",
       generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
       request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      initialization: isSet(object.initialization)
+        ? ExtensionHostInitializationDTO.fromJSON(object.initialization)
+        : undefined,
     };
   },
 
@@ -7665,6 +7698,9 @@ export const ExtensionHostConnectionDTO: MessageFns<ExtensionHostConnectionDTO> 
     if (message.request_id !== "") {
       obj.request_id = message.request_id;
     }
+    if (message.initialization !== undefined) {
+      obj.initialization = ExtensionHostInitializationDTO.toJSON(message.initialization);
+    }
     return obj;
   },
 
@@ -7681,6 +7717,192 @@ export const ExtensionHostConnectionDTO: MessageFns<ExtensionHostConnectionDTO> 
     message.client_id = object.client_id ?? "";
     message.generation = object.generation ?? "";
     message.request_id = object.request_id ?? "";
+    message.initialization = (object.initialization !== undefined && object.initialization !== null)
+      ? ExtensionHostInitializationDTO.fromPartial(object.initialization)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionHostEnvironmentDTO(): ExtensionHostEnvironmentDTO {
+  return { app_root_uri: "", global_storage_home_uri: "", workspace_storage_home_uri: "" };
+}
+
+export const ExtensionHostEnvironmentDTO: MessageFns<ExtensionHostEnvironmentDTO> = {
+  fromJSON(object: any): ExtensionHostEnvironmentDTO {
+    return {
+      app_root_uri: isSet(object.app_root_uri) ? globalThis.String(object.app_root_uri) : "",
+      global_storage_home_uri: isSet(object.global_storage_home_uri)
+        ? globalThis.String(object.global_storage_home_uri)
+        : "",
+      workspace_storage_home_uri: isSet(object.workspace_storage_home_uri)
+        ? globalThis.String(object.workspace_storage_home_uri)
+        : "",
+    };
+  },
+
+  toJSON(message: ExtensionHostEnvironmentDTO): unknown {
+    const obj: any = {};
+    if (message.app_root_uri !== "") {
+      obj.app_root_uri = message.app_root_uri;
+    }
+    if (message.global_storage_home_uri !== "") {
+      obj.global_storage_home_uri = message.global_storage_home_uri;
+    }
+    if (message.workspace_storage_home_uri !== "") {
+      obj.workspace_storage_home_uri = message.workspace_storage_home_uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostEnvironmentDTO>, I>>(base?: I): ExtensionHostEnvironmentDTO {
+    return ExtensionHostEnvironmentDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostEnvironmentDTO>, I>>(object: I): ExtensionHostEnvironmentDTO {
+    const message = createBaseExtensionHostEnvironmentDTO();
+    message.app_root_uri = object.app_root_uri ?? "";
+    message.global_storage_home_uri = object.global_storage_home_uri ?? "";
+    message.workspace_storage_home_uri = object.workspace_storage_home_uri ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionHostFolderDTO(): ExtensionHostFolderDTO {
+  return { workspace_id: "", resource_uri: "", native_uri: "", name: "" };
+}
+
+export const ExtensionHostFolderDTO: MessageFns<ExtensionHostFolderDTO> = {
+  fromJSON(object: any): ExtensionHostFolderDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      native_uri: isSet(object.native_uri) ? globalThis.String(object.native_uri) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+    };
+  },
+
+  toJSON(message: ExtensionHostFolderDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.native_uri !== "") {
+      obj.native_uri = message.native_uri;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostFolderDTO>, I>>(base?: I): ExtensionHostFolderDTO {
+    return ExtensionHostFolderDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostFolderDTO>, I>>(object: I): ExtensionHostFolderDTO {
+    const message = createBaseExtensionHostFolderDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.resource_uri = object.resource_uri ?? "";
+    message.native_uri = object.native_uri ?? "";
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionHostWorkspaceDTO(): ExtensionHostWorkspaceDTO {
+  return { id: "", name: "", folders: [] };
+}
+
+export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = {
+  fromJSON(object: any): ExtensionHostWorkspaceDTO {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      folders: globalThis.Array.isArray(object?.folders)
+        ? object.folders.map((e: any) => ExtensionHostFolderDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ExtensionHostWorkspaceDTO): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.folders?.length) {
+      obj.folders = message.folders.map((e) => ExtensionHostFolderDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostWorkspaceDTO>, I>>(base?: I): ExtensionHostWorkspaceDTO {
+    return ExtensionHostWorkspaceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostWorkspaceDTO>, I>>(object: I): ExtensionHostWorkspaceDTO {
+    const message = createBaseExtensionHostWorkspaceDTO();
+    message.id = object.id ?? "";
+    message.name = object.name ?? "";
+    message.folders = object.folders?.map((e) => ExtensionHostFolderDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseExtensionHostInitializationDTO(): ExtensionHostInitializationDTO {
+  return { os: "", parent_pid: 0, environment: undefined, logs_location_uri: "", workspace: undefined };
+}
+
+export const ExtensionHostInitializationDTO: MessageFns<ExtensionHostInitializationDTO> = {
+  fromJSON(object: any): ExtensionHostInitializationDTO {
+    return {
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
+      parent_pid: isSet(object.parent_pid) ? globalThis.Number(object.parent_pid) : 0,
+      environment: isSet(object.environment) ? ExtensionHostEnvironmentDTO.fromJSON(object.environment) : undefined,
+      logs_location_uri: isSet(object.logs_location_uri) ? globalThis.String(object.logs_location_uri) : "",
+      workspace: isSet(object.workspace) ? ExtensionHostWorkspaceDTO.fromJSON(object.workspace) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionHostInitializationDTO): unknown {
+    const obj: any = {};
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
+    if (message.parent_pid !== 0) {
+      obj.parent_pid = Math.round(message.parent_pid);
+    }
+    if (message.environment !== undefined) {
+      obj.environment = ExtensionHostEnvironmentDTO.toJSON(message.environment);
+    }
+    if (message.logs_location_uri !== "") {
+      obj.logs_location_uri = message.logs_location_uri;
+    }
+    if (message.workspace !== undefined) {
+      obj.workspace = ExtensionHostWorkspaceDTO.toJSON(message.workspace);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostInitializationDTO>, I>>(base?: I): ExtensionHostInitializationDTO {
+    return ExtensionHostInitializationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostInitializationDTO>, I>>(
+    object: I,
+  ): ExtensionHostInitializationDTO {
+    const message = createBaseExtensionHostInitializationDTO();
+    message.os = object.os ?? "";
+    message.parent_pid = object.parent_pid ?? 0;
+    message.environment = (object.environment !== undefined && object.environment !== null)
+      ? ExtensionHostEnvironmentDTO.fromPartial(object.environment)
+      : undefined;
+    message.logs_location_uri = object.logs_location_uri ?? "";
+    message.workspace = (object.workspace !== undefined && object.workspace !== null)
+      ? ExtensionHostWorkspaceDTO.fromPartial(object.workspace)
+      : undefined;
     return message;
   },
 };

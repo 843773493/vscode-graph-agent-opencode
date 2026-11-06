@@ -143,7 +143,8 @@ async def extension_host_channel(websocket: WebSocket, registry: Annotated[Works
                 client_id=client_id, view_id=payload.view_id, workspace_ids=tuple(payload.workspace_ids)) as connection:
             identity = asdict(connection.identity)
             identity["workspace_ids"] = list(connection.identity.workspace_ids)
-            result = ExtensionHostConnectionDTO(protocol_version=1, request_id=request_id, **identity)
+            result = ExtensionHostConnectionDTO(protocol_version=1, request_id=request_id,
+                initialization=connection.initialization, **identity)
             # 首次await前登记传输占用；owner关闭IPC前必须等双方任务实际结清。
             connection.transport_settled.clear()
             try:

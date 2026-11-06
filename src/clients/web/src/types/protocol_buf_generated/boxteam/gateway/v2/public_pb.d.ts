@@ -4271,6 +4271,11 @@ export declare type ExtensionHostConnectionDTO = Message<"boxteam.gateway.v2.Ext
    * @generated from field: string request_id = 8;
    */
   requestId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostInitializationDTO initialization = 9;
+   */
+  initialization?: ExtensionHostInitializationDTO | undefined;
 };
 
 /**
@@ -4278,6 +4283,127 @@ export declare type ExtensionHostConnectionDTO = Message<"boxteam.gateway.v2.Ext
  * Use `create(ExtensionHostConnectionDTOSchema)` to create a new message.
  */
 export declare const ExtensionHostConnectionDTOSchema: GenMessage<ExtensionHostConnectionDTO>;
+
+/**
+ * file URI 是目标机器的原生操作参数；资源关联仍由 resource_uri 表示。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionHostEnvironmentDTO
+ */
+export declare type ExtensionHostEnvironmentDTO = Message<"boxteam.gateway.v2.ExtensionHostEnvironmentDTO"> & {
+  /**
+   * @generated from field: string app_root_uri = 1;
+   */
+  appRootUri: string;
+
+  /**
+   * @generated from field: string global_storage_home_uri = 2;
+   */
+  globalStorageHomeUri: string;
+
+  /**
+   * @generated from field: string workspace_storage_home_uri = 3;
+   */
+  workspaceStorageHomeUri: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostEnvironmentDTO.
+ * Use `create(ExtensionHostEnvironmentDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostEnvironmentDTOSchema: GenMessage<ExtensionHostEnvironmentDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionHostFolderDTO
+ */
+export declare type ExtensionHostFolderDTO = Message<"boxteam.gateway.v2.ExtensionHostFolderDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string resource_uri = 2;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string native_uri = 3;
+   */
+  nativeUri: string;
+
+  /**
+   * @generated from field: string name = 4;
+   */
+  name: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostFolderDTO.
+ * Use `create(ExtensionHostFolderDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostFolderDTOSchema: GenMessage<ExtensionHostFolderDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionHostWorkspaceDTO
+ */
+export declare type ExtensionHostWorkspaceDTO = Message<"boxteam.gateway.v2.ExtensionHostWorkspaceDTO"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.ExtensionHostFolderDTO folders = 3;
+   */
+  folders: ExtensionHostFolderDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostWorkspaceDTO.
+ * Use `create(ExtensionHostWorkspaceDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostWorkspaceDTOSchema: GenMessage<ExtensionHostWorkspaceDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionHostInitializationDTO
+ */
+export declare type ExtensionHostInitializationDTO = Message<"boxteam.gateway.v2.ExtensionHostInitializationDTO"> & {
+  /**
+   * @generated from field: string os = 1;
+   */
+  os: string;
+
+  /**
+   * @generated from field: uint32 parent_pid = 2;
+   */
+  parentPid: number;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostEnvironmentDTO environment = 3;
+   */
+  environment?: ExtensionHostEnvironmentDTO | undefined;
+
+  /**
+   * @generated from field: string logs_location_uri = 4;
+   */
+  logsLocationUri: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostWorkspaceDTO workspace = 5;
+   */
+  workspace?: ExtensionHostWorkspaceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostInitializationDTO.
+ * Use `create(ExtensionHostInitializationDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostInitializationDTOSchema: GenMessage<ExtensionHostInitializationDTO>;
 
 /**
  * 实时读取不会启动 Backend 或宿主；已知 Backend 时必须保留身份约束。

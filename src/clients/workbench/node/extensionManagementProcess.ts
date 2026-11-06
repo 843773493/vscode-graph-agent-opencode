@@ -20,6 +20,7 @@ try {
     try {
       let result: unknown;
       if (request.method === 'inventory') result = await management.inventory();
+      else if (request.method === 'environment') result = management.environment();
       else if (request.method === 'install' && 'vsix_path' in request && typeof request.vsix_path === 'string' && isAbsolute(request.vsix_path)) {
         result = await management.install(request.vsix_path);
       } else throw new Error('不支持的扩展管理操作或目标原生路径');

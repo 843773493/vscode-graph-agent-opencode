@@ -24,9 +24,15 @@ browser 扩展 SHALL 在 Workbench 原 Web 宿主执行，需要 Node 的扩展 
 
 一个 Node 宿主 SHALL 绑定一个客户端会话、一个稳定原生目标及明确挂接的同目标工作区集合，集合可使用原 multi-root 语义。其它目标的 workspace MUST NOT 隐式进入该宿主视图。全局活动工作区或单一 remoteAuthority 的切换不能替代多目标身份。工作区集合变化及宿主重启 SHALL 通过明确生命周期和 generation 更新，旧 generation 不得接受新调用或发布迟到结果。
 
+认证握手 SHALL 返回目标平台、原 mount 中的有序根映射及目标原生 profile／日志初始化位置；根映射保留资源 URI 与目标 file URI 的不同职责，不成为第二份权威登记。原生位置只在目标机器解释。workspaceState 的稳定视图身份 SHALL 包含原生目标、明确 view 和有序工作区集合，不依赖客户端会话、generation 或临时路由。
+
 #### Scenario: 同屏 A 与 B 的同名工作区
 - **WHEN** 一个窗口同时打开 A1、A2、B1，而 A 宿主只挂接 A1/A2
 - **THEN** A 扩展看到的 workspace view 只有 A1/A2，B 扩展仅见其挂接集合，切换编辑器焦点不会修改任一宿主身份或泄露另一目标文件
+
+#### Scenario: 重连消费目标生成的初始化位置
+- **WHEN** 客户端为同一明确目标和工作区视图重新建立认证通道
+- **THEN** 新 generation 沿原协议使用目标生成的根与 profile 位置，同一视图的持久状态身份保持；根集合不同的视图不得借用该身份，Relay 和客户端不把目标 file URI 解释为自己的文件
 
 ### Requirement: 内部扩展身份必须支持同一公开 ID 的多目标实例
 

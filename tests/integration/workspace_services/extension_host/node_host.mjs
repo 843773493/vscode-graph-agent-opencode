@@ -81,13 +81,25 @@ async function connect(label) {
   receipts.push(receipt);
   const socket = createConnection(Number(process.env.BOXTEAM_TEST_HOST_BACKEND_PORT), '127.0.0.1');
   const exit = once(socket, 'close');
+  // 装具只递送产品owner/认证WS已经生成的初始化；原协议字节仍留在同一socket缓冲区。
+  socket.write(`${label}\n`);
+  const bindingBytes = [];
+  for (;;) {
+    const byte = socket.read(1);
+    if (byte === null) { await bounded(once(socket, 'readable'), `${label}目标初始化`); continue; }
+    if (byte[0] === 10) break;
+    bindingBytes.push(byte[0]);
+  }
+  const initialization = JSON.parse(Buffer.from(bindingBytes).toString('utf8'));
+  assert.equal(initialization.workspace.folders.length, 1);
+  assert.equal(initialization.workspace.folders[0].name, label);
+  assert.equal(initialization.workspace.folders[0].native_uri, pathToFileURL(folder).href);
+  receipt.initialization = initialization;
   const nodeSocket = new m.NodeSocket(socket, `host-probe-${label}`);
   run.addCleanup(`socket ${label}`, () => nodeSocket.dispose());
   // 本装具不验 CPU 负载判定；用原注入点避免创建窗口级、无释放入口的采样定时器。
   const protocol = new m.PersistentProtocol({ socket: nodeSocket, loadEstimator: { hasHighLoad: () => false } });
   run.addCleanup(`protocol ${label}`, () => protocol.dispose());
-  // 控制头由Python测试listener消费；后续完全复用原协议，不维护另一套编码。
-  socket.write(`${label}\n`);
   protocol.sendResume();
   const next = () => bounded(new Promise(resolve => {
     const listener = protocol.onMessage(value => { listener.dispose(); resolve(value); });
@@ -97,14 +109,16 @@ async function connect(label) {
   const description = { ...manifest, identifier, extensionLocation: m.URI.file(extension), isBuiltin: false,
     isUserBuiltin: false, isUnderDevelopment: false, targetPlatform: 'undefined', preRelease: false };
   const init = {
-    version: metadata.version, quality: 'stable', commit: metadata.commit, parentPid: process.pid,
+    version: metadata.version, quality: 'stable', commit: metadata.commit, parentPid: initialization.parent_pid,
     environment: { isExtensionDevelopmentDebug: false, appName: 'Host probe', appHost: 'web', appLanguage: 'en',
       appUriScheme: 'boxteam', isExtensionTelemetryLoggingOnly: true,
-      globalStorageHome: m.URI.file(join(folder, 'global')), workspaceStorageHome: m.URI.file(join(folder, 'storage')) },
-    workspace: { id: label, name: label },
+      appRoot: m.URI.parse(initialization.environment.app_root_uri),
+      globalStorageHome: m.URI.parse(initialization.environment.global_storage_home_uri),
+      workspaceStorageHome: m.URI.parse(initialization.environment.workspace_storage_home_uri) },
+    workspace: { id: initialization.workspace.id, name: initialization.workspace.name },
     extensions: { versionId: 1, allExtensions: [description], activationEvents: { 'host-probe.node': ['*'] }, myExtensions: [identifier] },
     telemetryInfo: { sessionId: label, machineId: 'probe', sqmId: 'probe', devDeviceId: 'probe', firstSessionDate: '2026-11-06' },
-    logLevel: 0, loggers: [], logsLocation: m.URI.file(join(folder, 'logs')), autoStart: false,
+    logLevel: 0, loggers: [], logsLocation: m.URI.parse(initialization.logs_location_uri), autoStart: false,
     remote: { isRemote: false, connectionData: null }, consoleForward: { includeStack: false, logNative: false }, uiKind: 2,
   };
   let extensionService;
@@ -145,8 +159,9 @@ async function connect(label) {
       defaults: empty, policy: empty, application: empty, userLocal: empty, userRemote: empty,
       workspace: empty, folders: [], configurationScopes: [],
     });
-    await rpc.getProxy(m.ExtHostContext.ExtHostWorkspace).$initializeWorkspace({ id: label, name: label,
-      folders: [{ uri: m.URI.file(folder), name: label, index: 0 }] }, true);
+    await rpc.getProxy(m.ExtHostContext.ExtHostWorkspace).$initializeWorkspace({
+      id: initialization.workspace.id, name: initialization.workspace.name,
+      folders: initialization.workspace.folders.map((folder, index) => ({ uri: m.URI.parse(folder.native_uri), name: folder.name, index })) }, true);
     extensionService = rpc.getProxy(m.ExtHostContext.ExtHostExtensionService);
     await bounded(extensionService.$startExtensionHost({
       versionId: label === 'A' ? 1 : 2, toAdd: [], toRemove: [], addActivationEvents: {}, myToAdd: [], myToRemove: [],

@@ -124,6 +124,11 @@ async def test_native_vsix_profile_inventory_isolated_and_recovered(management_b
     b = _backend(workspace / "b", backends)
     first, second = a.extension_hosts.management, b.extension_hosts.management
     assert (await first.inventory()).extensions == []
+    a_environment, b_environment = await first.environment(), await second.environment()
+    assert a_environment.app_root_uri == (context.run_root / "runtime").as_uri()
+    assert a_environment.global_storage_home_uri == (first._directory / "data/User/globalStorage").as_uri()
+    assert a_environment.workspace_storage_home_uri == (first._directory / "data/User/workspaceStorage").as_uri()
+    assert b_environment.global_storage_home_uri != a_environment.global_storage_home_uri
     one = await first.install(vsix_factory(workspace, "1.0.0", "A"))
     two = await second.install(vsix_factory(workspace, "2.0.0", "B"))
     assert one.id == two.id == "boxteam-probe.target-inventory"
@@ -154,6 +159,7 @@ async def test_native_vsix_profile_inventory_isolated_and_recovered(management_b
     assert a._extension_hosts is not None
     recovered = _backend(workspace / "a", backends, backend_id=a._extension_hosts.backend_id)
     assert await recovered.extension_hosts.management.inventory() == a_inventory
+    assert await recovered.extension_hosts.management.environment() == a_environment
     assert await second.inventory() == b_inventory
     with pytest.raises(ExtensionManagementError, match="not compatible"):
         await recovered.extension_hosts.management.install(vsix_factory(workspace, "3.0.0", "invalid", engine="^999.0.0"))

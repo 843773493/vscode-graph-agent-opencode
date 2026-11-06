@@ -3,12 +3,56 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from app.core.resource_uri import parse_resource_uri
 from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
+from app.schemas.internal_v2.workspace_file_operations import WorkspaceFileURI
 
 BackendId = Annotated[str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
+
+
+def _native_file_uri(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme != "file" or not parsed.path.startswith("/") or parsed.query or parsed.fragment:
+        raise ValueError("Node 宿主原生位置必须为目标机器的绝对 file URI")
+    return value
+
+
+NativeFileURI = Annotated[str, AfterValidator(_native_file_uri)]
+
+
+class _HostValue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
+
+
+class ExtensionHostEnvironmentDTO(_HostValue):
+    app_root_uri: NativeFileURI
+    global_storage_home_uri: NativeFileURI
+    workspace_storage_home_uri: NativeFileURI
+
+
+class ExtensionHostFolderDTO(_HostValue):
+    workspace_id: CanonicalWorkspaceId
+    resource_uri: WorkspaceFileURI
+    native_uri: NativeFileURI
+    name: str = Field(min_length=1)
+
+
+class ExtensionHostWorkspaceDTO(_HostValue):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    folders: list[ExtensionHostFolderDTO] = Field(min_length=1)
+
+
+class ExtensionHostInitializationDTO(_HostValue):
+    os: Literal["linux", "windows", "macos"]
+    parent_pid: int = Field(gt=0)
+    environment: ExtensionHostEnvironmentDTO
+    logs_location_uri: NativeFileURI
+    workspace: ExtensionHostWorkspaceDTO
 
 
 class _WorkspaceView(BaseModel):
@@ -38,6 +82,19 @@ class ExtensionHostConnectionDTO(ExtensionHostOpenRequest):
     client_id: str = Field(min_length=1)
     generation: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
+    initialization: ExtensionHostInitializationDTO
+
+    @model_validator(mode="after")
+    def initialized_view_matches_binding(self) -> ExtensionHostConnectionDTO:
+        folders = self.initialization.workspace.folders
+        if [folder.workspace_id for folder in folders] != self.workspace_ids:
+            raise ValueError("Node 宿主初始化目录与有序工作区视图不符")
+        for folder in folders:
+            resource = parse_resource_uri(folder.resource_uri)
+            if (resource.gateway_authority != self.gateway_id or resource.scope != "workspace"
+                or resource.scope_id != folder.workspace_id or resource.kind != "files" or resource.tail_segments != ("root",)):
+                raise ValueError("Node 宿主目录映射不属于原 Gateway 的工作区根")
+        return self
 
 
 class ExtensionHostRuntimeDTO(BaseModel):

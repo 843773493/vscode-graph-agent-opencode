@@ -1647,7 +1647,7 @@ class ExtensionHostOpenRequest(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ExtensionHostConnectionDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "client_id", "generation", "request_id")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "client_id", "generation", "request_id", "initialization")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1656,6 +1656,7 @@ class ExtensionHostConnectionDTO(_message.Message):
     CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    INITIALIZATION_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
@@ -1664,7 +1665,54 @@ class ExtensionHostConnectionDTO(_message.Message):
     client_id: str
     generation: str
     request_id: str
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ...) -> None: ...
+    initialization: ExtensionHostInitializationDTO
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ..., initialization: _Optional[_Union[ExtensionHostInitializationDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionHostEnvironmentDTO(_message.Message):
+    __slots__ = ("app_root_uri", "global_storage_home_uri", "workspace_storage_home_uri")
+    APP_ROOT_URI_FIELD_NUMBER: _ClassVar[int]
+    GLOBAL_STORAGE_HOME_URI_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_STORAGE_HOME_URI_FIELD_NUMBER: _ClassVar[int]
+    app_root_uri: str
+    global_storage_home_uri: str
+    workspace_storage_home_uri: str
+    def __init__(self, app_root_uri: _Optional[str] = ..., global_storage_home_uri: _Optional[str] = ..., workspace_storage_home_uri: _Optional[str] = ...) -> None: ...
+
+class ExtensionHostFolderDTO(_message.Message):
+    __slots__ = ("workspace_id", "resource_uri", "native_uri", "name")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_URI_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    resource_uri: str
+    native_uri: str
+    name: str
+    def __init__(self, workspace_id: _Optional[str] = ..., resource_uri: _Optional[str] = ..., native_uri: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+
+class ExtensionHostWorkspaceDTO(_message.Message):
+    __slots__ = ("id", "name", "folders")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    FOLDERS_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    name: str
+    folders: _containers.RepeatedCompositeFieldContainer[ExtensionHostFolderDTO]
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., folders: _Optional[_Iterable[_Union[ExtensionHostFolderDTO, _Mapping]]] = ...) -> None: ...
+
+class ExtensionHostInitializationDTO(_message.Message):
+    __slots__ = ("os", "parent_pid", "environment", "logs_location_uri", "workspace")
+    OS_FIELD_NUMBER: _ClassVar[int]
+    PARENT_PID_FIELD_NUMBER: _ClassVar[int]
+    ENVIRONMENT_FIELD_NUMBER: _ClassVar[int]
+    LOGS_LOCATION_URI_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_FIELD_NUMBER: _ClassVar[int]
+    os: str
+    parent_pid: int
+    environment: ExtensionHostEnvironmentDTO
+    logs_location_uri: str
+    workspace: ExtensionHostWorkspaceDTO
+    def __init__(self, os: _Optional[str] = ..., parent_pid: _Optional[int] = ..., environment: _Optional[_Union[ExtensionHostEnvironmentDTO, _Mapping]] = ..., logs_location_uri: _Optional[str] = ..., workspace: _Optional[_Union[ExtensionHostWorkspaceDTO, _Mapping]] = ...) -> None: ...
 
 class ExtensionHostTargetRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id")

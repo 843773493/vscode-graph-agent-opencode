@@ -82,6 +82,8 @@ MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_insta
 
 宿主传输沿独立 WebSocket 通道协商，不把 RPC 混入普通工作区 API。首个 JSON 请求固定协议版本、原生 Gateway、稳定 Backend、view 和有序 workspace 集合；原生 Backend 返回同一绑定、目标生成的 generation 与原 request_id，随后只传原上游协议二进制字节。Gateway 在披露握手前核对目标、视图、客户端绑定及 request_id，不重编码或重放扩展 RPC。
 
+已认证握手同时返回目标平台、Backend 父进程 PID、原生管理组件提供的 appRoot／profile 存储位置、该 generation 的日志位置及原 mount 解析的有序根集合。每个根同时带工作区资源 URI 与目标原生 file URI，二者只是此次已绑定视图的投影，不建立第二份根登记；file URI 只作为目标侧原协议初始化参数，不能在 Relay 或浏览器机器上解释。稳定 workspaceState ID 由原生 Gateway、Backend、明确 view 及有序工作区集合共同确定，不含临时客户端、generation 或 endpoint；重连保留身份，变更视图不借用旧状态。客户端沿原宿主初始化和 typed URI transformation 消费这些参数，不根据导航焦点或本机目录猜测目标位置。
+
 本地通道同时核本机管理 token 与既有 UserAccess cookie；客户端身份由访问会话及租约代际派生，不接受浏览器自报，也不把原 cookie 传给 Backend。用户与游客沿既有有效访问租约，续租仍由原 heartbeat 入口负责，宿主通道不替闲置客户端续租。联邦入站按已认证 peer 划定客户端命名空间，并在原生 Gateway 核独立宿主管理权限；已认证联邦请求不能再次转发到另一远端目标。每个 workspace 分别取得原 route reference，集合须抵达同一 Backend；任一路由失效、租约失效或权限撤销均结束连接，策略发布直接唤醒空闲连接，不增加逐帧数据库轮询。
 
 Backend 私有通道只接受 loopback、无浏览器来源头及已配置运行时控制凭据的请求，且复用唯一宿主 owner。关闭先通知传输停止，再等待双向任务实际结清，随后关闭 IPC 并核实原子进程退出；不能用通知已发出代替收发任务已退出。传输认证和内部 mount 集合校验不代表 MainThread 初始载荷、事件和窗口贡献已完成工作区投影，后者继续按 D7／D8 单独迁齐与验收。

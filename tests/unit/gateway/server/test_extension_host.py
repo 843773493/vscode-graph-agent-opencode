@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+import json
+from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from starlette.testclient import WebSocketDenialResponse
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.path_utils import get_gateway_root
+from app.core.resource_uri import resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -34,7 +36,11 @@ from app.gateway.server import extension_host
 from app.gateway.server.extension_host import _upstream as real_upstream
 from app.schemas.gateway.extension_host import (
     ExtensionHostConnectionDTO,
+    ExtensionHostEnvironmentDTO,
+    ExtensionHostFolderDTO,
+    ExtensionHostInitializationDTO,
     ExtensionHostOpenRequest,
+    ExtensionHostWorkspaceDTO,
 )
 
 GATEWAY = "gateway_" + "a" * 32
@@ -54,10 +60,28 @@ class Harness:
     token: str
     federation_token: str
     application: FastAPI
+    initialization: Callable[[ExtensionHostOpenRequest], ExtensionHostInitializationDTO]
 
 
 @pytest.fixture
-def host_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Harness]:
+def host_initialization(tmp_path: Path) -> Callable[[ExtensionHostOpenRequest], ExtensionHostInitializationDTO]:
+    def build(payload: ExtensionHostOpenRequest) -> ExtensionHostInitializationDTO:
+        return ExtensionHostInitializationDTO(os="linux", parent_pid=123,
+            environment=ExtensionHostEnvironmentDTO(app_root_uri=(tmp_path / "component").as_uri(),
+                global_storage_home_uri=(tmp_path / "globalStorage").as_uri(),
+                workspace_storage_home_uri=(tmp_path / "workspaceStorage").as_uri()),
+            logs_location_uri=(tmp_path / "logs").as_uri(),
+            workspace=ExtensionHostWorkspaceDTO(id="explicit-view", name="View", folders=[
+                ExtensionHostFolderDTO(workspace_id=workspace_id, name="Workspace", native_uri=(tmp_path / workspace_id).as_uri(),
+                    resource_uri=resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
+                        tail_segments=("root",), gateway_authority=payload.gateway_id)) for workspace_id in payload.workspace_ids]))
+    return build
+
+
+@pytest.fixture
+def host_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    host_initialization: Callable[[ExtensionHostOpenRequest], ExtensionHostInitializationDTO],
+) -> Iterator[Harness]:
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path))
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=GATEWAY)
     workspaces = [str(uuid4()), str(uuid4())]
@@ -81,7 +105,7 @@ def host_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Ha
     async def upstream(websocket, *, url, headers, payload, **_):
         calls.append({**headers, "url": url})
         result = ExtensionHostConnectionDTO(**payload.model_dump(), client_id=headers[extension_host.CLIENT_HEADER],
-            generation=str(uuid4()), request_id=headers["X-Request-ID"])
+            generation=str(uuid4()), request_id=headers["X-Request-ID"], initialization=host_initialization(payload))
         await websocket.send_text(result.model_dump_json())
         await asyncio.Event().wait()
 
@@ -94,7 +118,7 @@ def host_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Ha
             yield Harness(client, registry, users, access, policy, ExtensionHostOpenRequest.model_validate({
                 "protocol_version": 1, "gateway_id": GATEWAY, "backend_id": str(uuid4()),
                 "view_id": "window-a", "workspace_ids": workspaces,
-            }), calls, get_gateway_local_token(), federation.token, application)
+            }), calls, get_gateway_local_token(), federation.token, application, host_initialization)
         finally:
             registry.close()
             state.close()
@@ -182,7 +206,10 @@ def test_wrong_target_handshake_is_never_disclosed(host_gateway: Harness, monkey
             binding = {**self.request.model_dump(), "client_id": self.headers[extension_host.CLIENT_HEADER],
                        "generation": str(uuid4()), "request_id": self.headers["X-Request-ID"]}
             binding[field] = [str(uuid4())] if field == "workspace_ids" else str(uuid4())
-            return ExtensionHostConnectionDTO.model_validate(binding).model_dump_json()
+            # workspace 身份替换仍构成合法的另一视图，由真实 Gateway 核原请求归属。
+            target = ExtensionHostOpenRequest.model_validate({name: binding[name] for name in ExtensionHostOpenRequest.model_fields})
+            binding["initialization"] = h.initialization(target).model_dump()
+            return json.dumps(binding)
 
     @asynccontextmanager
     async def connect(_url: str, *, additional_headers: dict[str, str], **_):

@@ -35,6 +35,7 @@ from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.extension_host import router as gateway_host_router
+from app.schemas.gateway.extension_host import ExtensionHostInitializationDTO
 from app.services.infrastructure.extension_host.owner import NodeHostIdentity
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from tests.harness.python.run_context import TestRunContext
@@ -96,7 +97,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     lifecycle = BackendLifespan(None, application)
     registry: WorkspaceContainerRegistry | None = None
     identities: dict[str, NodeHostIdentity] = {}
-    channel_bindings: dict[str, object] = {}
+    channel_bindings: dict[str, dict[str, object]] = {}
     network = network_scope
     http = await network.enter_async_context(httpx.AsyncClient(timeout=10))
 
@@ -202,6 +203,8 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
                     assert session.host is not None
                     hosts[label], identities[label] = session.host, session.identity
                     channel_bindings[label] = binding
+                    writer.write(json.dumps(binding["initialization"]).encode() + b"\n")
+                    await writer.drain()
 
                     async def to_channel() -> None:
                         while data := await reader.read(65536):
@@ -224,10 +227,13 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
                     )
                     await run_channel(to_channel(), from_channel())
                 return
-            async with registry.extension_hosts.connect(gateway_id="gateway-probe", expected_backend_id=backend_id,
+            async with registry.extension_hosts.connect(gateway_id=gateway_id, expected_backend_id=backend_id,
                     client_id="protocol-probe", view_id=label, workspace_ids=(workspace_ids[label],)) as connection:
                 hosts[label] = connection.host
                 identities[label] = connection.identity
+                channel_bindings[label] = {"initialization": connection.initialization.model_dump()}
+                writer.write(connection.initialization.model_dump_json().encode() + b"\n")
+                await writer.drain()
                 upstream = asyncio.create_task(forward(reader, connection.writer))
                 downstream = asyncio.create_task(forward(connection.reader, writer))
                 try:
@@ -306,7 +312,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     assert len({identity.generation for identity in identities.values()}) == len(workspace_ids)
     for label, identity in identities.items():
         assert (identity.gateway_id, identity.backend_id, identity.view_id) == (
-            gateway_id if transport != "ipc" else "gateway-probe", backend_id, label)
+            gateway_id, backend_id, label)
         if transport == "ipc":
             assert identity.client_id == "protocol-probe"
         elif transport == "gateway":
@@ -315,4 +321,11 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             assert identity.client_id.startswith("peer:gateway_" + "b" * 32 + ":")
             assert len(identity.client_id.rsplit(":", 1)[1]) == 64
         assert identity.workspace_ids == (workspace_ids[label],)
+        initialization = ExtensionHostInitializationDTO.model_validate(channel_bindings[label]["initialization"])
+        assert initialization.parent_pid == os.getpid()
+        assert initialization.os == ("windows" if sys.platform == "win32" else "linux")
+        assert [folder.model_dump() for folder in initialization.workspace.folders] == [{
+            "workspace_id": workspace_ids[label], "native_uri": mounted.resolve(workspace_ids[label]).workspace_root.as_uri(),
+            "resource_uri": f"boxteam://{gateway_id}/workspace/{workspace_ids[label]}/resources/files/root", "name": label}]
+        assert initialization.logs_location_uri == (home / "state/backend/extension-hosts" / identity.generation).as_uri()
         assert (home / "state/backend/extension-hosts" / identity.generation / "host.log").is_file()

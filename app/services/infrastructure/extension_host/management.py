@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.core.child_process import OwnedChildProcess
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.schemas.gateway.extension_host import ExtensionHostEnvironmentDTO
 from app.schemas.gateway.extension_installation import ProfileExtensionInventory
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 
@@ -113,6 +114,9 @@ class NodeExtensionManagement:
 
     async def inventory(self) -> ProfileExtensionInventory:
         return ProfileExtensionInventory.model_validate(await self._request({"method": "inventory"}))
+
+    async def environment(self) -> ExtensionHostEnvironmentDTO:
+        return ExtensionHostEnvironmentDTO.model_validate(await self._request({"method": "environment"}))
 
     async def install(self, vsix_path: Path) -> VsixInstallResult:
         if not vsix_path.is_absolute():

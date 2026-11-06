@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
+from app.core.resource_uri import resource_display_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.schemas.gateway.extension_host import (
+    ExtensionHostFolderDTO,
+    ExtensionHostInitializationDTO,
+    ExtensionHostWorkspaceDTO,
+)
 from app.services.infrastructure.extension_host.management import (
     NodeExtensionManagement,
 )
@@ -33,6 +41,7 @@ class NodeHostIdentity:
 @dataclass(frozen=True, slots=True)
 class NodeHostConnection:
     identity: NodeHostIdentity
+    initialization: ExtensionHostInitializationDTO
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     host: NodeExtensionHost
@@ -63,7 +72,7 @@ class _HostSession:
         self.transport_settled = asyncio.Event()
         self.transport_settled.set()
 
-    async def open(self) -> NodeHostConnection:
+    async def open(self, initialization: ExtensionHostInitializationDTO) -> NodeHostConnection:
         async with self._lock:
             if self.closed:
                 raise RuntimeError("Node 宿主 generation 已撤销，不能重新连接")
@@ -73,7 +82,7 @@ class _HostSession:
                 directory=self._directory, environment=self._environment,
                 output=self._output, startup_timeout=self._startup_timeout)
             reader, writer = await self._scope.enter_async_context(self.host.connect())
-            return NodeHostConnection(self.identity, reader, writer, self.host, self.stopping, self.transport_settled)
+            return NodeHostConnection(self.identity, initialization, reader, writer, self.host, self.stopping, self.transport_settled)
 
     async def close(self) -> None:
         # 通知公开传输先停止收发；随后关闭IPC时不能再写入已关闭的writer。
@@ -151,6 +160,22 @@ class NodeExtensionHostOwner:
         await session.close()
         self._sessions.pop(session.identity.generation, None)
 
+    async def _initialization(self, identity: NodeHostIdentity, directory: Path) -> ExtensionHostInitializationDTO:
+        environment = await self.management.environment()
+        folders = []
+        for workspace_id in identity.workspace_ids:
+            mount = self._mounts.resolve(workspace_id)
+            folders.append(ExtensionHostFolderDTO(workspace_id=workspace_id,
+                resource_uri=resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
+                    tail_segments=("root",), gateway_authority=identity.gateway_id),
+                native_uri=mount.workspace_root.as_uri(), name=mount.workspace_root.name or str(mount.workspace_root)))
+        # 安装域、明确视图和有序根集合决定 workspaceState 身份；客户端和临时 generation 不参与。
+        view = json.dumps([identity.gateway_id, identity.backend_id, identity.view_id, identity.workspace_ids], separators=(",", ":"))
+        workspace = ExtensionHostWorkspaceDTO(id=str(uuid5(NAMESPACE_URL, view)),
+            name=", ".join(folder.name for folder in folders), folders=folders)
+        return ExtensionHostInitializationDTO(os="windows" if sys.platform == "win32" else "linux",
+            parent_pid=os.getpid(), environment=environment, logs_location_uri=directory.as_uri(), workspace=workspace)
+
     @asynccontextmanager
     async def connect(self, *, gateway_id: str, expected_backend_id: str, client_id: str,
                       view_id: str, workspace_ids: tuple[str, ...]) -> AsyncIterator[NodeHostConnection]:
@@ -169,14 +194,16 @@ class NodeExtensionHostOwner:
                == (gateway_id, client_id, view_id) for session in self._sessions.values()):
             raise ValueError("该客户端的 Node 宿主视图尚未关闭；不能覆盖原 generation")
         identity = NodeHostIdentity(gateway_id, self.backend_id, client_id, view_id, workspace_ids, str(uuid4()))
+        directory = self._home / "state/backend/extension-hosts" / identity.generation
         session = _HostSession(identity, runtime=status.runtime,
-            directory=self._home / "state/backend/extension-hosts" / identity.generation,
+            directory=directory,
             environment=self._environment, startup_timeout=self._startup_timeout)
         # 预留与关闭快照之间没有await；启动中的实例同样归原owner回收。
         self._sessions[identity.generation] = session
         failure: BaseException | None = None
         try:
-            connection = await session.open()
+            initialization = await self._initialization(identity, directory)
+            connection = await session.open(initialization)
             if self._admission_closed:
                 raise RuntimeError("Node 宿主启动期间 Backend 已撤销准入")
             yield connection

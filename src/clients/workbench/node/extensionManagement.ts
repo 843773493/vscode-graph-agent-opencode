@@ -85,6 +85,12 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const profile = profiles.defaultProfile;
       return {
         dispose: () => scope.dispose(),
+        environment() {
+          // bundle 的实际根就是发行组件目录；存储沿原环境/profile，不按客户端或进程代际重建。
+          return { app_root_uri: URI.file(import.meta.dirname).toString(),
+            global_storage_home_uri: profile.globalStorageHome.toString(),
+            workspace_storage_home_uri: environment.workspaceStorageHome.toString() };
+        },
         async inventory() {
           // 不调用 scanAllExtensions 的跨来源 dedup；此库存只承诺同一默认 profile。
           const extensions = await scanner.scanUserExtensions({ profileLocation: profile.extensionsResource, includeInvalid: true });

@@ -14,6 +14,10 @@ from uuid import uuid4
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.schemas.gateway.extension_host import ExtensionHostEnvironmentDTO
+from app.services.infrastructure.extension_host.management import (
+    NodeExtensionManagement,
+)
 from app.services.infrastructure.extension_host.owner import (
     NodeExtensionHostOwner,
     NodeHostConnection,
@@ -64,6 +68,12 @@ async def case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
             await host.child.close()
 
     monkeypatch.setattr(NodeExtensionHost, "connect", connect)
+    async def environment(_management: NodeExtensionManagement) -> ExtensionHostEnvironmentDTO:
+        return ExtensionHostEnvironmentDTO(app_root_uri=tmp_path.as_uri(),
+            global_storage_home_uri=(tmp_path / "profile/globalStorage").as_uri(),
+            workspace_storage_home_uri=(tmp_path / "profile/workspaceStorage").as_uri())
+
+    monkeypatch.setattr(NodeExtensionManagement, "environment", environment)
     # 测试的是owner的身份及生命周期；平台IPC由真实进程集成验证。
     monkeypatch.setattr(sys, "platform", "linux")
     try:
@@ -86,7 +96,7 @@ async def test_invalid_target_or_view_never_opens_a_host(case: Case, invalid: st
     elif invalid == "unavailable":
         case.owner.runtime = None
     with pytest.raises((ValueError, KeyError, NotImplementedError)):
-        async with case.owner.connect(gateway_id="gateway", client_id=" " if invalid == "client" else "client",
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, client_id=" " if invalid == "client" else "client",
                 view_id="view", expected_backend_id="wrong" if invalid == "backend" else case.owner.backend_id,
                 workspace_ids=ids):
             pytest.fail("非法目标不能发布连接")
@@ -94,24 +104,34 @@ async def test_invalid_target_or_view_never_opens_a_host(case: Case, invalid: st
 
 
 async def test_views_preserve_client_identity_and_independent_generations(case: Case) -> None:
-    async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+    async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
             client_id="one", view_id="same", workspace_ids=case.workspace_ids) as first:
-        async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+        first_view = first.initialization
+        assert [folder.workspace_id for folder in first_view.workspace.folders] == list(case.workspace_ids)
+        assert [folder.native_uri for folder in first_view.workspace.folders] == [
+            case.owner._mounts.resolve(workspace_id).workspace_root.as_uri() for workspace_id in case.workspace_ids]
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="two", view_id="same", workspace_ids=case.workspace_ids[::-1]) as second:
+            assert second.initialization.workspace.id != first_view.workspace.id
+            assert second.initialization.environment == first_view.environment
+            assert second.initialization.logs_location_uri != first_view.logs_location_uri
             assert first.identity.workspace_ids == case.workspace_ids
             assert second.identity.workspace_ids == case.workspace_ids[::-1]
             assert first.identity.generation != second.identity.generation
             with pytest.raises(ValueError, match="尚未关闭"):
-                async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+                async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                         client_id="one", view_id="same", workspace_ids=case.workspace_ids[:1]):
                     pytest.fail("不能覆盖已有视图")
         assert second.host.child.state.exit_verified
         assert not first.host.child.state.exit_verified
         assert case.owner.active == (first.identity,)
     assert not case.owner.active
-    async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
-            client_id="one", view_id="same", workspace_ids=case.workspace_ids) as restarted:
+    async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
+            client_id="another-window", view_id="same", workspace_ids=case.workspace_ids) as restarted:
         assert restarted.identity.generation != first.identity.generation
+        assert restarted.initialization.workspace.id == first_view.workspace.id
+        assert restarted.initialization.workspace.folders == first_view.workspace.folders
+        assert restarted.initialization.logs_location_uri != first_view.logs_location_uri
     assert len(case.hosts) == 3
 
 
@@ -119,7 +139,7 @@ async def test_shutdown_during_start_cannot_publish_or_abandon_the_reserved_host
     case.gate.clear()
 
     async def connecting() -> None:
-        async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="client", view_id="view", workspace_ids=case.workspace_ids):
             pytest.fail("关闭期间不能发布连接")
 
@@ -144,7 +164,7 @@ async def test_cancelled_start_releases_the_original_generation_and_log(case: Ca
     case.gate.clear()
 
     async def connecting() -> None:
-        async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="client", view_id="view", workspace_ids=case.workspace_ids):
             pytest.fail("取消启动不能发布连接")
 
@@ -163,7 +183,7 @@ async def test_cancelled_start_releases_the_original_generation_and_log(case: Ca
 
 
 async def test_owner_waits_for_transport_settlement_before_closing_ipc(case: Case) -> None:
-    async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+    async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
             client_id="client", view_id="view", workspace_ids=case.workspace_ids) as connection:
         connection.transport_settled.clear()
         closing = asyncio.create_task(case.owner.close())
@@ -183,7 +203,7 @@ async def test_cleanup_failure_preserves_original_error_generation_and_log_until
     connection: NodeHostConnection | None = None
     session: _HostSession | None = None
     with pytest.raises(BaseExceptionGroup) as caught:
-        async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="client", view_id="view", workspace_ids=case.workspace_ids) as connection:
             session = case.owner._sessions[connection.identity.generation]
             case.close_failures.append(failure)
@@ -197,7 +217,7 @@ async def test_cleanup_failure_preserves_original_error_generation_and_log_until
     assert not case.owner.active and connection.host.child.state.exit_verified
     assert session._output.closed and len(case.hosts) == 1
     with pytest.raises(RuntimeError, match="正在关闭"):
-        async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="new", view_id="view", workspace_ids=case.workspace_ids):
             pytest.fail("关闭后不能重建宿主")
 
