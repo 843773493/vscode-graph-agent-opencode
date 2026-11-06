@@ -332,6 +332,7 @@ class SessionCatalogPathResolver:
     def _nearest_session_ancestor_from_map(
         parent_node_id: str | None,
         nodes_by_id: dict[str, SessionCatalogNode],
+        ancestors: dict[str, str | None],
     ) -> str | None:
         """按 catalog 父链计算最近 session 祖先。
 
@@ -339,7 +340,7 @@ class SessionCatalogPathResolver:
         """
         current_id = parent_node_id
         visited: set[str] = set()
-        while current_id is not None:
+        while current_id is not None and current_id not in ancestors:
             if current_id in visited:
                 raise RuntimeError(f"会话目录包含循环: {current_id}")
             visited.add(current_id)
@@ -347,9 +348,12 @@ class SessionCatalogPathResolver:
             if node is None:
                 raise RuntimeError(f"物理会话节点父节点不存在: {current_id}")
             if node.kind == "session":
-                return node.node_id
+                ancestors[current_id] = node.node_id
+                break
             current_id = node.parent_node_id
-        return None
+        ancestor = ancestors.get(current_id) if current_id is not None else None
+        ancestors.update((node_id, ancestor) for node_id in visited)
+        return ancestor
 
     # ------------------------------------------------------------------
     # 初始化与缓存适配
@@ -397,12 +401,14 @@ class SessionCatalogPathResolver:
         self._ensure_consistency_verified()
         navigation_revision, nodes = self._store.read_nodes_snapshot(check=check)
         by_id = {node.node_id: node for node in nodes}
+        # 仅在本次快照内复用已走过的父链，避免深层目录逐节点重复追溯。
+        ancestors: dict[str, str | None] = {}
         projected: list[SessionCatalogNodeProjection] = []
         for node in nodes:
             if check is not None:
                 check()
             projected.append(self._project_node(
-                node, self._nearest_session_ancestor_from_map(node.parent_node_id, by_id)
+                node, self._nearest_session_ancestor_from_map(node.parent_node_id, by_id, ancestors)
             ))
         return navigation_revision, projected
 
@@ -689,6 +695,7 @@ class SessionCatalogPathResolver:
             raise KeyError(f"物理会话节点不存在: {session_id}")
         all_nodes = self._list_all_catalog_nodes(include_deleting=True)
         nodes_by_id = {item.node_id: item for item in all_nodes}
+        ancestors: dict[str, str | None] = {}
         summaries: list[SessionChildSummary] = []
         for candidate in all_nodes:
             if candidate.kind != "session":
@@ -700,6 +707,7 @@ class SessionCatalogPathResolver:
                 self._nearest_session_ancestor_from_map(
                     candidate.parent_node_id,
                     nodes_by_id,
+                    ancestors,
                 )
                 != session_id
             ):
