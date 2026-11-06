@@ -41,3 +41,5 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 原 OutlineModelService 的旧版本最后消费者取消只释放自己的缓存条目，不能按模型 ID 删除后来建立的新版本；沿原 LRU／模型版本与引用生命周期，不新建分析缓存。
 
 原 WebExtensionsScannerService 区分可再生 system／custom 缓存与受保护的 profile 安装记录。前者保留原跳过坏项和扫描回退；后者损坏或拒绝读取时向上传递原错误，禁止以空列表覆盖原件。初次缺失仍走原安装链，不增加安装账本或缓存服务。
+
+直接位置和原 Gallery 安装写入前消费同次 toScannedExtension 的 isValid／validations，拒绝无效版本并保留原件；警告及原扫描诊断语义不变，不重复计算 manifest 校验。

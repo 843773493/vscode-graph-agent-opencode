@@ -218,6 +218,17 @@ const model = reference.object;`);
 if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`);
     }
     if (path === join(upstream, 'src/vs/workbench/services/extensionManagement/browser/webExtensionsScannerService.ts')) {
+      // 直接位置和原gallery入口都消费已经算出的原manifest校验，不把无效版本写成已安装。
+      const rejectInvalid = `if (!extension.isValid) throw new Error(extension.validations.map(([, message]) => message).join('\\n'));`;
+      contents = replaceOnce(contents, `const extension = await this.toScannedExtension(webExtension, false);
+\t\tawait this.addToInstalledExtensions`, `const extension = await this.toScannedExtension(webExtension, false);
+${rejectInvalid}
+await this.addToInstalledExtensions`);
+      contents = replaceOnce(contents, `const extension = await this.toScannedExtension(webExtension, isBuiltin);
+
+\t\tif (isSystem)`, `const extension = await this.toScannedExtension(webExtension, isBuiltin);
+${rejectInvalid}
+if (isSystem)`);
       // profile 的安装记录不可当可丢弃缓存：损坏／无权限时阻止后续写入，保留原件。
       contents = replaceOnce(contents, 'let webExtensions: IWebExtension[] = [];',
         'const isCache = file === this.systemExtensionsCacheResource || file === this.customBuiltinExtensionsCacheResource;\nlet webExtensions: IWebExtension[] = [];');

@@ -9,12 +9,13 @@ import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 if (process.argv[2] === '--prepare-assets') {
   const [, , , source, target] = process.argv;
   await cp(source, target, { recursive: true });
-  for (const version of ['1.0.0', '2.0.0', 'node-only']) {
+  for (const version of ['1.0.0', '2.0.0', 'node-only', 'incompatible']) {
     const directory = join(target, 'extensions', `cache-probe-${version}`);
     await mkdir(directory, { recursive: true });
     const manifest = { publisher: 'boxteam-test', name: 'cache-probe', displayName: 'Cache Lifecycle Probe',
-      // TODO（extension-management 4.1）：原安装链可保存engine不兼容记录，但不会激活，仍需前置拒绝验收。
-      version: version === 'node-only' ? '3.0.0' : version, engines: { vscode: '^1.145.0' },
+      // TODO（extension-management 4.1）：VSIX、依赖、信任与完整能力预检仍待独立闭包。
+      version: version === 'node-only' ? '3.0.0' : version === 'incompatible' ? '4.0.0' : version,
+      engines: { vscode: version === 'incompatible' ? '^999.0.0' : '^1.145.0' },
       ...(version === 'node-only' ? { main: './extension.js', extensionKind: ['workspace'] } : { browser: './extension.js' }),
       contributes: { commands: [{ command: 'boxteamCacheProbe.inspect', title: 'Inspect Cache Probe' }] } };
     await writeFile(join(directory, 'package.json'), JSON.stringify(manifest));
@@ -159,6 +160,16 @@ try {
   expect(rejected.ok).toBe(false);
   expect(rejected.error).toContain('not a web extension');
   result.nodeOnlyRejected = rejected;
+  result.phase = 'reject-incompatible-upgrade';
+  const beforeRejectedUpgrade = (await profileText()).text;
+  await command('workbench.action.closeActiveEditor');
+  const incompatible = await install('incompatible');
+  expect(incompatible.ok).toBe(false);
+  expect(incompatible.error).toMatch(/not compatible.*requires/i);
+  expect((await profileText()).text).toBe(beforeRejectedUpgrade);
+  await command('workbench.action.closeActiveEditor');
+  expect(result.requests.filter(request => request.url.includes('/cache-probe-incompatible/extension.js'))).toEqual([]);
+  result.incompatibleUpgradeRejected = incompatible;
   result.phase = 'protected-profile';
   const original = (await profileText()).text;
   const installed = JSON.parse(original);

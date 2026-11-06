@@ -76,6 +76,7 @@ async def test_real_web_extension_install_upgrade_restart_and_protected_profile(
     assert [item["version"] for item in result["executions"]] == ["1.0.0", "1.0.0", "2.0.0"]
     assert result["declarativeTheme"] == {"installed": True, "color": "#123456", "restored": True}
     assert result["nodeOnlyRejected"] and result["corruptProfilePreserved"] and result["restoredProfile"] and result["uninstalled"]
+    assert result["incompatibleUpgradeRejected"]["ok"] is False
     with provider.control._condition:
         calls = {key: value for key, value in provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "Web扩展验收不能发起Agent模型请求"

@@ -16,6 +16,8 @@
 
 `web_extensions_scanner.test.mjs` 编译原扫描器及 FileService，验证 manifest 复用、升级／卸载、profile 隔离与拒写；资源、内建目录和兼容能力是显式服务边界。`web_extensions_cache_browser.test.mjs` 另在真实 Chromium 的 `isWeb=true` 下，使用原内建扫描器／manifest／配置／profile／存储服务验证 system／custom 派生缓存跳过坏项和读取失败回退，以及 profile 的相同故障保留原件、原 Provider 错误不变。故障预备仅用于缓存读取，不能表述为真实安装或宿主验收。
 
+安装前检查覆盖原位置／Gallery的engine、version和browser非法值，首次拒绝无记录、升级拒绝保留旧版及其它profile，有效版本和原警告仍可安装。Gallery资源边界为明确受控依赖；真实页面另验不兼容升级拒绝、profile原文不变及候选脚本零读取，不将原上游重复manifest读取的保留误记为性能优化。
+
 pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Workbench 构建继续使用 Bun；Windows 实测 Bun 会在 `chromium.launch()` 挂起，不能以增加超时替代正确运行时。保留原进程外超时、内存保护和业务断言。
 
 `test_resource_opener_sources` 经真实执行生成工具结果，再由正式 Workbench 的原只读编辑器打开、分屏和恢复；复制通过真实命令面板、原 Command 与候选按钮，核对完整 Gateway 引用、原 request_id、零额外正文读取和不打开候选、保留搜索框焦点。剪贴板使用浏览器权限，不预写历史或替换资源响应；不据此证明 Composer 附加、固定版本或 Electron。

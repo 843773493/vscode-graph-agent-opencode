@@ -58,6 +58,7 @@
 ## 4. 原版扩展管理与 Web 宿主
 
 - [ ] 4.1 复用原扩展视图、详情和安装服务，接入经验证目录及用户明确 VSIX；安装前校验 manifest、版本、依赖、平台、所需 API／运行位置，区分安装与激活。
+  - 2026-11-06 manifest安装前拒绝切片：真实反例确认直接位置及原Gallery入口虽然已算出isValid=false，仍把engine／version／browser不合法版本写为已安装；修前5通过6失败。两个原写入点现在消费已有校验结果并返回原诊断，不增加校验器、hash或缓存；有效Gallery和仅有警告的manifest继续通过，既有读取仍保留原isValid诊断。最终17通过／113断言、59份实际转换源码类型及相关静态通过；正式Gateway／Workbench原安装QuickInput拒绝不兼容升级，profile原文不变且候选脚本零读取，原Worker／主题／重启／卸载回归1 passed／83.60秒，pageErrors为空、模型零调用、受影响源码前后不变，正式构建通过。完整反例、命令、指纹、原件及reference_repo对照见 `out/tests/temp/2026/11/06/web_extension_preflight/artifacts/verification-001.json`（SHA256 `9d9aacc9c8d06d7e2e4b16167720a0b0401a6ae77f180cfdf710fb3f80f35f57`）。VSIX／市场与依赖／信任／完整API和目标平台验收尚未完成，4.1保持未勾选。
 - [x] 4.2 将纯声明式及 browser 扩展接入原 Web Extension Host／Workbench profile，验证真实命令和 UI 贡献；Node-only 扩展没有合法目标时明确不可用。
   - 2026-11-06 当前 Web 宿主闭包：真实 Gateway／Backend／正式 Workbench 独占副本，经原安装 Quick Input 生成 profile，browser 扩展命令在原 Web Worker 返回 v1，正常重开仍为 v1，显式升级重开为 v2；纯声明式主题经原选择器实际改变编辑器背景并在重启后保持，Node-only明确拒绝。原profile记录损坏后安装失败且原件保留，恢复原文后两扩展均由原命令卸载。最终1 passed／111.09秒，pageErrors为空、模型零调用、受影响源码前后不变；扫描器及真实Chromium派生缓存边界8项／88断言通过，59份实际转换源码类型、相关Python静态和正式构建通过。准确命令、修前吞错反例、页面接线／粘贴竞态失败原件、指纹及边界见 `out/tests/temp/2026/11/06/web_extension_scan/artifacts/verification-001.json`。市场／VSIX、安装前完整兼容性、目标Node宿主及Electron未由本项验收，4.1等保持未完成。
 - [ ] 4.3 将安装选择器与目标分组接入原 Quick Input，冻结发起身份与版本；验证切 Tab、目录失败、目标离线不改投，不抢占默认 Ctrl+P 查询范围。

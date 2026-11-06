@@ -38,6 +38,7 @@ async function fixture(callback) {
       contributes: { configuration: { properties: { [`${name}.version`]: { type: 'string', default: version } } } } };
     resources.set(m.URI.joinPath(location, 'package.json').toString(), JSON.stringify(manifest));
     resources.set(m.URI.joinPath(location, 'package.nls.json').toString(), '{}');
+    resources.set(location.toString(), JSON.stringify([m.URI.joinPath(location, 'package.nls.json').toString()]));
     return location;
   };
   const scanner = () => {
@@ -49,6 +50,7 @@ async function fixture(callback) {
           if (!resources.has(uri.toString())) throw new Error(`受控扩展资源不存在：${uri}`);
           return resources.get(uri.toString());
         }, isExtensionGalleryResource: async () => false,
+        getExtensionGalleryResourceURL: async ({ name, version }) => m.URI.parse(`https://extensions.invalid/${name}/${version}`),
       }, {}, { get: (_key, _scope, fallback) => fallback }, { version: '1.145.0' },
       { defaultProfile: { extensionsResource: profile } }, identity, { when: () => new Promise(() => {}) });
     scanners.push(service); return service;
@@ -76,6 +78,59 @@ test('原profile记录跨scanner复用manifest，显式升级与卸载不改变�
     expect(await f.scanner().scanUserExtensions(f.profile)).toEqual([]);
     expect((await f.scanner().scanUserExtensions(f.other)).map(e => e.manifest.version)).toEqual(['1.0.0']);
     receipt.checks.push('原安装记录带manifest跨scanner复用；显式升级／卸载保持profile隔离，不读取旧版本manifest');
+  });
+});
+
+for (const method of ['location', 'gallery']) {
+  for (const [label, patch, message] of [
+    ['engine', { engines: { vscode: '^999.0.0' } }, /not compatible.*requires/i],
+    ['version', { version: 'invalid-version' }, /not semver/i],
+    ['browser', { browser: 42 }, /browser.*string/i],
+  ]) test(`${method}安装在写入前拒绝不兼容${label}，保留现有版本和其它profile`, async () => {
+    await fixture(async f => {
+      const service = f.scanner(), current = f.extension('compatible', '1.0.0'), candidate = f.extension('compatible', '2.0.0');
+      await service.addExtension(current, {}, f.profile);
+      await service.addExtension(current, {}, f.other);
+      const originals = await Promise.all([f.profile, f.other].map(async uri => (await f.files.readFile(uri)).value.toString()));
+      const manifestUri = m.URI.joinPath(candidate, 'package.json').toString();
+      f.resources.set(manifestUri, JSON.stringify({ ...JSON.parse(f.resources.get(manifestUri)), ...patch }));
+      const attempt = method === 'location' ? service.addExtension(candidate, {}, f.profile)
+        : service.addExtensionFromGallery({ identifier: { id: 'cache-probe.compatible' }, publisher: 'cache-probe',
+          name: 'compatible', version: '2.0.0', properties: { targetPlatform: 'web' }, assets: {} }, {}, f.profile);
+      await expect(attempt).rejects.toThrow(message);
+      expect(await Promise.all([f.profile, f.other].map(async uri => (await f.files.readFile(uri)).value.toString()))).toEqual(originals);
+      expect((await service.scanUserExtensions(f.profile)).map(extension => extension.manifest.version)).toEqual(['1.0.0']);
+      receipt.checks.push(`${method}的${label}校验在发布前拒绝，旧版本及另一profile原件保留`);
+    });
+  });
+}
+
+test('原gallery仍可发布有效版本，manifest警告保持可安装', async () => {
+  await fixture(async f => {
+    const service = f.scanner(), location = f.extension('gallery-valid', '1.0.0');
+    const manifestUri = m.URI.joinPath(location, 'package.json').toString();
+    // 上游仅把非便携入口记作警告；安装拒绝只消费原isValid，不另定更严格规则。
+    f.resources.set(manifestUri, JSON.stringify({ ...JSON.parse(f.resources.get(manifestUri)), browser: '../extension.js' }));
+    const installed = await service.addExtensionFromGallery({ identifier: { id: 'cache-probe.gallery-valid' },
+      publisher: 'cache-probe', name: 'gallery-valid', version: '1.0.0', properties: { targetPlatform: 'web' }, assets: {} }, {}, f.profile);
+    expect(installed.isValid).toBe(true);
+    expect(installed.validations).not.toBeEmpty();
+    expect((await service.scanUserExtensions(f.profile)).map(extension => extension.identifier.id)).toEqual(['cache-probe.gallery-valid']);
+    receipt.checks.push('原gallery有效版本可安装；仅有manifest警告不被扩为拒绝');
+  });
+});
+
+for (const method of ['location', 'gallery']) test(`${method}首次安装不兼容版本不创建安装记录`, async () => {
+  await fixture(async f => {
+    const service = f.scanner(), location = f.extension('fresh-invalid', '1.0.0');
+    const manifestUri = m.URI.joinPath(location, 'package.json').toString();
+    f.resources.set(manifestUri, JSON.stringify({ ...JSON.parse(f.resources.get(manifestUri)), engines: { vscode: '^999.0.0' } }));
+    const attempt = method === 'location' ? service.addExtension(location, {}, f.profile)
+      : service.addExtensionFromGallery({ identifier: { id: 'cache-probe.fresh-invalid' }, publisher: 'cache-probe',
+        name: 'fresh-invalid', version: '1.0.0', properties: { targetPlatform: 'web' }, assets: {} }, {}, f.profile);
+    await expect(attempt).rejects.toThrow(/not compatible.*requires/i);
+    expect(await f.files.exists(f.profile)).toBe(false);
+    receipt.checks.push(`${method}首次校验拒绝不创建安装记录`);
   });
 });
 
