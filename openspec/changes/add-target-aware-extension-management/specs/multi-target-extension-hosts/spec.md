@@ -52,9 +52,15 @@ extensions.all／getExtension／exports SHALL 解析该 host 的合法实例集�
 
 初始模型、dirty buffer、textDocuments、visibleTextEditors、activeTextEditor、文档／编辑器／诊断／watcher 事件 SHALL 按 Node host 明确 workspace view 及资源归属发送，不能广播全窗口模型。焦点在其它 view 时该 host 的 active editor SHALL 为 undefined；版本、取消及 generation 须贯穿请求和结果。跨资源 WorkspaceEdit SHALL 在副作用前核验全部资源归属、映射与版本，拒绝错误目标，不声称新跨目标原子事务。此 API 视图约束不等于 Node 进程的文件系统沙箱。
 
+TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完整 EditorInput；组内增量索引基于投影后的标签顺序，保留原 Tab／TabGroup 的运行态对象身份。其它目标的活动标签 SHALL 表现为该组无 activeTab，实际 activeTabGroup 与 viewColumn 仍由窗口布局决定。混合资源 Diff／Merge／MultiDiff 的所有实际文件端点均属该视图时才可见，不能只展示部分文件却允许操作完整输入。尚无目标归属的无文件标签不进入 Node 视图，Web 原窗口语义保持。关闭组 SHALL 仅关闭该宿主的标签，组中仍有其它目标文件时不得移除真实组；关闭、移动及迟到事件不得越过所属代际或改投其它资源。
+
 #### Scenario: A 与 B 的未保存文档同时打开
 - **WHEN** A/B 文件均有不同 dirty 内容，两个扩展枚举文档／可见编辑器并监听变化，用户在二者间切焦点
 - **THEN** 每 host 只得到自己 view 的模型、内容和事件，非所属 view 焦点表现为无 active editor；错误目标编辑在产生副作用前被拒绝，迟到旧代际结果不发布
+
+#### Scenario: 混合编辑器组的标签事件与关闭
+- **WHEN** 同一真实编辑器组交错打开 A/B 文件，随后移动、切焦点或由 A 扩展关闭自己的 TabGroup
+- **THEN** A/B 分别收到自己标签的连续索引和增量，未关闭标签的 API 对象身份保持；A 只能关闭自己的完整输入，B 文件及仍非空的真实编辑器组保留，宿主关闭后不再发送标签模型或继续处理后继关闭
 
 ### Requirement: 扩展启用范围与版本激活必须区别于安装位置
 

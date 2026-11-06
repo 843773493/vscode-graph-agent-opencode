@@ -21,3 +21,5 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 诊断继续由原 MainThreadDiagnostics／MarkerService 持有；目标 collection 的内部 owner 使用原 extHostId 区分，清空及释放只撤本代。事件按 workspace view 投影并过滤外部关联位置，保留普通正文及合法文档链接；写入先核整批资源，不能部分发布后报错。Web 保留原 owner 与窗口事件语义。
 
 配置转换复用原 WorkspaceService、scope 合并及 ConfigurationEditing；显式目标 settings 不等待窗口 RemoteAgent。原文件夹 parser 保留 raw／名称并按目标平台解析，结果须匹配已认证的有序根；所有 MainThread customer 共用该 host 的配置／context child。配置读取的目标不可用错误不能吞成空配置。
+
+标签投影只维护原 MainThreadEditorTabs 模型及索引；完整 EditorInput 的全部资源决定可见性，不把混合 MultiDiff 拆成可单独关闭的假标签。增量使用本宿主数组索引，结构重同步保留 Tab 对象身份；关闭混合组仅关闭当前宿主的完整输入，真实非空组不得移除。初始化、observable 和异步关闭遵守同一代际，错误不通过全量重建掩盖。
