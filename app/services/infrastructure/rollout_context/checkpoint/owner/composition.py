@@ -47,12 +47,6 @@ def _manifest_optional_non_negative_int(value: object, *, field: str) -> int | N
     return _manifest_non_negative_int(value, field=field)
 
 
-def _manifest_sql_bool(value: object, *, field: str) -> bool:
-    if value not in (0, 1) or isinstance(value, bool):
-        raise ValueError(f"plan-order-integrity: manifest {field} 非法")
-    return value == 1
-
-
 class ContextPlanCompositionMixin:
     def _composer_for(
         self,
@@ -344,22 +338,16 @@ class ContextPlanCompositionMixin:
         source_overlay_epoch = snapshot.manifest.source_overlay_epoch
         active_view_id = self._storage.checkpoints.active_view_id(snapshot)
         composer = self._composer_for(session_id, thread_id, checkpoint_ns)
-        loaded_contributions: list[ContextContribution] = []
-        for raw in self._storage.assemblies.list_context_contributions(
+        loaded_contributions = self._storage.assemblies.list_context_contributions(
             session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,
             overlay_contribution_ids=active_overlay_contribution_ids,
             snapshot=snapshot,
-        ):
-            extensions = raw.get("extensions")
-            if not isinstance(extensions, Mapping):
-                raise TypeError("context contribution extensions 非法")
-            binding_value = raw.get("source_binding")
-            source_binding = SourceBinding.from_dict(binding_value) if binding_value is not None else None
-            contribution_id = _manifest_string(
-                raw.get("contribution_id"), field="contribution_id"
-            )
+        )
+        for contribution in loaded_contributions:
+            source_binding = contribution.source_binding
+            contribution_id = contribution.contribution_id
             # storage 已按当前选集筛选 backing；实际消费的绑定仍须与活动 overlay 一致。
             overlay_id = source_binding.overlay_id if source_binding is not None else None
             if overlay_id is not None:
@@ -394,62 +382,6 @@ class ContextPlanCompositionMixin:
                 )
                 if source_binding != active_binding:
                     raise ValueError("source-mismatch: registry overlay binding 与 active overlay 不一致")
-            # source_ordinal 是 registry 列的稳定持久化顺序，不能在重启后
-            # 退回 created_at 排序；assembly 内的 contribution_ordinal
-            # 仍由 seal 单独分配，二者不能混用。registry 值只映射 typed
-            # 字段，metadata 中的同名历史键保持 inert 透传。
-            restored_source_ordinal = _manifest_non_negative_int(
-                raw.get("source_ordinal"), field="source_ordinal"
-            )
-            loaded_contributions.append(
-                ContextContribution(
-                    contribution_id=contribution_id,
-                    source_kind=_manifest_string(
-                        raw.get("source_kind"), field="source_kind"
-                    ),
-                    source_revision=_manifest_string(
-                        raw.get("source_revision"), field="source_revision"
-                    ),
-                    content_hash=(
-                        _manifest_string(raw["content_hash"], field="content_hash")
-                        if raw["content_hash"] is not None
-                        else None
-                    ),
-                    # ledger 只镜像 registry manifest，正文由同一 owner 的
-                    # cache/detail 提供，seal 校验精确正文的 content_hash。
-                    body=None,
-                    request_only=_manifest_sql_bool(
-                        raw.get("request_only"), field="request_only"
-                    ),
-                    extensions=extensions,
-                    source_binding=source_binding,
-                    root_placement=raw["root_placement"],
-                    contribution_kind=_manifest_string(
-                        raw.get("contribution_kind"), field="contribution_kind"
-                    ),
-                    content_length=(
-                        _manifest_non_negative_int(
-                            raw["content_length"], field="content_length"
-                        )
-                    ),
-                    visibility=_manifest_string(
-                        raw.get("visibility"), field="visibility"
-                    ),
-                    protection=_manifest_string(
-                        raw.get("protection"), field="protection"
-                    ),
-                    # selection_role/replacement_policy 是 registry 权威列，
-                    # 必须逐字段从 SQLite 恢复；不从 metadata 同名键补造。
-                    selection_role=_manifest_string(
-                        raw.get("selection_role"), field="selection_role"
-                    ),
-                    replacement_policy=_manifest_string(
-                        raw.get("replacement_policy"),
-                        field="replacement_policy",
-                    ),
-                    source_ordinal=restored_source_ordinal,
-                )
-            )
         loaded_ids = {item.contribution_id for item in loaded_contributions}
         missing_overlay_contributions = sorted(
             active_overlay_contribution_ids - loaded_ids

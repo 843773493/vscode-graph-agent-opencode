@@ -43,8 +43,8 @@ from app.domain.itemized.identity.item_projection import (
 )
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    SourceBinding,
     ContributionResolver,
+    SourceBinding,
     validate_included_overlay_chain,
 )
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -239,14 +239,14 @@ def _register(
     saver.register_context_contribution(session_id, saver._storage.storage.main_thread_id(session_id), contribution)
     thread_id = saver._storage.storage.main_thread_id(session_id)
     for row in saver._storage.assemblies.list_context_contributions(session_id, thread_id):
-        if row["contribution_id"] == contribution.contribution_id:
-            ordinal = row["source_ordinal"]
+        if row.contribution_id == contribution.contribution_id:
+            ordinal = row.source_ordinal
             assert isinstance(ordinal, int) and not isinstance(ordinal, bool)
             return ordinal
     raise AssertionError("registry 行缺失")
 
 
-def _rows(saver: RolloutCheckpointSaver, session_id: str) -> list[dict]:
+def _rows(saver: RolloutCheckpointSaver, session_id: str) -> list[ContextContribution]:
     thread_id = saver._storage.storage.main_thread_id(session_id)
     return list(saver._storage.assemblies.list_context_contributions(session_id, thread_id))
 
@@ -579,7 +579,7 @@ class TestRegistryStabilityAcrossRestart:
         third = _register(restarted, MAIN_SESSION_ID, _contribution("c-3"))
         assert third == 2
         rows = {
-            row["contribution_id"]: row["source_ordinal"]
+            row.contribution_id: row.source_ordinal
             for row in _rows(restarted, MAIN_SESSION_ID)
         }
         assert rows == {"c-1": 0, "c-2": 1, "c-3": 2}
@@ -613,8 +613,8 @@ class TestRegistryStabilityAcrossRestart:
         saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), updated, expected_source_revision=original.source_revision)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
-        assert rows[0]["source_ordinal"] == first
-        assert rows[0]["source_revision"] == "rev-b"
+        assert rows[0].source_ordinal == first
+        assert rows[0].source_revision == "rev-b"
 
     def test_typed_replaceable_source_enables_in_place_revision_update(
         self,
@@ -634,8 +634,8 @@ class TestRegistryStabilityAcrossRestart:
         saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), updated, expected_source_revision=original.source_revision)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
-        assert rows[0]["source_ordinal"] == first
-        assert rows[0]["source_revision"] == "rev-updated"
+        assert rows[0].source_ordinal == first
+        assert rows[0].source_revision == "rev-updated"
 
     def test_metadata_only_replaceable_key_is_no_longer_replaceable(
         self,
@@ -659,8 +659,8 @@ class TestRegistryStabilityAcrossRestart:
             saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), drifted)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
-        assert rows[0]["source_ordinal"] == first
-        assert rows[0]["source_revision"] == "rev-metadata-only-replaceable"
+        assert rows[0].source_ordinal == first
+        assert rows[0].source_revision == "rev-metadata-only-replaceable"
 
     def test_reregistration_of_same_source_is_idempotent(
         self,
@@ -675,7 +675,7 @@ class TestRegistryStabilityAcrossRestart:
         saver.register_context_contribution(MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), contribution)
         rows = _rows(saver, MAIN_SESSION_ID)
         assert len(rows) == 1
-        assert rows[0]["source_ordinal"] == first
+        assert rows[0].source_ordinal == first
         # 内容漂移（source_revision 变化）仍必须显式拒绝。
         drifted = replace(contribution, source_revision="rev-drift")
         with pytest.raises(ValueError, match="identity.*冲突"):
@@ -696,8 +696,8 @@ class TestRegistryStabilityAcrossRestart:
             _contribution("shared-id"),
         )
         assert (main_ordinal, child_ordinal) == (0, 0)
-        main_ids = {row["contribution_id"] for row in _rows(saver, MAIN_SESSION_ID)}
-        child_ids = {row["contribution_id"] for row in _rows(saver, CHILD_SESSION_ID)}
+        main_ids = {row.contribution_id for row in _rows(saver, MAIN_SESSION_ID)}
+        child_ids = {row.contribution_id for row in _rows(saver, CHILD_SESSION_ID)}
         assert main_ids == {"shared-id"}
         assert child_ids == {"shared-id"}
         # CSM 控制状态同轮隔离：main 的 tracking 事实不出现在 child owner。
@@ -1041,7 +1041,7 @@ class TestSealedTypedFieldConsumption:
         assert context_plan_hash(after) == before_hash
         (row,) = _rows(restarted, MAIN_SESSION_ID)
         contribution = after.contributions[0]
-        assert contribution.source_ordinal == row["source_ordinal"]
+        assert contribution.source_ordinal == row.source_ordinal
         assert contribution.source_ordinal != 123
         assert contribution.selection_role == "direct"
         assert contribution.replacement_policy == "immutable"
@@ -1252,9 +1252,9 @@ class TestContributionRevisionCAS:
                 expected_source_revision=original.source_revision, request_content="late revision",
             )
         (row,) = _rows(saver, MAIN_SESSION_ID)
-        assert row["source_revision"] == "rev-b"
-        assert row["source_ordinal"] == ordinal
-        assert row["content_hash"] == second.content_hash
+        assert row.source_revision == "rev-b"
+        assert row.source_ordinal == ordinal
+        assert row.content_hash == second.content_hash
         assert saver._request_only_content == request_only_content_before_conflict
         current = saver._composer_for(MAIN_SESSION_ID, thread_id).ledger.contributions["cas-slot"]
         assert current.source_revision == "rev-b" and current.body is None
@@ -1277,7 +1277,7 @@ class TestContributionRevisionCAS:
             MAIN_SESSION_ID, thread_id, "", snapshot.as_sealed_plan(), None,
         )
         assert request_bodies["cas-slot"] == "revision b"
-        assert contribution_content_hash("prompt", request_bodies["cas-slot"]) == row["content_hash"]
+        assert contribution_content_hash("prompt", request_bodies["cas-slot"]) == row.content_hash
         assert "late revision" not in request_bodies.values()
 
     def test_replacement_requires_expected_revision(self, saver):
@@ -1288,7 +1288,7 @@ class TestContributionRevisionCAS:
             saver.register_context_contribution(
                 MAIN_SESSION_ID, saver._storage.storage.main_thread_id(MAIN_SESSION_ID), updated,
             )
-        assert _rows(saver, MAIN_SESSION_ID)[0]["source_revision"] == original.source_revision
+        assert _rows(saver, MAIN_SESSION_ID)[0].source_revision == original.source_revision
 
     def test_immutable_slot_cannot_change_to_replaceable(self, saver):
         original = _contribution("immutable-slot")
@@ -1299,7 +1299,7 @@ class TestContributionRevisionCAS:
                 replace(original, source_revision="new", replacement_policy="replaceable"),
                 expected_source_revision=original.source_revision,
             )
-        assert _rows(saver, MAIN_SESSION_ID)[0]["replacement_policy"] == "immutable"
+        assert _rows(saver, MAIN_SESSION_ID)[0].replacement_policy == "immutable"
 
     def test_registry_bound_to_sealed_assembly_is_immutable(self, saver):
         original = _contribution("sealed-slot", replacement_policy="replaceable")
@@ -1316,8 +1316,8 @@ class TestContributionRevisionCAS:
                 expected_source_revision=original.source_revision,
             )
         (row,) = _rows(saver, MAIN_SESSION_ID)
-        assert row["source_revision"] == original.source_revision
-        assert row["source_ordinal"] == ordinal
+        assert row.source_revision == original.source_revision
+        assert row.source_ordinal == ordinal
 
 
 def test_observation_unknown_extension_survives_owner_commit_and_restart(saver, sessions_root):
@@ -1392,8 +1392,8 @@ def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(
     assert saver._storage.storage.jsonl_path(MAIN_SESSION_ID, thread_id=thread_id).read_bytes() == before_jsonl
     assert saver._composer_for(MAIN_SESSION_ID, thread_id).ledger.contributions == before_ledger
     assert saver._request_only_content == before_body
-    row = next(row for row in _rows(saver, MAIN_SESSION_ID) if row["contribution_id"] == original.contribution_id)
-    assert row["source_revision"] == original.source_revision and row["source_ordinal"] == ordinal
+    row = next(row for row in _rows(saver, MAIN_SESSION_ID) if row.contribution_id == original.contribution_id)
+    assert row.source_revision == original.source_revision and row.source_ordinal == ordinal
 
 
 def test_root_policy_fields_survive_observation_mapping_with_adversarial_extensions():

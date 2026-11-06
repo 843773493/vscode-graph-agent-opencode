@@ -2107,14 +2107,14 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         for row in saver._storage.assemblies.list_context_contributions(
             source.session_id, source_thread
         )
-        if row["contribution_id"] == contribution.contribution_id
+        if row.contribution_id == contribution.contribution_id
     ]
     assert (
-        registered["extensions"],
-        registered["selection_role"],
-        registered["replacement_policy"],
-        registered["root_placement"],
-        registered["source_ordinal"],
+        registered.extensions,
+        registered.selection_role,
+        registered.replacement_policy,
+        registered.root_placement,
+        registered.source_ordinal,
     ) == (extensions, "direct", "immutable", "tail_only", 0)
     (source_selection,) = [
         entry
@@ -2312,14 +2312,14 @@ async def test_fork_uses_typed_source_observation_not_extension_controls(
         for row in cold._storage.assemblies.list_context_contributions(
             target_session_id, target_thread_id
         )
-        if row["contribution_id"] == contribution.contribution_id
+        if row.contribution_id == contribution.contribution_id
     ]
-    assert target_registered["source_ordinal"] == registered["source_ordinal"]
-    assert target_registered["source_ordinal"] != adversarial_controls["source_ordinal"]
+    assert target_registered.source_ordinal == registered.source_ordinal
+    assert target_registered.source_ordinal != adversarial_controls["source_ordinal"]
     assert (
-        target_registered["selection_role"],
-        target_registered["replacement_policy"],
-        target_registered["root_placement"],
+        target_registered.selection_role,
+        target_registered.replacement_policy,
+        target_registered.root_placement,
     ) == ("direct", "immutable", "tail_only")
     assert cold.load_context_source_control_states(target_storage_owner) == ()
     with closing(sqlite3.connect(source_index)) as connection:

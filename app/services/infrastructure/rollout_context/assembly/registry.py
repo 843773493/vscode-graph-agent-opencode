@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
+    SourceBinding,
     parse_contribution_binding_manifest,
 )
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
@@ -40,7 +41,7 @@ def _strict_bool(value: object, *, field: str) -> bool:
     return value == 1
 
 
-def _canonical_json_object(value: object, *, field: str) -> str:
+def _canonical_json_object(value: object, *, field: str) -> dict[str, object]:
     if not isinstance(value, str) or not value:
         raise RuntimeError(f"{field} 必须是非空 JSON object 文本")
     try:
@@ -49,7 +50,7 @@ def _canonical_json_object(value: object, *, field: str) -> str:
         raise RuntimeError(f"{field} JSON 非法") from error
     if not isinstance(decoded, Mapping) or _json(decoded) != value:
         raise RuntimeError(f"{field} 必须是 canonical JSON object")
-    return value
+    return decoded
 
 
 class AssemblyRegistryMixin(DetailRegistryMixin):
@@ -171,10 +172,9 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     existing[9],
                     field="context_contributions.replacement_policy",
                 ),
-                _canonical_json_object(
-                    existing[10], field="context_contributions.binding_manifest_json"
-                ),
+                existing[10],
             )
+            _canonical_json_object(stored[10], field="context_contributions.binding_manifest_json")
             if expected_source_revision is not None and expected_source_revision != stored[1]:
                 raise ValueError("context contribution revision CAS 冲突")
             if stored == expected:
@@ -234,7 +234,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         checkpoint_ns: str = "",
         overlay_contribution_ids: set[str] | None = None,
         snapshot: RolloutReadSnapshot | None = None,
-    ) -> tuple[dict[str, object], ...]:
+    ) -> tuple[ContextContribution, ...]:
         session_id = strict_text(session_id, field="list_context_contributions.session_id")
         thread_id = strict_text(thread_id, field="list_context_contributions.thread_id")
         if not isinstance(checkpoint_ns, str):
@@ -259,62 +259,64 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                 rows = connection.execute(query + ' ORDER BY source_ordinal, contribution_id', params).fetchall()
         except RolloutNotMaterializedError:
             return ()
-        result: list[dict[str, object]] = []
+        result: list[ContextContribution] = []
         for row in rows:
             if len(row) != 16:
                 raise RuntimeError("context_contributions 行字段数非法")
+            manifest = parse_contribution_binding_manifest(_canonical_json_object(
+                row[14], field="context_contributions.binding_manifest_json",
+            ))
+            binding = manifest["source_binding"]
+            # SQLite 边界统一恢复 typed manifest；组合器只校验来源之间的关系，
+            # 不再把同一份字典逐字段检查后重建。正文仍归 cache/detail owner。
             result.append(
-                {
-                    "contribution_id": strict_text(
+                ContextContribution(
+                    contribution_id=strict_text(
                         row[0], field="context_contributions.contribution_id"
                     ),
-                    "source_kind": strict_text(
+                    source_kind=strict_text(
                         row[1], field="context_contributions.source_kind"
                     ),
-                    "source_revision": strict_text(
+                    source_revision=strict_text(
                         row[2], field="context_contributions.source_revision"
                     ),
-                    "content_hash": strict_optional_text(
+                    content_hash=strict_optional_text(
                         row[3], field="context_contributions.content_hash"
                     ),
-                    "content_length": strict_non_negative_int(
+                    content_length=strict_non_negative_int(
                         row[4], field="context_contributions.content_length"
                     ),
-                    "request_only": int(
-                        _strict_bool(row[5], field="context_contributions.request_only")
-                    ),
-                    "contribution_kind": strict_text(
+                    request_only=_strict_bool(row[5], field="context_contributions.request_only"),
+                    contribution_kind=strict_text(
                         row[6], field="context_contributions.contribution_kind"
                     ),
-                    "visibility": strict_text(
+                    visibility=strict_text(
                         row[7], field="context_contributions.visibility"
                     ),
-                    "protection": strict_text(
+                    protection=strict_text(
                         row[8], field="context_contributions.protection"
                     ),
-                    "assembly_id": strict_optional_text(
+                    assembly_id=strict_optional_text(
                         row[11], field="context_contributions.assembly_id"
                     ),
-                    "contribution_ordinal": strict_optional_non_negative_int(
+                    contribution_ordinal=strict_optional_non_negative_int(
                         row[12], field="context_contributions.contribution_ordinal"
                     ),
-                    "source_ordinal": strict_non_negative_int(
+                    source_ordinal=strict_non_negative_int(
                         row[13], field="context_contributions.source_ordinal"
                     ),
-                    "selection_role": strict_text(
+                    selection_role=strict_text(
                         row[9], field="context_contributions.selection_role"
                     ),
-                    "replacement_policy": strict_text(
+                    replacement_policy=strict_text(
                         row[10], field="context_contributions.replacement_policy"
                     ),
-                    **parse_contribution_binding_manifest(json.loads(_canonical_json_object(
-                        row[14], field="context_contributions.binding_manifest_json"
-                    ))),
-                    "created_at": strict_text(
-                        row[15], field="context_contributions.created_at"
-                    ),
-                }
+                    source_binding=SourceBinding.from_dict(binding) if binding is not None else None,
+                    root_placement=manifest["root_placement"],
+                    extensions=manifest["extensions"],
+                )
             )
+            strict_text(row[15], field="context_contributions.created_at")
         return tuple(result)
 
 

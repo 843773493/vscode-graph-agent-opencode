@@ -138,7 +138,7 @@ async def test_extensions_preserve_typed_controls_through_seal_fork_and_cold_rea
         assert restored_records == records
         assert restored.session_id == session and restored.thread_id == thread
         (registry_row,) = restarted._storage.assemblies.list_context_contributions(target, target_thread)
-        assert registry_row["source_ordinal"] == 0
+        assert registry_row.source_ordinal == 0
         files = restarted._detail_store._files
         original_read = files.read
         original_resolve = files._resolver.resolve_thread_node
