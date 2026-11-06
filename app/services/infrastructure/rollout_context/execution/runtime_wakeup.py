@@ -192,9 +192,10 @@ class RuntimeWakeupStorageMixin:
                 "SELECT item_id FROM item_catalog WHERE execution_id = ? "
                 "AND semantic_kind = 'assistant_output' ORDER BY item_sequence", (execution_id,),
             ).fetchall()
-            items = tuple(self._storage._read_canonical_item_from_catalog(
-                connection, session_id=session_id, thread_id=thread_id, checkpoint_ns="", item_id=str(row[0]),
-            ) for row in rows)
+            # 同一执行的输出共用 JSONL 流与本次提交/归属校验，不逐块重开和重复核验。
+            items = tuple(self._storage.read_items(
+                session_id, thread_id, item_ids=(row[0] for row in rows), connection=connection,
+            )) if rows else ()
             if final_only:
                 items = tuple(item for item in items if execution[0] is not None and item.projection_identity is not None
                               and item.projection_identity.model_call_id == execution[0] and item.status == "completed")
