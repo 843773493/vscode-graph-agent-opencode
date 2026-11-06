@@ -277,7 +277,6 @@ class RolloutProjectionMixin:
         values = tuple(dict.fromkeys(item_ids or ()))
         try:
             with self.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-                self._require_v2_runtime(connection)
                 columns = "ip.item_sequence, ip.item_id, ip.id, ip.semantic_kind, ip.payload_kind, ip.status, ip.turn_id, ip.turn_scope, ip.message_group_id, ip.wire_role, ip.content, ip.content_length, ip.content_truncated, ip.has_reasoning, ip.has_tool_calls, ip.phase, ip.content_hash, ip.projection_version, ip.created_at, ip.updated_at"
                 # 身份校验与读取共用本次选中的行，不为读取单条投影审计全部历史。
                 query = (

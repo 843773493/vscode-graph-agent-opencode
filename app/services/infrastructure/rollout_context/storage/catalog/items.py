@@ -321,7 +321,6 @@ class RolloutItemsMixin:
             turn_id = strict_text(turn_id, field="turn_id")
         groups: list[RequestMessageGroup] = []
         with self.read_connection(session_id, thread_id, checkpoint_ns, connection=writer_connection) as connection:
-            self._require_v2_runtime(connection)
             admission = connection.execute(
                 "SELECT turn_id,execution_origin FROM executions "
                 "WHERE session_id=? AND thread_id=? AND execution_id=?",
@@ -452,7 +451,9 @@ class RolloutItemsMixin:
                 session_id, thread_id, checkpoint_ns, snapshot=snapshot,
                 connection=connection,
             ) as read_connection:
-                self._require_v2_readable(read_connection)
+                # 快照入口已核格式和发布状态；借用 writer 事务仍须检查可读状态。
+                if connection is not None:
+                    self._require_v2_readable(read_connection)
                 # None 请求全部；显式空选集仍须过滤，不得读回全部历史。
                 query = (
                     "SELECT item.item_sequence,item.item_id,item.content_hash,item.payload_length,"

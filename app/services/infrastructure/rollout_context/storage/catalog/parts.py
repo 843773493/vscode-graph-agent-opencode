@@ -83,7 +83,6 @@ class RolloutPartsMixin:
         # 先跳过通用 item 内容校验，避免把可定位的 anchor 损坏误报成
         # 泛化的 rollout integrity error。offset/commit chain 仍然照常校验。
         with self.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
-            self._require_v2_runtime(connection)
             row = connection.execute(
                 "SELECT anchor_id, item_id, part_id, mode, view_id, branch_id, "
                 "recovery_capability, fragment_identity, "
