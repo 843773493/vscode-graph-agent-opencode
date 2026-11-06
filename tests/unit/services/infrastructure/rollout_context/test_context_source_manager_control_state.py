@@ -263,12 +263,19 @@ def test_seal_cas_sync_rejects_external_tracking_change(
     owner: ContextSourceOwnerKey,
     seal_sources,
 ) -> None:
-    _track_skill(manager, seal_sources)
+    _install_snapshot(manager)
+    manager.load_skill("debugging", mode="tracked")
+    batch = manager.prepare_sources()
+    sealing_manager = _new_manager(owner, control_state_port)
+    _install_snapshot(sealing_manager)
+    sealing_manager.load_skill("debugging", mode="tracked")
+    _, binding = seal_sources(sealing_manager)
     external = ContextSourceManager(owner=owner, control_state_port=control_state_port)
     external.load_skill("debugging", mode="untrack")
     committed = control_state_port.load_context_source_control_states(owner)
     with pytest.raises(RuntimeError, match="seal 确认不得吸收"):
-        manager._sync_persisted_control_states({"skill:debugging"})
+        manager.acknowledge_sealed_pending(batch, binding)
+    assert manager.prepare_sources() == batch
     assert control_state_port.load_context_source_control_states(owner) == committed
     manager.refresh_control_states()
     assert manager.observe("skill:debugging", "v2\n").status == "not_tracked"

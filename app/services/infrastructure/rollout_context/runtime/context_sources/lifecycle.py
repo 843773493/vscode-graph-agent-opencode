@@ -363,10 +363,12 @@ class SourceLifecycleMixin:
                     )
             port, owner = self._control_state_port, self._owner
             if port is not None and owner is not None:
+                synchronized = set(applied) & set(frozen)
+                # receipt 校验与 CAS 基准同步消费同一批 durable truth，不重复打开读取快照。
                 persisted = {
                     state.source_id: state
                     for state in port.load_context_source_control_states(
-                        owner, source_ids=frozenset(delta.source_id for delta in batch.deltas),
+                        owner, source_ids=frozenset(synchronized),
                     )
                 }
                 for delta in batch.deltas:
@@ -378,7 +380,23 @@ class SourceLifecycleMixin:
                             "context-source-seal-receipt-conflict: durable owner 尚未 applied: "
                             + delta.source_id
                         )
-                self._sync_persisted_control_states(set(applied) & set(frozen))
+                for stored in persisted.values():
+                    state = self._sources.get(stored.source_id)
+                    if state is None:
+                        continue
+                    if (
+                        stored.owner != owner
+                        or stored.source_kind != state.source_kind
+                        or stored.name != state.name
+                        or stored.binding_revision != state.binding_revision
+                        or stored.tracking_status != state.tracking_status
+                    ):
+                        raise RuntimeError(
+                            "context-source-control-state-conflict: seal 确认不得吸收其它 writer 的来源绑定或 tracking 变化"
+                        )
+                    state.persisted_state_revision = stored.state_revision
+                    state.persisted_fields = stored.durable_fields()
+                    state.latest_visible_selection_sequence = stored.latest_visible_selection_sequence
             for delta in batch.deltas:
                 state = self._sources[delta.source_id]
                 state.latest_visible_committed_revision = delta.revision
