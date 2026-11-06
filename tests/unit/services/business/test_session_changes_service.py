@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict, replace
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -96,6 +98,58 @@ def session_service(session_changes_workspace: tuple[str, Path]) -> SessionServi
         path_resolver=get_session_path_resolver(get_sessions_dir()),
         creation_service=get_session_creation_service(get_sessions_dir()),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("operation", ["list", "review"])
+async def test_changes_read_keeps_loop_responsive_and_settles_before_review(
+    workspace_root: Path, workspace_id: str, session_service: SessionService,
+    monkeypatch: pytest.MonkeyPatch, cancel: bool, operation: str,
+) -> None:
+    session = await session_service.create(SessionCreateRequest(title="changes concurrency"))
+    store = SessionChangesStore(workspace_root=workspace_root)
+    service = SessionChangesService(session_service=session_service, store=store)
+    entered, release = Event(), Event()
+    method = "read_records" if operation == "list" else "read_reviewed_map"
+    read = getattr(store, method)
+
+    def blocked_read(session_id: str):
+        entered.set()
+        assert release.wait(3), "读取期间事件循环未能释放 worker"
+        return read(session_id)
+
+    monkeypatch.setattr(store, method, blocked_read)
+    reader = asyncio.create_task(
+        service.list_changesets(session.session_id) if operation == "list" else service.set_file_reviewed(
+            session_id=session.session_id, file_path=_uri(workspace_id, "hello.txt"), reviewed=True,
+        )
+    )
+    review = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        if cancel:
+            reader.cancel()
+        review = asyncio.create_task(service.set_file_reviewed(
+            session_id=session.session_id, file_path=_uri(workspace_id, "next.txt"), reviewed=True,
+        ))
+        await asyncio.sleep(0.02)
+        assert not reader.done()
+        assert not review.done()
+    finally:
+        release.set()
+        outcomes = await asyncio.gather(reader, *([review] if review else []), return_exceptions=True)
+    if cancel:
+        assert isinstance(outcomes[0], asyncio.CancelledError)
+    elif operation == "list":
+        assert outcomes[0].items[0].summary.files == 0
+    else:
+        assert outcomes[0].reviewed is True
+    assert review is not None and review.result().reviewed is True
+    expected = {_uri(workspace_id, "next.txt"): True}
+    if operation == "review":
+        expected[_uri(workspace_id, "hello.txt")] = True
+    assert store.read_reviewed_map(session.session_id) == expected
 
 
 @pytest.mark.asyncio

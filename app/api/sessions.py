@@ -656,6 +656,8 @@ async def list_session_changesets(
 ):
     try:
         result = await session_changes_service.list_changesets(session_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -680,6 +682,8 @@ async def get_session_changeset(
             session_id=session_id,
             changeset_id=changeset_id,
         )
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError, ValueError) as error:
         raise _not_found_or_invalid_input_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -707,6 +711,8 @@ async def review_session_changeset_file(
             file_path=payload.file_path,
             reviewed=payload.reviewed,
         )
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError, ValueError) as error:
         # 服务入口先用 SessionService.get 校验会话，缺失时抛 NotFoundError。
         raise _not_found_or_invalid_input_http_error(error) from error

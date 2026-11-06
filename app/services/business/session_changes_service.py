@@ -7,6 +7,8 @@ from app.abstractions.session_changes import (
     SessionChangesStoreProtocol,
     StoredFileEdit,
 )
+from app.core.key_lock_pool import KeyLockPool
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.session_changes import (
     SessionChangesetDTO,
     SessionChangesetListDTO,
@@ -40,6 +42,8 @@ class SessionChangesService:
     ) -> None:
         self._session_service = session_service
         self._store = store
+        # 同会话的文件与审查状态仍串行处理，取消须等待 worker 结算。
+        self._operation_locks = KeyLockPool()
 
     async def record_tool_file_edit(
         self,
@@ -51,76 +55,88 @@ class SessionChangesService:
         tool_name: str,
         before: FileEditSnapshot,
     ) -> StoredFileEdit | None:
-        await self._session_service.get(session_id)
-        file_path = self._store.normalize_file_reference(before.file_path)
-        after_content = before.after_content
-        after_exists = before.after_exists
-        if before.existed == after_exists and before.content == after_content:
-            return None
+        def record() -> StoredFileEdit | None:
+            file_path = self._store.normalize_file_reference(before.file_path)
+            after_content = before.after_content
+            after_exists = before.after_exists
+            if before.existed == after_exists and before.content == after_content:
+                return None
 
-        diff_text = build_unified_diff(
-            file_path=file_path,
-            before_content=before.content if before.existed else "",
-            after_content=after_content if after_exists else "",
-        )
-        additions, deletions = count_diff_lines(diff_text)
-        edit_id = build_edit_id(
-            turn_id=turn_id,
-            execution_id=execution_id,
-            tool_call_id=tool_call_id,
-            file_path=file_path,
-        )
-        record = StoredFileEdit(
-            edit_id=edit_id,
-            session_id=session_id,
-            turn_id=turn_id,
-            tool_call_id=tool_call_id,
-            execution_id=execution_id,
-            tool_name=tool_name,
-            file_path=file_path,
-            kind=detect_change_kind(
+            diff_text = build_unified_diff(
+                file_path=file_path,
+                before_content=before.content if before.existed else "",
+                after_content=after_content if after_exists else "",
+            )
+            additions, deletions = count_diff_lines(diff_text)
+            edit_id = build_edit_id(
+                turn_id=turn_id,
+                execution_id=execution_id,
+                tool_call_id=tool_call_id,
+                file_path=file_path,
+            )
+            record = StoredFileEdit(
+                edit_id=edit_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                execution_id=execution_id,
+                tool_name=tool_name,
+                file_path=file_path,
+                kind=detect_change_kind(
+                    before_exists=before.existed,
+                    after_exists=after_exists,
+                ),
+                additions=additions,
+                deletions=deletions,
+                created_at=datetime.now(UTC).isoformat(),
                 before_exists=before.existed,
                 after_exists=after_exists,
-            ),
-            additions=additions,
-            deletions=deletions,
-            created_at=datetime.now(UTC).isoformat(),
-            before_exists=before.existed,
-            after_exists=after_exists,
-        )
-        self._store.save_edit(
-            record=record,
-            before_content=before.content,
-            after_content=after_content,
-            diff_text=diff_text,
-        )
-        return record
+            )
+            self._store.save_edit(
+                record=record,
+                before_content=before.content,
+                after_content=after_content,
+                diff_text=diff_text,
+            )
+            return record
+
+        # 原执行 owner 保护工具结果结算，不重新申请 active 准入。
+        async with self._operation_locks.lock_for(session_id):
+            await self._session_service.get(session_id)
+            return await run_sync_shielded(record)
 
     async def list_changesets(self, session_id: str) -> SessionChangesetListDTO:
-        await self._session_service.get(session_id)
-        records = self._store.read_records(session_id)
-        items: list[SessionChangesetListItemDTO] = []
-        for changeset_id in (
-            "all",
-            *(f"turn:{turn_id}" for turn_id in sorted_turn_ids(records)),
-        ):
-            changeset = self._build_changeset(
-                session_id=session_id,
-                changeset_id=changeset_id,
-                records=changeset_records(records, changeset_id),
-            )
-            items.append(
-                SessionChangesetListItemDTO(
+        def read() -> SessionChangesetListDTO:
+            records = self._store.read_records(session_id)
+            items: list[SessionChangesetListItemDTO] = []
+            for changeset_id in (
+                "all",
+                *(f"turn:{turn_id}" for turn_id in sorted_turn_ids(records)),
+            ):
+                changeset = self._build_changeset(
+                    session_id=session_id,
                     changeset_id=changeset_id,
-                    label=changeset.label,
-                    description=changeset.description,
-                    change_kind=changeset.change_kind,
-                    is_default=changeset.change_kind == "all",
-                    turn_id=changeset.turn_id,
-                    summary=changeset.summary,
+                    records=changeset_records(records, changeset_id),
                 )
-            )
-        return SessionChangesetListDTO(session_id=session_id, items=items)
+                items.append(
+                    SessionChangesetListItemDTO(
+                        changeset_id=changeset_id,
+                        label=changeset.label,
+                        description=changeset.description,
+                        change_kind=changeset.change_kind,
+                        is_default=changeset.change_kind == "all",
+                        turn_id=changeset.turn_id,
+                        summary=changeset.summary,
+                    )
+                )
+            return SessionChangesetListDTO(session_id=session_id, items=items)
+
+        async with (
+            self._session_service.session_read_admission(session_id),
+            self._operation_locks.lock_for(session_id),
+        ):
+            await self._session_service.get(session_id)
+            return await run_sync_shielded(read)
 
     async def get_changeset(
         self,
@@ -128,16 +144,23 @@ class SessionChangesService:
         session_id: str,
         changeset_id: str,
     ) -> SessionChangesetDTO:
-        await self._session_service.get(session_id)
-        return self._build_changeset(
-            session_id=session_id,
-            changeset_id=changeset_id,
-            records=changeset_records(
-                self._store.read_records(session_id),
-                changeset_id,
-            ),
-            persist=True,
-        )
+        def read() -> SessionChangesetDTO:
+            return self._build_changeset(
+                session_id=session_id,
+                changeset_id=changeset_id,
+                records=changeset_records(
+                    self._store.read_records(session_id),
+                    changeset_id,
+                ),
+                persist=True,
+            )
+
+        async with (
+            self._session_service.session_read_admission(session_id),
+            self._operation_locks.lock_for(session_id),
+        ):
+            await self._session_service.get(session_id)
+            return await run_sync_shielded(read)
 
     async def set_file_reviewed(
         self,
@@ -146,19 +169,26 @@ class SessionChangesService:
         file_path: str,
         reviewed: bool,
     ) -> SessionFileReviewResultDTO:
-        await self._session_service.get(session_id)
-        normalized_path = self._store.normalize_file_reference(file_path)
-        reviewed_map = self._store.read_reviewed_map(session_id)
-        if reviewed:
-            reviewed_map[normalized_path] = True
-        else:
-            reviewed_map.pop(normalized_path, None)
-        self._store.save_reviewed_map(session_id, reviewed_map)
-        return SessionFileReviewResultDTO(
-            session_id=session_id,
-            file_path=normalized_path,
-            reviewed=reviewed,
-        )
+        def update() -> SessionFileReviewResultDTO:
+            normalized_path = self._store.normalize_file_reference(file_path)
+            reviewed_map = self._store.read_reviewed_map(session_id)
+            if reviewed:
+                reviewed_map[normalized_path] = True
+            else:
+                reviewed_map.pop(normalized_path, None)
+            self._store.save_reviewed_map(session_id, reviewed_map)
+            return SessionFileReviewResultDTO(
+                session_id=session_id,
+                file_path=normalized_path,
+                reviewed=reviewed,
+            )
+
+        async with (
+            self._session_service.session_read_admission(session_id),
+            self._operation_locks.lock_for(session_id),
+        ):
+            await self._session_service.get(session_id)
+            return await run_sync_shielded(update)
 
     def _build_changeset(
         self,
