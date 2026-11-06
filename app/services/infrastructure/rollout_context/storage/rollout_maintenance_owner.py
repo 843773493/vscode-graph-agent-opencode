@@ -38,6 +38,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     COMMIT_IDEMPOTENCY_INDEX_SQL,
+    CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL,
     CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
     ITEM_CATALOG_LOCATOR_INDEX_SQL,
@@ -612,4 +613,5 @@ class RolloutMaintenanceOwner(
                     connection.execute(ITEM_CATALOG_MODEL_TOOL_INDEX_SQL)
                     connection.execute(MODEL_CALLS_ASSEMBLY_INDEX_SQL)
                     connection.execute(CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL)
+                    connection.execute(CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL)
                 return manifest

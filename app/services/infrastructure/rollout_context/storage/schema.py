@@ -26,6 +26,7 @@ COMMIT_IDEMPOTENCY_INDEX_SQL = load_sql(__package__, "sql/commit_idempotency_ind
 ITEM_CATALOG_MODEL_TOOL_INDEX_SQL = load_sql(__package__, "sql/item_catalog_model_tool_index.sql")
 MODEL_CALLS_ASSEMBLY_INDEX_SQL = load_sql(__package__, "sql/model_calls_assembly_index.sql")
 CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL = load_sql(__package__, "sql/context_contributions_source_ref_index.sql")
+CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL = load_sql(__package__, "migrations/context_contributions_overlay_index.sql")
 TOOL_CALLS_MESSAGE_INDEX_SQL = load_sql(__package__, "sql/tool_calls_message_index.sql")
 EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "sql/execution_queue.sql")
 SKILL_SELECTION_MIGRATION_SQL = load_sql("app.services.infrastructure.rollout_context.storage", "sql/skill_selection_024_025.sql")
@@ -90,6 +91,7 @@ def initialize_rollout_schema(
         + ITEM_CATALOG_MODEL_TOOL_INDEX_SQL
         + MODEL_CALLS_ASSEMBLY_INDEX_SQL
         + CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL
+        + CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL
         + TOOL_CALLS_MESSAGE_INDEX_SQL
         + VIEW_CREATION_SCHEMA_SQL
         + ASSEMBLY_CONTENT_SCHEMA_SQL
