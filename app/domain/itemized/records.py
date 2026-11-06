@@ -26,6 +26,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
+    ItemProjectionManifest,
     ItemProvenanceRelation,
     ItemSourceManifest,
     ProjectionGroup,
@@ -86,23 +87,6 @@ _DISPLAY_PROVENANCE_FIELDS = frozenset(
 GENERATED_RESULT_ANNOTATION_FIELDS = frozenset({
     "structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id",
 })
-_ITEM_PROJECTION_MANIFEST_FIELDS = frozenset(
-    {
-        "projection_group",
-        "projection_identity",
-        "tool_result_evidence",
-        "source_manifest",
-        "provenance_relations",
-        "extensions",
-    }
-)
-_ITEM_PROJECTION_MANIFEST_TYPES = (
-    ("projection_group", ProjectionGroup),
-    ("projection_identity", ItemProjectionIdentity),
-    ("tool_result_evidence", ToolResultEvidence),
-    ("source_manifest", ItemSourceManifest),
-)
-
 
 def validate_generated_result_extensions(extensions: Mapping[str, object]) -> None:
     """生成结果的扩展只承载已知结构标记，来源由闭合 payload 独占。"""
@@ -447,22 +431,6 @@ def _validate_payload(
         _non_empty_string(payload.get("summary"), "payload.summary")
 
 
-def parse_item_projection_manifest(value: object) -> dict[str, object]:
-    """恢复 catalogue 的无正文镜像；禁止扩展覆盖 typed owner。"""
-    if not isinstance(value, Mapping) or value.keys() != _ITEM_PROJECTION_MANIFEST_FIELDS:
-        raise ItemSchemaError("item projection manifest 字段缺失或含未知字段")
-    validate_extensions(value["extensions"])
-    result = {"extensions": dict(value["extensions"])}
-    for name, target_type in _ITEM_PROJECTION_MANIFEST_TYPES:
-        child = value[name]
-        result[name] = target_type.from_dict(child).to_dict() if child is not None else None
-    relations = value["provenance_relations"]
-    if not isinstance(relations, list):
-        raise ItemSchemaError("item provenance_relations 必须是有序 array")
-    result["provenance_relations"] = [ItemProvenanceRelation.from_dict(child).to_dict() for child in relations]
-    return result
-
-
 @dataclass(frozen=True, slots=True)
 class ProducerRef:
     producer_kind: str
@@ -661,14 +629,10 @@ class CanonicalItemRecord:
 
     def projection_manifest(self) -> dict[str, object]:
         """SQLite 只保存无正文 typed 投影/关系镜像，由 JSONL 逐字段核对。"""
-        return {
-            "projection_group": self.projection_group.to_dict() if self.projection_group is not None else None,
-            "projection_identity": self.projection_identity.to_dict() if self.projection_identity is not None else None,
-            "tool_result_evidence": self.tool_result_evidence.to_dict() if self.tool_result_evidence is not None else None,
-            "source_manifest": self.source_manifest.to_dict() if self.source_manifest is not None else None,
-            "provenance_relations": [entry.to_dict() for entry in self.provenance_relations],
-            "extensions": dict(self.extensions),
-        }
+        return ItemProjectionManifest(
+            self.projection_group, self.projection_identity, self.tool_result_evidence,
+            self.source_manifest, self.provenance_relations, self.extensions,
+        ).to_dict()
 
     def validate(self) -> None:
         if type(self.format_version) is not int or self.format_version != 2:

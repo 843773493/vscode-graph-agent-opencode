@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.schema import PROTECTIONS, VISIBILITIES
+from app.domain.itemized.schema import PROTECTIONS, VISIBILITIES, validate_extensions
 from app.domain.itemized.validation import _non_empty_string
 
 
@@ -237,3 +237,47 @@ class ItemProvenanceRelation:
 
     def to_dict(self) -> dict[str, object]:
         return {entry.name: child for entry in fields(self) if (child := getattr(self, entry.name)) is not None}
+
+
+_ITEM_PROJECTION_MANIFEST_FIELDS = frozenset({
+    "projection_group", "projection_identity", "tool_result_evidence",
+    "source_manifest", "provenance_relations", "extensions",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class ItemProjectionManifest:
+    """无正文投影镜像；解析一次后直接复用 typed 值，只在序列化边界转回字典。"""
+
+    projection_group: ProjectionGroup | None
+    projection_identity: ItemProjectionIdentity | None
+    tool_result_evidence: ToolResultEvidence | None
+    source_manifest: ItemSourceManifest | None
+    provenance_relations: tuple[ItemProvenanceRelation, ...]
+    extensions: Mapping[str, object]
+
+    @classmethod
+    def from_dict(cls, value: object) -> ItemProjectionManifest:
+        if not isinstance(value, Mapping) or value.keys() != _ITEM_PROJECTION_MANIFEST_FIELDS:
+            raise ItemSchemaError("item projection manifest 字段缺失或含未知字段")
+        validate_extensions(value["extensions"])
+        group = ProjectionGroup.from_dict(value["projection_group"]) if value["projection_group"] is not None else None
+        identity = ItemProjectionIdentity.from_dict(value["projection_identity"]) if value["projection_identity"] is not None else None
+        evidence = ToolResultEvidence.from_dict(value["tool_result_evidence"]) if value["tool_result_evidence"] is not None else None
+        source = ItemSourceManifest.from_dict(value["source_manifest"]) if value["source_manifest"] is not None else None
+        relations = value["provenance_relations"]
+        if not isinstance(relations, list):
+            raise ItemSchemaError("item provenance_relations 必须是有序 array")
+        return cls(group, identity, evidence, source,
+                   tuple(ItemProvenanceRelation.from_dict(child) for child in relations),
+                   dict(value["extensions"]))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "projection_group": self.projection_group.to_dict() if self.projection_group is not None else None,
+            "projection_identity": self.projection_identity.to_dict() if self.projection_identity is not None else None,
+            "tool_result_evidence": self.tool_result_evidence.to_dict() if self.tool_result_evidence is not None else None,
+            "source_manifest": self.source_manifest.to_dict() if self.source_manifest is not None else None,
+            "provenance_relations": [entry.to_dict() for entry in self.provenance_relations],
+            "extensions": dict(self.extensions),
+        }

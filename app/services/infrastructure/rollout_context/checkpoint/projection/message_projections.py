@@ -13,12 +13,9 @@ from collections.abc import Mapping, Sequence
 
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.enums import SemanticKind
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import (
-    CanonicalItemRecord,
-    parse_item_projection_manifest,
-)
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -384,10 +381,9 @@ class RolloutMessageProjectionMixin:
                 status = (
                     data.get("status") if isinstance(data.get("status"), str) else "success"
                 )
-                projection = parse_item_projection_manifest(
+                identity = ItemProjectionManifest.from_dict(
                     json.loads(canonical_row[1]),
-                )["projection_identity"]
-                identity = ItemProjectionIdentity.from_dict(projection) if projection is not None else None
+                ).projection_identity
                 model_call_id = identity.model_call_id if identity is not None else None
                 checkpoint_result = identity is not None and identity.projection_message_id is not None
                 raw_call_id = provider_tool_call_id(identity, call_id)
@@ -403,10 +399,9 @@ class RolloutMessageProjectionMixin:
                     (raw_call_id, scoped_call_id, canonical_row[2], canonical_row[3]),
                 ).fetchall()
                 for pending_call_id, assistant_sequence, projection_manifest, call_status in paired_candidates:
-                    pending_projection = parse_item_projection_manifest(
+                    pending_identity = ItemProjectionManifest.from_dict(
                         json.loads(projection_manifest),
-                    )["projection_identity"]
-                    pending_identity = ItemProjectionIdentity.from_dict(pending_projection) if pending_projection is not None else None
+                    ).projection_identity
                     pending_model_call_id = pending_identity.model_call_id if pending_identity is not None else None
                     checkpoint_call = pending_identity is not None and pending_identity.projection_message_id is not None
                     if pending_model_call_id != model_call_id or (

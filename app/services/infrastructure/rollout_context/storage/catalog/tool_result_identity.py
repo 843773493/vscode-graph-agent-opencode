@@ -6,12 +6,9 @@ import json
 import sqlite3
 from collections.abc import Mapping
 
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import (
-    CanonicalItemRecord,
-    parse_item_projection_manifest,
-)
+from app.domain.itemized.records import CanonicalItemRecord
 
 
 def _strict_db_text(value: object, *, field: str) -> str:
@@ -109,10 +106,9 @@ def _select_existing_tool_result(
     scoped_candidates: list[sqlite3.Row] = []
     same_carrier: list[sqlite3.Row] = []
     for row in rows:
-        manifest = parse_item_projection_manifest(json.loads(row[2]))
-        identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"])
+        identity = ItemProjectionManifest.from_dict(json.loads(row[2])).projection_identity
         existing_raw_tool_call_id = row[3]
-        if not isinstance(existing_raw_tool_call_id, str) or not existing_raw_tool_call_id:
+        if identity is None or not isinstance(existing_raw_tool_call_id, str) or not existing_raw_tool_call_id:
             raise RuntimeError(f"既有 tool_result 缺少 typed call identity: {row[0]}")
         if (
             provider_tool_call_id(identity, existing_raw_tool_call_id)

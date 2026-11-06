@@ -6,7 +6,7 @@ import json
 import sqlite3
 from collections.abc import Sequence
 
-from app.domain.itemized.records import parse_item_projection_manifest
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
@@ -101,8 +101,8 @@ class RolloutViewSequenceMixin:
             if sequence is None:
                 if semantic_kind not in {"user_input", "assistant_output", "tool_call", "tool_result"}:
                     continue
-                group = parse_item_projection_manifest(json.loads(projection_manifest))["projection_group"]
-                if group is not None and group["ordinal"] < group["size"] - 1:
+                group = ItemProjectionManifest.from_dict(json.loads(projection_manifest)).projection_group
+                if group is not None and group.ordinal < group.size - 1:
                     continue
                 raise RuntimeError(
                     f"context view canonical item 缺少已提交 message projection: view={view_id}, item={item_id}"

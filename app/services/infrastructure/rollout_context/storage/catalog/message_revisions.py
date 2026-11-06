@@ -6,11 +6,8 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.records import (
-    CanonicalItemRecord,
-    parse_item_projection_manifest,
-)
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
@@ -127,16 +124,15 @@ def validate_message_revision_source(
         manifest_value = json.loads(raw_manifest)
     except json.JSONDecodeError as error:
         raise ValueError("message revision source projection manifest 非法") from error
-    manifest = parse_item_projection_manifest(manifest_value)
-    if canonical_json_text(manifest) != raw_manifest:
+    manifest = ItemProjectionManifest.from_dict(manifest_value)
+    if canonical_json_text(manifest.to_dict()) != raw_manifest:
         raise ValueError("message revision source projection manifest 非 canonical JSON")
-    source_group = manifest["projection_group"]
-    if source_group is not None and source_group["ordinal"] != source_group["size"] - 1:
+    source_group = manifest.projection_group
+    if source_group is not None and source_group.ordinal != source_group.size - 1:
         raise ValueError("message revision source 必须是消息组 anchor")
-    source_identity_value = manifest["projection_identity"]
-    if not isinstance(source_identity_value, dict):
+    source_identity = manifest.projection_identity
+    if source_identity is None:
         raise TypeError("message revision source 缺少 projection identity")
-    source_identity = ItemProjectionIdentity.from_dict(source_identity_value)
     current_identity = item.projection_identity
     if (
         current_identity is None

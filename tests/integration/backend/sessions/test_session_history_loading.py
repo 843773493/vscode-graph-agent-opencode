@@ -19,11 +19,8 @@ from app.core.resource_uri import session_artifact_uri
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.records import (
-    parse_item_projection_manifest,
-    user_input_payload,
-)
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
+from app.domain.itemized.records import user_input_payload
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
@@ -757,23 +754,21 @@ async def test_history_deduplicates_final_checkpoint_reasoning_by_part_ref(
         ).fetchone()
         assert canonical_reasoning is not None
         reasoning_sequence = int(canonical_reasoning[0])
-        reasoning_manifest = parse_item_projection_manifest(
+        reasoning_manifest = ItemProjectionManifest.from_dict(
             json.loads(str(canonical_reasoning[1]))
         )
-        reasoning_identity = ItemProjectionIdentity.from_dict(
-            reasoning_manifest["projection_identity"]
-        )
-        reasoning_manifest["projection_identity"] = replace(
-            reasoning_identity,
+        assert reasoning_manifest.projection_identity is not None
+        reasoning_manifest = replace(reasoning_manifest, projection_identity=replace(
+            reasoning_manifest.projection_identity,
             model_call_id=model_call_id,
             block_id="part-shared-reasoning",
             block_index=0,
-        ).to_dict()
+        ))
         history_catalog_copy.execute(
             "UPDATE item_catalog SET payload_kind = 'text', projection_manifest_json = ? "
             "WHERE item_sequence = ?",
             (
-                json.dumps(reasoning_manifest, ensure_ascii=False),
+                json.dumps(reasoning_manifest.to_dict(), ensure_ascii=False),
                 reasoning_sequence,
             ),
         )

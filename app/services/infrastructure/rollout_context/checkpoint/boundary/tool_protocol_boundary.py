@@ -15,9 +15,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProjectionManifest,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import parse_item_projection_manifest
 
 CONFLICT_CODE = "tool-protocol-boundary-conflict"
 
@@ -91,10 +93,10 @@ def _tool_carriers(
             tuple(chunk),
         ).fetchall()
         for sequence, message_id, turn_id, execution_id, role, status, call_id, manifest in rows:
-            projection = parse_item_projection_manifest(json.loads(manifest))["projection_identity"]
+            identity = ItemProjectionManifest.from_dict(json.loads(manifest)).projection_identity
             carriers[sequence] = _ToolCarrier(
                 message_id, turn_id, execution_id, role, status, call_id,
-                ItemProjectionIdentity.from_dict(projection) if projection is not None else None,
+                identity,
             )
     return carriers
 

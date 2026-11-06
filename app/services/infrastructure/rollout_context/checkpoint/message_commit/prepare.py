@@ -11,10 +11,10 @@ from pathlib import Path
 
 from app.core.execution_admission_context import require_current_execution_admission
 from app.domain.itemized.enums import PayloadKind
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     RuntimeNoticePayload,
-    parse_item_projection_manifest,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
@@ -90,8 +90,8 @@ def inherit_message_selection(
             require_historical_scope(connection, *scope, current_owner=owner)
             scopes.add(scope)
         if sequence not in groups:
-            group = parse_item_projection_manifest(json.loads(manifest))["projection_group"]
-            group_sizes[sequence] = group["size"] if group is not None else 1
+            group = ItemProjectionManifest.from_dict(json.loads(manifest)).projection_group
+            group_sizes[sequence] = group.size if group is not None else 1
             groups[sequence] = []
             message_ids[sequence] = strict_text(message_id, field="messages.message_id")
         groups[sequence].append(strict_text(item_id, field="item_catalog.item_id"))

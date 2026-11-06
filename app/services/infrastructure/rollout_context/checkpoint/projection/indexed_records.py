@@ -8,9 +8,8 @@ from collections.abc import Iterable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
-from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -180,19 +179,14 @@ class IndexedRecordQueryMixin:
             ).fetchall()
             for call_id, assistant_sequence, manifest_json in carriers:
                 call_id = strict_text(call_id, field="tool_calls.tool_call_id")
-                manifest = parse_item_projection_manifest(
+                identity = ItemProjectionManifest.from_dict(
                     json.loads(
                         strict_text(
                             manifest_json,
                             field="item_catalog.projection_manifest_json",
                         )
                     )
-                )
-                identity = (
-                    ItemProjectionIdentity.from_dict(manifest["projection_identity"])
-                    if manifest["projection_identity"] is not None
-                    else None
-                )
+                ).projection_identity
                 if any(
                     matches_tool_call_id(identity, call_id, selected_id)
                     for selected_id in selected_tool_ids

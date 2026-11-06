@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import fields, replace
 
 from app.domain.itemized.hashing import canonical_json_bytes, content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
+    ItemProjectionManifest,
     ProjectionGroup,
     ReasoningCarrier,
 )
 from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
-from app.domain.itemized.records import (
-    CanonicalItemRecord,
-    parse_item_projection_manifest,
-)
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     CANONICAL_GROUP_FIELD,
     TOOL_BINDING_FIELD,
@@ -269,12 +267,12 @@ def restore_group_manifests(
     for item, entry in zip(items, raw, strict=True):
         if not isinstance(entry, Mapping) or entry.get("item_id") != item.item_id:
             raise ValueError("checkpoint canonical group manifest item identity 不一致")
-        manifest = parse_item_projection_manifest(
+        manifest = ItemProjectionManifest.from_dict(
             {key: value for key, value in entry.items() if key not in {"item_id", TOOL_BINDING_FIELD}}
         )
-        identity = manifest["projection_identity"]
-        identity = ItemProjectionIdentity.from_dict(identity) if identity is not None else None
-        values = {**item.to_dict(), **manifest}
+        identity = manifest.projection_identity
+        values = {field.name: getattr(manifest, field.name) for field in fields(manifest)}
+        values["payload"] = item.payload
         if TOOL_BINDING_FIELD in entry:
             binding = entry[TOOL_BINDING_FIELD]
             binding_keys = TOOL_BINDING_KEYS.get(item.semantic_kind, ())
@@ -303,7 +301,7 @@ def restore_group_manifests(
             )
             values["payload"] = {**payload, **binding}
             values["content_hash"] = content_hash(item.payload_kind, values["payload"])
-        evidence = manifest["tool_result_evidence"]
+        evidence = manifest.tool_result_evidence
         if evidence is not None:
             if item.semantic_kind != "tool_result" or not isinstance(
                 item.payload, Mapping
@@ -312,21 +310,21 @@ def restore_group_manifests(
                     "checkpoint text tool_result evidence 与消息角色不一致"
                 )
             if not matches_tool_call_id(
-                identity, item.payload["tool_call_id"], evidence["tool_call_id"],
+                identity, item.payload["tool_call_id"], evidence.tool_call_id,
             ) or not isinstance(item.payload["content"], str):
                 raise ValueError(
                     "checkpoint text tool_result evidence 与消息调用/正文不一致"
                 )
             values["payload_kind"], values["payload"] = "text", item.payload["content"]
             values["content_hash"] = content_hash("text", values["payload"])
-        # typed 字段已由 domain 严格解析；镜像与正文未变时复用本次已校验的候选，
-        # 避免再次摘要完整正文。自由扩展仍按 JCS 比较，不能把布尔值当作数字。
+        # 已解析的 typed 字段直接参与比较和 replace，不再字典往返或重复构造。
+        # 镜像与正文未变时复用候选；自由扩展仍按 JCS 比较，不能把布尔值当作数字。
         candidate = (
             item
             if values["payload"] is item.payload
-            and manifest == item.projection_manifest()
-            and canonical_json_bytes(manifest["extensions"]) == canonical_json_bytes(item.extensions)
-            else CanonicalItemRecord.from_dict(values)
+            and all(getattr(item, name) == value for name, value in values.items())
+            and canonical_json_bytes(manifest.extensions) == canonical_json_bytes(item.extensions)
+            else replace(item, **values)
         )
         if candidate.projection_group != item.projection_group:
             raise ValueError("checkpoint canonical group manifest 有序坐标不一致")

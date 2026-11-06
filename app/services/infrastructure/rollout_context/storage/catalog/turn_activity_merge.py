@@ -5,11 +5,7 @@
 
 from __future__ import annotations
 
-from app.domain.itemized.identity.item_projection import (
-    ItemProjectionIdentity,
-    ProjectionGroup,
-)
-from app.domain.itemized.records import parse_item_projection_manifest
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
     _authoritative_tool_coordinates,
     _final_reasoning_source_refs,
@@ -72,8 +68,7 @@ def _merge_activity_items(
         # 同一消息的工具行来自同一 catalog item；连续成员共用一次 manifest 解析。
         # 只在本次读取中复用，相邻消息或后续请求仍重新校验。
         if anchor_item_id != previous_tool_item_id:
-            tool_manifest = parse_item_projection_manifest(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool"))
-            tool_identity = ItemProjectionIdentity.from_dict(tool_manifest["projection_identity"]) if tool_manifest["projection_identity"] is not None else None
+            tool_identity = ItemProjectionManifest.from_dict(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool")).projection_identity
             model_call_id = tool_identity.model_call_id if tool_identity is not None else None
             previous_tool_item_id = anchor_item_id
         tool_by_item.setdefault((turn_id, anchor_item_id), []).append(tool)
@@ -108,9 +103,9 @@ def _merge_activity_items(
     ) in activity_rows:
         turn_id = strict_text(turn_id, field="item_catalog.turn_id")
         semantic_kind = strict_text(semantic_kind, field=f"item_catalog.semantic_kind:{item_id}")
-        manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
-        identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"]) if manifest["projection_identity"] is not None else None
-        projection_group = ProjectionGroup.from_dict(manifest["projection_group"]) if manifest["projection_group"] is not None else None
+        manifest = ItemProjectionManifest.from_dict(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
+        identity = manifest.projection_identity
+        projection_group = manifest.projection_group
         producer_ref = _json_object(
             producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"
         )
@@ -494,8 +489,7 @@ def _merge_final_reasoning(
         if turn_id != previous_turn_id:
             # SQL 按 Turn 聚合有序块；manifest 随 final header 只取一次，part 引用也只索引一次。
             # 不得为每个思考块重读整条 manifest、再扫描全部 part，避免块数增加时平方增长。
-            final_manifest = parse_item_projection_manifest(_json_object(final_manifests[turn_id], field=f"item_catalog.projection_manifest_json:{item_id}"))
-            final_identity = ItemProjectionIdentity.from_dict(final_manifest["projection_identity"]) if final_manifest["projection_identity"] is not None else None
+            final_identity = ItemProjectionManifest.from_dict(_json_object(final_manifests[turn_id], field=f"item_catalog.projection_manifest_json:{item_id}")).projection_identity
             model_call_id = final_identity.model_call_id if final_identity is not None else None
             part_refs = {ref.index: ref.id for ref in final_identity.content_part_refs} if final_identity is not None else {}
             previous_turn_id = turn_id

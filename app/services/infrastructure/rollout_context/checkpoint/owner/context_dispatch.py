@@ -20,14 +20,13 @@ from app.core.trace_middleware import get_current_gateway_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.identity.tool_call_identity import (
     matches_tool_call_id,
     provider_tool_call_id,
 )
 from app.domain.itemized.plans.request import ContextRequestPlan
-from app.domain.itemized.records import parse_item_projection_manifest
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
@@ -174,9 +173,7 @@ class ContextDispatchOwnerMixin:
             ).fetchall()
             model_call_ids: set[str] = set()
             for stored_call_id, raw_manifest in call_rows:
-                manifest = parse_item_projection_manifest(json.loads(raw_manifest))
-                projection = manifest["projection_identity"]
-                identity = ItemProjectionIdentity.from_dict(projection) if projection is not None else None
+                identity = ItemProjectionManifest.from_dict(json.loads(raw_manifest)).projection_identity
                 if identity is None or identity.model_call_id is None:
                     if stored_call_id == tool_call_id:
                         raise RuntimeError(f"tool_call 缺少 typed model_call provenance: {tool_call_id}")
