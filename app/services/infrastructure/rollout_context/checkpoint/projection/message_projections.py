@@ -119,6 +119,8 @@ class RolloutMessageProjectionMixin:
             checkpoint_ns,
             thread_id=thread_id,
         ).open("rb") as stream:
+            # 读回也承担 JSON 容器归一化：合法 Mapping 扩展可能不能被 codec deepcopy。
+            # 不能仅因写入前已校验 item，就直接拿调用方的容器替代 canonical 正文。
             items = read_message_group(
                 connection, stream, offset=catalog_offset, length=catalog_length,
                 read_item=self._storage._read_v2_item_at,
