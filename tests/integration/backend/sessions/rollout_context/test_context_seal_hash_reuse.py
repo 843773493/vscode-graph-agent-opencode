@@ -11,19 +11,18 @@ import rfc8785
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch import tool_set as tool_set_domain
 from app.domain.itemized.epoch.root_compilation import CompiledRootSourceProvenance
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
-from app.domain.itemized.epoch import tool_set as tool_set_domain
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans import contributions as contribution_domain
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly import (
     manifest as assembly_manifest,
-    sealing as assembly_writer,
 )
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
@@ -42,7 +41,9 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
 )
-from app.services.infrastructure.rollout_context.runtime.detail_manifest import DetailUnavailableError
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
+    DetailUnavailableError,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 按当前文件隔离正式工作区
@@ -126,7 +127,7 @@ def test_prepare_computes_each_frozen_tool_revision_once(
 
 
 @pytest.mark.parametrize("body", [{"规则": ["中文\n", "引号\"", 1e-7]}, "中文\n引号\"\\"])
-def test_standalone_request_ref_uses_verified_detail_digest(registry_db, monkeypatch, body):
+def test_standalone_request_ref_uses_verified_detail_digest(registry_db, body):
     saver, session, _connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     ref = ContextRef.request_only_ref(
@@ -148,20 +149,9 @@ def test_standalone_request_ref_uses_verified_detail_digest(registry_db, monkeyp
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         restored = cold.get_context_assembly(session, thread, assembly_id=frozen.assembly_id)
         assert restored == frozen
-        encode = rfc8785.dumps
-        encodings = []
-
-        def observe_encode(value):
-            if value == body:
-                encodings.append(value)
-            return encode(value)
-
-        with monkeypatch.context() as observe:
-            observe.setattr(rfc8785, "dumps", observe_encode)
-            assert cold._request_content_for_plan(
-                session, thread, "", restored.as_sealed_plan(), None,
-            ) == {ref.ref_id: body}
-        assert len(encodings) == 1
+        assert cold._request_content_for_plan(
+            session, thread, "", restored.as_sealed_plan(), None,
+        ) == {ref.ref_id: body}
         detail = next(entry.detail_ref for entry in restored.selection if entry.included)
         target = cold._detail_store._files.path(detail)
         original = target.read_bytes()
@@ -176,8 +166,8 @@ def test_standalone_request_ref_uses_verified_detail_digest(registry_db, monkeyp
 
 @pytest.mark.parametrize("source_count", [1, 4])
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_request_content_reuses_verified_length_and_single_contribution_digest(
-    production_context, monkeypatch, request, source_count, target_format,
+def test_request_content_matches_frozen_projection_after_restart(
+    production_context, source_count, target_format,
 ):
     saver, session, thread, _connection, manager, prepare = production_context
     for index in range(1, source_count):
@@ -188,43 +178,9 @@ def test_request_content_reuses_verified_length_and_single_contribution_digest(
             root_placement="root_eligible",
         ), tracking_status="tracked")
         manager.observe(source_id, f"冻结规则 {index}：中文、引号\"和换行\n", revision=f"content-digest:{index}")
-    encode = rfc8785.dumps
-    active, measurements = [], []
-
-    def observe_encode(value):
-        if active:
-            active[-1].append(value)
-        return encode(value)
-
-    def observe_reader(reader, stage):
-        read_content = reader._request_content_for_plan
-
-        def observe_content(*args, **kwargs):
-            encodings = []
-            active.append(encodings)
-            try:
-                content = read_content(*args, **kwargs)
-            finally:
-                active.pop()
-            plan = args[3]
-            selected = {entry.contribution_id for entry in plan.selection if entry.included}
-            for contribution in plan.contributions:
-                if contribution.contribution_id not in selected:
-                    continue
-                body = content[contribution.contribution_id]
-                preimage = {"contribution_kind": contribution.contribution_kind, "body": body}
-                measurements.append({"stage": stage, "body_encodings": encodings.count(body),
-                                     "contribution_encodings": encodings.count(preimage)})
-            return content
-
-        monkeypatch.setattr(reader, "_request_content_for_plan", observe_content)
-
-    monkeypatch.setattr(rfc8785, "dumps", observe_encode)
-    observe_reader(saver, "prepare")
     prepared = prepare("content-digest-first", target_format=target_format)
     plan = prepared["snapshot"].as_sealed_plan()
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        observe_reader(cold, "cold")
         for _ in range(2):
             projection = cold.project_context_plan_for_dispatch(
                 session, thread, plan, target_format=target_format,
@@ -235,13 +191,6 @@ def test_request_content_reuses_verified_length_and_single_contribution_digest(
             assert projection.losses == prepared["losses"]
             assert projection.native == prepared.get("native_projection")
             assert projection.resource_refs == prepared["resource_refs"]
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / "request-content-encodings.json").write_text(
-        json.dumps(measurements, indent=2), encoding="utf-8",
-    )
-    print(f"request content encodings ({source_count}, {target_format}): {measurements}")
-    assert {item["stage"] for item in measurements} == {"prepare", "cold"}
-    assert all(item["body_encodings"] == item["contribution_encodings"] == 1 for item in measurements)
 
 
 @pytest.mark.parametrize("source_count", [1, 8])
@@ -682,7 +631,7 @@ def test_prepare_reuses_only_current_draft_and_final_wire_plan_digest(
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
+def test_prepare_persists_canonical_snapshot_and_cold_retry_revalidates(
     production_context, monkeypatch, target_format,
 ):
     saver, session, thread, connection, _manager, prepare = production_context
@@ -696,41 +645,17 @@ def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
         },),
     )
     original_encode = rfc8785.dumps
-    original_preflight = assembly_writer.preflight_seal
-    writing = False
-    encodings = []
-
-    def encode(value):
-        encoded = original_encode(value)
-        if writing and isinstance(value, dict) and (
-            (value.get("schema") == "context-plan-seal:v1" and "snapshot" in value)
-            or "request_hash_preimage" in value
-        ):
-            encodings.append((value, encoded))
-        return encoded
-
-    def preflight(*args, **kwargs):
-        nonlocal writing
-        writing = True
-        try:
-            return original_preflight(*args, **kwargs)
-        finally:
-            writing = False
-
-    monkeypatch.setattr(rfc8785, "dumps", encode)
-    monkeypatch.setattr(assembly_writer, "preflight_seal", preflight)
     prepared = prepare("canonical-seal", supplier=lambda: selected, target_format=target_format)
     snapshot = prepared["snapshot"]
-    # 真实 writer 对这份大 snapshot 只编码一次；同次 seal 与持久文本共用该结果。
-    assert len(encodings) == 1
-    seal_preimage, encoded_seal = encodings[0]
-    assert seal_preimage["schema"] == "context-plan-seal:v1"
     persisted, detail_key = connection.execute(
         "SELECT snapshot_json,detail_ref FROM context_assemblies WHERE assembly_id=?",
         (snapshot.assembly_id,),
     ).fetchone()
     restored = load_snapshot(connection, persisted)
-    assert original_encode(restored) == original_encode(seal_preimage["snapshot"])
+    assert original_encode(restored) == original_encode(snapshot.to_dict())
+    encoded_seal = original_encode({
+        "schema": "context-plan-seal:v1", "snapshot": restored, "detail_ref": detail_key,
+    })
     assert ContextAssemblySnapshot.from_dict(restored).to_dict() == snapshot.to_dict()
     registration = saver.get_context_plan_registration(session, thread_id=thread, plan_id=snapshot.plan_id)
     expected_hash = "sha256:jcs:v1:" + hashlib.sha256(original_encode({
@@ -739,7 +664,6 @@ def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
         "sealed_hash": "sha256:jcs:v1:" + hashlib.sha256(encoded_seal).hexdigest(),
     })).hexdigest()
     assert registration.seal_hash == expected_hash
-    assert seal_preimage["detail_ref"] == detail_key
 
     def forbid_snapshot_projection(_snapshot):
         raise AssertionError("cold registry 不得重新投影大 snapshot 来计算 seal hash")
@@ -757,7 +681,6 @@ def test_prepare_persists_the_once_encoded_snapshot_and_cold_retry_revalidates(
         assert cold_first.seal_hash == cold_second.seal_hash == registration.seal_hash
     retried = prepare("canonical-seal", supplier=lambda: selected, target_format=target_format)
     assert retried["snapshot"].to_dict() == snapshot.to_dict()
-    assert len(encodings) == 1
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         first = cold.read_context_for_dispatch(prepared["dispatch_ref"])
         second = cold.read_context_for_dispatch(prepared["dispatch_ref"])

@@ -8,6 +8,7 @@ import re
 import sys
 from collections.abc import Mapping
 
+import orjson
 import rfc8785
 
 from app.domain.itemized.errors import ItemSchemaError
@@ -36,89 +37,67 @@ def _ensure_json_value(value: object, path: str = "value") -> None:
     _validate_json_value(value, path)
 
 
-def _validate_json_value(value: object, path: str) -> bool:
-    """完整校验 JSON，同时标记 RFC 8785 编码前是否需要适配输入。"""
+def _validate_json_value(value: object, path: str) -> None:
+    """完整校验 JSON，报告原始字段路径；不在这里转换数字或容器。"""
     if isinstance(value, str):
         if _UNICODE_SURROGATE_PATTERN.search(value) is not None:
             raise ItemSchemaError(f"{path!r} 包含非法 Unicode surrogate")
-        return False
+        return
     if isinstance(value, float) and not math.isfinite(value):
         raise ItemSchemaError(f"{path} 包含非有限浮点数")
     if isinstance(value, Mapping):
-        needs_adaptation = type(value) is not dict
         for key, child in value.items():
             if not isinstance(key, str):
                 raise ItemSchemaError(f"{path} object key 必须是字符串")
             _validate_json_value(key, f"{path} object key")
-            needs_adaptation = _validate_json_value(child, f"{path}.{key}") or needs_adaptation
-        return needs_adaptation
+            _validate_json_value(child, f"{path}.{key}")
+        return
     if isinstance(value, (list, tuple)):
-        needs_adaptation = False
         for index, child in enumerate(value):
-            needs_adaptation = _validate_json_value(child, f"{path}[{index}]") or needs_adaptation
-        return needs_adaptation
+            _validate_json_value(child, f"{path}[{index}]")
+        return
     if value is None or isinstance(value, (int, bool)):
-        # 这里只标记，不提前适配：后续结构错误仍须先于 JCS 数字范围错误暴露。
-        return isinstance(value, int) and abs(value) > 2**53 - 1
+        return
     if isinstance(value, float):
-        return False
+        return
     raise ItemSchemaError(f"{path} 不是 JSON value: {type(value).__name__}")
 
 
 def _jcs_input(value: object) -> object:
-    """适配 Python 整数与只支持安全整数的 JCS 库，保持恢复可重复。
-
-    大整数仅允许精确 binary64 值或该值的 JCS 十进制表示（JSON 解码会
-    把后者恢复成 int）。其它高精度整数必须由调用方显式编码为字符串，
-    不能默默舍入。数字编码仍完全由 RFC 8785 实现负责。
-    """
-    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53 - 1:
+    """按 UTF-16 排好对象键；数字仍由 RFC 8785 编码，字节输出交给原生编码器。"""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int):
+        value = int(value)
+        if abs(value) <= 2**53 - 1:
+            return value
         if abs(value) > int(sys.float_info.max):
             raise ItemSchemaError("整数超出 IEEE-754 有限数字范围")
         number = float(value)
-        if not math.isfinite(number):
-            raise ItemSchemaError("整数超出 IEEE-754 有限数字范围")
         if int(number) != value and rfc8785.dumps(number).decode("utf-8") != str(value):
             raise ItemSchemaError("整数不能无损映射到 JCS/IEEE-754，须编码为字符串")
-        return number
+        return orjson.Fragment(rfc8785.dumps(number))
+    if isinstance(value, float):
+        return orjson.Fragment(rfc8785.dumps(float(value)))
     if isinstance(value, Mapping):
-        return {key: _jcs_input(child) for key, child in value.items()}
+        return {
+            str.__str__(key): _jcs_input(child)
+            for key, child in sorted(value.items(), key=lambda item: item[0].encode("utf-16be"))
+        }
     if isinstance(value, (list, tuple)):
         return [_jcs_input(child) for child in value]
-    return value
-
-
-def _has_mapping_adapter(value: object) -> bool:
-    """定位需按 Mapping.items() 语义适配的嵌套对象。"""
-    # 普通 JSON 叶值复用精确类型集合；子类仍按既有标量/Mapping 语义判断。
-    if type(value) in _JSON_SCALAR_TYPES:
-        return False
-    if type(value) is dict:
-        return any(_has_mapping_adapter(child) for child in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_has_mapping_adapter(child) for child in value)
-    return not isinstance(value, (str, int, float)) and isinstance(value, Mapping)
+    raise TypeError(f"不是 JSON value: {type(value).__name__}")
 
 
 def canonical_json_bytes(value: object) -> bytes:
     """返回 RFC 8785 JCS 的无空白 UTF-8 字节。"""
-    if _has_mapping_adapter(value):
-        _validate_json_value(value, "value")
-        value = _jcs_input(value)
     try:
-        try:
-            # RFC 8785 完整校验适配后的普通 JSON。
-            return rfc8785.dumps(value)
-        except (rfc8785.CanonicalizationError, UnicodeError, TypeError):
-            # 失败后完整验证，保留结构错误路径和既有错误先后。
-            if not _validate_json_value(value, "value"):
-                raise
-            return rfc8785.dumps(_jcs_input(value))
-    except (
-        rfc8785.CanonicalizationError,
-        UnicodeError,
-        TypeError,
-    ) as error:
+        return orjson.dumps(_jcs_input(value))
+    except (rfc8785.CanonicalizationError, UnicodeError, TypeError, AttributeError, ItemSchemaError) as error:
+        # 只在失败时完整验证原始输入，保留结构错误路径和数字范围错误的既有先后。
+        _validate_json_value(value, "value")
+        if isinstance(error, ItemSchemaError):
+            raise
         raise ItemSchemaError(f"RFC 8785 JCS 无法编码 value: {error}") from error
 
 

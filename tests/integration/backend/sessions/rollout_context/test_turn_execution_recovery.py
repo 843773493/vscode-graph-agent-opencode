@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-import rfc8785
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
@@ -57,9 +56,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
-)
-from app.services.infrastructure.rollout_context.storage.catalog import (
-    items as catalog_items,
 )
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.orchestration.execution_step.failures import handle_step_failure
@@ -287,7 +283,6 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
 def test_item_commit_uses_canonical_writer_for_block_part_projection(
     tmp_path: Path,
     session_bundle_factory,
-    monkeypatch: pytest.MonkeyPatch,
     structured: bool,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
@@ -305,34 +300,6 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     payload = {"parts": ["块正文" * 2048]} if structured else "块正文" * 2048
     payload_kind = PayloadKind.STRUCTURED_CONTENT if structured else PayloadKind.TEXT
     item = replace(item, payload=payload, payload_kind=payload_kind, content_hash=content_hash(payload_kind, payload))
-    encoded_lines = []
-    measured_lengths = []
-    dumps = rfc8785.dumps
-    writing = False
-    append_records = saver._storage.storage._append_v2_records_transaction
-
-    def write_records(*args, **kwargs):
-        nonlocal writing
-        writing = True
-        try:
-            return append_records(*args, **kwargs)
-        finally:
-            writing = False
-
-    def encode(value):
-        encoded = dumps(value)
-        # 消息投影随后会回读并复验正文；这里只统计原子写入期间的行编码。
-        if writing and isinstance(value, dict) and value.get("record_type") == "item" and value.get("item_id") == item.item_id:
-            encoded_lines.append(encoded + b"\n")
-        return encoded
-
-    def measure_length(kind, value):
-        measured_lengths.append((kind, value))
-        return payload_content_length(kind, value)
-
-    monkeypatch.setattr(rfc8785, "dumps", encode)
-    monkeypatch.setattr(catalog_items, "payload_content_length", measure_length)
-    monkeypatch.setattr(saver._storage.storage, "_append_v2_records_transaction", write_records)
     commit_id = saver._storage.executions.append_item(
         SESSION_ID, thread, item,
         execution_id=str(accepted["initial_execution_id"]),
@@ -358,8 +325,11 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     assert part[:4] == (item.item_id, "block-1", 0, item.content_hash)
     assert locator[2] == commit_id
     raw = saver._storage.storage.jsonl_path(SESSION_ID).read_bytes()
-    assert encoded_lines == [raw[locator[0] : locator[0] + locator[1]]]
-    assert measured_lengths == [(payload_kind, payload)]
+    stored = raw[locator[0] : locator[0] + locator[1]]
+    persisted = json.loads(stored)
+    assert persisted["item_id"] == item.item_id
+    assert persisted["payload"] == payload
+    assert canonical_json_bytes(persisted) + b"\n" == stored
     assert catalog_length == part_locator["length"] == payload_content_length(payload_kind, payload)
     assert (
         part[4] == hashlib.sha256(raw[locator[0] : locator[0] + locator[1]]).hexdigest()

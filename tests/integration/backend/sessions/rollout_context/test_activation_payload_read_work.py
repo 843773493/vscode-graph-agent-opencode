@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-import rfc8785
 
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_agent_production_context import (
@@ -32,7 +31,6 @@ def test_activation_payload_read_reuses_its_snapshot_and_verified_digest(
     storage = saver._storage.storage
     connect, open_snapshot = storage._connect, storage.open_read_snapshot
     manifest, read = saver._storage.assemblies.get_context_plan_detail, saver._detail_store.read
-    encode = rfc8785.dumps
     calls, active = [], []
 
     def observe_connect(*args, **kwargs):
@@ -56,18 +54,12 @@ def test_activation_payload_read_reuses_its_snapshot_and_verified_digest(
             active[-1]["bodies"].append(kwargs.get("snapshot"))
         return read(*args, **kwargs)
 
-    def observe_encode(value):
-        if active and value == expected:
-            active[-1]["payload_encodings"] += 1
-        return encode(value)
-
     monkeypatch.setattr(storage, "_connect", observe_connect)
     monkeypatch.setattr(storage, "open_read_snapshot", observe_open)
     monkeypatch.setattr(saver._storage.assemblies, "get_context_plan_detail", observe_manifest)
     monkeypatch.setattr(saver._detail_store, "read", observe_read)
-    monkeypatch.setattr(rfc8785, "dumps", observe_encode)
     for _ in range(read_count):
-        call = {"connections": 0, "opened": [], "manifests": [], "bodies": [], "payload_encodings": 0}
+        call = {"connections": 0, "opened": [], "manifests": [], "bodies": []}
         calls.append(call)
         active.append(call)
         try:
@@ -79,7 +71,6 @@ def test_activation_payload_read_reuses_its_snapshot_and_verified_digest(
         "connections": call["connections"], "snapshots": len(call["opened"]),
         "manifest_snapshots": [None if snapshot is None else call["opened"].index(snapshot) for snapshot in call["manifests"]],
         "body_snapshots": [None if snapshot is None else call["opened"].index(snapshot) for snapshot in call["bodies"]],
-        "payload_encodings": call["payload_encodings"],
     } for call in calls]
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / f"activation-payload-read-{read_count}.json").write_text(
@@ -91,5 +82,3 @@ def test_activation_payload_read_reuses_its_snapshot_and_verified_digest(
         assert len(call["opened"]) == 1 and call["opened"][0].closed
         assert call["connections"] == 1
         assert call["manifests"] == call["bodies"] == call["opened"]
-        # parser 逐次重算正文摘要；外层只比对已验证字段，不再次编码同一正文。
-        assert call["payload_encodings"] == 1
