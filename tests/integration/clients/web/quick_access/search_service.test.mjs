@@ -54,12 +54,13 @@ async function withTransport(callback, asset = async target => page(target.uri),
         states.push(state); emit('branch', { branch: state }); continue;
       }
       const count = q.operation === 'content' ? result.matches.length : result.entries.length;
+      const limitedReason = ['response_byte_limit', 'file_byte_limit'].includes(result.truncation_reason) ? 'byte_limit' : 'result_limit';
       const state = { branch, state: result.truncated ? 'limited' : 'complete', retryable: false, allocated_results: q.limit,
-        returned_results: count, ...(result.truncated ? { code: result.truncation_reason ?? 'result_limit', cursor: result.next_cursor } : {}), ...diagnostic };
+        returned_results: count, ...(result.truncated ? { code: limitedReason, cursor: result.next_cursor } : {}), ...diagnostic };
       states.push(state);
       emit('page', { branch: state, page: { provider_id: 'workspace-files-' + q.operation, workspace_id: item.owner.workspace_id,
         category: 'file', operation: q.operation, contract_version: 1, state: state.state,
-        ...(result.truncated ? { limited_reason: 'result_limit' } : {}), files: result } });
+        ...(result.truncated ? { limited_reason: limitedReason } : {}), files: result } });
       emit('branch', { branch: state });
     }
     emit('end', { summary: { state: states.every(s => s.state === 'complete') ? 'complete' : 'incomplete',
@@ -304,26 +305,54 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         const warm = await f.search.fileSearch({ ...common, filePattern: '', maxResults: 0 });
         expect(warm.results).toHaveLength(500); expect(warm.limitHit).toBe(true);
         expect(warm.results.some(item => item.resource.toString() === uri(ownerA, tail).toString())).toBe(false);
-        expect(calls).toHaveLength(2);
+        expect(calls).toHaveLength(1);
         expect(calls[0].request.queries[0].limit).toBe(500);
-        expect(calls[1].request.continuations[0].cursor).toBe('after-500');
         expect(calls.every(call => call.request.queries[0].file_targets.every(item => item.owner.gateway_id === ownerA.gatewayId))).toBe(true);
 
         const later = await f.search.fileSearch({ ...common, filePattern: 'only-after-prewarm-cap', maxResults: 10 });
         expect(later.results.map(item => item.resource.toString())).toEqual([uri(ownerA, tail).toString()]);
-        expect(later.limitHit).toBe(false); expect(calls).toHaveLength(3);
+        expect(later.limitHit).toBe(false); expect(calls).toHaveLength(2);
         const other = await f.search.fileSearch({ ...common, folderQueries: [{ folder: uri(ownerB) }], filePattern: 'only-after-prewarm-cap', maxResults: 10 });
         expect(other.results.map(item => item.resource.toString())).toEqual([uri(ownerB, tail).toString()]);
-        expect(other.limitHit).toBe(false); expect(calls).toHaveLength(4);
+        expect(other.limitHit).toBe(false); expect(calls).toHaveLength(3);
 
         await f.search.clearCache(cacheKey);
-        expect(calls).toHaveLength(4);
+        expect(calls).toHaveLength(3);
         const reopened = await f.search.fileSearch({ ...common, filePattern: 'only-after-prewarm-cap', maxResults: 10 });
         expect(reopened.results.map(item => item.resource.toString())).toEqual([uri(ownerA, tail).toString()]);
-        expect(reopened.limitHit).toBe(false); expect(calls).toHaveLength(5);
+        expect(reopened.limitHit).toBe(false); expect(calls).toHaveLength(4);
       }, async (target, cursor, q) => q.query === '**/*'
         ? files(target, cursor ? [tail] : prefix, cursor ? {} : { truncated: true, next_cursor: 'after-500' })
         : files(target, [tail]));
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('已有下一文件证据时到达总配额不再取哨兵，续页完成不会继承旧受限状态', async () => {
+    for (const hasB of [true, false]) {
+      const f = fixture([]);
+      try {
+        await withTransport(async calls => {
+          const result = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }, { folder: uri(ownerB) }],
+            filePattern: 'match', maxResults: 2 });
+          expect(result.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'match-a.txt').toString(),
+            hasB ? uri(ownerB, 'match-b.txt').toString() : uri(ownerA, 'match-next.txt').toString()]);
+          expect(result.limitHit).toBe(hasB); expect(calls).toHaveLength(hasB ? 1 : 2);
+          if (!hasB) expect(calls[1].request.continuations[0].cursor).toBe('next-A');
+        }, async (target, cursor) => target.uri === root(ownerB) ? files(target, hasB ? ['match-b.txt'] : [])
+          : files(target, cursor ? ['match-next.txt'] : ['match-a.txt'], cursor ? {} : { truncated: true, next_cursor: 'next-A' }));
+      } finally { f.instantiation.dispose(); }
+    }
+  });
+
+  test('字节受限未证明还有匹配，恰好配额仍探测原续点并保留完整状态', async () => {
+    const f = fixture([]);
+    try {
+      await withTransport(async calls => {
+        const result = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'match', maxResults: 2 });
+        expect(result.results).toHaveLength(2); expect(result.limitHit).toBe(false);
+        expect(calls).toHaveLength(2); expect(calls[1].request.continuations[0].cursor).toBe('byte-boundary');
+      }, async (target, cursor) => files(target, cursor ? [] : ['match-a.txt', 'match-b.txt'],
+        cursor ? {} : { truncated: true, truncation_reason: 'response_byte_limit', next_cursor: 'byte-boundary' }));
     } finally { f.instantiation.dispose(); }
   });
 
@@ -389,7 +418,7 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         async () => ({ failure: { code: 'owner_denied', message: 'exact cause' } }));
       await withTransport(async () => {
         const result = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'file' });
-        expect(result.limitHit).toBe(true); expect(result.messages[0].text).toContain('response_byte_limit');
+        expect(result.limitHit).toBe(true); expect(result.messages[0].text).toContain('code: byte_limit');
       }, async target => page(target.uri, [], { truncated: true, truncation_reason: 'response_byte_limit' }));
     } finally { f.instantiation.dispose(); }
   });
@@ -428,7 +457,7 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         expect(result.messages).toHaveLength(1);
         const warning = result.messages[0];
         expect(warning.type).toBe(2); expect(warning.trusted).not.toBe(true);
-        for (const value of ['code: response_byte_limit', diagnostic.message, 'error_owner: workspace_files', 'reason: response_bytes', 'request_id: file-request-0']) {
+        for (const value of ['code: byte_limit', diagnostic.message, 'error_owner: workspace_files', 'reason: response_bytes', 'request_id: file-request-0']) {
           expect(warning.text).toContain(value);
         }
         expect(warning.text).not.toContain('http_status:'); expect(calls).toHaveLength(1);

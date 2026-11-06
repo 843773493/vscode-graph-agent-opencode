@@ -119,6 +119,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
         if (source.token.isCancellationRequested) throw new CancellationError();
         let scope = continuation?.scope;
         const branches: FederatedSearchContinuationDTO[] = [];
+        let moreFiles = false;
         await raceCancellationError(streamFederatedSearch(0, {
           scope: scope ? { mode: 'resume', scope, owners: [] } : { mode: 'selected', owners },
           queries: [requestQuery], continuations: continuation?.branches ?? [], max_results: pageLimit * planned.length,
@@ -137,6 +138,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             if (event.branch.state === 'failed' || event.branch.state === 'cancelled') throw new Error(
               `文件搜索${event.branch.state === 'cancelled' ? '已取消' : '失败'}：${diagnostic}`, { cause: event });
             if (event.branch.state === 'limited') {
+              if (query.type === QueryType.File && event.branch.code === 'result_limit') moreFiles = true;
               if (event.branch.cursor || event.branch.code === 'output_limit') branches.push({ branch: event.branch.branch, cursor: event.branch.cursor });
               else {
                 limitHit = true;
@@ -181,6 +183,8 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           }
         } }), source.token);
         if (!scope) throw new Error('文件搜索缺少冻结范围');
+        // 原 owner 的 result_limit 已确认下一文件；字节受限仍须沿续点探测。
+        if (count >= maximum && moreFiles) limitHit = true;
         continuation = branches.length ? { scope, branches } : undefined;
       } while (continuation && !limitHit);
       if (source.token.isCancellationRequested) throw new CancellationError();
