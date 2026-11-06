@@ -9,7 +9,7 @@ from typing import Any
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.services.mapping.itemized.content_blocks import (
-    direct_content_blocks,
+    iter_direct_content_blocks,
     reasoning_content_text,
 )
 
@@ -75,7 +75,7 @@ def project_user_message_content(
 
     if isinstance(content, Mapping) and "attachments" in content and "content" in content:
         content = content["content"]
-    source_blocks = direct_content_blocks(content)
+    source_blocks = iter_direct_content_blocks(content)
     projected: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
     for index, source in enumerate(source_blocks):
@@ -346,7 +346,7 @@ def project_ai_message_content(
     response_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按目标 provider 能力投影已规范化的 AIMessage content。"""
-    blocks = direct_content_blocks(content)
+    blocks = iter_direct_content_blocks(content)
     source_provider = _source_provider(response_metadata)
     same_provider = (
         isinstance(source_provider, str)

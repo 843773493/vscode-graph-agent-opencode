@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.services.mapping.itemized.content_blocks import (
-    direct_content_blocks,
+    iter_direct_content_blocks,
     reasoning_content_rows,
 )
 
@@ -50,7 +50,7 @@ def public_message_record(record: Mapping[str, object]) -> dict[str, object]:
 def visible_text(content: Any) -> str:
     """从直接 content blocks 提取可见文本，不读取思考块。"""
     parts: list[str] = []
-    for block in direct_content_blocks(content):
+    for block in iter_direct_content_blocks(content):
         block_type = block.get("type")
         if block_type in {"text", "input_text", "output_text"}:
             text = block.get("text")

@@ -15,7 +15,7 @@ from app.domain.itemized.identity.tool_call_identity import (
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
 from app.services.mapping.itemized.content_blocks import (
-    direct_content_blocks,
+    iter_direct_content_blocks,
     reasoning_content_rows,
 )
 from app.services.mapping.itemized.provider_history import visible_text
@@ -518,7 +518,7 @@ def _internal_content_parts(
 ) -> list[TurnResponsePartDTO]:
     """从 canonical content 展开可见语义；密文只投影存在性。"""
     rows: list[tuple[int, int | None, str, str, str | None]] = []
-    for block_index, block in enumerate(direct_content_blocks(item.payload)):
+    for block_index, block in enumerate(iter_direct_content_blocks(item.payload)):
         if block.get("type") in {"text", "input_text", "output_text", "refusal"}:
             rows.append((block_index, None, "text", visible_text([block]), None))
     for row in reasoning_content_rows(item.payload):

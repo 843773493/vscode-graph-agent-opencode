@@ -7,7 +7,6 @@ schema 选择或外部请求编码。provider 响应的归一化仍归
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -29,8 +28,8 @@ class ReasoningContentRow:
     signature_present: bool = False
 
 
-def _iter_direct_content_blocks(content: Any) -> Iterator[dict[str, Any]]:
-    """展开 content block；只规范化外层键，不复制嵌套载荷。"""
+def iter_direct_content_blocks(content: Any) -> Iterator[dict[str, Any]]:
+    """只读遍历 content；输出方按实际保留字段复制，避免先复制整份嵌套载荷。"""
     if isinstance(content, Mapping) and "attachments" in content and "content" in content:
         content = content["content"]
     if content is None:
@@ -53,14 +52,6 @@ def _iter_direct_content_blocks(content: Any) -> Iterator[dict[str, Any]]:
             continue
         if value is not None:
             yield {"type": "text", "text": str(value)}
-
-
-def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
-    """将已接受的消息 content 展开为独立副本，保持原有顺序。"""
-    return [
-        {key: copy.deepcopy(value) for key, value in block.items()}
-        for block in _iter_direct_content_blocks(content)
-    ]
 
 
 def _reasoning_content_text(block: Mapping[str, object]) -> str:
@@ -104,7 +95,7 @@ def reasoning_content_rows(content: object) -> list[ReasoningContentRow]:
             encrypted=encrypted if isinstance(encrypted, str) else None,
         ))
 
-    for block_index, block in enumerate(_iter_direct_content_blocks(content)):
+    for block_index, block in enumerate(iter_direct_content_blocks(content)):
         block_type = block.get("type")
         if block_type == "reasoning_items":
             items = block.get("reasoning_items")
@@ -135,4 +126,4 @@ def reasoning_content_rows(content: object) -> list[ReasoningContentRow]:
     return rows
 
 
-__all__ = ["ReasoningContentRow", "direct_content_blocks", "reasoning_content_rows", "reasoning_content_text"]
+__all__ = ["ReasoningContentRow", "iter_direct_content_blocks", "reasoning_content_rows", "reasoning_content_text"]

@@ -48,7 +48,7 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.mapping.itemized.content_blocks import (
-    direct_content_blocks,
+    iter_direct_content_blocks,
     reasoning_content_rows,
 )
 from tests.harness.python.run_context import TestRunContext
@@ -448,8 +448,8 @@ async def _assembly_history(
         assert actual_raw["id"] == expected_raw["response_metadata"]["message_id"]
         assert actual_raw["response_metadata"].get("model_call_id") == expected_raw["response_metadata"].get("model_call_id")
         # 两类公开记录使用相同原生布局；密文只保留 hash/length，恢复原件另在 checkpoint 审计。
-        actual_blocks = direct_content_blocks(actual_raw["content"])
-        expected_blocks = direct_content_blocks(expected_raw["content"])
+        actual_blocks = list(iter_direct_content_blocks(actual_raw["content"]))
+        expected_blocks = list(iter_direct_content_blocks(expected_raw["content"]))
         assert actual_blocks == expected_blocks
         assert [
             (row.content_block_index, row.item_index, row.reasoning_text or "", row.summary_text or "",
