@@ -62,7 +62,7 @@ Code action Provider SHALL 在发布返回列表前核验其中全部 WorkspaceE
 
 Code action 的文本编辑 SHALL 沿原 WorkspaceEdit 转换及版本字段传递调用所基于的已同步文档版本。provide 与实际进入的 resolve 各自在调用扩展回调前冻结本宿主文档的数值版本，异步返回及后续应用不得把旧编辑改标为最新版本；已有初始 edit 的动作继续沿原流程直接应用，不为刷新版本另行 resolve。未知版本的资源及同批新建目标保持原转换语义，不合成版本或读取正文推断。此合同可能拒绝回调等待期间按新正文重新计算的编辑，用户可重新请求动作；它不承诺无版本资源的并发保护或已发生副作用回滚。
 
-Rename 的 provide SHALL 复用同一原文档版本快照与 WorkspaceEdit 转换，在扩展回调前冻结本宿主已同步文本版本；MainThread SHALL 在结果发布前核验全部编辑端点，再沿原 DTO 恢复。provide 与 prepare 的在途请求 SHALL 同时响应调用取消、注册撤销及宿主关闭，拒绝迟到结果，不影响新注册或另一宿主。原 prepare 的 Range／placeholder、缺省位置、空结果及 rejectReason 语义保持；本合同不把结果准入等同于已返回编辑在 UI 预览或 inline rename 中的应用取消完成。
+Rename 的 provide SHALL 复用同一原文档版本快照与 WorkspaceEdit 转换，在扩展回调前冻结本宿主已同步文本版本；MainThread SHALL 在结果发布前核验全部编辑端点，再沿原 DTO 恢复。provide 与 prepare 的在途请求 SHALL 同时响应调用取消、注册撤销及宿主关闭，拒绝迟到结果，不影响新注册或另一宿主。原 prepare 的 Range／placeholder、缺省位置、空结果及 rejectReason 语义保持；返回的窗口内结果 SHALL 保留其注册生命周期，原 BulkEditService 将其与调用方 token 合并并贯穿预览及实际应用；内部字段不得随公开命令结果进入 RPC。原 RenameController 与 inline rename 命令 SHALL 等待应用结算，前者使用该次操作的父 token，不能被自身文本变化取消后续编辑；退役的 inline 缓存结果不继续计数或应用。预览 SHALL 在打开原视图前满足其显示条件，取消后沿原 owner 释放输入与会话，停止迟到的预览模型创建及自引用申请，准确释放尚无引用的新模型和迟到引用；异步准备完成的旧点击不得打开已退役的预览，活跃预览的解析错误仍明确上报，未应用时不播报成功；已完成资源保留真实结果，不承诺回滚。本片不覆盖原 Chat response stream 分项移交后的应用生命周期，也不把内部字段扩展为跨 RPC 的持久引用。
 
 #### Scenario: A 与 B 的未保存文档同时打开
 - **WHEN** A/B 文件均有不同 dirty 内容，两个扩展枚举文档／可见编辑器并监听变化，用户在二者间切焦点
@@ -91,6 +91,10 @@ Rename 的 provide SHALL 复用同一原文档版本快照与 WorkspaceEdit 转�
 #### Scenario: Rename 的整批结果、版本与迟到请求
 - **WHEN** A 的 Rename 返回双根编辑且后项越出所属视图，或 provide 等待期间另一待编辑文档变版；prepare／provide 在取消、注销或宿主关闭后仍返回
 - **THEN** 非所属结果整批拒绝；已同步文本保留回调前版本，原编辑链在首个副作用前拒绝冲突；迟到位置或编辑不发布，原拒绝原因保持，新请求及 B 的状态不受影响
+
+#### Scenario: 已返回的 Rename 在预览及 inline 应用前退役
+- **WHEN** Rename 已返回编辑后注册撤销，或预览在打开、确认、输入创建及用户选择期间遇到注册／调用取消；用户随后重新注册并请求重命名
+- **THEN** 已取消结果不开始新的文件或文本副作用，原预览输入和会话释放，未完成的预览准备不在退役后重新创建模型或打开旧视图，晚到引用释放且正常状态的解析错误不被吞掉；已有资源完成时保留真实结果并停止后继，原命令等待结算且零应用不播报成功，新注册和另一宿主仍可正常应用；窗口内部生命周期不出现在公开命令 RPC 回包中
 
 #### Scenario: 工作区符号查询限定完整宿主视图
 - **WHEN** A 的符号 Provider 绑定 A1/A2，B 绑定 B1，用户明确选择工作区范围或 A 扩展在 B 获得焦点时发起公开符号查询

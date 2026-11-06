@@ -11,6 +11,8 @@ export const extensionLanguageFeaturesSourcePaths = [
   'src/vs/editor/contrib/codeAction/browser/codeAction.ts',
   'src/vs/workbench/api/common/extHostLanguageFeatures.ts',
   'src/vs/editor/contrib/codeAction/browser/codeActionController.ts',
+  'src/vs/editor/contrib/rename/browser/rename.ts',
+  'src/vs/editor/contrib/inlineCompletions/browser/model/renameSymbolProcessor.ts',
 ];
 
 export function transformExtensionLanguageFeatures(root, path, source, replaceOnce, runtime = 'browser') {
@@ -41,6 +43,19 @@ export function transformExtensionLanguageFeatures(root, path, source, replaceOn
     return replaceOnce(contents, 'return typeConvert.WorkspaceEdit.from(value);', 'return typeConvert.WorkspaceEdit.from(value, versions);');
   }
   if (runtime === 'node') return source;
+  if (path === paths[9]) {
+    // 状态 token 会被本次文本修改取消，应用阶段只沿原 run 的父 token。
+    let contents = replaceOnce(source, '\n\t\tthis._cts = new CancellationTokenSource();', '\n\t\tthis._cts = new CancellationTokenSource();\n    const operationToken = this._cts.token;');
+    contents = replaceOnce(contents, '\n\t\t\tthis._bulkEditService.apply(renameResult, {', '\n\t\t\treturn this._bulkEditService.apply(renameResult, {');
+    contents = replaceOnce(contents, 'showPreview: inputFieldResult.wantsPreview,', 'showPreview: inputFieldResult.wantsPreview,\n        token: operationToken,');
+    return replaceOnce(contents, 'if (result.ariaSummary) {', 'if (result.isApplied && result.ariaSummary) {');
+  }
+  if (path === paths[10]) {
+    let contents = replaceOnce(source, 'import { CancellationTokenSource }', 'import { CancellationToken, CancellationTokenSource }');
+    contents = replaceOnce(contents, '\n\tpublic get requestUuid(): string {', '\n  public get token(): CancellationToken { return this._cancellationTokenSource.token; }\n\n\tpublic get requestUuid(): string {');
+    contents = replaceOnce(contents, 'this._result.rejectReason || this._cancellationTokenSource.token.isCancellationRequested', 'this._result.rejectReason || this._result.lifecycleToken?.isCancellationRequested || this._cancellationTokenSource.token.isCancellationRequested');
+    return replaceOnce(contents, 'bulkEditService.apply(workspaceEdit, { reason: source });', 'await bulkEditService.apply(workspaceEdit, { reason: source, token: renameRunnable.token });');
+  }
   if (path === paths[8]) {
     let contents = `import { INotificationService } from '../../../../platform/notification/common/notification.js';\n` + source;
     contents = replaceOnce(contents, '@IKeybindingService private readonly _keybindingService: IKeybindingService,',
@@ -79,6 +94,7 @@ export function transformExtensionLanguageFeatures(root, path, source, replaceOn
   if (path === paths[4]) {
     let contents = replaceOnce(source, "import { LanguageSelector } from './languageSelector.js';\n", '');
     contents = replaceOnce(contents, '\n\treadonly selector: LanguageSelector;\n', '');
+    contents = replaceOnce(contents, 'export interface WorkspaceEdit {', 'export interface WorkspaceEdit {\n\t/** 仅窗口内保留结果所属注册生命周期，不进入扩展 RPC DTO。 */\n\t// TODO: 原 Chat response stream 分项移交后的应用仍须由其 owner 保留版本与生命周期。\n\treadonly lifecycleToken?: CancellationToken;');
     return replaceOnce(contents, 'export interface CodeActionProvider {', 'export interface CodeActionProvider {\n\treadonly lifecycleToken?: CancellationToken;');
   }
   if (path === paths[5]) {
@@ -167,14 +183,16 @@ import type { score } from '../../../editor/common/languageSelector.js';\n` + so
 \t\t\t\t? (model: ITextModel, position: EditorPosition, token: CancellationToken): Promise<languages.RenameLocation | undefined> => this._proxy.$resolveRenameLocation(handle, model.uri, position, token)
 \t\t\t\t: undefined
 \t\t}));`, `const { lifetime, assertActive, invoke } = this._createProviderLifetime();
-    // TODO: 已返回编辑在 RenameController 预览及 inline rename 中的应用取消须沿各原 owner 继续接通。
     this._registrations.set(handle, combinedDisposable(this._languageFeaturesService.renameProvider.register(selector, {
       provideRenameEdits: (model: ITextModel, position: EditorPosition, newName: string, token: CancellationToken) => invoke(token, async token => {
         const data = await this._proxy.$provideRenameEdits(handle, model.uri, position, newName, token);
         assertActive(token);
         // 原拒绝结果允许 edits 为 undefined；只校验实际编辑，不改写 rejectReason。
         if (data?.edits) assertHostWorkspaceEdit(this.extHostContext.extensionHost, data);
-        return reviveWorkspaceEditDto(data, this._uriIdentService);
+        const result = reviveWorkspaceEditDto(data, this._uriIdentService);
+        // 不可枚举的本地字段不会随公开命令结果进入 RPC；预览和 inline 保留原结果。
+        if (result && this.extHostContext.extensionHost.binding) Object.defineProperty(result, 'lifecycleToken', { value: lifetime.token });
+        return result;
       }),
       resolveRenameLocation: supportResolveLocation
         ? (model: ITextModel, position: EditorPosition, token: CancellationToken) => invoke(token, async token => {

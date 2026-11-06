@@ -23,9 +23,111 @@ collectApplyEdit(parsed);
 if (methods.length !== 1) throw new Error('原 workspace.applyEdit 入口数量已变化：' + methods.length);
 const applyEditMethod = methods[0].getText(parsed);
 await writeFile(join(run.artifactsDir, 'original-workspace-apply-edit.ts'), applyEditMethod + '\n');
+async function originalNodes(relative, select, artifact, print = (node, source) => node.getText(source)) {
+  const path = join(root, 'upstream/src/vs', relative);
+  const source = ts.createSourceFile(path, await transform(path, await readFile(path, 'utf8')), ts.ScriptTarget.Latest, true), nodes = [];
+  const visit = node => { if (select(node, source)) nodes.push(print(node, source)); ts.forEachChild(node, visit); };
+  visit(source);
+  if (nodes.length !== 1) throw new Error(artifact + ' 原入口数量已变化：' + nodes.length);
+  await writeFile(join(run.artifactsDir, artifact + '.ts'), nodes[0] + '\n'); return nodes[0];
+}
+const originalClass = name => node => ts.isClassDeclaration(node) && node.name?.text === name;
+const originalMethod = (owner, name) => node => ts.isMethodDeclaration(node) && node.name.getText() === name && node.parent.name?.text === owner;
+const renamePath = 'editor/contrib/rename/browser/rename.ts', inlinePath = 'editor/contrib/inlineCompletions/browser/model/renameSymbolProcessor.ts';
+const previewPath = 'workbench/contrib/bulkEdit/browser/preview/bulkEdit.contribution.ts', panePath = 'workbench/contrib/bulkEdit/browser/preview/bulkEditPane.ts';
+const skeleton = await originalNodes(renamePath, originalClass('RenameSkeleton'), 'original-rename-skeleton');
+const controllerRun = await originalNodes(renamePath, originalMethod('RenameController', 'run'), 'original-rename-controller-run');
+const inlineState = await originalNodes(inlinePath, originalClass('EditorState'), 'original-inline-editor-state');
+const inlineRunnable = await originalNodes(inlinePath, originalClass('RenameSymbolRunnable'), 'original-inline-rename-runnable');
+const previewHandler = await originalNodes(previewPath, node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+  && node.expression.name.text === 'setPreviewHandler', 'original-preview-handler');
+const previewMethod = await originalNodes(previewPath, originalMethod('BulkEditPreviewContribution', '_previewEdit'), 'original-preview-method');
+const previewSession = await originalNodes(previewPath, originalClass('PreviewSession'), 'original-preview-session');
+const getPane = await originalNodes(previewPath, node => ts.isFunctionDeclaration(node) && node.name?.text === 'getBulkEditPane', 'original-preview-get-pane');
+const paneInput = await originalNodes(panePath, originalMethod('BulkEditPane', 'setInput'), 'original-preview-pane-input');
+const paneDone = await originalNodes(panePath, originalMethod('BulkEditPane', '_done'), 'original-preview-pane-done');
+const paneOpen = await originalNodes(panePath, originalMethod('BulkEditPane', '_openElementInMultiDiffEditor'), 'original-preview-pane-open');
+const providerClass = await originalNodes('workbench/contrib/bulkEdit/browser/preview/bulkEditPreview.ts', originalClass('BulkEditPreviewProvider'), 'original-preview-provider',
+  (node, source) => ts.createPrinter().printNode(ts.EmitHint.Unspecified, ts.factory.updateClassDeclaration(node,
+    node.modifiers?.filter(modifier => modifier.kind !== ts.SyntaxKind.ExportKeyword), node.name, node.typeParameters, node.heritageClauses, node.members), source));
 const built = await build({ stdin: { loader: 'ts', resolveDir: resolve('.'), contents: `
+import * as nls from '${upstream}nls.js';
+import { localize } from '${upstream}nls.js';
+import { CancellationToken, CancellationTokenSource } from '${upstream}base/common/cancellation.js';
+import { CancellationError, onUnexpectedError } from '${upstream}base/common/errors.js';
+import { DisposableStore } from '${upstream}base/common/lifecycle.js';
+import { Event } from '${upstream}base/common/event.js';
+import { URI } from '${upstream}base/common/uri.js';
+import { generateUuid } from '${upstream}base/common/uuid.js';
+import { Schemas } from '${upstream}base/common/network.js';
+import { MicrotaskDelay } from '${upstream}base/common/symbols.js';
+import { createTextBufferFactoryFromSnapshot } from '${upstream}editor/common/model/textModel.js';
+import { ILanguageService } from '${upstream}editor/common/languages/language.js';
+import { IModelService } from '${upstream}editor/common/services/model.js';
+import { ITextModelService } from '${upstream}editor/common/services/resolverService.js';
+import { raceCancellation } from '${upstream}base/common/async.js';
+import { isMarkdownString } from '${upstream}base/common/htmlContent.js';
+import { Range } from '${upstream}editor/common/core/range.js';
+import { ResourceTextEdit } from '${upstream}editor/browser/services/bulkEditService.js';
+import { TextReplacement } from '${upstream}editor/common/core/edits/textEdit.js';
+import { EditSources } from '${upstream}editor/common/textModelEditSource.js';
+import { NewSymbolNameTriggerKind } from '${upstream}editor/common/languages.js';
+import { EditorStateCancellationTokenSource, CodeEditorStateFlag } from '${upstream}editor/contrib/editorState/browser/editorState.js';
+import { MessageController } from '${upstream}editor/contrib/message/browser/messageController.js';
+import { rawRename } from '${upstream}editor/contrib/rename/browser/rename.js';
+import Severity from '${upstream}base/common/severity.js';
+import { FileElement, TextEditElement } from '${upstream}workbench/contrib/bulkEdit/browser/preview/bulkEditTree.js';
+import { ACTIVE_GROUP, SIDE_GROUP } from '${upstream}workbench/services/editor/common/editorService.js';
+${skeleton}
+${inlineState}
+${inlineRunnable}
+export { EditorState as InlineEditorState, RenameSymbolRunnable, CancellationToken, rawRename, EditSources, Range as EditorRange };
+export function originalRenameController(fields, alert) { return Object.assign({ ${controllerRun} }, fields); }
+// 仅将原类置于词法队列边界中；测试手动调度原 callback，类的方法和退役逻辑不改写。
+export function originalPreviewProvider(operations, language, models, resolver, queueMicrotask) {
+  ${providerClass}
+  return new BulkEditPreviewProvider(operations, language, models, resolver);
+}
+export { FileElement, TextEditElement };
+// View、UX、input 创建和树 UI 是具名边界；handler、session、setInput、取消收尾均执行转换后的原方法。
+const State = { Data: 'data', Message: 'message' };
+const BulkFileOperations = { create: Symbol('具名预览输入创建边界') };
+class BulkEditPreviewProvider {}
+class UXState { constructor(panels, groups) { this.panels = panels; this.groups = groups; } restore(...args) { return this.panels.restore(...args); } }
+export class BulkEditPane {
+  static ID = 'test.original-refactor-preview';
+  static Schema = 'vscode-bulkeditpreview-multieditor';
+  constructor(fields) { Object.assign(this, fields); }
+  hasInput() { return Boolean(this._currentInput); }
+  ${paneInput}
+  ${paneDone}
+  ${paneOpen}
+}
+${getPane}
+${previewSession}
+export { PreviewSession };
+export class OriginalPreviewContribution {
+  constructor(fields, bulkEditService) { Object.assign(this, fields); ${previewHandler}; }
+  ${previewMethod}
+}
 export function originalWorkspaceApi(extHostBulkEdits, extension) { return { ${applyEditMethod} }; }
 export { MainThreadBulkEdits } from '${upstream}workbench/api/browser/mainThreadBulkEdits.js';
+export { MainThreadLanguageFeatures } from '${upstream}workbench/api/browser/mainThreadLanguageFeatures.js';
+export { MainThreadCommands } from '${upstream}workbench/api/browser/mainThreadCommands.js';
+export { LanguageFeaturesService } from '${upstream}editor/common/services/languageFeaturesService.js';
+export { ILanguageFeaturesService } from '${upstream}editor/common/services/languageFeatures.js';
+export { IAiEditTelemetryService } from '${upstream}workbench/contrib/editTelemetry/browser/telemetry/aiEditTelemetry/aiEditTelemetryService.js';
+export { RenameSymbolProcessor } from '${upstream}editor/contrib/inlineCompletions/browser/model/renameSymbolProcessor.js';
+export { renameSymbolCommandId } from '${upstream}editor/contrib/inlineCompletions/browser/controller/commandIds.js';
+export { CommandsRegistry } from '${upstream}platform/commands/common/commands.js';
+export { errorHandler, setUnexpectedErrorHandler, isCancellationError } from '${upstream}base/common/errors.js';
+export { TextModelResolverService } from '${upstream}workbench/services/textmodelResolver/common/textModelResolverService.js';
+export { BulkFileOperations as OriginalBulkFileOperations } from '${upstream}workbench/contrib/bulkEdit/browser/preview/bulkEditPreview.js';
+export { BulkFileOperation as OriginalBulkFileOperation } from '${upstream}workbench/contrib/bulkEdit/browser/preview/bulkEditPreview.js';
+export { IAccessibilityService } from '${upstream}platform/accessibility/common/accessibility.js';
+export { ILanguageDetectionService } from '${upstream}workbench/services/languageDetection/common/languageDetectionWorkerService.js';
+export { Position as EditorPosition } from '${upstream}editor/common/core/position.js';
+export { Selection } from '${upstream}editor/common/core/selection.js';
 export { ExtHostBulkEdits } from '${upstream}workbench/api/common/extHostBulkEdits.js';
 export { WorkspaceEdit } from '${upstream}workbench/api/common/extHostTypes/workspaceEdit.js';
 export { Range } from '${upstream}workbench/api/common/extHostTypes/range.js';
@@ -64,24 +166,40 @@ export { INotificationService } from '${upstream}platform/notification/common/no
 export { IEditorService } from '${upstream}workbench/services/editor/common/editorService.js';
 export { ILifecycleService } from '${upstream}workbench/services/lifecycle/common/lifecycle.js';
 export { ILogService, NullLogService } from '${upstream}platform/log/common/log.js';
-export { MainContext } from '${upstream}workbench/api/common/extHost.protocol.js';
+export { MainContext, ExtHostContext } from '${upstream}workbench/api/common/extHost.protocol.js';
 export { RPCProtocol } from '${upstream}workbench/services/extensions/common/rpcProtocol.js';
 export { SerializableObjectWithBuffers } from '${upstream}workbench/services/extensions/common/proxyIdentifier.js';
 export { DisposableStore } from '${upstream}base/common/lifecycle.js';
 export { Event, Emitter } from '${upstream}base/common/event.js';
-export { CancellationTokenSource } from '${upstream}base/common/cancellation.js';
+export { CancellationTokenSource };
 export { URI } from '${upstream}base/common/uri.js';
 export { dirname } from '${upstream}base/common/resources.js';
 export { VSBuffer, encodeBase64 } from '${upstream}base/common/buffer.js';
 export { TargetUriTransformer } from './src/clients/workbench/src/extensions/targetUris.js';
+export { unpackCommandSource, executeCommandForHost } from './src/clients/workbench/src/extensions/commands.js';
 ` }, outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024', metafile: true,
   loader: { '.ttf': 'file', '.svg': 'file', '.png': 'file' }, plugins: [buildSourcePlugin(root, transform)],
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 await writeFile(join(run.artifactsDir, 'bundle-meta.json'), JSON.stringify(built.metafile, null, 2));
-const sources = ['scripts/sourceTransform.mjs', 'scripts/extensions/extensionFileEventsTransform.mjs', 'src/extensions/targetUris.ts',
+const sources = ['scripts/sourceTransform.mjs', 'scripts/extensions/extensionFileEventsTransform.mjs', 'scripts/extensions/extensionLanguageFeaturesTransform.mjs',
+  'scripts/extensions/extensionOwnerTransform.mjs', 'src/extensions/targetUris.ts', 'src/extensions/commands.ts',
   'upstream/src/vs/workbench/api/common/extHost.api.impl.ts', 'upstream/src/vs/workbench/api/common/extHostBulkEdits.ts',
   'upstream/src/vs/workbench/api/common/extHostTypeConverters.ts', 'upstream/src/vs/workbench/api/common/extHostTypes/workspaceEdit.ts',
   'upstream/src/vs/workbench/api/browser/mainThreadBulkEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkEditService.ts',
+  'upstream/src/vs/workbench/api/browser/mainThreadLanguageFeatures.ts', 'upstream/src/vs/workbench/api/browser/mainThreadCommands.ts',
+  'upstream/src/vs/editor/common/languages.ts', 'upstream/src/vs/editor/common/services/languageFeaturesService.ts',
+  'upstream/src/vs/editor/common/languageFeatureRegistry.ts', 'upstream/src/vs/editor/common/languageSelector.ts',
+  'upstream/src/vs/editor/contrib/rename/browser/rename.ts', 'upstream/src/vs/editor/contrib/editorState/browser/editorState.ts',
+  'upstream/src/vs/editor/contrib/editorState/browser/keybindingCancellation.ts',
+  'upstream/src/vs/editor/contrib/inlineCompletions/browser/model/renameSymbolProcessor.ts',
+  'upstream/src/vs/workbench/contrib/bulkEdit/browser/preview/bulkEdit.contribution.ts',
+  'upstream/src/vs/workbench/contrib/bulkEdit/browser/preview/bulkEditPane.ts',
+  'upstream/src/vs/workbench/contrib/bulkEdit/browser/preview/bulkEditPreview.ts',
+  'upstream/src/vs/workbench/contrib/bulkEdit/browser/preview/bulkEditTree.ts',
+  'upstream/src/vs/workbench/contrib/bulkEdit/browser/conflicts.ts',
+  'upstream/src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts',
+  'upstream/src/vs/workbench/common/editor/textResourceEditorModel.ts',
+  'upstream/src/vs/base/common/cancellation.ts', 'upstream/src/vs/base/common/errors.ts', 'upstream/src/vs/base/common/lifecycle.ts',
   'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkFileEdits.ts',
   'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkCellEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/opaqueEdits.ts',
   'upstream/src/vs/workbench/contrib/notebook/common/notebookCommon.ts',
@@ -104,7 +222,7 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkEditService、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、文档版本镜像、文本 resolver 的请求延迟/失败/按需创建原模型、配置/UI 与纯文本 TreeSitter 库是具名装具；resolver引用只观察请求/释放，不实现原TextModelResolver的引用计数及关模/重开保护。目标 WorkspaceFiles 和配置文件 provider 明确由原 InMemoryFileSystemProvider 替代。版本测试核预览最终集合和首项类型副作用前的现有versionId/notebookVersionId；Notebook只经原版本DTO/RPC或直接ResourceEdit和具名resolver提供版本，不能证明Notebook真实模型编辑或版本producer。具名配置仅验证原资源映射和模型编辑，不代表真实配置保存、产品 WorkspaceFiles 的 rename/delete 支持、Gateway、真实 Node、磁盘保存、Windows、无版本字段的原子性或所有取消时点。',
+      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、RenameSkeleton/Controller.run、inline EditorState/RenameSymbolRunnable、preview handler/_previewEdit/PreviewSession/getBulkEditPane/Pane.setInput/_done/_openElementInMultiDiffEditor 和完整 BulkEditPreviewProvider 类；原 RenameSymbolProcessor 注册并执行真实 CommandsRegistry 命令，原 MainThreadLanguageFeatures/共享 registry/rawRename 的同一返回对象直接交原 BulkEditService。公开 Rename 命令经原 MainThreadCommands/真实 RPC 返回，核窗口不可枚举 lifecycleToken 不进入 DTO。另运行原 ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、扩展 Rename 回调/已冻结版本 DTO、文档版本镜像、常规文本 resolver 延迟/失败/按需创建原模型、编辑器/Widget/通知/进度、preview View/UX/输入创建和树UI、配置与纯文本TreeSitter库是具名装具；状态取消实际运行原EditorStateCancellationTokenSource，readonly编辑器使原BulkTextEdits选择原模型任务。常规编辑组resolver只观察请求/释放，不证明其引用计数及关模/重开保护；Provider窄组另运行原BulkFileOperations/ConflictDetector、TextModelResolverService/AsyncReferenceCollection/TextResourceEditorModel，源模型持原baseline引用，resolver包装仅注入回执延迟/失败并观察原引用，词法queueMicrotask仅收集并调度原callback，不改写Provider方法或伪造模型销毁。语言检测/辅助通知和Pane资源计算/openEditor为具名边界；Pane核两次await后的input/provider精确身份及fresh成功。目标文件和配置provider由原InMemoryFileSystemProvider替代。Notebook只经原版本DTO/RPC或直接ResourceEdit及具名resolver提供版本，不能证明真实Notebook编辑或版本producer。本片不重复原RenameAdapter版本producer，不验证inline推断/NES命令、真实Preview渲染/UX恢复、Chat分项移交后的owner、产品WorkspaceFiles rename/delete、真实配置保存、Gateway、真实Node、磁盘保存、Windows、无版本字段原子性或所有取消时点。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
@@ -137,10 +255,12 @@ async function inBrowser(name, body, argument) {
         return undefined;
       } };
       const dialog = { confirm: unexpected('窗口确认') }, notification = { error: unexpected('窗口错误通知'), warn: unexpected('窗口警告通知') };
-      const undoRedo = new m.UndoRedoService(dialog, notification), language = lifetime.add(new m.LanguageService());
+      const undoRedo = new m.UndoRedoService(dialog, notification), language = lifetime.add(new m.LanguageService()), features = new m.LanguageFeaturesService();
+      const extensions = { getExtensionHosts: () => clients.map(client => client.host), getHostExtensions: () => [], whenInstalledExtensionsRegistered: async () => {} };
       const services = new m.ServiceCollection([m.ILogService, log], [m.IFileService, files], [m.IUriIdentityService, identity],
         [m.IWorkingCopyService, workingCopies], [m.IConfigurationService, config], [m.IUndoRedoService, undoRedo],
         [m.ILanguageService, language], [m.IDialogService, dialog], [m.INotificationService, notification],
+        [m.ILanguageFeaturesService, features], [m.IAiEditTelemetryService, {}],
         [m.IEditorService, { activeTextEditorControl: undefined }], [m.ILifecycleService, { onBeforeShutdown: m.Event.None }],
         [m.IProgressService, { withProgress: unexpected('保存进度UI') }],
         [m.ITextFileService, { getEncodedReadable: unexpected('省略内容的文件编码') }],
@@ -187,7 +307,7 @@ async function inBrowser(name, body, argument) {
         return { binding, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
       }
       async function connect(host) {
-        const calls = [], documents = new Map(), toMain = new m.Emitter(), toHost = new m.Emitter();
+        const calls = [], documents = new Map(), renameRequests = [], renameDtos = [], commandResults = [], toMain = new m.Emitter(), toHost = new m.Emitter();
         const mainRpc = new m.RPCProtocol({ onMessage: toMain.event, send: data => queueMicrotask(() => toHost.fire(data)), drain: async () => {} }, null, host.uriTransformer);
         const hostRpc = new m.RPCProtocol({ onMessage: toHost.event, send: data => queueMicrotask(() => toMain.fire(data)), drain: async () => {} });
         const actualBulk = insta.createInstance(m.BulkEditService);
@@ -197,9 +317,34 @@ async function inBrowser(name, body, argument) {
         mainRpc.set(m.MainContext.MainThreadBulkEdits, main);
         const extHost = new m.ExtHostBulkEdits({ getProxy: hostRpc.getProxy.bind(hostRpc) }, { getDocument: uri => documents.get(uri.toString()) });
         const workspace = m.originalWorkspaceApi(extHost, { identifier: { value: 'probe.workspace-edits' } });
-        const client = { host, calls, documents, main, actualBulk, workspace, remote: hostRpc.getProxy(m.MainContext.MainThreadBulkEdits),
+        const mainLanguage = new m.MainThreadLanguageFeatures({ extensionHost: host, getProxy: mainRpc.getProxy.bind(mainRpc) }, undefined, undefined, features,
+          { asCanonicalUri: uri => uri }, insta, undefined);
+        mainRpc.set(m.MainContext.MainThreadLanguageFeatures, mainLanguage);
+        // 扩展回调与已冻结版本 DTO 是具名边界；上一片单独验证原 RenameAdapter 的版本 producer。
+        hostRpc.set(m.ExtHostContext.ExtHostLanguageFeatures, {
+          async $provideRenameEdits(handle, resource, position, newName, token) {
+            const request = { handle, resource: m.URI.revive(resource), position, newName, token }; renameRequests.push(request);
+            const result = await client.onRename(request); renameDtos.push(result); return result;
+          },
+          async $supportsAutomaticNewSymbolNamesTriggerKind() { return false; },
+        });
+        const mainCommands = new m.MainThreadCommands({ extensionHost: host, getProxy: mainRpc.getProxy.bind(mainRpc) }, {
+          async executeCommand(id, ...args) {
+            const command = m.CommandsRegistry.getCommand(id);
+            if (!command) throw new Error('未注册原命令：' + id);
+            const source = m.unpackCommandSource(args);
+            const result = await insta.invokeFunction(accessor => m.executeCommandForHost(command, accessor, source.args, source.source)); commandResults.push(result); return result;
+          },
+        }, extensions);
+        mainRpc.set(m.MainContext.MainThreadCommands, mainCommands);
+        const client = { host, calls, documents, renameRequests, renameDtos, commandResults, main, mainLanguage, actualBulk, workspace,
+          remote: hostRpc.getProxy(m.MainContext.MainThreadBulkEdits), remoteCommands: hostRpc.getProxy(m.MainContext.MainThreadCommands),
+          onRename: unexpected('Rename 扩展回调未配置'),
+          async registerRename(handle = 1) {
+            await hostRpc.getProxy(m.MainContext.MainThreadLanguageFeatures).$registerRenameSupport(handle, [{ $serialized: true, language: 'plaintext' }], false);
+          },
           logical: uri => host.uriTransformer ? m.URI.revive(host.uriTransformer.transformIncoming(uri)) : uri,
-          close() { main.dispose(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose(); } };
+          close() { main.dispose(); mainLanguage.dispose(); mainCommands.dispose(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose(); } };
         clients.push(client);
         for (const folder of host.uriTransformer?.folders ?? []) await files.createFolder(folder.uri);
         return client;
@@ -221,7 +366,81 @@ async function inBrowser(name, body, argument) {
       const notebookVersion = (resource, versionId) => ({ uri: resource, versionId,
         applyEdits() { notebooks.writes++; throw new Error('本版本冲突场景不应执行 Notebook 编辑'); } });
       const defer = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-      globalThis.editProbe = { m, target, connect, openText, unloadedText, native, seed, read, dtoText, dtoCreate, defer, files, models, workingFiles,
+      function editorFor(model) {
+        const cursor = lifetime.add(new m.Emitter()), changeModel = lifetime.add(new m.Emitter()), registered = [];
+        let selection = new m.Selection(1, 1, 1, 1);
+        return { registered, hasModel: () => true, getModel: () => model, getPosition: () => selection.getPosition(), getSelection: () => selection,
+          setSelection(value) { selection = m.Selection.liftSelection({ ...value, selectionStartLineNumber: value.startLineNumber, selectionStartColumn: value.startColumn,
+            positionLineNumber: value.endLineNumber, positionColumn: value.endColumn }); }, focus() {},
+          // 只读 editor 边界让原 BulkTextEdits 选择真实模型任务；不替换任何文本应用逻辑。
+          getOption: () => true, onDidChangeCursorPosition: cursor.event, onDidChangeModel: changeModel.event, onDidChangeModelContent: model.onDidChangeContent.bind(model),
+          invokeWithinContext(callback) { return callback({ get() { return { add(_editor, source) { registered.push(source); return () => {}; } }; } }); } };
+      }
+      function previewFor(client, boundary = {}) {
+        const states = [], contexts = [], openContexts = [], inputs = [], tokens = [], requestTokens = [], restores = [], events = [];
+        let contextEnabled = Boolean(boundary.oldSession);
+        const pane = new m.BulkEditPane({ _sessionDisposables: lifetime.add(new m.DisposableStore()), _treeViewStates: new Map(),
+          _treeDataSource: { groupByFile: true }, _ctxHasCategories: { set() {} }, _ctxHasCheckedChanges: { set() {} },
+          _setState: state => states.push(state), _setTreeInput: input => { events.push(['tree', inputs.indexOf(input)]); boundary.entered?.resolve(); }, _tree: { updateChildren() {} },
+          _instaService: {
+            async invokeFunction(_create, edits) {
+              const checked = lifetime.add(new m.Emitter()), input = { categories: [], checked: { checkedCount: edits.length, onDidChange: checked.event },
+                getWorkspaceEdit: () => edits, disposed: 0, dispose() { this.disposed++; } }; inputs.push(input); events.push(['create', inputs.length - 1]);
+              await boundary.create?.(); return input;
+            },
+            createInstance(_provider, input) { return { input, disposed: 0, dispose() { this.disposed++; } }; },
+          } });
+        const setInput = pane.setInput.bind(pane);
+        pane.setInput = (edits, token) => { tokens.push(token); events.push(['setInput']); return setInput(edits, token); };
+        if (boundary.hasInput) pane._currentInput = { getWorkspaceEdit: () => [] };
+        const ui = { restore: async (...args) => { restores.push(args); await boundary.restore?.(...args); } };
+        const owner = new m.OriginalPreviewContribution({ _ctxEnabled: { set(value) { contextEnabled = value; contexts.push(value); } }, _paneCompositeService: ui, _editorGroupsService: {},
+          _viewsService: { async openView() {
+            openContexts.push(contextEnabled); events.push(['open', contextEnabled]);
+            // 原 view 注册以 refactorPreview.enabled 为 when；未启用时不能凭装具取得 Pane。
+            if (!contextEnabled) return undefined;
+            await boundary.open?.(); return pane;
+          } },
+          _dialogService: { async confirm() { events.push(['confirm']); await boundary.confirm?.(); return { confirmed: true }; } },
+        }, { setPreviewHandler(handler) { return client.actualBulk.setPreviewHandler((edits, options) => { requestTokens.push(options.token); return handler(edits, options); }); } });
+        if (boundary.oldSession) { const cts = lifetime.add(new m.CancellationTokenSource()); owner._activeSession = new m.PreviewSession(ui, cts); }
+        return { pane, owner, states, contexts, openContexts, get contextEnabled() { return contextEnabled; }, inputs, tokens, requestTokens, restores, events };
+      }
+      async function providerFor(boundary = {}) {
+        const child = lifetime.add(insta.createChild(new m.ServiceCollection(
+          [m.IAccessibilityService, { alert: unexpected('预览语言检测通知') }],
+          [m.ILanguageDetectionService, { isEnabledForLanguage: () => false }])));
+        const actualResolver = lifetime.add(child.createInstance(m.TextModelResolverService)), sources = [], references = [], requests = [], registrations = [], queued = [], previewModels = [], editRequests = [];
+        for (let index = 0; index < 2; index++) {
+          const uri = m.URI.parse('inmemory:/provider-source-' + index + '.ts'), model = models.createModel('old-provider-' + index, null, uri);
+          // 原 baseline 引用保住源模型；被测 Provider 另行请求并释放自己的原引用。
+          lifetime.add(await actualResolver.createModelReference(uri)); sources.push(model);
+        }
+        const edits = sources.map(model => new m.ResourceTextEdit(model.uri, { range: new m.EditorRange(1, 1, 1, 4), text: 'preview' }));
+        const input = lifetime.add(await child.invokeFunction(m.OriginalBulkFileOperations.create, edits)), getFileEdits = input.getFileEdits.bind(input);
+        input.getFileEdits = async uri => { editRequests.push(uri.toString()); const result = await getFileEdits(uri); await boundary.edits?.(uri); return result; };
+        lifetime.add(models.onModelAdded(model => { if (model.uri.scheme === 'vscode-bulkeditpreview-editor') previewModels.push(model); }));
+        // 解析和释放运行原 TextModelResolverService；这里只观察原引用并注入回执延迟或错误。
+        const resolver = {
+          registerTextModelContentProvider(scheme, provider) {
+            const registration = actualResolver.registerTextModelContentProvider(scheme, provider), observation = { scheme, disposed: 0 }; registrations.push(observation);
+            return { dispose() { observation.disposed++; registration.dispose(); } };
+          },
+          async createModelReference(resource) {
+            const kind = resource.scheme === 'inmemory' ? 'source' : 'preview'; requests.push({ kind, resource: resource.toString() });
+            await boundary.beforeAcquire?.(kind, resource);
+            const original = await actualResolver.createModelReference(resource), observation = { kind, resource: resource.toString(), returned: false, disposed: 0 };
+            references.push(observation); await boundary.afterAcquire?.(kind, resource);
+            observation.returned = true;
+            return { object: original.object, dispose() { observation.disposed++; original.dispose(); } };
+          },
+        };
+        const provider = lifetime.add(m.originalPreviewProvider(input, language, models, resolver, callback => queued.push(callback)));
+        return { provider, actualResolver, sources, input, references, requests, registrations, queued, previewModels, editRequests,
+          runQueued() { const callback = queued.shift(); if (!callback) throw new Error('原 Provider 未排入预期微任务'); return callback(); } };
+      }
+      const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+      globalThis.editProbe = { m, target, connect, openText, unloadedText, native, seed, read, dtoText, dtoCreate, defer, files, models, workingFiles, features, editorFor, previewFor, providerFor, flush,
         warnings, failures, resolutions, resolver, notebooks, notebookVersion, operations, lifetime,
         dispose() { for (const client of clients.reverse()) client.close(); for (const model of models.getModels()) model.dispose(); lifetime.dispose(); } };
     });
@@ -617,4 +836,378 @@ test('Notebook cell URI 通过原 CellUri 归一，版本冲突在文件及 Note
   expect(result.error).toContain('Notebook'); expect(result.error).toContain('has changed in the meantime'); expect(result.exists).toBe(false); expect(result.writes).toBe(0); expect(result.operations).toEqual([]);
   expect(result.requests).toEqual([result.resource]); expect(result.references).toHaveLength(1); expect(result.references[0].disposed).toBe(true); expect(result.references[0].disposeCount).toBe(1); expect(result.textRequests).toEqual([]);
   expect(result.failures).toHaveLength(1); checks.push('直接原ResourceEdit的cell URI由原CellUri归一到Notebook resolver，已有版本冲突首file前失败；不代表Notebook版本producer或真实编辑');
+});
+
+for (const retirement of ['unregister', 'dispose']) test(`原 rawRename 已返回结果在 ${retirement} 后零应用，新注册和另一宿主仍成功`, async () => {
+  const result = await inBrowser('Rename已返回结果的注册生命周期', async retirement => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), b = await p.connect(p.target('B'));
+    const native = [p.native(a, 0, 'rename-first.ts'), p.native(a, 1, 'rename-second.ts')], created = p.native(a, 0, 'rename-created.ts');
+    const models = native.map(uri => p.openText(a, uri, 'old-source')), peerNative = p.native(b, 0, 'peer.ts'), peer = p.openText(b, peerNative, 'old-peer');
+    const response = request => ({ edits: [p.dtoCreate(created, request.newName), ...native.map((uri, index) => ({ ...p.dtoText(uri, request.newName), versionId: models[index].getVersionId() }))] });
+    a.onRename = response; b.onRename = request => ({ edits: [{ ...p.dtoText(peerNative, request.newName), versionId: peer.getVersionId() }] });
+    await a.registerRename(); await b.registerRename();
+    const edit = await m.rawRename(p.features.renameProvider, models[0], new m.EditorPosition(1, 1), 'stale'), lifetime = edit.lifecycleToken;
+    let previews = 0; p.lifetime.add(a.actualBulk.setPreviewHandler(async edits => { previews++; return edits; }));
+    const descriptor = Object.getOwnPropertyDescriptor(edit, 'lifecycleToken');
+    if (retirement === 'unregister') a.mainLanguage.$unregister(1); else a.mainLanguage.dispose();
+    const stale = await a.actualBulk.apply(edit, { showPreview: true });
+    const before = { values: models.map(model => model.getValue()), exists: await p.files.exists(a.logical(created)), operations: p.operations.length, resolutions: p.resolutions.length, previews };
+    const freshClient = retirement === 'unregister' ? a : await p.connect(p.target('A')); freshClient.onRename = response; await freshClient.registerRename(2);
+    const fresh = await m.rawRename(p.features.renameProvider, models[0], new m.EditorPosition(1, 1), 'fresh');
+    const freshApplied = await freshClient.actualBulk.apply(fresh), peerEdit = await m.rawRename(p.features.renameProvider, peer, new m.EditorPosition(1, 1), 'peer');
+    return { stale, before, cancelled: lifetime.isCancellationRequested, enumerable: descriptor.enumerable, dtoHasToken: a.renameDtos.some(dto => Object.hasOwn(dto, 'lifecycleToken')),
+      freshApplied, peerApplied: await b.actualBulk.apply(peerEdit), freshToken: fresh.lifecycleToken !== lifetime && !fresh.lifecycleToken.isCancellationRequested,
+      values: models.map(model => model.getValue()), peer: peer.getValue(), created: await p.read(a.logical(created)), warnings: p.warnings, failures: p.failures };
+  }, retirement);
+  expect(result.stale.isApplied).toBe(false); expect(result.before).toEqual({ values: ['old-source', 'old-source'], exists: false, operations: 0, resolutions: 0, previews: 0 });
+  expect(result.cancelled).toBe(true); expect(result.enumerable).toBe(false); expect(result.dtoHasToken).toBe(false); expect(result.freshApplied.isApplied).toBe(true);
+  expect(result.peerApplied.isApplied).toBe(true); expect(result.freshToken).toBe(true); expect(result.values).toEqual(['fresh-source', 'fresh-source']); expect(result.peer).toBe('peer-peer');
+  expect(result.created).toBe('fresh'); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push(`原rawRename结果在${retirement}后不进预览/解析/文件/文本；新注册和B正常`);
+});
+
+test('原公开 Rename 命令经 MainThreadCommands 和真实 RPC 返回时不序列化窗口生命周期', async () => {
+  const result = await inBrowser('Rename窗口结果与公开命令RPC隔离', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'command.ts'), model = p.openText(a, native, 'old-command');
+    a.onRename = request => ({ edits: [{ ...p.dtoText(native, request.newName), versionId: model.getVersionId() }] }); await a.registerRename();
+    const remote = await a.remoteCommands.$executeCommand('_executeDocumentRenameProvider', [native, new m.EditorPosition(1, 1), 'rpc'], false);
+    const windowResult = a.commandResults[0], token = windowResult.lifecycleToken;
+    const before = { hasWindowToken: Boolean(token), enumerable: Object.getOwnPropertyDescriptor(windowResult, 'lifecycleToken').enumerable,
+      remoteHasToken: Object.hasOwn(remote, 'lifecycleToken'), jsonHasToken: JSON.stringify(remote).includes('lifecycleToken'),
+      windowJsonHasToken: JSON.stringify(windowResult).includes('lifecycleToken'), remoteText: remote.edits[0].textEdit.text,
+      resource: m.URI.revive(remote.edits[0].resource).toString(), expected: native.toString() };
+    a.mainLanguage.$unregister(1);
+    return { before, sameToken: windowResult.lifecycleToken === token, cancelled: token.isCancellationRequested,
+      applied: await a.actualBulk.apply(windowResult), value: model.getValue(), operations: p.operations, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.before).toEqual({ hasWindowToken: true, enumerable: false, remoteHasToken: false, jsonHasToken: false, windowJsonHasToken: false,
+    remoteText: 'rpc', resource: result.before.expected, expected: result.before.expected });
+  expect(result.sameToken).toBe(true); expect(result.cancelled).toBe(true); expect(result.applied.isApplied).toBe(false); expect(result.value).toBe('old-command');
+  expect(result.operations).toEqual([]); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('真实原Rename命令/MainThreadCommands/RPC只返回edit DTO，窗口原对象的不可枚举token仍随注册取消');
+});
+
+for (const stage of ['open', 'confirm', 'restore', 'create', 'input']) for (const cancellation of ['registration', 'request']) {
+  test(`原预览 owner 在 ${stage} 等待中由 ${cancellation} 取消，首文件与双根文本零写入`, async () => {
+    const result = await inBrowser('Rename真实预览异步取消', async ({ stage, cancellation }) => {
+      const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), gate = p.defer(), source = p.lifetime.add(new m.CancellationTokenSource());
+      const native = [p.native(a, 0, 'preview-first.ts'), p.native(a, 1, 'preview-second.ts')], created = p.native(a, 0, 'preview-created.ts');
+      const models = native.map(uri => p.openText(a, uri, 'old-preview'));
+      a.onRename = () => ({ edits: [p.dtoCreate(created), ...native.map((uri, index) => ({ ...p.dtoText(uri, 'bad'), versionId: models[index].getVersionId() }))] }); await a.registerRename();
+      const edit = await m.rawRename(p.features.renameProvider, models[0], new m.EditorPosition(1, 1), 'bad');
+      const boundary = { hasInput: stage === 'confirm', oldSession: stage === 'restore' };
+      if (stage === 'input') boundary.entered = entered;
+      else boundary[stage] = async (...args) => { if (stage !== 'restore' || args[0] === false) { entered.resolve(); await gate.promise; } };
+      const preview = p.previewFor(a, boundary), oldSession = preview.owner._activeSession;
+      let settled = false;
+      const pending = a.actualBulk.apply(edit, { showPreview: true, token: source.token }).then(value => { settled = true; return value; });
+      await Promise.race([entered.promise, pending.then(() => { throw new Error('未经过指定原预览等待点：' + stage); })]);
+      const before = { values: models.map(model => model.getValue()), exists: await p.files.exists(a.logical(created)), operations: p.operations.length, settled,
+        openContexts: [...preview.openContexts], contextEnabled: preview.contextEnabled };
+      if (cancellation === 'registration') a.mainLanguage.$unregister(1); else source.cancel();
+      const previewCancelled = preview.tokens.map(token => token.isCancellationRequested); gate.resolve(); const applied = await pending;
+      return { before, applied, previewCancelled, lifecycleCancelled: edit.lifecycleToken.isCancellationRequested, requestCancelled: source.token.isCancellationRequested,
+        values: models.map(model => model.getValue()), exists: await p.files.exists(a.logical(created)), operations: p.operations, resolutions: p.resolutions.length,
+        treeInputs: preview.events.filter(event => event[0] === 'tree').length, inputs: preview.inputs.map(input => input.disposed), currentInput: Boolean(preview.pane._currentInput),
+        currentResolve: Boolean(preview.pane._currentResolve), contexts: preview.contexts, contextEnabled: preview.contextEnabled, restores: preview.restores,
+        activeSession: oldSession && preview.owner._activeSession === oldSession ? 'previous' : preview.owner._activeSession ? 'new' : 'none', warnings: p.warnings, failures: p.failures };
+    }, { stage, cancellation });
+    expect(result.before).toEqual({ values: ['old-preview', 'old-preview'], exists: false, operations: 0, settled: false, openContexts: [true], contextEnabled: true }); expect(result.applied.isApplied).toBe(false);
+    expect(result.lifecycleCancelled).toBe(cancellation === 'registration'); expect(result.requestCancelled).toBe(cancellation === 'request'); expect(result.values).toEqual(['old-preview', 'old-preview']);
+    expect(result.exists).toBe(false); expect(result.operations).toEqual([]); expect(result.resolutions).toBe(0);
+    expect(result.treeInputs).toBe(stage === 'input' ? 1 : 0); expect(result.inputs).toEqual(['create', 'input'].includes(stage) ? [1] : []);
+    expect(result.previewCancelled).toEqual(['create', 'input'].includes(stage) ? [true] : []); expect(result.currentResolve).toBe(false);
+    expect(result.contexts).toEqual(stage === 'restore' ? [true] : [true, false]); expect(result.contextEnabled).toBe(stage === 'restore');
+    expect(result.activeSession).toBe(stage === 'restore' ? 'previous' : 'none'); expect(result.currentInput).toBe(stage === 'confirm');
+    expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push(`原preview在getPane前启用view上下文，handler/session/Pane.setInput在${stage}由${cancellation}取消，保留旧owner身份且零业务写入`);
+  });
+}
+
+test('Rename 原文件创建已完成而 did 回执等待时撤代，保留创建成功并跳过后续双根文本', async () => {
+  const result = await inBrowser('Rename部分完成后的诚实结果', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), gate = p.defer();
+    const native = [p.native(a, 0, 'partial-first.ts'), p.native(a, 1, 'partial-second.ts')], created = p.native(a, 0, 'partial-created.ts');
+    const models = native.map(uri => p.openText(a, uri, 'old-partial'));
+    a.onRename = () => ({ edits: [p.dtoCreate(created, 'completed-file'), ...native.map((uri, index) => ({ ...p.dtoText(uri, 'bad'), versionId: models[index].getVersionId() }))] }); await a.registerRename();
+    const edit = await m.rawRename(p.features.renameProvider, models[0], new m.EditorPosition(1, 1), 'bad');
+    p.lifetime.add(p.workingFiles.onDidRunWorkingCopyFileOperation(event => {
+      if (event.operation === m.FileOperation.CREATE && event.files.some(file => file.target.toString() === a.logical(created).toString())) { event.waitUntil(gate.promise); entered.resolve(); }
+    }));
+    const pending = a.actualBulk.apply(edit); await Promise.race([entered.promise, pending.then(() => { throw new Error('未经过原文件完成事件'); })]);
+    const before = { content: await p.read(a.logical(created)), values: models.map(model => model.getValue()), references: p.resolutions.length, held: p.resolutions.every(ref => !ref.disposed) };
+    a.mainLanguage.$unregister(1); gate.resolve(); const applied = await pending;
+    return { before, applied, values: models.map(model => model.getValue()), content: await p.read(a.logical(created)), cancelled: edit.lifecycleToken.isCancellationRequested,
+      released: p.resolutions.every(ref => ref.disposed && ref.disposeCount === 1), operations: p.operations.map(event => event.phase), warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.before).toEqual({ content: 'completed-file', values: ['old-partial', 'old-partial'], references: 2, held: true }); expect(result.applied.isApplied).toBe(true);
+  expect(result.cancelled).toBe(true); expect(result.values).toEqual(['old-partial', 'old-partial']); expect(result.content).toBe('completed-file'); expect(result.operations).toEqual(['will', 'did']);
+  expect(result.released).toBe(true); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('原Rename结果首create真实完成后撤代，保留已完成成功、后续文本不写且预检引用释放');
+});
+
+test('成功应用回收生命周期和父 token 订阅，Web 结果与原数组继续保留应用语义', async () => {
+  const result = await inBrowser('Rename完成释放与Web/数组对照', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), source = p.lifetime.add(new m.CancellationTokenSource()), native = p.native(a, 0, 'success.ts');
+    const model = p.openText(a, native, 'old-success'); a.onRename = request => ({ edits: [{ ...p.dtoText(native, request.newName), versionId: model.getVersionId() }] }); await a.registerRename();
+    const edit = await m.rawRename(p.features.renameProvider, model, new m.EditorPosition(1, 1), 'new'), entered = p.defer(), preview = p.previewFor(a, { entered });
+    const pending = a.actualBulk.apply(edit, { showPreview: true, token: source.token });
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('未经过真实预览输入'); })]);
+    const sessionToken = preview.tokens[0], mergedToken = preview.requestTokens[0];
+    preview.pane._done(true); const applied = await pending;
+    a.mainLanguage.$unregister(1); source.cancel();
+    const web = await p.connect({ runningLocation: { kind: 2 } }), webNative = m.URI.file('/web-result.ts'), webModel = p.openText(web, webNative, 'old-web');
+    web.onRename = request => ({ edits: [{ ...p.dtoText(webNative, request.newName), versionId: webModel.getVersionId() }] }); await web.registerRename();
+    const webEdit = await m.rawRename(p.features.renameProvider, webModel, new m.EditorPosition(1, 1), 'web'); web.mainLanguage.dispose();
+    const webApplied = await web.actualBulk.apply(webEdit), arrayApplied = await web.actualBulk.apply([new m.ResourceTextEdit(webNative, { range: new m.EditorRange(1, 1, 1, 4), text: 'array' })]);
+    return { applied, cancelled: edit.lifecycleToken.isCancellationRequested, parentCancelled: source.token.isCancellationRequested,
+      completedTokensCancelled: [sessionToken.isCancellationRequested, mergedToken.isCancellationRequested], value: model.getValue(), inputDisposed: preview.inputs.map(input => input.disposed),
+      webHasToken: Object.hasOwn(webEdit, 'lifecycleToken'), webApplied, arrayApplied, webValue: webModel.getValue(), warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.applied.isApplied).toBe(true); expect(result.cancelled).toBe(true); expect(result.parentCancelled).toBe(true); expect(result.completedTokensCancelled).toEqual([false, false]);
+  expect(result.value).toBe('new-success'); expect(result.inputDisposed).toEqual([1]); expect(result.webHasToken).toBe(false); expect(result.webApplied.isApplied).toBe(true);
+  expect(result.arrayApplied.isApplied).toBe(true); expect(result.webValue).toBe('array-web'); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
+  checks.push('真实预览成功后CTS链已释放，原结果/父取消不再联动完成token；Web返回和数组仍正常应用');
+});
+
+test('原 RenameController.run 等待真实应用完成，自身文本变化只取消状态 token', async () => {
+  const result = await inBrowser('Controller父token及应用完成顺序', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), gate = p.defer(), alerts = [], notices = [], applications = [];
+    const native = [p.native(a, 0, 'controller-first.ts'), p.native(a, 1, 'controller-second.ts')], created = p.native(a, 0, 'controller-created.ts');
+    const models = native.map(uri => p.openText(a, uri, 'old-controller')), editor = p.editorFor(models[0]);
+    a.onRename = () => ({ edits: [{ ...p.dtoText(native[0], 'new'), versionId: models[0].getVersionId() }, p.dtoCreate(created, 'controller-file'),
+      { ...p.dtoText(native[1], 'new'), versionId: models[1].getVersionId() }] }); await a.registerRename();
+    p.lifetime.add(p.workingFiles.onDidRunWorkingCopyFileOperation(event => {
+      if (event.operation === m.FileOperation.CREATE && event.files.some(file => file.target.toString() === a.logical(created).toString())) { event.waitUntil(gate.promise); entered.resolve(); }
+    }));
+    const controller = m.originalRenameController({ editor, _cts: p.lifetime.add(new m.CancellationTokenSource()), _languageFeaturesService: p.features,
+      _logService: new m.NullLogService(), _progressService: { showWhile() {} }, _configService: { getValue: () => false },
+      _notificationService: { info: value => notices.push(value), error: value => notices.push(value) },
+      _renameWidget: { async getInput() { return { newName: 'new', wantsPreview: false }; } },
+      _bulkEditService: { hasPreviewHandler: () => false, apply(edit, options) { applications.push({ edit, options }); return a.actualBulk.apply(edit, options); } },
+    }, value => alerts.push(value));
+    let settled = false; const pending = controller.run().then(() => { settled = true; });
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('Controller在真实应用完成前退出'); })]);
+    const before = { settled, values: models.map(model => model.getValue()), created: await p.read(a.logical(created)), alerts: alerts.length,
+      parentToken: applications[0].options.token === controller._cts.token, stateToken: applications[0].options.token === editor.registered[1].token,
+      stateCancelled: editor.registered[1].token.isCancellationRequested, operationCancelled: applications[0].options.token.isCancellationRequested };
+    gate.resolve(); await pending;
+    return { before, values: models.map(model => model.getValue()), settled, alerts, notices, applications: applications.length,
+      released: p.resolutions.every(ref => ref.disposed && ref.disposeCount === 1), warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.before).toEqual({ settled: false, values: ['new-controller', 'old-controller'], created: 'controller-file', alerts: 0,
+    parentToken: true, stateToken: false, stateCancelled: true, operationCancelled: false });
+  expect(result.settled).toBe(true); expect(result.values).toEqual(['new-controller', 'new-controller']); expect(result.alerts).toHaveLength(1);
+  expect(result.notices).toEqual([]); expect(result.applications).toBe(1); expect(result.released).toBe(true); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
+  checks.push('AST原Controller.run/原状态CTS经RPC和真实BulkEdit：首文本改变取消cts2，冻结父token保持、run/aria等待后续file/text完成');
+});
+
+test('原 RenameController 的父操作取消关闭真实预览，不播报未应用的成功摘要', async () => {
+  const result = await inBrowser('Controller取消时真实preview清理和aria准入', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), alerts = [], notices = [], applications = [];
+    const native = p.native(a, 0, 'controller-cancel.ts'), model = p.openText(a, native, 'old-cancel'), created = p.native(a, 1, 'controller-cancel-created.ts'), editor = p.editorFor(model);
+    a.onRename = () => ({ edits: [p.dtoCreate(created), { ...p.dtoText(native, 'bad'), versionId: model.getVersionId() }] }); await a.registerRename();
+    const preview = p.previewFor(a, { entered });
+    const controller = m.originalRenameController({ editor, _cts: p.lifetime.add(new m.CancellationTokenSource()), _languageFeaturesService: p.features,
+      _logService: new m.NullLogService(), _progressService: { showWhile() {} }, _configService: { getValue: () => true },
+      _notificationService: { info: value => notices.push(value), error: value => notices.push(value) },
+      _renameWidget: { async getInput() { return { newName: 'bad', wantsPreview: true }; } },
+      _bulkEditService: { hasPreviewHandler: () => true, async apply(edit, options) { const result = await a.actualBulk.apply(edit, options); applications.push(result); return result; } },
+    }, value => alerts.push(value));
+    let settled = false; const pending = controller.run().then(() => { settled = true; });
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('未经过Controller原预览'); })]);
+    const pendingBeforeCancel = !settled; controller._cts.dispose(true); await pending;
+    return { pendingBeforeCancel, settled, alerts, notices, applications, value: model.getValue(), exists: await p.files.exists(a.logical(created)),
+      previewCancelled: preview.tokens[0].isCancellationRequested, inputDisposed: preview.inputs.map(input => input.disposed), contexts: preview.contexts,
+      operations: p.operations, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.pendingBeforeCancel).toBe(true); expect(result.settled).toBe(true); expect(result.applications).toHaveLength(1); expect(result.applications[0].isApplied).toBe(false);
+  expect(result.alerts).toEqual([]); expect(result.notices).toEqual([]); expect(result.value).toBe('old-cancel'); expect(result.exists).toBe(false);
+  expect(result.previewCancelled).toBe(true); expect(result.inputDisposed).toEqual([1]); expect(result.contexts).toEqual([true, false]); expect(result.operations).toEqual([]);
+  expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('AST原Controller父操作取消传入真实preview，零file/text且isApplied=false禁止成功aria');
+});
+
+for (const cancellation of ['registration', 'runnable']) test(`原 inline 缓存结果由 ${cancellation} 取消后 count=0，真实命令零 apply`, async () => {
+  const result = await inBrowser('Inline缓存退役结果准入', async cancellation => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'inline-stale.ts'), model = p.openText(a, native, 'old-inline');
+    a.onRename = () => ({ edits: [{ ...p.dtoText(native, 'bad'), versionId: model.getVersionId() }] }); await a.registerRename();
+    const editor = p.editorFor(model), codeEditors = { getFocusedCodeEditor: () => editor }, commandService = { executeCommand() { throw new Error('本片不调用NES命令'); } }, applications = [];
+    const runnable = new m.RenameSymbolRunnable(p.features, commandService, 'inline-stale', model, m.InlineEditorState.create(codeEditors, model), new m.EditorPosition(1, 1), 'bad');
+    const countBefore = await runnable.getCount(), cached = await runnable.getWorkspaceEdit();
+    const processor = p.lifetime.add(new m.RenameSymbolProcessor(commandService, p.features, undefined, { apply(...args) { applications.push(args); throw new Error('取消的inline不应apply'); } }, undefined, codeEditors));
+    processor._renameRunnable = runnable;
+    if (cancellation === 'registration') a.mainLanguage.$unregister(1); else runnable.cancel();
+    await m.CommandsRegistry.getCommand(m.renameSymbolCommandId).handler(undefined, m.EditSources.rename('old', 'bad'), runnable);
+    return { countBefore, countAfter: await runnable.getCount(), editAfter: await runnable.getWorkspaceEdit() === undefined, cachedCancelled: cached.lifecycleToken.isCancellationRequested,
+      runnableCancelled: runnable.token.isCancellationRequested, cleared: processor._renameRunnable === undefined, applications: applications.length, requests: a.renameRequests.length,
+      value: model.getValue(), operations: p.operations, resolutions: p.resolutions.length, warnings: p.warnings, failures: p.failures };
+  }, cancellation);
+  expect(result.countBefore).toBe(1); expect(result.countAfter).toBe(0); expect(result.editAfter).toBe(true); expect(result.cachedCancelled).toBe(cancellation === 'registration');
+  expect(result.runnableCancelled).toBe(cancellation === 'runnable'); expect(result.cleared).toBe(true); expect(result.applications).toBe(0); expect(result.requests).toBe(1);
+  expect(result.value).toBe('old-inline'); expect(result.operations).toEqual([]); expect(result.resolutions).toBe(0); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
+  checks.push(`AST原runnable缓存经${cancellation}取消后由原getResult过滤，原Processor命令零apply并清除缓存`);
+});
+
+for (const cancel of [false, true]) test(`原 inline 命令等待真实预览${cancel ? '取消' : '确认'}，finally 才释放 runnable`, async () => {
+  const result = await inBrowser('Inline命令应用等待及token消费', async cancel => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), native = p.native(a, 0, 'inline-command.ts'), model = p.openText(a, native, 'old-inline');
+    const created = p.native(a, 1, 'inline-created.ts');
+    a.onRename = () => ({ edits: [{ ...p.dtoCreate(created), metadata: { needsConfirmation: true, label: 'inline预览' } }, { ...p.dtoText(native, 'new'), versionId: model.getVersionId() }] }); await a.registerRename();
+    const editor = p.editorFor(model), codeEditors = { getFocusedCodeEditor: () => editor }, commandService = { executeCommand() { throw new Error('本片不调用NES命令'); } }, applications = [];
+    const runnable = new m.RenameSymbolRunnable(p.features, commandService, 'inline-command', model, m.InlineEditorState.create(codeEditors, model), new m.EditorPosition(1, 1), 'new');
+    const countBefore = await runnable.getCount(), preview = p.previewFor(a, { entered }), source = m.EditSources.rename('old', 'new');
+    const processor = p.lifetime.add(new m.RenameSymbolProcessor(commandService, p.features, undefined, {
+      async apply(edit, options) { const observation = { token: options.token === runnable.token, reason: options.reason === source }; applications.push(observation);
+        const result = await a.actualBulk.apply(edit, options); observation.isApplied = result.isApplied; return result; },
+    }, undefined, codeEditors));
+    processor._renameRunnable = runnable;
+    let settled = false; const pending = m.CommandsRegistry.getCommand(m.renameSymbolCommandId).handler(undefined, source, runnable).then(() => { settled = true; });
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('inline命令在真实apply完成前已退出'); })]);
+    const before = { settled, retained: processor._renameRunnable === runnable, value: model.getValue(), exists: await p.files.exists(a.logical(created)) };
+    if (cancel) runnable.cancel(); else preview.pane._done(true);
+    await pending;
+    return { countBefore, before, settled, cleared: processor._renameRunnable === undefined, applications, value: model.getValue(), exists: await p.files.exists(a.logical(created)),
+      inputDisposed: preview.inputs.map(input => input.disposed), previewCancelled: preview.tokens[0].isCancellationRequested, countAfter: await runnable.getCount(), warnings: p.warnings, failures: p.failures };
+  }, cancel);
+  expect(result.countBefore).toBe(2); expect(result.before).toEqual({ settled: false, retained: true, value: 'old-inline', exists: false }); expect(result.settled).toBe(true);
+  expect(result.cleared).toBe(true); expect(result.applications).toEqual([{ token: true, reason: true, isApplied: !cancel }]); expect(result.value).toBe(cancel ? 'old-inline' : 'new-inline');
+  expect(result.exists).toBe(!cancel); expect(result.inputDisposed).toEqual([1]); expect(result.previewCancelled).toBe(cancel); expect(result.countAfter).toBe(cancel ? 0 : 2);
+  expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push(`原Processor命令传runnable.token、等待真实preview${cancel ? '取消' : '确认'}及BulkEdit完成后finally清缓存`);
+});
+
+test('原预览Provider在源引用回执等待中退役，释放迟到引用且停止后续模型和初始化', async () => {
+  const result = await inBrowser('Provider源引用等待中退役', async () => {
+    const p = globalThis.editProbe, m = p.m, entered = p.defer(), gate = p.defer();
+    const fixture = await p.providerFor({ async afterAcquire(kind) { if (kind === 'source') { entered.resolve(); await gate.promise; } } });
+    const provider = fixture.provider, previewUri = provider.asPreviewUri(fixture.sources[0].uri);
+    const pendingContent = provider.provideTextContent(previewUri).then(() => ({ resolved: true }), error => ({ resolved: false, cancelled: m.isCancellationError(error) }));
+    await Promise.race([entered.promise, provider._ready.then(() => { throw new Error('未经过原Provider源引用回执等待'); })]);
+    const before = { previews: fixture.previewModels.length, requests: fixture.requests.map(item => item.kind), references: fixture.references.map(item => [item.kind, item.returned, item.disposed]) };
+    provider.dispose(); gate.resolve(); await provider._ready; const content = await pendingContent;
+    const retiredEmpty = await provider.provideTextContent(provider.constructor.emptyPreview).then(() => false, error => m.isCancellationError(error));
+    await p.flush();
+    return { before, content, retiredEmpty, previews: fixture.previewModels.length, queued: fixture.queued.length, requests: fixture.requests.map(item => item.kind),
+      references: fixture.references.map(item => [item.kind, item.returned, item.disposed]), registrations: fixture.registrations.map(item => item.disposed), editRequests: fixture.editRequests,
+      sourceValues: fixture.sources.map(model => model.getValue()), handlesScheme: fixture.actualResolver.canHandleResource(previewUri), failures: p.failures };
+  });
+  expect(result.before).toEqual({ previews: 0, requests: ['source'], references: [['source', false, 0]] }); expect(result.content).toEqual({ resolved: false, cancelled: true });
+  expect(result.retiredEmpty).toBe(true); expect(result.previews).toBe(0); expect(result.queued).toBe(0); expect(result.requests).toEqual(['source']);
+  expect(result.references).toEqual([['source', true, 1]]); expect(result.registrations).toEqual([1]); expect(result.editRequests).toEqual([]);
+  expect(result.sourceValues).toEqual(['old-provider-0', 'old-provider-1']); expect(result.handlesScheme).toBe(false); expect(result.failures).toEqual([]);
+  checks.push('AST原Provider源ref await后退役立即释放原resolver引用，不建preview/第二源/队列，provideTextContent含empty明确取消');
+});
+
+test('原预览Provider在编辑计算等待中退役，不向迟到模型写入且队列释放未引用模型', async () => {
+  const result = await inBrowser('Provider编辑等待中退役', async () => {
+    const p = globalThis.editProbe, entered = p.defer(), gate = p.defer();
+    const fixture = await p.providerFor({ async edits() { entered.resolve(); await gate.promise; } });
+    await Promise.race([entered.promise, fixture.provider._ready.then(() => { throw new Error('未经过原Provider编辑计算等待'); })]);
+    const preview = fixture.previewModels[0], before = { previews: fixture.previewModels.length, value: preview.getValue(), queued: fixture.queued.length, edits: fixture.editRequests.length };
+    fixture.provider.dispose(); gate.resolve(); await fixture.provider._ready;
+    const beforeQueue = { value: preview.getValue(), edits: fixture.editRequests.length };
+    await fixture.runQueued(); await p.flush();
+    return { before, beforeQueue, disposed: preview.isDisposed(), registeredModel: Boolean(p.models.getModel(preview.uri)), previews: fixture.previewModels.length,
+      queued: fixture.queued.length, references: fixture.references.map(item => [item.kind, item.disposed]), requests: fixture.requests.map(item => item.kind),
+      sourceValues: fixture.sources.map(model => model.getValue()), failures: p.failures };
+  });
+  expect(result.before).toEqual({ previews: 1, value: 'old-provider-0', queued: 1, edits: 1 }); expect(result.beforeQueue).toEqual({ value: 'old-provider-0', edits: 1 });
+  expect(result.disposed).toBe(true); expect(result.registeredModel).toBe(false); expect(result.previews).toBe(1); expect(result.queued).toBe(0);
+  expect(result.references).toEqual([['source', 1]]); expect(result.requests).toEqual(['source']); expect(result.sourceValues).toEqual(['old-provider-0', 'old-provider-1']); expect(result.failures).toEqual([]);
+  checks.push('原Provider await edits后退役不apply迟到编辑、不继续第二源；执行原queued callback释放尚无resolver引用的原preview模型');
+});
+
+test('原预览Provider微任务执行前退役，零新增引用且已建预览模型全部释放', async () => {
+  const result = await inBrowser('Provider已排队引用在退役后停止', async () => {
+    const p = globalThis.editProbe, fixture = await p.providerFor(); await fixture.provider._ready;
+    const previews = [...fixture.previewModels], previewUri = fixture.provider.asPreviewUri(fixture.sources[0].uri);
+    const provided = await fixture.provider.provideTextContent(previewUri);
+    const before = { count: previews.length, values: previews.map(model => model.getValue()), queued: fixture.queued.length, identity: provided === previews[0], requests: fixture.requests.map(item => item.kind) };
+    fixture.provider.dispose(); while (fixture.queued.length) await fixture.runQueued(); await p.flush();
+    return { before, requests: fixture.requests.map(item => item.kind), disposed: previews.map(model => model.isDisposed()), registeredModels: previews.map(model => Boolean(p.models.getModel(model.uri))),
+      registrations: fixture.registrations.map(item => item.disposed), references: fixture.references.map(item => [item.kind, item.disposed]),
+      sources: fixture.sources.map(model => model.getValue()), handlesScheme: fixture.actualResolver.canHandleResource(previewUri), failures: p.failures };
+  });
+  expect(result.before).toEqual({ count: 2, values: ['preview-provider-0', 'preview-provider-1'], queued: 2, identity: true, requests: ['source', 'source'] });
+  expect(result.requests).toEqual(['source', 'source']); expect(result.disposed).toEqual([true, true]); expect(result.registeredModels).toEqual([false, false]);
+  expect(result.registrations).toEqual([1]); expect(result.references).toEqual([['source', 1], ['source', 1]]); expect(result.sources).toEqual(['old-provider-0', 'old-provider-1']);
+  expect(result.handlesScheme).toBe(false); expect(result.failures).toEqual([]); checks.push('原queued callback在store退役后不请求已注销scheme，并释放本owner已创建而尚未引用的两个真实preview模型');
+});
+
+for (const outcome of ['resolve', 'reject']) test(`原预览Provider微任务引用在途时退役，迟到 ${outcome} 释放原模型且零告警`, async () => {
+  const result = await inBrowser('Provider在途预览引用退役结算', async outcome => {
+    const p = globalThis.editProbe, m = p.m, entered = p.defer(), gate = p.defer(), reported = [], error = new Error('退役后原预览引用失败');
+    const previous = m.errorHandler.getUnexpectedErrorHandler(); m.setUnexpectedErrorHandler(failure => reported.push(failure));
+    try {
+      const boundary = outcome === 'resolve' ? { async afterAcquire(kind) { if (kind === 'preview') { entered.resolve(); await gate.promise; } } }
+        : { async beforeAcquire(kind) { if (kind === 'preview') { entered.resolve(); await gate.promise; throw error; } } };
+      const fixture = await p.providerFor(boundary); await fixture.provider._ready;
+      const previews = [...fixture.previewModels]; await fixture.runQueued();
+      await entered.promise;
+      const before = { requests: fixture.requests.map(item => item.kind), previewRefs: fixture.references.filter(item => item.kind === 'preview').map(item => [item.returned, item.disposed]),
+        disposed: previews.map(model => model.isDisposed()) };
+      fixture.provider.dispose(); gate.resolve(); await p.flush(); while (fixture.queued.length) await fixture.runQueued(); await p.flush();
+      return { before, requests: fixture.requests.map(item => item.kind), references: fixture.references.map(item => [item.kind, item.returned, item.disposed]),
+        disposed: previews.map(model => model.isDisposed()), registeredModels: previews.map(model => Boolean(p.models.getModel(model.uri))), reports: reported.map(item => item.message),
+        registrations: fixture.registrations.map(item => item.disposed), sources: fixture.sources.map(model => model.getValue()), failures: p.failures };
+    } finally { m.setUnexpectedErrorHandler(previous); }
+  }, outcome);
+  expect(result.before).toEqual({ requests: ['source', 'source', 'preview'], previewRefs: outcome === 'resolve' ? [[false, 0]] : [], disposed: [false, false] });
+  expect(result.requests).toEqual(['source', 'source', 'preview']); expect(result.references).toEqual([['source', true, 1], ['source', true, 1], ...(outcome === 'resolve' ? [['preview', true, 1]] : [])]);
+  expect(result.disposed).toEqual([true, true]); expect(result.registeredModels).toEqual([false, false]); expect(result.reports).toEqual([]); expect(result.registrations).toEqual([1]);
+  expect(result.sources).toEqual(['old-provider-0', 'old-provider-1']); expect(result.failures).toEqual([]); checks.push(`原queued ref在途后退役再${outcome}，迟到原引用只释放一次、失败明确归退役且真实模型释放，无全局错误`);
+});
+
+test('原预览Provider活跃时微任务引用失败，原 onUnexpectedError 报告同一错误并释放模型', async () => {
+  const result = await inBrowser('Provider活跃引用错误归属', async () => {
+    const p = globalThis.editProbe, m = p.m, failure = new Error('fresh-preview-reference-failed'), reports = [], events = [], reported = p.defer();
+    const previous = m.errorHandler.getUnexpectedErrorHandler(), remove = m.errorHandler.addListener(error => events.push(error));
+    m.setUnexpectedErrorHandler(error => { reports.push(error); reported.resolve(); });
+    try {
+      const fixture = await p.providerFor({ async beforeAcquire(kind) { if (kind === 'preview') throw failure; } }); await fixture.provider._ready;
+      const previews = [...fixture.previewModels]; await fixture.runQueued(); await reported.promise;
+      const active = { sameError: reports[0] === failure, sameEvent: events[0] === failure, reports: reports.length, events: events.length,
+        firstDisposed: previews[0].isDisposed(), firstRemoved: !p.models.getModel(previews[0].uri), secondAlive: !previews[1].isDisposed(),
+        schemeRegistered: fixture.actualResolver.canHandleResource(previews[1].uri), references: fixture.references.map(item => [item.kind, item.disposed]) };
+      fixture.provider.dispose(); while (fixture.queued.length) await fixture.runQueued(); await p.flush();
+      return { active, requests: fixture.requests.map(item => item.kind), disposed: previews.map(model => model.isDisposed()), reports: reports.length, events: events.length,
+        sources: fixture.sources.map(model => model.getValue()), failures: p.failures };
+    } finally { remove(); m.setUnexpectedErrorHandler(previous); }
+  });
+  expect(result.active).toEqual({ sameError: true, sameEvent: true, reports: 1, events: 1, firstDisposed: true, firstRemoved: true, secondAlive: true,
+    schemeRegistered: true, references: [['source', 1], ['source', 1]] }); expect(result.requests).toEqual(['source', 'source', 'preview']); expect(result.disposed).toEqual([true, true]);
+  expect(result.reports).toBe(1); expect(result.events).toBe(1); expect(result.sources).toEqual(['old-provider-0', 'old-provider-1']); expect(result.failures).toEqual([]);
+  checks.push('原Provider活跃queued ref失败经原onUnexpectedError报告同一个Error/事件一次，失败模型释放且另一模型/源不被误伤');
+});
+
+for (const stage of ['resources', 'resourceId']) for (const changed of ['input', 'provider']) test(`原Pane旧点击在 ${stage} 等待后 ${changed} 已替换，不打开迟到 multidiff`, async () => {
+  const result = await inBrowser('Pane异步旧点击按输入和Provider身份拒绝', async ({ stage, changed }) => {
+    const p = globalThis.editProbe, m = p.m, entered = p.defer(), gate = p.defer(), opens = [], computations = [], idRequests = [], results = [];
+    const uri = m.URI.parse('inmemory:/pane-selection.ts'), operation = new m.OriginalBulkFileOperation(uri, undefined);
+    const range = new m.EditorRange(1, 1, 1, 4); operation.textEdits.push({ textEdit: new m.ResourceTextEdit(uri, { range, text: 'new' }) });
+    const oldInput = { fileOperations: [operation] }, oldProvider = { identity: 'old' };
+    const pane = new m.BulkEditPane({ _currentInput: oldInput, _currentProvider: oldProvider,
+      _computeResourceDiffEditorInputs: { async get(operations) {
+        const index = computations.length; computations.push(operations === oldInput.fileOperations);
+        if (index === 0 && stage === 'resources') { entered.resolve(); await gate.promise; }
+        const resource = m.URI.parse('inmemory:/pane-result-' + index), resources = [{ original: { resource: uri }, modified: { resource } }];
+        const result = { resources, async getResourceDiffEditorInputIdOfOperation(value) {
+          idRequests.push({ index, sameOperation: value === operation });
+          if (index === 0 && stage === 'resourceId') { entered.resolve(); await gate.promise; }
+          return { original: uri, modified: resource };
+        } }; results.push(result); return result;
+      } }, _editorService: { openEditor(input, group) { opens.push({ input, group }); } } });
+    const event = () => ({ element: new m.FileElement(pane._currentInput, operation), editorOptions: { preserveFocus: true }, sideBySide: false });
+    let settled = false; const pending = pane._openElementInMultiDiffEditor(event()).then(() => { settled = true; });
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('未经过原Pane指定异步等待点'); })]);
+    // 新 input 刻意复用同一 fileOperations，必须核对象身份而不能只比数组；provider 单独替换同理。
+    if (changed === 'input') pane._currentInput = { fileOperations: oldInput.fileOperations }; else pane._currentProvider = { identity: 'fresh' };
+    const selectedInput = pane._currentInput, selectedProvider = pane._currentProvider, before = { settled, opens: opens.length };
+    gate.resolve(); await pending;
+    const stale = { opens: opens.length, idRequests: [...idRequests], sameInput: pane._currentInput === selectedInput, sameProvider: pane._currentProvider === selectedProvider };
+    await pane._openElementInMultiDiffEditor(event());
+    return { before, stale, computations, idRequests, opens: opens.length, resourcesIdentity: opens[0].input.resources === results[1].resources,
+      modified: opens[0].input.options.viewState.revealData.resource.modified.toString(), selectedRange: opens[0].input.options.viewState.revealData.range,
+      scheme: opens[0].input.multiDiffSource.scheme, preserveFocus: opens[0].input.options.preserveFocus, failures: p.failures };
+  }, { stage, changed });
+  expect(result.before).toEqual({ settled: false, opens: 0 }); expect(result.stale).toEqual({ opens: 0, idRequests: stage === 'resources' ? [] : [{ index: 0, sameOperation: true }], sameInput: true, sameProvider: true });
+  expect(result.computations).toEqual([true, true]); expect(result.idRequests).toEqual([...(stage === 'resourceId' ? [{ index: 0, sameOperation: true }] : []), { index: 1, sameOperation: true }]);
+  expect(result.opens).toBe(1); expect(result.resourcesIdentity).toBe(true); expect(result.modified).toBe('inmemory:/pane-result-1');
+  expect(result.selectedRange).toEqual({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 }); expect(result.scheme).toBe('vscode-bulkeditpreview-multieditor');
+  expect(result.preserveFocus).toBe(true); expect(result.failures).toEqual([]); checks.push(`AST原Pane在await ${stage}后${changed}身份变更拒绝旧点击，复用同数组的新点击原路成功且资源身份不变`);
 });
