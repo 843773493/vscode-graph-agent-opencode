@@ -186,6 +186,29 @@ class CatalogQueriesMixin:
                     nodes.append(self._node_from_row(row))
             return int(generation_row[0]), nodes
 
+    def read_reachable_nodes(
+        self, *, include_deleting: bool,
+    ) -> list[SessionCatalogNode]:
+        """同一读快照从根枚举，按稳定 ID 返回节点及所需的删除中子树。"""
+        with self.read_transaction() as connection:
+            # 按父索引递归一次，避免为每个节点打开事务并查询空子页。
+            rows = connection.execute(
+                f"""
+                WITH RECURSIVE reachable(node_id) AS (
+                    SELECT node_id FROM nodes
+                    WHERE parent_node_id IS NULL AND (? OR state = 'active')
+                    UNION ALL
+                    SELECT child.node_id FROM nodes AS child
+                    JOIN reachable AS parent ON child.parent_node_id = parent.node_id
+                    WHERE ? OR child.state = 'active'
+                )
+                SELECT {_NODE_COLUMNS} FROM nodes
+                WHERE node_id IN (SELECT node_id FROM reachable) ORDER BY node_id
+                """,
+                (include_deleting, include_deleting),
+            ).fetchall()
+            return [self._node_from_row(row) for row in rows]
+
     def list_children(
         self,
         parent_node_id: str | None,

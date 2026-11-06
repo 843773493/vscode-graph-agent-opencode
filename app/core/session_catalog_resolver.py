@@ -62,7 +62,7 @@ __all__ = [
     "SessionChildSummary",
 ]
 
-# store.list_children 单页上限（BFS 全量投影的分页粒度）。
+# store.list_children 直接子节点投影的分页粒度。
 _LIST_CHILDREN_PAGE_LIMIT = 512
 
 
@@ -285,7 +285,7 @@ class SessionCatalogPathResolver:
         )
 
     # ------------------------------------------------------------------
-    # 全量/子树节点聚合（store 无 list-all 公开方法，BFS 分页聚合）
+    # 全量/子树节点聚合
     # ------------------------------------------------------------------
 
     def _ensure_consistency_verified(self) -> None:
@@ -300,33 +300,14 @@ class SessionCatalogPathResolver:
         *,
         include_deleting: bool = False,
     ) -> list[SessionCatalogNode]:
-        """按 node_id 稳定序返回 catalog 全量节点（list_children BFS 分页）。
+        """按 node_id 稳定序返回 catalog 根可达节点。
 
         ``include_deleting=False``（读路径默认）时按 design.md §9 语义把
         ``deleting`` 子树暂时从目录树隐藏：单一节点进入 deleting 不再拖垮
         整棵目录的读取。删除恢复链路如需完整视图显式传 ``True``。
         """
         self._ensure_consistency_verified()
-        nodes: dict[str, SessionCatalogNode] = {}
-        frontier: list[str | None] = [None]
-        while frontier:
-            parent_node_id = frontier.pop()
-            cursor: str | None = None
-            while True:
-                page, next_cursor, has_more = self._store.list_children(
-                    parent_node_id,
-                    limit=_LIST_CHILDREN_PAGE_LIMIT,
-                    cursor=cursor,
-                )
-                for node in page:
-                    if not include_deleting and node.state != "active":
-                        continue
-                    nodes[node.node_id] = node
-                    frontier.append(node.node_id)
-                if not has_more:
-                    break
-                cursor = next_cursor
-        return [nodes[node_id] for node_id in sorted(nodes)]
+        return self._store.read_reachable_nodes(include_deleting=include_deleting)
 
     @staticmethod
     def _nearest_session_ancestor_from_map(
