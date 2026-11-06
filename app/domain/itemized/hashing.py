@@ -163,6 +163,27 @@ def payload_content_length(payload_kind: str, payload: object) -> int:
 
 
 def contribution_content_hash(contribution_kind: str, body: object) -> str:
+    return _contribution_content_bytes_and_hash(contribution_kind, body)[1]
+
+
+def contribution_content_hash_and_length(
+    contribution_kind: str, body: object,
+) -> tuple[str, int]:
+    """同次 JCS 编码给出 contribution 摘要与正文的结构化长度。"""
+    encoded, digest = _contribution_content_bytes_and_hash(contribution_kind, body)
+    # JCS 固定按 body、contribution_kind 排列两个键；扣除信封即可取得正文长度，
+    # 不为长度再编码正文。kind 的转义仍交给同一 JCS 编码器处理。
+    body_length = len(encoded) - len(canonical_json_bytes(contribution_kind)) - len(
+        b'{"body":,"contribution_kind":}'
+    )
+    return digest, body_length
+
+
+def _contribution_content_bytes_and_hash(
+    contribution_kind: str, body: object,
+) -> tuple[bytes, str]:
     if not isinstance(contribution_kind, str) or not contribution_kind:
         raise ItemSchemaError("contribution_kind 必须是非空字符串")
-    return sha256_jcs({"contribution_kind": contribution_kind, "body": body})
+    return canonical_json_bytes_and_hash({
+        "contribution_kind": contribution_kind, "body": body,
+    })

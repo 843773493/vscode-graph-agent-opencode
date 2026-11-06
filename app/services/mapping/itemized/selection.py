@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from app.domain.itemized.hashing import (
+    canonical_json_bytes_and_hash,
     content_hash,
-    contribution_content_hash,
+    contribution_content_hash_and_length,
     payload_content_length,
-    sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, ref_identity
 from app.domain.itemized.plans.contributions import ContextContribution
@@ -146,12 +146,16 @@ def resolve_selected_request_body(
             f"plan-order-integrity: contribution manifest 缺失: {entry.contribution_id}"
         )
     body = bodies[body_key]
-    expected_hash = (
-        contribution_content_hash(contribution.contribution_kind, body)
-        if contribution is not None
-        else sha256_jcs(body)
-    )
-    if ref.content_hash != expected_hash or ref.content_length != payload_content_length(ref.payload_kind or 'structured_content', body):
+    if contribution is not None:
+        expected_hash, body_length = contribution_content_hash_and_length(
+            contribution.contribution_kind, body,
+        )
+    else:
+        encoded, expected_hash = canonical_json_bytes_and_hash(body)
+        body_length = len(encoded)
+    if ref.content_hash == expected_hash and ref.payload_kind == "text":
+        body_length = payload_content_length("text", body)
+    if ref.content_hash != expected_hash or ref.content_length != body_length:
         raise ValueError(f"source-mismatch: request-only ref: {ref.ref_id}")
     return body
 
