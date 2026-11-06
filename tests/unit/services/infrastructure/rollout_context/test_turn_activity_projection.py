@@ -13,7 +13,6 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
-    ProjectionPartRef,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
@@ -212,9 +211,7 @@ def test_checkpoint_tool_shadow_uses_model_call_provenance() -> None:
 
 def test_final_reasoning_resolves_preserved_content_part_identity() -> None:
     refs = _final_reasoning_source_refs(
-        ItemProjectionIdentity(model_call_id="model-call-1", content_part_refs=(
-            ProjectionPartRef("part-reasoning", 0, "reasoning"), ProjectionPartRef("part-text", 1, "text")
-        )),
+        "model-call-1", {0: "part-reasoning", 1: "part-text"},
         content_block_index=0,
         item_index=0,
         provider_item_id=None,
@@ -225,9 +222,7 @@ def test_final_reasoning_resolves_preserved_content_part_identity() -> None:
 
 def test_final_reasoning_keeps_distinct_provider_item_identity() -> None:
     refs = _final_reasoning_source_refs(
-        ItemProjectionIdentity(model_call_id="model-call-1", content_part_refs=(
-            ProjectionPartRef("outer-reasoning", 0, "reasoning_items"),
-        )),
+        "model-call-1", {0: "outer-reasoning"},
         content_block_index=0,
         item_index=1,
         provider_item_id="provider-reasoning-2",
@@ -238,7 +233,7 @@ def test_final_reasoning_keeps_distinct_provider_item_identity() -> None:
 
 def test_final_reasoning_scope_prevents_reused_part_cross_call_merge() -> None:
     refs = _final_reasoning_source_refs(
-        ItemProjectionIdentity(model_call_id="model-call-2", content_part_refs=(ProjectionPartRef("part-reused", 0),)),
+        "model-call-2", {0: "part-reused"},
         content_block_index=0, item_index=0, provider_item_id=None,
     )
     assert refs == {("model-call-2", "part-reused")}

@@ -148,17 +148,17 @@ def _logical_activity_key(item: dict[str, object], model_call_id: str | None) ->
 
 
 def _final_reasoning_source_refs(
-    identity: ItemProjectionIdentity | None,
+    model_call_id: str | None,
+    part_refs: dict[int, str],
     *,
     content_block_index: int,
     item_index: int,
     provider_item_id: object,
 ) -> set[tuple[str | None, str]]:
     """最终 reasoning 只按显式 scope/part 坐标与流式块去重。"""
-    scope = identity.model_call_id if identity is not None else None
     refs: set[tuple[str | None, str]] = set()
     if provider_item_id is not None:
-        refs.add((scope, strict_text(provider_item_id, field="reasoning_blocks.item_id")))
-    if item_index == 0 and identity is not None:
-        refs.update((scope, ref.id) for ref in identity.content_part_refs if ref.index == content_block_index)
+        refs.add((model_call_id, strict_text(provider_item_id, field="reasoning_blocks.item_id")))
+    if item_index == 0 and content_block_index in part_refs:
+        refs.add((model_call_id, part_refs[content_block_index]))
     return refs

@@ -446,8 +446,12 @@ def _merge_final_reasoning(
     result: dict[str, dict[str, object]],
     final_reasoning_rows: object,
     seen_reasoning_source_refs: dict[str, set[tuple[str | None, str]]],
+    final_manifests: dict[str, object],
 ) -> None:
     """归并 final checkpoint reasoning 源引用。"""
+    previous_turn_id: str | None = None
+    model_call_id: str | None = None
+    part_refs: dict[int, str] = {}
     for (
         turn_id,
         message_sequence,
@@ -462,7 +466,6 @@ def _merge_final_reasoning(
         item_id,
         item_sequence,
         item_created_at,
-        final_item_projection_manifest_json,
         logical_item_ordinal,
     ) in final_reasoning_rows:
         turn_id = strict_text(turn_id, field="turns.turn_id")
@@ -496,10 +499,16 @@ def _merge_final_reasoning(
         )
         if signature_value not in {0, 1}:
             raise RuntimeError(f"reasoning signature 标记非法: {turn_id}")
-        final_manifest = parse_item_projection_manifest(_json_object(final_item_projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
-        final_identity = ItemProjectionIdentity.from_dict(final_manifest["projection_identity"]) if final_manifest["projection_identity"] is not None else None
+        if turn_id != previous_turn_id:
+            # SQL 按 Turn 聚合有序块；manifest 随 final header 只取一次，part 引用也只索引一次。
+            # 不得为每个思考块重读整条 manifest、再扫描全部 part，避免块数增加时平方增长。
+            final_manifest = parse_item_projection_manifest(_json_object(final_manifests[turn_id], field=f"item_catalog.projection_manifest_json:{item_id}"))
+            final_identity = ItemProjectionIdentity.from_dict(final_manifest["projection_identity"]) if final_manifest["projection_identity"] is not None else None
+            model_call_id = final_identity.model_call_id if final_identity is not None else None
+            part_refs = {ref.index: ref.id for ref in final_identity.content_part_refs} if final_identity is not None else {}
+            previous_turn_id = turn_id
         source_refs = _final_reasoning_source_refs(
-            final_identity,
+            model_call_id, part_refs,
             content_block_index=content_block_index,
             item_index=item_index,
             provider_item_id=reasoning_item_id,

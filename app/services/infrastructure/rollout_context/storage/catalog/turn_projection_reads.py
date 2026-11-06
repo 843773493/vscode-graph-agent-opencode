@@ -119,7 +119,8 @@ class TurnProjectionReadMixin:
             "membership.visible, membership.source_kind, "
             "selected_turn.turn_id, selected_turn.final_message_sequence, "
             "EXISTS(SELECT 1 FROM message_projections canonical_projection "
-            "WHERE canonical_projection.message_sequence = t.final_message_sequence) "
+            "WHERE canonical_projection.message_sequence = t.final_message_sequence), "
+            "item.projection_manifest_json "
             "FROM turns t "
             "LEFT JOIN messages m ON m.message_sequence = t.final_message_sequence "
             "LEFT JOIN item_catalog item ON item.jsonl_offset = m.jsonl_offset "
@@ -156,7 +157,7 @@ class TurnProjectionReadMixin:
             "SELECT t.turn_id, rb.message_sequence, rb.content_block_index, "
             "rb.item_index, rb.carrier_type, rb.reasoning_text, rb.summary_text, "
             "rb.signature_present, rb.encrypted_length, rb.item_id, ic.item_id, "
-            "ic.item_sequence, ic.created_at, ic.projection_manifest_json, "
+            "ic.item_sequence, ic.created_at, "
             "membership.logical_item_ordinal "
             "FROM turns AS t "
             "JOIN turn_records AS tr ON tr.turn_id = t.turn_id "
@@ -284,12 +285,14 @@ class TurnProjectionReadMixin:
             raise RuntimeError(
                 f"turns projection 缺少 canonical TurnRecord: {set(result) - projected_turn_ids}"
             )
+        final_manifests: dict[str, object] = {}
         for (
             turn_id, final_sequence, text, truncated, message_id, message_turn_id,
             item_id, item_turn_id, semantic_kind, item_status,
             final_item_sequence, final_item_created_at,
             final_logical_item_ordinal, final_visible, final_source_kind,
             selected_turn_id, selected_final_sequence, has_canonical_projection,
+            final_item_projection_manifest_json,
         ) in final_rows:
             turn_id = strict_text(turn_id, field="turns.turn_id")
             final_sequence = strict_optional_non_negative_int(
@@ -359,11 +362,12 @@ class TurnProjectionReadMixin:
                 final_logical_item_ordinal,
                 field=f"context_view_items.logical_item_ordinal:{view_id}/{item_id}",
             )
+            final_manifests[turn_id] = final_item_projection_manifest_json
         discarded_activity_indices, seen_reasoning_source_refs = (
             _merge_activity_items(result, tool_rows, activity_rows)
         )
         _merge_final_reasoning(
-            result, final_reasoning_rows, seen_reasoning_source_refs
+            result, final_reasoning_rows, seen_reasoning_source_refs, final_manifests
         )
         _finalize_projections(result, discarded_activity_indices)
         return result
