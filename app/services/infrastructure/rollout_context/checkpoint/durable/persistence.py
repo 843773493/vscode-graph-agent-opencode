@@ -440,19 +440,21 @@ class RolloutCheckpointPersistenceMixin:
                 (row for row in parent_members if row[1] == 1),
                 key=lambda row: strict_non_negative_int(row[2], field="context_view_items.context_ordinal"),
             )]
-            if messages_state != "view" and locator_view is not None:
+            if current_messages is not None and messages_state != "view" and locator_view is not None:
                 # messages view 用末尾 anchor 定位完整消息。移除消息时必须
                 # 同时移除其 typed group，不能留下多工具声明的前半组。
-                previous_items = {row[0] for row in connection.execute(
+                # 先排除本次仍选中的 anchor，只展开被移除的组；追加消息不应
+                # 反复展开全部旧组。纯继承已验证完整 selection，无需计算删除项。
+                removed_items = {row[0] for row in connection.execute(
                     "SELECT member.item_id FROM context_view_items previous "
                     "JOIN item_catalog anchor ON anchor.item_id=previous.item_id "
                     "JOIN item_catalog member ON member.item_id=anchor.item_id OR ("
                     "anchor.message_group_id IS NOT NULL AND member.message_group_id=anchor.message_group_id "
                     "AND member.execution_id=anchor.execution_id AND member.turn_id IS anchor.turn_id) "
-                    "WHERE previous.view_id=? AND previous.visible=1",
-                    (locator_view[0],),
-                )}
-                removed_items = previous_items - set(batch.item_ids)
+                    "WHERE previous.view_id=? AND previous.visible=1 "
+                    "AND previous.item_id NOT IN (SELECT value FROM json_each(?))",
+                    (locator_view[0], _json(batch.item_ids)),
+                )} - set(batch.item_ids)
                 inherited = [item_id for item_id in inherited if item_id not in removed_items]
             context_selection = compaction_selection if compaction_selection is not None else (
                 *inherited, *(item_id for item_id in batch.item_ids if item_id not in parent_item_ids)
