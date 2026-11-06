@@ -27,14 +27,14 @@ def _merge_activity_items(
 ) -> tuple[dict[str, set[int]], dict[str, set[tuple[str | None, str]]]]:
     """归并 canonical activity item，返回 shadow 索引与 reasoning 源引用表。"""
 
-    tool_by_item: dict[tuple[str, str], list[dict[str, object]]] = {}
+    tool_by_item: dict[
+        tuple[str, str], tuple[ItemProjectionManifest, list[dict[str, object]]]
+    ] = {}
     tool_by_call_id: dict[tuple[str, str | None, str], dict[str, object]] = {}
     tool_by_model_call_index: dict[tuple[str, str, int], dict[str, object]] = {}
     canonical_tools_by_model_call: dict[
         tuple[str, str], list[dict[str, object]]
     ] = {}
-    previous_tool_item_id: str | None = None
-    model_call_id: str | None = None
     for (
         turn_id,
         anchor_item_id,
@@ -65,13 +65,15 @@ def _merge_activity_items(
                 call_index, field=f"tool_calls.call_index:{call_id}"
             ),
         }
-        # 同一消息的工具行来自同一 catalog item；连续成员共用一次 manifest 解析。
-        # 只在本次读取中复用，相邻消息或后续请求仍重新校验。
-        if anchor_item_id != previous_tool_item_id:
-            tool_identity = ItemProjectionManifest.from_dict(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool")).projection_identity
-            model_call_id = tool_identity.model_call_id if tool_identity is not None else None
-            previous_tool_item_id = anchor_item_id
-        tool_by_item.setdefault((turn_id, anchor_item_id), []).append(tool)
+        # 工具和 activity 行在同一快照内连接同一 catalog item，按 item 身份
+        # 共享一次解析；只保留本次归并结果，不跨请求缓存或按展示消息 ID 复用。
+        key = (turn_id, anchor_item_id)
+        if key not in tool_by_item:
+            tool_by_item[key] = (ItemProjectionManifest.from_dict(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool")), [])
+        manifest, tools = tool_by_item[key]
+        tool_identity = manifest.projection_identity
+        model_call_id = tool_identity.model_call_id if tool_identity is not None else None
+        tools.append(tool)
         tool_by_call_id[(turn_id, model_call_id, call_id)] = tool
         tool_by_model_call_index[
             (turn_id, model_call_id, tool["call_index"])
@@ -103,7 +105,8 @@ def _merge_activity_items(
     ) in activity_rows:
         turn_id = strict_text(turn_id, field="item_catalog.turn_id")
         semantic_kind = strict_text(semantic_kind, field=f"item_catalog.semantic_kind:{item_id}")
-        manifest = ItemProjectionManifest.from_dict(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
+        tool_group = tool_by_item.get((turn_id, item_id))
+        manifest = tool_group[0] if tool_group is not None else ItemProjectionManifest.from_dict(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
         identity = manifest.projection_identity
         projection_group = manifest.projection_group
         producer_ref = _json_object(
@@ -161,8 +164,8 @@ def _merge_activity_items(
         projection_message_id = identity.projection_message_id if identity is not None else None
         activity_model_call_id = identity.model_call_id if identity is not None else None
         matching_tools = (
-            tool_by_item.get((turn_id, item_id), [])
-            if isinstance(projection_message_id, str)
+            tool_by_item[(turn_id, item_id)][1]
+            if isinstance(projection_message_id, str) and (turn_id, item_id) in tool_by_item
             else []
         )
         block_ordinal = (
