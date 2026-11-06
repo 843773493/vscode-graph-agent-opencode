@@ -27,10 +27,21 @@ const page = (path, hits = [], extra = {}) => ({ node: { uri: path, resource_sha
 const files = (target, names, extra = {}) => page(target.uri, [], { entries: names.map(name => ({ uri: target.uri + '/' + name, resource_shape: 'file', operations: ['read'] })), ...extra });
 
 /** 仅提供显式领域页资产；生产 Provider、共享 SSE 消费及其校验均实际运行。 */
-async function withTransport(callback, asset = async target => page(target.uri), diagnostic = {}) {
-  const calls = [], paths = [];
-  const routes = spyOn(gateway, 'resolveWorkspace');
-  const direct = spyOn(gateway, 'request');
+async function withTransport(callback, asset = async target => page(target.uri), diagnostic = {}, expectedMetadata = [], metadataReply = paths => paths) {
+  const calls = [], paths = [], metadata = [], resolved = [];
+  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async owner => {
+    resolved.push({ gatewayId: owner.gatewayId, workspaceId: owner.workspaceId });
+    return JSON.stringify([owner.gatewayId, owner.workspaceId]);
+  });
+  const direct = spyOn(gateway, 'request').mockImplementation(async (path, init, workspaceKey) => {
+    expect(path).toBe('/api/v1/workspace/files/references'); expect(init.method).toBe('POST');
+    const [gatewayId, workspaceId] = JSON.parse(workspaceKey), owner = { gatewayId, workspaceId };
+    const request = JSON.parse(init.body);
+    expect(Object.keys(request)).toEqual(['paths']); expect(request.paths.length).toBeLessThanOrEqual(100);
+    expect(request.paths.every(path => path.startsWith(root(owner) + '/'))).toBe(true);
+    metadata.push({ owner, paths: request.paths });
+    return { uris: metadataReply(request.paths, owner) };
+  });
   installSessionApiFetchMock(async ({ path, init }) => {
     paths.push(path);
     if (path !== '/api/gateway/search') throw new Error(`文件搜索出现旧请求：${path}`);
@@ -70,12 +81,44 @@ async function withTransport(callback, asset = async target => page(target.uri),
   try {
     const result = await callback(calls);
     expect(paths.every(path => path === '/api/gateway/search')).toBe(true);
-    expect(routes).not.toHaveBeenCalled(); expect(direct).not.toHaveBeenCalled();
+    expect(metadata).toEqual(expectedMetadata);
+    expect(resolved).toEqual(expectedMetadata.map(batch => batch.owner));
+    expect(direct).toHaveBeenCalledTimes(expectedMetadata.length);
+    expect(routes).toHaveBeenCalledTimes(expectedMetadata.length);
     return result;
   } finally { unwrapSessionApiFetch(); routes.mockRestore(); direct.mockRestore(); }
 }
 
 describe('唯一 SearchService 文件联邦合同（网络页为显式资产）', () => {
+  test('owner规范回执同时归一目录、局部排除和额外文件，按规范模型冻结覆盖且不查询B', async () => {
+    const canonicalRoot = `boxteam://workspace/${ownerA.workspaceId}/resources/files/root`;
+    const canonicalUri = (owner, name) => workspaceFileUri(owner, canonicalRoot + '/' + name, canonicalRoot);
+    const draft = model(canonicalUri(ownerA, 'Mixed/Doc.txt'), 'removed in A');
+    const other = model(canonicalUri(ownerB, 'Mixed/Doc.txt'), 'needle B');
+    const f = fixture([draft, other]), folder = uri(ownerA, 'mixed'), extra = uri(ownerA, 'mixed/doc.txt');
+    try {
+      await withTransport(async calls => {
+        const progress = [], result = await f.search.textSearch(query({
+          folderQueries: [{ folder, includePattern: { '*.txt': true }, excludePattern: [{ folder, pattern: { 'skip*': true } }] }],
+          extraFileResources: [extra],
+        }), undefined, item => progress.push(item));
+        expect(result.results.map(item => item.resource.toString())).toEqual([canonicalUri(ownerA, 'Mixed/Remaining.txt').toString()]);
+        expect(progress.map(item => item.resource.toString())).toEqual(result.results.map(item => item.resource.toString()));
+        expect([draft.calls, other.calls]).toEqual([1, 0]); expect(calls).toHaveLength(1);
+        expect(calls[0].request.scope.owners).toEqual([{ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId }]);
+        const [target] = calls[0].request.queries[0].file_targets;
+        expect(target.target.uri).toBe(canonicalRoot + '/Mixed');
+        expect(target.target.search_options.include_globs).toEqual(['*.txt']);
+        expect(target.target.search_options.exclude_globs).toEqual(['skip*']);
+        expect(target.target.search_options.excluded_resource_uris).toEqual([canonicalRoot + '/Mixed/Doc.txt']);
+        expect(JSON.stringify(calls)).not.toContain('removed in A');
+      }, async target => page(target.uri, [hit(target.uri + '/Remaining.txt')], { entries: [{
+        uri: target.uri + '/Remaining.txt', canonical_uri: canonicalRoot + '/Mixed/Remaining.txt', resource_shape: 'file', operations: ['read'],
+      }] }), {}, [{ owner: ownerA, paths: [root(ownerA) + '/mixed', root(ownerA) + '/mixed', root(ownerA) + '/mixed/doc.txt'] }],
+      paths => paths.map(path => path.replace(root(ownerA), canonicalRoot).replace('/mixed/doc.txt', '/Mixed/Doc.txt').replace('/mixed', '/Mixed')));
+    } finally { f.instantiation.dispose(); draft.dispose(); other.dispose(); }
+  });
+
   test('真实 singleton 和 file/text Provider，模型首次 progress 限精确 owner；异步一次提交全部根', async () => {
     const a = model(uri(ownerA, 'same.txt'), '🧪 needle A'), b = model(uri(ownerB, 'same.txt'), 'needle B');
     const native = model(URI.parse('workbench:/same.txt'), 'needle IndexedDB'), f = fixture([a, b, native]);
@@ -176,7 +219,8 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         expect(second.queries).toEqual(first.queries); expect(first.queries[0].limit).toBe(500);
         expect(second.deadline_at).toBe(first.deadline_at);
       }, async (target, cursor) => files(target, [target.uri.endsWith('/one') ? 'page.txt' : cursor ? 'page2.md' : 'page1.md'],
-        target.uri.endsWith('/two') && !cursor ? { truncated: true, next_cursor: 'two-next' } : {}));
+        target.uri.endsWith('/two') && !cursor ? { truncated: true, next_cursor: 'two-next' } : {}), {},
+      [{ owner: ownerA, paths: ['one', 'two'].map(name => root(ownerA) + '/' + name) }]);
     } finally { f.instantiation.dispose(); }
   });
 
@@ -202,7 +246,8 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         expect(result.results.map(item => item.resource.toString()).sort()).toEqual([
           ...['file.txt', 'src/file.txt', 'src/nested/file.txt'].map(name => uri(ownerA, name).toString()), uri(ownerB, 'file.txt').toString(),
         ].sort());
-      }, async target => files(target, ['file.txt']));
+      }, async target => files(target, ['file.txt']), {}, [{ owner: ownerA,
+        paths: [...(reversed ? ['src', 'src/nested'] : ['src/nested', 'src']), 'file.txt', 'file.txt'].map(name => root(ownerA) + '/' + name) }]);
     } finally { f.instantiation.dispose(); }
   });
 
@@ -249,10 +294,11 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         expect(exact[0].target.uri).toBe(workspaceFileSource(disk).path);
         expect(exact[0].target.search_options.excluded_subtree_uris).toEqual([]);
         expect(exact[0].target.search_options.include_globs).toEqual([]);
-      });
+      }, undefined, {}, Array.from({ length: 2 }, () => ({ owner: ownerA, paths: [root(ownerA) + '/src'] })));
       await withTransport(async () => {
         await expect(f.search.fileSearch({ type: 1, folderQueries: folders, filePattern: 'keep' })).rejects.toThrow('目录或过滤范围');
-      }, async target => files(target, target.uri === root(ownerA) ? ['src/keep.md'] : []));
+      }, async target => files(target, target.uri === root(ownerA) ? ['src/keep.md'] : []), {},
+      [{ owner: ownerA, paths: [root(ownerA) + '/src'] }]);
     } finally { f.instantiation.dispose(); }
   });
 

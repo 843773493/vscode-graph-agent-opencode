@@ -1,18 +1,24 @@
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { Sequencer } from '../upstream/src/vs/base/common/async.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encodeHex, VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import { getMediaMime } from '../upstream/src/vs/base/common/mime.js';
 import { Event, Emitter } from '../upstream/src/vs/base/common/event.js';
 import { toDisposable, IDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
-import { isEqualOrParent } from '../upstream/src/vs/base/common/resources.js';
+import type { IUriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
+import type { IUntypedEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
+import type { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
+import type { IEditorGroup } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import type { IWorkingCopyBackupService } from '../upstream/src/vs/workbench/services/workingCopy/common/workingCopyBackup.js';
 import { newWriteableStream, ReadableStreamEvents } from '../upstream/src/vs/base/common/stream.js';
 import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability, IFileReadStreamOptions, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult } from '../upstream/src/vs/platform/files/common/files.js';
-import type { WorkspaceFileContentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { WorkspaceFileContentDTO, WorkspaceFileReferencesDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
 import { getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
+import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
 
 const scheme = 'boxteam-file';
@@ -42,6 +48,120 @@ export function workspaceFileSource(resource: URI): WorkspaceOwner & { path: str
       .replace(/[!'()*]/g, character => '%' + character.charCodeAt(0).toString(16).toUpperCase())).join('/') : '') };
 }
 
+/** 备份复用原完整读取建立的 CAS；不为热退出重新读取或计算文件 hash。 */
+export function workspaceFileRevisionForBackup(files: IFileService, resource: URI): string | undefined {
+  if (resource.scheme !== scheme) return undefined;
+  const provider = files.getProvider(scheme);
+  if (!(provider instanceof WorkspaceFiles)) throw new Error('工作区文件 Provider 未注册，不能备份保存基线');
+  return provider.revisionForBackup(resource);
+}
+
+export function restoreWorkspaceFileRevision(files: IFileService, resource: URI, revision: string | undefined): void {
+  if (resource.scheme !== scheme) return;
+  const provider = files.getProvider(scheme);
+  if (!(provider instanceof WorkspaceFiles)) throw new Error('工作区文件 Provider 未注册，不能恢复保存基线');
+  provider.restoreRevision(resource, revision);
+}
+
+/** 每次准入按 owner 批量取规范引用；结果只沿本次调用传递，不保存身份缓存。 */
+export async function canonicalWorkspaceFileResources(resources: readonly URI[], signal?: AbortSignal): Promise<URI[]> {
+  const result = [...resources];
+  const groups = new Map<string, { source: ReturnType<typeof workspaceFileSource>; indices: number[] }>();
+  resources.forEach((resource, index) => {
+    if (resource.scheme !== scheme) return;
+    const source = workspaceFileSource(resource), key = JSON.stringify([source.gatewayId, source.workspaceId]);
+    if (source.path === source.root) return;
+    const group = groups.get(key) ?? { source, indices: [] };
+    group.indices.push(index); groups.set(key, group);
+  });
+  await Promise.all([...groups.values()].map(async ({ source, indices }) => {
+    const workspaceKey = await gateway.resolveWorkspace(source, signal);
+    for (let offset = 0; offset < indices.length; offset += 100) {
+      signal?.throwIfAborted();
+      const batch = indices.slice(offset, offset + 100);
+      const reply = await gateway.request<WorkspaceFileReferencesDTO>('/api/v1/workspace/files/references', {
+        method: 'POST', signal, body: JSON.stringify({ paths: batch.map(index => workspaceFileSource(resources[index]).path) }),
+      }, workspaceKey);
+      if (reply.uris.length !== batch.length) throw new Error('文件规范引用响应与批量输入不配对');
+      batch.forEach((index, position) => {
+        const original = workspaceFileSource(resources[index]);
+        const root = resourceFileRootUri(reply.uris[position]);
+        if (!root) throw new Error('文件规范引用响应缺少 owner 文件根');
+        const canonical = workspaceFileUri(original, reply.uris[position], root).with({ query: resources[index].query });
+        result[index] = canonical.path === resources[index].path ? resources[index] : canonical;
+      });
+    }
+  }));
+  return result;
+}
+
+/** 复用原输入结构；diff／分屏／merge 的所有文件在同次 owner 准入中归一。 */
+export async function canonicalWorkspaceFileInputs(inputs: readonly IUntypedEditorInput[]): Promise<IUntypedEditorInput[]> {
+  const resources: URI[] = [];
+  function project<T extends IUntypedEditorInput>(input: T, resource: (value: URI) => URI): T {
+    if ('original' in input && 'modified' in input) return { ...input, original: project(input.original, resource), modified: project(input.modified, resource) };
+    if ('primary' in input && 'secondary' in input) return { ...input, primary: project(input.primary, resource), secondary: project(input.secondary, resource) };
+    if ('input1' in input && 'input2' in input) return { ...input, input1: project(input.input1, resource), input2: project(input.input2, resource), base: project(input.base, resource), result: project(input.result, resource) };
+    if ('resources' in input) return { ...input, resources: input.resources?.map(item => ({ ...item, ...project(item, resource) })) };
+    return 'resource' in input && input.resource ? { ...input, resource: resource(input.resource) } : input;
+  }
+  inputs.forEach(input => project(input, value => { resources.push(value); return value; }));
+  const canonical = await canonicalWorkspaceFileResources(resources);
+  let index = 0;
+  return inputs.map(input => {
+    let changed = false;
+    const projected = project(input, value => { const next = canonical[index++]; changed ||= value !== next; return next; });
+    return changed ? projected : input;
+  });
+}
+
+// 原编辑器组可并发恢复同一文件；只串行化恢复事务，不保存 URI 身份事实。
+const restoredFiles = new Sequencer();
+
+/** 原同步反序列化后、首次模型取得前，迁移原备份并交原编辑器组替换输入。 */
+export function canonicalRestoredWorkspaceFiles(group: IEditorGroup, create: (input: IUntypedEditorInput) => EditorInput,
+  files: IFileService, backups: IWorkingCopyBackupService, identity: IUriIdentityService,
+  restoreViewState: (source: EditorInput, target: EditorInput) => object | undefined): Promise<void> {
+  return restoredFiles.queue(async () => {
+    const editors = group.editors.map(editor => ({ editor, input: editor.toUntyped({ preserveViewState: group.id }) })).filter(
+      (entry): entry is { editor: EditorInput; input: IUntypedEditorInput } => !!entry.input);
+    // 连同无标签的热退出备份一起归一，原 BackupTracker 随后仍负责恢复它们。
+    const identifiers = (await backups.getBackups()).filter(backup => backup.resource.scheme === scheme);
+    const inputs = await canonicalWorkspaceFileInputs([...editors.map(entry => entry.input), ...identifiers.map(({ resource }) => ({ resource }))]);
+    const key = (resource: URI, typeId: string) => JSON.stringify([identity.extUri.getComparisonKey(resource), typeId]);
+    const targets = new Set<string>();
+    const migrations = identifiers.flatMap((source, index) => {
+      const resource = (inputs[editors.length + index] as { resource: URI }).resource;
+      if (identity.extUri.isEqual(source.resource, resource)) return [];
+      const target = { resource, typeId: source.typeId }, targetKey = key(resource, source.typeId);
+      if (backups.hasBackupSync(target) || targets.has(targetKey)) {
+        throw new Error(`文件恢复的规范目标已有草稿备份，已保留双方：${source.resource.toString()} → ${resource.toString()}`);
+      }
+      targets.add(targetKey);
+      return [{ source, target }];
+    });
+    // references 允许未创建后缀；只有真实文件才能承接旧 URI 的未保存正文。
+    for (const { target } of migrations) {
+      if (!(await files.stat(target.resource)).isFile) throw new Error(`草稿备份的规范目标不是文件：${target.resource.toString()}`);
+    }
+    for (const { source, target } of migrations) {
+      const backup = await backups.resolve(source);
+      if (!backup) throw new Error(`文件恢复时原草稿备份不可读取，未删除原键：${source.resource.toString()}`);
+      // versionId 仅属于原运行期缓存，磁盘备份不保存它；正文和 metadata 按原合同迁移。
+      await backups.backup(target, backup.value, undefined, backup.meta);
+      await backups.discardBackup(source);
+    }
+    const replacements = editors.flatMap(({ editor, input }, index) => {
+      const canonical = inputs[index];
+      if (input === canonical) return [];
+      const replacement = create(canonical), viewState = restoreViewState(editor, replacement);
+      return [{ editor, replacement, options: { ...canonical.options, viewState: canonical.options?.viewState ?? viewState,
+        pinned: group.isPinned(editor), sticky: group.isSticky(editor), preserveFocus: true } }];
+    });
+    if (replacements.length) await group.replaceEditors(replacements);
+  });
+}
+
 class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability {
   readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.FileReadStream | FileSystemProviderCapabilities.PathCaseSensitive;
   readonly onDidChangeCapabilities = Event.None;
@@ -52,6 +172,14 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   // 仅完整正文读取能建立保存基线；stat/watch 和媒体范围读取不得推进它。
   private readonly revisions = new Map<string, string>();
   private readonly watches = new Map<string, FileWatch>();
+  constructor(private readonly identity: IUriIdentityService) { }
+  private key(resource: URI): string { return this.identity.extUri.getComparisonKey(resource); }
+  revisionForBackup(resource: URI): string | undefined { return this.revisions.get(this.key(resource)); }
+  restoreRevision(resource: URI, revision: string | undefined): void {
+    if (revision !== undefined && !/^[0-9a-f]{64}$/.test(revision)) throw new Error('草稿备份的文件 revision 不是有效的原字节 SHA-256');
+    if (revision === undefined) this.revisions.delete(this.key(resource));
+    else this.revisions.set(this.key(resource), revision);
+  }
 
   private async access<T>(resource: URI, action: (workspaceKey: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const source = workspaceFileSource(resource);
@@ -102,7 +230,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     if (!range) {
       // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
       const revision = encodeHex(VSBuffer.wrap(sha256(bytes)));
-      this.revisions.set(resource.toString(), revision);
+      this.revisions.set(this.key(resource), revision);
     }
     return bytes;
   }
@@ -118,11 +246,11 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     return stream;
   }
   async writeFile(resource: URI, bytes: Uint8Array): Promise<void> {
-    const expectedRevision = this.revisions.get(resource.toString());
+    const expectedRevision = this.revisions.get(this.key(resource));
     if (!expectedRevision) throw new Error('保存前必须先读取后端文件，不能跳过 revision 校验');
     try {
       const file = await this.content(resource, { method: 'PUT', body: JSON.stringify({ content: new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected_revision: expectedRevision }) });
-      this.revisions.set(resource.toString(), file.revision);
+      this.revisions.set(this.key(resource), file.revision);
       this.changes.fire([{ resource, type: FileChangeType.UPDATED }]);
     } catch (error) {
       if (error instanceof GatewayRequestError && error.status === 409) {
@@ -135,7 +263,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   }
   watch(resource: URI): IDisposable {
     const source = workspaceFileSource(resource);
-    const key = workspaceFileUri(source, source.root, source.root).toString();
+    const key = this.key(workspaceFileUri(source, source.root, source.root));
     let watch = this.watches.get(key);
     if (!watch) {
       watch = { controller: new AbortController(), resources: new Map() };
@@ -145,7 +273,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
         if (!active.controller.signal.aborted) this.watchErrors.fire(`文件监听失败：${error instanceof Error ? error.message : String(error)}`);
       });
     }
-    const name = resource.toString(), entry = watch.resources.get(name) ?? { resource, references: 0 };
+    const name = this.key(resource), entry = watch.resources.get(name) ?? { resource, references: 0 };
     entry.references++;
     watch.resources.set(name, entry);
     return toDisposable(() => {
@@ -173,7 +301,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
           // 原观察通道也可覆盖默认工作区；仅接收本次明确根的事件。
           if (change.path !== source.root && !change.path.startsWith(source.root + '/')) return [];
           const resource = workspaceFileUri(source, change.path, source.root);
-          if (!watched.some(entry => isEqualOrParent(resource, entry.resource) || isEqualOrParent(entry.resource, resource))) return [];
+          if (!watched.some(entry => this.identity.extUri.isEqualOrParent(resource, entry.resource) || this.identity.extUri.isEqualOrParent(entry.resource, resource))) return [];
           const type = change.kind === 'create' ? FileChangeType.ADDED : change.kind === 'delete' ? FileChangeType.DELETED : FileChangeType.UPDATED;
           return [{ resource, type }];
         });
@@ -189,6 +317,6 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   async rename(): Promise<void> { throw new Error('文本资源不支持直接重命名后端文件'); }
 }
 
-export function installBackendFiles(files: IFileService): void {
-  files.registerProvider(scheme, new WorkspaceFiles());
+export function installBackendFiles(files: IFileService, identity: IUriIdentityService): void {
+  files.registerProvider(scheme, new WorkspaceFiles(identity));
 }

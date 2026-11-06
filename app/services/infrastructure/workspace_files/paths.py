@@ -173,6 +173,28 @@ class WorkspaceFilePaths:
             raise RuntimeError("目标文件 owner 尚未装配原生 Gateway 目录根绑定")
         return self.bindings
 
+    def canonical_uri(self, parsed: ParsedResourceUri, root: Path) -> str:
+        """目标 owner 只归一现存逻辑路径段；未创建后缀保留请求拼写。"""
+        if os.name != "nt" or parsed.kind != "files":
+            return parsed.display_uri
+        from app.runtime.windows_fs import entry_name
+
+        parts: list[str] = []
+        current = root
+        for index, name in enumerate(parsed.tail_segments[1:]):
+            current = current / name
+            try:
+                actual = entry_name(native_io_path(current))
+            except FileNotFoundError:
+                # 新建操作沿原父目录 holder 发布后才产生文件身份，不能猜测未存在的段。
+                parts.extend(parsed.tail_segments[index + 1:])
+                break
+            parts.append(actual)
+            current = current.with_name(actual)
+        return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+                                    tail_segments=(parsed.tail_segments[0], *parts),
+                                    gateway_authority=parsed.gateway_authority)
+
     def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path], bool]]:
         if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":
             root, _ = self.resolve(resource_uri.file_uri_root(root_uri), materialize=False)
@@ -253,7 +275,7 @@ class WorkspaceFilePaths:
                     raise ValueError(f"不允许编辑符号链接: {parsed.display_uri}")
                 target = safe_join(root, *parsed.tail_segments[1:])
                 self.require_public_path(target)
-                return target, parsed.display_uri
+                return target, self.canonical_uri(parsed, root)
         if not value and not allow_empty:
             raise ValueError("文件路径不能为空")
         with file_access(None, "目标解析"):

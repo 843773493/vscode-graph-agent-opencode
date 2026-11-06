@@ -346,6 +346,8 @@ class ResourceNavigation:
         if _entry_identity(root.joinpath(*children), path) in subtrees:
             raise ResourceUriResolveError("scope_mismatch", "独立查询子树必须严格位于当前查询根以内")
         node = self._node(parsed, path, include_stat=request.operation == "describe")
+        if parsed.kind == "files" and self._file_paths is not None:
+            node = node.model_copy(update={"canonical_uri": self._file_paths.canonical_uri(parsed, root)})
         if request.operation not in node.operations:
             raise ResourceUriResolveError("capability_denied", "资源不允许所请求的导航操作")
         if request.operation == "describe":
@@ -378,6 +380,11 @@ class ResourceNavigation:
             # _walk 仍按需分类，不能为一页少量结果预先 realpath 整个目录。
             with private_paths as is_private:
                 for child_node, hit, position in self._search_items(root, children, parsed, node, request, deadline, pattern, excluded, subtrees, resume, is_private):
+                    if node.canonical_uri is not None:
+                        # 扫描的子段直接来自真实目录项；只复用本次根的规范拼写，不逐文件重查。
+                        child_node = child_node.model_copy(update={
+                            "canonical_uri": node.canonical_uri + child_node.uri[len(node.uri):],
+                        })
                     match = hit.match if hit is not None else None
                     relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
                     name = "/".join(relative) or parsed.tail_segments[-1]

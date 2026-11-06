@@ -109,7 +109,10 @@ describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
       const absolute = join(workbench, 'upstream', path), original = await readFile(absolute, 'utf8');
       const generated = await transform(absolute, original);
       expect(generated).not.toBe(original);
-      await expect(transform(absolute, '')).rejects.toThrow('恰好一次');
+      const missingAnchor = path.endsWith('/mcpCommands.ts') ? '上游 MCP 命令 seam 缺失'
+        : path.endsWith('/mcpServerActions.ts') ? '上游 MCP InstallAction 边界缺失'
+        : path.endsWith('/mcpServerEditor.ts') ? '上游 MCP 详情 action import 锚点缺失' : '恰好一次';
+      await expect(transform(absolute, '')).rejects.toThrow(missingAnchor);
       await expect(transform(absolute, original + original)).rejects.toThrow('恰好一次');
       expect(await readFile(absolute, 'utf8')).toBe(original);
     }

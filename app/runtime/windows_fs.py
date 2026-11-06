@@ -48,6 +48,22 @@ def rename_entry_exclusive(source: Path, target: Path) -> None:
         win32file.MoveFileEx(str(source), str(target), win32file.MOVEFILE_WRITE_THROUGH)
 
 
+def entry_name(path: Path) -> str:
+    """取原逻辑目录项拼写；不解析链接或按文件 ID 合并入口。"""
+    import win32file
+
+    # 先让真实 I/O 核验目录自身的大小写规则；FindFilesW 的匹配不能代替存在性检查。
+    path.lstat()
+    with _native_errors(path):
+        entries = win32file.FindFilesW(str(path))
+    exact = [entry[8] for entry in entries if entry[8] == path.name]
+    if exact:
+        return exact[0]
+    if len(entries) != 1:
+        raise OSError(f"文件目录项的规范拼写不唯一: {path}")
+    return entries[0][8]
+
+
 def private_acl_is_current(path: Path, *, is_directory: bool) -> bool:
     import ntsecuritycon
     import win32con

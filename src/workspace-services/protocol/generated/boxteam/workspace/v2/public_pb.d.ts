@@ -10341,6 +10341,13 @@ export declare type ResourceNavigationNodeDTO = Message<"boxteam.workspace.v2.Re
    * @generated from field: optional boxteam.workspace.v2.ResourceNavigationStatDTO stat = 5;
    */
   stat?: ResourceNavigationStatDTO | undefined;
+
+  /**
+   * 目标 owner 内的逐段规范 URI；完整 owner 沿原目标绑定，保留逻辑链接入口，uri 仍回执原请求。
+   *
+   * @generated from field: optional string canonical_uri = 6;
+   */
+  canonicalUri?: string | undefined;
 };
 
 /**

@@ -74,7 +74,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
 
     node_fields = public_pb2.ResourceNavigationNodeDTO.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in node_fields.items()} == {
-        "uri": 1, "resource_shape": 2, "operations": 3, "child_path": 4, "stat": 5,
+        "uri": 1, "resource_shape": 2, "operations": 3, "child_path": 4, "stat": 5, "canonical_uri": 6,
     }
     root = public_pb2.ResourceNavigationNodeDTO(
         uri=decoded_request.uri, resource_shape="directory",
@@ -82,6 +82,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
     )
     decoded_root = type(root).FromString(root.SerializeToString())
     assert decoded_root == root and decoded_root.HasField("child_path")
+    assert not decoded_root.HasField("canonical_uri")
     assert not decoded_root.HasField("stat")
     described_root = public_pb2.ResourceNavigationNodeDTO()
     described_root.CopyFrom(root)
@@ -95,6 +96,9 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
     )
     decoded_file = type(file).FromString(file.SerializeToString())
     assert decoded_file == file and not decoded_file.HasField("child_path")
+    file.canonical_uri = root.uri + "/Skill.md"
+    canonical_file = type(file).FromString(file.SerializeToString())
+    assert canonical_file.HasField("canonical_uri") and canonical_file.canonical_uri == root.uri + "/Skill.md"
 
     result_fields = public_pb2.ResourceNavigationResultDTO.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in result_fields.items()} == {

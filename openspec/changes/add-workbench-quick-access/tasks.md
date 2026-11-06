@@ -980,3 +980,9 @@
 - 文件正式页面已证明前缀emoji与裁短预览仍打开真实选区：UTF-16源列1204、状态栏码点列1203，实际复制为preview-target，零额外正文读取；当前原textMatch投影与已验实现一致，正文位置owner与原`%`Provider精确指纹不变，另补当前21项／327条Provider合同。消息／工具页面覆盖未打开child、超过64KiB的原文／结果、截断片段、多行与emoji、真实侧边组和滚动；双日志页面保留原来源、原行、追加及未选零查询证据。
 - 请求／Trace实际删除复用本轮两页；工具通过当前真实ASGI入口再验同长度改写及原件删除后的409，1 passed／19.51秒，保留既有依赖弃用警告。消息的view版本失效补当前同步／异步图替换、rewind及冷reader检查，3 passed／4.08秒；不手删canonical文件造另一条产品历史链。运行日志轮转／删除复用186项成功收据，相关owner及删除用例与当前精确指纹一致。
 - 原文件页面来自已接受产物，当前并非整树与旧构建一致；根局部选项／v2归属等后续改动由当前Provider合同及其它既有范围验收承接。仅收口本项，无生产修改、不重复完整页面或构建；精确原件、源码适用范围、命令及退出码见 `out/tests/temp/2026/11/05/content_selection_audit/artifacts/content-position-matrix-verification-060.json`。本项不替代Electron及第15／16组的完整验收。
+
+### 2026-11-06：目标 owner canonical 与原编辑器冷恢复（16.19 部分）
+
+- 文件引用与导航沿目标文件 owner 逐段取得真实大小写，保留 logical symlink 入口；新 canonical_uri 表达 owner 内规范 URI，原 uri 继续承担请求回执与跨 Gateway 引用。编辑器准入、直接 resolver、搜索 dirty overlay 和冷恢复共用规范身份，不增加逐文件 HTTP 或第二身份表。
+- 冷恢复复用原 WorkingCopyBackup、Pane／Memento 与已有 Provider SHA 保存基线：先写规范备份再移除旧键，目标备份冲突保留双方；不以当前磁盘重建草稿基线。Linux 正式 Workbench／真实 Gateway 页面通过，验证多入口同模型、owner／逻辑链接隔离、刷新后草稿／sticky／光标保留、保存200及外改后原SHA冲突409，pageErrors为空。
+- 后端 owner／导航／URI 合同268项、Provider53项／988断言、实际转换57份源码类型检查及协议生成一致性通过。Windows owner真实HTTP／大小写敏感目录等4项通过，正式构建79个扩展成功；Windows页面尚在Gateway启动阶段因既有受管PID与真实Backend PID不同而拒绝，未执行交互。391项公开合同通过，4项既有MCP roots／Skill descriptor fixture失败保留原件。完整命令、源码指纹和原始收据见 `out/tests/temp/2026/11/06/file_canonical_identity/artifacts/canonical-manifest.json`。Windows页面、Electron及16.19整项继续未完成。

@@ -141,6 +141,7 @@ class ResourceNavigationNodeDTO(BaseModel):
     operations: tuple[ResourceNavigationOperation, ...]
     child_path: Literal["file_segments"] | None = None
     stat: ResourceNavigationStatDTO | None = None
+    canonical_uri: NavigationResourceURI | None = None
 
 
 class ResourceNavigationMatchDTO(BaseModel):

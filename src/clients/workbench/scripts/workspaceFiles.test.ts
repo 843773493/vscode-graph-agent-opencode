@@ -4,6 +4,7 @@ import { joinPath, relativePath, isEqualOrParent } from '../upstream/src/vs/base
 import { FileService } from '../upstream/src/vs/platform/files/common/fileService.js';
 import { FileType, FileChangeType, type IFileChange } from '../upstream/src/vs/platform/files/common/files.js';
 import { NullLogService } from '../upstream/src/vs/platform/log/common/log.js';
+import { UriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentityService.js';
 import { gateway, GatewayRequestError } from '../src/agentApi.js';
 import { installBackendFiles, workspaceFileUri, workspaceFileSource } from '../src/workspaceFiles.js';
 import * as fileEvents from '../../web/src/api/stream/workspaceFileEvents.js';
@@ -18,7 +19,7 @@ const root = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resour
 // 通过原版 FileService 验证实际 provider 调用，不只测试投影函数。
 function fileService() {
   const files = new FileService(new NullLogService());
-  installBackendFiles(files);
+  installBackendFiles(files, new UriIdentityService(files));
   return files;
 }
 

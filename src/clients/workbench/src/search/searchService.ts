@@ -18,7 +18,7 @@ import { RemoteSearchService } from '../../upstream/src/vs/workbench/services/se
 import { DEFAULT_MAX_SEARCH_RESULTS, FileMatch, IAITextQuery, IFileQuery, ISearchComplete, ISearchProgressItem, ISearchService, ITextQuery, SearchProviderType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import { editorMatchesToTextSearchResults, getTextSearchMatchWithModelContext } from '../../upstream/src/vs/workbench/services/search/common/searchHelpers.js';
 import { WorkspaceSearchProvider } from './fileProvider.js';
-import { businessQuery, fileScheme, openResources, resourceInQuery, validateTextQuery } from './query.js';
+import { businessQuery, canonicalFileQuery, fileScheme, openResources, requiresCanonicalFileQuery, resourceInQuery, validateTextQuery } from './query.js';
 
 export class WorkspaceSearchService extends RemoteSearchService {
   private readonly businessProvider: WorkspaceSearchProvider;
@@ -53,6 +53,20 @@ export class WorkspaceSearchService extends RemoteSearchService {
     onProgress?: (item: ISearchProgressItem) => void, notebookFilesToIgnore?: ResourceSet,
     asyncNotebookFilesToIgnore?: Promise<ResourceSet>): { syncResults: ISearchComplete; asyncResults: Promise<ISearchComplete> } {
     if (!businessQuery(query)) return super.textSearchSplitSyncAsync(query, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore);
+    const deadlineAt = Date.now() + 10000;
+    if (requiresCanonicalFileQuery(query)) return { syncResults: { results: [], messages: [], limitHit: false },
+      asyncResults: canonicalFileQuery(query, token, deadlineAt).then(async canonical => {
+        const split = this.textSearchCanonical(canonical, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore, deadlineAt);
+        const remote = await split.asyncResults;
+        return { ...remote, results: [...split.syncResults.results, ...remote.results],
+          messages: [...split.syncResults.messages, ...remote.messages], limitHit: split.syncResults.limitHit || remote.limitHit };
+      }) };
+    return this.textSearchCanonical(query, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore, deadlineAt);
+  }
+
+  private textSearchCanonical(query: ITextQuery, token: CancellationToken, onProgress: ((item: ISearchProgressItem) => void) | undefined,
+    notebookFilesToIgnore: ResourceSet | undefined, asyncNotebookFilesToIgnore: Promise<ResourceSet> | undefined, deadlineAt: number
+  ): { syncResults: ISearchComplete; asyncResults: Promise<ISearchComplete> } {
     const identity = this.businessIdentity.extUri;
     query = validateTextQuery(query, identity);
     if (token.isCancellationRequested) throw new CancellationError();
@@ -100,7 +114,7 @@ export class WorkspaceSearchService extends RemoteSearchService {
           const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
           for (const resource of ignoredModels) covered.add(resource);
           for (const resource of ignored) covered.add(resource);
-          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered);
+          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt });
         } finally { this._store.delete(lifetime); }
       })();
       return { syncResults, asyncResults };

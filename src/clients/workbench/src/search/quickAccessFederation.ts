@@ -40,7 +40,7 @@ export function isContentSearchCategory(category: string): category is ContentSe
 function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, label: string): ResourceSearchItem[] {
   if (page.category === 'file' && page.files?.node) return page.files.entries.map(item => {
     if (item.resource_shape !== 'file') throw new Error('文件 Provider 返回了目录候选');
-    const resource = workspaceFileUri(owner, item.uri, page.files!.node!.uri);
+    const resource = workspaceFileUri(owner, item.canonical_uri ?? item.uri, page.files!.node!.canonical_uri ?? page.files!.node!.uri);
     const relative = resource.path.split('/').slice(3);
     return { kind: 'resource', resource, title: relative.at(-1)!, description: `${label} · ${relative.slice(0, -1).join('/')}`, detail: relative.join('/') };
   });

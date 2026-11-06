@@ -2396,7 +2396,11 @@ export interface ResourceNavigationNodeDTO {
     | string
     | undefined;
   /** 实际文件系统观察值；不读取正文，不充当保存时的 CAS revision。 */
-  stat?: ResourceNavigationStatDTO | undefined;
+  stat?:
+    | ResourceNavigationStatDTO
+    | undefined;
+  /** 目标 owner 内的逐段规范 URI；完整 owner 沿原目标绑定，保留逻辑链接入口，uri 仍回执原请求。 */
+  canonical_uri?: string | undefined;
 }
 
 export interface ResourceNavigationStatDTO {
@@ -19065,7 +19069,14 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
 };
 
 function createBaseResourceNavigationNodeDTO(): ResourceNavigationNodeDTO {
-  return { uri: "", resource_shape: "", operations: [], child_path: undefined, stat: undefined };
+  return {
+    uri: "",
+    resource_shape: "",
+    operations: [],
+    child_path: undefined,
+    stat: undefined,
+    canonical_uri: undefined,
+  };
 }
 
 export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = {
@@ -19078,6 +19089,7 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
         : [],
       child_path: isSet(object.child_path) ? globalThis.String(object.child_path) : undefined,
       stat: isSet(object.stat) ? ResourceNavigationStatDTO.fromJSON(object.stat) : undefined,
+      canonical_uri: isSet(object.canonical_uri) ? globalThis.String(object.canonical_uri) : undefined,
     };
   },
 
@@ -19098,6 +19110,9 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
     if (message.stat !== undefined) {
       obj.stat = ResourceNavigationStatDTO.toJSON(message.stat);
     }
+    if (message.canonical_uri !== undefined) {
+      obj.canonical_uri = message.canonical_uri;
+    }
     return obj;
   },
 
@@ -19113,6 +19128,7 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
     message.stat = (object.stat !== undefined && object.stat !== null)
       ? ResourceNavigationStatDTO.fromPartial(object.stat)
       : undefined;
+    message.canonical_uri = object.canonical_uri ?? undefined;
     return message;
   },
 };

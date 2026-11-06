@@ -1,13 +1,43 @@
 import * as glob from '../../upstream/src/vs/base/common/glob.js';
 import type { IExtUri } from '../../upstream/src/vs/base/common/resources.js';
+import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import type { ICommonQueryProps, IFolderQuery, ITextQuery } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import type { ResourceNavigationSearchOptions } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import { workspaceFileSource } from '../workspaceFiles.js';
+import { canonicalWorkspaceFileResources, workspaceFileSource } from '../workspaceFiles.js';
 
 export const fileScheme = 'boxteam-file';
+
+function queryResources(query: ICommonQueryProps<URI>): URI[] {
+  return [...query.folderQueries.flatMap(folder => [folder.folder, ...(folder.excludePattern ?? []).flatMap(exclude => exclude.folder ? [exclude.folder] : [])]),
+    ...(query.extraFileResources ?? [])];
+}
+
+/** 原根是 owner 已发布的不透明引用；用户追加的目录和额外文件才需要本次批量归一。 */
+export function requiresCanonicalFileQuery(query: ICommonQueryProps<URI>): boolean {
+  return queryResources(query).some(resource => { const source = workspaceFileSource(resource); return source.path !== source.root; });
+}
+
+export async function canonicalFileQuery<T extends ICommonQueryProps<URI>>(query: T, token: CancellationToken, deadlineAt: number): Promise<T> {
+  if (!requiresCanonicalFileQuery(query)) return query;
+  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort());
+  const timer = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
+  try {
+    if (token.isCancellationRequested) throw new CancellationError();
+    const resources = queryResources(query), canonical = await canonicalWorkspaceFileResources(resources, controller.signal);
+    const mapped = new Map(resources.map((resource, index) => [resource, canonical[index]]));
+    return { ...query, folderQueries: query.folderQueries.map(folder => ({ ...folder, folder: mapped.get(folder.folder)!,
+      excludePattern: folder.excludePattern?.map(exclude => ({ ...exclude, folder: exclude.folder ? mapped.get(exclude.folder)! : undefined })) })),
+      extraFileResources: query.extraFileResources?.map(resource => mapped.get(resource)!) };
+  } catch (error) {
+    if (token.isCancellationRequested) throw new CancellationError();
+    if (Date.now() >= deadlineAt) throw new Error('文件搜索超过本次总期限', { cause: error });
+    throw error;
+  } finally { clearTimeout(timer); cancellation.dispose(); }
+}
 
 export function businessQuery(query: ICommonQueryProps<URI>): boolean {
   const resources = [...query.folderQueries.map(folder => folder.folder), ...(query.extraFileResources ?? [])];

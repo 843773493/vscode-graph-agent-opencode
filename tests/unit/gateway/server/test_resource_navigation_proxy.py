@@ -559,6 +559,38 @@ def test_search_match_uris_are_qualified_and_must_belong_to_returned_files() -> 
         assert failure.value.code == "federation-malformed-frame"
 
 
+@pytest.mark.parametrize("invalid", [None, "authority", "workspace", "kind", "root", "depth", "grammar", "child_owner", "child_suffix", "child_without_root"])
+def test_canonical_file_reference_retains_target_owner_and_rejects_unpaired_frame(invalid: str | None) -> None:
+    root = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root"
+    requested, canonical = root + "/mIXED", root + "/Mixed"
+    node = {"uri": requested, "canonical_uri": canonical, "resource_shape": "directory", "operations": ["describe", "list"]}
+    entry = {"uri": requested + "/Doc.json", "canonical_uri": canonical + "/Doc.json", "resource_shape": "file", "operations": ["read"]}
+    result = ResourceNavigationResultDTO.model_validate({"node": node, "entries": [entry]})
+    if invalid is None:
+        qualified = qualify_navigation_result(result, uri=requested, gateway_id="gateway_target")
+        assert qualified.node.uri == requested.replace("boxteam://", "boxteam://gateway_target/")
+        assert qualified.node.canonical_uri == canonical
+        assert qualified.entries[0].canonical_uri == canonical + "/Doc.json"
+        return
+    bad_roots = {
+        "authority": canonical.replace("boxteam://", "boxteam://gateway_foreign/"),
+        "workspace": canonical.replace(WORKSPACE_ID, "01900000000070008000000000000099"),
+        "kind": canonical.replace("/files/", "/skills/"),
+        "root": canonical.replace("/root/", "/fs/"),
+        "depth": canonical + "/extra",
+        "grammar": "file:///private/untrusted-target",
+        "child_without_root": None,
+    }
+    if invalid in bad_roots:
+        result = result.model_copy(update={"node": result.node.model_copy(update={"canonical_uri": bad_roots[invalid]})})
+    else:
+        bad_child = entry["canonical_uri"].replace(WORKSPACE_ID, "01900000000070008000000000000099") if invalid == "child_owner" else canonical + "/Other.json"
+        result = result.model_copy(update={"entries": (result.entries[0].model_copy(update={"canonical_uri": bad_child}),)})
+    with pytest.raises(FederationError) as failure:
+        qualify_navigation_result(result, uri=requested, gateway_id="gateway_target")
+    assert failure.value.code == "federation-malformed-frame"
+
+
 @pytest.mark.parametrize("bad", ["uri", "entry", "match", "windows", "unc", "shape", "extra"])
 async def test_navigation_invalid_remote_frame_is_sanitized_at_http_boundary(navigation_proxy, navigation_relay: _NavigationRelay, bad: str) -> None:
     client, _, _ = navigation_proxy

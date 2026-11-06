@@ -3966,18 +3966,20 @@ class ResourceNavigationSearchOptions(_message.Message):
     def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ..., context_lines: _Optional[int] = ..., excluded_resource_uris: _Optional[_Iterable[str]] = ..., files_only: _Optional[bool] = ..., excluded_subtree_uris: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ResourceNavigationNodeDTO(_message.Message):
-    __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat")
+    __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat", "canonical_uri")
     URI_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_SHAPE_FIELD_NUMBER: _ClassVar[int]
     OPERATIONS_FIELD_NUMBER: _ClassVar[int]
     CHILD_PATH_FIELD_NUMBER: _ClassVar[int]
     STAT_FIELD_NUMBER: _ClassVar[int]
+    CANONICAL_URI_FIELD_NUMBER: _ClassVar[int]
     uri: str
     resource_shape: str
     operations: _containers.RepeatedScalarFieldContainer[str]
     child_path: str
     stat: ResourceNavigationStatDTO
-    def __init__(self, uri: _Optional[str] = ..., resource_shape: _Optional[str] = ..., operations: _Optional[_Iterable[str]] = ..., child_path: _Optional[str] = ..., stat: _Optional[_Union[ResourceNavigationStatDTO, _Mapping]] = ...) -> None: ...
+    canonical_uri: str
+    def __init__(self, uri: _Optional[str] = ..., resource_shape: _Optional[str] = ..., operations: _Optional[_Iterable[str]] = ..., child_path: _Optional[str] = ..., stat: _Optional[_Union[ResourceNavigationStatDTO, _Mapping]] = ..., canonical_uri: _Optional[str] = ...) -> None: ...
 
 class ResourceNavigationStatDTO(_message.Message):
     __slots__ = ("size", "modified_at_ms", "changed_at_ms")

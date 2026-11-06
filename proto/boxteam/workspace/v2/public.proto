@@ -2365,6 +2365,8 @@ message ResourceNavigationNodeDTO {
   optional string child_path = 4;
   // 实际文件系统观察值；不读取正文，不充当保存时的 CAS revision。
   optional ResourceNavigationStatDTO stat = 5;
+  // 目标 owner 内的逐段规范 URI；完整 owner 沿原目标绑定，保留逻辑链接入口，uri 仍回执原请求。
+  optional string canonical_uri = 6;
 }
 
 message ResourceNavigationStatDTO {

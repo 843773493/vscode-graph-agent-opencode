@@ -22,6 +22,12 @@ export const transformedSourcePaths = [
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/services/textfile/common/textEditorService.ts',
+  'src/vs/workbench/services/textfile/common/textFileEditorModel.ts',
+  'src/vs/workbench/services/editor/browser/editorResolverService.ts',
+  'src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts',
+  'src/vs/workbench/browser/parts/editor/editorGroupView.ts',
+  'src/vs/workbench/browser/parts/editor/editorPanes.ts',
+  'src/vs/workbench/browser/parts/editor/editorWithViewState.ts',
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   'src/vs/workbench/contrib/webview/common/webview.ts',
@@ -101,10 +107,70 @@ export function sourceTransform(root, productConfiguration, extensions) {
       const closeDatabase = 'this.onWillShutdownDisposables.add(toDisposable(() => indexedDB?.close()));';
       // 默认虚拟工作区与 vscode-userdata 一样由本地 IndexedDB 提供；额外配置缓存会留下关闭后的异步写入。
       contents = replaceOnce(contents, marker, `${marker}\nawait installWorkspaceFileSystem(fileService);`);
+      const identity = 'const uriIdentityService = new UriIdentityService(fileService);';
+      contents = replaceOnce(contents, identity, `${identity}\ninstallBackendFiles(fileService, uriIdentityService);`);
       contents = replaceOnce(contents, cacheSchemes, '[Schemas.file, Schemas.vscodeUserData, Schemas.tmp, workspaceFolder.scheme]');
       // pagehide 的同步 shutdown 仍会产生延迟日志；数据库连接由浏览器随文档释放，不能提前关闭并中止事务。
       contents = replaceOnce(contents, closeDatabase, '// IndexedDB 连接随浏览器文档释放，保留关闭期间日志和设置写入的机会。');
-      contents = `import { installWorkspaceFileSystem, workspaceFolder } from ${JSON.stringify(join(root, 'src/filesystem.js'))};\n` + contents;
+      contents = `import { installBackendFiles } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\nimport { installWorkspaceFileSystem, workspaceFolder } from ${JSON.stringify(join(root, 'src/filesystem.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/editor/browser/editorResolverService.ts')) {
+      const entry = 'async resolveEditor(editor: IUntypedEditorInput, preferredGroup: PreferredGroup | undefined): Promise<ResolvedEditor> {';
+      contents = replaceOnce(contents, entry, `${entry}\n[editor] = await canonicalWorkspaceFileInputs([editor]);`);
+      contents = `import { canonicalWorkspaceFileInputs } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/textfile/common/textFileEditorModel.ts')) {
+      contents = replaceOnce(contents, 'interface IBackupMetaData extends IWorkingCopyBackupMeta {',
+        'interface IBackupMetaData extends IWorkingCopyBackupMeta {\nboxteamFileRevision?: string;');
+      contents = replaceOnce(contents, 'return { meta, content };',
+        'const revision = workspaceFileRevisionForBackup(this.fileService, this.resource);\nif (meta && revision !== undefined) meta.boxteamFileRevision = revision;\nreturn { meta, content };');
+      const restore = 'private async doResolveFromBackup(backup: IResolvedWorkingCopyBackup<IBackupMetaData>, encoding: string, options?: ITextFileResolveOptions): Promise<void> {';
+      contents = replaceOnce(contents, restore, `${restore}\nrestoreWorkspaceFileRevision(this.fileService, this.resource, backup.meta?.boxteamFileRevision);`);
+      contents = `import { workspaceFileRevisionForBackup, restoreWorkspaceFileRevision } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts')) {
+      const entry = 'async createModelReference(resource: URI): Promise<IReference<IResolvedTextEditorModel>> {';
+      // FileEditorInput 先通过原 files.resolve 建立真实模型；沿该模型直接复用，不再向 owner 重复请求。
+      contents = replaceOnce(contents, entry, `${entry}\nif (!this.modelService.getModel(resource)) [resource] = await canonicalWorkspaceFileResources([resource]);`);
+      contents = `import { canonicalWorkspaceFileResources } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/editor/editorGroupView.ts')) {
+      const entry = 'private restoreEditors(from: IEditorGroupView | ISerializedEditorGroupModel | null, groupViewOptions?: IEditorGroupViewOptions): Promise<void> | undefined {';
+      contents = replaceOnce(contents, entry, `private async restoreEditors(from: IEditorGroupView | ISerializedEditorGroupModel | null, groupViewOptions?: IEditorGroupViewOptions): Promise<void> {
+try {
+  await this.instantiationService.invokeFunction(accessor => {
+    const textEditors = accessor.get(ITextEditorService);
+    return canonicalRestoredWorkspaceFiles(this, input => textEditors.createTextEditor(input),
+      this.fileService, accessor.get(IWorkingCopyBackupService), this.uriIdentityService,
+      (source, target) => this.editorPane.restoreEditorViewState(source, target, this.uriIdentityService.extUri));
+  });
+} catch (error) {
+  this.titleControl.openEditors(this.editors);
+  this.instantiationService.invokeFunction(accessor => accessor.get(INotificationService).error(error instanceof Error ? error : String(error)));
+  return;
+}`);
+      contents = `import { canonicalRestoredWorkspaceFiles } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\nimport { ITextEditorService } from '../../../services/textfile/common/textEditorService.js';\nimport { IWorkingCopyBackupService } from '../../../services/workingCopy/common/workingCopyBackup.js';\nimport { INotificationService } from '../../../../platform/notification/common/notification.js';\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/editor/editorPanes.ts')) {
+      const entry = 'private doInstantiateEditorPane(descriptor: IEditorPaneDescriptor): EditorPane {';
+      contents = replaceOnce(contents, entry, `restoreEditorViewState(source: EditorInput, target: EditorInput, comparer: IExtUri): object | undefined {
+  // 复用原 Pane 和 Memento；冷恢复此时只构造，不创建 DOM 或读取模型。
+  const pane = this.doInstantiateEditorPane(this.getEditorPaneDescriptor(source));
+  return pane instanceof AbstractEditorWithViewState ? pane.restoreEditorViewState(source, target, comparer) : undefined;
+}
+
+${entry}`);
+      contents = "import { AbstractEditorWithViewState } from './editorWithViewState.js';\nimport { IExtUri } from '../../../../base/common/resources.js';\n" + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/editor/editorWithViewState.ts')) {
+      const entry = 'protected moveEditorViewState(source: URI, target: URI, comparer: IExtUri): void {';
+      contents = replaceOnce(contents, entry, `restoreEditorViewState(source: EditorInput, target: EditorInput, comparer: IExtUri): T | undefined {
+  const sourceResource = this.toEditorViewStateResource(source), targetResource = this.toEditorViewStateResource(target);
+  if (sourceResource && targetResource) this.moveEditorViewState(sourceResource, targetResource, comparer);
+  return this.loadEditorViewState(target);
+}
+
+${entry}`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts')) {
       // 业务文件删除及读取失败不能继续把旧图当作当前成功；其余原生文件沿原版行为。

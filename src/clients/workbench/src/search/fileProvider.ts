@@ -12,7 +12,7 @@ import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/str
 import type { FederatedSearchContinuationDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
 import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
-import { fileOptions, openResources, resourceInFolder, validateQuery, validateTextQuery } from './query.js';
+import { canonicalFileQuery, fileOptions, openResources, resourceInFolder, validateQuery, validateTextQuery } from './query.js';
 
 /** 只把原文件 owner 的精确区间投影为搜索结果，不为片段再读一次正文。 */
 export function textMatch(hit: ResourceNavigationMatchDTO, previewOptions?: ITextSearchPreviewOptions): ITextSearchMatch {
@@ -51,12 +51,14 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
   }
 
   textSearch(query: ITextQuery, onProgress?: (item: ISearchProgressItem) => void, token?: CancellationToken,
-    models = new ResourceSet()): Promise<ISearchComplete> {
-    return this.search(query, onProgress, token, models);
+    models = new ResourceSet(), prepared?: { deadlineAt: number }): Promise<ISearchComplete> {
+    return this.search(query, onProgress, token, models, prepared);
   }
 
   private async search(query: IFileQuery | ITextQuery, onProgress?: (item: ISearchProgressItem) => void,
-    token = CancellationToken.None, models = new ResourceSet()): Promise<ISearchComplete> {
+    token = CancellationToken.None, models = new ResourceSet(), prepared?: { deadlineAt: number }): Promise<ISearchComplete> {
+    const deadlineAt = prepared?.deadlineAt ?? Date.now() + 10000;
+    if (!prepared) query = await canonicalFileQuery(query, token, deadlineAt);
     const identity = this.uriIdentity.extUri;
     query = query.type === QueryType.Text ? validateTextQuery(query, identity) : validateQuery(query, identity);
     models = new ResourceSet([...models], this.resourceKey);
@@ -67,7 +69,6 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     this.active.add(source);
     let timedOut = false;
     // 沿原导航的十秒预算限制整个查询；续页不重新获得完整等待期限。
-    const deadlineAt = Date.now() + 10000;
     const timer = setTimeout(() => { timedOut = true; source.cancel(); }, Math.max(0, deadlineAt - Date.now()));
     if (deadlineAt <= Date.now()) { timedOut = true; source.cancel(); }
     const results = new Map<string, IFileMatch>();
@@ -150,11 +151,12 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (event.type !== 'page') return;
           const page = event.page?.files;
           if (!page || page.node?.uri !== owner.path) throw new Error('文件搜索响应目标与请求不一致');
+          const canonical = new Map(page.entries.map(entry => [entry.uri, entry.canonical_uri ?? entry.uri]));
           const rows = query.type === QueryType.Text ? page.matches.map(hit => ({ uri: hit.uri, hit })) : page.entries
             .filter(entry => entry.resource_shape === 'file').map(entry => ({ uri: entry.uri, hit: undefined }));
           for (const row of rows) {
             if (source.token.isCancellationRequested) throw new CancellationError();
-            const resource = workspaceFileUri(owner, row.uri, owner.root);
+            const resource = workspaceFileUri(owner, canonical.get(row.uri) ?? row.uri, owner.root);
             if (query.onlyOpenEditors && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件');
             if (!resourceInFolder(resource, query, folder, identity)) throw new Error('文件搜索响应越过本次目录或过滤范围');
             if (models.has(resource)) continue;
@@ -172,7 +174,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           }
           for (const line of page.contexts) {
             if (source.token.isCancellationRequested) throw new CancellationError();
-            const resource = workspaceFileUri(owner, line.uri, owner.root);
+            const resource = workspaceFileUri(owner, canonical.get(line.uri) ?? line.uri, owner.root);
             if (query.onlyOpenEditors && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件的上下文');
             if (!resourceInFolder(resource, query, folder, identity)) throw new Error('文件搜索上下文越过本次目录或过滤范围');
             if (models.has(resource)) continue;
