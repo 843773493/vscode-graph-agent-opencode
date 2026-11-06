@@ -182,6 +182,8 @@ Node host 的文档和编辑器同步同样按明确 view 投影，不能只过�
 
 直接 workspace.applyEdit 沿原 MainThreadBulkEdits 在 DTO 恢复前共用整批端点归属检查，再交原 BulkEditService；原 warn／false、undoRedoGroupId 与 refactoring 自动保存选项保持。每个 MainThread 实例以原 cancellation token 绑定宿主代际，取消后的结果由原 bulk owner 实际完成资源决定：零完成为 false，已完成的真实结果不被外层关闭覆盖。文件操作参与者复用相同端点检查，不另建文件 writer。整批跨类型版本预检和其它语言 Provider 编辑仍是未完成边界；当前产品 WorkspaceFiles 只支持原有创建／保存，不支持的重命名／删除明确拒绝，不能用 Node fs 绕过原 owner。
 
+Code action 的原 MainThread 在发布列表前预检全部 action 的 WorkspaceEdit，再复用原 revive；resolve 同样先验证后修改原 action。每个注册持有 cancellation source，调用的原父 token 与注册释放共同取消 RPC，await 后重核；迟到或拒绝的 provide 只释放其新 cache，已发布 list 沿原幂等 dispose 收尾，不增加缓存注册表。原 metadata、action 身份、command 正文、无 edit 与 Web 语义保持。此片只闭合结果生产，已发布 action 的 UI 应用生命周期、整批版本及 rename／paste／drop 编辑仍需沿各自原 owner 迁齐。
+
 复用原 RPC 的 URI transformation，区分工作台稳定内部 URI 与目标 Node API 的原生文件视图。Node 扩展取得的 workspace／document 文件 URI 及 fsPath 必须能用于该目标真实 Node 文件访问，返回 URI 再投影回同一工作区稳定身份；根绑定只消费已登记 Gateway 事实及 Backend mount view，不持久化另一套路径注册表。转换限定 typed URI／协议字段，不全局替换任意字符串或 env／配置正文。验收必须用真实扩展经 `node:fs` 及 `workspace.fs` 分别读取目标独有文件，并核返回位置在原编辑器打开；只让自定义 URI 在浏览器 VFS 可读不足以证明 Node 扩展兼容。
 
 同目标嵌套根沿原 folder 最长匹配规则；同一本机路径若对应多个业务身份且上下文不足以唯一还原，使用已有请求／文档来源消歧或明确拒绝该投影，不能任选根并声称稳定 URI 往返。`extensions.all`／`getExtension`／exports 也以该 host 合法实例集解析，不能凭公开 ID 取另一个目标的运行对象。

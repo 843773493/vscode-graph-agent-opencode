@@ -58,6 +58,8 @@ TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完�
 
 文档语言 Provider SHALL 在原注册表的候选评分与独占排序前核对宿主视图；目标 Provider 的 scheme、绝对 glob 和 RelativePattern 按目标原生文件位置匹配，继续复用原 selector／glob 合同，不能仅在错发 RPC 后拒绝 URI。多文档操作的次要文档 SHALL 使用同一注册项的归属及评分，不另存 selector 绕过目标限制。Web 原窗口评分、Provider 对象及取消协议保持。
 
+Code action Provider SHALL 在发布返回列表前核验其中全部 WorkspaceEdit 的端点归属；resolve SHALL 在修改原 action 的 edit／command 前完成同一检查。调用取消、注册撤销或宿主关闭后 SHALL 取消原在途请求，不发布迟到列表或修改旧 action。未发布或拒绝的列表 SHALL 释放其准确缓存；已发布列表继续沿原 dispose 释放，不重复结算，也不因另一代际同号缓存而混用。普通 command 正文与无 binding 的 Web 资源范围保持原合同。
+
 #### Scenario: A 与 B 的未保存文档同时打开
 - **WHEN** A/B 文件均有不同 dirty 内容，两个扩展枚举文档／可见编辑器并监听变化，用户在二者间切焦点
 - **THEN** 每 host 只得到自己 view 的模型、内容和事件，非所属 view 焦点表现为无 active editor；错误目标编辑在产生副作用前被拒绝，迟到旧代际结果不发布
@@ -73,6 +75,10 @@ TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完�
 #### Scenario: 同语言 Provider 按目标原生位置匹配
 - **WHEN** A/B 同时打开同语言文件，各自 Provider 使用语言、file scheme、绝对 glob 或 RelativePattern 注册，并交替请求结果或执行多文档高亮
 - **THEN** 仅所属目标的 Provider 参与候选，模式匹配目标真实位置；外部目标的 exclusive Provider 不压制自身候选，多文档操作不向该 Provider 发送其它目标文档，切焦点不改变已发起目标
+
+#### Scenario: Code action 列表、resolve 与缓存生命周期
+- **WHEN** A 返回多个 action 且后项 edit 越出所属视图，或 resolve 返回非法编辑；在途 provide／resolve 遇到取消、注销或宿主关闭后仍返回结果
+- **THEN** 列表整批拒绝并释放准确的新缓存；resolve 保持原 action 的 edit／command，迟到结果不发布或修改旧对象；已发布 list 的原缓存仍由该 list 收尾，新代际与 B 的同号缓存不受影响
 
 #### Scenario: 工作区符号查询限定完整宿主视图
 - **WHEN** A 的符号 Provider 绑定 A1/A2，B 绑定 B1，用户明确选择工作区范围或 A 扩展在 B 获得焦点时发起公开符号查询

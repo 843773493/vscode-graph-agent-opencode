@@ -47,9 +47,57 @@ export function transformExtensionLanguageFeatures(root, path, source, replaceOn
     return replaceOnce(contents, "\n\tselector: LanguageFilter = { language: '*' };\n", '');
   }
   if (path !== paths[2]) return source;
-  let contents = `import { hostLanguageFeatureScore } from ${JSON.stringify(join(root, 'src/extensions/languageFeatures.js'))};
+  let contents = `import { assertHostWorkspaceEdit } from ${JSON.stringify(join(root, 'src/extensions/targetUris.js'))};
+import { hostLanguageFeatureScore } from ${JSON.stringify(join(root, 'src/extensions/languageFeatures.js'))};
 import type { score } from '../../../editor/common/languageSelector.js';\n` + source;
+  contents = replaceOnce(contents, 'import { CancellationToken }', 'import { CancellationToken, CancellationTokenSource }');
   contents = replaceOnce(contents, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
+  contents = replaceOnce(contents, 'private static _reviveCodeActionDto(data: ReadonlyArray<ICodeActionDto>, uriIdentService: IUriIdentityService)', 'private _reviveCodeActionDto(data: ReadonlyArray<ICodeActionDto>)');
+  contents = replaceOnce(contents, 'data?.forEach(code => reviveWorkspaceEditDto(code.edit, uriIdentService));', `data?.forEach(code => { if (code.edit) assertHostWorkspaceEdit(this.extHostContext.extensionHost, code.edit); });
+    data?.forEach(code => reviveWorkspaceEditDto(code.edit, this._uriIdentService));`);
+  contents = replaceOnce(contents, 'const provider: languages.CodeActionProvider = {', `const lifetime = new CancellationTokenSource();
+    const assertActive = (token: CancellationToken) => {
+      if (lifetime.token.isCancellationRequested || token.isCancellationRequested) throw new CancellationError();
+    };
+    const invoke = async <T>(token: CancellationToken, operation: (token: CancellationToken) => Promise<T>): Promise<T> => {
+      assertActive(token);
+      const request = new CancellationTokenSource(token);
+      const cancellation = lifetime.token.onCancellationRequested(() => request.cancel());
+      try { return await operation(request.token); }
+      finally { cancellation.dispose(); request.dispose(); }
+    };
+    const provider: languages.CodeActionProvider = {`);
+  contents = replaceOnce(contents, `const listDto = await this._proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, context, token);
+\t\t\t\tif (!listDto) {
+\t\t\t\t\treturn undefined;
+\t\t\t\t}
+\t\t\t\treturn {
+\t\t\t\t\tactions: MainThreadLanguageFeatures._reviveCodeActionDto(listDto.actions, this._uriIdentService),
+\t\t\t\t\tdispose: () => {
+\t\t\t\t\t\tif (typeof listDto.cacheId === 'number') {
+\t\t\t\t\t\t\tthis._proxy.$releaseCodeActions(handle, listDto.cacheId);
+\t\t\t\t\t\t}
+\t\t\t\t\t}
+\t\t\t\t};`, `return invoke(token, async token => {
+          const listDto = await this._proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, context, token);
+          const release = toDisposable(() => {
+            if (typeof listDto?.cacheId === 'number') this._proxy.$releaseCodeActions(handle, listDto.cacheId);
+          });
+          try {
+            assertActive(token);
+            if (!listDto) return undefined;
+            return { actions: this._reviveCodeActionDto(listDto.actions), dispose: () => release.dispose() };
+          } catch (error) { release.dispose(); throw error; }
+        });`);
+  contents = replaceOnce(contents, 'const resolved = await this._proxy.$resolveCodeAction(handle, (<ICodeActionDto>codeAction).cacheId!, token);', `return invoke(token, async token => {
+        const resolved = await this._proxy.$resolveCodeAction(handle, (<ICodeActionDto>codeAction).cacheId!, token);
+        assertActive(token);
+        if (resolved.edit) assertHostWorkspaceEdit(this.extHostContext.extensionHost, resolved.edit);`);
+  contents = replaceOnce(contents, '\n\t\t\t\treturn codeAction;\n\t\t\t};', '\n\t\t\t\treturn codeAction;\n      });\n\t\t\t};');
+  contents = replaceOnce(contents, 'this._registrations.set(handle, this._languageFeaturesService.codeActionProvider.register(selector, provider));', `this._registrations.set(handle, combinedDisposable(
+      this._languageFeaturesService.codeActionProvider.register(selector, provider),
+      toDisposable(() => { lifetime.cancel(); lifetime.dispose(); })
+    ));`);
   contents = replaceOnce(contents, 'private readonly _selector: IDocumentFilterDto[],', 'private readonly _selector: IDocumentFilterDto[],\n\t\tprivate readonly _selectorScore: typeof score | undefined,');
   contents = replaceOnce(contents, '\n\t\t\tselector,\n\t\t\tthis._proxy,', '\n\t\t\tselector,\n\t\t\thostLanguageFeatureScore(this.extHostContext.extensionHost, selector),\n\t\t\tthis._proxy,');
   contents = replaceOnce(contents, '\n\t\t\tselector: selector,\n', '\n');
