@@ -34,6 +34,7 @@ export async function skillSourcesContract(mode) {
       if (mode === 'freeze') return new Promise(resolve => { releaseParse = () => resolve(result()); });
       return result();
     }
+    if (path === '/api/v1/resources') return ok({ workspace_id: owners[0].workspaceId, items: [] });
     if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills'].includes(path)) throw new Error(`非预期 Skill 请求: ${method} ${path}`);
     const first = gateway === owners[0].gatewayId, skill = path.endsWith('skill-sources'), local = path.includes('local-skills'), currentRound = round;
     const result = () => {
@@ -69,7 +70,7 @@ export async function skillSourcesContract(mode) {
   picker = { value: 'resource ', items: [], activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerButton: buttons.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { lifetime.dispose(); } };
-  provider = new ResourceQuickAccess(quick, opener, groups, configuration, { error: cause => errors.push(String(cause)) });
+  provider = new ResourceQuickAccess(quick, opener, groups, configuration, { error: cause => errors.push(String(cause)) }, {}, {});
   lifetime = provider.provide(picker, cancellation.token, { searchOwners: selected });
   const rows = () => picker.items.map(item => ({ id: item.id, label: item.label, description: item.description, detail: item.detail, highlights: item.highlights, selectable: !!item.accept }));
   const until = async predicate => {

@@ -5,6 +5,7 @@ import { matchesFuzzy } from '../../upstream/src/vs/base/common/filters.js';
 import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
 import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
@@ -14,18 +15,23 @@ import { Extensions, type IQuickAccessRegistry } from '../../upstream/src/vs/pla
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
 import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
+import { listWorkspaceResources, type ResourceAction, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
+import { resourceActionLabels, workspaceResourceName } from '../../../web/src/hooks/workspace/resourceActions.js';
 import { gateway } from '../agentApi.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import { chooseSearchOwners } from '../search/quickAccessScope.js';
 import type { SearchInvocationOptions } from '../search/target.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { ThreadInput } from '../threadInput.js';
+import { resourceActionCommand } from './runtimeActions.js';
 
-interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string }
-interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number }
+interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string }
+interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread'] }
 interface SourceRun {
   picker: IQuickPick<SourcePick, { useSeparators: true }>;
   owners: readonly WorkspaceOwner[];
@@ -35,6 +41,7 @@ interface SourceRun {
   invalidated: boolean;
   signal: AbortSignal;
   discovery?: Promise<SourcePick[]>;
+  thread?: { owner: WorkspaceOwner; session_id: string; thread_id: string };
 }
 
 /** 来源候选沿固定根导航发现本地文件，配置 Skill 只消费 accepted metadata。 */
@@ -46,6 +53,8 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
     @IConfigurationService private readonly configuration: IConfigurationService,
     @INotificationService private readonly notifications: INotificationService,
+    @ICommandService private readonly commands: ICommandService,
+    @IEditorService private readonly editors: IEditorService,
   ) { super(ResourceQuickAccess.PREFIX, { canAcceptInBackground: true,
     noResultsPick: { id: 'no-sources', label: '所选工作区没有匹配的来源' } }); }
 
@@ -55,6 +64,9 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       gatewayId: workspaceContext.getSnapshot().gatewayId, group: options.resourceGroup ?? this.groups.activeGroup.id,
       ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal };
     this.run = run;
+    const input = this.editors.activeEditor;
+    run.thread = options.resourceThread;
+    if (!run.thread && input instanceof ThreadInput) run.thread = { owner: { ...input.owner }, session_id: input.owner.sessionId, thread_id: input.owner.threadId };
     const invalidate = () => {
       run.invalidated = true;
       access.cancel();
@@ -65,7 +77,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     lifetime.add(toDisposable(workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate(); })));
     const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择来源所属工作区' };
     picker.buttons = [...picker.buttons, scope];
-    picker.placeholder = '查找根 AGENTS、本地和配置 Skill · 浏览不读取正文或激活来源';
+    picker.placeholder = '查找来源、终端和浏览器 · 浏览不读取正文或操作资源';
     lifetime.add(picker.onDidTriggerButton(button => {
       if (button !== scope) return;
       const value = picker.value;
@@ -77,7 +89,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           const owners = await chooseSearchOwners(this.quick, run.owners);
           if (invalidated) throw new Error('用户身份已改变，请重新选择来源所属工作区');
           this.assertAccess(run);
-          const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group };
+          const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group, resourceThread: run.thread };
           this.quick.quickAccess.show(value, { providerOptions });
         } finally { release(); }
       })());
@@ -96,7 +108,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     return picks.flatMap(item => {
       if (item.filterLabel === undefined) return [item];
       const highlights = matchesFuzzy(filter, item.filterLabel);
-      return filter && !highlights ? [] : [{ ...item, highlights: { label: highlights ?? undefined } }];
+      return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...item, highlights: { label: highlights ?? undefined } }];
     });
   }
 
@@ -154,7 +166,22 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               return pick(owner, entry.node.uri, entry.name, `本地 Skill · ${target.name}`);
             });
           }).catch(cause => failed(owner, '本地 Skill ', cause));
-          return (await Promise.all([agents, skills, localSkills])).flat();
+          const runtime = (['terminal', 'browser'] as const).map(kind => limiter.queue(async () => {
+            run.signal.throwIfAborted();
+            const result = await listWorkspaceResources(0, key, kind, run.signal);
+            if (result.workspace_id !== owner.workspaceId || result.items.some(item => item.workspace_id !== owner.workspaceId || item.kind !== kind)) {
+              throw new Error('运行资源响应与工作区或资源种类不匹配');
+            }
+            return result.items.map(resource => {
+              const frozen = structuredClone(resource), label = workspaceResourceName(resource);
+              return { id: `${key}/${kind}/${resource.resource_id}`, label, filterLabel: label, resourceId: resource.resource_id,
+                description: `${kind === 'terminal' ? '终端' : '浏览器'} · ${resource.status} · ${target.name}`,
+                detail: `${owner.gatewayId} · ${owner.workspaceId} · ${resource.resource_id} · revision ${resource.owner_revision}`,
+                accept: () => this.report(this.chooseRuntimeAction(run, { ...owner }, frozen)),
+              };
+            });
+          }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
+          return (await Promise.all([agents, skills, localSkills, ...runtime])).flat();
         } catch (cause) { return failed(owner, '', cause); }
       }));
       if (run.signal.aborted || run.invalidated) return [];
@@ -168,12 +195,35 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
   private assertAccess(run: SourceRun): void {
     if (run.invalidated || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或用户身份已改变，请重新查找来源');
   }
+  private async chooseRuntimeAction(run: SourceRun, owner: WorkspaceOwner, resource: WorkspaceResourceDTO): Promise<void> {
+    const value = run.picker.value;
+    let invalidated = false;
+    const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+    try {
+      this.assertAccess(run);
+      const actions = (Object.keys(resourceActionLabels) as ResourceAction[]).filter(action => resource.available_actions.includes(action));
+      if (!actions.length) throw new Error('资源当前没有可用的管理动作');
+      const selected = await this.quick.pick(actions.map(action => ({ action, label: resourceActionLabels[action] })),
+        { title: `资源动作 · ${workspaceResourceName(resource)}`, placeHolder: `${owner.gatewayId} · ${owner.workspaceId} · revision ${resource.owner_revision}` });
+      if (invalidated) throw new Error('用户身份已改变，请重新选择资源');
+      this.assertAccess(run);
+      if (!selected) {
+        const providerOptions: ResourceAccessOptions = { searchOwners: run.owners, resourceGroup: run.group, resourceThread: run.thread };
+        this.quick.quickAccess.show(value, { providerOptions });
+        return;
+      }
+      const thread = selected.action === 'attach' && run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
+        ? { session_id: run.thread.session_id, thread_id: run.thread.thread_id } : undefined;
+      await this.commands.executeCommand(resourceActionCommand(selected.action), { owner, resource, thread });
+      // TODO：运行资源的精确聚焦沿原工作区面板接入，MCP 仍按其独立 owner 接入。
+    } finally { release(); }
+  }
   private report(operation: Promise<unknown>): void { void operation.catch(cause => this.notifications.error(cause)); }
 }
 
 Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider({
   ctor: ResourceQuickAccess, prefix: ResourceQuickAccess.PREFIX, placeholder: '查找已接入的来源资源',
-  helpEntries: [{ description: '查找来源资源（根 AGENTS、本地和配置 Skill）', commandId: 'boxteam.quickAccess.resources', commandCenterOrder: 44 }],
+  helpEntries: [{ description: '查找来源、终端和浏览器资源', commandId: 'boxteam.quickAccess.resources', commandCenterOrder: 44 }],
 });
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.quickAccess.resources', title: { value: '查找来源资源', original: 'Find Source Resources' }, f1: true }); }

@@ -27,6 +27,7 @@ export async function agentSpecContract(mode) {
     if (path === '/api/gateway/workspaces') return ok({ items: targets, active_workspace: targets[0] });
     if (path === '/api/v1/resources/skill-sources') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
     if (path === '/api/v1/resources/local-skills') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
+    if (path === '/api/v1/resources') return ok({ workspace_id: owners[0].workspaceId, items: [] });
     if (path === '/api/v1/resources/agent-spec') {
       const result = () => ok({ node: { uri, resource_shape: mode === 'unsupported' ? 'domain_object' : 'file', operations: ['describe', 'read'] },
         entries: [], matches: [], contexts: [], truncated: false, view: 'live' });
@@ -63,7 +64,7 @@ export async function agentSpecContract(mode) {
     keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event,
     onDidAccept: accepts.event, onDidTriggerButton: buttons.event, onDidTriggerItemButton: Event.None,
     onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
-  const provider = new ResourceQuickAccess(quick, opener, groups, configuration, notifications);
+  const provider = new ResourceQuickAccess(quick, opener, groups, configuration, notifications, {}, {});
   const options = mode === 'no-owner' ? { searchOwnerError: '发起来源未明确' } : { searchOwners: owners };
   const lifetime = provider.provide(picker, cancellation.token, options);
   const until = async predicate => {

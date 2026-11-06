@@ -21,6 +21,7 @@ workspace/  (所有文件直接位于本目录；测试与被测实现按缩进�
 │   └── useWorkspacePreviewTabs.test.tsx
 ├── useWorkspaceResources.ts              工作区 Terminal/Browser 资源查询与控制
 │   └── useWorkspaceResources.test.tsx
+├── resourceActions.ts                    运行资源管理的临时动作句柄及唯一写入结算
 └── useWorkspaceInformationClipboard.ts            工作区信息复制
 ```
 
@@ -48,3 +49,5 @@ workspace/  (所有文件直接位于本目录；测试与被测实现按缩进�
 - 代码注释使用中文，专业术语除外。
 - 修改本目录后需要运行前端静态检查和 `bun run build`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+运行资源管理成功仅消费完整 owner 回执，失败沿原清单回读，切换范围不向旧 owner 追加读取。Workbench 原按钮可把临时 scope／资源快照句柄交给统一 Command；该句柄的执行仍归原 Hook，不登记全局资源状态或重放结果未知的写入。

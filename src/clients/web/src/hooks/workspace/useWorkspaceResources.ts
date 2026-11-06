@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { controlWorkspaceResource, createWorkspaceBrowser, createWorkspaceTerminal, listWorkspaceResources } from "../../api/workspaceResources";
 import type { ResourceAction, ResourceThreadRef, WorkspaceConnectionKind, WorkspaceResourceDTO } from "../../api/workspaceResources";
 import { errorMessage } from "../../utils/errorMessage";
+import { settleWorkspaceResourceOperation, type DispatchWorkspaceResourceAction } from "./resourceActions";
 
-export function useWorkspaceResources(apiPort: number, workspaceId: string | null, kind: WorkspaceConnectionKind, enabled: boolean) {
+export function useWorkspaceResources(apiPort: number, workspaceId: string | null, kind: WorkspaceConnectionKind, enabled: boolean,
+  dispatchControl?: DispatchWorkspaceResourceAction) {
   const [items, setItems] = useState<WorkspaceResourceDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
@@ -57,30 +59,32 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
     setMutating(true);
     setLoading(false);
     try {
-      const result = await operation();
+      const settled = await settleWorkspaceResourceOperation(apiPort, workspaceId, kind, operation, () => scopeRef.current === scope);
+      if (!settled.succeeded) {
+        if (scopeRef.current === scope) {
+          if (settled.snapshot) { setItems(settled.snapshot.items); setReadError(null); }
+          setOperationError(settled.error);
+        }
+        throw settled.cause;
+      }
+      const result = settled.resource;
       if (scopeRef.current !== scope) throw new Error("资源操作已在原工作区完成；当前资源范围已切换");
       replace(result);
       setOperationError(null);
       return result;
-    } catch (cause) {
-      if (scopeRef.current === scope) {
-        let message = errorMessage(cause);
-        try {
-          const result = await listWorkspaceResources(apiPort, workspaceId, kind);
-          if (scopeRef.current === scope) { setItems(result.items); setReadError(null); }
-        } catch (refreshCause) {
-          message += `；刷新失败：${errorMessage(refreshCause)}`;
-        }
-        if (scopeRef.current === scope) setOperationError(message);
-      }
-      throw cause;
     } finally {
       scope.mutating = false;
       if (scopeRef.current === scope) setMutating(false);
     }
   }, [apiPort, replace, scope, workspaceId, kind]);
-  const control = useCallback((resource: WorkspaceResourceDTO, action: ResourceAction, thread?: ResourceThreadRef) =>
-    mutate(() => controlWorkspaceResource(apiPort, workspaceId!, resource, action, thread)), [apiPort, mutate, workspaceId]);
+  const control = useCallback(async (resource: WorkspaceResourceDTO, action: ResourceAction, thread?: ResourceThreadRef) => {
+    const run = (selected: ResourceAction, ref?: ResourceThreadRef) => mutate(() => controlWorkspaceResource(apiPort, workspaceId!, resource, selected, ref));
+    if (!dispatchControl) return run(action, thread);
+    const result = await dispatchControl(action, { workspaceKey: workspaceId!, resource, run }, thread);
+    // 原组件只在写入确已执行时消费完整回执；命令取消不伪造资源。
+    if (!result) throw new Error("资源操作已取消");
+    return result;
+  }, [apiPort, dispatchControl, mutate, workspaceId]);
   const create = useCallback((thread: ResourceThreadRef, retentionScope: "thread" | "workspace") =>
     mutate(() => (kind === "terminal" ? createWorkspaceTerminal : createWorkspaceBrowser)(apiPort, workspaceId!, thread, retentionScope)), [apiPort, mutate, workspaceId, kind]);
   return { items, loading, mutating, error: [operationError, readError].filter(Boolean).join("；") || null, refresh, control, create };

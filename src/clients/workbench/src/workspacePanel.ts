@@ -10,6 +10,7 @@ import { IThemeService } from '../upstream/src/vs/platform/theme/common/themeSer
 import { IHoverService } from '../upstream/src/vs/platform/hover/browser/hover.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
+import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { WorkspacePanelSurface } from './react/workspacePanelView.js';
 
 export class WorkspacePanel extends ViewPane {
@@ -26,6 +27,7 @@ export class WorkspacePanel extends ViewPane {
     @IHoverService hover: IHoverService,
     @IEditorService private readonly editors: IEditorService,
     @INotificationService private readonly notifications: INotificationService,
+    @ICommandService private readonly commands: ICommandService,
   ) {
     super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover);
     this._register(this.onDidChangeBodyVisibility(visible => this.surface?.setVisible(visible)));
@@ -33,7 +35,7 @@ export class WorkspacePanel extends ViewPane {
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
     container.style.height = '100%';
-    this.surface = new WorkspacePanelSurface(container, this.editors, this.id, this.isBodyVisible(), this.notifications);
+    this.surface = new WorkspacePanelSurface(container, this.editors, this.id, this.isBodyVisible(), this.notifications, this.commands);
   }
   override focus(): void { this.surface?.focus(); }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }

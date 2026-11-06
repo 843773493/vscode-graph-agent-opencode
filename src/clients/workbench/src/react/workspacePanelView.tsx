@@ -1,16 +1,20 @@
 import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { getWorkspace } from '../../../web/src/api/workspace.js';
 import type { GatewayWorkspace } from '../../../web/src/types/backend.js';
 import type { GatewayResolvedThemeConfig } from '../../../web/src/theme/theme.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import type { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
+import type { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { TerminalContent } from '../../../web/src/components/panels/bottomPanel/TerminalContent.js';
 import { BrowserContent } from '../../../web/src/components/panels/bottomPanel/BrowserContent.js';
 import { GatewayLogContent } from '../../../web/src/components/panels/bottomPanel/GatewayLogContent.js';
 import WorkspacePortForwardPanel from '../../../web/src/components/workspace/portForward/WorkspacePortForwardPanel.js';
 import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmProvider.js';
 import { useWorkspaceResources } from '../../../web/src/hooks/workspace/useWorkspaceResources.js';
+import type { DispatchWorkspaceResourceAction } from '../../../web/src/hooks/workspace/resourceActions.js';
+import type { WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
+import { resourceActionCommand } from '../resources/runtimeActions.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
 import { ReactSurface } from './surface.js';
@@ -28,10 +32,14 @@ const panelKinds: Record<string, PanelKind> = {
 };
 const toolbar = (tools: ReactNode) => <div className="native-workspace-panel-toolbar">{tools}</div>;
 
-function WorkspaceConnections({ workspace, input, active, kind }: {
+function WorkspaceConnections({ workspace, input, active, kind, commands, notifications }: {
   workspace: GatewayWorkspace; input: ThreadInput | null; active: boolean; kind: 'terminal' | 'browser';
+  commands: ICommandService; notifications: INotificationService;
 }) {
-  const controller = useWorkspaceResources(0, gatewayWorkspaceKey(workspace), kind, active);
+  const dispatch = useCallback<DispatchWorkspaceResourceAction>((action, source, thread) => commands.executeCommand<WorkspaceResourceDTO | undefined>(
+    resourceActionCommand(action), { owner: { gatewayId: workspace.gateway_id, workspaceId: workspace.workspace_id }, resource: source.resource, source, thread },
+  ).catch((cause: unknown) => { notifications.error(cause instanceof Error ? cause : String(cause)); throw cause; }), [commands, notifications, workspace.gateway_id, workspace.workspace_id]);
+  const controller = useWorkspaceResources(0, gatewayWorkspaceKey(workspace), kind, active, dispatch);
   const [selected, setSelected] = useState<string | null>(null);
   const currentThread = input ? { session_id: input.owner.sessionId, thread_id: input.owner.threadId } : null;
   if (kind === 'browser') return <WarmConfirmProvider><BrowserContent controller={controller} workspaceId={gatewayWorkspaceKey(workspace)}
@@ -43,8 +51,9 @@ function WorkspaceConnections({ workspace, input, active, kind }: {
   </section>;
 }
 
-function WorkspaceProduct({ kind, workspace, editors, active, input }: {
+function WorkspaceProduct({ kind, workspace, editors, active, input, commands, notifications }: {
   kind: PanelKind; workspace: GatewayWorkspace; editors: IEditorService; active: boolean; input: ThreadInput | null;
+  commands: ICommandService; notifications: INotificationService;
 }) {
   const [owner, setOwner] = useState<{ workspaceKey: string; workspaceId: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +71,7 @@ function WorkspaceProduct({ kind, workspace, editors, active, input }: {
   if (!owner) return <p role="status">正在确认工作区…</p>;
   switch (kind) {
     case 'automation': return <TaskView owner={owner} editors={editors} active={active} goalSessionId={input?.owner.sessionId ?? null} />;
-    case 'terminal': case 'browser': return <WorkspaceConnections workspace={workspace} input={input} active={active} kind={kind} />;
+    case 'terminal': case 'browser': return <WorkspaceConnections workspace={workspace} input={input} active={active} kind={kind} commands={commands} notifications={notifications} />;
     case 'output': return <section className="gateway-log-panel native-workspace-panel-product" data-testid="gateway-log-panel">
       <GatewayLogContent apiPort={0} workspaceId={gatewayWorkspaceKey(workspace)} active={active} renderToolbar={toolbar} />
     </section>;
@@ -70,8 +79,9 @@ function WorkspaceProduct({ kind, workspace, editors, active, input }: {
   }
 }
 
-function WorkspacePanelView({ editors, kind, visible, onTheme }: {
+function WorkspacePanelView({ editors, kind, visible, onTheme, commands, notifications }: {
   editors: IEditorService; kind: PanelKind; visible: boolean; onTheme: (theme: GatewayResolvedThemeConfig) => void;
+  commands: ICommandService; notifications: INotificationService;
 }) {
   const snapshot = useSyncExternalStore(workspaceContext.subscribe, workspaceContext.getSnapshot);
   const [visited, setVisited] = useState(new Map<string, GatewayWorkspace>());
@@ -101,7 +111,7 @@ function WorkspacePanelView({ editors, kind, visible, onTheme }: {
       const selected = current?.gateway_id === workspace.gateway_id && current.workspace_id === workspace.workspace_id;
       const input = activeEditor instanceof ThreadInput && activeEditor.owner.workspaceKey === gatewayWorkspaceKey(workspace) ? activeEditor : null;
       return <section key={gatewayWorkspaceKey(workspace)} className="native-workspace-panel-content" hidden={!selected} aria-label={`${kind}：${workspace.name}`}>
-        <WorkspaceProduct kind={kind} workspace={workspace} editors={editors} active={visible && selected} input={input} />
+        <WorkspaceProduct kind={kind} workspace={workspace} editors={editors} active={visible && selected} input={input} commands={commands} notifications={notifications} />
       </section>;
     })}
   </div>;
@@ -113,7 +123,7 @@ export class WorkspacePanelSurface {
   private readonly kind: PanelKind;
   private visible: boolean;
   constructor(container: HTMLElement, private readonly editors: IEditorService, id: string, visible: boolean,
-    private readonly notifications: INotificationService) {
+    private readonly notifications: INotificationService, private readonly commands: ICommandService) {
     const kind = panelKinds[id];
     if (!kind) throw new Error(`未注册的工作区面板：${id}`);
     this.kind = kind;
@@ -124,5 +134,5 @@ export class WorkspacePanelSurface {
   focus(): void { this.surface.focus('.native-workspace-panel-content:not([hidden]) :is(button,input,select)'); }
   dispose(): void { this.surface.dispose(); }
   private readonly onTheme = (theme: GatewayResolvedThemeConfig) => this.surface.applyTheme(theme, this.notifications);
-  private render(): void { this.surface.render(<WorkspacePanelView editors={this.editors} kind={this.kind} visible={this.visible} onTheme={this.onTheme} />); }
+  private render(): void { this.surface.render(<WorkspacePanelView editors={this.editors} kind={this.kind} visible={this.visible} onTheme={this.onTheme} commands={this.commands} notifications={this.notifications} />); }
 }

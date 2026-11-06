@@ -29,7 +29,7 @@ async function exercise(mode) {
     expect(errors).toEqual([]); return result;
   } finally { await page.close(); }
 }
-const metadata = result => result.requests.filter(item => item.path.startsWith('/api/v1'));
+const metadata = result => result.requests.filter(item => ['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills'].includes(item.path));
 const workspaceReads = result => result.requests.filter(item => item.path === '/api/gateway/workspaces');
 const skillRows = result => result.rows.filter(item => item.description?.startsWith('配置 Skill'));
 

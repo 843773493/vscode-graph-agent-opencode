@@ -5,6 +5,7 @@ import * as api from "../../api/workspaceResources";
 import type { WorkspaceConnectionKind, WorkspaceResourceDTO } from "../../api/workspaceResources";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import { useWorkspaceResources } from "./useWorkspaceResources";
+import type { DispatchWorkspaceResourceAction, WorkspaceResourceActionSource } from "./resourceActions";
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const renderers: ReactTestRenderer[] = [];
@@ -32,14 +33,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function mount(kind: WorkspaceConnectionKind = "terminal") {
+async function mount(kind: WorkspaceConnectionKind = "terminal", dispatch?: DispatchWorkspaceResourceAction) {
   let current!: ReturnType<typeof useWorkspaceResources>;
   let poll = () => {};
   Object.defineProperty(globalThis, "window", { configurable: true, value: {
     setInterval: (callback: () => void) => { poll = callback; return 1; }, clearInterval: () => {},
   } });
   function Probe({ workspaceId }: { workspaceId: string }) {
-    current = useWorkspaceResources(49_945, workspaceId, kind, true);
+    current = useWorkspaceResources(49_945, workspaceId, kind, true, dispatch);
     return null;
   }
   let renderer!: ReactTestRenderer;
@@ -59,6 +60,61 @@ function stubList() {
 }
 
 describe("工作区连接 owner 镜像", () => {
+  test("原按钮通过统一命令的临时句柄执行，仅写一次并完整替换回执", async () => {
+    stubList();
+    const promoted = { ...resource(2), retention_scope: "workspace", thread_associations: [] };
+    const control = spyOn(api, "controlWorkspaceResource").mockResolvedValue(promoted);
+    restores.push(() => control.mockRestore());
+    const seen: WorkspaceResourceActionSource[] = [];
+    const dispatch: DispatchWorkspaceResourceAction = async (action, source, thread) => {
+      seen.push(source); return source.run(action, thread);
+    };
+    const mounted = await mount("terminal", dispatch);
+    await act(async () => { await mounted.current().control(resource(), "promote"); });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.workspaceKey).toBe("gateway-a");
+    expect(control).toHaveBeenCalledTimes(1);
+    expect(mounted.current().items).toEqual([promoted]);
+  });
+
+  test("命令取消不执行原句柄，不伪造成功或修改资源镜像", async () => {
+    stubList();
+    const control = spyOn(api, "controlWorkspaceResource");
+    restores.push(() => control.mockRestore());
+    const mounted = await mount("terminal", async () => undefined);
+    await act(async () => { await expect(mounted.current().control(resource(), "promote")).rejects.toThrow("已取消"); });
+    expect(control).not.toHaveBeenCalled();
+    expect(mounted.current().items).toEqual([resource()]);
+    expect(mounted.current().mutating).toBe(false);
+  });
+
+  test("A→B→A后旧命令句柄不能写入后来恢复的A范围", async () => {
+    const list = stubList();
+    const control = spyOn(api, "controlWorkspaceResource");
+    restores.push(() => control.mockRestore());
+    let source!: WorkspaceResourceActionSource;
+    const mounted = await mount("terminal", async (_, value) => { source = value; return undefined; });
+    await act(async () => { await expect(mounted.current().control(resource(), "promote")).rejects.toThrow("已取消"); });
+    await mounted.switchTo("gateway-b"); await mounted.switchTo("gateway-a");
+    await expect(source.run("promote")).rejects.toThrow("缺少当前工作区");
+    expect(control).not.toHaveBeenCalled(); expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  test("在途写入失败时若范围已切换，不向旧owner追加回读或污染新错误", async () => {
+    const list = stubList();
+    let reject!: (cause: Error) => void;
+    const response = new Promise<WorkspaceResourceDTO>((_, fail) => { reject = fail; });
+    const control = spyOn(api, "controlWorkspaceResource").mockImplementation(() => response);
+    restores.push(() => control.mockRestore());
+    const mounted = await mount();
+    let operation!: Promise<WorkspaceResourceDTO | string>;
+    act(() => { operation = mounted.current().control(resource(), "promote").catch(String); });
+    await mounted.switchTo("gateway-b");
+    await act(async () => { reject(new Error("原A写入结果未知")); await operation; });
+    expect(await operation).toContain("原A写入结果未知");
+    expect(list).toHaveBeenCalledTimes(2); expect(mounted.current().error).toBeNull();
+  });
+
   test("Browser 使用相同控制器按明确种类查询、创建并替换完整 owner", async () => {
     const browser: WorkspaceResourceDTO = { ...resource(3, "browser_current"), kind: "browser", retention_scope: "workspace", thread_associations: [] };
     const list = stubList().mockResolvedValue({ workspace_id: "backend-uuid", items: [browser] });

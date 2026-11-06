@@ -116,6 +116,7 @@
 覆盖规范：快速访问必须区分目标选择与动作执行；候选展示不得触发业务执行；管理动作必须复用领域权威状态；跨入口命令必须保持目标优先级与原打开修饰键。
 
 - [ ] 11.1 将项目业务动作注册为同一 Action／Command，迁齐原菜单、React 操作和 picker 消费者；目标优先显式参数，再发起 editor owner，仍不明确才选择。
+  - 2026-11-06 终端／Browser 的 promote、attach、detach、stop、delete 已注册同一原 Action／Command，底部面板按钮经原 Hook 临时句柄复用原 writer，picker 固定 owner／revision 和发起 child。共享唯一写入结算，成功完整替换、失败只回读；不为已挂载按钮追加控制面查询。其余业务动作与右侧 Session 资源入口尚未迁齐，整项不勾选。
 - [ ] 11.2 接入 `session `／`thread `／`resource `，覆盖 Skill／AGENTS／配置、附件／工具结果、变更的真实数据与能力，非文本交相应视图，不为各类再建通用状态机。
   - `resource ` 已接入工作区根 AGENTS 的真实元数据发现和原只读 SourceDocuments 打开；复用唯一 URI parser，在同一次解析中传递明确来源 Gateway，保留工作区与目标组身份。共享树6项API／OpenAPI、30项Provider／原来源合同（253条断言）、51份实际转换源码类型检查及正式构建通过；独占快照真实Gateway双工作区页面核候选浏览／取消零正文读取、一次读取原正文、只读、侧边共享模型和删除源后的原404，pageErrors为空。远端Gateway仅HTTP合同装具，未验真实联邦／Electron；Skill、配置及其余类别继续未完成。精确源码、原始结果及复用边界见 `out/tests/temp/2026/11/05/resource_quick_access/artifacts/root-integration.json`。
   - 随后接入工作区已配置HTTP Skill：GET只投影原accepted metadata，原导航／Opener／只读Provider消费原URI；同名来源及owner独立，不编译runtime或维护第二目录。单次浮层只发现一次，逐键本地筛选，关闭／身份失效取消实际读取。新旧Provider35项、API／递归合同22项及最终int64字段16项检查通过，proto标准生成／一致性／breaking通过；同批51份实际转换类型及正式Web构建通过，精确7833个主构建输入核验支持int64生成后的复用。正式Gateway双工作区页面通过，启动4次来源获取，浏览／取消／只读打开零新增获取，显式刷新才增加2次；不可用来源保留原错误，零模型／Session。保留原等待全部owner元数据的呈现边界；本地Skill、Gateway／inline、配置及其它资源和Electron继续未完成。精确源码、失败归因及真实页原件见 `out/tests/temp/2026/11/06/skill_quick_access/artifacts/root-integration.json`。
@@ -125,6 +126,7 @@
 - [x] 11.4 接入 `workspace ` 的真实控制面候选、范围选择与独立切换／连接／启动动作，执行时核验冻结目标，不因浏览候选启动后台服务。
   - 原控制面发现复用有界查询；三个原Command交回导航hooks，菜单和控制中心同链。执行前只读`check_health=false`登记，不增加全目标健康探测；明确来源解析错误直接暴露，无owner才选择。25项定向合同、共享树Workbench真实类型、Ruff及正式构建通过；真实Gateway页面验证浏览／范围取消零写入、启动B不激活、独立切换及原导航切回，零模型调用／页面错误。证据`out/tests/temp/2026/11/05/workspace_quick_actions/artifacts/root-integration-037.json`。同批Composer提示断言失败另行修复，不宣称组合全绿；远程连接、多成员确认和Electron未由本页覆盖。
 - [ ] 11.5 接入终端／浏览器／MCP 等已有资源的查找、聚焦和原生命周期动作，保持 stop／detach／delete 区分及合法关联范围。
+  - 2026-11-06 `resource ` 已接入原工作区终端／Browser 清单和上述五种独立管理动作；同名和空页面标题以稳定 ID 区分，所有来源 metadata 共用原三并发，单次发现后本地筛选、关闭／身份失效取消实际读取。74项受保护合同／464条断言、57份真实转换类型、Ruff／Pyright及正式Web构建通过；真实Gateway双工作区页面核浏览／二级取消零写入、stop保留关联、detach不删除、delete独立确认、原Browser按钮、旧revision409和B操作不切导航，pageErrors及模型调用均零。Web独立tsc仍为28条既存诊断，未新增。精确命令、源码指纹、原始失败归因和通过证据见 `out/tests/temp/2026/11/06/runtime_resource_actions/artifacts/verification.json`。精确聚焦、MCP、右侧Session资源动作及Electron／Windows运行资源管理继续未完成，不以本片勾整项。
 - [ ] 11.6 统一 pending／confirmed、完整权威替换、失败重新读取与未知结果对账，取消未接受步骤不写入，关闭已受理浮层不撤销／重放后端动作。
 - [ ] 11.7 验证未打开详情直接管理、显式 child 优先、任务 revision 冲突、目录 outbox 回执和预览无写副作用，移除迁齐后无消费者的同义执行链。
 

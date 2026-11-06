@@ -18,6 +18,8 @@ React 挂载、释放、可见性、样式及浮层隔离；显式 owner 与原�
 
 资源页复用会话资源 loader 的可见性轮询；隐藏、切换标签或释放 owner 时停止调度。没有运行时预览时必须传空槽，不能传入内部返回 null 的 React 元素而启用预览列。Gateway 生命周期操作复用既有完整组确认，控制中心不得遮挡业务确认浮层。
 
+主窗口底部面板的终端／Browser 管理按钮通过原资源 Hook 的临时句柄进入同一资源 Command，保持所选 owner／revision。命令不重复请求已挂载组件的工作区列表，不在 React 宿主新建 writer；原控制错误和身份失效通过所属通知出口显示。
+
 调试 Thread 导航通过原版 editor options 传递展开资源并选择调试的意图；新建与复用编辑器均应用该意图，保留其余展示态。
 
 消息及子 Thread 资源的上下文分支复用 `useSessionForkDialog` 和会话实例已有的生命周期 writer；提交成功后按后端目标身份打开固定 Thread 标签。来源报告留在发起 Thread 的资源内，使用精确来源 Session、Thread、Execution，不以打开另一会话代替读取来源报告。

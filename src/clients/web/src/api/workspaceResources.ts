@@ -6,9 +6,9 @@ export type { ResourceThreadRef, WorkspaceResourceDTO };
 export type ResourceAction = "promote" | "attach" | "detach" | "stop" | "delete";
 export type WorkspaceConnectionKind = "terminal" | "browser";
 
-export async function listWorkspaceResources(port: number, workspaceId: string, kind: WorkspaceConnectionKind): Promise<WorkspaceResourceListDTO> {
+export async function listWorkspaceResources(port: number, workspaceId: string, kind: WorkspaceConnectionKind, signal?: AbortSignal): Promise<WorkspaceResourceListDTO> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceListDTO>>(
-    port, `/api/v1/resources?kind=${kind}`, { headers: workspaceHeader(workspaceId) },
+    port, `/api/v1/resources?kind=${kind}`, { headers: workspaceHeader(workspaceId), signal },
   ));
 }
 
