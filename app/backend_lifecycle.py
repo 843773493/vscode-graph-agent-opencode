@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class BackendLifespan:
-    """全部挂载独立排空后，按原依赖顺序关闭catalog、维护锁和模型传输。"""
+    """先回收Node宿主，再排空挂载并依次关闭catalog、维护锁和模型传输。"""
 
     def __init__(self, model_stream: ModelStreamTransportController | None, application: FastAPI) -> None:
         self._application = application
@@ -40,6 +40,7 @@ class BackendLifespan:
         self._model_stream = model_stream
         self._close_owner: asyncio.Task[None] | None = None
         self._steps: deque[tuple[str, CloseAction]] = deque([
+            ("extension_hosts", self._close_extension_hosts),
             ("workspaces", self._close_workspaces),
             ("catalog", self._close_registry),
             ("maintenance", self._close_access),
@@ -102,6 +103,10 @@ class BackendLifespan:
             self._steps.popleft()
         self._application.state.workspace_container_registry = None
         self._application.state.workspace_lifespan = None
+
+    async def _close_extension_hosts(self) -> None:
+        if self.registry is not None:
+            await self.registry.close_extension_hosts()
 
     async def _close_workspaces(self) -> None:
         # 按挂载逆序发起，各自的依赖链仍由创建它的原Workspace任务串行关闭。

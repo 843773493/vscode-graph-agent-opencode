@@ -47,7 +47,7 @@ after(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'node-host-checks.json'), JSON.stringify({
-      boundary: '真实Backend进程owner、私有Unix IPC、固定上游Node宿主、原PersistentProtocol/RPC与ESM扩展；TCP仅为测试传输。主线程UI/配置/存储/注册回调及CPU负载估算为明确替身。未经过Gateway授权、安装管理或窗口多目标registry，不代表产品完整验收。',
+      boundary: '真实Backend registry/宿主owner/关闭生命周期、专用manifest、私有Unix IPC、固定上游Node宿主、原PersistentProtocol/RPC与ESM扩展；TCP仅为测试传输。主线程UI/配置/存储/注册回调及CPU负载估算为明确替身。未经过Gateway授权、安装管理或窗口多目标registry，不代表产品完整验收。',
       metadata, receipts,
     }, null, 2) + '\n');
   }
@@ -415,4 +415,18 @@ test('客户端断连回收自己的宿主，实际崩溃沿原通道结束且�
   // 原宿主会拦截process.exit；用真实OS信号终止，Python核实原Process.wait和进程组。
   await assert.rejects(inspect('host-probe.crash'));
   await bounded(crashed.exit, '宿主崩溃');
+});
+
+test('Backend原关闭生命周期回收仍在运行的宿主，保留目标输出', async () => {
+  const host = await connect('backend-shutdown');
+  const inspect = await host.initialize();
+  assert.equal((await inspect()).native, 'backend-shutdown');
+  const control = createConnection({ host: '127.0.0.1', port: Number(process.env.BOXTEAM_TEST_HOST_BACKEND_PORT) });
+  try {
+    await once(control, 'connect');
+    control.write('shutdown-owner\n');
+    const [data] = await bounded(once(control, 'data'), 'Backend关闭原owner');
+    assert.equal(data.toString(), 'closed\n');
+    assert.deepEqual(await bounded(host.exit, 'Backend关闭宿主'), [false]);
+  } finally { control.destroy(); }
 });

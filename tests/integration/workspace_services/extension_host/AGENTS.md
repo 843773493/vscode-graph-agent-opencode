@@ -14,6 +14,6 @@
 
 - 使用显式 Node runtime 和隔离依赖，产物按测试路径写入 out/tests；所有运行带进程外超时和内存保护。
 - 原型不代表 Gateway、目标授权、多目标窗口 registry 或完整产品验收。
-- 真实 Backend 模块 owner 的集成不代表已经接入 FastAPI lifespan；测试 TCP listener 仅传原协议字节。
+- `test_node_host.py`使用真实Backend registry与原BackendLifespan关闭宿主；不启动完整FastAPI服务，测试TCP listener仅传原协议字节，认证和窗口主线程仍是后续验收边界。
 - `extension_state.test.mjs` 编译真实描述类、接收端、Registry、Sequencer、原 Manager 和生命周期 owner；只在文件 realpath、进程／RPC 传输和主线程服务边界提供明确装具。候选发布、失败代际移除和 eager 并发必须经过这些原方法，不能复制状态机；该组合验证不等同 Gateway 授权或完整多目标产品验收。
 - `node_host.mjs` 通过真实原 RPC 增删、替换同 ID 的未激活扩展，并在合法版本激活真实代码；回调观察真实 `extensions.onDidChange`，核旧／重复版本与非法候选拒绝及另一宿主不变，不据描述替换宣称支持已激活扩展动态卸载。

@@ -86,6 +86,7 @@
 - [ ] 5.4 绑定同目标明确 workspace 集合与原 multi-root 事件，分离各客户端活动态；不同 VSIX 启用集使用不同明确视图，不伪报同 host 的 folder 级隔离。验证 A1/A2 不包含 B1、视图变更有明确生命周期、一个客户端不覆盖另一个。
 - [ ] 5.5 迁齐相同扩展 command ID 的来源记录与目标分派，保留 manifest／ID、菜单条件与快捷键；有发起目标直接路由，无上下文且多候选时明确选择，切焦点不改投。
 - [ ] 5.6 实现宿主 generation、迟到 RPC fencing、惰性启动、有界断线回收与后端生命周期排空；真实崩溃／重启不重放未知副作用，宿主退出不删除安装或稳定存储。
+  - 2026-11-06 Backend关闭切片：registry只装配一个惰性Node宿主owner，冻结目标／客户端／view及原mount中的有序workspace集合，generation由目标生成；同client/view未释放时拒绝覆盖，不影响其它client。Backend先撤销宿主准入并关闭原IPC／等待原子进程退出，再排空workspace与catalog；启动中关闭不发布迟到连接，关闭失败保留generation／日志句柄及原关闭步骤供重试。23项owner／Backend关闭定向通过，真实registry／BackendLifespan／原Node RPC 1 passed／9.91秒，含双视图实际扩展及关闭仍运行宿主，六个原PID均核实退出、日志保留。新owner／新增测试／真实测试Pyright零诊断，容器及原生命周期测试7条诊断与完整改前archive一致；Ruff通过。准确命令、指纹及原件见 `out/tests/temp/2026/11/06/node_host_lifespan/artifacts/verification-v1.json`。扩大真实Gateway双挂载回归在旧错误文案断言失败：HEAD源码与原测试已不一致，未修改两者；双挂载启动／组重启／读取已执行，后续会话执行未运行。TCP仍为装具通道，未实现公开鉴权／租约／持续撤权／窗口投影或迟到RPC fencing，不把内部身份冻结当产品隔离，本项仍未勾选。
 - [ ] 5.7 迁齐公开 extension ID 与内部安装／运行实例身份，extensions.all／getExtension／exports 和依赖只解析该 host 合法实例；验证 A/B 同 ID 不同版本真实激活，更新／停用 A 不改变 B；静态声明冲突明确诊断并要求合法版本／窗口选择，不忽略重复注册或更名公开 ID。
   - 2026-11-06 描述发布前置切片：浏览器与 Node 沿同一源码转换修正描述比较和版本推进；完整快照／增量先验证唯一 ID 与宿主归属，保留等版本空初始化及原依赖环过滤。接收端沿原 Sequencer 串行准备描述、激活事件和路径索引，再同步发布两个原 registry、wire 版本及通知；失败不发布候选，替换为零事件不残留旧激活，索引失败可显式重试，首次更新不额外重建失效旧包的索引。没有新协议、hash、长存快照或第二扩展服务。
   - 原 Manager 的乐观发送投影不作为远端确认；任一状态 RPC 失败由唯一 AbstractExtensionService owner 移除准确宿主代际，先撤销退出订阅再断连／释放，保留原错误与所有清理原因并报告。启动的 fire-and-forget 拒绝被明确观察；不复用失败代际、不自动重放，不持状态队列等待 eager 激活。显式重启仍由原 owner 从最新窗口快照重建，未新增自动恢复行为。

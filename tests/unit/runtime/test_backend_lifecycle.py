@@ -47,6 +47,8 @@ class Workspace:
 class Registry:
     closes: int = 0
     installation_closes: int = 0
+    extension_host_closes: int = 0
+    extension_host_failures: list[BaseException] = field(default_factory=list)
     admission_closed: bool = False
 
     def close_admission(self) -> None:
@@ -54,6 +56,11 @@ class Registry:
 
     async def close_installations(self) -> None:
         self.installation_closes += 1
+
+    async def close_extension_hosts(self) -> None:
+        self.extension_host_closes += 1
+        if self.extension_host_failures:
+            raise self.extension_host_failures.pop(0)
 
     def close(self) -> None:
         self.closes += 1
@@ -397,3 +404,22 @@ async def test_maintenance_stack_failure_preserves_error_and_consumed_callbacks(
     assert case.backend.closed and case.backend._close_owner is not owner
     assert case.registry.closes == case.stream.closes == 1
     assert case.released_access == [True] and attempts == [1]
+
+
+async def test_host_close_failure_keeps_workspace_dependencies_until_original_retry(case: Case) -> None:
+    for workspace in case.workspaces:
+        workspace.release.set()
+    failure = OSError("原宿主进程退出尚未核实")
+    case.registry.extension_host_failures.append(failure)
+    with pytest.raises(OSError) as caught:
+        await case.backend.close()
+    assert caught.value is failure
+    assert case.backend._steps[0][0] == "extension_hosts"
+    assert case.registry.extension_host_closes == 1
+    assert all(workspace.attempts == 0 for workspace in case.workspaces)
+    assert case.registry.closes == case.stream.closes == 0
+    assert case.released_access == []
+    await case.backend.close()
+    assert case.backend.closed and case.registry.extension_host_closes == 2
+    assert all(workspace.attempts == 1 for workspace in case.workspaces)
+    assert case.registry.closes == case.stream.closes == 1

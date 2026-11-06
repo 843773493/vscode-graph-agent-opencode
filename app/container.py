@@ -115,6 +115,8 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
+from app.services.infrastructure.extension_host.owner import NodeExtensionHostOwner
+from app.services.infrastructure.extension_host.runtime import load_node_host_runtime
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -446,7 +448,11 @@ class WorkspaceContainerRegistry:
         self._mounted_workspaces = mounted_workspaces
         self._project_root = project_root
         self._clock_ports = clock_ports
+        node_host_runtime = load_node_host_runtime() if backend_id is not None else None
         self._mcp_installations = McpInstallationOwner(home=get_boxteam_home(), backend_id=backend_id) if backend_id is not None else None
+        self._extension_hosts = NodeExtensionHostOwner(backend_id=backend_id, mounted_workspaces=mounted_workspaces,
+            runtime=node_host_runtime, home=get_boxteam_home(), environment=os.environ,
+            startup_timeout=10) if backend_id is not None else None
         self._containers: dict[str, AppContainer] = {}
         self._catalog_components: dict[str, SessionCatalogComponents] = {}
         self._pending_catalog_closes: set[str] = set()
@@ -460,6 +466,13 @@ class WorkspaceContainerRegistry:
     @property
     def workspace_ids(self) -> tuple[str, ...]:
         return self._mounted_workspaces.workspace_ids
+
+    @property
+    def extension_hosts(self) -> NodeExtensionHostOwner:
+        self._require_open()
+        if self._extension_hosts is None:
+            raise RuntimeError("Backend 尚未绑定稳定身份，不能管理 Node 宿主")
+        return self._extension_hosts
 
     def _require_open(self) -> None:
         if self._closed:
@@ -544,15 +557,24 @@ class WorkspaceContainerRegistry:
     def close_admission(self) -> None:
         """线程排队或原生关闭持锁前撤销装配准入；锁内仍须复核。"""
         self._closed = True
+        if self._extension_hosts is not None:
+            self._extension_hosts.close_admission()
 
     async def close_installations(self) -> None:
         """工作区连接排空后等待原安装子进程，关闭唯一 Backend 安装域。"""
         if self._mcp_installations is not None:
             await self._mcp_installations.close()
 
+    async def close_extension_hosts(self) -> None:
+        """工作区服务开始排空前，停止宿主准入并核实原进程退出。"""
+        if self._extension_hosts is not None:
+            await self._extension_hosts.close()
+
     def close(self) -> None:
         """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
         self.close_admission()
+        if self._extension_hosts is not None and self._extension_hosts.active:
+            raise RuntimeError("Node 宿主尚未回收，须先 await close_extension_hosts()")
         with self._lock:
             errors: list[Exception] = []
             for workspace_id in tuple(self._catalog_components):
