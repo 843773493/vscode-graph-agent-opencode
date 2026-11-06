@@ -106,6 +106,10 @@ MainThreadStorage／ExtensionStorageService 等原存储 owner SHALL 迁齐上�
 - **WHEN** 已安装目标 B 的旧连接地址被另一个目标接管，用户从历史入口激活 B 扩展
 - **THEN** 按稳定身份重新核验并拒绝不匹配连接，不向新目标发送扩展代码、凭据或命令
 
+#### Scenario: 实时宿主发现不触发启动
+- **WHEN** 客户端对明确目标及workspace集合读取宿主状态，目标缺少专用runtime、平台未支持或正在排空
+- **THEN** 由原生Gateway按宿主管理权限读取Backend唯一owner，返回实际稳定身份与具名通道不可用原因，不启动Backend或宿主；离线和路由失效明确失败，不以登记镜像冒充实时状态，通道可用也不代表完整扩展API已可用
+
 ### Requirement: 发行产物必须独立提供工作台资源与可验证宿主链
 
 Web 与 Electron 发行产物 SHALL 包含其所需静态资源与扩展资源定位，不依赖开发服务器或源码目录。目标侧 Node 宿主 SHALL 使用与固定上游及平台匹配的实际 runtime／组件，不借 Electron 内置 Node 假充远端能力。真实扩展激活及文件／命令操作、重启状态恢复必须分别通过产品入口验证，进程启动不能作为功能完成证明。

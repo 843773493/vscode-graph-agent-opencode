@@ -86,6 +86,8 @@ MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_insta
 
 Backend 私有通道只接受 loopback、无浏览器来源头及已配置运行时控制凭据的请求，且复用唯一宿主 owner。关闭先通知传输停止，再等待双向任务实际结清，随后关闭 IPC 并核实原子进程退出；不能用通知已发出代替收发任务已退出。传输认证和内部 mount 集合校验不代表 MainThread 初始载荷、事件和窗口贡献已完成工作区投影，后者继续按 D7／D8 单独迁齐与验收。
 
+宿主实时发现使用 `POST /api/gateway/extension-hosts/resolve`，输入明确 Gateway、有序 workspace 集合及可选的已知 Backend 身份；已知身份不得因当前地址可达而改写。该入口与通道共用原路由解析和逐 workspace 引用，沿同一原生 `extension_host_manage` 授权读取 Backend 唯一 owner。响应标注 `source=live`，返回实际稳定 Backend、平台、已绑定组件版本及独立 `channel_state`；缺少专用 runtime、平台未支持和 Backend 排空分别具名说明。通道可用不代表完整扩展 API、激活或业务执行已通过；离线、路由换代或撤权直接失败，不以登记镜像替代实时结果，也不为发现启动 Backend、宿主或下载运行时。
+
 ### D4. 目录发现、安装、配置与运行分别报告事实
 
 安装取消按 operation 独立结算，并使用独立 `cancelled` 终态。共享 producer 的下载／准备只有最后一个使用者取消才停止，且须核实际执行进程退出；其它消费者不随之取消。同安装域的另一后端可在原 SQLite 安装账本写入取消意图，由 producer 原执行者处理，不新增第二取消存储或重放未知脚本。取消与发布在原事务中决定先后，已经提交的 `succeeded` 不被迟到取消覆盖。

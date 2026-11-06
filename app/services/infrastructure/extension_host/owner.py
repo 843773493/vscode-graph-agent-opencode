@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 from uuid import uuid4
 
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
@@ -35,6 +35,14 @@ class NodeHostConnection:
     host: NodeExtensionHost
     stopping: asyncio.Event
     transport_settled: asyncio.Event
+
+
+@dataclass(frozen=True, slots=True)
+class NodeHostStatus:
+    backend_id: str
+    platform: str
+    reason: Literal["runtime_missing", "platform_unsupported", "backend_draining"] | None
+    runtime: NodeHostRuntime | None
 
 
 class _HostSession:
@@ -106,6 +114,17 @@ class NodeExtensionHostOwner:
     def close_admission(self) -> None:
         self._admission_closed = True
 
+    def describe(self, *, expected_backend_id: str | None, workspace_ids: tuple[str, ...]) -> NodeHostStatus:
+        if expected_backend_id is not None and expected_backend_id != self.backend_id:
+            raise ValueError("Node 宿主目标 Backend 身份不匹配")
+        if not workspace_ids or len(set(workspace_ids)) != len(workspace_ids):
+            raise ValueError("Node 宿主工作区视图必须非空且不能重复")
+        for workspace_id in workspace_ids:
+            self._mounts.resolve(workspace_id)
+        reason = ("backend_draining" if self._admission_closed else "runtime_missing" if self.runtime is None
+                  else "platform_unsupported" if sys.platform != "linux" else None)
+        return NodeHostStatus(self.backend_id, sys.platform, reason, self.runtime)
+
     async def _release(self, session: _HostSession) -> None:
         await session.close()
         self._sessions.pop(session.identity.generation, None)
@@ -113,27 +132,22 @@ class NodeExtensionHostOwner:
     @asynccontextmanager
     async def connect(self, *, gateway_id: str, expected_backend_id: str, client_id: str,
                       view_id: str, workspace_ids: tuple[str, ...]) -> AsyncIterator[NodeHostConnection]:
-        if self._admission_closed:
+        status = self.describe(expected_backend_id=expected_backend_id, workspace_ids=tuple(workspace_ids))
+        if status.reason == "backend_draining":
             raise RuntimeError("Backend 正在关闭，拒绝新的 Node 宿主")
-        if expected_backend_id != self.backend_id:
-            raise ValueError("Node 宿主目标 Backend 身份不匹配")
         if not all(value.strip() for value in (gateway_id, client_id, view_id)):
             raise ValueError("Node 宿主必须绑定已认证客户端和明确工作区视图")
         workspace_ids = tuple(workspace_ids)
-        if not workspace_ids or len(set(workspace_ids)) != len(workspace_ids):
-            raise ValueError("Node 宿主工作区视图必须非空且不能重复")
-        for workspace_id in workspace_ids:
-            self._mounts.resolve(workspace_id)
-        if self.runtime is None:
+        if status.runtime is None:
             raise NotImplementedError("目标未提供专用 Node Extension Host 运行时")
         # TODO: Windows named pipe / macOS 私有IPC验收后启用，不能落到其它目标。
-        if sys.platform != "linux":
+        if status.reason == "platform_unsupported":
             raise NotImplementedError("Node Extension Host 当前仅验证 Linux 目标")
         if any((session.identity.gateway_id, session.identity.client_id, session.identity.view_id)
                == (gateway_id, client_id, view_id) for session in self._sessions.values()):
             raise ValueError("该客户端的 Node 宿主视图尚未关闭；不能覆盖原 generation")
         identity = NodeHostIdentity(gateway_id, self.backend_id, client_id, view_id, workspace_ids, str(uuid4()))
-        session = _HostSession(identity, runtime=self.runtime,
+        session = _HostSession(identity, runtime=status.runtime,
             directory=self._home / "state/backend/extension-hosts" / identity.generation,
             environment=self._environment, startup_timeout=self._startup_timeout)
         # 预留与关闭快照之间没有await；启动中的实例同样归原owner回收。

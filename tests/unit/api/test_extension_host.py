@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
@@ -53,3 +54,43 @@ def test_backend_rejects_untrusted_channel_before_host_creation(
         pass
     assert rejected.value.status_code == status
     assert registry.extension_hosts.active == ()
+
+
+def test_private_discovery_reports_real_identity_and_never_starts_host(
+    private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
+) -> None:
+    client, registry = private_host_client
+    owner = registry.extension_hosts
+    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32,
+               "workspace_ids": list(registry.mounted_workspaces.workspace_ids)}
+    headers = {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": payload["gateway_id"],
+               "X-Request-ID": "discover-private"}
+    response = client.post("/api/internal/extension-hosts/resolve", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "discover-private"
+    assert response.json()["data"] == {**payload, "backend_id": owner.backend_id, "source": "live",
+        "platform": sys.platform, "channel_state": "unavailable", "reason": "runtime_missing", "runtime": None}
+    owner.close_admission()
+    result = client.post("/api/internal/extension-hosts/resolve", json=payload, headers=headers)
+    assert result.json()["data"]["channel_state"] == "draining"
+    assert result.json()["data"]["reason"] == "backend_draining"
+    for wrong in ({"backend_id": str(uuid4())}, {"workspace_ids": [str(uuid4())]}):
+        assert client.post("/api/internal/extension-hosts/resolve", json={**payload, **wrong}, headers=headers).status_code == 409
+    assert owner.active == () and not (owner._home / "state/backend/extension-hosts").exists()
+
+
+@pytest.mark.parametrize(("headers", "status"), [
+    ({}, 401),
+    ({"X-Local-Token": "local-dev-token"}, 401),
+    ({"X-Local-Token": "private-host-token", "Origin": "https://browser.invalid"}, 403),
+    ({"X-Local-Token": "private-host-token", "Sec-Fetch-Site": "same-origin"}, 403),
+    ({"X-Local-Token": "private-host-token"}, 400),
+])
+def test_private_discovery_preserves_control_boundary(
+    private_host_client: tuple[TestClient, WorkspaceContainerRegistry], headers: dict[str, str], status: int,
+) -> None:
+    client, registry = private_host_client
+    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32,
+               "workspace_ids": list(registry.mounted_workspaces.workspace_ids)}
+    response = client.post("/api/internal/extension-hosts/resolve", json=payload, headers=headers)
+    assert response.status_code == status and registry.extension_hosts.active == ()

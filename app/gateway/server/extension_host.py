@@ -5,10 +5,24 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from pydantic import ValidationError
+from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
@@ -30,10 +44,17 @@ from app.gateway.federation.policy import (
     require_federation_capability,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
+from app.gateway.server.workspace_proxy import (
+    _http_client,
+    verify_user_access_for_proxy,
+)
 from app.schemas.gateway.extension_host import (
     ExtensionHostConnectionDTO,
     ExtensionHostOpenRequest,
+    ExtensionHostTargetDTO,
+    ExtensionHostTargetRequest,
 )
+from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
     run_channel,
@@ -64,20 +85,100 @@ def _access(websocket: WebSocket) -> tuple[GatewayAuthContext, UserAccessContext
     return auth, access, hashlib.sha256(identity.encode()).hexdigest()
 
 
-def _users(websocket: WebSocket) -> UserAccessService:
+def _users(websocket: HTTPConnection) -> UserAccessService:
     service = getattr(websocket.app.state, "user_access_service", None)
     if not isinstance(service, UserAccessService):
         raise TypeError("Gateway 用户访问服务尚未初始化")
     return service
 
 
-def _check(websocket: WebSocket, auth: GatewayAuthContext, access: UserAccessContext | None,
+def _check(websocket: HTTPConnection, auth: GatewayAuthContext, access: UserAccessContext | None,
            leases: list[WorkspaceRouteLease]) -> None:
     require_federation_capability(websocket, auth, "extension_host_manage")
     if access is not None and access.invalidated.is_set():
         raise PermissionError("Node 宿主客户端租约已失效")
     if any(lease.invalidated.is_set() for lease in leases):
         raise LookupError("Node 宿主工作区路由已失效")
+
+
+@dataclass(frozen=True, slots=True)
+class _HostRoute:
+    base_url: str
+    remote: bool
+    headers: dict[str, str]
+    leases: list[WorkspaceRouteLease]
+
+
+@contextmanager
+def _target_route(connection: HTTPConnection, *, gateway_id: str, workspace_ids: list[str],
+                  auth: GatewayAuthContext, streaming: bool) -> Iterator[_HostRoute]:
+    registry = getattr(connection.app.state, "registry", None)
+    if not isinstance(registry, GatewayWorkspaceRegistry):
+        raise TypeError("Gateway 工作区注册表尚未初始化")
+    targets = [registry.resolve((gateway_id, workspace_id)) for workspace_id in workspace_ids]
+    if auth.kind == "federation" and any(target.connection_kind != "local" for target in targets):
+        raise PermissionError("联邦宿主通道禁止嵌套远端转发")
+    with ExitStack() as references:
+        leases = []
+        for target in targets:
+            if target.connection_error is not None:
+                raise LookupError(f"Node 宿主工作区连接不可用: {target.connection_error}")
+            leases.append(registry.acquire_route_reference(target.key, streaming=streaming))
+            references.callback(registry.release_route_reference, target.key, streaming=streaming)
+        urls = {registry.resolve_service_url(target.key, "workspace_api") for target in targets}
+        if len(urls) != 1 or len({target.connection_kind for target in targets}) != 1:
+            raise ValueError("Node 宿主视图必须属于同一 Backend 目标")
+        headers = {"X-Request-ID": get_request_id(connection)}
+        remote = targets[0].connection_kind == "remote_gateway"
+        if remote:
+            if len({registry.remote_connection_for_target(target).connection_id for target in targets}) != 1:
+                raise ValueError("Node 宿主视图必须使用同一明确远端连接")
+            headers.update(registry.target_request_headers(targets[0]))
+        else:
+            if gateway_id != registry.gateway_id:
+                raise ValueError("Node 宿主目标不属于原生 Gateway")
+            headers.update({"X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": registry.gateway_id})
+        yield _HostRoute(urls.pop(), remote, headers, leases)
+
+
+@router.post("/api/gateway/extension-hosts/resolve", response_model=APIResponse[ExtensionHostTargetDTO])
+async def resolve_extension_host(
+    payload: ExtensionHostTargetRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionHostTargetDTO] | Response:
+    require_federation_capability(request, auth, "extension_host_manage")
+    try:
+        with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
+                           auth=auth, streaming=False) as route:
+            _check(request, auth, access, route.leases)
+            path = "api/gateway/extension-hosts/resolve" if route.remote else "api/internal/extension-hosts/resolve"
+            response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
+                headers=route.headers, json=payload.model_dump(), timeout=10)
+            _check(request, auth, access, route.leases)
+            if access is not None:
+                expires_at = _users(request).expires_at(access)
+                if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
+                    raise PermissionError("Node 宿主客户端租约已过期")
+            if not response.is_success:
+                return Response(response.content, status_code=response.status_code, media_type="application/json")
+            result = APIResponse[ExtensionHostTargetDTO].model_validate_json(response.content)
+            target = result.data
+            if (result.code != 0 or result.request_id != request_id or response.headers.get("X-Request-ID") != request_id
+                or target is None or target.gateway_id != payload.gateway_id or target.workspace_ids != payload.workspace_ids
+                or target.protocol_version != payload.protocol_version
+                or (payload.backend_id is not None and target.backend_id != payload.backend_id)):
+                raise ValueError("Node 宿主返回了不同目标或请求身份")
+            return result
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except (httpx.RequestError, ValidationError) as error:
+        raise HTTPException(502, f"Node 宿主目标发现失败: {error}") from error
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 async def _watch_policy(websocket: WebSocket, auth: GatewayAuthContext) -> None:
@@ -169,35 +270,17 @@ async def extension_host_channel(websocket: WebSocket) -> None:
     try:
         async with asyncio.timeout(10):
             payload = ExtensionHostOpenRequest.model_validate_json(await websocket.receive_text())
-        registry = getattr(websocket.app.state, "registry", None)
-        if not isinstance(registry, GatewayWorkspaceRegistry):
-            raise TypeError("Gateway 工作区注册表尚未初始化")
-        targets = [registry.resolve((payload.gateway_id, workspace_id)) for workspace_id in payload.workspace_ids]
-        if auth.kind == "federation" and any(target.connection_kind != "local" for target in targets):
-            raise PermissionError("联邦宿主通道禁止嵌套远端转发")
-        leases: list[WorkspaceRouteLease] = []
-        with ExitStack() as references:
-            for target in targets:
-                leases.append(registry.acquire_route_reference(target.key, streaming=True))
-                references.callback(registry.release_route_reference, target.key, streaming=True)
-            urls = {registry.resolve_service_url(target.key, "workspace_api") for target in targets}
-            if len(urls) != 1 or len({target.connection_kind for target in targets}) != 1:
-                raise ValueError("Node 宿主视图必须属于同一 Backend 目标")
-            headers = {"X-Request-ID": request_id, CLIENT_HEADER: client_id}
-            if targets[0].connection_kind == "remote_gateway":
-                connections = {registry.remote_connection_for_target(target).connection_id for target in targets}
-                if len(connections) != 1:
-                    raise ValueError("Node 宿主视图必须使用同一明确远端连接")
-                headers.update(registry.target_request_headers(targets[0]))
-                expected_client_id = f"peer:{registry.gateway_id}:{client_id}"
+        with _target_route(websocket, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
+                           auth=auth, streaming=True) as route:
+            leases = route.leases
+            headers = {**route.headers, CLIENT_HEADER: client_id}
+            if route.remote:
+                expected_client_id = f"peer:{websocket.app.state.registry.gateway_id}:{client_id}"
                 path = "api/gateway/extension-hosts/channel"
             else:
-                if payload.gateway_id != registry.gateway_id:
-                    raise ValueError("Node 宿主目标不属于原生 Gateway")
-                headers.update({"X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": registry.gateway_id})
                 expected_client_id = client_id
                 path = "api/internal/extension-hosts/channel"
-            url = _websocket_target(urls.pop(), path)
+            url = _websocket_target(route.base_url, path)
             _check(websocket, auth, access, leases)
             # 所有监视与启动在同一作用域；连接等待期间撤权也会取消原上游。
             operations = [

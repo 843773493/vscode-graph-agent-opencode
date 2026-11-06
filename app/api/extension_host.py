@@ -7,7 +7,15 @@ import logging
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 
 from app.api.runtime_logging import verify_runtime_control_token
@@ -16,7 +24,11 @@ from app.core.trace_middleware import get_request_id
 from app.schemas.gateway.extension_host import (
     ExtensionHostConnectionDTO,
     ExtensionHostOpenRequest,
+    ExtensionHostRuntimeDTO,
+    ExtensionHostTargetDTO,
+    ExtensionHostTargetRequest,
 )
+from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
     run_channel,
@@ -27,14 +39,35 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def host_registry(websocket: WebSocket, _: str = Depends(verify_runtime_control_token)) -> WorkspaceContainerRegistry:
-    if (websocket.client is None or websocket.client.host not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
-        or "origin" in websocket.headers or "sec-fetch-site" in websocket.headers):
+def host_registry(connection: HTTPConnection, _: str = Depends(verify_runtime_control_token)) -> WorkspaceContainerRegistry:
+    if (connection.client is None or connection.client.host not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+        or "origin" in connection.headers or "sec-fetch-site" in connection.headers):
         raise HTTPException(403, "Node 宿主只接受本机 Gateway 管理通道")
-    registry = getattr(websocket.app.state, "workspace_container_registry", None)
+    registry = getattr(connection.app.state, "workspace_container_registry", None)
     if not isinstance(registry, WorkspaceContainerRegistry):
         raise TypeError("Backend 工作区注册表尚未初始化")
     return registry
+
+
+@router.post("/api/internal/extension-hosts/resolve", response_model=APIResponse[ExtensionHostTargetDTO], include_in_schema=False)
+async def resolve_extension_host(
+    payload: ExtensionHostTargetRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionHostTargetDTO]:
+    if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
+        raise HTTPException(400, "Node 宿主目标 Gateway 身份冲突")
+    try:
+        status = registry.extension_hosts.describe(expected_backend_id=payload.backend_id, workspace_ids=tuple(payload.workspace_ids))
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
+    runtime = status.runtime
+    result = ExtensionHostTargetDTO(
+        **payload.model_dump(exclude={"backend_id"}), backend_id=status.backend_id, platform=status.platform,
+        channel_state="draining" if status.reason == "backend_draining" else "unavailable" if status.reason else "available",
+        reason=status.reason, runtime=ExtensionHostRuntimeDTO(commit=runtime.commit, vscode_version=runtime.vscode_version,
+            node_version=runtime.node_version) if runtime is not None else None)
+    return APIResponse(data=result, request_id=request_id)
 
 
 async def _receive(websocket: WebSocket, connection: NodeHostConnection) -> None:

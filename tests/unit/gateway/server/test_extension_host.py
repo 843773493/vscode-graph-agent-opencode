@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -52,6 +53,7 @@ class Harness:
     calls: list[dict[str, str]]
     token: str
     federation_token: str
+    application: FastAPI
 
 
 @pytest.fixture
@@ -92,7 +94,7 @@ def host_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Ha
             yield Harness(client, registry, users, access, policy, ExtensionHostOpenRequest.model_validate({
                 "protocol_version": 1, "gateway_id": GATEWAY, "backend_id": str(uuid4()),
                 "view_id": "window-a", "workspace_ids": workspaces,
-            }), calls, get_gateway_local_token(), federation.token)
+            }), calls, get_gateway_local_token(), federation.token, application)
         finally:
             registry.close()
             state.close()
@@ -241,3 +243,150 @@ def test_public_shapes_follow_descriptor() -> None:
 
     for model in (ExtensionHostOpenRequest, ExtensionHostConnectionDTO):
         assert_public_schema(model.model_json_schema(), public_pb2.DESCRIPTOR.message_types_by_name[model.__name__])
+
+
+@pytest.fixture
+def target_discovery(host_gateway: Harness) -> Iterator[tuple[Harness, list[httpx.Request]]]:
+    h = host_gateway
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]}, json={
+            "request_id": request.headers["X-Request-ID"], "data": {
+                "protocol_version": 1, "gateway_id": GATEWAY, "backend_id": h.request.backend_id,
+                "workspace_ids": h.request.workspace_ids, "source": "live", "platform": "linux",
+                "channel_state": "unavailable", "reason": "runtime_missing", "runtime": None,
+            }})
+
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    h.application.state.http_client = upstream
+    try:
+        yield h, requests
+    finally:
+        assert h.client.portal is not None
+        h.client.portal.call(upstream.aclose)
+
+
+def test_discovery_binds_native_backend_without_trusting_client_identity(target_discovery: tuple[Harness, list[httpx.Request]]) -> None:
+    h, requests = target_discovery
+    payload = h.request.model_dump(exclude={"view_id", "backend_id"})
+    response = h.client.post("/api/gateway/extension-hosts/resolve", json=payload, headers={
+        "X-Local-Token": h.token, "X-Request-ID": "discover-target", extension_host.CLIENT_HEADER: "forged"})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "discover-target"
+    assert response.json()["data"]["backend_id"] == h.request.backend_id
+    assert response.json()["data"]["source"] == "live"
+    assert len(requests) == 1 and requests[0].url.path == "/api/internal/extension-hosts/resolve"
+    assert requests[0].headers["X-BoxTeam-Gateway-Id"] == GATEWAY
+    assert requests[0].headers["X-Local-Token"] == h.token
+    assert "cookie" not in requests[0].headers and extension_host.CLIENT_HEADER not in requests[0].headers
+    assert all(h.registry.route_reference_counts((GATEWAY, value)) == (0, 0) for value in h.request.workspace_ids)
+
+
+@pytest.mark.parametrize("invalid", ["version", "duplicate", "foreign", "mixed", "offline", "backend"])
+def test_discovery_refuses_invalid_or_reused_target(target_discovery: tuple[Harness, list[httpx.Request]], invalid: str) -> None:
+    h, requests = target_discovery
+    payload = h.request.model_dump(exclude={"view_id"})
+    if invalid == "version":
+        payload["protocol_version"] = 2
+    elif invalid == "duplicate":
+        payload["workspace_ids"] = [h.request.workspace_ids[0]] * 2
+    elif invalid == "foreign":
+        payload["gateway_id"] = PEER
+    elif invalid == "mixed":
+        h.registry.resolve((GATEWAY, h.request.workspace_ids[1])).backend_url = "http://127.0.0.1:41101"
+    elif invalid == "offline":
+        h.registry.resolve((GATEWAY, h.request.workspace_ids[0])).connection_error = "stopped"
+    else:
+        payload["backend_id"] = str(uuid4())
+    response = h.client.post("/api/gateway/extension-hosts/resolve", json=payload, headers={"X-Local-Token": h.token})
+    assert response.status_code == (422 if invalid in {"version", "duplicate"} else 409)
+    assert "data" not in response.json()
+    assert len(requests) == (1 if invalid == "backend" else 0)
+    assert all(h.registry.route_reference_counts((GATEWAY, value)) == (0, 0) for value in h.request.workspace_ids)
+
+
+@pytest.mark.parametrize("invalidate", ["route", "user", "policy"])
+def test_discovery_rechecks_authority_before_disclosing(target_discovery: tuple[Harness, list[httpx.Request]], invalidate: str) -> None:
+    h, requests = target_discovery
+    principal = principal_ref_for_gateway(PEER)
+    h.policy.publish({"rules": [{"capability": "extension_host_manage", "effect": "allow", "principal_ref": principal}]})
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if invalidate == "route":
+            h.registry.invalidate_route((GATEWAY, h.request.workspace_ids[0]))
+        elif invalidate == "user":
+            h.users.release(h.access)
+        else:
+            h.policy.publish({"rules": []})
+        return httpx.Response(200, json={"must_not_be_disclosed": True})
+
+    h.application.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    headers = {"X-BoxTeam-Federation-Token": h.federation_token} if invalidate == "policy" else {"X-Local-Token": h.token}
+    try:
+        response = h.client.post("/api/gateway/extension-hosts/resolve", json=h.request.model_dump(exclude={"view_id"}), headers=headers)
+        assert response.status_code == (409 if invalidate == "route" else 403)
+        assert "must_not_be_disclosed" not in response.text
+        assert len(requests) == 1
+    finally:
+        assert h.client.portal is not None
+        h.client.portal.call(h.application.state.http_client.aclose)
+    assert all(h.registry.route_reference_counts((GATEWAY, value)) == (0, 0) for value in h.request.workspace_ids)
+
+
+def test_discovery_uses_independent_native_permission(target_discovery: tuple[Harness, list[httpx.Request]]) -> None:
+    h, requests = target_discovery
+    headers = {"X-BoxTeam-Federation-Token": h.federation_token}
+    for capability in ("discovery", "read", "extension_installation_manage"):
+        h.policy.publish({"rules": [{"capability": capability, "effect": "allow",
+                                    "principal_ref": principal_ref_for_gateway(PEER)}]})
+        response = h.client.post("/api/gateway/extension-hosts/resolve", json=h.request.model_dump(exclude={"view_id"}), headers=headers)
+        assert response.status_code == 403
+    assert requests == []
+    h.policy.publish({"rules": [{"capability": "extension_host_manage", "effect": "allow",
+                                "principal_ref": principal_ref_for_gateway(PEER)}]})
+    response = h.client.post("/api/gateway/extension-hosts/resolve", json=h.request.model_dump(exclude={"view_id"}), headers=headers)
+    assert response.status_code == 200 and len(requests) == 1
+
+
+def test_discovery_requires_local_token_and_user_lease(target_discovery: tuple[Harness, list[httpx.Request]]) -> None:
+    h, requests = target_discovery
+    payload = h.request.model_dump(exclude={"view_id"})
+    assert h.client.post("/api/gateway/extension-hosts/resolve", json=payload).status_code == 401
+    h.client.cookies.clear()
+    assert h.client.post("/api/gateway/extension-hosts/resolve", json=payload, headers={"X-Local-Token": h.token}).status_code == 401
+    assert not requests
+
+
+@pytest.mark.parametrize("wrong", ["gateway_id", "workspace_ids", "protocol_version", "source", "request_id", "header", "available", "offline"])
+def test_discovery_never_discloses_wrong_or_cached_upstream(target_discovery: tuple[Harness, list[httpx.Request]], wrong: str) -> None:
+    h, requests = target_discovery
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if wrong == "offline":
+            raise httpx.ConnectError("target stopped", request=request)
+        data = {"protocol_version": 1, "gateway_id": GATEWAY, "workspace_ids": h.request.workspace_ids,
+                "backend_id": h.request.backend_id, "source": "live", "platform": "linux",
+                "channel_state": "unavailable", "reason": "runtime_missing"}
+        if wrong in {"gateway_id", "source", "workspace_ids", "protocol_version"}:
+            data[wrong] = {"gateway_id": PEER, "source": "mirror", "workspace_ids": [str(uuid4())], "protocol_version": 2}[wrong]
+        elif wrong == "available":
+            data.update(channel_state="available", reason=None)
+        return httpx.Response(200, headers={"X-Request-ID": "wrong" if wrong == "header" else request.headers["X-Request-ID"]},
+            json={"request_id": "wrong" if wrong == "request_id" else request.headers["X-Request-ID"], "data": data})
+
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    h.application.state.http_client = upstream
+    try:
+        response = h.client.post("/api/gateway/extension-hosts/resolve", json=h.request.model_dump(exclude={"view_id"}),
+                                 headers={"X-Local-Token": h.token})
+        assert response.status_code == (502 if wrong in {"source", "protocol_version", "available", "offline"} else 409)
+        assert "data" not in response.json()
+        assert len(requests) == 1
+    finally:
+        assert h.client.portal is not None
+        h.client.portal.call(upstream.aclose)
+    assert all(h.registry.route_reference_counts((GATEWAY, value)) == (0, 0) for value in h.request.workspace_ids)

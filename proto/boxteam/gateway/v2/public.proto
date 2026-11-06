@@ -1008,3 +1008,30 @@ message ExtensionHostConnectionDTO {
   string generation = 7;
   string request_id = 8;
 }
+
+// 实时读取不会启动 Backend 或宿主；已知 Backend 时必须保留身份约束。
+message ExtensionHostTargetRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  optional string backend_id = 4;
+}
+
+message ExtensionHostRuntimeDTO {
+  string commit = 1;
+  string vscode_version = 2;
+  string node_version = 3;
+}
+
+// channel_state 只表示原协议通道能力，不保证完整扩展 API 已接入。
+message ExtensionHostTargetDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  string backend_id = 4;
+  string source = 5;
+  string platform = 6;
+  string channel_state = 7;
+  optional string reason = 8;
+  ExtensionHostRuntimeDTO runtime = 9;
+}

@@ -14,6 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 import uvicorn
 from fastapi import FastAPI
@@ -102,6 +103,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     identities: dict[str, NodeHostIdentity] = {}
     channel_bindings: dict[str, object] = {}
     network = network_scope
+    http = await network.enter_async_context(httpx.AsyncClient(timeout=10))
 
     async def serve_application(app: FastAPI) -> str:
         # 本用例以真实 Uvicorn 网络接入产品路由；工作区服务图与窗口主线程不在此装配。
@@ -151,6 +153,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         gateway.state.registry = gateway_registry
         gateway.state.user_access_service = users
         gateway.state.federation_policy_store = FederationPolicyStore()
+        gateway.state.http_client = http
         gateway_url = (await serve_application(gateway)).replace("http://", "ws://")
         if transport == "relay":
             relay_id = "gateway_" + "b" * 32
@@ -176,6 +179,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             relay.state.registry = relay_registry
             relay.state.user_access_service = users
             relay.state.federation_policy_store = FederationPolicyStore()
+            relay.state.http_client = http
             gateway_url = (await serve_application(relay)).replace("http://", "ws://")
 
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -201,10 +205,23 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
                 application.state.workspace_container_registry = registry
                 application.state.workspace_lifespan = lifecycle
             if transport != "ipc":
+                discovery = await http.post(f"{gateway_url.replace('ws://', 'http://')}/api/gateway/extension-hosts/resolve",
+                    headers={"X-Local-Token": token, "Cookie": cookie, "X-Request-ID": f"discover-{label}"},
+                    json={"protocol_version": 1, "gateway_id": gateway_id, "workspace_ids": [workspace_ids[label]]})
+                assert discovery.status_code == 200, discovery.text
+                target = discovery.json()["data"]
+                assert discovery.headers["X-Request-ID"] == discovery.json()["request_id"] == f"discover-{label}"
+                assert target["gateway_id"] == gateway_id and target["backend_id"] == backend_id
+                assert target["workspace_ids"] == [workspace_ids[label]]
+                assert target["source"] == "live" and target["channel_state"] == "available"
+                assert target["runtime"]["node_version"] == "24.22.1"
+                # 能力读取不得创建任何新的宿主 generation，实际启动仍由原通道完成。
+                assert all(session.identity.view_id != label for session in registry.extension_hosts._sessions.values())
+                channel_bindings[f"{label}-discovery"] = discovery.json()
                 async with connect(f"{gateway_url}/api/gateway/extension-hosts/channel?token={token}",
                         additional_headers={"Cookie": cookie, "X-Request-ID": f"request-{label}"}, compression=None) as channel:
                     await channel.send(json.dumps({"protocol_version": 1, "gateway_id": gateway_id,
-                        "backend_id": backend_id, "view_id": label, "workspace_ids": [workspace_ids[label]]}))
+                        "backend_id": target["backend_id"], "view_id": label, "workspace_ids": target["workspace_ids"]}))
                     binding = json.loads(await channel.recv())
                     assert binding["request_id"] == f"request-{label}"
                     assert binding["gateway_id"] == gateway_id

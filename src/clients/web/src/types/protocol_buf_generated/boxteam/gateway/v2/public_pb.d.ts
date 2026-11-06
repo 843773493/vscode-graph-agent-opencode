@@ -4279,3 +4279,120 @@ export declare type ExtensionHostConnectionDTO = Message<"boxteam.gateway.v2.Ext
  */
 export declare const ExtensionHostConnectionDTOSchema: GenMessage<ExtensionHostConnectionDTO>;
 
+/**
+ * 实时读取不会启动 Backend 或宿主；已知 Backend 时必须保留身份约束。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionHostTargetRequest
+ */
+export declare type ExtensionHostTargetRequest = Message<"boxteam.gateway.v2.ExtensionHostTargetRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: optional string backend_id = 4;
+   */
+  backendId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostTargetRequest.
+ * Use `create(ExtensionHostTargetRequestSchema)` to create a new message.
+ */
+export declare const ExtensionHostTargetRequestSchema: GenMessage<ExtensionHostTargetRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionHostRuntimeDTO
+ */
+export declare type ExtensionHostRuntimeDTO = Message<"boxteam.gateway.v2.ExtensionHostRuntimeDTO"> & {
+  /**
+   * @generated from field: string commit = 1;
+   */
+  commit: string;
+
+  /**
+   * @generated from field: string vscode_version = 2;
+   */
+  vscodeVersion: string;
+
+  /**
+   * @generated from field: string node_version = 3;
+   */
+  nodeVersion: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostRuntimeDTO.
+ * Use `create(ExtensionHostRuntimeDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostRuntimeDTOSchema: GenMessage<ExtensionHostRuntimeDTO>;
+
+/**
+ * channel_state 只表示原协议通道能力，不保证完整扩展 API 已接入。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionHostTargetDTO
+ */
+export declare type ExtensionHostTargetDTO = Message<"boxteam.gateway.v2.ExtensionHostTargetDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string source = 5;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string platform = 6;
+   */
+  platform: string;
+
+  /**
+   * @generated from field: string channel_state = 7;
+   */
+  channelState: string;
+
+  /**
+   * @generated from field: optional string reason = 8;
+   */
+  reason?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostRuntimeDTO runtime = 9;
+   */
+  runtime?: ExtensionHostRuntimeDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostTargetDTO.
+ * Use `create(ExtensionHostTargetDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostTargetDTOSchema: GenMessage<ExtensionHostTargetDTO>;
+

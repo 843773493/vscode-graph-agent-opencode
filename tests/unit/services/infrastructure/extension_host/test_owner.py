@@ -200,3 +200,18 @@ async def test_cleanup_failure_preserves_original_error_generation_and_log_until
         async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
                 client_id="new", view_id="view", workspace_ids=case.workspace_ids):
             pytest.fail("关闭后不能重建宿主")
+
+
+@pytest.mark.parametrize("unavailable", ["none", "runtime", "platform", "draining"])
+def test_description_uses_the_same_admission_facts_without_creating_sessions(case: Case, monkeypatch: pytest.MonkeyPatch, unavailable: str) -> None:
+    if unavailable == "runtime":
+        case.owner.runtime = None
+    elif unavailable == "platform":
+        monkeypatch.setattr(sys, "platform", "win32")
+    elif unavailable == "draining":
+        case.owner.close_admission()
+    status = case.owner.describe(expected_backend_id=case.owner.backend_id, workspace_ids=case.workspace_ids[::-1])
+    assert status.backend_id == case.owner.backend_id
+    assert status.reason == {"none": None, "runtime": "runtime_missing", "platform": "platform_unsupported", "draining": "backend_draining"}[unavailable]
+    assert not case.hosts and not case.owner.active
+    assert not (case.owner._home / "state/backend/extension-hosts").exists()

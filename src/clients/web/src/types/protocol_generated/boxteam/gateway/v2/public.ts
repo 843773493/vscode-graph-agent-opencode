@@ -996,6 +996,33 @@ export interface ExtensionHostConnectionDTO {
   request_id: string;
 }
 
+/** 实时读取不会启动 Backend 或宿主；已知 Backend 时必须保留身份约束。 */
+export interface ExtensionHostTargetRequest {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id?: string | undefined;
+}
+
+export interface ExtensionHostRuntimeDTO {
+  commit: string;
+  vscode_version: string;
+  node_version: string;
+}
+
+/** channel_state 只表示原协议通道能力，不保证完整扩展 API 已接入。 */
+export interface ExtensionHostTargetDTO {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id: string;
+  source: string;
+  platform: string;
+  channel_state: string;
+  reason?: string | undefined;
+  runtime: ExtensionHostRuntimeDTO | undefined;
+}
+
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
   return { uri: "", local_gateway_id: "", resource_gateway_id: undefined };
 }
@@ -7618,6 +7645,174 @@ export const ExtensionHostConnectionDTO: MessageFns<ExtensionHostConnectionDTO> 
     message.client_id = object.client_id ?? "";
     message.generation = object.generation ?? "";
     message.request_id = object.request_id ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionHostTargetRequest(): ExtensionHostTargetRequest {
+  return { protocol_version: 0, gateway_id: "", workspace_ids: [], backend_id: undefined };
+}
+
+export const ExtensionHostTargetRequest: MessageFns<ExtensionHostTargetRequest> = {
+  fromJSON(object: any): ExtensionHostTargetRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionHostTargetRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== undefined) {
+      obj.backend_id = message.backend_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostTargetRequest>, I>>(base?: I): ExtensionHostTargetRequest {
+    return ExtensionHostTargetRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostTargetRequest>, I>>(object: I): ExtensionHostTargetRequest {
+    const message = createBaseExtensionHostTargetRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionHostRuntimeDTO(): ExtensionHostRuntimeDTO {
+  return { commit: "", vscode_version: "", node_version: "" };
+}
+
+export const ExtensionHostRuntimeDTO: MessageFns<ExtensionHostRuntimeDTO> = {
+  fromJSON(object: any): ExtensionHostRuntimeDTO {
+    return {
+      commit: isSet(object.commit) ? globalThis.String(object.commit) : "",
+      vscode_version: isSet(object.vscode_version) ? globalThis.String(object.vscode_version) : "",
+      node_version: isSet(object.node_version) ? globalThis.String(object.node_version) : "",
+    };
+  },
+
+  toJSON(message: ExtensionHostRuntimeDTO): unknown {
+    const obj: any = {};
+    if (message.commit !== "") {
+      obj.commit = message.commit;
+    }
+    if (message.vscode_version !== "") {
+      obj.vscode_version = message.vscode_version;
+    }
+    if (message.node_version !== "") {
+      obj.node_version = message.node_version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostRuntimeDTO>, I>>(base?: I): ExtensionHostRuntimeDTO {
+    return ExtensionHostRuntimeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostRuntimeDTO>, I>>(object: I): ExtensionHostRuntimeDTO {
+    const message = createBaseExtensionHostRuntimeDTO();
+    message.commit = object.commit ?? "";
+    message.vscode_version = object.vscode_version ?? "";
+    message.node_version = object.node_version ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionHostTargetDTO(): ExtensionHostTargetDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    workspace_ids: [],
+    backend_id: "",
+    source: "",
+    platform: "",
+    channel_state: "",
+    reason: undefined,
+    runtime: undefined,
+  };
+}
+
+export const ExtensionHostTargetDTO: MessageFns<ExtensionHostTargetDTO> = {
+  fromJSON(object: any): ExtensionHostTargetDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      platform: isSet(object.platform) ? globalThis.String(object.platform) : "",
+      channel_state: isSet(object.channel_state) ? globalThis.String(object.channel_state) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      runtime: isSet(object.runtime) ? ExtensionHostRuntimeDTO.fromJSON(object.runtime) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionHostTargetDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.platform !== "") {
+      obj.platform = message.platform;
+    }
+    if (message.channel_state !== "") {
+      obj.channel_state = message.channel_state;
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    if (message.runtime !== undefined) {
+      obj.runtime = ExtensionHostRuntimeDTO.toJSON(message.runtime);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostTargetDTO>, I>>(base?: I): ExtensionHostTargetDTO {
+    return ExtensionHostTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostTargetDTO>, I>>(object: I): ExtensionHostTargetDTO {
+    const message = createBaseExtensionHostTargetDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? "";
+    message.source = object.source ?? "";
+    message.platform = object.platform ?? "";
+    message.channel_state = object.channel_state ?? "";
+    message.reason = object.reason ?? undefined;
+    message.runtime = (object.runtime !== undefined && object.runtime !== null)
+      ? ExtensionHostRuntimeDTO.fromPartial(object.runtime)
+      : undefined;
     return message;
   },
 };

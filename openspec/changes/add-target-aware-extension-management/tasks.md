@@ -12,6 +12,7 @@
   - MCP 候选规划切片沿原 policy／schema 登记独立 `mcp_installation_manage`，默认拒绝且须精确绑定认证主体；两种 workspace mount 的原件读取／计划／重验共用原生 Gateway 权限边界。该切片不代替后续制品安装、宿主管理及整项验收，本项保持未勾选。
   - 2026-11-06 扩展权限注册切片：原 policy／schema 登记独立 `extension_installation_manage`、`extension_host_manage`，管理能力默认拒绝且须精确绑定认证主体，彼此不代授；87项policy定向通过。实际宿主管理入口／联邦通道尚未接入，不将注册等同完整授权验收。
 - [ ] 1.5 实现绑定稳定目标的能力／状态发现及实际路由，区分离线镜像和实时状态；验证同名、route 变化／重用、停止和权限撤销，无隐式启动或本地 fallback。
+  - 2026-11-06 Node宿主实时发现切片：新增原Gateway／Backend私有resolve，读取唯一宿主owner的稳定Backend、平台、已绑定版本与独立channel_state；和原WS共用目标解析及逐workspace引用，已知Backend身份不改写，无隐式启动／下载／镜像回退。86项相关单元、原IPC／原生Gateway／Relay真实网络3项通过，后者先发现再用返回身份打开原通道；每种网络六个真实Node进程均核退出。新错误响应强断言补验8项，与86项重叠不相加。生产及测试Pyright零诊断，Ruff、Buf格式／lint／build／真实基线breaking、生成一致性与完整Workbench构建79扩展通过；Web完整tsc仍为相同28条既有诊断，原始输出SHA与前批完整基线一致。准确命令、指纹、原始输出及未验边界见 `out/tests/temp/2026/11/06/node_host_discovery/artifacts/verification-v1.json`。未接入窗口HostFactory、完整API能力矩阵、VSIX安装或真实SSH／Windows／Electron，1.5及5.3继续未勾选。
 - [ ] 1.6 清点各功能将使用的既有 URI 与字段；在原配置／联邦／MCP owner 补本稿已明确需要的 source 读写、私有输入引用、受管 launch binding、管理能力正式 delta／schema／消费者；确需新增 URI 时补原寻址 owner delta，不在前端拼 grammar。
 
 ## 2. MCP 目录与目标安装

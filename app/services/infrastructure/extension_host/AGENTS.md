@@ -7,6 +7,7 @@
 - 已选定运行时的直接启动、私有 IPC、输出收集及原进程退出核验。
 - Backend registry唯一装配宿主owner；关闭先撤销宿主准入并回收IPC/进程，再排空工作区依赖。
 - 专用运行时从 Launcher runtime manifest 的 extension_host 声明解析；缺失表示不可用，不借应用通用 Node 或 PATH。
+- `describe`与实际连接共用Backend／mount校验和准入事实；读取版本／平台／通道状态不创建session、不重新探测或扫描runtime。通道状态不代表完整扩展API已经接入。
 
 # 不可修改内容
 

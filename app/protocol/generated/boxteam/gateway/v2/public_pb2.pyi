@@ -1665,3 +1665,47 @@ class ExtensionHostConnectionDTO(_message.Message):
     generation: str
     request_id: str
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionHostTargetRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionHostRuntimeDTO(_message.Message):
+    __slots__ = ("commit", "vscode_version", "node_version")
+    COMMIT_FIELD_NUMBER: _ClassVar[int]
+    VSCODE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    NODE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    commit: str
+    vscode_version: str
+    node_version: str
+    def __init__(self, commit: _Optional[str] = ..., vscode_version: _Optional[str] = ..., node_version: _Optional[str] = ...) -> None: ...
+
+class ExtensionHostTargetDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "source", "platform", "channel_state", "reason", "runtime")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_FIELD_NUMBER: _ClassVar[int]
+    CHANNEL_STATE_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    RUNTIME_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    source: str
+    platform: str
+    channel_state: str
+    reason: str
+    runtime: ExtensionHostRuntimeDTO
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source: _Optional[str] = ..., platform: _Optional[str] = ..., channel_state: _Optional[str] = ..., reason: _Optional[str] = ..., runtime: _Optional[_Union[ExtensionHostRuntimeDTO, _Mapping]] = ...) -> None: ...
