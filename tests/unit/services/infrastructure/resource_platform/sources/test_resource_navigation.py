@@ -417,7 +417,8 @@ async def test_fuzzy_cursor_keeps_query_and_changed_prefix_contract(navigation_c
     assert failure.value.reason == "stale_cursor"
 
 
-async def test_fuzzy_cancellation_releases_caller_and_worker_keeps_original_deadline(navigation_case, monkeypatch):
+@pytest.mark.parametrize("expired", [False, True])
+async def test_fuzzy_cancellation_stops_worker_without_extending_deadline(navigation_case, monkeypatch, expired):
     owner, _, uri = navigation_case
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     original = owner._navigate_local
@@ -428,8 +429,8 @@ async def test_fuzzy_cancellation_releases_caller_and_worker_keeps_original_dead
         try:
             assert release.wait(2), "测试必须释放文件导航worker"
             return original(*args)
-        except ResourceFileOperationError as error:
-            failures.append(error.reason)
+        except (ResourceFileOperationError, asyncio.CancelledError) as error:
+            failures.append(error.reason if isinstance(error, ResourceFileOperationError) else "cancelled")
             raise
         finally:
             finished.set()
@@ -446,10 +447,12 @@ async def test_fuzzy_cancellation_releases_caller_and_worker_keeps_original_dead
             await task
         assert not finished.is_set()
     finally:
-        clock[0] = 2.0
+        clock[0] = 2.0 if expired else 0.0
         release.set()
         assert await asyncio.to_thread(finished.wait, 1)
-    assert failures == ["deadline"]
+    assert failures == ["deadline" if expired else "cancelled"]
+    following = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list"), local_gateway_id=GATEWAY_ID)
+    assert following.entries == ()
 
 
 @pytest.mark.asyncio

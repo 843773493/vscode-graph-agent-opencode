@@ -15,7 +15,9 @@ import stat
 import time
 from collections.abc import Callable, Iterator
 from contextlib import nullcontext
+from contextvars import ContextVar
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING, NamedTuple
 
 import regex
@@ -83,6 +85,7 @@ _MEDIA_EXTENSIONS = {
     **dict.fromkeys((".pdf", ".ppt", ".pptx"), "file"),
 }
 _DEFAULT_SEARCH_OPTIONS = ResourceNavigationSearchOptions()
+_navigation_cancelled: ContextVar[Event | None] = ContextVar("resource_navigation_cancelled", default=None)
 
 
 class FileObservation(NamedTuple):
@@ -317,8 +320,14 @@ class ResourceNavigation:
                         request.model_copy(update={"uri": parsed.display_uri}), gateway_id=local_gateway_id, deadline=deadline,
                     )
                     return self._response(result, request, deadline)
-                # 取消等待不能中断原生阻塞 I/O；只读 worker 恢复后仍检查同一 deadline。
-                return await asyncio.to_thread(self._navigate_local, parsed, request, local_gateway_id, deadline, artifact_reader)
+                # 原生 I/O 返回后，在原检查点停止已取消的扫描；保留同一总期限。
+                cancelled = Event()
+                token = _navigation_cancelled.set(cancelled)
+                try:
+                    return await asyncio.to_thread(self._navigate_local, parsed, request, local_gateway_id, deadline, artifact_reader)
+                finally:
+                    cancelled.set()
+                    _navigation_cancelled.reset(token)
         except TimeoutError as error:
             raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline") from error
 
@@ -813,6 +822,9 @@ class ResourceNavigation:
     def _check_deadline(deadline: float) -> None:
         if time.monotonic() >= deadline:
             raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline")
+        cancelled = _navigation_cancelled.get()
+        if cancelled is not None and cancelled.is_set():
+            raise asyncio.CancelledError
 
     @staticmethod
     def _size(result: ResourceNavigationResultDTO) -> int:
