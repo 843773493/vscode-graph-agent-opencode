@@ -1,10 +1,10 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fork, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { createRequire, isBuiltin } from 'node:module';
-import { createConnection, createServer } from 'node:net';
+import { createConnection } from 'node:net';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
@@ -47,7 +47,7 @@ after(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'node-host-checks.json'), JSON.stringify({
-      boundary: '真实固定上游Node宿主及ESM扩展、原TCP/socket-transfer/PersistentProtocol/RPC和原生文件访问；主线程UI/配置/存储/注册回调及CPU负载估算为明确替身。未经过Gateway、安装管理或窗口多目标registry，不代表产品完整验收。',
+      boundary: '真实Backend进程owner、私有Unix IPC、固定上游Node宿主、原PersistentProtocol/RPC与ESM扩展；TCP仅为测试传输。主线程UI/配置/存储/注册回调及CPU负载估算为明确替身。未经过Gateway授权、安装管理或窗口多目标registry，不代表产品完整验收。',
       metadata, receipts,
     }, null, 2) + '\n');
   }
@@ -74,40 +74,18 @@ async function connect(label) {
     writeFile(join(extension, 'extension.mjs'), await readFile('tests/integration/workspace_services/extension_host/probe_extension.mjs')),
     writeFile(join(folder, 'identity.txt'), label),
   ]);
-  const child = fork(join(hostDirectory, 'extensionHostProcess.mjs'), ['--useHostProxy=false'], {
-    execPath: node, execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    env: { ...process.env, VSCODE_EXTHOST_WILL_SEND_SOCKET: '1', VSCODE_RECONNECTION_GRACE_TIME: '0' },
-  });
-  const exit = once(child, 'exit'), ready = once(child, 'message');
-  const receipt = { label, pid: child.pid, calls: [], errors: [], stdout: '', stderr: '' };
+  const receipt = { label, calls: [], errors: [] };
   receipts.push(receipt);
-  child.stdout.on('data', data => { receipt.stdout += data; });
-  child.stderr.on('data', data => { receipt.stderr += data; });
-  run.addCleanup(`Node宿主${label}`, async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill();
-    await bounded(exit, `${label}退出`);
-  });
-  const server = createServer({ pauseOnConnect: true });
-  run.addCleanup(`socket listener ${label}`, () => new Promise((resolve, reject) => {
-    if (!server.listening) return resolve();
-    server.close(error => error ? reject(error) : resolve());
-  }));
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const accepted = once(server, 'connection');
-  const socket = createConnection(server.address().port, '127.0.0.1');
+  const socket = createConnection(Number(process.env.BOXTEAM_TEST_HOST_BACKEND_PORT), '127.0.0.1');
+  const exit = once(socket, 'close');
   const nodeSocket = new m.NodeSocket(socket, `host-probe-${label}`);
   run.addCleanup(`socket ${label}`, () => nodeSocket.dispose());
   // 本装具不验 CPU 负载判定；用原注入点避免创建窗口级、无释放入口的采样定时器。
   const protocol = new m.PersistentProtocol({ socket: nodeSocket, loadEstimator: { hasHighLoad: () => false } });
   run.addCleanup(`protocol ${label}`, () => protocol.dispose());
+  // 控制头由Python测试listener消费；后续完全复用原协议，不维护另一套编码。
+  socket.write(`${label}\n`);
   protocol.sendResume();
-  assert.deepEqual((await bounded(ready, 'IPC ready'))[0], { type: 'VSCODE_EXTHOST_IPC_READY' });
-  const [transfer] = await accepted;
-  run.addCleanup(`transfer socket ${label}`, () => transfer.destroy());
-  child.send({ type: 'VSCODE_EXTHOST_IPC_SOCKET', initialDataChunk: '', skipWebSocketFrames: true,
-    permessageDeflate: false, inflateBytes: '' }, transfer);
-  server.close();
   const next = () => bounded(new Promise(resolve => {
     const listener = protocol.onMessage(value => { listener.dispose(); resolve(value); });
   }), `${label}握手`);
@@ -132,6 +110,7 @@ async function connect(label) {
     if (commit !== metadata.commit) return bounded(exit, '版本拒绝');
     assert.equal((await initialized).readUInt8(0), 1);
     const rpc = new m.RPCProtocol(protocol);
+    socket.once('close', () => rpc.dispose());
     run.addCleanup(`RPC ${label}`, () => rpc.dispose());
     // 这些主线程边界只记录真实宿主的通知；不模拟文件读取或扩展执行结果。
     const notification = (actor, name) => (...args) => { receipt.calls.push({ actor, name, args }); };
@@ -169,16 +148,16 @@ async function connect(label) {
     }), 'startExtensionHost');
     assert.equal(await rpc.getProxy(m.ExtHostContext.ExtHostExtensionService).$activate(identifier,
       { startup: false, extensionId: identifier, activationEvent: '*' }), true);
-    return () => rpc.getProxy(m.ExtHostContext.ExtHostCommands).$executeContributedCommand('host-probe.inspect');
+    return (command = 'host-probe.inspect') => rpc.getProxy(m.ExtHostContext.ExtHostCommands).$executeContributedCommand(command);
   }
   async function stop() {
     protocol.send(m.VSBuffer.wrap(Uint8Array.of(3)));
     const result = await bounded(exit, `${label}正常终止`);
     receipt.exit = result;
     nodeSocket.dispose();
-    assert.deepEqual(result, [0, null]);
+    assert.deepEqual(result, [false]);
   }
-  return { initialize, stop, receipt, folder, manifest };
+  return { initialize, stop, receipt, folder, manifest, disconnect: () => socket.destroy(), exit };
 }
 
 test('构建原Node宿主时不引入renderer文件链，依赖跟随固定上游', () => {
@@ -364,7 +343,7 @@ test('构建拒绝覆盖已有输出或写入固定上游，不修改原文件',
 
 test('原协议拒绝不同上游版本，不激活扩展', async () => {
   const host = await connect('wrong-commit');
-  assert.deepEqual(await host.initialize('wrong-commit'), [55, null]);
+  assert.deepEqual(await host.initialize('wrong-commit'), [false]);
   assert.deepEqual(host.receipt.calls, []);
 });
 
@@ -378,9 +357,21 @@ test('真实双Node宿主各自激活同ID不同版本，原生与扩展fs访问
       ownVersion: host.manifest.version, all: ['host-probe.node'], folders: [protocolTypes.URI.file(host.folder).toString()] });
     assert.equal(host.receipt.calls.some(call => call.name === '$onDidActivateExtension'), true);
     assert.deepEqual(host.receipt.errors, []);
-    assert.equal(host.receipt.stderr, '');
   }
   await a.stop();
   assert.equal((await inspectB()).native, 'B');
   await b.stop();
+});
+
+test('客户端断连回收自己的宿主，实际崩溃沿原通道结束且不重放命令', async () => {
+  const disconnected = await connect('disconnect');
+  await disconnected.initialize();
+  disconnected.disconnect();
+  await bounded(disconnected.exit, '客户端断连');
+  const crashed = await connect('crash');
+  const inspect = await crashed.initialize();
+  assert.equal((await inspect()).native, 'crash');
+  // 原宿主会拦截process.exit；用真实OS信号终止，Python核实原Process.wait和进程组。
+  await assert.rejects(inspect('host-probe.crash'));
+  await bounded(crashed.exit, '宿主崩溃');
 });

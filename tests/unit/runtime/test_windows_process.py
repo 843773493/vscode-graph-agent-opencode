@@ -15,7 +15,7 @@ from app.runtime import windows_process
 @pytest.fixture
 def native_process_case(monkeypatch):
     events, descriptors = [], []
-    state = SimpleNamespace(code=None, active=1, fail_assign=False, fail_job=False)
+    state = SimpleNamespace(code=None, active=1, fail_assign=False, fail_job=False, output=None)
 
     class Handle:
         def __init__(self, name, value):
@@ -51,6 +51,9 @@ def native_process_case(monkeypatch):
         startup = args[8]
         assert all(os.get_inheritable(fd) for fd in (startup.hStdInput, startup.hStdOutput, startup.hStdError))
         descriptors.append(startup.hStdError)
+        if state.output is not None:
+            os.write(startup.hStdOutput, state.output)
+            os.write(startup.hStdError, b"stderr-tail")
         events.append("create_suspended")
         return process, thread, 1234, 5678
 
@@ -88,11 +91,11 @@ def native_process_case(monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(windows_process.os, "pipe", pipe)
 
-    def open_process(command=("server.exe", "argument with space")):
+    def open_process(command=("server.exe", "argument with space"), **streams):
         with monkeypatch.context() as platform_patch:
             platform_patch.setattr(windows_process.sys, "platform", "win32")
             return windows_process.open_windows_process(command,
-                env={"MODEL": "configured"}, cwd=None, stderr=sys.stderr)
+                env={"MODEL": "configured"}, cwd=None, **{"stderr": sys.stderr, **streams})
 
     return SimpleNamespace(open=open_process, state=state, events=events, descriptors=descriptors)
 
@@ -150,3 +153,16 @@ def test_windows_job_creation_failure_opens_no_pipes(native_process_case):
     with pytest.raises(OSError, match="Job 创建失败"):
         case.open()
     assert not case.descriptors and not case.events
+
+
+async def test_file_stdout_is_inherited_without_a_parent_pipe_and_keeps_the_caller_handle(native_process_case, tmp_path):
+    case = native_process_case
+    case.state.output = b"native-stdout"
+    target = tmp_path / "process.raw"
+    with target.open("wb") as output:
+        process = case.open(stdout=output, stderr=-2)
+        assert process.stdout is None
+        case.state.code, case.state.active = 0, 0
+        await process.aclose()
+        output.write(b"parent-tail")
+    assert target.read_bytes() == b"native-stdoutstderr-tailparent-tail"

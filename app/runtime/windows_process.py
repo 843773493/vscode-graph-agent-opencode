@@ -10,7 +10,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Literal, Protocol, TextIO, cast
+from typing import BinaryIO, Literal, Protocol, TextIO, cast
 
 from anyio.abc import Process
 from anyio.streams.file import FileReadStream, FileWriteStream
@@ -24,7 +24,7 @@ class _NativeHandle(Protocol):
 
 class WindowsChildProcess(Process):
     def __init__(self, *, process: _NativeHandle, job: _NativeHandle, pid: int,
-                 stdin: FileWriteStream, stdout: FileReadStream) -> None:
+                 stdin: FileWriteStream, stdout: FileReadStream | None) -> None:
         self._process, self._job, self._pid = process, job, pid
         self._stdin, self._stdout = stdin, stdout
         self._returncode: int | None = None
@@ -38,7 +38,7 @@ class WindowsChildProcess(Process):
         return self._stdin
 
     @property
-    def stdout(self) -> FileReadStream:
+    def stdout(self) -> FileReadStream | None:
         return self._stdout
 
     @property
@@ -84,13 +84,15 @@ class WindowsChildProcess(Process):
         if self.returncode is None or not self.group_empty():
             raise RuntimeError("Windows 原进程／Job Object 尚未核实退出，不能释放句柄")
         await self._stdin.aclose()
-        await self._stdout.aclose()
+        if self._stdout is not None:
+            await self._stdout.aclose()
         self._process.Close()
         self._job.Close()
 
 
 def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
-                         cwd: str | Path | None, stderr: TextIO | Literal[-2]) -> WindowsChildProcess:
+                         cwd: str | Path | None, stderr: TextIO | Literal[-2],
+                         stdout: BinaryIO | TextIO | Literal[-1] = -1) -> WindowsChildProcess:
     if sys.platform != "win32":
         raise OSError("Windows 子进程入口只能在 Windows 调用")
     import msvcrt
@@ -120,9 +122,13 @@ def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
             stdin_read, stdin_write = os.pipe()
             child_input = inherited.enter_context(os.fdopen(stdin_read, "rb", buffering=0))
             parent_input = owned.enter_context(os.fdopen(stdin_write, "wb", buffering=0))
-            stdout_read, stdout_write = os.pipe()
-            parent_output = owned.enter_context(os.fdopen(stdout_read, "rb", buffering=0))
-            child_output = inherited.enter_context(os.fdopen(stdout_write, "wb", buffering=0))
+            parent_output = None
+            if stdout == subprocess.PIPE:
+                stdout_read, stdout_write = os.pipe()
+                parent_output = owned.enter_context(os.fdopen(stdout_read, "rb", buffering=0))
+                child_output = inherited.enter_context(os.fdopen(stdout_write, "wb", buffering=0))
+            else:
+                child_output = inherited.enter_context(os.fdopen(os.dup(stdout.fileno()), "wb", buffering=0))
             child_error = child_output if stderr == subprocess.STDOUT else inherited.enter_context(
                 os.fdopen(os.dup(stderr.fileno()), "wb", buffering=0))
             for stream in (child_input, child_output, child_error):
@@ -144,6 +150,6 @@ def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
             win32job.AssignProcessToJobObject(int(job), int(process))
             win32process.ResumeThread(int(thread))
             result = WindowsChildProcess(process=process, job=job, pid=pid,
-                stdin=FileWriteStream(parent_input), stdout=FileReadStream(parent_output))
+                stdin=FileWriteStream(parent_input), stdout=FileReadStream(parent_output) if parent_output is not None else None)
         owned.pop_all()
         return result

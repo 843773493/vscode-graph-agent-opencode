@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { readFile } from 'node:fs/promises';
 
 export function activate(context) {
+  context.subscriptions.push(vscode.commands.registerCommand('host-probe.crash', () => process.kill(process.pid, 'SIGKILL')));
   context.subscriptions.push(vscode.commands.registerCommand('host-probe.inspect', async () => {
     const folders = vscode.workspace.workspaceFolders;
     const file = vscode.Uri.joinPath(folders[0].uri, 'identity.txt');

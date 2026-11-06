@@ -9,7 +9,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import ClassVar, Literal, TextIO
+from typing import BinaryIO, ClassVar, Literal, TextIO
 
 import anyio
 import psutil
@@ -56,7 +56,8 @@ class OwnedChildProcess:
         self._close_lock = asyncio.Lock()
 
     async def start(self, command: Sequence[str], *, env: Mapping[str, str],
-                    cwd: str | Path | None, stderr: TextIO | Literal[-2] = sys.stderr) -> None:
+                    cwd: str | Path | None, stderr: TextIO | Literal[-2] = sys.stderr,
+                    stdout: BinaryIO | TextIO | Literal[-1] = -1) -> None:
         if self._creating is not None:
             raise RuntimeError("子进程身份不能重复启动")
 
@@ -64,12 +65,12 @@ class OwnedChildProcess:
             if os.name == "nt":
                 from app.runtime.windows_process import open_windows_process
 
-                process = await asyncio.to_thread(open_windows_process, command, env=env, cwd=cwd, stderr=stderr)
+                process = await asyncio.to_thread(open_windows_process, command, env=env, cwd=cwd, stderr=stderr, stdout=stdout)
                 self.process = process
                 self._group_empty = process.group_empty
                 self._terminate, self._kill = process.terminate, process.kill
             else:
-                self.process = await anyio.open_process(command, env=env, cwd=cwd, stderr=stderr, start_new_session=True)
+                self.process = await anyio.open_process(command, env=env, cwd=cwd, stderr=stderr, stdout=stdout, start_new_session=True)
                 group_id = self.process.pid
 
                 def group_empty() -> bool:
