@@ -109,6 +109,7 @@
 
 - [ ] 6.1 完成 design D8 能力矩阵与机器可查询诊断，按实际服务声明支持／拒绝；未支持 API 不返回空成功，不把类型存在记为可用。
 - [ ] 6.2 迁齐文档／语言／符号／搜索 Provider 的目标注册、原 URI identity、模型同步与取消，沿现有 SearchService；明确过滤初始／dirty textDocuments、visible／active editors、诊断／watcher 和所有事件，跨资源编辑预检全部归属及版本。验 A/B 同开 dirty 文件并切焦点，非所属 active 为 undefined，无内容泄露或迟到发布。
+  - 2026-11-06 诊断切片：修前真实组合复现同名集合覆盖、事件广播外部目标；原 MainThreadDiagnostics／MarkerService 以既有 extHostId 区分目标集合的内部 owner，clear／dispose 仅撤本代，重叠视图及新旧代际不互删。整批位置先校验再发布；事件只转发所属主位置，关联位置／code link 复用原 typed URI 许可，保留 HTTPS、自定义 URI、目标帮助文件及普通路径正文，不修改权威 marker。原 Web owner／窗口语义保持。原公开 DiagnosticCollection 经真实 RPCProtocol／URI 转换的发布、镜像和清空通过；组合矩阵46项／323断言、104份实际转换源码类型及79内置扩展正式Web构建通过，独立审查修正关联位置过度拒绝后无新问题。准确命令、指纹与原件见 `out/tests/temp/2026/11/06/extension_diagnostics/artifacts/verification-v1.json`；认证binding、字节传输及文档版本为具名装具，本片不代替真实Gateway／Node／页面或完整文档／Provider验收，6.2保持未勾选。
 - [ ] 6.3 接通 host workspace view 的 fs／watcher／configuration 与目标 owner，复用原 typed URI transformation；真实扩展分别经 Node 文件 API 与 workspace.fs 读目标独有文件并返回可打开位置，fsPath 在目标真实有效。验嵌套根原 folder 匹配、重复本机路径身份不足时明确拒绝，不把任意字符串全局替换、不建第二根绑定，不访问浏览器 IndexedDB 同名根或中继文件系统。
 - [ ] 6.4 接通实际支持的 terminal／tasks／debug／process API 到目标运行服务，核目标 PATH／平台；不支持项明确错误，不在本地或 Electron 创建替代进程。
 - [ ] 6.5 在原窗口 command dispatcher、TreeView／WebviewView resolver、setContext／菜单及资源通道实现按 host／view 的运行注册与展示绑定，静态声明一次登记；验 B 在 A 焦点调用、A dispose 不撤销 B、同 ID view 正确切目标、CSP／端口／迟到消息隔离，无绕过权限资源通道。

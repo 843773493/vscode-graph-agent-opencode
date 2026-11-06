@@ -45,6 +45,10 @@ export class TargetUriTransformer implements IURITransformer {
     return [...this.nativeHomes, ...this.extensions().map(extension => extension.extensionLocation)].some(base => this.inside(uri, base));
   }
   ownsWorkspaceResource(uri: URI): boolean { return this.folders.some(folder => this.inside(uri, folder.uri)); }
+  allowsOutgoingResource(uri: URI): boolean {
+    if (uri.scheme === 'boxteam-file') return this.ownsWorkspaceResource(uri);
+    return uri.scheme !== 'file' || this.isHostResource(uri) || this.folders.some(folder => this.inside(uri, folder.native));
+  }
   transformIncoming(value: UriComponents): UriComponents {
     const uri = URI.revive(value);
     if (uri.scheme === 'boxteam-file' && !this.ownsWorkspaceResource(uri)) {
@@ -72,7 +76,7 @@ export class TargetUriTransformer implements IURITransformer {
       if (suffix === undefined) throw new Error('无法映射目标工作区文件位置');
       return folder.native.with({ path: posix.join(folder.native.path, suffix), query: uri.query, fragment: uri.fragment }).toJSON();
     }
-    if (uri.scheme === 'file' && !this.isHostResource(uri) && !this.folders.some(folder => this.inside(uri, folder.native))) throw new Error('不能向目标 Node 宿主发送未绑定的本机文件：' + uri.toString());
+    if (!this.allowsOutgoingResource(uri)) throw new Error('不能向目标 Node 宿主发送未绑定的本机文件：' + uri.toString());
     return value;
   }
   transformOutgoingURI(uri: URI): URI { return URI.revive(this.transformOutgoing(uri)); }
@@ -83,4 +87,11 @@ export function hostOwnsWorkspaceResource(host: IExtensionHost, uri: URI): boole
   if (!host.binding) return true;
   if (!(host.uriTransformer instanceof TargetUriTransformer)) throw new Error('Node 宿主缺少已绑定 URI transformer');
   return host.uriTransformer.ownsWorkspaceResource(uri);
+}
+
+/** 诊断的文档链接可以指向该宿主扩展内的帮助文件；业务文档仍须属于 workspace view。 */
+export function hostAllowsResourceLink(host: IExtensionHost, uri: URI): boolean {
+  if (!host.binding) return true;
+  if (!(host.uriTransformer instanceof TargetUriTransformer)) throw new Error('Node 宿主缺少已绑定 URI transformer');
+  return host.uriTransformer.allowsOutgoingResource(uri);
 }

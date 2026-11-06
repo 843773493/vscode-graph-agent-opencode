@@ -17,3 +17,5 @@
 Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成，MainThreadStorage 读写和通知使用同一身份；Web 保留原 profile 行为。目标文件型存储位置沿认证初始化映射，不把窗口状态库当目标文件系统。目标 Node 的跨设备 setKeysForSync 未迁齐消费者时从原公开 API 明确拒绝，不能写无人消费的声明。
 
 目标 SecretStorage 尚未接入消费侧 owner，Node 入口在秘密进入浏览器 RPC 前拒绝；主线程不读写或向目标宿主广播 Web 秘密。Web 原秘密 API 保持，明确拒绝不等同目标能力已实现。
+
+诊断继续由原 MainThreadDiagnostics／MarkerService 持有；目标 collection 的内部 owner 使用原 extHostId 区分，清空及释放只撤本代。事件按 workspace view 投影并过滤外部关联位置，保留普通正文及合法文档链接；写入先核整批资源，不能部分发布后报错。Web 保留原 owner 与窗口事件语义。
