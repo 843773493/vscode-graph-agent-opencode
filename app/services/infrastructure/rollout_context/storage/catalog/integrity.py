@@ -177,6 +177,8 @@ def _validated_catalog_body(key: _BodyValidationKey) -> CanonicalItemRecord:
         raise RuntimeError(f"v2 item JSONL 无法解码: item_id={item_id}") from error
     if not isinstance(envelope, Mapping):
         raise TypeError(f"v2 item envelope 非 object: item_id={item_id}")
+    # 整行 JCS 检查拒绝重复键和非规范字节；后续 content_hash 只绑定正文，不能替代它。
+    # 这里只检查本次消费的 line，不扫描未读取的历史。
     if raw != canonical_json_line(envelope):
         raise RuntimeError(f"v2 item JSONL 不是 canonical JCS line: item_id={item_id}")
     if (
