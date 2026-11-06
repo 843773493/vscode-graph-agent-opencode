@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import ntpath
 import os
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Protocol, TextIO, cast
+from typing import Literal, Protocol, TextIO, cast
 
 from anyio.abc import Process
 from anyio.streams.file import FileReadStream, FileWriteStream
@@ -89,7 +90,7 @@ class WindowsChildProcess(Process):
 
 
 def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
-                         cwd: str | Path | None, stderr: TextIO) -> WindowsChildProcess:
+                         cwd: str | Path | None, stderr: TextIO | Literal[-2]) -> WindowsChildProcess:
     if sys.platform != "win32":
         raise OSError("Windows 子进程入口只能在 Windows 调用")
     import msvcrt
@@ -122,7 +123,8 @@ def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
             stdout_read, stdout_write = os.pipe()
             parent_output = owned.enter_context(os.fdopen(stdout_read, "rb", buffering=0))
             child_output = inherited.enter_context(os.fdopen(stdout_write, "wb", buffering=0))
-            child_error = inherited.enter_context(os.fdopen(os.dup(stderr.fileno()), "wb", buffering=0))
+            child_error = child_output if stderr == subprocess.STDOUT else inherited.enter_context(
+                os.fdopen(os.dup(stderr.fileno()), "wb", buffering=0))
             for stream in (child_input, child_output, child_error):
                 os.set_inheritable(stream.fileno(), True)
             startup = win32process.STARTUPINFO()
@@ -130,7 +132,9 @@ def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
             startup.hStdInput = msvcrt.get_osfhandle(child_input.fileno())
             startup.hStdOutput = msvcrt.get_osfhandle(child_output.fileno())
             startup.hStdError = msvcrt.get_osfhandle(child_error.fileno())
-            process_handle, thread_handle, pid, _ = win32process.CreateProcess(None, subprocess.list2cmdline(command),
+            # 已解析的绝对 exe 独立传入，避免命令行首 token 的 MAX_PATH 限制；裸命令仍按原 PATH 搜索。
+            executable = command[0] if ntpath.isabs(command[0]) else None
+            process_handle, thread_handle, pid, _ = win32process.CreateProcess(executable, subprocess.list2cmdline(command),
                 None, None, True, win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW, dict(env),
                 str(cwd) if cwd is not None else None, startup)
             process = cast(_NativeHandle, cast(object, process_handle))

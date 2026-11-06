@@ -3,7 +3,7 @@ import { Emitter, type Event } from '../../upstream/src/vs/base/common/event.js'
 import { observableValue } from '../../upstream/src/vs/base/common/observable.js';
 import { MarkdownString } from '../../upstream/src/vs/base/common/htmlContent.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
-import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { IIterativePage, IIterativePager } from '../../upstream/src/vs/base/common/paging.js';
 import { IMcpGalleryManifest } from '../../upstream/src/vs/platform/mcp/common/mcpGalleryManifest.js';
 import { IGalleryMcpServer, IMcpGalleryService, IQueryOptions } from '../../upstream/src/vs/platform/mcp/common/mcpManagement.js';
@@ -240,8 +240,12 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
     if (!server.gallery) throw new Error('请从原 MCP 目录选择待安装制品');
     if (options && Object.values(options).some(value => value !== undefined)) throw new Error('制品安装不消费工作区配置选项，请从明确目标的制品入口安装');
     const { target, label } = this.owner.installationTarget();
-    const artifact = await this.progress.withProgress({ location: ProgressLocation.Notification, title: `安装 MCP 制品 · ${label}` },
-      progress => publishMcpArtifact(server.gallery!, target, label, this.quickInput, progress));
+    const cancellation = new CancellationTokenSource();
+    let artifact: Awaited<ReturnType<typeof publishMcpArtifact>>;
+    try {
+      artifact = await this.progress.withProgress({ location: ProgressLocation.Notification, title: `安装 MCP 制品 · ${label}`, cancellable: true },
+        progress => publishMcpArtifact(server.gallery!, target, label, this.quickInput, progress, cancellation.token), () => cancellation.cancel());
+    } finally { cancellation.dispose(); }
     this.notifications.info(`MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。工作区尚未配置或连接；generation ${artifact.binding!.generation}`);
     return server;
   }

@@ -415,7 +415,7 @@ class McpInstalledArtifactDTO(_McpCandidateModel):
 class McpInstallationOperationDTO(_McpCandidateModel):
     operation_id: str
     intent_digest: str
-    status: Literal["running", "succeeded", "failed", "interrupted"]
+    status: Literal["running", "succeeded", "failed", "interrupted", "cancelled"]
     stage: Literal["prepare", "lock", "install", "verify", "publish", "remove", "complete"]
     created_at: float
     updated_at: float
@@ -423,6 +423,7 @@ class McpInstallationOperationDTO(_McpCandidateModel):
     error: str | None = None
     log: str = Field(default="", max_length=65536)
     kind: Literal["install", "uninstall"] = "install"
+    cancellation_requested: bool = False
 
 
 class McpUninstallationRequestDTO(_McpCandidateModel):

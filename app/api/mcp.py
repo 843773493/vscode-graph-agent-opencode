@@ -223,6 +223,28 @@ async def get_mcp_installation_operation(
     return McpInstallationOperationResponseDTO(data=data, request_id=request_id, target=target)
 
 
+@router.post("/installation-operations/{operation_id}/cancel", response_model=McpInstallationOperationResponseDTO,
+    summary="独立取消原安装操作，最后消费者等待执行退出结算")
+async def cancel_mcp_installation_operation(
+    operation_id: str,
+    payload: McpInstallationTargetDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        if payload != target:
+            raise McpCandidateConflict("MCP 安装取消必须绑定原生 Gateway／Backend，不能改投当前目标")
+        try:
+            data = await owner.installations.cancel(operation_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return McpInstallationOperationResponseDTO(data=data, request_id=request_id, target=target)
+
+
 @router.get("/installations", response_model=McpInstalledArtifactListResponseDTO, summary="读取唯一 Backend 已发布 MCP 制品记录")
 async def list_mcp_installations(
     _: Annotated[str, Depends(verify_local_token)],

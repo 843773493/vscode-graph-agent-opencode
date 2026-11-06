@@ -1582,7 +1582,7 @@ class McpInstalledArtifactDTO(_message.Message):
     def __init__(self, binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ..., entrypoint: _Optional[str] = ..., command: _Optional[str] = ..., lock_digest: _Optional[str] = ..., installed_distributions: _Optional[_Mapping[str, str]] = ..., state: _Optional[str] = ..., removal_operation_id: _Optional[str] = ..., removal_error: _Optional[str] = ...) -> None: ...
 
 class McpInstallationOperationDTO(_message.Message):
-    __slots__ = ("operation_id", "intent_digest", "status", "stage", "created_at", "updated_at", "artifact", "error", "log", "kind")
+    __slots__ = ("operation_id", "intent_digest", "status", "stage", "created_at", "updated_at", "artifact", "error", "log", "kind", "cancellation_requested")
     OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     INTENT_DIGEST_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -1593,6 +1593,7 @@ class McpInstallationOperationDTO(_message.Message):
     ERROR_FIELD_NUMBER: _ClassVar[int]
     LOG_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
+    CANCELLATION_REQUESTED_FIELD_NUMBER: _ClassVar[int]
     operation_id: str
     intent_digest: str
     status: str
@@ -1603,7 +1604,8 @@ class McpInstallationOperationDTO(_message.Message):
     error: str
     log: str
     kind: str
-    def __init__(self, operation_id: _Optional[str] = ..., intent_digest: _Optional[str] = ..., status: _Optional[str] = ..., stage: _Optional[str] = ..., created_at: _Optional[float] = ..., updated_at: _Optional[float] = ..., artifact: _Optional[_Union[McpInstalledArtifactDTO, _Mapping]] = ..., error: _Optional[str] = ..., log: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
+    cancellation_requested: bool
+    def __init__(self, operation_id: _Optional[str] = ..., intent_digest: _Optional[str] = ..., status: _Optional[str] = ..., stage: _Optional[str] = ..., created_at: _Optional[float] = ..., updated_at: _Optional[float] = ..., artifact: _Optional[_Union[McpInstalledArtifactDTO, _Mapping]] = ..., error: _Optional[str] = ..., log: _Optional[str] = ..., kind: _Optional[str] = ..., cancellation_requested: _Optional[bool] = ...) -> None: ...
 
 class McpUninstallationRequestDTO(_message.Message):
     __slots__ = ("target", "binding", "operation_id")

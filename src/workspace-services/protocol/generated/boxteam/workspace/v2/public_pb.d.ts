@@ -4112,6 +4112,11 @@ export declare type McpInstallationOperationDTO = Message<"boxteam.workspace.v2.
    * @generated from field: string kind = 10;
    */
   kind: string;
+
+  /**
+   * @generated from field: bool cancellation_requested = 11;
+   */
+  cancellationRequested: boolean;
 };
 
 /**

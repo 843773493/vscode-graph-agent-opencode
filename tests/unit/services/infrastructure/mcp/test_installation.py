@@ -211,7 +211,7 @@ async def test_cancellation_waits_for_original_worker_before_settling(tmp_path: 
     entered, release = threading.Event(), threading.Event()
     tasks: list[asyncio.Task[None]] = []
 
-    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback, execution_directory: Path) -> tuple[str, str, dict[str, str]]:
         task = asyncio.current_task()
         assert task is not None
         tasks.append(task)
@@ -279,7 +279,7 @@ async def test_preparation_error_remains_primary_when_failure_recording_fails(tm
     recording = OSError("原操作失败状态写入失败")
     preparing: asyncio.Future[asyncio.Task[None]] = asyncio.get_running_loop().create_future()
 
-    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback, execution_directory: Path) -> tuple[str, str, dict[str, str]]:
         task = asyncio.current_task()
         assert task is not None
         preparing.set_result(task)
@@ -310,7 +310,7 @@ async def _completed_installation(owner: McpInstallationOwner, operation_id: str
 
 @pytest.fixture
 def no_artifact_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback, execution_directory: Path) -> tuple[str, str, dict[str, str]]:
         pytest.fail("暖复用不得重新准备或下载制品")
 
     monkeypatch.setattr("app.services.infrastructure.mcp.installation.owner.prepare_python_artifact", prepare)
@@ -426,14 +426,14 @@ def test_two_store_transactions_claim_only_one_cold_preparation(tmp_path: Path,
     assert observed.stage == progress.stage and observed.log == progress.log
     assert observed.intent_digest == follower.operation.intent_digest and observed.created_at == follower.operation.created_at
     with sqlite3.connect(root / "installations.sqlite") as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (4,)
         assert connection.execute("SELECT COUNT(*) FROM artifact_preparations").fetchone() == (1,)
         assert connection.execute("SELECT COUNT(*) FROM operation_owners").fetchone() == (1,)
         assert connection.execute("SELECT producer_operation_id FROM operations").fetchall() == [(producer.operation.operation_id,)] * 2
     assert stores[0].artifacts() == []
 
 
-def test_v2_migration_adds_only_workspace_locators(installation_store: InstallationStore,
+def test_v2_migration_preserves_operations_and_adds_current_schema(installation_store: InstallationStore,
     prepared_artifact: tuple[McpInstalledArtifactDTO, Path], operation: McpInstallationOperationDTO, tmp_path: Path) -> None:
     artifact, _ = prepared_artifact
     installation_store.publish(operation, artifact)
@@ -441,12 +441,13 @@ def test_v2_migration_adds_only_workspace_locators(installation_store: Installat
     root = tmp_path / "home/artifacts/mcp" / artifact.binding.backend_id
     with sqlite3.connect(root / "installations.sqlite") as connection:
         connection.execute("DROP TABLE workspace_locators")
+        connection.execute("ALTER TABLE operation_owners DROP COLUMN execution_payload")
         connection.execute("PRAGMA user_version=2")
     upgraded = InstallationStore(root)
     assert upgraded.operation(operation.operation_id) == original and upgraded.artifacts() == [artifact]
     assert upgraded.workspaces() == []
     with sqlite3.connect(root / "installations.sqlite") as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 def test_follower_observes_original_process_and_cannot_write_or_publish(installation_store: InstallationStore,
@@ -515,7 +516,7 @@ async def test_cold_owner_reuses_original_worker_progress_and_binding(tmp_path: 
     entered, advance, progressed, release = (asyncio.Event() for _ in range(4))
     roots: list[Path] = []
 
-    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback, execution_directory: Path) -> tuple[str, str, dict[str, str]]:
         roots.append(root)
         await progress("lock", "原执行者开始锁定\n")
         entered.set()
@@ -574,7 +575,7 @@ async def test_cold_failure_settles_followers_and_only_new_intent_can_recover(tm
     roots: list[Path] = []
     failing = True
 
-    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback, execution_directory: Path) -> tuple[str, str, dict[str, str]]:
         task = asyncio.current_task()
         assert task is not None
         tasks.append(task)
@@ -666,7 +667,7 @@ def test_v1_migration_keys_exact_artifacts_and_keeps_terminal_intents(v1_ledger:
     warm = store.reserve(operation.model_copy(update={"operation_id": "new-warm-intent"}), key=artifact_key_value)
     assert warm.artifact == artifact and warm.preparation is None
     with sqlite3.connect(root / "installations.sqlite") as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (4,)
         assert connection.execute("SELECT artifact_key FROM artifacts").fetchall() == [(artifact_key_value,)]
         assert connection.execute("SELECT producer_operation_id FROM operations WHERE operation_id='original'").fetchone() == (None,)
 

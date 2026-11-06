@@ -948,6 +948,7 @@ export interface McpInstallationOperationDTO {
   error?: string | undefined;
   log: string;
   kind: string;
+  cancellation_requested: boolean;
 }
 
 export interface McpUninstallationRequestDTO {
@@ -9903,6 +9904,7 @@ function createBaseMcpInstallationOperationDTO(): McpInstallationOperationDTO {
     error: undefined,
     log: "",
     kind: "",
+    cancellation_requested: false,
   };
 }
 
@@ -9919,6 +9921,9 @@ export const McpInstallationOperationDTO: MessageFns<McpInstallationOperationDTO
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
       log: isSet(object.log) ? globalThis.String(object.log) : "",
       kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      cancellation_requested: isSet(object.cancellation_requested)
+        ? globalThis.Boolean(object.cancellation_requested)
+        : false,
     };
   },
 
@@ -9954,6 +9959,9 @@ export const McpInstallationOperationDTO: MessageFns<McpInstallationOperationDTO
     if (message.kind !== "") {
       obj.kind = message.kind;
     }
+    if (message.cancellation_requested !== false) {
+      obj.cancellation_requested = message.cancellation_requested;
+    }
     return obj;
   },
 
@@ -9974,6 +9982,7 @@ export const McpInstallationOperationDTO: MessageFns<McpInstallationOperationDTO
     message.error = object.error ?? undefined;
     message.log = object.log ?? "";
     message.kind = object.kind ?? "";
+    message.cancellation_requested = object.cancellation_requested ?? false;
     return message;
   },
 };

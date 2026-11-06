@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
 
-from app.core.shielded_cleanup import run_sync_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.mcp_candidates import McpCandidateConflict
@@ -41,6 +41,7 @@ from app.services.infrastructure.mcp.installation.references import (
     workspace_references,
 )
 from app.services.infrastructure.mcp.installation.store import (
+    InstallationCancelled,
     InstallationReservation,
     InstallationStore,
     artifact_key,
@@ -97,6 +98,21 @@ class McpInstallationOwner:
                 "log": (operation.log + output)[-65536:]})
             operation = await run_sync_shielded(self._store.update, operation)
 
+        executor = asyncio.current_task()
+        assert executor is not None
+        monitoring_error: Exception | None = None
+
+        async def watch_cancellation() -> None:
+            nonlocal monitoring_error
+            try:
+                while not await run_sync_shielded(self._store.cancellation_pending, operation.operation_id):
+                    await asyncio.sleep(0.25)
+            except Exception as error:  # noqa: BLE001 - 原后台错误交还执行 owner，不能静默丢失。
+                # 监测失败交给原执行 task 结算，不能让后台 task 静默失效。
+                monitoring_error = error
+            executor.cancel("所有安装操作均已请求取消" if monitoring_error is None else "原安装取消监测失败")
+
+        watcher = asyncio.create_task(watch_cancellation(), name=f"mcp-cancellation:{operation.operation_id}")
         try:
             artifact = reservation.artifact
             if artifact is not None:
@@ -110,7 +126,8 @@ class McpInstallationOwner:
                 installation_id, generation = preparation.installation_id, preparation.generation
                 root = self._root / "generations" / installation_id / generation
                 command, lock_digest, distributions = await prepare_python_artifact(root,
-                    name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress)
+                    name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress,
+                    execution_directory=self._root)
                 await progress("publish")
                 digest = await run_sync_shielded(artifact_digest, root)
                 artifact = McpInstalledArtifactDTO(
@@ -120,16 +137,33 @@ class McpInstallationOwner:
                     identifier=name, version=version, entrypoint=request.entrypoint, command=command,
                     lock_digest=lock_digest, installed_distributions=distributions)
             await run_sync_shielded(self._store.publish, operation, artifact)
-        except BaseException as error:
+        except BaseException as cause:
+            error = monitoring_error or cause
             # 未发布目录保留给原操作核实，绝不返回可启动 binding，也不删除已发布旧版。
-            operation = operation.model_copy(update={"status": "interrupted" if isinstance(error, asyncio.CancelledError) else "failed",
-                "updated_at": time.time(), "error": str(error) or type(error).__name__})
+            cancelled = isinstance(error, InstallationCancelled) or (isinstance(error, asyncio.CancelledError)
+                and await run_sync_shielded(self._store.cancellation_pending, operation.operation_id))
+            operation = operation.model_copy(update={"status": "cancelled" if cancelled else
+                "interrupted" if isinstance(error, asyncio.CancelledError) else "failed",
+                "updated_at": time.time(), "error": None if cancelled else str(error) or type(error).__name__})
             try:
                 await run_sync_shielded(self._store.update, operation)
             except BaseException as settlement_error:
                 raise error from settlement_error
-            if isinstance(error, asyncio.CancelledError):
+            if isinstance(error, asyncio.CancelledError) and not cancelled:
                 raise
+        finally:
+            watcher.cancel()
+
+            async def drain_watcher() -> None:
+                try:
+                    await watcher
+                except asyncio.CancelledError:
+                    pass
+
+            await run_cleanup_shielded(drain_watcher)
+
+    async def cancel(self, operation_id: str) -> McpInstallationOperationDTO:
+        return await run_sync_shielded(self._store.request_cancel, operation_id)
 
     def operation(self, operation_id: str) -> McpInstallationOperationDTO:
         return self._store.operation(operation_id)

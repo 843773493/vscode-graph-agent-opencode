@@ -1,12 +1,13 @@
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { timeout } from '../../upstream/src/vs/base/common/async.js';
+import type { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import type { IGalleryMcpServer } from '../../upstream/src/vs/platform/mcp/common/mcpManagement.js';
 import type { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import type { IProgress } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import {
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation,
-  installMcpArtifact, getMcpInstallationOperation,
+  installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
 } from '../../../web/src/api/mcpConnections.js';
 import type {
   McpCandidateSourceDTO, McpCandidatePlanRequestDTO, McpInstalledArtifactDTO,
@@ -24,7 +25,7 @@ export function galleryInstallationSource(gallery: IGalleryMcpServer): McpCandid
 
 /** 原 install seam 的制品步骤；返回原生 owner 完整回执，不写配置或创建另一 MCP client。 */
 export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: GatewayWorkspaceRequestTarget, label: string,
-  quickInput: IQuickInputService, progress: IProgress<{ message?: string }>): Promise<McpInstalledArtifactDTO> {
+  quickInput: IQuickInputService, progress: IProgress<{ message?: string }>, token: CancellationToken): Promise<McpInstalledArtifactDTO> {
   const source = galleryInstallationSource(gallery);
   const capabilities = await getMcpInstallationCapabilities(0, workspace);
   if (!capabilities.data?.pypi_wheel_available) throw new Error(capabilities.data?.unavailable_reason ?? '目标尚无可用的 PyPI wheel 安装能力');
@@ -48,6 +49,7 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
     prompt: '输入根 distribution 的 console entry point；制品安装后不会自动创建工作区配置',
     placeHolder: '例如 mcp-server-fetch', validateInput: async value => /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value) ? undefined : '请输入明确的 console entry point 名称' });
   if (entrypoint === undefined) throw new CancellationError();
+  if (token.isCancellationRequested) throw new CancellationError();
   const operationId = crypto.randomUUID();
   let receipt;
   try {
@@ -55,12 +57,20 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
   } catch (cause) {
     throw new Error(`安装请求未确认，不能自动重放。请查询原操作 ${operationId}`, { cause });
   }
+  let cancellationSent = false;
   while (receipt.data?.status === 'running') {
-    progress.report({ message: `${label} · ${receipt.data.stage} · 操作 ${operationId}` });
+    if (token.isCancellationRequested && !cancellationSent) {
+      try { receipt = await cancelMcpInstallationOperation(0, workspace, target, operationId); }
+      catch (cause) { throw new Error(`取消请求未确认，请查询原安装操作 ${operationId}`, { cause }); }
+      cancellationSent = true;
+      if (receipt.data?.status !== 'running') break;
+    }
+    progress.report({ message: `${label} · ${receipt.data.cancellation_requested ? '取消待核实退出' : receipt.data.stage} · 操作 ${operationId}` });
     await timeout(500);
     try { receipt = await getMcpInstallationOperation(0, workspace, target, operationId); }
     catch (cause) { throw new Error(`安装状态读取中断，原操作可能仍在运行。请查询 ${operationId}`, { cause }); }
   }
+  if (receipt.data?.status === 'cancelled') throw new CancellationError();
   if (receipt.data?.status !== 'succeeded' || !receipt.data.artifact) throw new Error(receipt.data?.error ?? '目标没有确认制品发布成功');
   const artifact = receipt.data.artifact;
   if (artifact.binding?.backend_id !== target.backend_id || artifact.manifest_digest !== inspected.data.manifest_digest

@@ -17,6 +17,9 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
+from app.core.child_process import OwnedChildProcess
+from app.core.identifier import create_uuid_hex
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.domain.itemized.hashing import sha256_jcs
 
 StageCallback = Callable[[str, str], Awaitable[None]]
@@ -79,39 +82,44 @@ def _tool_environment() -> dict[str, str]:
 
 async def _run(command: list[str], *, directory: Path, progress: StageCallback, stage: str) -> str:
     await progress(stage, "")
-    process = await asyncio.create_subprocess_exec(*command, cwd=directory, env=_tool_environment(),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    reader = process.stdout
-    assert reader is not None
+    owned = OwnedChildProcess(create_uuid_hex(namespace="mcp-installation-process"))
     chunks: list[bytes] = []
     size = 0
+    output = ""
 
     async def read() -> None:
         nonlocal size
-        while chunk := await reader.read(8192):
+        process = owned.process
+        assert process is not None and process.stdout is not None
+        async for chunk in process.stdout:
             # 排空工具输出但只保留固定上限；不把请求输入传给命令或日志。
             if size < _MAX_LOG:
                 chunks.append(chunk[:_MAX_LOG - size])
                 size += len(chunks[-1])
         await process.wait()
 
+    async def finish() -> None:
+        nonlocal output
+        await owned.close()
+        output = b"".join(chunks).decode("utf-8", errors="replace")
+        await progress(stage, output)
+
     try:
         async with asyncio.timeout(180):
+            await owned.start(command, cwd=directory, env=_tool_environment(), stderr=-2)
             await read()
-    except BaseException:
-        if process.returncode is None:
-            process.kill()
-        await process.wait()
-        raise
-    output = b"".join(chunks).decode("utf-8", errors="replace")
-    await progress(stage, output)
+    finally:
+        # 取消和阶段超时都须核实原进程容器为空；清理失败不能声称已取消。
+        await run_cleanup_shielded(finish)
+    process = owned.process
+    assert process is not None
     if process.returncode != 0:
         raise InstallationUnavailable(f"目标 uv／Python 阶段 {stage} 失败，exit_code={process.returncode}；查看原操作日志")
     return output
 
 
 async def prepare_python_artifact(root: Path, *, name: str, version: str, index: str,
-    entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+    entrypoint: str, progress: StageCallback, execution_directory: Path) -> tuple[str, str, dict[str, str]]:
     root.mkdir(parents=True, exist_ok=False)
     # venv 的 shebang 含绝对路径；准备即采用最终 generation 路径，验证后只发布账本。
     project = ("[project]\nname = \"boxteam-mcp-artifact\"\nversion = \"0.0.0\"\n"
@@ -121,9 +129,10 @@ async def prepare_python_artifact(root: Path, *, name: str, version: str, index:
     uv = shutil.which("uv")
     if uv is None:
         raise InstallationUnavailable("目标 uv 已不可用，未尝试动态 uvx 或其它安装方式")
-    common = [uv, "--no-config", "--no-cache", "--directory", str(root)]
+    # 制品目标始终显式给 uv；进程 cwd 留在安装域，避免 Windows 拒绝深 generation 的 cwd。
+    common = [uv, "--no-config", "--no-cache", "--project", str(root)]
     options = ["--python", sys.executable, "--no-python-downloads", "--no-managed-python", "--default-index", index, "--no-build"]
-    await _run([*common, "lock", *options], directory=root, progress=progress, stage="lock")
+    await _run([*common, "lock", *options], directory=execution_directory, progress=progress, stage="lock")
     lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
     for package in lock["package"]:
         source = package["source"]
@@ -131,19 +140,19 @@ async def prepare_python_artifact(root: Path, *, name: str, version: str, index:
         if source != {"virtual": "."} and not same_index:
             raise InstallationUnavailable("依赖锁包含所选 PyPI index 之外的来源，未安装或切换到其它来源")
     await _run([*common, "sync", "--locked", "--no-dev", "--no-default-groups", "--no-install-project", "--link-mode", "copy", *options],
-        directory=root, progress=progress, stage="install")
+        directory=execution_directory, progress=progress, stage="install")
     executable_directory = root / ".venv" / ("Scripts" if os.name == "nt" else "bin")
     python = executable_directory / ("python.exe" if os.name == "nt" else "python")
     script = ("import importlib.metadata as m,json,sys; d=m.distribution(sys.argv[1]); "
         "print(json.dumps({'version':d.version,'entrypoints':{e.name:e.value for e in d.entry_points if e.group=='console_scripts'},"
         "'distributions':{v.metadata['Name']:v.version for v in m.distributions()}}))")
-    metadata = json.loads(await _run([str(python), "-I", "-B", "-c", script, name], directory=root, progress=progress, stage="verify"))
+    metadata = json.loads(await _run([str(python), "-I", "-B", "-c", script, name], directory=execution_directory, progress=progress, stage="verify"))
     if Version(metadata["version"]) != Version(version) or entrypoint not in metadata["entrypoints"]:
         raise InstallationUnavailable("已安装根 distribution 的版本或显式 console entry point 与请求不一致")
     load_script = ("import importlib.metadata as m,sys; "
         "e=next(e for e in m.distribution(sys.argv[1]).entry_points if e.group=='console_scripts' and e.name==sys.argv[2]); "
         "assert callable(e.load()), 'console entry point 必须可调用'")
-    await _run([str(python), "-I", "-B", "-c", load_script, name, entrypoint], directory=root, progress=progress, stage="verify")
+    await _run([str(python), "-I", "-B", "-c", load_script, name, entrypoint], directory=execution_directory, progress=progress, stage="verify")
     command = executable_directory / (entrypoint + ".exe" if os.name == "nt" else entrypoint)
     if not command.is_file():
         raise InstallationUnavailable("生态工具未生成所选 console entry point 可执行文件")

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
-  getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation,
+  getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
   writeMcpPrivateHeader, writeMcpPrivateEnv,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
@@ -113,17 +113,22 @@ test("制品入口冻结原生 Backend，实际安装与查询沿相同目标且
   const intent = { candidate, plan_digest: "sha256:jcs:v1:" + "c".repeat(64), operation_id: "original", entrypoint: "selected-entry" };
   await installMcpArtifact(port, target, intent);
   await getMcpInstallationOperation(port, target, native, "original/id");
+  await cancelMcpInstallationOperation(port, target, native, "original/id");
   expect(requests.map(({ url }) => url.pathname)).toEqual([
     "/api/v1/mcp/installation-capabilities", "/api/v1/mcp/candidate-manifests", "/api/v1/mcp/candidate-plans",
     "/api/v1/mcp/installations", "/api/v1/mcp/installation-operations/original%2Fid",
+    "/api/v1/mcp/installation-operations/original%2Fid/cancel",
   ]);
   expect(JSON.parse(String(requests[3]!.init?.body))).toEqual(intent);
+  expect(requests[5]!.init?.method).toBe("POST");
+  expect(JSON.parse(String(requests[5]!.init?.body))).toEqual(native);
   for (const { init } of requests) {
     expect(new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
     expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
   }
   actual = { ...native, backend_id: "00000000-0000-4000-8000-000000000012" };
   await expect(getMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
+  await expect(cancelMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
 });
 
 test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操作对象", async () => {

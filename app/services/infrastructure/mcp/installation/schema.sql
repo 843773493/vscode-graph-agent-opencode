@@ -16,7 +16,8 @@ CREATE TABLE artifacts (
 CREATE TABLE operation_owners (
     operation_id TEXT PRIMARY KEY REFERENCES operations(operation_id),
     pid INTEGER NOT NULL,
-    started REAL NOT NULL
+    started REAL NOT NULL,
+    execution_payload TEXT NOT NULL
 );
 
 CREATE TABLE artifact_preparations (
@@ -31,4 +32,4 @@ CREATE TABLE workspace_locators (
     root TEXT NOT NULL UNIQUE
 );
 
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;

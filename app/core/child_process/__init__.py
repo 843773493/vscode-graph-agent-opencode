@@ -56,7 +56,7 @@ class OwnedChildProcess:
         self._close_lock = asyncio.Lock()
 
     async def start(self, command: Sequence[str], *, env: Mapping[str, str],
-                    cwd: str | Path | None, stderr: TextIO = sys.stderr) -> None:
+                    cwd: str | Path | None, stderr: TextIO | Literal[-2] = sys.stderr) -> None:
         if self._creating is not None:
             raise RuntimeError("子进程身份不能重复启动")
 

@@ -55,6 +55,11 @@ export function getMcpInstallationOperation(port: number, workspace: GatewayWork
   return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}`, {}, target);
 }
 
+export function cancelMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string) {
+  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}/cancel`,
+    { method: "POST", body: JSON.stringify(target) }, target);
+}
+
 export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO) {
   return installationRequest<McpInstalledArtifactListResponseDTO>(port, workspace, "installations", {}, target);
 }

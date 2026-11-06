@@ -34,6 +34,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式构建由同一会话复用
 )
+from tests.support.http_server import running_http_server
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
@@ -84,7 +85,13 @@ class ArtifactIndex:
 
 
 @pytest.fixture
-def artifact_index(request: pytest.FixtureRequest) -> Iterator[ArtifactIndex]:
+def artifact_download_gate() -> tuple[threading.Event, threading.Event] | None:
+    return None
+
+
+@pytest.fixture
+def artifact_index(request: pytest.FixtureRequest,
+    artifact_download_gate: tuple[threading.Event, threading.Event] | None) -> Iterator[ArtifactIndex]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     root = context.artifacts_dir / "index"
     _wheel(root, "locked-leaf", "1.0.0", b"VALUE = 'locked-one'\n")
@@ -101,6 +108,17 @@ def artifact_index(request: pytest.FixtureRequest) -> Iterator[ArtifactIndex]:
             super().end_headers()
 
         def do_GET(self) -> None:
+            if artifact_download_gate is not None:
+                entered, release = artifact_download_gate
+                if self.path == "/download-state":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"started": entered.is_set()}).encode())
+                    return
+                if urlsplit(self.path).path.endswith(".whl"):
+                    entered.set()
+                    assert release.wait(90), "测试未释放真实 wheel 下载"
             if urlsplit(self.path).path != "/v0.1/servers":
                 super().do_GET()
                 return
@@ -110,22 +128,20 @@ def artifact_index(request: pytest.FixtureRequest) -> Iterator[ArtifactIndex]:
             self.end_headers()
             self.wfile.write(json.dumps({"servers": [document], "metadata": {"count": 1}}).encode())
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, directory=str(root)))
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    index = ArtifactIndex(root, f"http://127.0.0.1:{server.server_port}", requests)
-    manifest = root / "v0.1/servers/org.example/artifact/versions/release-1"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(json.dumps({"server": {"name": "org.example/artifact", "title": "Artifact Server", "description": "标准 wheel 安装验证", "version": "release-1", "packages": [
-        {"registryType": "pypi", "identifier": "artifact-server", "version": "1.0.0", "registryBaseUrl": index.url + "/simple",
-         "transport": {"type": "stdio"}}]}, "_meta": {}}), encoding="utf-8")
     try:
-        yield index
+        with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, directory=str(root)))) as server:
+            index = ArtifactIndex(root, f"http://127.0.0.1:{server.server_port}", requests)
+            manifest = root / "v0.1/servers/org.example/artifact/versions/release-1"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({"server": {"name": "org.example/artifact", "title": "Artifact Server", "description": "标准 wheel 安装验证", "version": "release-1", "packages": [
+                {"registryType": "pypi", "identifier": "artifact-server", "version": "1.0.0", "registryBaseUrl": index.url + "/simple",
+                 "transport": {"type": "stdio"}}]}, "_meta": {}}), encoding="utf-8")
+            try:
+                yield index
+            finally:
+                if artifact_download_gate is not None:
+                    artifact_download_gate[1].set()
     finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
-        assert not worker.is_alive()
         (context.artifacts_dir / "index-requests.json").write_text(json.dumps(requests, indent=2), encoding="utf-8")
 
 
@@ -159,7 +175,7 @@ def installation_case(request: pytest.FixtureRequest, web_workbench_assets: Path
     runtime = context.runtime_root_for_node(request.node.nodeid)
     home = context.boxteam_home_for_node(request.node.nodeid)
     port = integration_port_block_for_file(Path(request.node.path)).port(0)
-    with model_stream_replay(context.output_root, runtime_root=runtime, business_assertion=request.node.nodeid) as replay:
+    with model_stream_replay(context.artifacts_dir, runtime_root=runtime, business_assertion=request.node.nodeid) as replay:
         gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=port,
             boxteam_home=home, artifacts_dir=context.artifacts_dir, asgi_app="tests.support.e2e_control.gateway_app:app",
             extra_env={**replay.environment, "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})

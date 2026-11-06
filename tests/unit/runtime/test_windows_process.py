@@ -45,6 +45,7 @@ def native_process_case(monkeypatch):
         return job
 
     def create_process(*args):
+        state.application, state.commandline = args[:2]
         assert args[4] is True and args[5] == 12
         assert args[6] == {"MODEL": "configured"}
         startup = args[8]
@@ -87,10 +88,10 @@ def native_process_case(monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(windows_process.os, "pipe", pipe)
 
-    def open_process():
+    def open_process(command=("server.exe", "argument with space")):
         with monkeypatch.context() as platform_patch:
             platform_patch.setattr(windows_process.sys, "platform", "win32")
-            return windows_process.open_windows_process(["server.exe", "argument with space"],
+            return windows_process.open_windows_process(command,
                 env={"MODEL": "configured"}, cwd=None, stderr=sys.stderr)
 
     return SimpleNamespace(open=open_process, state=state, events=events, descriptors=descriptors)
@@ -115,6 +116,19 @@ async def test_windows_creation_assigns_job_before_resume_and_keeps_original_han
     await process.aclose()
     assert case.events[-2:] == ["close_process", "close_job"]
     assert process.returncode == 9 and await process.wait() == 9
+
+
+@pytest.mark.parametrize("executable,application", [
+    ("server.exe", None),
+    ("C:\\" + "long-directory\\" * 22 + "python.exe", "C:\\" + "long-directory\\" * 22 + "python.exe"),
+])
+async def test_absolute_executable_is_explicit_without_changing_path_search(native_process_case, executable, application):
+    case = native_process_case
+    process = case.open((executable, "argument with space"))
+    assert case.state.application == application
+    assert case.state.commandline.endswith('"argument with space"')
+    case.state.code, case.state.active = 0, 0
+    await process.aclose()
 
 
 def test_windows_assignment_failure_never_resumes_and_waits_before_releasing_handles(native_process_case):

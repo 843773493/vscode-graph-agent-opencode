@@ -102,23 +102,37 @@ try {
   await expect(quick).toContainText('输入根 distribution 的 console entry point');
   await quick.locator('input').first().fill('artifact-server');
   await page.keyboard.press('Enter');
-  result.phase = 'published';
-  await expect(page.locator('.notifications-toasts')).toContainText('工作区尚未配置或连接', { timeout: 40_000 });
-  await Promise.all(pending);
+  if (fixture.cancel) {
+    result.phase = 'cancel';
+    await expect.poll(async () => (await (await fetch(`${fixture.registryUrl}/download-state`)).json()).started,
+      { timeout: 15_000 }).toBe(true);
+    await page.locator('.notifications-toasts').getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect.poll(() => result.responses.some(item => item.body.data?.status === 'cancelled'), { timeout: 15_000 }).toBe(true);
+    result.operation = result.responses.find(item => item.body.data?.status === 'cancelled').body.data;
+    assert.equal(result.operation.cancellation_requested, true);
+    assert.equal(result.operation.artifact, null);
+    const cancellations = result.responses.filter(item => item.method === 'POST' && new URL(item.url).pathname.endsWith('/cancel'));
+    assert.equal(cancellations.length, 1);
+    assert.equal(cancellations[0].body.target.backend_id, result.responses.find(item => item.url.endsWith('/mcp/installations')).body.target.backend_id);
+  } else {
+    result.phase = 'published';
+    await expect(page.locator('.notifications-toasts')).toContainText('工作区尚未配置或连接', { timeout: 40_000 });
+    await Promise.all(pending);
+    const complete = result.responses.find(item => item.body.data?.status === 'succeeded');
+    assert(complete?.body.data.artifact, '原安装操作必须真实确认发布');
+    result.operation = complete.body.data;
+    assert.equal(result.operation.artifact.identifier, 'artifact-server');
+    assert.equal(result.operation.artifact.entrypoint, 'artifact-server');
+  }
   const submitted = result.responses.filter(item => item.method === 'POST' && new URL(item.url).pathname.endsWith('/mcp/installations'));
   assert.equal(submitted.length, 1, '原安装意图只能提交一次');
-  const complete = result.responses.find(item => item.body.data?.status === 'succeeded');
-  assert(complete?.body.data.artifact, '原安装操作必须真实确认发布');
-  result.operation = complete.body.data;
-  assert.equal(result.operation.artifact.identifier, 'artifact-server');
-  assert.equal(result.operation.artifact.entrypoint, 'artifact-server');
   assert(result.responses.some(item => item.url.endsWith('/mcp/candidate-manifests')));
   assert(result.responses.some(item => item.url.endsWith('/mcp/candidate-plans')));
   assert(!result.requests.some(item => item.method !== 'GET' && /\/config\/sources|\/mcp\/connection-operations/.test(item.url)), '发布不能暗写工作区配置或启动连接');
   await expect(install).toBeEnabled();
   await expect(detail.getByRole('button', { name: /^(Start Server|Stop Server|Authorize)$/ })).toHaveCount(0);
   assert.deepEqual(result.pageErrors, []);
-  await page.screenshot({ path: join(fixture.artifacts, 'installation-published.png'), fullPage: true });
+  await page.screenshot({ path: join(fixture.artifacts, fixture.cancel ? 'installation-cancelled.png' : 'installation-published.png'), fullPage: true });
   result.phase = 'complete';
 } catch (error) {
   failure = error;

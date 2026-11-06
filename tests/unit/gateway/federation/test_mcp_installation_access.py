@@ -41,7 +41,7 @@ PEER = "gateway_" + "a" * 32
 
 @pytest.mark.parametrize("mount", ["workspace", "active"])
 @pytest.mark.parametrize("method,suffix", [("GET", "installation-capabilities"), ("GET", "installations"),
-    ("GET", "installation-operations/original"), ("POST", "installations"),
+    ("GET", "installation-operations/original"), ("POST", "installation-operations/original/cancel"), ("POST", "installations"),
     ("GET", "installations/original/references"), ("DELETE", "installations/original")])
 async def test_artifact_routes_require_installation_permission_before_backend(mcp_access: McpAccess, mount: str, method: str, suffix: str) -> None:
     response = await mcp_access.client.request(method, mcp_access.path(mount, suffix), json={})

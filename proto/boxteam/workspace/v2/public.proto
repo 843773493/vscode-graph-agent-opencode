@@ -935,6 +935,7 @@ message McpInstallationOperationDTO {
   optional string error = 8;
   string log = 9;
   string kind = 10;
+  bool cancellation_requested = 11;
 }
 
 message McpUninstallationRequestDTO {

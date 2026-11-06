@@ -27,6 +27,10 @@ from app.schemas.internal_v2.mcp import (
 _INTERRUPTED = "原安装进程已退出；仅保留已确认阶段，未发布制品不可启动，请检查原操作后创建新意图"
 
 
+class InstallationCancelled(RuntimeError):
+    """原共享执行已无未取消消费者，不再允许发布。"""
+
+
 def artifact_key(candidate: McpCandidatePlanDTO | McpInstalledArtifactDTO, *, identifier: str, version: str, entrypoint: str) -> str:
     # 安装域由账本路径隔离；工作区 args/env 和 plan_digest 不参与制品身份。
     return sha256_jcs({"schema": "mcp-artifact:v1", "source": candidate.source.model_dump(),
@@ -72,8 +76,21 @@ class InstallationStore:
                 self._migrate_v1(connection)
             elif version == 2:
                 self._execute_sql(connection, "upgrade_v2.sql")
-            elif version != 3:
+                self._migrate_v3(connection)
+            elif version == 3:
+                self._migrate_v3(connection)
+            elif version != 4:
                 raise RuntimeError(f"MCP 安装账本版本不受支持: {version}")
+
+    def _migrate_v3(self, connection: sqlite3.Connection) -> None:
+        for producer_id, pid, started, payload in connection.execute(
+            "SELECT operation_owners.operation_id, pid, started, operations.payload FROM operation_owners "
+            "JOIN operations USING(operation_id)"
+        ):
+            if (McpInstallationOperationDTO.model_validate_json(payload).status == "running"
+                    and self._owner_alive((pid, started), operation_id=producer_id)):
+                raise McpCandidateConflict(f"MCP 旧账本仍有活进程安装，须等待原操作结算后迁移: {producer_id}")
+        self._execute_sql(connection, "upgrade_v3.sql")
 
     def _migrate_v1(self, connection: sqlite3.Connection) -> None:
         artifacts: dict[str, McpInstalledArtifactDTO] = {}
@@ -117,8 +134,9 @@ class InstallationStore:
         connection.executemany("INSERT INTO artifacts VALUES (?, ?, ?)",
             [(artifact.binding.installation_id, key, artifact.model_dump_json()) for key, artifact in keyed_artifacts.items()])
         connection.executemany("INSERT INTO operations VALUES (?, ?, NULL, ?)", operations)
-        connection.executemany("INSERT INTO operation_owners VALUES (?, ?, ?)",
-            [(operation_id, pid, started) for operation_id, (pid, started) in owners.items()])
+        connection.executemany("INSERT INTO operation_owners VALUES (?, ?, ?, ?)",
+            [(operation_id, pid, started, self._read_operation(connection, operation_id).model_dump_json())
+             for operation_id, (pid, started) in owners.items()])
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -187,7 +205,8 @@ class InstallationStore:
             operation = operation.model_copy(update={"artifact": removing})
             connection.execute("INSERT INTO operations VALUES (?, ?, ?, ?)",
                 (operation.operation_id, key, operation.operation_id, operation.model_dump_json()))
-            connection.execute("INSERT INTO operation_owners VALUES (?, ?, ?)", (operation.operation_id, os.getpid(), self._process_started))
+            connection.execute("INSERT INTO operation_owners VALUES (?, ?, ?, ?)",
+                (operation.operation_id, os.getpid(), self._process_started, operation.model_dump_json()))
             connection.execute("UPDATE artifacts SET payload=? WHERE installation_id=?", (removing.model_dump_json(), binding.installation_id))
             return operation, True
 
@@ -241,8 +260,12 @@ class InstallationStore:
                 row = connection.execute("SELECT operations.payload FROM artifact_preparations JOIN operations "
                     "ON operations.operation_id=artifact_preparations.operation_id WHERE artifact_preparations.artifact_key=?", (key,)).fetchone()
                 if row is not None:
-                    producer = self._reconcile(connection, McpInstallationOperationDTO.model_validate_json(row[0]))
+                    producer_operation = McpInstallationOperationDTO.model_validate_json(row[0])
+                    self._reconcile(connection, producer_operation)
+                    producer = self._read_execution(connection, producer_operation.operation_id)
                     if producer.status == "running":
+                        if not self._has_consumers(connection, producer.operation_id):
+                            raise McpCandidateConflict("MCP 原共享安装正在取消并核实退出，请结算后重新创建意图")
                         producer_id = producer.operation_id
                         operation = self._execution(operation, producer).model_copy(update={"updated_at": max(operation.updated_at, producer.updated_at)})
                 if producer_id == operation.operation_id:
@@ -250,8 +273,8 @@ class InstallationStore:
             connection.execute("INSERT INTO operations VALUES (?, ?, ?, ?)",
                 (operation.operation_id, key, producer_id, operation.model_dump_json()))
             if producer_id == operation.operation_id:
-                connection.execute("INSERT INTO operation_owners VALUES (?, ?, ?)",
-                    (operation.operation_id, os.getpid(), self._process_started))
+                connection.execute("INSERT INTO operation_owners VALUES (?, ?, ?, ?)",
+                    (operation.operation_id, os.getpid(), self._process_started, operation.model_dump_json()))
             if preparation is not None:
                 connection.execute("INSERT INTO artifact_preparations VALUES (?, ?, ?, ?)",
                     (key, operation.operation_id, preparation.installation_id, preparation.generation))
@@ -270,13 +293,15 @@ class InstallationStore:
         return McpInstallationOperationDTO.model_validate_json(row[0])
 
     def _reconcile(self, connection: sqlite3.Connection, operation: McpInstallationOperationDTO) -> McpInstallationOperationDTO:
-        if operation.status != "running":
+        if operation.status not in {"running", "cancelled"}:
             return operation
         producer_id, = connection.execute("SELECT producer_operation_id FROM operations WHERE operation_id=?", (operation.operation_id,)).fetchone()
         if producer_id is None:
             raise RuntimeError(f"MCP 运行操作缺少原执行者: {operation.operation_id}")
-        producer = operation if producer_id == operation.operation_id else self._read_operation(connection, producer_id)
+        producer = self._read_execution(connection, producer_id)
         if producer.status != "running":
+            if operation.status == "cancelled":
+                return operation
             raise RuntimeError(f"MCP 等待操作未随原执行者结算: {operation.operation_id}; {producer_id}")
         owner = connection.execute("SELECT pid, started FROM operation_owners WHERE operation_id=?", (producer_id,)).fetchone()
         if self._owner_alive(owner, operation_id=producer_id):
@@ -297,11 +322,53 @@ class InstallationStore:
         return self._read_operation(connection, operation.operation_id)
 
     @staticmethod
+    def _read_execution(connection: sqlite3.Connection, producer_id: str) -> McpInstallationOperationDTO:
+        row = connection.execute("SELECT execution_payload FROM operation_owners WHERE operation_id=?", (producer_id,)).fetchone()
+        if row is None:
+            raise McpCandidateConflict(f"MCP 安装缺少原进程 PID／创建时间及执行状态，不能推定已退出: {producer_id}")
+        return McpInstallationOperationDTO.model_validate_json(row[0])
+
+    @staticmethod
+    def _has_consumers(connection: sqlite3.Connection, producer_id: str) -> bool:
+        return bool(connection.execute("SELECT EXISTS(SELECT 1 FROM operations WHERE producer_operation_id=? "
+            "AND json_extract(payload, '$.status')='running' AND NOT coalesce(json_extract(payload, '$.cancellation_requested'), 0))",
+            (producer_id,)).fetchone()[0])
+
+    def request_cancel(self, operation_id: str) -> McpInstallationOperationDTO:
+        with self.reference_write() as connection:
+            operation = self._reconcile(connection, self._read_operation(connection, operation_id))
+            if operation.kind != "install":
+                raise McpCandidateConflict("物理卸载不能通过安装取消入口撤销，请查询原卸载结果")
+            if operation.status != "running" or operation.cancellation_requested:
+                return operation
+            operation = operation.model_copy(update={"cancellation_requested": True, "updated_at": time.time()})
+            connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (operation.model_dump_json(), operation_id))
+            producer_id, = connection.execute("SELECT producer_operation_id FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
+            if self._has_consumers(connection, producer_id):
+                operation = operation.model_copy(update={"status": "cancelled"})
+                connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (operation.model_dump_json(), operation_id))
+            return operation
+
+    def cancellation_pending(self, producer_id: str) -> bool:
+        with self._connect() as connection:
+            # 同一读快照核执行与消费者，避免发布在两个查询之间提交而触发迟到取消。
+            row = connection.execute("SELECT json_extract(execution_payload, '$.status')='running' AND NOT EXISTS("
+                "SELECT 1 FROM operations WHERE producer_operation_id=operation_owners.operation_id "
+                "AND json_extract(payload, '$.status')='running' AND NOT coalesce(json_extract(payload, '$.cancellation_requested'), 0)) "
+                "FROM operation_owners WHERE operation_id=?", (producer_id,)).fetchone()
+            if row is None:
+                raise McpCandidateConflict(f"MCP 安装取消监测缺少原执行者: {producer_id}")
+            return bool(row[0])
+
+    @staticmethod
     def _execution(operation: McpInstallationOperationDTO, producer: McpInstallationOperationDTO) -> McpInstallationOperationDTO:
-        return operation.model_copy(update={"status": producer.status, "stage": producer.stage, "updated_at": producer.updated_at,
+        return operation.model_copy(update={"status": producer.status, "stage": producer.stage, "updated_at": max(operation.updated_at, producer.updated_at),
             "artifact": producer.artifact, "error": producer.error, "log": producer.log})
 
     def _write_execution(self, connection: sqlite3.Connection, producer: McpInstallationOperationDTO) -> None:
+        # 共享任务与用户操作职责分开，首个用户取消不撤销其他操作的执行。
+        connection.execute("UPDATE operation_owners SET execution_payload=? WHERE operation_id=?",
+            (producer.model_dump_json(), producer.operation_id))
         rows = connection.execute("SELECT payload FROM operations WHERE producer_operation_id=?", (producer.operation_id,)).fetchall()
         for payload, in rows:
             operation = McpInstallationOperationDTO.model_validate_json(payload)
@@ -312,18 +379,18 @@ class InstallationStore:
             connection.execute("DELETE FROM artifact_preparations WHERE operation_id=?", (producer.operation_id,))
 
     def _current(self, connection: sqlite3.Connection, operation: McpInstallationOperationDTO) -> tuple[McpInstallationOperationDTO, str]:
-        row = connection.execute("SELECT payload, artifact_key, producer_operation_id FROM operations WHERE operation_id=?", (operation.operation_id,)).fetchone()
+        row = connection.execute("SELECT artifact_key, producer_operation_id FROM operations WHERE operation_id=?", (operation.operation_id,)).fetchone()
         if row is None:
             raise RuntimeError("MCP 安装操作在写入阶段消失")
-        current = McpInstallationOperationDTO.model_validate_json(row[0])
+        if row[1] != operation.operation_id:
+            raise McpCandidateConflict("MCP 等待操作不持有制品执行写入权，必须观察原执行者")
+        current = self._read_execution(connection, operation.operation_id)
         if current.intent_digest != operation.intent_digest:
             raise McpCandidateConflict("MCP 安装写入与原操作意图不一致")
-        if row[2] != operation.operation_id:
-            raise McpCandidateConflict("MCP 等待操作不持有制品执行写入权，必须观察原执行者")
         owner = connection.execute("SELECT pid, started FROM operation_owners WHERE operation_id=?", (operation.operation_id,)).fetchone()
         if current.status == "running" and owner != (os.getpid(), self._process_started):
             raise McpCandidateConflict("MCP 安装写入不属于原执行进程")
-        return current, row[1]
+        return current, row[0]
 
     def update(self, operation: McpInstallationOperationDTO) -> McpInstallationOperationDTO:
         if operation.status == "succeeded" or operation.artifact is not None:
@@ -335,7 +402,7 @@ class InstallationStore:
             if current.status != "running":
                 return current
             self._write_execution(connection, operation)
-            return self._read_operation(connection, operation.operation_id)
+            return operation
 
     def publish(self, operation: McpInstallationOperationDTO, artifact: McpInstalledArtifactDTO) -> None:
         with self._connect() as connection:
@@ -345,6 +412,8 @@ class InstallationStore:
                 raise McpCandidateConflict("只有原安装操作可以发布已验证制品")
             if current.status != "running":
                 raise McpCandidateConflict(f"MCP 安装操作已结算为 {current.status}，不能迟到发布制品")
+            if not self._has_consumers(connection, operation.operation_id):
+                raise InstallationCancelled("所有安装操作均已请求取消，原制品未发布")
             if artifact_key(artifact, identifier=artifact.identifier, version=artifact.version, entrypoint=artifact.entrypoint) != key:
                 raise McpCandidateConflict("MCP 发布制品与原准备身份不一致")
             row = connection.execute("SELECT payload FROM artifacts WHERE artifact_key=? OR installation_id=?",
