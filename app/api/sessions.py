@@ -586,7 +586,7 @@ async def list_session_llm_request_logs(
     ),
 ):
     try:
-        result = llm_request_log_service.list_session_logs(session_id)
+        result = await run_sync_shielded(llm_request_log_service.list_session_logs, session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
