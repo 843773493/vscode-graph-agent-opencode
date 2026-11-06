@@ -37,6 +37,8 @@ def _merge_activity_items(
     canonical_tools_by_model_call: dict[
         tuple[str, str], list[dict[str, object]]
     ] = {}
+    previous_tool_item_id: str | None = None
+    model_call_id: str | None = None
     for (
         turn_id,
         anchor_item_id,
@@ -67,9 +69,13 @@ def _merge_activity_items(
                 call_index, field=f"tool_calls.call_index:{call_id}"
             ),
         }
-        tool_manifest = parse_item_projection_manifest(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool"))
-        tool_identity = ItemProjectionIdentity.from_dict(tool_manifest["projection_identity"]) if tool_manifest["projection_identity"] is not None else None
-        model_call_id = tool_identity.model_call_id if tool_identity is not None else None
+        # 同一消息的工具行来自同一 catalog item；连续成员共用一次 manifest 解析。
+        # 只在本次读取中复用，相邻消息或后续请求仍重新校验。
+        if anchor_item_id != previous_tool_item_id:
+            tool_manifest = parse_item_projection_manifest(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool"))
+            tool_identity = ItemProjectionIdentity.from_dict(tool_manifest["projection_identity"]) if tool_manifest["projection_identity"] is not None else None
+            model_call_id = tool_identity.model_call_id if tool_identity is not None else None
+            previous_tool_item_id = anchor_item_id
         tool_by_item.setdefault((turn_id, anchor_item_id), []).append(tool)
         tool_by_call_id[(turn_id, model_call_id, call_id)] = tool
         tool_by_model_call_index[
