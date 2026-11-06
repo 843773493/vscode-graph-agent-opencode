@@ -46,9 +46,15 @@ def _group_conflict(
                     for name in differing
                 )
             )
-        if canonical_json_text(candidate.projection_manifest()) != canonical_json_text(
-            stored.projection_manifest()
-        ):
+        # typed 字段已在构造/读取时校验，直接比较，不为每次复用重建并编码镜像。
+        # 自由扩展仍按 JCS 比较，保留 bool/数字及 list/tuple 的既有序列化语义。
+        if any(
+            getattr(candidate, name) != getattr(stored, name)
+            for name in (
+                "projection_group", "projection_identity", "tool_result_evidence",
+                "source_manifest", "provenance_relations",
+            )
+        ) or canonical_json_text(candidate.extensions) != canonical_json_text(stored.extensions):
             return (
                 f"canonical item typed provenance/extensions 不一致: {stored.item_id}"
             )
