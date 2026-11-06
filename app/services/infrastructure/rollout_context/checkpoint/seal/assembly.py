@@ -38,6 +38,7 @@ from app.services.infrastructure.rollout_context.assembly.seal_preflight import 
     validate_seal_dispatch_invariants,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
+    ContextProjectionInput,
     ContextProjectionResult,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
@@ -93,8 +94,8 @@ def _project_wire_snapshot(
         prepared_details=prepared_details,
     )
     projection = owner._project_context_projection(
-        snapshot.session_id, snapshot.thread_id, snapshot, items, bodies,
-        resource_activation=activation,
+        snapshot.session_id, snapshot.thread_id,
+        ContextProjectionInput(snapshot, sealed_plan, activation), items, bodies,
         include_runtime_notices=True, include_summaries=True,
         target_format=snapshot.target_format,
         include_native=isinstance(wire_profile, ResponsesWireProfile),

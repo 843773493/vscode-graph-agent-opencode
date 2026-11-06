@@ -12,12 +12,10 @@ from collections.abc import Mapping
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 
 from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION
-from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.infrastructure.rollout_context.checkpoint.owner.composition import (
     ContextPlanCompositionMixin,
 )
@@ -28,7 +26,7 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_dispat
     ContextDispatchOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
-    CommittedContextSnapshot,
+    ContextProjectionInput,
     ContextProjectionOwnerMixin,
     ContextProjectionResult,
 )
@@ -181,7 +179,7 @@ class ContextOwnerMixin(
         snapshot = committed.assembly
         # 纯映射核对封存 selection/prefix 与正文，不查询当前可变附件目录。
         project_context_plan(
-            snapshot.as_sealed_plan(), items,
+            committed.plan, items,
             include_runtime_notices=True, include_summaries=True,
             request_only_content=content, seal_binding=snapshot.seal_binding,
         )
@@ -274,11 +272,11 @@ class ContextOwnerMixin(
         resources = (project_sealed_resource_refs(committed.resource_activation)
                      if committed.resource_activation is not None else ())
         native = self._project_native_context(
-            session_id, thread_id, committed.assembly, items, content,
+            session_id, thread_id, committed, items, content,
             resource_refs=resources,
         )
         evidence = build_projection_evidence(
-            committed.assembly.as_sealed_plan(), projection="native",
+            committed.plan, projection="native",
             losses=native["losses"], resource_refs=resources,
         )
         if native["selection"] != list(evidence.selection):
@@ -335,8 +333,7 @@ class ContextOwnerMixin(
             request_only_content=request_only_content, include_request_only=include_request_only,
         )
         return self._project_context_projection(
-            session_id, thread_id, committed_snapshot.assembly, items, resolved_request_content,
-            resource_activation=committed_snapshot.resource_activation,
+            session_id, thread_id, committed_snapshot, items, resolved_request_content,
             include_runtime_notices=include_runtime_notices, include_summaries=include_summaries,
             target_format=target_format, collect_capability_losses=collect_capability_losses,
             include_request_only=include_request_only, include_native=include_native,
@@ -346,11 +343,10 @@ class ContextOwnerMixin(
         self,
         session_id: str,
         thread_id: str,
-        committed_snapshot: ContextAssemblySnapshot,
+        context: ContextProjectionInput,
         items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         resolved_request_content: Mapping[str, object],
         *,
-        resource_activation: ResourceActivationSnapshotRef | None,
         include_runtime_notices: bool,
         include_summaries: bool,
         target_format: str | None,
@@ -359,7 +355,9 @@ class ContextOwnerMixin(
         include_native: bool = False,
     ) -> ContextProjectionResult:
         """只映射当前 seal owner 或冷读取 owner 已验证的材料，不读取持久化。"""
-        committed_plan = committed_snapshot.as_sealed_plan()
+        # 正文解析、LangChain/Native 投影共用本次已构造的 plan；不跨操作缓存。
+        committed_snapshot = context.assembly
+        committed_plan = context.plan
         losses: list[str] = []
         if include_request_only:
             messages = project_context_plan(
@@ -388,10 +386,10 @@ class ContextOwnerMixin(
                     tools.extend(
                         project_tool_set_ref(entry.ref, target_format=target_format)
                     )
-        resources = (project_sealed_resource_refs(resource_activation)
-                     if resource_activation is not None else ())
+        resources = (project_sealed_resource_refs(context.resource_activation)
+                     if context.resource_activation is not None else ())
         native = self._project_native_context(
-            session_id, thread_id, committed_snapshot, items, resolved_request_content,
+            session_id, thread_id, context, items, resolved_request_content,
             resource_refs=resources,
         ) if include_native else None
         return ContextProjectionResult(
@@ -425,7 +423,7 @@ class ContextOwnerMixin(
         expected: ContextRequestPlan | SealedContextDispatchRef | str,
         *,
         snapshot: RolloutReadSnapshot,
-    ) -> CommittedContextSnapshot:
+    ) -> ContextProjectionInput:
         """从当前快照读取 assembly，并核对调用方提供的 plan 或派发引用。
 
         ``ContextRequestPlan`` 是不可变值对象，但调用方仍可能自行构造一个
@@ -472,7 +470,7 @@ class ContextOwnerMixin(
                 checkpoint_ns=checkpoint_ns,
                 snapshot=snapshot,
             )
-        return CommittedContextSnapshot(persisted, activation)
+        return ContextProjectionInput(persisted, persisted.as_sealed_plan(), activation)
 
     def get_canonical_item(
         self,

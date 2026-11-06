@@ -52,10 +52,11 @@ from app.services.mapping.itemized.resource_activation import (
 
 
 @dataclass(frozen=True, slots=True)
-class CommittedContextSnapshot:
-    """同一读取事务校验的 assembly 与 activation，禁止再读当前 Registry。"""
+class ContextProjectionInput:
+    """本次封存或权威读取生成的 assembly、plan 与 activation。"""
 
     assembly: ContextAssemblySnapshot
+    plan: ContextRequestPlan
     resource_activation: ResourceActivationSnapshotRef | None
 
 
@@ -155,7 +156,7 @@ class ContextProjectionOwnerMixin:
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
         return self._project_native_context(
-            session_id, thread_id, snapshot.assembly, items, request_content,
+            session_id, thread_id, snapshot, items, request_content,
             resource_refs=(project_sealed_resource_refs(snapshot.resource_activation)
                            if snapshot.resource_activation is not None else ()),
         )
@@ -169,7 +170,7 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str,
         request_only_content: Mapping[str, object] | None = None,
         include_request_only: bool = True,
-    ) -> tuple[CommittedContextSnapshot, dict[tuple[str, str, str], CanonicalItemRecord], dict[str, object]]:
+    ) -> tuple[ContextProjectionInput, dict[tuple[str, str, str], CanonicalItemRecord], dict[str, object]]:
         """一次 fresh authority 读取冻结投影材料，关闭连接后才运行各 projector。"""
         if isinstance(expected, ContextRequestPlan) and (expected.plan_state != "sealed" or expected.assembly_id is None):
             self._require_context_plan_owner(session_id, thread_id, expected)
@@ -192,7 +193,7 @@ class ContextProjectionOwnerMixin:
                 expected,
                 snapshot=read_snapshot,
             )
-            committed = committed_snapshot.assembly.as_sealed_plan()
+            committed = committed_snapshot.plan
             refs = [
                 entry.ref
                 for entry in committed.selection
@@ -217,7 +218,7 @@ class ContextProjectionOwnerMixin:
         self,
         session_id: str,
         thread_id: str,
-        snapshot: ContextAssemblySnapshot,
+        context: ContextProjectionInput,
         items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         request_content: Mapping[str, object],
         *, resource_refs: tuple[SessionContextResourceDTO, ...],
@@ -228,8 +229,8 @@ class ContextProjectionOwnerMixin:
         )
 
         native = project_native_request(
-            snapshot.as_sealed_plan(), items, request_content,
-            seal_binding=snapshot.seal_binding,
+            context.plan, items, request_content,
+            seal_binding=context.assembly.seal_binding,
             attachment_projector=lambda payload: self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, payload),
         )
         native["resource_refs"] = [ref.model_dump(mode="json") for ref in resource_refs]
@@ -250,8 +251,7 @@ class ContextProjectionOwnerMixin:
             include_request_only=False,
         )
         projection = self._project_context_projection(
-            session_id, thread_id, committed.assembly, items, content,
-            resource_activation=committed.resource_activation,
+            session_id, thread_id, committed, items, content,
             include_runtime_notices=False, include_summaries=False, target_format=None,
             include_request_only=False, collect_capability_losses=True,
         )
@@ -664,4 +664,4 @@ class ContextProjectionOwnerMixin:
         return plan, tuple(prepared_details), detail_by_ref
 
 
-__all__ = ["CommittedContextSnapshot", "ContextProjectionOwnerMixin", "ContextProjectionResult"]
+__all__ = ["ContextProjectionInput", "ContextProjectionOwnerMixin", "ContextProjectionResult"]
