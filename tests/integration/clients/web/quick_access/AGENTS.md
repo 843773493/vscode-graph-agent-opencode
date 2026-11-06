@@ -67,3 +67,5 @@ pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Work
 `test_language_models.py` 通过真实 Gateway 在 A/B 打开同名 JSON，原 Web 扩展和语言 Worker 计算符号；真实编辑、放弃修改及重开验证分析随模型变化和资源身份隔离。原 token 检查器核对 JSON 语言和属性名 scope，Monaco 数字颜色类核实际渲染；真实语言选择器切换纯文本／JSON后验证旧符号与词法退出、重建及另一工作区保持不变。模型回放只供后端启动且要求零调用，不替换语言服务、预写分析结果或证明迟到 Worker、扩展升级及尚未接入的远端语言宿主。
 
 `workspace_actions.test.mjs` 在 Chromium 中编译真实控制面 Provider、CommandsRegistry 与 HTTP 客户端，仅 Picker／宿主视图 writer 和 HTTP 响应为装具，核 cursor、迟到响应、原查询重试、稳定 owner 与三个独立命令。`test_workspace_actions.py` 经真实 Gateway 和正式 Workbench 验证候选浏览零生命周期写入、范围取消恢复、离线范围选择、明确启动不激活、独立切换及原导航入口；B 只在准备阶段登记并停止，模型回放仅供启动且要求零调用。前者不代替 React writer，后者不证明真实远程 Gateway 连接或多成员 Backend 确认。
+
+`language_analysis.test.mjs` 编译真实 OutlineModelService、LRU、语言 Provider registry 和取消令牌；仅文本模型与异步符号源为受控依赖。核旧版本取消／迟到不删除新缓存、同版本在途共享及模型移除／owner隔离；不将此装具称为真实 Worker，产品语言回归另由 `test_language_models.py` 证明。

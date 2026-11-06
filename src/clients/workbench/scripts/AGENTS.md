@@ -37,3 +37,5 @@ ConfigurationCache 继续使用原 type／key、cacheHome 与单条目队列；�
 扩展 staging／发布的目录过滤仅检查复制源内部的相对路径；源码祖先目录名不得影响结果，路径分隔符使用当前平台约定。`extensions.test.mjs` 用真实文件复制验证祖先目录、内部测试／依赖排除及上游原件不变；不代替完整扩展编译与 Workbench 页面验收。
 
 Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker／FileService 加载；根外 URL 保留原直接加载规则。Markdown 在首次生成贡献资源地址前更新同一允许根，HTTP Provider 的占位 stat 不充当缓存 validator；业务文件保留原 ETag／NotModified。字体 MIME 在原映射补齐，不复制 Worker、放宽 CSP 或建立第二份字节缓存。构建与 Vite 共用转换清单；类型检查按原 Workbench 与各扩展的宿主声明和精确依赖别名分别检查全部转换源码。
+
+原 OutlineModelService 的旧版本最后消费者取消只释放自己的缓存条目，不能按模型 ID 删除后来建立的新版本；沿原 LRU／模型版本与引用生命周期，不新建分析缓存。

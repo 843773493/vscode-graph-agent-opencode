@@ -25,6 +25,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/services/textfile/common/textFileEditorModel.ts',
   'src/vs/workbench/services/editor/browser/editorResolverService.ts',
   'src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts',
+  'src/vs/editor/contrib/documentSymbols/browser/outlineModel.ts',
   'src/vs/workbench/browser/parts/editor/editorGroupView.ts',
   'src/vs/workbench/browser/parts/editor/editorPanes.ts',
   'src/vs/workbench/browser/parts/editor/editorWithViewState.ts',
@@ -207,6 +208,13 @@ this.textModelService.createModelReference(this.resource).then(reference => {
   return this.cachedTextFileModelReference;
 }).finally(() => { this.pendingTextFileModelReference = undefined; }));
 const model = reference.object;`);
+    }
+    if (path === join(upstream, 'src/vs/editor/contrib/documentSymbols/browser/outlineModel.ts')) {
+      // 旧版本的最后一个消费者取消时，只释放原分析条目，不能删掉后来建立的新版本缓存。
+      const cancel = `data.source.cancel();
+\t\t\t\tthis._cache.delete(textModel.id);`;
+      contents = replaceOnce(contents, cancel, `data.source.cancel();
+if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`);
     }
     if (path === join(upstream, 'src/vs/workbench/services/textfile/common/textEditorService.ts')) {
       contents = replaceOnce(contents, 'const textResourceEditorInput = input as IUntypedFileEditorInput;',
