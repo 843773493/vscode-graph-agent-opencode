@@ -108,9 +108,12 @@ def parse_detail_payload(
     if not isinstance(value["created_at"], str) or not value["created_at"]:
         raise DetailUnavailableError("assembly detail created_at 非法")
     record = _record_from_payload(value, ref, envelope_hash)
-    canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(
-        value["detail"]
-    )
+    # envelope 已逐字节核验为 JCS，身份与 metadata 也已校验；正文复用这次编码。
+    # 前置字符串中的引号已转义；正文可含同名键，故取最后一个外层 hash 分隔符。
+    start = canonical.index(b',"detail":') + len(b',"detail":')
+    end = canonical.rindex(b',"detail_content_hash":')
+    canonical_detail_bytes = canonical[start:end]
+    detail_hash = "sha256:jcs:v1:" + sha256(canonical_detail_bytes).hexdigest()
     if (
         value["detail_content_hash"] != detail_hash
         or len(canonical_detail_bytes) != record.length
