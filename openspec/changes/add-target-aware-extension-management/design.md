@@ -90,13 +90,15 @@ Backend 私有通道只接受 loopback、无浏览器来源头及已配置运行
 
 宿主实时发现使用 `POST /api/gateway/extension-hosts/resolve`，输入明确 Gateway、有序 workspace 集合及可选的已知 Backend 身份；已知身份不得因当前地址可达而改写。该入口与通道共用原路由解析和逐 workspace 引用，沿同一原生 `extension_host_manage` 授权读取 Backend 唯一 owner。响应标注 `source=live`，返回实际稳定 Backend、平台、已绑定组件版本及独立 `channel_state`；缺少专用 runtime、平台未支持和 Backend 排空分别具名说明。通道可用不代表完整扩展 API、激活或业务执行已通过；离线、路由换代或撤权直接失败，不以登记镜像替代实时结果，也不为发现启动 Backend、宿主或下载运行时。
 
-目标安装库存使用 `POST /api/gateway/extension-installations/inventory`，必须提交稳定 Backend 身份和明确 workspace 集合，单独核 `extension_installation_manage`；宿主权限不代授。原生 Backend 通过同一专用运行时中的惰性管理进程读取 Code OSS 默认 profile，安装、profile 成员与 scanner 共用原服务实例，Python 不扫描安装目录或持有第二份清单。响应绑定原 Gateway／Backend／workspace 和 `profile_scope=default`，保留原描述及 invalid 诊断，不声称已覆盖系统扩展、开发扩展或窗口启用集。Relay 保留目标和 request_id，读取前及披露前核现行权限与路由；身份不符、离线及损坏明确报错。管理进程正常关闭保留 profile；取消或控制结果未知后回收原进程，不自动重启并重放安装。Backend 排空还须等管理日志和跨进程锁实际释放，关闭失败保留原 owner 供重试。
+共同目标发现使用 `POST /api/gateway/extension-targets/resolve`，只返回原 owner 的稳定身份及原生 Gateway 对当前主体判定的两项管理能力，不披露宿主运行态、不启动宿主或管理进程。至少一项管理能力获准才访问 Backend；原生 Gateway 在准入及披露时重核，Relay 不以自己的权限扩大结果。原窗口只查询明确挂接的根，按稳定 Backend 分组；多根组再核完整有序集合并使用该次完整组的权限，单根复用原回执，不合并各根的权限。视图仍由原 running-location owner 持有，安装权限与宿主权限分别消费同一投影，不增目标 registry。
+
+目标安装库存使用 `POST /api/gateway/extension-installations/inventory`，必须提交稳定 Backend 身份和明确 workspace 集合。此只读清单可由 `extension_installation_manage` 用于安装管理，也可由 `extension_host_manage` 用于原宿主初始化；后者不授予安装、更新或移除能力。原生 Backend 通过同一专用运行时中的惰性管理进程读取 Code OSS 默认 profile，安装、profile 成员与 scanner 共用原服务实例，Python 不扫描安装目录或持有第二份清单。响应绑定原 Gateway／Backend／workspace 和 `profile_scope=default`，保留原描述及 invalid 诊断，不声称已覆盖系统扩展、开发扩展或窗口启用集。Relay 保留目标和 request_id，读取前及披露前核现行权限与路由；身份不符、离线及损坏明确报错。管理进程正常关闭保留 profile；取消或控制结果未知后回收原进程，不自动重启并重放安装。Backend 排空还须等管理日志和跨进程锁实际释放，关闭失败保留原 owner 供重试。
 
 用户明确选择的目标侧 VSIX 通过 `POST /api/gateway/extension-installations/install` 进入同一原生管理 owner；请求冻结稳定目标、有序工作区集合及 `source_uri`，当前支持该目标已挂接工作区的普通文件来源，由原文件 owner 保护私有目录并解析目标路径。安装回执返回原安装器的 ID／版本／profile 与完整库存，不表示已有宿主切换版本。原安装器保留已存在版本的目录；同版本沿其复用规则处理，新版本发布不自动卸载旧版。传输失败不重放安装，客户端应先查询原目标库存；物理卸载与在用版本回收仍须另行闭合原引用规则。Gateway 只沿原安装管理权限及同一短请求路由转送，不能按当前导航替换目标或把中继机器的路径当作来源。
 
 原 `Install from VSIX` 命令与扩展视图菜单先用原 Quick Input 明确来源工作区及其 Backend 默认 profile，再打开原文件选择器；资源上下文菜单与既有拖放调用保留同一公开命令 ID 和 `URI | URI[]` 形式。当前入口从原扩展服务的运行位置 owner 读取已有目标视图，在打开文件选择器前冻结 Backend 与有序工作区集合，安装期间切标签或活动工作区不改投；文件选择器只限定文件系统及初始目录，返回来源仍须整批核验属于所选已挂接根。工作区文件 Provider 的 `readdir` 复用现有目录 API 及游标，取得完整目录后交原 FileService；不另建目录树、缓存或路径事实，读取失败不能伪装为空目录。直接资源批次先核全部来源及对应目标，再依次安装，后项失败不回滚前项；已核实回执合并通知，真实版本与当前运行版本分别表达，重新加载交原 HostService。没有成功回执的错误保留原原因并要求先查库存，不按 HTTP 状态推断是否已经发布，也不重放安装。
 
-该入口目前仅覆盖窗口已经建立的明确目标视图；原启动扫描仍依赖宿主管理权限，只有安装权限的窗口初始化尚待迁齐目标发现 owner，不能因本入口没有额外发现请求就宣称权限已完全解耦。浏览器或中继机器的原生 `file:` 来源当前不能直接用作目标安装来源，原拖放的错误通知明确指引先把 VSIX 放入目标工作区；本片不新增上传链。完整安装详情、市场及物理卸载继续由后续任务验收。
+原窗口初始化按共同目标发现的能力分别推进：只有安装权限时保留安装视图，不读取宿主状态或库存，也不创建 Node running location；有宿主管理权限时才核通道状态并读取原库存。原 VSIX action 从同一视图检查安装能力；未获准的根显示明确原因，选择后在打开文件对话框前拒绝，不妨碍同屏另一个获准目标。实际安装仍由原生 Gateway 按请求时现行策略判权，旧窗口投影不成为授权凭据。浏览器或中继机器的原生 `file:` 来源当前不能直接用作目标安装来源，原拖放的错误通知明确指引先把 VSIX 放入目标工作区；本片不新增上传链。完整安装详情、市场及物理卸载继续由后续任务验收。
 
 ### D4. 目录发现、安装、配置与运行分别报告事实
 

@@ -153,3 +153,20 @@ class ExtensionHostTargetDTO(ExtensionWorkspaceTarget):
         if self.channel_state != expected_state or (self.channel_state == "available" and self.runtime is None):
             raise ValueError("Node 宿主通道状态与实际运行时能力不符")
         return self
+
+
+class ExtensionTargetCapabilitiesDTO(_HostValue):
+    installation_manage: bool
+    host_manage: bool
+
+    @model_validator(mode="after")
+    def at_least_one_management_capability(self) -> ExtensionTargetCapabilitiesDTO:
+        if not (self.installation_manage or self.host_manage):
+            raise ValueError("目标发现至少需要一项扩展管理能力")
+        return self
+
+
+class ExtensionTargetDTO(ExtensionWorkspaceTarget):
+    backend_id: BackendId
+    source: Literal["live"] = "live"
+    capabilities: ExtensionTargetCapabilitiesDTO

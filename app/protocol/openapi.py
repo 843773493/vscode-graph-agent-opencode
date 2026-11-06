@@ -140,6 +140,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "WorkspaceNavigationPlacementRequest", "WorkspaceNavigationReorderRequest",
         "WorkspaceNavigationTreeDTO", "WorkspaceNavigationBreadcrumbDTO",
         "ExtensionHostTargetRequest", "ExtensionHostTargetDTO",
+        "ExtensionTargetDTO",
         "ExtensionInstallationInventoryRequest", "ExtensionInstallationInventoryDTO",
         "ExtensionInstallationInstallRequest", "ExtensionInstallationInstallDTO",
         "ExtensionConfigurationViewRequest", "ExtensionConfigurationFileRequest",

@@ -1124,6 +1124,21 @@ export interface ExtensionHostTargetDTO {
   runtime: ExtensionHostRuntimeDTO | undefined;
 }
 
+/** 目标身份和当前管理授权投影；不暴露宿主运行态，也不启动 Backend。 */
+export interface ExtensionTargetCapabilitiesDTO {
+  installation_manage: boolean;
+  host_manage: boolean;
+}
+
+export interface ExtensionTargetDTO {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id: string;
+  source: string;
+  capabilities: ExtensionTargetCapabilitiesDTO | undefined;
+}
+
 export interface ExtensionValidation {
   severity: number;
   message: string;
@@ -8679,6 +8694,109 @@ export const ExtensionHostTargetDTO: MessageFns<ExtensionHostTargetDTO> = {
     message.reason = object.reason ?? undefined;
     message.runtime = (object.runtime !== undefined && object.runtime !== null)
       ? ExtensionHostRuntimeDTO.fromPartial(object.runtime)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionTargetCapabilitiesDTO(): ExtensionTargetCapabilitiesDTO {
+  return { installation_manage: false, host_manage: false };
+}
+
+export const ExtensionTargetCapabilitiesDTO: MessageFns<ExtensionTargetCapabilitiesDTO> = {
+  fromJSON(object: any): ExtensionTargetCapabilitiesDTO {
+    return {
+      installation_manage: isSet(object.installation_manage) ? globalThis.Boolean(object.installation_manage) : false,
+      host_manage: isSet(object.host_manage) ? globalThis.Boolean(object.host_manage) : false,
+    };
+  },
+
+  toJSON(message: ExtensionTargetCapabilitiesDTO): unknown {
+    const obj: any = {};
+    if (message.installation_manage !== false) {
+      obj.installation_manage = message.installation_manage;
+    }
+    if (message.host_manage !== false) {
+      obj.host_manage = message.host_manage;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionTargetCapabilitiesDTO>, I>>(base?: I): ExtensionTargetCapabilitiesDTO {
+    return ExtensionTargetCapabilitiesDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionTargetCapabilitiesDTO>, I>>(
+    object: I,
+  ): ExtensionTargetCapabilitiesDTO {
+    const message = createBaseExtensionTargetCapabilitiesDTO();
+    message.installation_manage = object.installation_manage ?? false;
+    message.host_manage = object.host_manage ?? false;
+    return message;
+  },
+};
+
+function createBaseExtensionTargetDTO(): ExtensionTargetDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    workspace_ids: [],
+    backend_id: "",
+    source: "",
+    capabilities: undefined,
+  };
+}
+
+export const ExtensionTargetDTO: MessageFns<ExtensionTargetDTO> = {
+  fromJSON(object: any): ExtensionTargetDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      capabilities: isSet(object.capabilities)
+        ? ExtensionTargetCapabilitiesDTO.fromJSON(object.capabilities)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionTargetDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.capabilities !== undefined) {
+      obj.capabilities = ExtensionTargetCapabilitiesDTO.toJSON(message.capabilities);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionTargetDTO>, I>>(base?: I): ExtensionTargetDTO {
+    return ExtensionTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionTargetDTO>, I>>(object: I): ExtensionTargetDTO {
+    const message = createBaseExtensionTargetDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? "";
+    message.source = object.source ?? "";
+    message.capabilities = (object.capabilities !== undefined && object.capabilities !== null)
+      ? ExtensionTargetCapabilitiesDTO.fromPartial(object.capabilities)
       : undefined;
     return message;
   },

@@ -42,6 +42,7 @@ from app.gateway.control.user_access import (
 from app.gateway.federation.policy import (
     Capability,
     FederationPolicyStore,
+    federation_capability_allowed,
     require_federation_capability,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
@@ -54,6 +55,8 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostOpenRequest,
     ExtensionHostTargetDTO,
     ExtensionHostTargetRequest,
+    ExtensionTargetCapabilitiesDTO,
+    ExtensionTargetDTO,
 )
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
@@ -107,10 +110,36 @@ def _users(websocket: HTTPConnection) -> UserAccessService:
 def _check(websocket: HTTPConnection, auth: GatewayAuthContext, access: UserAccessContext | None,
            leases: list[WorkspaceRouteLease], *, capability: Capability) -> None:
     require_federation_capability(websocket, auth, capability)
+    _check_access(access, leases)
+
+
+def _check_access(access: UserAccessContext | None, leases: list[WorkspaceRouteLease]) -> None:
     if access is not None and access.invalidated.is_set():
         raise PermissionError("Node 宿主客户端租约已失效")
     if any(lease.invalidated.is_set() for lease in leases):
         raise LookupError("Node 宿主工作区路由已失效")
+
+
+def _extension_capabilities(connection: HTTPConnection, auth: GatewayAuthContext) -> tuple[bool, bool]:
+    return (
+        federation_capability_allowed(connection, auth, "extension_installation_manage"),
+        federation_capability_allowed(connection, auth, "extension_host_manage"),
+    )
+
+
+def _check_inventory_permission(connection: HTTPConnection, auth: GatewayAuthContext) -> tuple[bool, bool]:
+    capabilities = _extension_capabilities(connection, auth)
+    if not any(capabilities):
+        raise PermissionError("目标 Gateway 未授权扩展库存读取")
+    return capabilities
+
+
+def _check_inventory_access(connection: HTTPConnection, auth: GatewayAuthContext,
+                            access: UserAccessContext | None, leases: list[WorkspaceRouteLease],
+                            expected: tuple[bool, bool]) -> None:
+    _check_access(access, leases)
+    if _check_inventory_permission(connection, auth) != expected:
+        raise PermissionError("扩展库存读取权限在操作期间发生变化，请重新查询")
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +222,75 @@ async def resolve_extension_host(
         raise HTTPException(409, str(error)) from error
 
 
+@router.post("/api/gateway/extension-targets/resolve", response_model=APIResponse[ExtensionTargetDTO])
+async def resolve_extension_target(
+    payload: ExtensionHostTargetRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionTargetDTO] | Response:
+    local_capabilities: tuple[bool, bool] | None = None
+    current_capabilities: tuple[bool, bool] | None = None
+    try:
+        with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
+                           auth=auth, streaming=False) as route:
+            _check_access(access, route.leases)
+            local_capabilities = None if route.remote else _check_inventory_permission(request, auth)
+            path = "api/gateway/extension-targets/resolve" if route.remote else "api/internal/extension-targets/resolve"
+            response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
+                headers=route.headers, json=payload.model_dump(), timeout=10)
+            _check_access(access, route.leases)
+            if local_capabilities is not None:
+                current_capabilities = _extension_capabilities(request, auth)
+                if current_capabilities != local_capabilities or not any(current_capabilities):
+                    raise PermissionError("扩展管理权限在目标发现期间发生变化，请重新查询")
+            if access is not None:
+                expires_at = _users(request).expires_at(access)
+                if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
+                    raise PermissionError("扩展目标客户端租约已过期")
+            if response.headers.get("X-Request-ID") != request_id:
+                raise ValueError("扩展目标 Backend 返回了不同 request_id")
+            if not response.is_success:
+                failure = response.json()
+                if not isinstance(failure, dict) or failure.get("request_id") != request_id:
+                    raise ValueError("扩展目标错误回执不属于原请求")
+                return Response(response.content, status_code=response.status_code, media_type="application/json")
+            if route.remote:
+                result = APIResponse[ExtensionTargetDTO].model_validate_json(response.content)
+                resolved = result.data
+                if (result.code != 0 or result.request_id != request_id or resolved is None
+                    or resolved.protocol_version != payload.protocol_version
+                    or resolved.gateway_id != payload.gateway_id or resolved.workspace_ids != payload.workspace_ids
+                    or (payload.backend_id is not None and resolved.backend_id != payload.backend_id)
+                    or not (resolved.capabilities.installation_manage or resolved.capabilities.host_manage)):
+                    raise ValueError("远端 Gateway 返回了不同目标或无管理能力结果")
+                return result
+            identity = APIResponse[ExtensionInstallationInventoryRequest].model_validate_json(response.content)
+            target = identity.data
+            if (identity.code != 0 or identity.request_id != request_id or target is None
+                or target.protocol_version != payload.protocol_version or target.gateway_id != payload.gateway_id
+                or target.workspace_ids != payload.workspace_ids
+                or (payload.backend_id is not None and target.backend_id != payload.backend_id)):
+                raise ValueError("扩展目标 Backend 返回了不同稳定身份或 request_id")
+            if current_capabilities is None:
+                raise RuntimeError("原生扩展目标权限未完成重核")
+            result = ExtensionTargetDTO(protocol_version=target.protocol_version, gateway_id=target.gateway_id,
+                workspace_ids=target.workspace_ids, backend_id=target.backend_id, source="live",
+                capabilities=ExtensionTargetCapabilitiesDTO(installation_manage=current_capabilities[0],
+                    host_manage=current_capabilities[1]))
+            return APIResponse(data=result, request_id=request_id)
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(502, f"扩展目标发现失败: {error}") from error
+    except ValidationError as error:
+        raise HTTPException(502, f"扩展目标发现回执结构无效: {error.errors(include_input=False)}") from error
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+
 @router.post("/api/gateway/extension-installations/inventory", response_model=APIResponse[ExtensionInstallationInventoryDTO])
 async def extension_installation_inventory(
     payload: ExtensionInstallationInventoryRequest, request: Request,
@@ -223,18 +321,27 @@ async def _installation_request(
     access: UserAccessContext | None, request_id: str, *,
     operation: Literal["inventory", "install"], response_type: type[APIResponse[InstallationResult]],
 ) -> APIResponse[InstallationResult] | Response:
-    require_federation_capability(request, auth, "extension_installation_manage")
+    if operation == "install":
+        require_federation_capability(request, auth, "extension_installation_manage")
     label = "扩展安装" if operation == "install" else "扩展库存"
     try:
         with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
                            auth=auth, streaming=False) as route:
-            _check(request, auth, access, route.leases, capability="extension_installation_manage")
+            if operation == "inventory":
+                expected_capabilities = _check_inventory_permission(request, auth)
+                _check_inventory_access(request, auth, access, route.leases, expected_capabilities)
+            else:
+                expected_capabilities = None
+                _check(request, auth, access, route.leases, capability="extension_installation_manage")
             prefix = "api/gateway" if route.remote else "api/internal"
             path = f"{prefix}/extension-installations/{operation}"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
                 headers=route.headers, json=payload.model_dump(), timeout=120)
             # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
-            _check(request, auth, access, route.leases, capability="extension_installation_manage")
+            if expected_capabilities is not None:
+                _check_inventory_access(request, auth, access, route.leases, expected_capabilities)
+            else:
+                _check(request, auth, access, route.leases, capability="extension_installation_manage")
             if access is not None:
                 expires_at = _users(request).expires_at(access)
                 if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):

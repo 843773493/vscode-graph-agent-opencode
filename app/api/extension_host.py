@@ -79,6 +79,24 @@ async def resolve_extension_host(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.post("/api/internal/extension-targets/resolve", response_model=APIResponse[ExtensionInstallationInventoryRequest], include_in_schema=False)
+async def resolve_extension_target(
+    payload: ExtensionHostTargetRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationInventoryRequest]:
+    if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
+        raise HTTPException(400, "扩展目标 Gateway 身份冲突")
+    try:
+        status = registry.extension_hosts.describe(expected_backend_id=payload.backend_id,
+            workspace_ids=tuple(payload.workspace_ids))
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
+    result = ExtensionInstallationInventoryRequest(protocol_version=payload.protocol_version,
+        gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids, backend_id=status.backend_id)
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.post("/api/internal/extension-installations/install", response_model=APIResponse[ExtensionInstallationInstallDTO], include_in_schema=False)
 async def extension_installation_install(
     payload: ExtensionInstallationInstallRequest, request: Request,

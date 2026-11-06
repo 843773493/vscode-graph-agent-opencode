@@ -110,14 +110,18 @@ def test_inventory_requires_token_and_user_lease_before_transport(inventory_prox
 def test_inventory_permission_is_default_denied_and_independent_of_host_and_read(inventory_proxy, operation: str) -> None:
     h, requests, _ = inventory_proxy
     headers = {"X-BoxTeam-Federation-Token": h.federation_token}
-    for capability in (None, "discovery", "read", "extension_host_manage"):
+    for capability in (None, "discovery", "read"):
         rules = [] if capability is None else [{"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]
         h.policy.publish({"rules": rules})
         assert h.client.post(PATH.rsplit("/", 1)[0] + f"/{operation}", json=_payload(h, operation), headers=headers).status_code == 403
     assert requests == []
+    h.policy.publish({"rules": [{"capability": "extension_host_manage", "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
+    host_response = h.client.post(PATH.rsplit("/", 1)[0] + f"/{operation}", json=_payload(h, operation), headers=headers)
+    assert host_response.status_code == (200 if operation == "inventory" else 403)
+    assert len(requests) == (1 if operation == "inventory" else 0)
     h.policy.publish({"rules": [{"capability": "extension_installation_manage", "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
     assert h.client.post(PATH.rsplit("/", 1)[0] + f"/{operation}", json=_payload(h, operation), headers=headers).status_code == 200
-    assert len(requests) == 1
+    assert len(requests) == (2 if operation == "inventory" else 1)
 
 
 def test_install_forwards_exact_target_and_never_replays_unknown_result(inventory_proxy) -> None:

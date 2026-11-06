@@ -2,7 +2,7 @@ import { revive } from '../../upstream/src/vs/base/common/marshalling.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { ExtensionIdentifier, IExtensionDescription, IBoundExtensionDescription, IExtensionWorkspaceView, bindExtensionDescription, installationTargetKey } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
 import type { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
-import type { ExtensionHostTargetDTO, ExtensionInstallationInventoryDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import type { ExtensionHostTargetDTO, ExtensionInstallationInventoryDTO, ExtensionTargetDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 
@@ -19,13 +19,13 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
     if (source.path !== source.root) throw new Error('Node 宿主只能挂接原工作区文件根');
     return source;
   });
-  const groups = new Map<string, { target: ExtensionHostTargetDTO; workspaceIds: string[] }>();
+  const groups = new Map<string, { target: ExtensionTargetDTO; workspaceIds: string[] }>();
   for (const owner of owners) {
     const payload = { protocol_version: 1, gateway_id: owner.gatewayId, workspace_ids: [owner.workspaceId] };
-    const target = await gateway.request<ExtensionHostTargetDTO>('/api/gateway/extension-hosts/resolve', {
+    const target = await gateway.request<ExtensionTargetDTO>('/api/gateway/extension-targets/resolve', {
       method: 'POST', body: JSON.stringify(payload),
     });
-    assertTarget(target, payload);
+    assertInstallationTarget(target, payload);
     const key = installationTargetKey({ kind: 'backend', gatewayId: target.gateway_id, backendId: target.backend_id });
     const group = groups.get(key) ?? { target, workspaceIds: [] };
     if (group.workspaceIds.includes(owner.workspaceId)) throw new Error('Node 宿主工作区集合重复');
@@ -35,7 +35,16 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
   const views: IExtensionWorkspaceView[] = [], extensions: IBoundExtensionDescription[] = [];
   for (const { target, workspaceIds } of groups.values()) {
     const request = { protocol_version: 1, gateway_id: target.gateway_id, backend_id: target.backend_id, workspace_ids: workspaceIds };
-    // 完整集合再次经原 owner 核验；单根发现不能代替 multi-root 的最终准入。
+    // 单根回执已覆盖完整集合；多根在原 owner 核验完整有序视图，不合并分根权限。
+    const resolvedTarget = workspaceIds.length === 1 ? target
+      : await gateway.request<ExtensionTargetDTO>('/api/gateway/extension-targets/resolve', {
+        method: 'POST', body: JSON.stringify(request),
+      });
+    assertInstallationTarget(resolvedTarget, request);
+    const installationTarget = { kind: 'backend' as const, gatewayId: target.gateway_id, backendId: target.backend_id };
+    views.push({ installationTarget, viewId: 'default', workspaceIds, capabilities: resolvedTarget.capabilities });
+    // 安装目标不等同运行宿主；仅安装权限的窗口不得请求运行态或读取启动库存。
+    if (!resolvedTarget.capabilities.host_manage) continue;
     const resolved = await gateway.request<ExtensionHostTargetDTO>('/api/gateway/extension-hosts/resolve', {
       method: 'POST', body: JSON.stringify(request),
     });
@@ -48,8 +57,6 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
       || !inventory.inventory?.profile_id || !Array.isArray(inventory.inventory.extensions)) {
       throw new Error('扩展库存响应的目标、默认 profile 或有序工作区视图不匹配');
     }
-    const installationTarget = { kind: 'backend' as const, gatewayId: inventory.gateway_id, backendId: inventory.backend_id };
-    views.push({ installationTarget, viewId: 'default', workspaceIds });
     for (const entry of inventory.inventory.extensions) {
       const value = revive(entry.description) as IExtensionDescription | undefined;
       const identifier = value?.identifier as { value?: unknown } | undefined;
@@ -69,6 +76,18 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
     }
   }
   return { views, extensions };
+}
+
+function assertInstallationTarget(target: ExtensionTargetDTO,
+  expected: { gateway_id: string; workspace_ids: string[]; backend_id?: string }): asserts target is ExtensionTargetDTO & {
+    capabilities: NonNullable<ExtensionTargetDTO['capabilities']>;
+  } {
+  if (target.protocol_version !== 1 || target.source !== 'live' || !target.backend_id || target.gateway_id !== expected.gateway_id
+    || expected.backend_id && target.backend_id !== expected.backend_id || JSON.stringify(target.workspace_ids) !== JSON.stringify(expected.workspace_ids)
+    || typeof target.capabilities?.installation_manage !== 'boolean' || typeof target.capabilities.host_manage !== 'boolean'
+    || !(target.capabilities.installation_manage || target.capabilities.host_manage)) {
+    throw new Error('扩展目标发现响应没有匹配明确身份或有效管理权限');
+  }
 }
 
 function assertTarget(target: ExtensionHostTargetDTO, expected: { gateway_id: string; workspace_ids: string[]; backend_id?: string }): void {

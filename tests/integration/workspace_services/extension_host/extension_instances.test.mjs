@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +10,13 @@ import { TestRunContext } from '../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/workspace_services/extension_host/extension_instances.test.mjs').prepare();
 const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'extension-instances.fixture.mjs');
 const upstream = './src/clients/workbench/upstream/src/vs/';
+const sourcePaths = ['tests/integration/workspace_services/extension_host/extension_instances.test.mjs',
+  ...['src/extensions/inventory.ts', 'scripts/sourceTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
+    'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionOwnerTransform.mjs',
+    'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocationTracker.ts',
+    'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocation.ts'].map(path => 'src/clients/workbench/' + path)];
+const fingerprint = async () => Object.fromEntries(await Promise.all(sourcePaths.map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
+const fingerprints = await fingerprint();
 const requests = [];
 let request;
 globalThis.__extensionInventoryBoundary = { request: (...args) => { requests.push(args); return request(...args); } };
@@ -75,6 +83,9 @@ const m = await import(pathToFileURL(bundle).href);
 const targetA = { kind: 'backend', gatewayId: 'gateway-a', backendId: '11111111-1111-4111-8111-111111111111' };
 const targetB = { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' };
 const web = { kind: 'web', profileId: 'web-profile' };
+const fullCapabilities = { installation_manage: true, host_manage: true };
+const installationOnly = { installation_manage: true, host_manage: false };
+const hostOnly = { installation_manage: false, host_manage: true };
 const id = value => new m.ExtensionIdentifier(value);
 function extension(target, version = '1.0.0', overrides = {}) {
   return { identifier: id('probe.shared'), name: 'shared', publisher: 'probe', version, engines: { vscode: '*' },
@@ -83,7 +94,7 @@ function extension(target, version = '1.0.0', overrides = {}) {
     activationEvents: ['onCommand:probe.shared'], contributes: { commands: [{ command: 'probe.shared', title: 'Shared' }] }, ...overrides };
 }
 const reader = { readActivationEvents: extension => m.ImplicitActivationEvents.readActivationEvents(extension) };
-const receipt = { boundary: '真实 Registry、Tracker、原 profile StorageManager／GlobalEnablement、原 CommandsRegistry、库存业务入口及 typed URI；HTTP 与 picker 是明确边界装具，不代替真实 Gateway／浏览器或全扩展 API 验收。', checks: [] };
+const receipt = { boundary: '真实 Registry、Tracker、原 profile StorageManager／GlobalEnablement、原 CommandsRegistry、目标发现/库存扫描业务入口及 typed URI；HTTP 与 picker 是明确边界装具，不代替真实 Gateway 权限判定／浏览器或全扩展 API 验收。', checks: [], scans: [] };
 
 test('挂接原命令只进入原工作区 owner，持久文件重读保留完整不透明根和有序集合', async () => {
   const routes = [{ gateway_id: 'gateway-a', workspace_id: 'a1', name: 'A1', status: 'ready' },
@@ -224,7 +235,7 @@ function tracker(registry) {
 test('原 Tracker 与 host snapshot 按实例分组，A/B 同ID版本和更新互不覆盖', () => {
   const a = extension(targetA), b = extension(targetB, '2.0.0'), local = extension(web, '3.0.0');
   const registry = new m.ExtensionDescriptionRegistry(reader, [a, b, local], true), running = tracker(registry);
-  const views = [targetA, targetB].map((installationTarget, index) => ({ installationTarget, viewId: 'default', workspaceIds: ['workspace-' + index] }));
+  const views = [targetA, targetB].map((installationTarget, index) => ({ installationTarget, viewId: 'default', workspaceIds: ['workspace-' + index], capabilities: fullCapabilities }));
   running.setRemoteViews(views); running.initializeRunningLocation([local], [a, b]);
   const locations = running.remoteRunningLocations;
   expect(locations[0].equals(locations[1])).toBe(false);
@@ -359,26 +370,127 @@ test('原 MainThreadDocuments 的 save/dirty/encoding 事件只发给已跟踪�
   receipt.checks.push('原 MainThreadDocuments 的 save/dirty/encoding 消费跟踪集合，不广播外部模型');
 });
 
-function context(owners) { return { getCompleteWorkspace: async () => ({ folders: owners.map(owner => ({ uri: m.workspaceFileUri(owner, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId) })) }) }; }
+function context(owners) { return { getCompleteWorkspace: async () => ({ folders: [{ uri: m.URI.parse('boxteam-workspace:/') }, ...owners.map(owner => ({ uri: m.workspaceFileUri(owner, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId) }))] }) }; }
+const targetResolvePath = '/api/gateway/extension-targets/resolve';
+const hostResolvePath = '/api/gateway/extension-hosts/resolve';
+const inventoryPath = '/api/gateway/extension-installations/inventory';
+const ownerA = workspaceId => ({ gatewayId: targetA.gatewayId, workspaceId });
+function targetReply(payload, capabilities = fullCapabilities) {
+  return { ...payload, backend_id: payload.gateway_id === targetA.gatewayId ? targetA.backendId : targetB.backendId, source: 'live', capabilities: { ...capabilities } };
+}
+function hostReply(payload) { return { ...payload, source: 'live', channel_state: 'available', runtime: { commit: pinnedUpstreamCommit } }; }
+function inventoryReply(payload) {
+  return { ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', extensions: [{ source: 'profile', is_valid: false,
+    validations: [{ severity: 3, message: 'manifest invalid' }], description: JSON.parse(JSON.stringify(extension(targetB))) }] } };
+}
+const scannedRequests = () => requests.map(([path, options]) => ({ path, method: options.method, body: JSON.parse(options.body) }));
+function scanResponse(path, options) {
+  const payload = JSON.parse(options.body);
+  if (path === targetResolvePath) return targetReply(payload);
+  if (path === hostResolvePath) return hostReply(payload);
+  if (path === inventoryPath) return inventoryReply(payload);
+  throw new Error('扫描不应请求其它入口：' + path);
+}
+
 test('库存真实业务入口只发现明确根并核完整集合，包正文不能覆写target或invalid诊断', async () => {
   requests.length = 0;
-  request = async (path, options) => {
-    const payload = JSON.parse(options.body), backend = payload.gateway_id === targetA.gatewayId ? targetA.backendId : targetB.backendId;
-    if (path.endsWith('/resolve')) return { ...payload, backend_id: backend, source: 'live', channel_state: 'available', runtime: { commit: pinnedUpstreamCommit } };
-    return { ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', extensions: [{ source: 'profile', is_valid: false,
-      validations: [{ severity: 3, message: 'manifest invalid' }], description: JSON.parse(JSON.stringify(extension(targetB))) }] } };
-  };
-  const snapshot = await m.scanTargetExtensions(context([{ gatewayId: targetA.gatewayId, workspaceId: 'a1' }, { gatewayId: targetA.gatewayId, workspaceId: 'a2' }]));
-  expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a1', 'a2'] }]);
+  request = async (...args) => scanResponse(...args);
+  const snapshot = await m.scanTargetExtensions(context([ownerA('a1'), ownerA('a2')]));
+  expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a1', 'a2'], capabilities: fullCapabilities }]);
   expect(snapshot.extensions[0].installationTarget).toEqual(targetA);
   expect(m.toExtension(snapshot.extensions[0])).toMatchObject({ isValid: false, validations: [[3, 'manifest invalid']], installationTarget: targetA });
-  expect(requests.map(([path]) => path)).toEqual(['/api/gateway/extension-hosts/resolve', '/api/gateway/extension-hosts/resolve', '/api/gateway/extension-hosts/resolve', '/api/gateway/extension-installations/inventory']);
+  expect(requests.map(([path]) => path)).toEqual([targetResolvePath, targetResolvePath, targetResolvePath, hostResolvePath, inventoryPath]);
+  const complete = { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['a1', 'a2'] };
+  expect(scannedRequests().slice(2)).toEqual([targetResolvePath, hostResolvePath, inventoryPath].map(path => ({ path, method: 'POST', body: complete })));
+  receipt.scans.push({ name: '原库存及invalid诊断', requests: scannedRequests(), views: snapshot.views });
   const previous = request;
   request = async (...args) => args[0].endsWith('/inventory') ? { ...await previous(...args), backend_id: targetB.backendId } : previous(...args);
-  await expect(m.scanTargetExtensions(context([{ gatewayId: targetA.gatewayId, workspaceId: 'a1' }]))).rejects.toThrow('不匹配');
+  await expect(m.scanTargetExtensions(context([ownerA('a1')]))).rejects.toThrow('不匹配');
   request = async () => { throw new Error('offline route'); };
-  await expect(m.scanTargetExtensions(context([{ gatewayId: targetA.gatewayId, workspaceId: 'a1' }]))).rejects.toThrow('offline route');
+  await expect(m.scanTargetExtensions(context([ownerA('a1')]))).rejects.toThrow('offline route');
   receipt.checks.push('扫描真实入口取 envelope 目标、完整有序集合准入、保留invalid诊断、路由误指与离线不空回退');
+});
+
+test('真实scanner仅安装目标不发现host或读取库存，原Tracker保留view而不生成宿主位置', async () => {
+  requests.length = 0;
+  request = async (path, options) => {
+    if (path !== targetResolvePath) throw new Error('仅安装权限不能进入宿主发现或库存入口');
+    return targetReply(JSON.parse(options.body), installationOnly);
+  };
+  const snapshot = await m.scanTargetExtensions(context([ownerA('a1')]));
+  expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a1'], capabilities: installationOnly }]);
+  expect(snapshot.extensions).toEqual([]);
+  expect(scannedRequests()).toEqual([{ path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a1'] } }]);
+  const registry = new m.ExtensionDescriptionRegistry(reader, [], true), running = tracker(registry);
+  try {
+    running.setRemoteViews(snapshot.views); running.initializeRunningLocation([], snapshot.extensions);
+    expect(running.workspaceViews).toEqual(snapshot.views); expect(running.workspaceViews[0]).toBe(snapshot.views[0]);
+    expect(running.remoteRunningLocations).toEqual([]);
+  } finally { registry.dispose(); }
+  receipt.scans.push({ name: '单根仅安装权限', requests: scannedRequests(), views: snapshot.views });
+});
+
+test('真实scanner混合两权限，完整组回执决定权限且保留根顺序，host-only仍读原库存', async () => {
+  requests.length = 0;
+  request = async (path, options) => {
+    const payload = JSON.parse(options.body);
+    if (path === targetResolvePath) return targetReply(payload, payload.gateway_id === targetA.gatewayId
+      ? payload.workspace_ids.length === 1 ? fullCapabilities : installationOnly : hostOnly);
+    return scanResponse(path, options);
+  };
+  const snapshot = await m.scanTargetExtensions(context([ownerA('a2'), { gatewayId: targetB.gatewayId, workspaceId: 'b1' }, ownerA('a1')]));
+  expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a2', 'a1'], capabilities: installationOnly },
+    { installationTarget: targetB, viewId: 'default', workspaceIds: ['b1'], capabilities: hostOnly }]);
+  expect(snapshot.extensions).toHaveLength(1); expect(snapshot.extensions[0].installationTarget).toEqual(targetB);
+  const a = { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['a2', 'a1'] };
+  const b = { protocol_version: 1, gateway_id: targetB.gatewayId, backend_id: targetB.backendId, workspace_ids: ['b1'] };
+  expect(scannedRequests()).toEqual([
+    { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a2'] } },
+    { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetB.gatewayId, workspace_ids: ['b1'] } },
+    { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a1'] } },
+    { path: targetResolvePath, method: 'POST', body: a }, { path: hostResolvePath, method: 'POST', body: b }, { path: inventoryPath, method: 'POST', body: b },
+  ]);
+  const registry = new m.ExtensionDescriptionRegistry(reader, snapshot.extensions, true), running = tracker(registry);
+  try {
+    running.setRemoteViews(snapshot.views); running.initializeRunningLocation([], snapshot.extensions);
+    expect(running.workspaceViews).toEqual(snapshot.views);
+    expect(running.workspaceViews[0]).toBe(snapshot.views[0]); expect(running.workspaceViews[1]).toBe(snapshot.views[1]);
+    expect(running.remoteRunningLocations.map(location => [location.installationTarget, location.workspaceIds])).toEqual([[targetB, ['b1']]]);
+    expect(running.getRunningLocation(snapshot.extensions[0]).equals(running.remoteRunningLocations[0])).toBe(true);
+  } finally { registry.dispose(); }
+  receipt.scans.push({ name: '混合权限完整有序组', requests: scannedRequests(), views: snapshot.views });
+});
+
+for (const invalid of ['protocol', 'gateway', 'backend', 'order', 'source', 'capabilities', 'missing-capabilities', 'denied']) test(`真实scanner完整组${invalid}回执拒绝，不越权发现host或读取库存`, async () => {
+  requests.length = 0;
+  request = async (path, options) => {
+    if (path !== targetResolvePath) throw new Error('非法目标回执不能继续其它入口');
+    const payload = JSON.parse(options.body), result = targetReply(payload);
+    if (payload.workspace_ids.length === 1) return result;
+    if (invalid === 'protocol') result.protocol_version = 2;
+    if (invalid === 'gateway') result.gateway_id = targetB.gatewayId;
+    if (invalid === 'backend') result.backend_id = targetB.backendId;
+    if (invalid === 'order') result.workspace_ids = [...payload.workspace_ids].reverse();
+    if (invalid === 'source') result.source = 'cached';
+    if (invalid === 'capabilities') result.capabilities = { installation_manage: 'true', host_manage: false };
+    if (invalid === 'missing-capabilities') delete result.capabilities;
+    if (invalid === 'denied') result.capabilities = { installation_manage: false, host_manage: false };
+    return result;
+  };
+  await expect(m.scanTargetExtensions(context([ownerA('a1'), ownerA('a2')]))).rejects.toThrow();
+  expect(requests.map(([path]) => path)).toEqual([targetResolvePath, targetResolvePath, targetResolvePath]);
+  receipt.scans.push({ name: '拒绝完整组-' + invalid, requests: scannedRequests() });
+});
+
+test('真实scanner前置目标授权拒绝保留原错误，不回退宿主发现；纯Web根零请求', async () => {
+  requests.length = 0;
+  const denied = new Error('extension targets forbidden: original-authorization-request');
+  request = async () => { throw denied; };
+  await expect(m.scanTargetExtensions(context([ownerA('a1')]))).rejects.toBe(denied);
+  expect(requests.map(([path]) => path)).toEqual([targetResolvePath]);
+  requests.length = 0;
+  expect(await m.scanTargetExtensions(context([]))).toEqual({ views: [], extensions: [] }); expect(requests).toEqual([]);
+  receipt.checks.push('目标授权失败保留原错误，不借宿主管理权回退；纯Web根不做目标请求');
 });
 
 test('原 CommandsRegistry 单入口按编辑器／原host冻结调用，dispose仅撤自己的generation', async () => {
@@ -412,7 +524,7 @@ test('首次命令在宿主尚未绑定时从原 Registry 与 Tracker 选择目�
   const a = extension(targetA), b = extension(targetB, '2.0.0');
   const registry = new m.ExtensionDescriptionRegistry(reader, [a, b], true), running = tracker(registry);
   running.setRemoteViews([targetA, targetB].map((installationTarget, index) => ({ installationTarget,
-    viewId: 'default', workspaceIds: [index ? 'b1' : 'a1'] })));
+    viewId: 'default', workspaceIds: [index ? 'b1' : 'a1'], capabilities: fullCapabilities })));
   running.initializeRunningLocation([], [a, b]);
   let live = running.remoteRunningLocations.map(runningLocation => ({ runningLocation, extensions: null })), picks = 0;
   const hosts = [...live];
@@ -532,7 +644,9 @@ test('typed URI 使用目标 Windows 盘符、目录及 UNC 大小写语义，�
 });
 
 afterAll(async () => {
-  await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify(receipt, null, 2));
-  delete globalThis.__extensionInventoryBoundary;
-  await run.close();
+  try {
+    const after = await fingerprint(), drift = sourcePaths.filter(path => fingerprints[path] !== after[path]);
+    await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ ...receipt, fingerprints, fingerprintsAfter: after, drift }, null, 2));
+    if (drift.length) throw new Error('验证期间源码改变：' + drift.join(', '));
+  } finally { delete globalThis.__extensionInventoryBoundary; await run.close(); }
 });

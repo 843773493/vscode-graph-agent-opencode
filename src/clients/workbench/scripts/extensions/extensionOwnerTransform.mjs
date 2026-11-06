@@ -141,7 +141,7 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
     return extension.installationTarget;
   }
   public getExtensionHosts(): readonly IExtensionHost[] { return this._extensionHostManagers.map(manager => manager.extensionHost); }
-  public getExtensionWorkspaceViews(): readonly IExtensionWorkspaceView[] { return this._runningLocations.remoteRunningLocations; }
+  public getExtensionWorkspaceViews(): readonly IExtensionWorkspaceView[] { return this._runningLocations.workspaceViews; }
   public getHostExtensions(host: IExtensionHost): readonly IExtensionDescription[] {
     return this.getExtensionHosts().includes(host)
       ? this._runningLocations.filterByRunningLocation(this._registry.getAllExtensionDescriptions(), host.runningLocation) : [];

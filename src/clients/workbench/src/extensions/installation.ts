@@ -46,8 +46,6 @@ export async function installTargetVsix(accessor: ServicesAccessor, input: Insta
   };
   subscriptions.add(context.onDidChangeWorkspaceFolders(() => { if (rootsRemoved()) invalidate(); }));
   try {
-    // TODO(1.4/4.3)：原窗口扫描仍要求宿主管理权限；仅安装权限的初始化须迁齐原目标发现 owner。
-    // 本入口目前只消费已经建立的明确视图，不能据此声称两权限已在窗口初始化中完全解耦。
     await extensions.whenInstalledExtensionsRegistered();
     const workspace = await context.getCompleteWorkspace();
     check();
@@ -68,7 +66,7 @@ export async function installTargetVsix(accessor: ServicesAccessor, input: Insta
         if (!root) throw new Error('原扩展安装视图的工作区集合已改变，请重新加载窗口');
         return root.folder.uri;
       });
-      return { target, viewRoots };
+      return { target, viewRoots, capabilities: view.capabilities };
     };
     let selectedRoot: URI | undefined;
     if ('select' in input) {
@@ -76,12 +74,13 @@ export async function installTargetVsix(accessor: ServicesAccessor, input: Insta
       const choices = roots.map(({ folder, source }) => {
         const target = targetFor(source);
         return { ...target, root: folder.uri, label: folder.name, description: `${source.gatewayId} · ${source.workspaceId}`,
-          detail: `Backend ${target.target.backend_id} · 默认 profile · ${source.root}` };
+          detail: `Backend ${target.target.backend_id} · ${target.capabilities.installation_manage ? '默认 profile' : '未获扩展安装管理权限'} · ${source.root}` };
       });
       const selected = await quickInput.pick(choices,
         { title: '选择 VSIX 来源工作区与安装目标', placeHolder: '安装到所选 Backend 默认 profile，影响其工作区视图；不会启动或切换工作区' }, cancellation.token);
       check();
       if (!selected) return;
+      if (!selected.capabilities.installation_manage) throw new Error('所选目标未授权扩展安装管理，请在原生 Gateway 授权后重新加载窗口');
       selectedRoot = selected.root;
       requiredRoots = selected.viewRoots;
       check();
@@ -102,7 +101,9 @@ export async function installTargetVsix(accessor: ServicesAccessor, input: Insta
       if (!attached || source.path === source.root || selectedRoot && attached.folder.uri.toString() !== selectedRoot.toString()) {
         throw new Error('VSIX 来源不属于本次选择的已挂接工作区文件根');
       }
-      return { ...source, ...targetFor(source) };
+      const target = targetFor(source);
+      if (!target.capabilities.installation_manage) throw new Error('VSIX 目标未授权扩展安装管理，请在原生 Gateway 授权后重新加载窗口');
+      return { ...source, ...target };
     });
     requiredRoots = sources.flatMap(source => source.viewRoots);
     check();

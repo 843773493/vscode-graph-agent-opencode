@@ -14,7 +14,7 @@ const root = resolve('src/clients/workbench'), upstream = './src/clients/workben
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
 const bundle = join(run.artifactsDir, 'installation-actions.fixture.mjs');
 const sourcePaths = [testFile, ...['scripts/sourceTransform.mjs', 'scripts/extensions/extensionBrowserTransform.mjs',
-  'scripts/extensions/extensionOwnerTransform.mjs', 'scripts/extensions/extensionRunningTransform.mjs',
+  'scripts/extensions/extensionOwnerTransform.mjs', 'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
   'src/extensions/installation.ts', 'src/agentApi.ts', 'src/workspaceContext.ts', 'src/workspaceFiles.ts',
   'upstream/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts',
   'upstream/src/vs/workbench/services/extensions/common/abstractExtensionService.ts',
@@ -164,12 +164,14 @@ async function inBrowser(name, config, body, policy = {}) {
       if (config.missingPeerRoot) folders = folders.filter(folder => m.workspaceFileSource(folder.uri).workspaceId !== 'workspace-a2');
       const registry = lifetime.add(new m.ExtensionDescriptionRegistry({ readActivationEvents: () => [] }, [], true));
       const tracker = new m.ExtensionRunningLocationTracker(registry, {}, {}, {}, {}, {}), owner = new m.OriginalViewOwner(tracker);
-      const views = [ { installationTarget: { kind: 'backend', gatewayId: 'gateway-a', backendId: '11111111-1111-4111-8111-111111111111' }, viewId: 'default', workspaceIds: ['workspace-a2', 'workspace-a1'] },
-        { installationTarget: { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' }, viewId: 'default', workspaceIds: ['workspace-b'] } ];
+      const views = [ { installationTarget: { kind: 'backend', gatewayId: 'gateway-a', backendId: '11111111-1111-4111-8111-111111111111' }, viewId: 'default', workspaceIds: ['workspace-a2', 'workspace-a1'],
+        capabilities: { installation_manage: !config.hostOnlyA, host_manage: !config.installOnlyA } },
+        { installationTarget: { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' }, viewId: 'default', workspaceIds: ['workspace-b'],
+          capabilities: { installation_manage: !config.hostOnlyB, host_manage: true } } ];
       owner._setExtensionWorkspaceViews(config.noView ? views.slice(1) : config.noViewB ? views.slice(0, 1) : views);
       m.workspaceContext.publish({ gatewayId: 'control-gateway', workspaces: [], activeId: 'active-a1', settings: null, loading: false, error: null });
       const picks = [], dialogs = [], prompts = [], reports = [], gate = Promise.withResolvers(), registration = Promise.withResolvers();
-      const p = { m, owner, tracker, picks, dialogs, prompts, reports, reloads: 0, started: false, completed: false,
+      const p = { m, owner, tracker, views, picks, dialogs, prompts, reports, reloads: 0, started: false, completed: false,
         registrationCalls: 0, viewReads: 0, gate, registration,
         focus() { m.workspaceContext.publish({ ...m.workspaceContext.getSnapshot(), activeId: 'active-b' }); },
         invalidate(kind) {
@@ -203,7 +205,7 @@ async function inBrowser(name, config, body, policy = {}) {
         [m.IExtensionService, { whenInstalledExtensionsRegistered: async () => { p.registrationCalls++; if (config.holdRegistration) await registration.promise; },
           getExtensionWorkspaceViews: () => { p.viewReads++; return owner.getExtensionWorkspaceViews(); } }],
         [m.IQuickInputService, { pick: async (items, options, token) => { picks.push({ items: items.map(item => ({ label: item.label, description: item.description,
-          detail: item.detail, root: item.root.toString(), workspaceIds: item.target.workspace_ids })), options }); p.pickToken = token;
+          detail: item.detail, root: item.root.toString(), workspaceIds: item.target.workspace_ids, capabilities: item.capabilities })), options }); p.pickToken = token;
           return config.cancelPick ? undefined : items[config.pickIndex ?? 0]; } }],
         [m.IFileDialogService, { showOpenDialog: async options => { dialogs.push({ ...options, defaultUri: options.defaultUri.toString() });
           if (config.focusDialog) { p.focus(); p.replaceView(); }
@@ -251,6 +253,38 @@ test('原两条命令和菜单在纯Web窗口可达，Explorer只接受工作区
   expect(result.native).toEqual([false]); expect(result.text).toEqual([false]);
   expect(result.views.map(view => [view.installationTarget.backendId, view.viewId, view.workspaceIds])).toEqual([
     [backends['gateway-a'], 'default', ['workspace-a2', 'workspace-a1']], [backends['gateway-b'], 'default', ['workspace-b']]]);
+}));
+
+test('原getter保留仅安装view的身份及顺序，原selector无需host权限仍向完整目标安装', async () => inBrowser('installation-only', { installOnlyA: true, hostOnlyB: true }, async (page, state) => {
+  const projection = await page.evaluate(() => {
+    const { owner, tracker, views } = globalThis.vsix, projected = owner.getExtensionWorkspaceViews();
+    return { sameViews: projected.map((view, index) => view === views[index]), sameCapabilities: projected.map((view, index) => view.capabilities === views[index].capabilities),
+      capabilities: projected.map(view => view.capabilities), workspaceIds: projected.map(view => view.workspaceIds),
+      hosts: tracker.remoteRunningLocations.map(location => location.installationTarget.backendId) };
+  });
+  expect(projection).toEqual({ sameViews: [true, true], sameCapabilities: [true, true],
+    capabilities: [{ installation_manage: true, host_manage: false }, { installation_manage: false, host_manage: true }],
+    workspaceIds: [['workspace-a2', 'workspace-a1'], ['workspace-b']], hosts: [backends['gateway-b']] });
+  const result = await invoke(page, 'select');
+  expect(result.error).toBeNull(); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1')]);
+  expect(result.picks[0].items.map(item => item.label)).toEqual(['A1', 'A2', 'B']);
+  expect(result.picks[0].items[2].detail).toContain('未获扩展安装管理权限');
+  expect(result.prompts).toHaveLength(1); expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
+}));
+
+for (const command of ['direct', 'select']) test(`原${command} action拒绝仅宿主管理目标，保留其它目标也不改投或发请求`, async () => inBrowser('host-only-' + command, { hostOnlyA: true }, async (page, state) => {
+  const result = await invoke(page, command);
+  expect(result.error?.message).toContain('未授权扩展安装管理'); expect(state.requests).toEqual([]);
+  expect(result.dialogs).toEqual([]); expect(result.prompts).toEqual([]);
+  if (command === 'select') {
+    expect(result.picks[0].items.map(item => item.label)).toEqual(['A1', 'A2', 'B']);
+    expect(result.picks[0].items[0].detail).toContain('未获扩展安装管理权限');
+  }
+}));
+
+test('原直接URI批次后项只有host权限时，合法前项目标也零安装', async () => inBrowser('mixed-capabilities-batch', { hostOnlyA: true }, async (page, state) => {
+  const result = await invoke(page, 'direct', ['b', 'a1']);
+  expect(result.error?.message).toContain('未授权扩展安装管理'); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
 }));
 
 for (const cancel of ['cancelPick', 'cancelDialog']) test(`${cancel}取消原服务零安装请求`, async () => inBrowser(cancel, { [cancel]: true }, async (page, state) => {

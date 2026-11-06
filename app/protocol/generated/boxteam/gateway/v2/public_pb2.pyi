@@ -1884,6 +1884,30 @@ class ExtensionHostTargetDTO(_message.Message):
     runtime: ExtensionHostRuntimeDTO
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source: _Optional[str] = ..., platform: _Optional[str] = ..., channel_state: _Optional[str] = ..., reason: _Optional[str] = ..., runtime: _Optional[_Union[ExtensionHostRuntimeDTO, _Mapping]] = ...) -> None: ...
 
+class ExtensionTargetCapabilitiesDTO(_message.Message):
+    __slots__ = ("installation_manage", "host_manage")
+    INSTALLATION_MANAGE_FIELD_NUMBER: _ClassVar[int]
+    HOST_MANAGE_FIELD_NUMBER: _ClassVar[int]
+    installation_manage: bool
+    host_manage: bool
+    def __init__(self, installation_manage: _Optional[bool] = ..., host_manage: _Optional[bool] = ...) -> None: ...
+
+class ExtensionTargetDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "source", "capabilities")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    source: str
+    capabilities: ExtensionTargetCapabilitiesDTO
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source: _Optional[str] = ..., capabilities: _Optional[_Union[ExtensionTargetCapabilitiesDTO, _Mapping]] = ...) -> None: ...
+
 class ExtensionValidation(_message.Message):
     __slots__ = ("severity", "message")
     SEVERITY_FIELD_NUMBER: _ClassVar[int]

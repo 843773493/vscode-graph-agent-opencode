@@ -10,7 +10,7 @@ export function transformExtensionRunning(root, path, source, replaceOnce) {
   const paths = extensionRunningSourcePaths.map(value => join(root, 'upstream', value));
   if (path === paths[0]) {
     let contents = `import { IExtensionWorkspaceView, installationTargetKey } from '../../../../platform/extensions/common/extensions.js';\n` + source;
-    contents = replaceOnce(contents, 'export class RemoteRunningLocation {', `export class RemoteRunningLocation implements IExtensionWorkspaceView {
+    contents = replaceOnce(contents, 'export class RemoteRunningLocation {', `export class RemoteRunningLocation {
   constructor(
     public readonly installationTarget: IExtensionWorkspaceView['installationTarget'],
     public readonly viewId: string,
@@ -47,8 +47,10 @@ export function transformExtensionRunning(root, path, source, replaceOnce) {
     this._remoteViews.clear();
     for (const [key, view] of next) this._remoteViews.set(key, view);
   }
+  public get workspaceViews(): readonly IExtensionWorkspaceView[] { return [...this._remoteViews.values()]; }
   public get remoteRunningLocations(): RemoteRunningLocation[] {
-    return [...this._remoteViews.values()].map(view => new RemoteRunningLocation(view.installationTarget, view.viewId, view.workspaceIds));
+    return this.workspaceViews.filter(view => view.capabilities.host_manage)
+      .map(view => new RemoteRunningLocation(view.installationTarget, view.viewId, view.workspaceIds));
   }
   public getHostExtensions(extensions: readonly IExtensionDescription[], location: ExtensionRunningLocation): IExtensionDescription[] {
     const own = extensions.filter(extension => {
@@ -73,7 +75,7 @@ export function transformExtensionRunning(root, path, source, replaceOnce) {
   private _remoteLocation(extension: IExtensionDescription): RemoteRunningLocation {
     const target = requireExtensionTarget(extension).installationTarget;
     const view = this._remoteViews.get(installationTargetKey(target));
-    if (target.kind !== 'backend' || !view) throw new Error('Extension has no explicit Backend workspace view: ' + extension.identifier.value);
+    if (target.kind !== 'backend' || !view?.capabilities.host_manage) throw new Error('Extension has no authorized Backend workspace view: ' + extension.identifier.value);
     return new RemoteRunningLocation(target, view.viewId, view.workspaceIds);
   }
   private _key(extension: ExtensionIdentifier | IExtensionDescription, target?: ExtensionInstallationTarget): string {

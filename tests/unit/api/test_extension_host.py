@@ -94,3 +94,29 @@ def test_private_discovery_preserves_control_boundary(
                "workspace_ids": list(registry.mounted_workspaces.workspace_ids)}
     response = client.post("/api/internal/extension-hosts/resolve", json=payload, headers=headers)
     assert response.status_code == status and registry.extension_hosts.active == ()
+
+
+def test_private_target_resolve_returns_only_bound_identity_without_starting_management(
+    private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
+) -> None:
+    client, registry = private_host_client
+    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32,
+        "workspace_ids": list(registry.mounted_workspaces.workspace_ids)}
+    headers = {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": payload["gateway_id"],
+        "X-Request-ID": "target-identity"}
+    response = client.post("/api/internal/extension-targets/resolve", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "target-identity"
+    assert response.json()["data"] == {**payload, "backend_id": registry.extension_hosts.backend_id}
+    owner = registry.extension_hosts
+    assert owner.active == () and owner._management is None
+    assert not (owner._home / "state/backend/extension-management").exists()
+    assert not (owner._home / "state/backend/extension-hosts").exists()
+
+    for wrong in ({"backend_id": str(uuid4())}, {"workspace_ids": [str(uuid4())]}):
+        rejected = client.post("/api/internal/extension-targets/resolve", json={**payload, **wrong}, headers=headers)
+        assert rejected.status_code == 409
+    assert owner.active == () and owner._management is None
+
+    rejected_gateway = client.post("/api/internal/extension-targets/resolve", json={**payload, "gateway_id": "gateway_" + "c" * 32}, headers=headers)
+    assert rejected_gateway.status_code == 400 and owner.active == ()

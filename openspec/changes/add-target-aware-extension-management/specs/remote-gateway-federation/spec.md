@@ -16,7 +16,9 @@
 
 ### Requirement: 目标扩展安装与宿主管理使用独立联邦能力
 
-原联邦 policy 与 Gateway schema SHALL 登记 `extension_installation_manage` 和 `extension_host_manage` 两项独立管理能力，且均归入管理员能力集合并默认拒绝。只有精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置读写及另一项扩展管理能力均不得代授。`extension_installation_manage` 只授权明确目标上的 VSIX 制品安装、更新、移除及安装状态；`extension_host_manage` 只授权该目标 Node Extension Host 的启动、通道管理、状态读取及停止。两种能力不得互相扩大权限。
+原联邦 policy 与 Gateway schema SHALL 登记 `extension_installation_manage` 和 `extension_host_manage` 两项独立管理能力，且均归入管理员能力集合并默认拒绝。只有精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置读写及另一项扩展管理能力均不得代授。`extension_installation_manage` 只授权明确目标上的 VSIX 制品安装、更新、移除及安装状态；`extension_host_manage` 只授权该目标 Node Extension Host 的启动、通道管理、状态读取及停止。原默认 profile 的只读安装描述可由任一管理能力读取，供安装管理或宿主初始化复用，MUST NOT 据此授予制品写入或宿主运行管理。两种能力不得互相扩大权限。
+
+共同目标发现 SHALL 仅返回当前明确目标的稳定身份和原生 Gateway 对两项管理能力的判定；至少一项获准才访问 Backend，不披露未授权宿主运行态，也不启动宿主或管理进程。原生 Gateway SHALL 在请求准入及实际披露时重核权限、用户与路由，Relay 只转送结果，不合并本机或各分根的授权。客户端投影不代替后续请求的实时授权。
 
 经 Relay 发起的请求 SHALL 保留明确目标和原始错误，并由目标原生 Gateway 在访问 Backend、制品或宿主进程前按当前策略最终判权。未获授权时 MUST 明确拒绝，不访问目标资源，也不改投本机或其他目标。
 
@@ -27,6 +29,10 @@
 #### Scenario: 安装管理与宿主管理彼此隔离
 - **WHEN** 主体只有 `extension_installation_manage` 却请求启动、查询运行态、管理通道或停止 Node 宿主，或只有 `extension_host_manage` 却请求安装、更新或移除 VSIX
 - **THEN** 目标原生 Gateway 拒绝缺少的对应能力，另一项能力不代授
+
+#### Scenario: 单项管理权限独立初始化窗口
+- **WHEN** 窗口明确挂接一个只有安装权限的目标与另一个只有宿主管理权限的目标
+- **THEN** 两者通过同一目标发现取得自己的身份和权限；安装目标不请求宿主状态、读取启动库存或创建运行宿主，宿主目标可以只读原 profile 描述并启动自己的宿主，但不能通过安装入口写入制品；同屏其它目标不被改投或隐式授权
 
 ### Requirement: 远端配置管理必须使用独立读写能力
 

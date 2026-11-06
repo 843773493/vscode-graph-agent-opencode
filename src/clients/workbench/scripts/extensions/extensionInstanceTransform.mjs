@@ -22,6 +22,7 @@ export interface IExtensionWorkspaceView {
   readonly installationTarget: Extract<ExtensionInstallationTarget, { kind: 'backend' }>;
   readonly viewId: string;
   readonly workspaceIds: readonly string[];
+  readonly capabilities: { readonly installation_manage: boolean; readonly host_manage: boolean };
 }
 
 export type IBoundExtensionDescription = IExtensionDescription & IExtensionInstanceIdentifier;

@@ -1137,6 +1137,21 @@ message ExtensionHostTargetDTO {
   ExtensionHostRuntimeDTO runtime = 9;
 }
 
+// 目标身份和当前管理授权投影；不暴露宿主运行态，也不启动 Backend。
+message ExtensionTargetCapabilitiesDTO {
+  bool installation_manage = 1;
+  bool host_manage = 2;
+}
+
+message ExtensionTargetDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  string backend_id = 4;
+  string source = 5;
+  ExtensionTargetCapabilitiesDTO capabilities = 6;
+}
+
 message ExtensionValidation {
   uint32 severity = 1;
   string message = 2;
