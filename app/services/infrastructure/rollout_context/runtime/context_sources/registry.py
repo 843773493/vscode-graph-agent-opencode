@@ -124,9 +124,19 @@ class SourceRegistryMixin:
                 )
             # 同批目录只在入口对齐 rebuild；各来源仍独立校验 descriptor 并持久化控制状态。
             self.refresh_context_rebuild_state(rebuild)
-            for candidate_descriptor in (descriptor, *additional_descriptors):
+            descriptors = (descriptor, *additional_descriptors)
+            durable_states: dict[str, ContextSourceControlState] | None = None
+            port, owner = self._control_state_port, self._owner
+            for candidate_descriptor in descriptors:
                 state = self._registration_candidate(candidate_descriptor, binding_revision, tracking_status)
-                self._persist_control_state(state, operation="register")
+                if durable_states is None and port is not None and owner is not None and state.has_durable_interest():
+                    # 本批目录一次定位持久控制行；纯目录来源不触发读取，实际 mutation 仍由 owner 核 CAS。
+                    source_ids = frozenset(value.source_id for value in descriptors if tracking_status == "tracked"
+                        or (current := self._sources.get(value.source_id)) is not None and current.has_durable_interest())
+                    durable_states = {stored.source_id: stored for stored in port.load_context_source_control_states(
+                        owner, source_ids=source_ids,
+                    )}
+                self._persist_control_state(state, operation="register", durable_states=durable_states)
                 self._install_registration(state)
 
         def _registration_candidate(
@@ -211,6 +221,7 @@ class SourceRegistryMixin:
             *,
             operation: ContextSourceControlOperation,
             replaced_state: SourceState | None = None,
+            durable_states: dict[str, ContextSourceControlState] | None = None,
         ) -> None:
             """唯一 owner 确认候选；rebind 的新观察和旧冻结同事务提交。"""
             port, owner = self._control_state_port, self._owner
@@ -222,13 +233,14 @@ class SourceRegistryMixin:
                             if value.source_kind == "skill" and _normalize_skill_name(value.name) == _normalize_skill_name(state.name)),
                     )
                 return
-            source_ids = {state.source_id}
-            if replaced_state is not None:
-                source_ids.add(replaced_state.source_id)
-            durable_states = {
-                stored.source_id: stored
-                for stored in port.load_context_source_control_states(owner, source_ids=frozenset(source_ids))
-            }
+            if durable_states is None:
+                source_ids = {state.source_id}
+                if replaced_state is not None:
+                    source_ids.add(replaced_state.source_id)
+                durable_states = {
+                    stored.source_id: stored
+                    for stored in port.load_context_source_control_states(owner, source_ids=frozenset(source_ids))
+                }
             durable = durable_states.get(state.source_id)
             snapshot = self._control_state_snapshot(state, durable)
             replaced = (
@@ -255,6 +267,8 @@ class SourceRegistryMixin:
                 candidate.persisted_fields = stored.durable_fields()
                 candidate.selection_sequence = stored.selection_sequence
                 candidate.latest_visible_selection_sequence = stored.latest_visible_selection_sequence
+                # 同批重复 source 必须继续使用刚提交的回执，不能拿旧 CAS 基准再次写入。
+                durable_states[candidate.source_id] = stored
 
         def _control_state_snapshot(
             self, state: SourceState, durable: ContextSourceControlState | None,
