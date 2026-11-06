@@ -62,6 +62,8 @@ Code action Provider SHALL 在发布返回列表前核验其中全部 WorkspaceE
 
 Code action 的文本编辑 SHALL 沿原 WorkspaceEdit 转换及版本字段传递调用所基于的已同步文档版本。provide 与实际进入的 resolve 各自在调用扩展回调前冻结本宿主文档的数值版本，异步返回及后续应用不得把旧编辑改标为最新版本；已有初始 edit 的动作继续沿原流程直接应用，不为刷新版本另行 resolve。未知版本的资源及同批新建目标保持原转换语义，不合成版本或读取正文推断。此合同可能拒绝回调等待期间按新正文重新计算的编辑，用户可重新请求动作；它不承诺无版本资源的并发保护或已发生副作用回滚。
 
+Rename 的 provide SHALL 复用同一原文档版本快照与 WorkspaceEdit 转换，在扩展回调前冻结本宿主已同步文本版本；MainThread SHALL 在结果发布前核验全部编辑端点，再沿原 DTO 恢复。provide 与 prepare 的在途请求 SHALL 同时响应调用取消、注册撤销及宿主关闭，拒绝迟到结果，不影响新注册或另一宿主。原 prepare 的 Range／placeholder、缺省位置、空结果及 rejectReason 语义保持；本合同不把结果准入等同于已返回编辑在 UI 预览或 inline rename 中的应用取消完成。
+
 #### Scenario: A 与 B 的未保存文档同时打开
 - **WHEN** A/B 文件均有不同 dirty 内容，两个扩展枚举文档／可见编辑器并监听变化，用户在二者间切焦点
 - **THEN** 每 host 只得到自己 view 的模型、内容和事件，非所属 view 焦点表现为无 active editor；错误目标编辑在产生副作用前被拒绝，迟到旧代际结果不发布
@@ -85,6 +87,10 @@ Code action 的文本编辑 SHALL 沿原 WorkspaceEdit 转换及版本字段传�
 #### Scenario: Code action 的异步返回和旧菜单保持原版本
 - **WHEN** provide 或 resolve 等待期间待编辑文档变版，或动作发布后用户修改其中一个目标再点击旧菜单
 - **THEN** 编辑仍携带相应回调调用前的文档版本，原整批版本校验在首个副作用前拒绝冲突，后继 command 不执行；原 UI 应用入口显示具体错误并结清进度，不触发全窗口启动失败，重新请求且版本匹配的动作可以正常应用，另一宿主不受影响
+
+#### Scenario: Rename 的整批结果、版本与迟到请求
+- **WHEN** A 的 Rename 返回双根编辑且后项越出所属视图，或 provide 等待期间另一待编辑文档变版；prepare／provide 在取消、注销或宿主关闭后仍返回
+- **THEN** 非所属结果整批拒绝；已同步文本保留回调前版本，原编辑链在首个副作用前拒绝冲突；迟到位置或编辑不发布，原拒绝原因保持，新请求及 B 的状态不受影响
 
 #### Scenario: 工作区符号查询限定完整宿主视图
 - **WHEN** A 的符号 Provider 绑定 A1/A2，B 绑定 B1，用户明确选择工作区范围或 A 扩展在 B 获得焦点时发起公开符号查询

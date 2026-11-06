@@ -33,3 +33,5 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 Code action 的 provide／resolve 在原 MainThread 内先核整批 edit，非法后项不能发布合法前项。请求 token 同时响应调用取消和注册释放；迟到 provide 释放准确的新 cache，resolve 拒绝后不改原 action。已发布 list 继续持有原 cache，由其幂等 dispose 收尾，不增加 session registry。目标 Provider 将同一注册生命周期留在原 Provider，原 CodeActionItem／applyCodeAction 合并调用方取消，并将同一 token 交原 BulkEditService；撤代后不启动编辑或后继 command，已开始的副作用不回滚。普通 Web／内置 Provider 不附带目标生命周期；不把本闭包扩大为其它语言编辑入口。
 
 原 CodeActionAdapter 在 provide／resolve 各自扩展回调前，仅冻结本宿主已同步文档的 URI 与数值版本，交原 WorkspaceEdit.from；同一转换在 Node 分流前执行，不能只修 renderer 而漏掉真实宿主。快照只活到本次转换完成，不保存正文或建立版本账本；异步等待后的新版本不能认证旧编辑。未知资源及同批新建目标保持原无版本语义，Notebook 版本仍由其原文档 owner 后续接线。原 CodeActionController 的 UI 应用入口将拒绝交原通知服务显示，同一 finally 结清进度和原刷新；核心 apply 继续拒绝，不改全局错误处理或把版本冲突当启动失败。
+
+RenameAdapter 与 CodeAction 共用原文档版本快照，在 provide 回调前冻结；MainThread 的 provide／prepare 共用原请求生命周期，返回后先核取消，再整批校验实际 edits 并沿原 revive。保留无 edits 的 rejectReason、undefined 和 prepare 原位置语义，注销及关闭拒绝迟到回包，不新建 Provider registry。已返回编辑在原 RenameController 预览和 inline rename 中的应用取消仍按源码 TODO 继续迁移，本片结果准入不能替代该阶段验收。

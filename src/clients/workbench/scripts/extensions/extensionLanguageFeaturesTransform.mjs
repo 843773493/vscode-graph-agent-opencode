@@ -17,24 +17,28 @@ export function transformExtensionLanguageFeatures(root, path, source, replaceOn
   const paths = extensionLanguageFeaturesSourcePaths.map(value => join(root, 'upstream', value));
   if (path === paths[7]) {
     let contents = `import { ResourceMap } from '../../../base/common/map.js';\n` + source;
-    contents = replaceOnce(contents, 'class CodeActionAdapter {', `class CodeActionAdapter {
-  private _captureVersions(): typeConvert.WorkspaceEdit.IVersionInformationProvider {
+    contents = replaceOnce(contents, '// --- adapter', `function captureWorkspaceEditVersions(documents: ExtHostDocuments): typeConvert.WorkspaceEdit.IVersionInformationProvider {
     // 只冻结本次调用已同步的版本号，不能给等待期间产生的旧编辑贴上返回时的新版本。
     const versions = new ResourceMap<number>();
-    for (const data of this._documents.getAllDocumentData()) versions.set(data.document.uri, data.version);
+    for (const data of documents.getAllDocumentData()) versions.set(data.document.uri, data.version);
     return {
       getTextDocumentVersion: uri => versions.get(uri),
       // TODO: Notebook 版本生产仍须接通原 Notebook 文档 owner。
       getNotebookDocumentVersion: () => undefined,
     };
-  }
+}
+
+// --- adapter
 `);
     contents = replaceOnce(contents, 'const commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);',
-      'const versions = this._captureVersions();\n\t\tconst commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);');
+      'const versions = captureWorkspaceEditVersions(this._documents);\n\t\tconst commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);');
     contents = replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(toConvert.edit, undefined)', 'typeConvert.WorkspaceEdit.from(toConvert.edit, versions)');
     contents = replaceOnce(contents, 'const resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;',
-      'const versions = this._captureVersions();\n\t\tconst resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;');
-    return replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, undefined)', 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, versions)');
+      'const versions = captureWorkspaceEditVersions(this._documents);\n\t\tconst resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;');
+    contents = replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, undefined)', 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, versions)');
+    contents = replaceOnce(contents, 'const value = await this._provider.provideRenameEdits(doc, pos, newName, token);',
+      'const versions = captureWorkspaceEditVersions(this._documents);\n\t\t\tconst value = await this._provider.provideRenameEdits(doc, pos, newName, token);');
+    return replaceOnce(contents, 'return typeConvert.WorkspaceEdit.from(value);', 'return typeConvert.WorkspaceEdit.from(value, versions);');
   }
   if (runtime === 'node') return source;
   if (path === paths[8]) {
@@ -102,10 +106,8 @@ import { hostLanguageFeatureScore } from ${JSON.stringify(join(root, 'src/extens
 import type { score } from '../../../editor/common/languageSelector.js';\n` + source;
   contents = replaceOnce(contents, 'import { CancellationToken }', 'import { CancellationToken, CancellationTokenSource }');
   contents = replaceOnce(contents, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
-  contents = replaceOnce(contents, 'private static _reviveCodeActionDto(data: ReadonlyArray<ICodeActionDto>, uriIdentService: IUriIdentityService)', 'private _reviveCodeActionDto(data: ReadonlyArray<ICodeActionDto>)');
-  contents = replaceOnce(contents, 'data?.forEach(code => reviveWorkspaceEditDto(code.edit, uriIdentService));', `data?.forEach(code => { if (code.edit) assertHostWorkspaceEdit(this.extHostContext.extensionHost, code.edit); });
-    data?.forEach(code => reviveWorkspaceEditDto(code.edit, this._uriIdentService));`);
-  contents = replaceOnce(contents, 'const provider: languages.CodeActionProvider = {', `const lifetime = new CancellationTokenSource();
+  contents = replaceOnce(contents, 'private readonly _proxy: ExtHostLanguageFeaturesShape;', `private _createProviderLifetime() {
+    const lifetime = new CancellationTokenSource();
     const assertActive = (token: CancellationToken) => {
       if (lifetime.token.isCancellationRequested || token.isCancellationRequested) throw new CancellationError();
     };
@@ -116,6 +118,14 @@ import type { score } from '../../../editor/common/languageSelector.js';\n` + so
       try { return await operation(request.token); }
       finally { cancellation.dispose(); request.dispose(); }
     };
+    return { lifetime, assertActive, invoke };
+  }
+
+  private readonly _proxy: ExtHostLanguageFeaturesShape;`);
+  contents = replaceOnce(contents, 'private static _reviveCodeActionDto(data: ReadonlyArray<ICodeActionDto>, uriIdentService: IUriIdentityService)', 'private _reviveCodeActionDto(data: ReadonlyArray<ICodeActionDto>)');
+  contents = replaceOnce(contents, 'data?.forEach(code => reviveWorkspaceEditDto(code.edit, uriIdentService));', `data?.forEach(code => { if (code.edit) assertHostWorkspaceEdit(this.extHostContext.extensionHost, code.edit); });
+    data?.forEach(code => reviveWorkspaceEditDto(code.edit, this._uriIdentService));`);
+  contents = replaceOnce(contents, 'const provider: languages.CodeActionProvider = {', `const { lifetime, assertActive, invoke } = this._createProviderLifetime();
     const provider: languages.CodeActionProvider = {
       lifecycleToken: this.extHostContext.extensionHost.binding ? lifetime.token : undefined,`);
   contents = replaceOnce(contents, `const listDto = await this._proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, context, token);
@@ -149,6 +159,30 @@ import type { score } from '../../../editor/common/languageSelector.js';\n` + so
       this._languageFeaturesService.codeActionProvider.register(selector, provider),
       toDisposable(() => { lifetime.cancel(); lifetime.dispose(); })
     ));`);
+  contents = replaceOnce(contents, `this._registrations.set(handle, this._languageFeaturesService.renameProvider.register(selector, {
+\t\t\tprovideRenameEdits: (model: ITextModel, position: EditorPosition, newName: string, token: CancellationToken) => {
+\t\t\t\treturn this._proxy.$provideRenameEdits(handle, model.uri, position, newName, token).then(data => reviveWorkspaceEditDto(data, this._uriIdentService));
+\t\t\t},
+\t\t\tresolveRenameLocation: supportResolveLocation
+\t\t\t\t? (model: ITextModel, position: EditorPosition, token: CancellationToken): Promise<languages.RenameLocation | undefined> => this._proxy.$resolveRenameLocation(handle, model.uri, position, token)
+\t\t\t\t: undefined
+\t\t}));`, `const { lifetime, assertActive, invoke } = this._createProviderLifetime();
+    // TODO: 已返回编辑在 RenameController 预览及 inline rename 中的应用取消须沿各原 owner 继续接通。
+    this._registrations.set(handle, combinedDisposable(this._languageFeaturesService.renameProvider.register(selector, {
+      provideRenameEdits: (model: ITextModel, position: EditorPosition, newName: string, token: CancellationToken) => invoke(token, async token => {
+        const data = await this._proxy.$provideRenameEdits(handle, model.uri, position, newName, token);
+        assertActive(token);
+        // 原拒绝结果允许 edits 为 undefined；只校验实际编辑，不改写 rejectReason。
+        if (data?.edits) assertHostWorkspaceEdit(this.extHostContext.extensionHost, data);
+        return reviveWorkspaceEditDto(data, this._uriIdentService);
+      }),
+      resolveRenameLocation: supportResolveLocation
+        ? (model: ITextModel, position: EditorPosition, token: CancellationToken) => invoke(token, async token => {
+          const location = await this._proxy.$resolveRenameLocation(handle, model.uri, position, token);
+          assertActive(token);
+          return location;
+        }) : undefined,
+    }), toDisposable(() => { lifetime.cancel(); lifetime.dispose(); })));`);
   contents = replaceOnce(contents, 'private readonly _selector: IDocumentFilterDto[],', 'private readonly _selector: IDocumentFilterDto[],\n\t\tprivate readonly _selectorScore: typeof score | undefined,');
   contents = replaceOnce(contents, '\n\t\t\tselector,\n\t\t\tthis._proxy,', '\n\t\t\tselector,\n\t\t\thostLanguageFeatureScore(this.extHostContext.extensionHost, selector),\n\t\t\tthis._proxy,');
   contents = replaceOnce(contents, '\n\t\t\tselector: selector,\n', '\n');

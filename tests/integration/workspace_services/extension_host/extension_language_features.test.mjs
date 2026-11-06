@@ -13,6 +13,12 @@ const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, '
 const upstream = './src/clients/workbench/upstream/src/vs/';
 const built = await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { MainThreadLanguageFeatures } from '${upstream}workbench/api/browser/mainThreadLanguageFeatures.js';
+export { ExtHostLanguageFeatures } from '${upstream}workbench/api/common/extHostLanguageFeatures.js';
+export { ExtHostDocumentsAndEditors } from '${upstream}workbench/api/common/extHostDocumentsAndEditors.js';
+export { ExtHostDocuments } from '${upstream}workbench/api/common/extHostDocuments.js';
+export { WorkspaceEdit, Range as ApiRange } from '${upstream}workbench/api/common/extHostTypes.js';
+export { NullLogService } from '${upstream}platform/log/common/log.js';
+export { rename, rawRename, prepareRename } from '${upstream}editor/contrib/rename/browser/rename.js';
 export { LanguageFeaturesService } from '${upstream}editor/common/services/languageFeaturesService.js';
 export { ILanguageFeaturesService } from '${upstream}editor/common/services/languageFeatures.js';
 export { CallHierarchyProviderRegistry } from '${upstream}workbench/contrib/callHierarchy/common/callHierarchy.js';
@@ -37,6 +43,7 @@ export { TargetUriTransformer } from './src/clients/workbench/src/extensions/tar
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 await writeFile(join(run.artifactsDir, 'bundle-meta.json'), JSON.stringify(built.metafile, null, 2));
 const sourcePaths = [
+  'tests/integration/workspace_services/extension_host/extension_language_features.test.mjs',
   'src/clients/workbench/scripts/sourceTransform.mjs',
   'src/clients/workbench/scripts/extensions/extensionLanguageFeaturesTransform.mjs',
   'src/clients/workbench/src/extensions/languageFeatures.ts',
@@ -44,6 +51,13 @@ const sourcePaths = [
   'src/clients/workbench/upstream/src/vs/editor/common/languageFeatureRegistry.ts',
   'src/clients/workbench/upstream/src/vs/editor/common/languageSelector.ts',
   'src/clients/workbench/upstream/src/vs/workbench/api/browser/mainThreadLanguageFeatures.ts',
+  'src/clients/workbench/upstream/src/vs/workbench/api/common/extHostLanguageFeatures.ts',
+  'src/clients/workbench/upstream/src/vs/workbench/api/common/extHostTypeConverters.ts',
+  'src/clients/workbench/upstream/src/vs/workbench/api/common/extHostDocuments.ts',
+  'src/clients/workbench/upstream/src/vs/workbench/api/common/extHostDocumentsAndEditors.ts',
+  'src/clients/workbench/upstream/src/vs/workbench/api/common/extHostDocumentData.ts',
+  'src/clients/workbench/upstream/src/vs/workbench/api/browser/mainThreadBulkEdits.ts',
+  'src/clients/workbench/upstream/src/vs/editor/contrib/rename/browser/rename.ts',
   'src/clients/workbench/upstream/src/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.ts',
 ];
 const fingerprints = Object.fromEntries(await Promise.all(sourcePaths.map(async path => [path,
@@ -67,14 +81,14 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中的原 MainThreadLanguageFeatures、LanguageFeaturesService/共享 registry、DI、wordHighlighter 多文档入口和 RPCProtocol/TargetUriTransformer。认证 binding、内存字节传输、扩展 Provider 回调及 ITextModel 的 URI/语言/同步状态为具名装具；未运行 Gateway、真实 Node、Windows 实机、文档同步或 Notebook cell owner。',
+      boundary: '真实 Chromium 中的原 MainThreadLanguageFeatures、LanguageFeaturesService/共享 registry、DI、wordHighlighter 多文档入口和 RPCProtocol/TargetUriTransformer。Rename版本及prepare合同另经原ExtHostLanguageFeatures/RenameAdapter、WorkspaceEdit.from、ExtHostDocuments/AndEditors/DocumentData与rename/rawRename/prepareRename；文档delta/change输入和扩展callback为具名边界，版本不由装具填入DTO。DTO整批准入及迟到回包场景的扩展actor刻意忽略取消；认证binding、内存字节传输、canonical URI接收端及ITextModel的URI/语言/同步状态和word fallback为具名装具。没有BulkEdit装具或磁盘写入，也未运行Gateway、真实Node、完整RenameController/UI点击、已返回edit后的UI/inline应用生命周期、Windows实机或Notebook cell/版本producer。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
   }
 });
 
-async function inBrowser(name, body, contextOptions = {}) {
+async function inBrowser(name, body, contextOptions = {}, argument) {
   const context = await browser.newContext(contextOptions), page = await context.newPage(), pageErrors = [];
   page.on('pageerror', error => { pageErrors.push(error.message); browserEvents.push({ name, kind: 'pageerror', message: error.message }); });
   page.on('console', message => { if (message.type() === 'error') browserEvents.push({ name, kind: 'console', message: message.text() }); });
@@ -82,7 +96,7 @@ async function inBrowser(name, body, contextOptions = {}) {
     await page.goto(`http://127.0.0.1:${server.port}`);
     await page.evaluate(async () => {
       globalThis._VSCODE_FILE_ROOT = location.origin + '/';
-      const m = await import('/fixture.mjs'), lifetimes = [];
+      const m = await import('/fixture.mjs'), lifetimes = [], tick = () => new Promise(resolve => setTimeout(resolve, 0));
       // 仅提供模型边界；评分、候选缓存、独占排序、注册和注销均运行原实现。
       const model = (uri, language = 'typescript', synchronized = true) => ({
         uri, getLanguageId: () => language, isTooLargeForSyncing: () => !synchronized, isForSimpleWidget: false,
@@ -103,11 +117,11 @@ async function inBrowser(name, body, contextOptions = {}) {
       function owner(host, service, getProxy = () => ({ $supportsAutomaticNewSymbolNamesTriggerKind: async () => false })) {
         // 本片不执行遥测，也不装配语言配置服务；inline Provider 仍由真实 DI 创建并注册。
         const di = new m.InstantiationService(new m.ServiceCollection([m.ILanguageFeaturesService, service], [m.IAiEditTelemetryService, {}]), true);
-        const main = new m.MainThreadLanguageFeatures({ extensionHost: host, getProxy }, undefined, undefined, service,
-          { asCanonicalUri: uri => uri }, di, undefined);
+        const canonical = [], main = new m.MainThreadLanguageFeatures({ extensionHost: host, getProxy }, undefined, undefined, service,
+          { asCanonicalUri: uri => { canonical.push(uri.toString()); return uri; } }, di, undefined);
         const close = () => { main.dispose(); di.dispose(); };
         lifetimes.push(close);
-        return { main, close };
+        return { main, close, canonical };
       }
       function connect(host, service) {
         // 只替换字节输送和扩展代码；原 RPC 负责序列化、typed URI、取消与关闭结算。
@@ -119,7 +133,10 @@ async function inBrowser(name, body, contextOptions = {}) {
           wire.push({ direction: 'main', size: data.byteLength }); queueMicrotask(() => toMain.fire(data));
         }, drain: async () => {} });
         const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 };
-        const client = { requests, wire, onHover: async () => ({ contents: [{ value: 'hover' }], range }) };
+        let extHost, documents, documentOwner, registration;
+        const client = { host, requests, wire, onHover: async () => ({ contents: [{ value: 'hover' }], range }),
+          onRename: async request => ({ edits: [{ resource: request.resource, versionId: 7, textEdit: { range, text: request.newName } }] }),
+          onPrepare: async () => ({ range, text: 'old' }) };
         const actor = {
           $provideHover(handle, resource, position, hoverContext, token) {
             const request = { kind: 'hover', handle, resource: m.URI.revive(resource), position, hoverContext, token };
@@ -134,14 +151,45 @@ async function inBrowser(name, body, contextOptions = {}) {
             requests.push({ kind: 'multi', handle, resource: m.URI.revive(resource), resources, position, token });
             return resources.map(uri => ({ uri, highlights: [{ range, kind: 1 }] }));
           },
+          $provideRenameEdits(handle, resource, position, newName, token) {
+            const request = { kind: 'rename', handle, resource: m.URI.revive(resource), position, newName, token }; requests.push(request);
+            return extHost ? extHost.$provideRenameEdits(handle, resource, position, newName, token) : client.onRename(request);
+          },
+          $resolveRenameLocation(handle, resource, position, token) {
+            const request = { kind: 'prepare', handle, resource: m.URI.revive(resource), position, token }; requests.push(request);
+            return extHost ? extHost.$resolveRenameLocation(handle, resource, position, token) : client.onPrepare(request);
+          },
           async $supportsAutomaticNewSymbolNamesTriggerKind() { return false; },
         };
         const original = owner(host, service, mainRpc.getProxy.bind(mainRpc));
         mainRpc.set(m.MainContext.MainThreadLanguageFeatures, original.main);
         hostRpc.set(m.ExtHostContext.ExtHostLanguageFeatures, actor);
-        const close = () => { original.close(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose(); };
+        const close = async () => {
+          original.close();
+          if (registration) { registration.dispose(); await tick(); }
+          if (documents) { documentOwner.acceptDocumentsAndEditorsDelta({ removedDocuments: documents.getAllDocumentData().map(data => data.document.uri) }); documents.dispose(); extHost.dispose(); }
+          mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose();
+        };
         lifetimes.push(close);
-        return Object.assign(client, { main: original.main, remote: hostRpc.getProxy(m.MainContext.MainThreadLanguageFeatures), close });
+        return Object.assign(client, { main: original.main, canonical: original.canonical, remote: hostRpc.getProxy(m.MainContext.MainThreadLanguageFeatures), close,
+          async registerRename(provider) {
+            const context = { getProxy: hostRpc.getProxy.bind(hostRpc) }, log = new m.NullLogService();
+            documentOwner = new m.ExtHostDocumentsAndEditors(context, log); documents = new m.ExtHostDocuments(context, documentOwner);
+            extHost = new m.ExtHostLanguageFeatures(context, undefined, documents, undefined, undefined, log, undefined,
+              { onExtensionError(_extension, error) { throw error; } });
+            const before = new Set(service.renameProvider.allNoModel());
+            registration = extHost.registerRenameProvider({ identifier: { value: 'probe.rename' }, name: 'rename', enabledApiProposals: [] }, ['typescript'], provider);
+            await tick(); client.documents = documents; client.renameProvider = registered(service.renameProvider, before); return client.renameProvider;
+          },
+          addDocument(uri, version, text = 'old source') {
+            documentOwner.acceptDocumentsAndEditorsDelta({ addedDocuments: [{ uri, versionId: version, lines: text.split('\n'), EOL: '\n', languageId: 'typescript', isDirty: false, encoding: 'utf8' }] });
+          },
+          changeDocument(uri, version, text) {
+            const document = documents.getDocument(uri), lastLine = document.lineCount;
+            documents.$acceptModelChanged(uri, { versionId: version, eol: '\n', isUndoing: false, isRedoing: false, isFlush: false, isEolChange: false, detailedReason: undefined,
+              changes: [{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: lastLine, endColumn: document.lineAt(lastLine - 1).text.length + 1 }, rangeOffset: 0, rangeLength: document.getText().length, text }] }, true);
+          },
+        });
       }
       const extension = new m.ExtensionIdentifier('probe.language'), legend = { tokenTypes: ['class'], tokenModifiers: [] };
       const service = new m.LanguageFeaturesService();
@@ -191,15 +239,15 @@ async function inBrowser(name, body, contextOptions = {}) {
         main[spec.method](handle, filters, ...spec.args);
         return registered(spec.registry, before);
       }
-      async function rpcRegister(client, handle, method, filters, registry) {
+      async function rpcRegister(client, handle, method, filters, registry, ...args) {
         const before = new Set(registry.allNoModel());
-        await client.remote[method](handle, filters);
+        await client.remote[method](handle, filters, ...args);
         return registered(registry, before);
       }
-      globalThis.languageProbe = { m, model, target, document, selector, owner, connect, service, specs, register, rpcRegister,
-        dispose() { for (const close of lifetimes.reverse()) close(); } };
+      globalThis.languageProbe = { m, model, target, document, selector, owner, connect, service, specs, register, rpcRegister, tick,
+        async dispose() { for (const close of lifetimes.reverse()) await close(); } };
     });
-    const result = await page.evaluate(body);
+    const result = await page.evaluate(body, argument);
     expect(pageErrors).toEqual([]);
     observations.push({ name, result });
     return result;
@@ -463,4 +511,187 @@ test('原 MainThread 注册到共享 registry 后经真实 RPC 回调、URI 往�
   expect(result.preCancelled).toBe('cancelled'); expect(result.preCancelledRequests).toBe(0); expect(result.closedResult).toBe('cancelled');
   expect(result.afterClose).toEqual({ aProviders: 0, bIdentity: true, removedDefinition: 0, lateCalls: 0, bCallback: 'hover' });
   checks.push('真实 MainThread/registry/RPC 回调、typed URI、取消和关闭后的迟到响应');
+});
+
+test('原 RenameAdapter 调用前冻结双根版本，等待及返回后变版不重盖，同原生 URI 的 A/B 与新查询独立', async () => {
+  const result = await inBrowser('Rename原版本producer、原rawRename与双宿主隔离', async () => {
+    const p = globalThis.languageProbe, m = p.m, registry = p.service.renameProvider, entered = Promise.withResolvers(), gate = Promise.withResolvers();
+    const host = p.target('A'), peer = p.target('B', { roots: [host.binding.initialization.workspace.folders[0].native_uri] });
+    const a = p.connect(host, p.service), b = p.connect(peer, p.service), callback = [], position = new m.Position(1, 2);
+    const native = host.uriTransformer.folders.map(folder => m.URI.joinPath(folder.native, 'src/main.ts'));
+    const peerNative = m.URI.joinPath(peer.uriTransformer.folders[0].native, 'src/main.ts');
+    const editFor = (uris, text) => { const edit = new m.WorkspaceEdit(); for (const uri of uris) edit.replace(uri, new m.ApiRange(0, 0, 0, 3), text); return edit; };
+    await a.registerRename({ async provideRenameEdits(document, pos, newName) {
+      callback.push({ uri: document.uri.toString(), version: document.version, position: { line: pos.line, character: pos.character }, newName,
+        versions: native.map(uri => a.documents.getDocument(uri).version) });
+      const edit = editFor(native, newName); entered.resolve(); await gate.promise; return edit;
+    } });
+    await b.registerRename({ provideRenameEdits(_document, _position, newName) { return editFor([peerNative], newName); } });
+    a.addDocument(native[0], 11); a.addDocument(native[1], 21); b.addDocument(peerNative, 91);
+    const doc = p.document(host), pending = m.rawRename(registry, doc, position, 'renamed');
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入原RenameAdapter callback等待'); })]);
+    a.changeDocument(native[1], 22, 'changed-during-rename'); const during = native.map(uri => a.documents.getDocument(uri).version);
+    const peerResult = await m.rawRename(registry, p.document(peer), position, 'peer'); gate.resolve();
+    const edit = await pending, frozen = edit.edits.map(value => value.versionId);
+    a.changeDocument(native[1], 23, 'changed-after-return'); const fresh = await m.rawRename(registry, doc, position, 'fresh');
+    return { callback, during, frozen, after: edit.edits.map(value => value.versionId), current: native.map(uri => a.documents.getDocument(uri).version),
+      fresh: fresh.edits.map(value => value.versionId), peerVersions: peerResult.edits.map(value => value.versionId), sameNative: native[0].toString() === peerNative.toString(),
+      typed: edit.edits.every(value => m.URI.isUri(value.resource)), resources: edit.edits.map(value => value.resource.toString()),
+      expected: host.uriTransformer.folders.map(folder => m.URI.joinPath(folder.uri, 'src/main.ts').toString()),
+      requests: a.requests.map(value => ({ kind: value.kind, resource: value.resource.toString(), newName: value.newName })), native: native[0].toString() };
+  });
+  expect(result.callback[0]).toEqual({ uri: result.native, version: 11, position: { line: 0, character: 1 }, newName: 'renamed', versions: [11, 21] });
+  expect(result.during).toEqual([11, 22]); expect(result.frozen).toEqual([11, 21]); expect(result.after).toEqual([11, 21]); expect(result.current).toEqual([11, 23]);
+  expect(result.fresh).toEqual([11, 23]); expect(result.peerVersions).toEqual([91]); expect(result.sameNative).toBe(true); expect(result.typed).toBe(true);
+  expect(result.resources).toEqual(result.expected); expect(result.requests).toEqual(['renamed', 'fresh'].map(newName => ({ kind: 'rename', resource: result.native, newName })));
+  checks.push('原rawRename/registry/RPC/RenameAdapter冻结调用前双根版本，同原生URI的另一宿主及新查询独立；返回后不重盖，不执行BulkEdit');
+});
+
+test('Rename 原转换器保留 create 的版本抑制，调用后才同步的资源不认证新版本', async () => {
+  const result = await inBrowser('Rename原producer的create与未同步资源版本边界', async () => {
+    const p = globalThis.languageProbe, m = p.m, host = p.target('A'), client = p.connect(host, p.service), entered = Promise.withResolvers(), gate = Promise.withResolvers();
+    const own = host.uriTransformer.folders.map(folder => m.URI.joinPath(folder.native, 'src/main.ts')), unknown = m.URI.joinPath(host.uriTransformer.folders[0].native, 'unknown.ts');
+    await client.registerRename({ async provideRenameEdits() {
+      const edit = new m.WorkspaceEdit(); edit.replace(own[0], new m.ApiRange(0, 0, 0, 3), 'known'); edit.createFile(own[1]);
+      edit.replace(own[1], new m.ApiRange(0, 0, 0, 3), 'created'); edit.replace(unknown, new m.ApiRange(0, 0, 0, 3), 'unknown');
+      entered.resolve(); await gate.promise; return edit;
+    } });
+    client.addDocument(own[0], 5); client.addDocument(own[1], 6);
+    const pending = m.rawRename(p.service.renameProvider, p.document(host), new m.Position(1, 1), 'mixed');
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入Rename版本边界callback'); })]);
+    client.addDocument(unknown, 80); gate.resolve(); const result = await pending;
+    return { edits: result.edits.map(edit => ({ type: edit.textEdit ? 'text' : 'file', version: edit.versionId ?? null, resource: (edit.resource ?? edit.newResource).toString() })),
+      expected: [own[0], own[1], own[1], unknown].map(uri => m.URI.revive(host.uriTransformer.transformIncoming(uri)).toString()), unknownVersion: client.documents.getDocument(unknown).version };
+  });
+  expect(result.edits.map(value => value.type)).toEqual(['text', 'file', 'text', 'text']); expect(result.edits.map(value => value.version)).toEqual([5, null, null, null]);
+  expect(result.edits.map(value => value.resource)).toEqual(result.expected); expect(result.unknownVersion).toBe(80);
+  checks.push('原Rename WorkspaceEdit.from继续抑制同批create+text版本，调用时未同步资源不读返回时的新版本；不应用编辑');
+});
+
+test('Rename 合法首项后的 foreign resource／oldResource／newResource 与 app 位置整批拒绝，原 canonical revive 零调用', async () => {
+  const result = await inBrowser('Rename结果整批准入、非typed后项与原RPC', async () => {
+    const p = globalThis.languageProbe, m = p.m, host = p.target('A'), client = p.connect(host, p.service), position = new m.Position(1, 1), doc = p.document(host);
+    const provider = await p.rpcRegister(client, 1, '$registerRenameSupport', p.selector({}), p.service.renameProvider, true);
+    const own = m.URI.joinPath(host.uriTransformer.folders[0].native, 'src/main.ts'), foreign = p.document(p.target('B')).uri;
+    // 不带 $mid 的 UriComponents 可穿过原 transport，必须由 MainThread 按字段核整批归属。
+    const raw = { scheme: foreign.scheme, authority: foreign.authority, path: foreign.path, query: foreign.query, fragment: foreign.fragment };
+    const text = resource => ({ resource, textEdit: { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 }, text: 'renamed' } });
+    const cases = [text(raw), { newResource: raw }, { oldResource: raw, newResource: own }, { oldResource: own, newResource: raw }, { oldResource: raw },
+      { ...text(own), oldResource: raw, newResource: own }, text(m.URI.file('/hosts/app/help.ts'))], rejected = [];
+    for (const invalid of cases) {
+      client.onRename = async () => ({ edits: [text(own), invalid] }); const before = client.canonical.length, wire = client.wire.length;
+      const state = await m.rawRename(p.service.renameProvider, doc, position, 'bad').then(() => ({ published: true }), error => ({ published: false, message: error.message }));
+      rejected.push({ ...state, canonicalCalls: client.canonical.length - before, transported: client.wire.length > wire });
+    }
+    client.onRename = async () => ({ edits: [text(own)] }); const valid = await provider.provideRenameEdits(doc, position, 'valid', m.CancellationToken.None);
+    return { rejected, count: client.requests.length, rawTyped: '$mid' in raw, valid: valid.edits[0].resource.toString(), typed: m.URI.isUri(valid.edits[0].resource), expected: doc.uri.toString() };
+  });
+  expect(result.rejected).toHaveLength(7);
+  for (const entry of result.rejected) { expect(entry.published).toBe(false); expect(entry.message).toContain('扩展编辑超出发起宿主工作区视图'); expect(entry.canonicalCalls).toBe(0); expect(entry.transported).toBe(true); }
+  expect(result.count).toBe(8); expect(result.rawTyped).toBe(false); expect(result.typed).toBe(true); expect(result.valid).toBe(result.expected);
+  checks.push('原Rename结果按全部资源端点整批准入，foreign非typed后项及可过transport的app位置均在原canonical revive前拒绝；随后合法结果恢复');
+});
+
+test('Rename provide／prepare 入口已取消时零 RPC，原注册和后续查询保持可用', async () => {
+  const result = await inBrowser('Rename预取消的provide与prepare边界', async () => {
+    const p = globalThis.languageProbe, m = p.m, host = p.target('A'), client = p.connect(host, p.service), doc = p.document(host), position = new m.Position(1, 1);
+    const provider = await p.rpcRegister(client, 1, '$registerRenameSupport', p.selector({}), p.service.renameProvider, true);
+    const outcome = promise => promise.then(() => 'published', error => m.isCancellationError(error) ? 'cancelled' : error.message);
+    const cancelled = [await outcome(provider.provideRenameEdits(doc, position, 'new', m.CancellationToken.Cancelled)),
+      await outcome(provider.resolveRenameLocation(doc, position, m.CancellationToken.Cancelled))], calls = client.requests.length;
+    const next = await m.rawRename(p.service.renameProvider, doc, position, 'new');
+    return { cancelled, calls, sameProvider: p.service.renameProvider.ordered(doc)[0] === provider, next: next.edits[0].textEdit.text, total: client.requests.length };
+  });
+  expect(result).toEqual({ cancelled: ['cancelled', 'cancelled'], calls: 0, sameProvider: true, next: 'new', total: 1 });
+  checks.push('原Rename provide/prepare预取消在RPC前拒绝，不改注册或后续合法查询');
+});
+
+for (const stage of ['rename', 'prepare']) for (const invalidation of ['cancel', 'unregister', 'dispose']) {
+  test(`Rename ${stage} 等待中 ${invalidation} 不发布迟到结果，保留 RPC 的旧引用拒绝且新代际／B 不受影响`, async () => {
+    const result = await inBrowser(`Rename ${stage}/${invalidation} 的原owner结果准入`, async ({ stage, invalidation }) => {
+      const p = globalThis.languageProbe, m = p.m, host = p.target('A'), peer = p.target('B'), client = p.connect(host, p.service), other = p.connect(peer, p.service);
+      const registry = p.service.renameProvider, doc = p.document(host), peerDoc = p.document(peer), position = new m.Position(1, 1), source = new m.CancellationTokenSource();
+      const provider = await p.rpcRegister(client, 1, '$registerRenameSupport', p.selector({}), registry, true);
+      const peerProvider = await p.rpcRegister(other, 1, '$registerRenameSupport', p.selector({}), registry, true);
+      const invoke = (provider, model, token) => stage === 'rename' ? provider.provideRenameEdits(model, position, 'new', token) : provider.resolveRenameLocation(model, position, token);
+      const summarize = value => stage === 'rename' ? value.edits[0].textEdit.text : value.text;
+      const outcome = promise => promise.then(() => 'published', error => m.isCancellationError(error) ? 'cancelled' : error.message);
+      const entered = Promise.withResolvers(), gate = Promise.withResolvers(), normalRename = client.onRename, normalPrepare = client.onPrepare;
+      // 这个扩展actor刻意忽略取消；保留原RPC以区分MainThread结果门与关闭transport产生的拒绝。
+      if (stage === 'rename') client.onRename = async request => { entered.resolve(); await gate.promise; return { edits: [{ resource: request.resource, textEdit: { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 }, text: 'late' } }] }; };
+      else client.onPrepare = async () => { entered.resolve(); await gate.promise; return { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 }, text: 'late' }; };
+      const pending = outcome(invoke(provider, doc, source.token)); await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入Rename等待回包'); })]);
+      if (invalidation === 'cancel') source.cancel(); else if (invalidation === 'unregister') await client.remote.$unregister(1); else client.main.dispose();
+      await p.tick(); const tokenCancelled = client.requests[0].token.isCancellationRequested, afterInvalidation = registry.ordered(doc).includes(provider);
+      client.onRename = normalRename; client.onPrepare = normalPrepare;
+      const peerValue = summarize(await invoke(peerProvider, peerDoc, m.CancellationToken.None));
+      let fresh = client, freshProvider = provider, freshValue;
+      if (invalidation !== 'cancel') {
+        if (invalidation === 'dispose') fresh = p.connect(host, p.service);
+        freshProvider = await p.rpcRegister(fresh, 1, '$registerRenameSupport', p.selector({}), registry, true);
+        freshValue = summarize(await invoke(freshProvider, doc, m.CancellationToken.None));
+      }
+      gate.resolve(); const late = await pending;
+      if (invalidation === 'cancel') freshValue = summarize(await invoke(provider, doc, m.CancellationToken.None));
+      const beforeStale = client.requests.length, blockedToken = invalidation === 'cancel' ? m.CancellationToken.Cancelled : m.CancellationToken.None;
+      const stale = [await outcome(provider.provideRenameEdits(doc, position, 'stale', blockedToken)), await outcome(provider.resolveRenameLocation(doc, position, blockedToken))];
+      source.dispose(); return { late, tokenCancelled, afterInvalidation, peerValue, freshValue, stale, staleRpc: client.requests.length - beforeStale,
+        freshIdentity: registry.ordered(doc)[0] === freshProvider, newGeneration: freshProvider !== provider, peerIdentity: registry.ordered(peerDoc)[0] === peerProvider };
+    }, {}, { stage, invalidation });
+    expect(result).toEqual({ late: 'cancelled', tokenCancelled: true, afterInvalidation: invalidation === 'cancel', peerValue: stage === 'rename' ? 'new' : 'old',
+      freshValue: stage === 'rename' ? 'new' : 'old', stale: ['cancelled', 'cancelled'], staleRpc: 0,
+      freshIdentity: true, newGeneration: invalidation !== 'cancel', peerIdentity: true });
+    checks.push(`原Rename ${stage}等待中${invalidation}后拒绝迟到结果，保留RPC、原token取消、旧引用零派发及新代际/B身份不变；不覆盖返回edit后的应用`);
+  });
+}
+
+test('原 RenameAdapter 的 prepare Range／placeholder、缺省 fallback、rejectReason 和 undefined 保持原消费者合同', async () => {
+  const result = await inBrowser('Rename真实prepare与原rename消费者拒绝合同', async () => {
+    const p = globalThis.languageProbe, m = p.m, host = p.target('A'), client = p.connect(host, p.service), registry = p.service.renameProvider;
+    const native = m.URI.joinPath(host.uriTransformer.folders[0].native, 'src/main.ts'), doc = p.document(host), position = new m.Position(1, 2);
+    doc.getWordAtPosition = () => ({ word: 'fallback', startColumn: 1, endColumn: 4 }); let prepareMode = 'range', editMode = 'value', provides = 0;
+    const provider = await client.registerRename({ prepareRename() {
+      if (prepareMode === 'error') throw new Error('prepare blocked'); if (prepareMode === 'undefined') return undefined;
+      const range = new m.ApiRange(0, 0, 0, 3); return prepareMode === 'placeholder' ? { range, placeholder: 'alias' } : range;
+    }, provideRenameEdits() {
+      provides++; if (editMode === 'error') throw new Error('rename blocked'); if (editMode === 'string') throw 'literal refused'; if (editMode === 'undefined') return undefined;
+      const edit = new m.WorkspaceEdit(); edit.replace(native, new m.ApiRange(0, 0, 0, 3), 'renamed'); return edit;
+    } });
+    client.addDocument(native, 17, 'old source');
+    const range = await m.prepareRename(registry, doc, position); prepareMode = 'placeholder'; const placeholder = await m.prepareRename(registry, doc, position);
+    prepareMode = 'undefined'; const absent = await provider.resolveRenameLocation(doc, position, m.CancellationToken.None), fallback = await m.prepareRename(registry, doc, position);
+    prepareMode = 'error'; const beforeReject = provides, rejectedPrepare = await m.rename(registry, doc, position, 'new'), skippedProvide = provides === beforeReject;
+    prepareMode = 'range'; const success = await m.rename(registry, doc, position, 'new');
+    editMode = 'error'; const directReject = await provider.provideRenameEdits(doc, position, 'new', m.CancellationToken.None), rejectedRename = await m.rawRename(registry, doc, position, 'new');
+    editMode = 'string'; const stringReject = await m.rawRename(registry, doc, position, 'new'); editMode = 'undefined';
+    const absentEdit = await provider.provideRenameEdits(doc, position, 'new', m.CancellationToken.None);
+    return { range, placeholder, absent: absent === undefined, fallback, rejectedPrepare, skippedProvide,
+      success: success.edits.map(value => ({ version: value.versionId, resource: value.resource.toString(), text: value.textEdit.text })), expected: doc.uri.toString(),
+      directReject: { reason: directReject.rejectReason, hasEdits: directReject.edits !== undefined }, rejectedRename, stringReject, absentEdit: absentEdit === undefined };
+  });
+  const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 };
+  expect(result.range).toEqual({ range, text: 'old' }); expect(result.placeholder).toEqual({ range, text: 'alias' }); expect(result.absent).toBe(true);
+  expect(result.fallback).toEqual({ range, text: 'fallback' }); expect(result.rejectedPrepare).toEqual({ edits: [], rejectReason: 'prepare blocked' }); expect(result.skippedProvide).toBe(true);
+  expect(result.success).toEqual([{ version: 17, resource: result.expected, text: 'renamed' }]); expect(result.directReject).toEqual({ reason: 'rename blocked', hasEdits: false });
+  expect(result.rejectedRename).toEqual({ edits: [], rejectReason: 'rename blocked' }); expect(result.stringReject).toEqual({ edits: [], rejectReason: 'literal refused' }); expect(result.absentEdit).toBe(true);
+  checks.push('原RenameAdapter保留Range原正文/placeholder/undefined，原prepareRename fallback及rename拒绝时跳过provide；Error/string rejectReason和无edit不被整批guard改写');
+});
+
+test('Web 原 Rename producer 保留 file／untitled 和 prepare，未实现 prepare 时仍使用原 word fallback', async () => {
+  const result = await inBrowser('Web Rename原范围、真实producer与可选prepare', async () => {
+    const p = globalThis.languageProbe, m = p.m, registry = p.service.renameProvider, host = { runningLocation: { kind: 2 } }, client = p.connect(host, p.service);
+    const uris = [m.URI.file('/outside-web/source.ts'), m.URI.parse('untitled:rename.ts')], position = new m.Position(1, 1), doc = p.model(uris[0]);
+    const makeEdit = () => { const edit = new m.WorkspaceEdit(); for (const uri of uris) edit.replace(uri, new m.ApiRange(0, 0, 0, 3), 'web'); return edit; };
+    await client.registerRename({ prepareRename: () => ({ range: new m.ApiRange(0, 0, 0, 3), placeholder: 'web-source' }), provideRenameEdits: makeEdit });
+    client.addDocument(uris[0], 4); client.addDocument(uris[1], 9); const prepared = await m.prepareRename(registry, doc, position), edits = await m.rename(registry, doc, position, 'web');
+    client.main.dispose(); const next = p.connect(host, p.service); await next.registerRename({ provideRenameEdits: makeEdit });
+    next.addDocument(uris[0], 5); doc.getWordAtPosition = () => ({ word: 'web-word', startColumn: 1, endColumn: 4 });
+    const fallback = await m.prepareRename(registry, doc, position);
+    return { prepared, resources: edits.edits.map(value => value.resource.toString()), expected: uris.map(uri => uri.toString()), versions: edits.edits.map(value => value.versionId),
+      noPrepare: next.renameProvider.resolveRenameLocation === undefined, fallback };
+  });
+  const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 };
+  expect(result.prepared).toEqual({ range, text: 'web-source' }); expect(result.resources).toEqual(result.expected); expect(result.versions).toEqual([4, 9]);
+  expect(result.noPrepare).toBe(true); expect(result.fallback).toEqual({ range, text: 'web-word' });
+  checks.push('无binding Web经原RenameAdapter/rename消费者保留file/untitled范围与prepare；不增加Node归属限制，缺少prepare继续原word fallback');
 });
