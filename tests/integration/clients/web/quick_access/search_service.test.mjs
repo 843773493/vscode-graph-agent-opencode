@@ -529,6 +529,54 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     } finally { release.forEach(item => item.resolve()); f.instantiation.dispose(); a.dispose(); b.dispose(); }
   });
 
+  test('同 cacheKey 查询换代及清理只取消原读取，独立 B 搜索继续且旧页不覆盖新结果', async () => {
+    const b = model(uri(ownerB, 'same.txt'), 'removed in B'), f = fixture([b]);
+    const entered = { old: Promise.withResolvers(), independent: Promise.withResolvers() };
+    const release = { old: Promise.withResolvers(), independent: Promise.withResolvers() };
+    const cancellation = new CancellationTokenSource(), cacheKey = 'picker-lifetime';
+    const fileQuery = pattern => ({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: pattern, cacheKey });
+    try {
+      await withTransport(async calls => {
+        const old = f.search.fileSearch(fileQuery('old'), cancellation.token);
+        const progress = [];
+        const independent = f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerB) }],
+          contentPattern: { pattern: 'independent' }, cacheKey }), undefined, item => progress.push(item));
+        await Promise.all(Object.values(entered).map(barrier => barrier.promise));
+        cancellation.cancel();
+        await expect(old).rejects.toThrow();
+        await f.search.clearCache(cacheKey);
+        expect(calls[0].signal.aborted).toBe(true);
+        expect(calls[1].signal.aborted).toBe(false);
+        expect(b.watching).toBe(true);
+        const current = await f.search.fileSearch(fileQuery('new'));
+        expect(current.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'new.txt').toString()]);
+        release.old.resolve();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(current.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'new.txt').toString()]);
+        expect(calls[1].signal.aborted).toBe(false);
+        expect(b.watching).toBe(true);
+        release.independent.resolve();
+        const completed = await independent;
+        expect(completed.results.map(item => item.resource.toString())).toEqual([uri(ownerB, 'disk.txt').toString()]);
+        expect(progress.map(item => item.resource.toString())).toEqual([uri(ownerB, 'disk.txt').toString()]);
+        expect(b.watching).toBe(false);
+        expect(calls).toHaveLength(3);
+        expect(calls.map(call => call.request.scope.owners)).toEqual([[{ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId }],
+          [{ gateway_id: ownerB.gatewayId, workspace_id: ownerB.workspaceId }], [{ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId }]]);
+        expect(calls.map(call => call.request.queries[0].query)).toEqual(['old', 'independent', 'new']);
+      }, async (target, _cursor, q) => {
+        if (q.query === 'old' || q.query === 'independent') {
+          entered[q.query].resolve();
+          await release[q.query].promise;
+        }
+        return q.operation === 'content' ? page(target.uri, [hit(target.uri + '/disk.txt')]) : files(target, [q.query + '.txt']);
+      });
+    } finally {
+      Object.values(release).forEach(barrier => barrier.resolve());
+      cancellation.dispose(true); f.instantiation.dispose(); b.dispose();
+    }
+  });
+
   test('等待 notebook 排除集合时修改模型也取消；同步 progress 中修改不会开始旧代际 HTTP', async () => {
     const a = model(uri(ownerA, 'same.txt'), 'needle'), f = fixture([a]);
     const waiting = Promise.withResolvers();
