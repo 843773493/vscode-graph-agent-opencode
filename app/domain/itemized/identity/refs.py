@@ -648,18 +648,23 @@ class ToolSetRef(ToolSetIdentityRef):
         ):
             raise ItemSchemaError("ToolSetRef.wire_tool_order 必须完整且唯一")
 
-    def manifest_preimage(self) -> dict[str, object]:
+    def _manifest_preimage(self) -> dict[str, object]:
+        """内部只读视图；冻结 JSON 直接参与编码，不为校验复制整份 schema。"""
         return {
             "tool_set_schema": self.tool_set_schema,
             "tool_set_schema_version": self.tool_set_schema_version,
-            "tools": [dict(tool) for tool in self.tools],
-            "tool_policy": dict(self.tool_policy),
+            "tools": list(object.__getattribute__(self, "tools")),
+            "tool_policy": object.__getattribute__(self, "tool_policy"),
             "tool_policy_version": self.tool_policy_version,
         }
 
+    def manifest_preimage(self) -> dict[str, object]:
+        """对外返回独立 JSON 容器，调用方编辑不得改写冻结 manifest。"""
+        return {name: copy_json_value(value) for name, value in self._manifest_preimage().items()}
+
     def validate_manifest(self) -> None:
         # 内部 manifest 始终保留完整正文；protection 仅由访问与展示 owner 消费。
-        encoded = canonical_json_bytes(self.manifest_preimage())
+        encoded = canonical_json_bytes(self._manifest_preimage())
         if len(encoded) != self.content_length:
             raise ItemSchemaError("ToolSetRef manifest content_length 不匹配")
         digest = "sha256:jcs:v1:" + hashlib.sha256(encoded).hexdigest()
