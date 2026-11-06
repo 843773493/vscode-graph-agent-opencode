@@ -55,15 +55,13 @@ class WorkspaceFileOperations:
     def __init__(self, *, workspace: Path, workspace_id: str,
                  resolve: Callable[..., tuple[Path, str]],
                  validate_name: Callable[[str], str],
-                 observe: Callable[[WorkspaceDirectoryKeyDTO, Path], DirectoryObservation],
-                 snapshot: Callable[[WorkspaceDirectoryKeyDTO, Path], tuple[dict, str]],
+                 observe: Callable[[WorkspaceDirectoryKeyDTO, Path, bool], tuple[DirectoryObservation, dict | None]],
                  paths: WorkspaceFilePaths) -> None:
         self.workspace, self.workspace_id = workspace, workspace_id
         self.store = WorkspaceFileStore(workspace, workspace_id)
         # 扫描与发布观察必须同序；迟到的旧扫描不能把新事实反向发布。
         self.observation_lock = RLock()
         self._resolve, self._validate_name, self._observe = resolve, validate_name, observe
-        self._snapshot = snapshot
         self.paths = paths
         self._directory_paths: dict[Path, set[WorkspaceDirectoryKeyDTO]] = {}
         # 一个已验证的 workspace worker 执行原有序意图；所有 scope 别名、源/目标
@@ -228,7 +226,7 @@ class WorkspaceFileOperations:
         with self.observation_lock:
             for key, path in directories:
                 self._directory_paths.setdefault(path, set()).add(key)
-            return self.store.observe([self._observe(key, path) for key, path in directories])
+            return self.store.observe([self._observe(key, path, False)[0] for key, path in directories])
 
     @staticmethod
     def _relative_child_path(value: str) -> str:
@@ -463,7 +461,7 @@ class WorkspaceFileOperations:
         return {self._stage_root(record, index) for operation_id, actor in self.store.staging_records()
                 for record in (self.store.get(operation_id, actor),) for index in range(len(record.steps))}
 
-    def _observations(self, record: FileOperationRecord) -> list[DirectoryObservation]:
+    def _observations(self, record: FileOperationRecord):
         key = WorkspaceDirectoryKeyDTO.model_validate(record.payload["directory_key"])
         root = self.paths.native(record.payload["target"])
         paths = {root}
@@ -477,7 +475,11 @@ class WorkspaceFileOperations:
                     for name, child in value["children"].items():
                         add_directories(base / name, child)
             add_directories(target, manifest)
-        observations = []
+        parents = {record.payload["target"]} | {
+            file_uri_child(record.payload["target"], *Path(entry["relative_path"]).parent.parts)
+            for entry in record.payload["entries"]
+        }
+        observations, snapshots = [], []
         aliases = dict(self.observed_directories(paths))
         for path in sorted(paths):
             display = file_uri_child(key.path, *path.relative_to(root).parts)
@@ -486,8 +488,12 @@ class WorkspaceFileOperations:
         for directory_key, real in aliases.items():
             if real in paths:
                 self._directory_paths.setdefault(real, set()).add(directory_key)
-                observations.append(self._observe(directory_key, real))
-        return observations
+                # 父目录的 revision 和分页快照来自同一次扫描，不重复观察后覆盖摘要。
+                observation, snapshot = self._observe(directory_key, real, directory_key.path in parents)
+                observations.append(observation)
+                if snapshot is not None:
+                    snapshots.append((directory_key, snapshot))
+        return observations, snapshots
 
     @staticmethod
     def _attachment_references(record: FileOperationRecord) -> tuple[str, ...]:
@@ -602,18 +608,7 @@ class WorkspaceFileOperations:
 
     def _settle(self, record: FileOperationRecord, **result):
         with self.observation_lock:
-            observations = self._observations(record)
-            parents = {record.payload["target"]} | {
-                file_uri_child(record.payload["target"], *Path(entry["relative_path"]).parent.parts)
-                for entry in record.payload["entries"]
-            }
-            snapshots = []
-            for index, (key, real, _signature, present) in enumerate(observations):
-                # 只投影受影响父目录及其已观察别名，不把新建 cold 子树全部送前端。
-                if real in parents and present:
-                    snapshot, signature = self._snapshot(key, self.paths.native(real))
-                    observations[index] = key, real, signature, present
-                    snapshots.append((key, snapshot))
+            observations, snapshots = self._observations(record)
             return self.store.settle(record, observations=observations, snapshots=snapshots, **result)
 
     @staticmethod

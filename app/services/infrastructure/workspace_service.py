@@ -125,7 +125,6 @@ class WorkspaceService:
                 workspace=self._workspace_root, workspace_id=self.workspace_id,
                 resolve=self.file_paths.resolve,
                 validate_name=self._validate_entry_name, observe=self._directory_observation,
-                snapshot=self._operation_snapshot,
                 paths=self.file_paths,
             )
         return self._file_operations
@@ -296,19 +295,16 @@ class WorkspaceService:
             digest({"count": count, "members": f"{fingerprint:064x}"}),
         )
 
-    def _directory_observation(self, key: WorkspaceDirectoryKeyDTO, target: Path):
+    def _directory_observation(self, key: WorkspaceDirectoryKeyDTO, target: Path, include_snapshot: bool):
         physical = native_io_path(target)
         if physical.is_symlink() or target.resolve() != target or not physical.is_dir():
-            return key, key.path, digest({"directory_missing": True}), False
-        _items, _cursor, signature = self._scan_directory(target, key.path, key.scope, 0, None)
-        return key, key.path, signature, True
-
-    def _operation_snapshot(self, key: WorkspaceDirectoryKeyDTO, target: Path):
-        limit = self._config_service.get_workspace_file_default_limit()
+            return (key, key.path, digest({"directory_missing": True}), False), None
+        limit = self._config_service.get_workspace_file_default_limit() if include_snapshot else 0
         items, after, signature = self._scan_directory(target, key.path, key.scope, limit, None)
-        return {"root_path": key.root,
-                "path": key.path, "items": [item.model_dump() for item in items],
-                "limit": limit, "after": after}, signature
+        snapshot = ({"root_path": key.root,
+                     "path": key.path, "items": [item.model_dump() for item in items],
+                     "limit": limit, "after": after} if include_snapshot else None)
+        return (key, key.path, signature, True), snapshot
 
     def _entry_to_file_node(
         self,
