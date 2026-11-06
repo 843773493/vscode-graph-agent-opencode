@@ -37,7 +37,6 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
-    detail_record_from_mapping,
     detail_relative_path,
 )
 from tests.integration.backend.sessions.itemized_dispatch_helpers import EMPTY_TOOL_SET
@@ -163,12 +162,10 @@ def protected_source(fork_workspace, session_bundle_factory):
         entry = next(
             entry for entry in sealed.selection if entry.ref.ref_type == "request_only"
         )
-        record = detail_record_from_mapping(
-            saver._storage.assemblies.get_context_plan_detail(
-                SOURCE_SESSION_ID,
-                source_thread_id,
-                detail_ref=entry.detail_ref,
-            )
+        record = saver._storage.assemblies.get_context_plan_detail(
+            SOURCE_SESSION_ID,
+            source_thread_id,
+            detail_ref=entry.detail_ref,
         )
         yield saver, sealed, record, body
 
@@ -224,12 +221,10 @@ async def test_full_copy_protected_detached_restarts_without_source(
     entry = next(
         entry for entry in snapshot.selection if entry.ref.ref_type == "request_only"
     )
-    target_record = detail_record_from_mapping(
-        saver._storage.assemblies.get_context_plan_detail(
-            TARGET_SESSION_ID,
-            target_thread_id,
-            detail_ref=entry.detail_ref,
-        )
+    target_record = saver._storage.assemblies.get_context_plan_detail(
+        TARGET_SESSION_ID,
+        target_thread_id,
+        detail_ref=entry.detail_ref,
     )
     assert target_record.detail_id == source_record.detail_id
     assert target_record.assembly_id == source_record.assembly_id
@@ -460,12 +455,10 @@ def header_detail_factory(protected_source):
             key = connection.execute(
                 "SELECT detail_ref FROM context_assemblies WHERE assembly_id='header-assembly'"
             ).fetchone()[0]
-        record = detail_record_from_mapping(
-            saver._storage.assemblies.get_context_plan_detail(
-                SOURCE_SESSION_ID,
-                source_thread_id,
-                detail_ref=detail_ref_from_key(key),
-            )
+        record = saver._storage.assemblies.get_context_plan_detail(
+            SOURCE_SESSION_ID,
+            source_thread_id,
+            detail_ref=detail_ref_from_key(key),
         )
         return saver, record
 

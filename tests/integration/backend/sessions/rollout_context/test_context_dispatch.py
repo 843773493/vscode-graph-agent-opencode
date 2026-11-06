@@ -475,7 +475,7 @@ def test_gc_protects_sealed_selection_detail_even_with_stale_candidate( frozen_p
     session = get_session_path_resolver(sessions).resolve_thread_node(
         session_id, saver._storage.storage.main_thread_id(session_id),
     )
-    target = session / str(manifest["relative_path"])
+    target = session / str(manifest.relative_path)
     assert saver._storage.assemblies.context_assembly_references_detail(session_id, saver._storage.storage.main_thread_id(session_id), assembly_id=str(plan.assembly_id), detail_ref=detail_ref)
     expired = datetime.now(UTC) + timedelta(days=365)
     assert saver.gc_context_plan_details(session_id, saver._storage.storage.main_thread_id(session_id), expired_before=expired) == ()
@@ -491,7 +491,7 @@ def test_gc_protects_sealed_selection_detail_even_with_stale_candidate( frozen_p
         saver.gc_context_plan_details(session_id, saver._storage.storage.main_thread_id(session_id), expired_before=expired)
     assert target.is_file()
     restored = RolloutCheckpointSaver(sessions)._storage.assemblies.get_context_plan_detail(session_id, RolloutCheckpointSaver(sessions)._storage.storage.main_thread_id(session_id), detail_ref=detail_ref)
-    assert restored["status"] == restored["availability"] == "available"
+    assert restored.status == restored.availability == "available"
 
 
 def test_same_plan_and_source_ids_stay_with_their_session_owner(

@@ -301,13 +301,13 @@ def test_sealed_detail_shape_is_typed_and_not_part_of_context_ref(
         assert payload["detail_ref"] == ref.to_dict()
         assert not {"gc_after", "content_length"} & payload.keys()
         record = saver._storage.assemblies.get_context_plan_detail(session_id, saver._storage.storage.main_thread_id(session_id), detail_ref=ref)
-        assert record["detail_kind"] == "request_source"
-        assert record["retention_class"] == "request_replay"
-        assert record["visibility"] == entry.visibility
-        assert record["length"] == entry.content_length
-        assert record["detail_id"] == ref.detail_id
-        assert record["detail_ref"] == ref
-        assert "expires_at" in record
+        assert record.detail_kind == "request_source"
+        assert record.retention_class == "request_replay"
+        assert record.visibility == entry.visibility
+        assert record.length == entry.content_length
+        assert record.detail_id == ref.detail_id
+        assert record.detail_ref == ref
+        assert record.expires_at is not None
 
 
 @pytest.mark.parametrize(

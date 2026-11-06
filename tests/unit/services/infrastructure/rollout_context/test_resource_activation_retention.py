@@ -51,9 +51,6 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
-    detail_record_from_mapping,
-)
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
 SESSION_ID = "ses_019c0fd1773c7b198a60f53aeeee17eb"
@@ -101,10 +98,8 @@ def _activation_snapshot(
         payloads=({'payload': 'resource-body'},),
         checkpoint_ns='',
     )[0][0]
-    body_record = detail_record_from_mapping(
-        saver._storage.assemblies.get_context_plan_detail(
-            binding.session_id, binding.thread_id, detail_ref=body_ref,
-        ),
+    body_record = saver._storage.assemblies.get_context_plan_detail(
+        binding.session_id, binding.thread_id, detail_ref=body_ref,
     )
     lineage = SourceLineageRef(
         lineage_id="lineage:skill:demo",
@@ -565,12 +560,10 @@ def test_retention_lineage_detail_manifest_is_registered(tmp_path: Path, session
         lineage_key = connection.execute(
             "SELECT lineage_detail_ref FROM resource_activation_snapshots"
         ).fetchone()[0]
-    record = detail_record_from_mapping(
-        saver._storage.assemblies.get_context_plan_detail(
-            SESSION_ID,
-            thread_id,
-            detail_ref=DetailRef.from_dict(json.loads(lineage_key)),
-        )
+    record = saver._storage.assemblies.get_context_plan_detail(
+        SESSION_ID,
+        thread_id,
+        detail_ref=DetailRef.from_dict(json.loads(lineage_key)),
     )
     assert record.detail_kind == "resource_activation_lineage"
     assert record.required is True

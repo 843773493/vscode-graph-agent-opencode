@@ -19,7 +19,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     _manifest_bool,
     _manifest_non_negative_int,
     _manifest_string,
-    detail_record_from_mapping,
     detail_relative_path,
     expiry_time,
 )
@@ -240,6 +239,5 @@ __all__ = [
     "DetailRecord",
     "DetailUnavailableError",
     "PreparedDetail",
-    "detail_record_from_mapping",
     "detail_relative_path",
 ]

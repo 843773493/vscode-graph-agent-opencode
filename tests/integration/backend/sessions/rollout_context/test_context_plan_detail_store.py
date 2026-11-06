@@ -22,14 +22,16 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime import detail_files
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
+    detail_record_from_mapping,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
     DetailRecord,
     DetailUnavailableError,
-    detail_record_from_mapping,
     detail_relative_path,
 )
-from app.services.infrastructure.rollout_context.runtime import detail_files
 from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
@@ -522,8 +524,8 @@ def test_typed_record_and_registry_roundtrip(
     restored = saver._storage.assemblies.get_context_plan_detail(
         SESSION_ID, ref.thread_id, detail_ref=ref
     )
-    assert restored["detail_ref"] == ref
-    assert detail_record_from_mapping(restored) == public_record
+    assert restored.detail_ref == ref
+    assert restored == public_record
     assert saver.read_context_plan_detail(
         SESSION_ID, ref.thread_id, detail_ref=ref
     ) == detail_store.read(

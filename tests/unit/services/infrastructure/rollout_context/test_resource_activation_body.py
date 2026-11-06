@@ -46,9 +46,6 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_owner import (
     ContextOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
-    detail_record_from_mapping,
-)
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
@@ -151,9 +148,7 @@ def test_payload_is_required_protected_and_uses_canonical_hash_and_length(
         payloads=(payload,),
     )[0][0]
 
-    record = detail_record_from_mapping(
-        storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
-    )
+    record = storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     assert record.detail_kind == PAYLOAD_DETAIL_KIND
     assert record.retention_class == PAYLOAD_RETENTION_CLASS
     assert record.required is True
@@ -163,13 +158,11 @@ def test_payload_is_required_protected_and_uses_canonical_hash_and_length(
     assert record.length == len(canonical_json_bytes(payload))
     record.detail_ref.require_owner(SESSION_ID, thread_id, SNAPSHOT_ID)
 
-    manifest = detail_record_from_mapping(
-        storage.assemblies.get_context_plan_detail(
-            SESSION_ID,
-            thread_id,
-            detail_ref=record.detail_ref,
-            checkpoint_ns="",
-        )
+    manifest = storage.assemblies.get_context_plan_detail(
+        SESSION_ID,
+        thread_id,
+        detail_ref=record.detail_ref,
+        checkpoint_ns="",
     )
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, thread_id)
     assert manifest == record
@@ -190,9 +183,7 @@ def test_payload_read_rejects_resource_ordinal_and_hash_conflicts(
         checkpoint_ns='',
         payloads=(payload,),
     )[0][0]
-    record = detail_record_from_mapping(
-        storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
-    )
+    record = storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, thread_id)
 
     for changed in (
@@ -220,9 +211,7 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
         checkpoint_ns='',
         payloads=(payload,),
     )[0][0]
-    record = detail_record_from_mapping(
-        storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
-    )
+    record = storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, thread_id)
     wrong_owner_binding = replace(
         binding,
@@ -291,9 +280,9 @@ def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspac
         checkpoint_ns='',
         payloads=(payload,),
     )[0][0]
-    record = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
+    record = storage.assemblies.get_context_plan_detail(
         SESSION_ID, bundle.main_thread_id, detail_ref=ref,
-    ))
+    )
     snapshot, binding = _snapshot_with_detail(record.detail_ref, payload, bundle.main_thread_id)
     restarted = ResourceActivationBodyStore(storage, ContextPlanDetailStore(sessions_root))
     assert restarted.read_payload(
@@ -437,9 +426,9 @@ def test_batch_failure_keeps_existing_data_and_preserves_bodies_after_registrati
         assert len(current) == len(original_manifests) + 2
         assert all(row in current for row in original_manifests)
         for record, payload in zip(registered, ({"new": 1}, {"new": 2}), strict=True):
-            manifest = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
+            manifest = storage.assemblies.get_context_plan_detail(
                 SESSION_ID, thread_id, detail_ref=record.detail_ref,
-            ))
+            )
             assert manifest == record
             assert detail_store.read(
                 session_id=SESSION_ID, thread_id=thread_id, record=record, include_sensitive=True,

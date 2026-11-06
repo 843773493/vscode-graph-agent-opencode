@@ -20,11 +20,10 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
 )
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     _COLUMNS,
-    _detail_mapping,
+    _detail_record,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
-    detail_record_from_mapping,
     detail_relative_path,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_payload import (
@@ -65,7 +64,7 @@ def read_captured_lineage_manifest(
     ).fetchone()
     if row is None:
         raise KeyError(f"detail-unavailable: captured lineage manifest 不存在: {detail_ref}")
-    record = detail_record_from_mapping(_detail_mapping(tuple(row)))
+    record = _detail_record(tuple(row))
     path = native_io_path(captured_node / detail_relative_path(detail_ref))
     if path.is_symlink() or not path.is_file():
         raise DetailUnavailableError(f"detail-unavailable: captured lineage 正文缺失: {detail_ref}")
@@ -116,14 +115,13 @@ class ActivationLineageBodyStore:
         storage_owner: tuple[str, str],
         snapshot: RolloutReadSnapshot | None = None,
     ) -> tuple[Mapping[str, object], str]:
-        raw = self._storage.assemblies.get_context_plan_detail(
+        record = self._storage.assemblies.get_context_plan_detail(
             storage_owner[0],
             storage_owner[1],
             detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
             snapshot=snapshot,
         )
-        record = detail_record_from_mapping(raw)
         if record.detail_kind != LINEAGE_DETAIL_KIND:
             raise RuntimeError("source-mismatch: lineage detail kind 不属于 activation provenance")
         payload = self._detail_store.read(

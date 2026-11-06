@@ -21,7 +21,6 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle impor
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     PreparedDetail,
-    detail_record_from_mapping,
 )
 
 
@@ -137,13 +136,12 @@ class ContextDetailOwnerMixin:
         """
         if not isinstance(detail_ref, DetailRef):
             raise TypeError("source-mismatch: detail_ref 必须是 typed DetailRef")
-        raw = self._storage.assemblies.get_context_plan_detail(
+        record = self._storage.assemblies.get_context_plan_detail(
             session_id,
             thread_id,
             detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
         )
-        record = detail_record_from_mapping(raw)
         return self._detail_store.read(
             session_id=session_id,
             thread_id=thread_id,

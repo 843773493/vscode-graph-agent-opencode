@@ -55,17 +55,12 @@ if TYPE_CHECKING:
     )
 
 
-def _detail_mapping(row: tuple[object, ...]) -> dict[str, object]:
+def _detail_record(row: tuple[object, ...]) -> DetailRecord:
     value = dict(zip(_COLUMNS, row, strict=True))
-    ref = detail_ref_from_key(value["detail_ref"])
-    value["detail_ref"] = ref
+    value["detail_ref"] = detail_ref_from_key(value["detail_ref"])
     value["length"] = value.pop("content_length")
-    record = detail_record_from_mapping(value)
-    if record.detail_ref != ref:
-        raise ValueError("source-mismatch: detail owner 字段与 typed reference 不一致")
-    if record.relative_path != detail_relative_path(ref).as_posix():
-        raise ValueError("source-mismatch: detail locator 不属于 typed owner")
-    return value
+    # 构造时核对 typed identity、locator 和 manifest；调用方直接消费本次校验结果。
+    return detail_record_from_mapping(value)
 
 
 def validate_assembly_details(
@@ -88,38 +83,33 @@ def validate_assembly_details(
         "WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
         (snapshot.session_id, snapshot.thread_id, snapshot.assembly_id),
     ).fetchall()
-    records = {row[0]: _detail_mapping(tuple(row)) for row in rows}
+    records = {row[0]: _detail_record(tuple(row)) for row in rows}
     if set(records) != set(selected):
         raise RuntimeError("detail-unavailable: sealed assembly detail manifest 集合不一致")
     for key, record in records.items():
-        ref = detail_ref_from_key(key)
+        ref = record.detail_ref
         ref.require_owner(snapshot.session_id, snapshot.thread_id, snapshot.assembly_id)
         entry = selected[key]
         # optional header 是审计附件，不是进入请求的正文。fork/GC 可以保留
         # 它的 unavailable manifest；included source 和 required header 仍必须可读。
-        needs_body = entry is not None or bool(record["required"])
-        if (record["session_id"], record["thread_id"]) != (
-            snapshot.session_id,
-            snapshot.thread_id,
-        ):
-            raise RuntimeError("source-mismatch: detail manifest 与 assembly owner 不一致")
-        if record["checkpoint_ns"] != checkpoint_ns or (
-            needs_body and record["availability"] != "available"
+        needs_body = entry is not None or record.required
+        if record.checkpoint_ns != checkpoint_ns or (
+            needs_body and record.availability != "available"
         ):
             raise RuntimeError("detail-unavailable: sealed assembly detail 状态或 namespace 不一致")
         if entry is not None and (
-            entry.source_revision != record["source_revision"]
-            or entry.content_length != record["length"]
-            or entry.protection != record["protection"]
-            or entry.visibility != record["visibility"]
-            or entry.availability != record["availability"]
-            or record["detail_kind"] != "request_source"
-            or record["retention_class"] != "request_replay"
+            entry.source_revision != record.source_revision
+            or entry.content_length != record.length
+            or entry.protection != record.protection
+            or entry.visibility != record.visibility
+            or entry.availability != record.availability
+            or record.detail_kind != "request_source"
+            or record.retention_class != "request_replay"
         ):
             raise RuntimeError("source-mismatch: sealed assembly detail source manifest 不一致")
         if entry is None and (
-            record["detail_kind"] != "assembly_snapshot"
-            or record["retention_class"] != "assembly_audit"
+            record.detail_kind != "assembly_snapshot"
+            or record.retention_class != "assembly_audit"
         ):
             raise RuntimeError("source-mismatch: assembly header detail 用途不一致")
 
@@ -190,9 +180,6 @@ class DetailRegistryMixin(DetailRetentionMixin):
         if detail.checkpoint_ns != checkpoint_ns:
             raise ValueError("source-mismatch: detail manifest namespace 不一致")
         key = detail_ref_key(ref)
-        expected_path = detail_relative_path(ref)
-        if detail.relative_path != expected_path.as_posix():
-            raise ValueError("detail locator 必须严格等于 typed owner 的 assembly/detail_id 路径")
         # 使用正文唯一 path owner 校验既存路径；尚未发布的父目录可不存在。
         DetailFiles(self._storage._path_resolver).path(
             ref, creation_record=(
@@ -207,13 +194,12 @@ class DetailRegistryMixin(DetailRetentionMixin):
             detail.availability, int(detail.required), int(detail.sensitive),
             detail.status, datetime.now(UTC).isoformat(), detail.expires_at,
         )
-        _detail_mapping(values)
         existing = connection.execute(
             f"SELECT {','.join(_COLUMNS)} FROM context_plan_details WHERE detail_ref = ?",
             (key,),
         ).fetchone()
         if existing is not None:
-            _detail_mapping(tuple(existing))
+            _detail_record(tuple(existing))
             # created_at 属于首次 registry 提交；其余 manifest 均不可覆盖。
             if tuple(existing[:18]) != values[:18] or tuple(existing[19:]) != values[19:]:
                 raise ValueError("source-mismatch: detail_ref 已存在但 manifest 冲突")
@@ -233,14 +219,8 @@ class DetailRegistryMixin(DetailRetentionMixin):
         detail_ref: DetailRef,
         checkpoint_ns: str = "",
         snapshot: RolloutReadSnapshot | None = None,
-    ) -> dict[str, object]:
-        """读取并核验 SQLite detail manifest，不读取正文文件。
-
-        返回映射已将 ``detail_ref`` 解码为 typed ``DetailRef``，并把数据库列
-        ``content_length`` 映射为 ``length``；``required`` 与 ``sensitive``
-        保持 SQLite 的 0/1 值，经过 ``detail_record_from_mapping`` 后才成为
-        typed record 中的 bool。
-        """
+    ) -> DetailRecord:
+        """读取并完整校验 SQLite manifest，直接返回 typed record，不读取正文。"""
         session_id = strict_text(session_id, field="get_context_plan_detail.session_id")
         thread_id = strict_text(thread_id, field="get_context_plan_detail.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
@@ -260,7 +240,4 @@ class DetailRegistryMixin(DetailRetentionMixin):
             ).fetchone()
         if row is None:
             raise KeyError(f"detail-unavailable: context detail 不存在: {detail_ref}")
-        value = _detail_mapping(tuple(row))
-        if value["detail_ref"] != detail_ref:
-            raise ValueError("source-mismatch: registry 返回了错误的 detail identity")
-        return value
+        return _detail_record(tuple(row))

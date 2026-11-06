@@ -33,7 +33,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailRecord,
     DetailUnavailableError,
     PreparedDetail,
-    detail_record_from_mapping,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
@@ -430,7 +429,7 @@ class ContextProjectionOwnerMixin:
             record = prepared.record
         else:
             try:
-                raw = self._storage.assemblies.get_context_plan_detail(
+                record = self._storage.assemblies.get_context_plan_detail(
                     session_id,
                     thread_id,
                     detail_ref=detail_ref,
@@ -441,7 +440,6 @@ class ContextProjectionOwnerMixin:
                 raise DetailUnavailableError(
                     f"detail-unavailable: request source detail missing: {ref.ref_id}"
                 ) from error
-            record = detail_record_from_mapping(raw)
         if (
             record.detail_ref != detail_ref
             or record.checkpoint_ns != checkpoint_ns

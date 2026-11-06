@@ -217,7 +217,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
-    detail_record_from_mapping,
     detail_relative_path,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_payload import (
@@ -2666,10 +2665,8 @@ async def test_prefix_selected_required_detail_rejects_corruption_before_publica
     )
     detail_ref = selected.detail_ref
     assert detail_ref is not None
-    detail_manifest = detail_record_from_mapping(
-        saver._storage.assemblies.get_context_plan_detail(
-            source.session_id, source_thread, detail_ref=detail_ref,
-        ),
+    detail_manifest = saver._storage.assemblies.get_context_plan_detail(
+        source.session_id, source_thread, detail_ref=detail_ref,
     )
     assert detail_manifest.required is True
     source_detail = saver.read_context_plan_detail(

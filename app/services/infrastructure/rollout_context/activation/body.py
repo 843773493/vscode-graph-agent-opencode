@@ -27,7 +27,6 @@ from app.services.infrastructure.rollout_context.activation.schema import (
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
     DetailUnavailableError,
-    detail_record_from_mapping,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
@@ -133,14 +132,13 @@ class ResourceActivationBodyStore:
                     f"resource payload 没有可校验的 canonical content hash: {binding.resource_id}",
                 )
             try:
-                raw = self._storage.assemblies.get_context_plan_detail(
+                record = self._storage.assemblies.get_context_plan_detail(
                     storage_owner[0],
                     storage_owner[1],
                     detail_ref=detail_ref,
                     checkpoint_ns=checkpoint_ns,
                     snapshot=current,
                 )
-                record = detail_record_from_mapping(raw)
                 self._validate_record(
                     record,
                     detail_ref=detail_ref,

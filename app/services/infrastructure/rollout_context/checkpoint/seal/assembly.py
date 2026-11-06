@@ -50,7 +50,6 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailUnavailableError,
     PreparedDetail,
-    detail_record_from_mapping,
 )
 from app.services.mapping.itemized.projection import build_projection_evidence
 
@@ -254,11 +253,9 @@ def seal_snapshot(
                     "assembly-idempotency-conflict: 重试 header detail 存在性不一致"
                 )
             if detail_ref is not None:
-                record = detail_record_from_mapping(
-                    owner._storage.assemblies.get_context_plan_detail(
-                        session_id, thread_id, detail_ref=detail_ref,
-                        checkpoint_ns=checkpoint_ns, snapshot=read_snapshot,
-                    )
+                record = owner._storage.assemblies.get_context_plan_detail(
+                    session_id, thread_id, detail_ref=detail_ref,
+                    checkpoint_ns=checkpoint_ns, snapshot=read_snapshot,
                 )
                 if record.required != required_detail or record.sensitive != sensitive_detail:
                     raise ValueError(

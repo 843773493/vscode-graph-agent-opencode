@@ -40,9 +40,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
-from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
-    detail_record_from_mapping,
-)
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
@@ -734,9 +731,9 @@ def test_lineage_detail_classification_guards_exact_body_read(
     snapshot = _execution_snapshot(storage=storage)
     body_ref = activation_store.save_snapshot(snapshot)
     detail_store = ContextPlanDetailStore(sessions_root)
-    record = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
+    record = storage.assemblies.get_context_plan_detail(
         SESSION_ID, snapshot.owner_thread_id, detail_ref=body_ref, checkpoint_ns="",
-    ))
+    )
     assert (record.detail_kind, record.retention_class) == (
         "resource_activation_lineage", "resource_activation_provenance",
     )
