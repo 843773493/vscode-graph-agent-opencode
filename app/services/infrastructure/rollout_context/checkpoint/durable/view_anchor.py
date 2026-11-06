@@ -233,18 +233,6 @@ class RolloutViewAnchorMixin:
                 boundary[0], field="turn_anchor.boundary_commit_id"
             ) - (1 if anchor_mode == "before" else 0)
 
-        candidates = {
-            strict_text(row[0], field="context_views.view_id"): {
-                "branch_id": strict_text(row[1], field="context_views.branch_id"),
-                "logical_turn_ordinal": strict_non_negative_int(
-                    row[2], field="context_view_turns.logical_turn_ordinal"
-                ),
-            }
-            for row in connection.execute(
-                "SELECT cvt.view_id, cv.branch_id, cvt.logical_turn_ordinal FROM context_view_turns cvt JOIN context_views cv ON cv.view_id = cvt.view_id WHERE cvt.turn_id = ?",
-                (turn_id,),
-            ).fetchall()
-        }
         active = connection.execute(
             "SELECT b.branch_id, b.head_view_id FROM branches b WHERE b.branch_id = (SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?)",
             (checkpoint_ns,),
@@ -263,8 +251,16 @@ class RolloutViewAnchorMixin:
             if current_view_id in visited:
                 raise RuntimeError(f"context view 父链成环: {current_view_id}")
             visited.add(current_view_id)
-            candidate = candidates.get(current_view_id)
-            if candidate is not None:
+            # 沿当前 lineage 精确查 Turn；不为通常一次命中的定位加载所有历史候选。
+            current_view = connection.execute(
+                "SELECT view.branch_id, view.parent_view_id, turn.logical_turn_ordinal "
+                "FROM context_views AS view LEFT JOIN context_view_turns AS turn "
+                "ON turn.view_id=view.view_id AND turn.turn_id=? WHERE view.view_id=?",
+                (turn_id, current_view_id),
+            ).fetchone()
+            if current_view is None:
+                raise RuntimeError(f"context view 不存在: {current_view_id}")
+            if current_view[2] is not None:
                 checkpoint_id = self._source_checkpoint_for_view(
                     connection,
                     current_view_id,
@@ -289,11 +285,11 @@ class RolloutViewAnchorMixin:
                         checkpoint_id=checkpoint_id,
                         state_header_checkpoint_id=state_header_checkpoint_id,
                         branch_id=strict_text(
-                            candidate["branch_id"],
+                            current_view[0],
                             field="context_views.branch_id",
                         ),
                         logical_turn_ordinal=strict_non_negative_int(
-                            candidate["logical_turn_ordinal"],
+                            current_view[2],
                             field="context_view_turns.logical_turn_ordinal",
                         ),
                         first_message_sequence=first_sequence,
@@ -303,14 +299,8 @@ class RolloutViewAnchorMixin:
                         anchor_mode=anchor_mode,
                         cutoff_message_sequence=cutoff,
                     )
-            parent = connection.execute(
-                "SELECT parent_view_id FROM context_views WHERE view_id = ?",
-                (current_view_id,),
-            ).fetchone()
-            if parent is None:
-                raise RuntimeError(f"context view 不存在: {current_view_id}")
             current_view_id = strict_optional_text(
-                parent[0], field="context_views.parent_view_id"
+                current_view[1], field="context_views.parent_view_id"
             ) or ""
 
         raise KeyError(
