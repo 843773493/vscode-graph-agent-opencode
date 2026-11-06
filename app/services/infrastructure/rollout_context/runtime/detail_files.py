@@ -153,7 +153,10 @@ class DetailFiles:
             raise self._invalid_path(ref, target, "detail target 不是普通文件")
         with self._path_access(ref, target):
             try:
-                target.resolve(strict=False).relative_to(root.resolve(strict=True))
+                # commonpath 不展开深层祖先对象；仍对真实路径做相同的目录归属检查。
+                resolved_root = root.resolve(strict=True)
+                if Path(os.path.commonpath((target.resolve(strict=False), resolved_root))) != resolved_root:
+                    raise ValueError("detail 路径越出 session node")
             except ValueError as error:
                 raise self._invalid_path(ref, target, "detail 路径越出 session node") from error
         return target
