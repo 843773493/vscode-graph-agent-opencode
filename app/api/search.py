@@ -1,8 +1,9 @@
 """工作区搜索与能力发现；取消、分页和领域状态由搜索服务负责。"""
 
+import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
@@ -71,12 +72,29 @@ async def search_capabilities(
 @router.post("", response_model=APIResponse[WorkspaceSearchResultDTO])
 async def search_workspace(
     payload: WorkspaceSearchRequest,
+    request: Request,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     service: Annotated[WorkspaceSearchService, Depends(get_workspace_search_service)],
 ):
+    request_task = asyncio.current_task()
+    assert request_task is not None
+
+    async def cancel_disconnected() -> None:
+        # 请求体已由 FastAPI 消费；只监听此连接的断开，不轮询业务状态。
+        while True:
+            if (await request.receive())["type"] == "http.disconnect":
+                request_task.cancel()
+                return
+
+    disconnected = asyncio.create_task(cancel_disconnected())
     try:
         result = await service.search(payload, gateway_id=require_current_gateway_id("工作区搜索"))
+    except asyncio.CancelledError:
+        if disconnected.done() and not disconnected.cancelled():
+            disconnected.result()
+            raise HTTPException(status_code=499, detail={"code": "client_disconnected", "message": "搜索连接已断开，查询已取消"}) from None
+        raise
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
     except (CatalogCursorError, ThreadSearchCursorError, ThreadCatalogRevisionChangedError) as error:
@@ -118,5 +136,10 @@ async def search_workspace(
     except ValueError as error:
         # TODO：随原 owner 的 cursor／revision 异常类型化，细分 owner_rejected 的诊断代码。
         raise HTTPException(status_code=409, detail={"code": "owner_rejected", "message": str(error)}) from error
+    finally:
+        disconnected.cancel()
+        await asyncio.gather(disconnected, return_exceptions=True)
+        if not disconnected.cancelled():
+            disconnected.result()
     # TODO：16.18 迁齐其余原 owner 的具名异常与信息／警告合同。
     return APIResponse(data=result, request_id=request_id)
