@@ -12,6 +12,8 @@
 
 # 规范
 
+pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Workbench 构建继续使用 Bun；Windows 实测 Bun 会在 `chromium.launch()` 挂起，不能以增加超时替代正确运行时。保留原进程外超时、内存保护和业务断言。
+
 `test_resource_opener_sources` 经真实执行生成工具结果，再由正式 Workbench 的原只读编辑器打开、分屏和恢复；复制通过真实命令面板、原 Command 与候选按钮，核对完整 Gateway 引用、原 request_id、零额外正文读取和不打开候选、保留搜索框焦点。剪贴板使用浏览器权限，不预写历史或替换资源响应；不据此证明 Composer 附加、固定版本或 Electron。
 
 `test_composer_resource_actions` 使用真实 Gateway、双工作区、产品创建的 Session 和正式 Workbench；两个可见 Thread 经原输入框写草稿，来源工作区的文件通过原 Opener 打开。引用与选定正文走不同命令及原接收者 Quick Input，核取消不变、更改精确草稿、无额外正文读取、来源修改与刷新后保留正文，以及零执行／模型调用。不预写 IndexedDB 或历史，不以编辑器选项绕过规范 URI 的 Opener，不代替固定版本或 Electron 验收。
@@ -58,7 +60,7 @@
 
 `test_development_hmr` 使用完整 Git 源码快照和当前差异、固定上游副本及只读依赖链接，经产品 Node／Vite 入口和真实 Gateway 打开页面；只在独占副本中修改导航观测属性，验证自动更新通知及新页面内容，不手动刷新、不替换响应。Vite 可以按原行为自动整页重载；脚本 URL 按路径核对并保留查询参数原件。依赖链接引起的字体访问拒绝及原生关闭诊断如实保留，不据 HMR 通过宣称界面零错误、发行或 Electron 验收。
 
-`test_webview_resource_cache` 经真实 Gateway 和正式 Workbench 打开原 Markdown 预览；CSS、字体及贡献扩展脚本沿原隔离 Worker 加载，无响应替身。核首次正文、热读时仍有 describe 且不重传 raw、更新后新正文与样式、Cache Storage 的 ETag／字体 MIME。模型回放仅提供启动配置，要求零模型请求；本项不代替身份切换、配额失败诊断或打包 Electron 重启验收。回环代理的条件头／304 透传另由 `workbench_server.test.mjs` 的明确 HTTP 替身验证。
+`test_webview_resource_cache` 经真实 Gateway 和正式 Workbench 打开原 Markdown 预览；CSS、字体及贡献扩展脚本沿原隔离 Worker 加载，无响应替身。核首次正文、热读时仍有 describe 且不重传 raw、更新后新正文与样式、Cache Storage 的 ETag／字体 MIME。Web 使用独立持久 profile，正常关闭 Chromium 后同来源重启，仍通过原 describe 校验而不新增 CSS／字体／保留样式的 raw 请求。业务场景导出后由真实打包 Electron 复用，各宿主显式提供自己的运行上下文；两者的证据分别保留。模型回放仅提供启动配置，要求零模型请求；本项不代替身份切换或其它平台验收，官方 Worker 缓存写入沿原上游尽力而为合同。回环代理的条件头／304 透传另由 `workbench_server.test.mjs` 的明确 HTTP 替身验证。
 
 资源淘汰场景仅通过原 Cache API 删除测试 CSS／字体两条记录，保留其它缓存条目；刷新仍经过原 Worker／宿主和真实文件 owner 重建。该具名故障注入不表示产品新增清理入口，也不证明配额失败诊断、工作台受保护数据清理或 Electron 重启。
 

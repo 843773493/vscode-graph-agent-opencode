@@ -10,9 +10,10 @@
 - [x] 17.2 在原文件 owner 为普通预览完整 raw GET 实现 private/no-cache、有效 ETag 及认证／原目标校验之后的空正文 304；Vary 合并实际工作区／后端身份与认证头／Cookie，validator 绑定稳定资源及版本观察值。保留下载／临时／Range／失败的 no-store，304 不完整读正文、不沿旧 request_id，mtime／size 不代替内容 hash 或保存基线；同步相关 API 描述及真实类型消费者，移除该预览场景旧的统一 no-store 分支。
 - [x] 17.3 沿标准 fetch HTTP 缓存接通原图片编辑器，保持原 FileService、Blob／object URL 生命周期；贯通 Gateway／回环代理条件头、缓存头、Vary、304。原 Webview 复用固定版本 Worker 和宿主 ETag／NotModified 链，不自建字节缓存服务或文件落盘 IPC，不通过替换原 Pane 绕过宿主条件。
 - [ ] 17.4 对齐稳定 owner／URI、HTTP Vary、Webview 根限制和认证切换；验证 watcher 更新／删除／重连／overflow、强制刷新、route 改变／重用及取消后迟到响应。覆盖缓存存在时的权限拒绝／断连，不能使用旧字节伪报当前成功，媒体内部 version 不成为业务版本。
-- [ ] 17.5 复用 Web origin 与 Electron 原固定 profile／partition／renderer origin 的持久存储，正常重启不清缓存；处理引擎淘汰、配额及写入诊断，资源清理不删设置／聊天／草稿／业务文件，无全量预热、home 镜像、另一份前端或新增原生能力。
+- [x] 17.5 复用 Web origin 与 Electron 原固定 profile／partition／renderer origin 的持久存储，正常重启不清缓存；容量与淘汰沿引擎及上游生命周期，官方 Webview Worker 缓存写入沿用上游尽力而为语义，不新增配额／写入失败诊断；资源清理不删设置／聊天／草稿／业务文件，无全量预热、home 镜像、另一份前端或新增原生能力。
+  - 2026-11-06 用户裁定：该 Worker 的写入错误处理直接跟随上游，不再作为本轮待实现诊断或上游待办；历史收据中的该项缺口据此收口，其余未验收范围和任务勾选保持不变。
 - [ ] 17.6 以隔离 A/B 同路径真实图片、UTF-8 文本及原 Webview 允许根中的 CSS／字体／脚本，经 Gateway 分别验首次／二次／更新／删除／断连／认证切换／route 重用、Range 和淘汰；按原读取 owner 保留 MIME、条件请求、服务端真实 200／304／206、正文传输量及缓存失效证据。不得只断言 fetch 状态码或可见图片；定向回归文本保存 CAS、未保存模型、备份和原媒体操作，不默认全套重跑。
-- [ ] 17.7 对同一源码及正式构建完成相关静态分析、真实类型检查和 Web build，并用可迁移打包 Electron 产物真实验普通图片／Webview 的正常退出重启及零正文重传；无开发服务器或源码目录依赖。所有执行性检查带进程外超时／内存保护，正式产物按测试路径保存；上游 Worker／宿主或原生条件缺失明确未通过，不用 Web 证明替代 Electron。
+- [x] 17.7 对同一源码及正式构建完成相关静态分析、真实类型检查和 Web build，并用可迁移打包 Electron 产物真实验普通图片／Webview 的正常退出重启及零正文重传；无开发服务器或源码目录依赖。所有执行性检查带进程外超时／内存保护，正式产物按测试路径保存；上游 Worker／宿主或原生条件缺失明确未通过，不用 Web 证明替代 Electron。
 
 2026-11-05，17.3 原 Markdown Webview 纵向接通：允许根内 HTTP 扩展资源沿原 asWebviewUri／官方 v6 隔离 Worker／FileService 加载，根外 URL 保持原语义；首次渲染前发布同一允许根，HTTP Provider 的占位 stat 不充当 validator，业务文件保留原 ETag／NotModified，原字体 MIME 补齐。真实 Gateway／正式 Workbench／Chromium `1 passed / 72.70s / exit 0`，首次 CSS／字体 raw 正文分别 130／154012 字节，热刷新仍 describe 且二者 raw 请求为零，修改 CSS 后读取新正文并显示新颜色；math／mermaid 贡献资源首次经 Worker 成功，扩展资源失败为零。无响应替身、无模型调用，pageErrors 为空，保留两条原生关闭长操作诊断。正式构建 `exit 0 / 38.11s`，49 份转换源码的完整宿主类型检查 `exit 0 / 50.83s`；转换／扩展复制 10 用例、回环代理 5 用例以及 Ruff／Python 类型检查通过。回环测试使用明确 HTTP 替身，仅证明条件头、owner／认证、Vary／ETag、空正文304及新 request_id 透传。收据与准确指纹：`out/tests/temp/2026/11/05/webview_resource_cache/artifacts/verification-001.json`（SHA256 `480b55c74aaaa98d282ff25696ba59dc8cf978b8ebfbe28508cbba1c0c1cca18`）。当前图片回归在 conftest 导入阶段被其它会话尚未落位的 `session_catalog_store/migrations/nodes.sql` 挡住，未进入产品场景；原件保留，未重复无变化失败。17.3 整项及 Electron 重启、认证切换／route、淘汰和其余17组场景继续保持待验收，不由本片替代。
 
@@ -21,6 +22,10 @@
 2026-11-05，17.1 完成实际入口清点：原图片与 React Markdown 图片共用普通 raw，原 Webview 沿隔离 v6 Worker／FileService，附件保留 Session owner；第三方 URL、Range、下载／临时及失败边界独立。路径、源码指纹及证据归属见 `out/tests/temp/2026/11/05/cache_cancellation/artifacts/inventory-001.json`。17.4 修复原 Provider 在路由解析／字节转换取消后仍交付迟到结果的两个真实反例；同时迁齐旧 watcher 装具的稳定 owner、资源 URI 与具名导航入口，保持首次建连零伪更新。定向12用例／77断言、49份转换源码完整类型检查及正式Web构建通过，准确命令、前后失败原件及指纹见 `out/tests/temp/2026/11/05/cache_cancellation/artifacts/verification-001.json`。此片仅证明具名 Provider／传输边界，17.4 的身份切换、断连等及 Electron 仍待验收。
 
 2026-11-05，17.5／17.6 补齐 Webview 引擎淘汰场景：完整 `76649e377`／固定上游快照、正式 Workbench 和真实 Gateway `1 passed / 74.83s / exit 0`，4406份源码前后不变，正式构建 `exit 0 / 39.28s`。只通过原 Cache API 删除 CSS／字体两条记录，原 Worker／宿主重新读取并建立130／154012字节资源；另一个真实加载的52字节 CSS 条目保持原 ETag／MIME／正文长度且零新增 raw。无响应替身、无模型调用、pageErrors为空，原生关闭诊断保留；Ruff、Python类型及驱动ESM检查通过。首次空保留集结果另存，不用于证明非目标记录保留。收据 `out/tests/temp/2026/11/05/webview_eviction/artifacts/verification-003.json`（SHA256 `5aeec2fb6a94d3ffabcaf1bb045fd93550d0f6776a6dcf046315d1a12a8b098c`）；该片不代表产品新增清理入口，配额／写入诊断、身份／route、受保护数据和打包Electron仍待验收，17.5／17.6保持未勾。
+
+2026-11-06，17.5／17.7 补齐正常退出重启：Web 独立持久 profile 的原场景通过；Linux 真实便携 ASAR 定向复验 `1 passed / 115.99s / exit 0`，两次原生启动／正常关窗均退出0，同 profile、固定 partition／renderer origin、独立cwd／空PATH，无开发服务器、响应替身、预写缓存或手动flush。共用原 Webview 断言及各宿主运行上下文，CSS／字体／保留样式冷读分别130／154012／52字节，热读及正常重启仍describe校验、三者均零新增raw；新颜色、两条资源淘汰重建及其它条目保留均通过。原图冷读69字节，全部后续请求均为同URL／ETag、独立request_id的304及零正文。官方Worker写入沿已裁定上游行为，资源缓存仅使用HTTP／Cache Storage／原profile，不清设置、草稿或业务数据；更广的受保护恢复验收仍归18.9。
+
+首批 `1 passed / 1 failed / 213.48s` 的Web完整通过，原生产品驱动完成，但新增Python尾断言错误要求恰好三次请求，实际多一次同归属零正文304；该失败原件保留。修为逐条核全部请求的归属／次序／validator／字节及request_id，未过滤额外请求，并保留调用来源。两轮重复观测已对照reference_repo原图片watcher／reload，额外304触发点尚未确定，具名性能TODO留在image_cache驱动，不删除原watcher掩盖现象。相关Ruff、Python类型、ESM、57份实际转换源码真实类型、正式Workbench构建和矩阵入口检查通过；原生8条上游shutdown joiner保留，pageErrors／IndexedDB关闭错误为空，模型零调用。源码／构建／归档摘要、首轮失败、最终结果与复用依据见 `out/tests/temp/2026/11/06/electron_webview_cache/artifacts/verification-v1.json`。17.4／17.6的身份／route／断连、18.9完整恢复数据以及Windows／macOS仍未完成，本片不替代这些验收。
 
 ## 18. 分层缓存接入与恢复数据保护（2026-11-03 扩展设计）
 
@@ -35,7 +40,7 @@
 - [ ] 18.5 核模型 tokenization、实际语言 Worker／索引、Web 扩展扫描／元数据缓存的真实入口与适用条件；按模型／语言／配置／扩展版本失效和原生命周期释放，验证迟到分析不能覆盖新模型、业务 URI 和范围有效。无真实服务列明未启用，不因 Electron 引入 native CachedData／scanner、扩展宿主、LSP 或全局符号索引。
 - [ ] 18.6 按原 owner 核查询缓存、已加载导航页、Gateway 目录镜像、聊天历史镜像和领域索引的用途隔离，复用快速访问原第 16 组受限预热／cursor 合同；验证 revision／身份改变、明确 stale 及原历史镜像先显后同步，不把文件读取失败的规则误用于删除既有只读历史预览，不扫描私有目录重建。
 - [x] 18.7 在唯一构建／server factory 及原静态资源消费者落实内容地址长期复用、未 hash main／Worker／入口再验证和升级一致性；保持 OAuth no-store、Vite/HMR 及原 Webview 隔离版本。验证旧缓存存在时新 bundle／Worker 实际生效、缺资源失败，Chromium 代码缓存只记录真实宿主边界而不导入 native bootstrap。
-- [ ] 18.8 复用原命令面板／设置／输出和 owner 清理方法，按具名可再生类别与明确作用域释放，补实际命中／再验证／stale／未命中／绕过／存储失败诊断；清理不删除备份／本地历史／草稿／设置／恢复数据／信任／凭据，无选择性 API 时沿 reload／淘汰，不加 bridge、清站点数据按钮或遥测后台。
+- [ ] 18.8 复用原命令面板／设置／输出和 owner 清理方法，按具名可再生类别与明确作用域释放，补实际命中／再验证／stale／未命中／绕过／存储失败诊断（官方 Webview Worker 的异步缓存写入沿用 17.5）；清理不删除备份／本地历史／草稿／设置／恢复数据／信任／凭据，无选择性 API 时沿 reload／淘汰，不加 bridge、清站点数据按钮或遥测后台。
 - [ ] 18.9 沿原 browser WorkingCopyBackup／History、Composer 及原展示态存储核正常关闭、既有恢复能力、升级和格式失配；可再生缓存可以失效，受保护数据保持原件并明确错误。通过实际未保存正文、草稿、分屏／光标／滚动、设置、最近记录证明清缓存／重启未丢数据，不对原服务未承诺的异常退出扩大恢复保证。
 - [ ] 18.10 在隔离工作区按层选有判别力的冷／热态、失效、取消、释放、清理与升级场景，通过真实 Gateway 的 Web 和可迁移打包 Electron 分别验收；同时有多个业务工作区与模型，核实际网络、引用／模型身份和保留数据，而非只凭耗时。复用快速访问原第 13～16 组和本变更第 17 组的同源码已通过证据，按变化依赖补受保护静态／真实类型／构建和定向检查，不默认全套重跑；保存源码指纹、真实产物、命令、原始结果及未验证条件。
 

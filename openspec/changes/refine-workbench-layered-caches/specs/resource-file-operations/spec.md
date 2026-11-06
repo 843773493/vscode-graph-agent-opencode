@@ -22,7 +22,9 @@ Range SHALL 保留原 206、Content-Range、取消和按需字节读取，不进
 
 ### Requirement: 资源缓存跨 Web 与 Electron 持久且可丢弃
 
-Web SHALL 使用浏览器 origin 的原 HTTP 缓存／Cache Storage；Electron SHALL 使用同一前端读取链、稳定 renderer origin、既有 persist partition 和固定 profile，由 Chromium 管理磁盘格式，正常重启不主动清资源缓存。两者 MUST NOT 为此分叉前端源码或添加 native FS IPC。缓存沿引擎配额、淘汰与原缓存版本生命周期，MUST NOT 无界预热或成为业务权威。资源缓存清理 SHALL 只作用于所属缓存，不删除聊天历史、设置、草稿或后端文件。淘汰按原权限重新读取；写入失败／配额耗尽 SHALL 有本地诊断，不能宣称持久化成功，来源读取结果仍按原合同表达。
+Web SHALL 使用浏览器 origin 的原 HTTP 缓存／Cache Storage；Electron SHALL 使用同一前端读取链、稳定 renderer origin、既有 persist partition 和固定 profile，由 Chromium 管理磁盘格式，正常重启不主动清资源缓存。两者 MUST NOT 为此分叉前端源码或添加 native FS IPC。缓存沿引擎配额、淘汰与原缓存版本生命周期，MUST NOT 无界预热或成为业务权威。资源缓存清理 SHALL 只作用于所属缓存，不删除聊天历史、设置、草稿或后端文件。淘汰按原权限重新读取，来源读取结果仍按原合同表达，不能以成功读取宣称持久化成功。
+
+官方隔离 Webview Worker 的 Cache Storage 异步写入 SHALL 沿用上游尽力而为语义：配额或写入失败不影响已成功取得资源的响应，不要求额外日志或宿主错误上报。MUST NOT 为补充该诊断复制 Worker、另行部署隔离宿主或增加写入探测。资源读取失败、权限拒绝及其它缓存层的原诊断要求继续适用。
 
 验收 SHALL 在真实 Gateway 和目标工作区下分别覆盖 Web 与打包 Electron 的普通图片及 Webview：首次、再次、正常重启、修改更新、身份隔离、断连／删除、Range 及缓存淘汰。证据 SHALL 区分网络 304 与浏览器合成的 fetch 200，记录实际条件请求、服务端状态及正文传输量，不以图片可见、进程启动、上游源码存在或浏览器 parity 代替原生证明。原 Webview Worker／宿主未匹配固定版本时 SHALL 明确未完成，不替换原编辑器绕开。
 
@@ -30,6 +32,10 @@ Web SHALL 使用浏览器 origin 的原 HTTP 缓存／Cache Storage；Electron S
 - **WHEN** 打包 Electron 已缓存普通图片和 Webview 资源，正常退出后以相同 profile／来源重启，缓存未被引擎淘汰且原资源未变
 - **THEN** 两类入口均经原链路校验后复用字节而不重传正文；证据包含实际产物、缓存存储边界和网络行为，不依赖开发服务器或源码目录
 
-#### Scenario: 缓存被淘汰或写入失败
-- **WHEN** 浏览器淘汰缓存或资源缓存写入因配额失败，而原资源仍可访问
-- **THEN** 原读取链可重新取得正确字节，写入失败可诊断且不伪报已持久化；不创建 home 文件副本或清除其它展示态补偿
+#### Scenario: 缓存被淘汰
+- **WHEN** 浏览器淘汰缓存，而原资源仍可访问
+- **THEN** 原读取链可重新取得正确字节；不创建 home 文件副本或清除其它展示态补偿
+
+#### Scenario: 官方 Webview 缓存写入失败
+- **WHEN** 官方隔离 Worker 已取得正确资源，但异步缓存写入因配额或其它写入异常失败
+- **THEN** 沿用上游响应与错误处理，不要求新增写入失败诊断，不宣称资源已经持久化；后续读取继续遵守原权限和校验合同

@@ -35,14 +35,9 @@ def metadata_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: P
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
 
 
-@pytest.mark.asyncio
-async def test_original_markdown_webview_revalidates_css_and_font(
-    request: pytest.FixtureRequest,
-    metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
-) -> None:
-    client, context, workspace, provider = metadata_case
-    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
-    assert chromium, "原 Webview 资源验收需要 Chromium"
+async def prepare_webview_files(
+    client: httpx.AsyncClient, context: TestRunContext, workspace: Path,
+) -> dict[str, str]:
     current = await metadata_data(client, "/api/gateway/workspaces")
     owner = current["active_workspace"]
     client.headers.update({"X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
@@ -64,9 +59,31 @@ async def test_original_markdown_webview_revalidates_css_and_font(
     )
     shutil.copyfile(context.project_root / "src/clients/workbench/node_modules/@vscode/codicons/dist/codicon.ttf",
                     directory / "font.ttf")
+    return {"gatewayId": owner["gateway_id"], "workspaceId": owner["workspace_id"],
+            "rootUri": roots["workspace_uri"], "directory": str(directory)}
+
+
+def assert_webview_result(result_path: Path) -> dict:
+    result = json.loads(result_path.read_text())
+    assert result["phase"] == "complete" and result["pageErrors"] == []
+    assert len(result["eviction"]["removed"]) == len(result["eviction"]["restored"]) == 2
+    assert any("/webview-cache/retained.css" in entry["url"] for entry in result["eviction"]["retained"])
+    assert result["restart"]["before"] == result["restart"]["after"]
+    return result
+
+
+@pytest.mark.asyncio
+async def test_original_markdown_webview_revalidates_css_and_font(
+    request: pytest.FixtureRequest,
+    metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
+) -> None:
+    client, context, workspace, provider = metadata_case
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "原 Webview 资源验收需要 Chromium"
+    fixture = await prepare_webview_files(client, context, workspace)
     runtime = context.runtime_root_for_node(request.node.nodeid)
     result_path = context.artifacts_dir / "webview-cache.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/webview_resource_cache.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/webview_resource_cache.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     protected = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                  "--timeout-seconds", "150", "--", *command]
@@ -74,9 +91,8 @@ async def test_original_markdown_webview_revalidates_css_and_font(
         process = await asyncio.to_thread(subprocess.run, protected, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
                  "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
-                 "BOXTEAM_WEBVIEW_FIXTURE": json.dumps({"gatewayId": owner["gateway_id"],
-                     "workspaceId": owner["workspace_id"], "rootUri": roots["workspace_uri"],
-                     "directory": str(directory)}),
+                 "BOXTEAM_WEBVIEW_FIXTURE": json.dumps(fixture),
+                 "BOXTEAM_WEBVIEW_PROFILE": str(runtime / "browser-profile"),
                  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
             capture_output=True, text=True, timeout=165, check=False)
     (context.artifacts_dir / "browser.stdout.raw").write_text(process.stdout, encoding="utf-8")
@@ -85,10 +101,7 @@ async def test_original_markdown_webview_revalidates_css_and_font(
         "command": protected, "exit_code": process.returncode,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert process.returncode == 0, process.stdout + process.stderr
-    result = json.loads(result_path.read_text())
-    assert result["phase"] == "complete" and result["pageErrors"] == []
-    assert len(result["eviction"]["removed"]) == len(result["eviction"]["restored"]) == 2
-    assert any("/webview-cache/retained.css" in entry["url"] for entry in result["eviction"]["retained"])
+    assert_webview_result(result_path)
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "原文件 Webview 读取不应触发模型请求"

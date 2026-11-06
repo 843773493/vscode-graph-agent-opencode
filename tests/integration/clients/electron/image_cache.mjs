@@ -3,6 +3,7 @@ import { expect } from 'playwright/test';
 /** 在真实 ASAR renderer 观察原图片编辑器；只保留条件头和字节计量，不采集凭据。 */
 export async function observeImageCache(page, allReads) {
   const session = await page.context().newCDPSession(page), requests = new Map();
+  // TODO：两轮真实 ASAR 热读均多出一次零正文304，结合 watcher 与调用来源定位后再决定是否精简。
   const item = id => {
     if (!requests.has(id)) requests.set(id, { encodedBodyBytes: 0 });
     return requests.get(id);
@@ -15,7 +16,9 @@ export async function observeImageCache(page, allReads) {
     const url = new URL(event.request.url);
     if (url.pathname !== '/api/v1/workspace/files/raw' || !url.searchParams.get('path')?.endsWith('/native-cache.png')) return;
     const read = item(event.requestId);
-    Object.assign(read, { phase, url: event.request.url, request: headers(event.request.headers) });
+    Object.assign(read, { phase, url: event.request.url, request: headers(event.request.headers),
+      timestamp: event.timestamp, initiator: { type: event.initiator.type, frames: (event.initiator.stack?.callFrames ?? [])
+        .slice(0, 8).map(frame => ({ function: frame.functionName, url: frame.url, line: frame.lineNumber, column: frame.columnNumber })) } });
     allReads.push(read);
   });
   session.on('Network.requestWillBeSentExtraInfo', event => { item(event.requestId).wireRequest = headers(event.headers); });
