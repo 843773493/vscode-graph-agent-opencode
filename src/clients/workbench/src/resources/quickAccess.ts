@@ -17,7 +17,7 @@ import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/e
 import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import type { SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
+import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
 import { gateway } from '../agentApi.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import { chooseSearchOwners } from '../search/quickAccessScope.js';
@@ -37,7 +37,7 @@ interface SourceRun {
   discovery?: Promise<SourcePick[]>;
 }
 
-/** 来源候选只消费固定 AGENTS metadata 和配置 Skill 的 accepted metadata。 */
+/** 来源候选沿固定根导航发现本地文件，配置 Skill 只消费 accepted metadata。 */
 export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
   static readonly PREFIX = 'resource ';
   private run?: SourceRun;
@@ -65,7 +65,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     lifetime.add(toDisposable(workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate(); })));
     const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择来源所属工作区' };
     picker.buttons = [...picker.buttons, scope];
-    picker.placeholder = '查找根 AGENTS 和工作区配置 Skill · 浏览不读取正文或激活来源';
+    picker.placeholder = '查找根 AGENTS、本地和配置 Skill · 浏览不读取正文或激活来源';
     lifetime.add(picker.onDidTriggerButton(button => {
       if (button !== scope) return;
       const value = picker.value;
@@ -145,7 +145,16 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             return result.entries.map(entry => pick(owner, entry.display_uri, entry.name, `配置 Skill · ${target.name} · 优先级 ${entry.priority}`,
               entry.available, entry.error_code));
           }).catch(cause => failed(owner, 'Skill ', cause));
-          return (await Promise.all([agents, skills])).flat();
+          const localSkills = limiter.queue(async () => {
+            run.signal.throwIfAborted();
+            const result = await gateway.request<LocalSkillsMetadataDTO>('/api/v1/resources/local-skills?limit=1000', { signal: run.signal }, key);
+            if (result.workspace_id !== owner.workspaceId) throw new Error('本地 Skill 来源响应与工作区归属不匹配');
+            return result.entries.map(entry => {
+              if (entry.node?.resource_shape !== 'file' || !entry.node.operations.includes('read')) throw new Error('本地 Skill 来源未公布文件读取能力');
+              return pick(owner, entry.node.uri, entry.name, `本地 Skill · ${target.name}`);
+            });
+          }).catch(cause => failed(owner, '本地 Skill ', cause));
+          return (await Promise.all([agents, skills, localSkills])).flat();
         } catch (cause) { return failed(owner, '', cause); }
       }));
       if (run.signal.aborted || run.invalidated) return [];
@@ -164,7 +173,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
 
 Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider({
   ctor: ResourceQuickAccess, prefix: ResourceQuickAccess.PREFIX, placeholder: '查找已接入的来源资源',
-  helpEntries: [{ description: '查找来源资源（根 AGENTS 和配置 Skill）', commandId: 'boxteam.quickAccess.resources', commandCenterOrder: 44 }],
+  helpEntries: [{ description: '查找来源资源（根 AGENTS、本地和配置 Skill）', commandId: 'boxteam.quickAccess.resources', commandCenterOrder: 44 }],
 });
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.quickAccess.resources', title: { value: '查找来源资源', original: 'Find Source Resources' }, f1: true }); }

@@ -6,6 +6,7 @@
 
 - 可以维护文件来源 owner，以及认证 Gateway Skill 原始快照的 typed 消费 owner。
 - `resource_navigation.py` 是 Workspace/Gateway 共用的固定根只读导航实现；普通导航不经过来源登记、快照或上下文激活。
+- 工作区本地 Skill 发现只枚举固定 `.boxteam/skills` 下一层有 `SKILL.md` 的包，复用原 URI、根边界、文件节点能力和导航预算；不解析正文或建立 accepted 目录，超出预算、路径拒绝和既存 URI 路由冲突须明确失败。
 - 文件续页按已完成文件数及当前文件内命中定位；原文件观察值与 ignore 版本校验已消费前缀，跳过已完成文件的正文，不为每条匹配重复编码正文指纹。续点指向首条未交付项，重启仍可恢复；目录观察不另立权威索引。
 - 会话产物仅经注入的原 owner 读取端口访问精确单文件；模型调用必须显式传入其 SessionThread capability，拒绝后不得回退到容器读取端口。附件 MIME、预览与保活归附件 owner，工具输出只开放单文件读取与正文搜索。
 - `gateway_resource_navigation.py` 只经已配置 Gateway 传输固定 URI，复用联邦 read grant；响应根、文件匹配及 authority 的校验由同一函数负责，不能在 source 读取远端宿主路径。

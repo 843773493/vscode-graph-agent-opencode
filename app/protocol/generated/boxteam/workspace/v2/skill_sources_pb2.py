@@ -22,19 +22,24 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from boxteam.workspace.v2 import public_pb2 as boxteam_dot_workspace_dot_v2_dot_public__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(boxteam/workspace/v2/skill_sources.proto\x12\x14\x62oxteam.workspace.v2\"u\n\x16SkillSourcesRefreshDTO\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x1a\n\x08revision\x18\x02 \x01(\tR\x08revision\x12\x1c\n\tavailable\x18\x03 \x01(\x08R\tavailable\"\xba\x01\n\x16SkillSourceMetadataDTO\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n\x0b\x64isplay_uri\x18\x02 \x01(\tR\ndisplayUri\x12\x1c\n\tavailable\x18\x03 \x01(\x08R\tavailable\x12\"\n\nerror_code\x18\x04 \x01(\tH\x00R\terrorCode\x88\x01\x01\x12\x1a\n\x08priority\x18\x05 \x01(\x03R\x08priorityB\r\n\x0b_error_code\"\x84\x01\n\x17SkillSourcesMetadataDTO\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x46\n\x07\x65ntries\x18\x02 \x03(\x0b\x32,.boxteam.workspace.v2.SkillSourceMetadataDTOR\x07\x65ntriesb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(boxteam/workspace/v2/skill_sources.proto\x12\x14\x62oxteam.workspace.v2\x1a!boxteam/workspace/v2/public.proto\"u\n\x16SkillSourcesRefreshDTO\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x1a\n\x08revision\x18\x02 \x01(\tR\x08revision\x12\x1c\n\tavailable\x18\x03 \x01(\x08R\tavailable\"\xba\x01\n\x16SkillSourceMetadataDTO\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n\x0b\x64isplay_uri\x18\x02 \x01(\tR\ndisplayUri\x12\x1c\n\tavailable\x18\x03 \x01(\x08R\tavailable\x12\"\n\nerror_code\x18\x04 \x01(\tH\x00R\terrorCode\x88\x01\x01\x12\x1a\n\x08priority\x18\x05 \x01(\x03R\x08priorityB\r\n\x0b_error_code\"\x84\x01\n\x17SkillSourcesMetadataDTO\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x46\n\x07\x65ntries\x18\x02 \x03(\x0b\x32,.boxteam.workspace.v2.SkillSourceMetadataDTOR\x07\x65ntries\"p\n\x15LocalSkillMetadataDTO\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x43\n\x04node\x18\x02 \x01(\x0b\x32/.boxteam.workspace.v2.ResourceNavigationNodeDTOR\x04node\"\x82\x01\n\x16LocalSkillsMetadataDTO\x12!\n\x0cworkspace_id\x18\x01 \x01(\tR\x0bworkspaceId\x12\x45\n\x07\x65ntries\x18\x02 \x03(\x0b\x32+.boxteam.workspace.v2.LocalSkillMetadataDTOR\x07\x65ntriesb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.workspace.v2.skill_sources_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_SKILLSOURCESREFRESHDTO']._serialized_start=66
-  _globals['_SKILLSOURCESREFRESHDTO']._serialized_end=183
-  _globals['_SKILLSOURCEMETADATADTO']._serialized_start=186
-  _globals['_SKILLSOURCEMETADATADTO']._serialized_end=372
-  _globals['_SKILLSOURCESMETADATADTO']._serialized_start=375
-  _globals['_SKILLSOURCESMETADATADTO']._serialized_end=507
+  _globals['_SKILLSOURCESREFRESHDTO']._serialized_start=101
+  _globals['_SKILLSOURCESREFRESHDTO']._serialized_end=218
+  _globals['_SKILLSOURCEMETADATADTO']._serialized_start=221
+  _globals['_SKILLSOURCEMETADATADTO']._serialized_end=407
+  _globals['_SKILLSOURCESMETADATADTO']._serialized_start=410
+  _globals['_SKILLSOURCESMETADATADTO']._serialized_end=542
+  _globals['_LOCALSKILLMETADATADTO']._serialized_start=544
+  _globals['_LOCALSKILLMETADATADTO']._serialized_end=656
+  _globals['_LOCALSKILLSMETADATADTO']._serialized_start=659
+  _globals['_LOCALSKILLSMETADATADTO']._serialized_end=789
 # @@protoc_insertion_point(module_scope)

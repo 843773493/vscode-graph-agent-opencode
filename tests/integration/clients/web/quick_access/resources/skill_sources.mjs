@@ -1,4 +1,4 @@
-// Integration：真实 HTTP accepted 快照、Gateway 和正式 Workbench；模型回放只供启动。
+// Integration：真实本地文件、HTTP accepted 快照、Gateway 和正式 Workbench；模型回放只供启动。
 import { access, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
@@ -8,7 +8,7 @@ const required = name => { const value = process.env[name]; if (!value) throw ne
 const output = required('BOXTEAM_BROWSER_RESULT_PATH'), screenshot = required('BOXTEAM_BROWSER_SCREENSHOT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/test_skill_sources.py');
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], discoveries: [], routes: [], parses: [], reads: [], receipts: [], forbiddenWrites: [],
-  boundary: '真实 Gateway／Backend、正式 Workbench、manual HTTP 来源；只在显式 refresh 前将上游一项改为非法 UTF-8，不替换产品响应、不预写 registry／存储、不创建 Session 或编译 runtime' };
+  boundary: '真实 Gateway／Backend、正式 Workbench、本地文件和 manual HTTP 来源；从宿主删除本地入口、添加新包，并在显式 refresh 前将一项HTTP来源改为非法 UTF-8，不替换产品响应、不预写 registry／存储、不创建 Session 或编译 runtime' };
 const pending = [], responseErrors = [];
 const phase = async value => { result.phase = value; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
 let page, failure;
@@ -22,7 +22,7 @@ try {
     const path = new URL(request.url()).pathname, method = request.method(), headers = request.headers();
     const observed = { phase: result.phase, path, method, gatewayId: headers['x-boxteam-target-gateway-id'], workspaceId: headers['x-boxteam-workspace-id'],
       body: method === 'GET' ? undefined : request.postDataJSON() };
-    if (['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources'].includes(path)) result.discoveries.push(observed);
+    if (['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills'].includes(path)) result.discoveries.push(observed);
     if (path === '/api/gateway/workspaces') result.routes.push(observed);
     if (path === '/api/gateway/resource-addresses/parse') result.parses.push(observed);
     if (path === '/api/v1/resources/navigation') result.reads.push(observed);
@@ -31,7 +31,7 @@ try {
   });
   page.on('requestfinished', request => {
     const path = new URL(request.url()).pathname;
-    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/navigation', '/api/gateway/resource-addresses/parse'].includes(path)) return;
+    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/navigation', '/api/gateway/resource-addresses/parse'].includes(path)) return;
     const observedPhase = result.phase;
     pending.push((async () => {
       const response = await request.response(), body = await response.json();
@@ -55,11 +55,14 @@ try {
   const a = registered.active_workspace, b = registered.items.find(item => item.name === 'Skill B');
   expect(b?.workspace_id).toBeTruthy(); expect(a.gateway_id).toBe(health.gateway_id);
   expect((await api('/api/v1/workspace', a)).workspace_id).toBe(a.workspace_id);
+  // 容器先挂载；等原导航完成身份和目录初始化，再冻结本次来源选择。
+  await expect(page.locator('.native-session-navigation .workspace-label').filter({ hasText: 'Skill B' })).toBeVisible();
   await command('workbench.action.closeAllEditors');
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first(), groups = page.locator('.editor-group-container');
   const text = index => groups.nth(index).locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines');
   const owner = item => ({ gatewayId: item.gateway_id, workspaceId: item.workspace_id });
-  const candidates = item => quick.locator('.monaco-list-row').filter({ hasText: 'network-demo' }).filter({ hasText: item.workspace_id });
+  const candidates = item => quick.locator('.monaco-list-row').filter({ hasText: 'network-demo' }).filter({ hasText: '配置 Skill' }).filter({ hasText: item.workspace_id });
+  const local = item => quick.locator('.monaco-list-row').filter({ hasText: '本地 Skill' }).filter({ hasText: item.workspace_id });
   const source = (item, priority) => candidates(item).filter({ hasText: `优先级 ${priority}` });
   const show = async item => {
     await command('boxteam.quickAccess.resources', ...(item ? [owner(item)] : []));
@@ -97,6 +100,32 @@ try {
   await phase('explicit-A'); await show(a); await select(a, 0); await page.keyboard.press('Enter');
   await expect(text(1)).toContainText('HTTP-SKILL-A-FIRST'); expect(currentReads()).toHaveLength(1);
   expect(currentReads()[0].workspaceId).toBe(a.workspace_id); result.explicitOwner = true;
+  await phase('local-open'); await command('workbench.action.closeAllEditors'); await show(b);
+  await expect(local(b)).toHaveCount(1); await expect(local(b)).toContainText('network-demo');
+  await expect(quick.locator('.monaco-list-row').filter({ hasText: 'network-demo' })).toHaveCount(3);
+  await expect(quick).not.toContainText('different-runtime-name'); await expect(quick).not.toContainText('missing-entry'); result.localDiscovery = true;
+  const selectLocal = async () => {
+    await input.fill('resource network-demo'); await input.focus();
+    for (let i = 0; i < 4 && !(await local(b).evaluate(element => element.classList.contains('focused'))); i++) await page.keyboard.press('ArrowDown');
+    await expect(local(b)).toHaveClass(/focused/);
+  };
+  await selectLocal(); await page.keyboard.press('Enter'); await expect(text(0)).toContainText('LOCAL-SKILL-B');
+  expect(currentReads()).toHaveLength(1); expect(currentReads()[0]).toMatchObject({ workspaceId: b.workspace_id,
+    body: { uri: expect.stringContaining('/skills/network-demo/SKILL.md'), operation: 'read' } }); result.localOpen = true;
+  await phase('local-read-only'); await text(0).click(); await page.keyboard.type('MUST-NOT-CHANGE-LOCAL-SKILL');
+  await expect(text(0)).toContainText('LOCAL-SKILL-B'); await expect(text(0)).not.toContainText('MUST-NOT-CHANGE-LOCAL-SKILL'); result.localReadOnly = true;
+  await command('workbench.action.closeAllEditors'); await show(b); await selectLocal();
+  await phase('local-delete-ready'); await writeFile(`${required('BOXTEAM_LOCAL_SKILL_FAULT_READY')}.request`, 'ready\n');
+  await expect.poll(async () => {
+    try { await access(required('BOXTEAM_LOCAL_SKILL_FAULT_READY')); return true; }
+    catch (cause) { if (cause.code === 'ENOENT') return false; throw cause; }
+  }).toBe(true);
+  await phase('local-stale'); const localGroupCount = await groups.count(); await input.focus(); await page.keyboard.press('Alt+Enter');
+  await expect.poll(() => result.receipts.some(item => item.phase === result.phase && item.path === '/api/v1/resources/navigation' && item.status === 404)).toBe(true);
+  await expect(page.locator('.notification-list-item-message').filter({ hasText: '资源不存在' })).toBeVisible();
+  await expect(groups).toHaveCount(localGroupCount); await expect(page.locator('.tab').filter({ hasText: 'SKILL.md' })).toHaveCount(0); result.localStale = true;
+  await phase('local-fresh'); await show(b); await expect(local(b)).toHaveCount(1); await expect(local(b)).toContainText('local-new');
+  await expect(local(b)).not.toContainText('network-demo'); await page.keyboard.press('Escape'); expect(currentReads()).toEqual([]); result.localFresh = true;
   await command('workbench.action.closeAllEditors'); await show(b); await select(b, 7);
   await phase('invalidate-ready');
   await writeFile(`${required('BOXTEAM_SKILL_FAULT_READY')}.request`, 'ready\n');
@@ -119,6 +148,10 @@ try {
   const metadata = result.receipts.filter(item => item.path === '/api/v1/resources/skill-sources');
   expect(metadata.length).toBeGreaterThan(0);
   expect(metadata.every(item => item.data.entries.every(entry => !('content' in entry) && !('fetch' in entry) && !('url' in entry)))).toBe(true);
+  const localMetadata = result.receipts.filter(item => item.path === '/api/v1/resources/local-skills');
+  expect(localMetadata.length).toBeGreaterThan(0);
+  expect(localMetadata.every(item => item.data.entries.every(entry => entry.node.resource_shape === 'file' && entry.node.operations.includes('read')
+    && !('content' in entry) && !('revision' in entry)))).toBe(true);
   expect(result.forbiddenWrites).toEqual([]); expect(result.pageErrors).toEqual([]); await phase('complete');
 } catch (cause) { failure = cause; result.error = String(cause.stack ?? cause); }
 finally {

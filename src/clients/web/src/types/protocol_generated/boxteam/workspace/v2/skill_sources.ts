@@ -5,6 +5,7 @@
 // source: boxteam/workspace/v2/skill_sources.proto
 
 /* eslint-disable */
+import { ResourceNavigationNodeDTO } from "./public.js";
 
 export const protobufPackage = "boxteam.workspace.v2";
 
@@ -27,6 +28,17 @@ export interface SkillSourceMetadataDTO {
 export interface SkillSourcesMetadataDTO {
   workspace_id: string;
   entries: SkillSourceMetadataDTO[];
+}
+
+/** 本地固定 Skill 根的一层文件发现，能力与只读打开共用原导航节点。 */
+export interface LocalSkillMetadataDTO {
+  name: string;
+  node: ResourceNavigationNodeDTO | undefined;
+}
+
+export interface LocalSkillsMetadataDTO {
+  workspace_id: string;
+  entries: LocalSkillMetadataDTO[];
 }
 
 function createBaseSkillSourcesRefreshDTO(): SkillSourcesRefreshDTO {
@@ -149,6 +161,78 @@ export const SkillSourcesMetadataDTO: MessageFns<SkillSourcesMetadataDTO> = {
     const message = createBaseSkillSourcesMetadataDTO();
     message.workspace_id = object.workspace_id ?? "";
     message.entries = object.entries?.map((e) => SkillSourceMetadataDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseLocalSkillMetadataDTO(): LocalSkillMetadataDTO {
+  return { name: "", node: undefined };
+}
+
+export const LocalSkillMetadataDTO: MessageFns<LocalSkillMetadataDTO> = {
+  fromJSON(object: any): LocalSkillMetadataDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      node: isSet(object.node) ? ResourceNavigationNodeDTO.fromJSON(object.node) : undefined,
+    };
+  },
+
+  toJSON(message: LocalSkillMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.node !== undefined) {
+      obj.node = ResourceNavigationNodeDTO.toJSON(message.node);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LocalSkillMetadataDTO>, I>>(base?: I): LocalSkillMetadataDTO {
+    return LocalSkillMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LocalSkillMetadataDTO>, I>>(object: I): LocalSkillMetadataDTO {
+    const message = createBaseLocalSkillMetadataDTO();
+    message.name = object.name ?? "";
+    message.node = (object.node !== undefined && object.node !== null)
+      ? ResourceNavigationNodeDTO.fromPartial(object.node)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLocalSkillsMetadataDTO(): LocalSkillsMetadataDTO {
+  return { workspace_id: "", entries: [] };
+}
+
+export const LocalSkillsMetadataDTO: MessageFns<LocalSkillsMetadataDTO> = {
+  fromJSON(object: any): LocalSkillsMetadataDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => LocalSkillMetadataDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: LocalSkillsMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => LocalSkillMetadataDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LocalSkillsMetadataDTO>, I>>(base?: I): LocalSkillsMetadataDTO {
+    return LocalSkillsMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LocalSkillsMetadataDTO>, I>>(object: I): LocalSkillsMetadataDTO {
+    const message = createBaseLocalSkillsMetadataDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.entries = object.entries?.map((e) => LocalSkillMetadataDTO.fromPartial(e)) || [];
     return message;
   },
 };

@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from urllib.error import URLError
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.api.deps import (
@@ -33,10 +33,12 @@ from app.gateway.federation.errors import FederationError
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationBudget,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
 from app.schemas.internal_v2.skill_sources import (
+    LocalSkillsMetadataDTO,
     SkillSourceMetadataDTO,
     SkillSourcesMetadataDTO,
     SkillSourcesRefreshDTO,
@@ -89,6 +91,38 @@ from app.services.infrastructure.workspace_service import WorkspaceService
 router = APIRouter(prefix="/resources", tags=["resources"])
 
 
+@contextmanager
+def _navigation_errors() -> Iterator[None]:
+    """固定根发现与精确导航共用原错误归属和 HTTP 状态。"""
+    try:
+        yield
+    except ResourceUriGrammarError as error:
+        raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
+    except ResourceUriResolveError as error:
+        status = 404 if error.reason_code == "unknown_resource" else 403
+        raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
+    except ResourceFileOperationError as error:
+        raise HTTPException(400, detail=error.detail()) from error
+    except (OSError, UnicodeError) as error:
+        raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
+
+
+@router.get("/local-skills", response_model=APIResponse[LocalSkillsMetadataDTO], summary="发现工作区本地 Skill 文件")
+async def list_local_skills(
+    request: Request, budget: Annotated[ResourceNavigationBudget, Query()],
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[ResourceNavigation, Depends(get_resource_navigation)],
+) -> APIResponse[LocalSkillsMetadataDTO]:
+    with _navigation_errors():
+        deadline = navigation_deadline(budget, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
+        result = await owner.local_skill_metadata(budget, deadline=deadline)
+        envelope = APIResponse(data=result, request_id=request_id)
+        if len(envelope.model_dump_json().encode("utf-8")) > budget.max_response_bytes:
+            raise ResourceFileOperationError("output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit")
+        ResourceNavigation._check_deadline(deadline)
+        return envelope
+
+
 @router.get("/skill-sources", response_model=APIResponse[SkillSourcesMetadataDTO], summary="发现工作区配置的 Skill 来源")
 async def list_skill_sources(
     _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
@@ -117,32 +151,24 @@ async def navigate_resource(
     _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
     *, owner: Annotated[ResourceNavigation, Depends(get_resource_navigation)],
 ):
-    try:
-        deadline = navigation_deadline(body, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
-        result = await owner.navigate(body, local_gateway_id=require_current_gateway_id("资源导航"), deadline=deadline)
-        envelope = APIResponse(data=result, request_id=request_id)
-        if len(envelope.model_dump_json().encode("utf-8")) > body.max_response_bytes:
-            raise ResourceFileOperationError(
-                "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
-            )
-        ResourceNavigation._check_deadline(deadline)
-        return envelope
-    except ResourceUriGrammarError as error:
-        raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
-    except ResourceUriResolveError as error:
-        status = 404 if error.reason_code == "unknown_resource" else 403
-        raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
-    except ResourceFileOperationError as error:
-        raise HTTPException(400, detail=error.detail()) from error
-    except FederationError as error:
-        raise HTTPException(409, detail=error.to_wire()) from error
-    except httpx.HTTPStatusError as error:
-        failure = navigation_http_error(error, uri=body.uri, request_id=request_id)
-        raise HTTPException(error.response.status_code, detail=str(failure)) from failure
-    except httpx.RequestError as error:
-        raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
-    except (OSError, UnicodeError) as error:
-        raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
+    with _navigation_errors():
+        try:
+            deadline = navigation_deadline(body, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
+            result = await owner.navigate(body, local_gateway_id=require_current_gateway_id("资源导航"), deadline=deadline)
+            envelope = APIResponse(data=result, request_id=request_id)
+            if len(envelope.model_dump_json().encode("utf-8")) > body.max_response_bytes:
+                raise ResourceFileOperationError(
+                    "output_limit_exceeded", "导航响应及请求回执超过总字节上限", reason="response_byte_limit",
+                )
+            ResourceNavigation._check_deadline(deadline)
+            return envelope
+        except FederationError as error:
+            raise HTTPException(409, detail=error.to_wire()) from error
+        except httpx.HTTPStatusError as error:
+            failure = navigation_http_error(error, uri=body.uri, request_id=request_id)
+            raise HTTPException(error.response.status_code, detail=str(failure)) from failure
+        except httpx.RequestError as error:
+            raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
 
 
 @router.get("/agent-spec", response_model=APIResponse[ResourceNavigationResultDTO], summary="发现工作区根 AGENTS 来源")

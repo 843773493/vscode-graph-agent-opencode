@@ -69,18 +69,23 @@ class ResourceNavigationSearchOptions(BaseModel):
         return self
 
 
-class ResourceNavigationRequest(BaseModel):
+class ResourceNavigationBudget(BaseModel):
+    """固定根只读发现和文件导航共用的执行与输出预算。"""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    uri: str = Field(min_length=1)
-    operation: ResourceNavigationOperation
-    query: str | None = None
     limit: int = Field(default=100, ge=1, le=1000)
-    max_bytes: int = Field(default=65536, ge=1, le=33554432)
-    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
     timeout_ms: int = Field(default=10000, ge=1, le=30000)
     scan_limit: int = Field(default=10000, ge=1, le=100000)
     max_response_bytes: int = Field(default=1048576, ge=1024, le=50331648)
+
+
+class ResourceNavigationRequest(ResourceNavigationBudget):
+    uri: str = Field(min_length=1)
+    operation: ResourceNavigationOperation
+    query: str | None = None
+    max_bytes: int = Field(default=65536, ge=1, le=33554432)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
     read_format: Literal["text", "auto"] = "text"
     line_offset: int | None = Field(default=None, ge=1)
     max_lines: int | None = Field(default=None, ge=1)

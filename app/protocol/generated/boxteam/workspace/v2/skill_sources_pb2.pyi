@@ -1,3 +1,4 @@
+from boxteam.workspace.v2 import public_pb2 as _public_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -37,3 +38,19 @@ class SkillSourcesMetadataDTO(_message.Message):
     workspace_id: str
     entries: _containers.RepeatedCompositeFieldContainer[SkillSourceMetadataDTO]
     def __init__(self, workspace_id: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[SkillSourceMetadataDTO, _Mapping]]] = ...) -> None: ...
+
+class LocalSkillMetadataDTO(_message.Message):
+    __slots__ = ("name", "node")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    NODE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    node: _public_pb2.ResourceNavigationNodeDTO
+    def __init__(self, name: _Optional[str] = ..., node: _Optional[_Union[_public_pb2.ResourceNavigationNodeDTO, _Mapping]] = ...) -> None: ...
+
+class LocalSkillsMetadataDTO(_message.Message):
+    __slots__ = ("workspace_id", "entries")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    entries: _containers.RepeatedCompositeFieldContainer[LocalSkillMetadataDTO]
+    def __init__(self, workspace_id: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[LocalSkillMetadataDTO, _Mapping]]] = ...) -> None: ...

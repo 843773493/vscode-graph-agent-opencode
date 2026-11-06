@@ -40,22 +40,22 @@ test('同名 Skill 按完整 owner 和原来源 URI 分别保留，浏览只读 
   expect(result.requests.every(item => item.method === 'GET')).toBe(true);
   expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
 });
-test('同次 provide 的连续筛选只发现一次，两种 metadata 均不按字符重拉', async () => {
+test('同次 provide 的连续筛选只发现一次，三种 metadata 均不按字符重拉', async () => {
   const result = await exercise('reuse');
-  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(4);
+  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(6);
   expect(result.snapshots.map(rows => rows.length)).toEqual([4, 4, 1, 2, 6]);
   expect(result.snapshots[2][0].id).toBe('no-sources');
   expect(result.snapshots[0].every(item => item.highlights.label.length)).toBe(true);
 });
 test('发现未完成时修改筛选不取消共享读取，只有最新过滤结果发布', async () => {
   const result = await exercise('filter-pending');
-  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(4);
+  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(6);
   expect(result.aborted).toBe(0); expect(result.rows).toHaveLength(4);
   expect(result.rows.every(item => item.label.startsWith('同名'))).toBe(true);
 });
 test('重新打开重新发现 owner 当前接受的 metadata', async () => {
   const result = await exercise('reopen');
-  expect(workspaceReads(result)).toHaveLength(2); expect(metadata(result)).toHaveLength(8);
+  expect(workspaceReads(result)).toHaveLength(2); expect(metadata(result)).toHaveLength(12);
   expect(result.snapshots[0].filter(item => item.label.startsWith('同名')).every(item => item.label.endsWith('1'))).toBe(true);
   expect(result.snapshots[1].filter(item => item.label.startsWith('同名')).every(item => item.label.endsWith('2'))).toBe(true);
 });
@@ -64,10 +64,45 @@ for (const mode of ['close', 'identity', 'gateway']) test(`${mode}取消在途 m
   expect(result.aborted).toBeGreaterThan(0); expect(result.references).toEqual([]); expect(result.opened).toEqual([]);
   expect(result.rows.map(item => item.id)).toEqual(mode === 'close' ? [] : ['source-access-invalidated']);
 });
-test('四个 owner 的两种 metadata 共用真实三并发，第四个请求等待空位', async () => {
+test('四个 owner 的三种 metadata 共用真实三并发，第四个请求等待空位', async () => {
   const result = await exercise('parallel');
   expect(result.maximum).toBe(3); expect(result.barrierRequests).toBe(3);
-  expect(metadata(result)).toHaveLength(8); expect(result.rows).toHaveLength(12);
+  expect(metadata(result)).toHaveLength(12); expect(result.rows).toHaveLength(12);
+});
+test('本地与配置同名来源按完整 owner 和原URI分别保留，筛选不再发现', async () => {
+  const result = await exercise('local-reuse');
+  expect(result.rows.filter(item => item.description?.startsWith('本地 Skill'))).toHaveLength(2);
+  expect(skillRows(result)).toHaveLength(4);
+  expect(new Set(result.rows.map(item => item.id)).size).toBe(8);
+  expect(result.snapshots.map(rows => rows.length)).toEqual([6, 6, 1, 2, 8]);
+  expect(metadata(result)).toHaveLength(6); expect(workspaceReads(result)).toHaveLength(1);
+  expect(result.requests.every(item => item.method === 'GET')).toBe(true);
+  expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+test('本地分支失败仍保留AGENTS与HTTP来源和原request_id', async () => {
+  const result = await exercise('fail-local');
+  expect(result.rows.filter(item => item.selectable)).toHaveLength(6);
+  expect(result.rows.filter(item => !item.selectable)).toMatchObject([{ label: expect.stringContaining('本地 Skill'), detail: 'request_id: source-failure-id' }]);
+});
+for (const mode of ['local-mismatch', 'local-unsupported', 'local-unreadable']) test(`${mode}不伪造本地来源读取能力`, async () => {
+  const result = await exercise(mode);
+  expect(result.rows.filter(item => item.description?.startsWith('本地 Skill'))).toHaveLength(mode === 'local-mismatch' ? 1 : 0);
+  expect(result.rows.filter(item => !item.selectable)).toHaveLength(mode === 'local-mismatch' ? 1 : 2);
+  expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+test('关闭选择器实际取消本地metadata且不发布迟到候选', async () => {
+  const result = await exercise('local-close');
+  expect(result.rows).toEqual([]); expect(result.aborted).toBeGreaterThan(0);
+  expect(result.requests.some(item => item.path.includes('local-skills'))).toBe(true);
+  expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+test('本地接受沿原Opener和SourceDocuments投影传递精确owner', async () => {
+  const result = await exercise('local-open');
+  expect(result.errors).toEqual([]); expect(result.opened).toHaveLength(1);
+  expect(result.opened[0].source).toMatchObject({ gatewayId: `gateway_${'b'.repeat(32)}`, uri: expect.stringContaining('/local-package/SKILL.md') });
+  expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
+  expect(result.requests.filter(item => item.path.endsWith('/parse'))).toHaveLength(1);
+  expect(metadata(result)).toHaveLength(6);
 });
 for (const mode of ['fail-skill', 'fail-agent']) test(`${mode}只报告独立分支失败并保留其他来源`, async () => {
   const result = await exercise(mode), failure = result.rows.filter(item => !item.selectable);

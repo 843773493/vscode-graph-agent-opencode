@@ -3,12 +3,13 @@
 /* eslint-disable */
 
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_boxteam_workspace_v2_public } from "./public_pb.js";
 
 /**
  * Describes the file boxteam/workspace/v2/skill_sources.proto.
  */
 export const file_boxteam_workspace_v2_skill_sources = /*@__PURE__*/
-  fileDesc("Cihib3h0ZWFtL3dvcmtzcGFjZS92Mi9za2lsbF9zb3VyY2VzLnByb3RvEhRib3h0ZWFtLndvcmtzcGFjZS52MiJTChZTa2lsbFNvdXJjZXNSZWZyZXNoRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRIQCghyZXZpc2lvbhgCIAEoCRIRCglhdmFpbGFibGUYAyABKAgiiAEKFlNraWxsU291cmNlTWV0YWRhdGFEVE8SDAoEbmFtZRgBIAEoCRITCgtkaXNwbGF5X3VyaRgCIAEoCRIRCglhdmFpbGFibGUYAyABKAgSFwoKZXJyb3JfY29kZRgEIAEoCUgAiAEBEhAKCHByaW9yaXR5GAUgASgDQg0KC19lcnJvcl9jb2RlIm4KF1NraWxsU291cmNlc01ldGFkYXRhRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRI9CgdlbnRyaWVzGAIgAygLMiwuYm94dGVhbS53b3Jrc3BhY2UudjIuU2tpbGxTb3VyY2VNZXRhZGF0YURUT2IGcHJvdG8z");
+  fileDesc("Cihib3h0ZWFtL3dvcmtzcGFjZS92Mi9za2lsbF9zb3VyY2VzLnByb3RvEhRib3h0ZWFtLndvcmtzcGFjZS52MiJTChZTa2lsbFNvdXJjZXNSZWZyZXNoRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRIQCghyZXZpc2lvbhgCIAEoCRIRCglhdmFpbGFibGUYAyABKAgiiAEKFlNraWxsU291cmNlTWV0YWRhdGFEVE8SDAoEbmFtZRgBIAEoCRITCgtkaXNwbGF5X3VyaRgCIAEoCRIRCglhdmFpbGFibGUYAyABKAgSFwoKZXJyb3JfY29kZRgEIAEoCUgAiAEBEhAKCHByaW9yaXR5GAUgASgDQg0KC19lcnJvcl9jb2RlIm4KF1NraWxsU291cmNlc01ldGFkYXRhRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRI9CgdlbnRyaWVzGAIgAygLMiwuYm94dGVhbS53b3Jrc3BhY2UudjIuU2tpbGxTb3VyY2VNZXRhZGF0YURUTyJkChVMb2NhbFNraWxsTWV0YWRhdGFEVE8SDAoEbmFtZRgBIAEoCRI9CgRub2RlGAIgASgLMi8uYm94dGVhbS53b3Jrc3BhY2UudjIuUmVzb3VyY2VOYXZpZ2F0aW9uTm9kZURUTyJsChZMb2NhbFNraWxsc01ldGFkYXRhRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRI8CgdlbnRyaWVzGAIgAygLMisuYm94dGVhbS53b3Jrc3BhY2UudjIuTG9jYWxTa2lsbE1ldGFkYXRhRFRPYgZwcm90bzM", [file_boxteam_workspace_v2_public]);
 
 /**
  * Describes the message boxteam.workspace.v2.SkillSourcesRefreshDTO.
@@ -30,4 +31,18 @@ export const SkillSourceMetadataDTOSchema = /*@__PURE__*/
  */
 export const SkillSourcesMetadataDTOSchema = /*@__PURE__*/
   messageDesc(file_boxteam_workspace_v2_skill_sources, 2);
+
+/**
+ * Describes the message boxteam.workspace.v2.LocalSkillMetadataDTO.
+ * Use `create(LocalSkillMetadataDTOSchema)` to create a new message.
+ */
+export const LocalSkillMetadataDTOSchema = /*@__PURE__*/
+  messageDesc(file_boxteam_workspace_v2_skill_sources, 3);
+
+/**
+ * Describes the message boxteam.workspace.v2.LocalSkillsMetadataDTO.
+ * Use `create(LocalSkillsMetadataDTOSchema)` to create a new message.
+ */
+export const LocalSkillsMetadataDTOSchema = /*@__PURE__*/
+  messageDesc(file_boxteam_workspace_v2_skill_sources, 4);
 

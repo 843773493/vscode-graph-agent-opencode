@@ -34,6 +34,11 @@ def test_skill_metadata_roots_follow_actual_routes(http_openapi: JsonSchemaValue
     envelope = http_openapi["components"]["schemas"][response["$ref"].rsplit("/", 1)[1]]
     assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/SkillSourcesMetadataDTO")
     assert {"SkillSourcesMetadataDTO", "SkillSourceMetadataDTO"} <= HTTP_JSON_DESCRIPTORS.keys()
+    local = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/resources/local-skills"]["get"]
+    local_schema = local["responses"]["200"]["content"]["application/json"]["schema"]
+    local_envelope = http_openapi["components"]["schemas"][local_schema["$ref"].rsplit("/", 1)[1]]
+    assert local_envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/LocalSkillsMetadataDTO")
+    assert {"LocalSkillsMetadataDTO", "LocalSkillMetadataDTO"} <= HTTP_JSON_DESCRIPTORS.keys()
     assert skill_sources_pb2.SkillSourceMetadataDTO.DESCRIPTOR.fields_by_name["priority"].type == FieldDescriptorProto.TYPE_INT64
     assert_public_http_schemas(http_openapi)
     assert http_openapi == original
@@ -42,10 +47,13 @@ def test_skill_metadata_roots_follow_actual_routes(http_openapi: JsonSchemaValue
 @pytest.mark.parametrize("snapshot", OPENAPI_SNAPSHOTS)
 def test_offline_snapshots_include_exact_metadata_and_route(http_openapi: JsonSchemaValue, snapshot: str) -> None:
     offline = cast(JsonSchemaValue, load_openapi_snapshot(snapshot))
-    for model in ("SkillSourcesMetadataDTO", "SkillSourceMetadataDTO", "APIResponse_SkillSourcesMetadataDTO_"):
+    for model in ("SkillSourcesMetadataDTO", "SkillSourceMetadataDTO", "APIResponse_SkillSourcesMetadataDTO_",
+                  "LocalSkillsMetadataDTO", "LocalSkillMetadataDTO", "APIResponse_LocalSkillsMetadataDTO_"):
         assert offline["components"]["schemas"][model] == http_openapi["components"]["schemas"][model]
     path = "/api/v1/workspaces/{workspace_id}/resources/skill-sources"
     assert offline["paths"][path] == http_openapi["paths"][path]
+    local_path = "/api/v1/workspaces/{workspace_id}/resources/local-skills"
+    assert offline["paths"][local_path] == http_openapi["paths"][local_path]
     assert set(offline["components"]["schemas"]["SkillSourceMetadataDTO"]["properties"]) == {
         "name", "display_uri", "available", "error_code", "priority",
     }
@@ -57,6 +65,9 @@ def test_offline_snapshots_include_exact_metadata_and_route(http_openapi: JsonSc
     ("SkillSourceMetadataDTO", "display_uri", {"type": "integer"}),
     ("SkillSourceMetadataDTO", "available", {"type": "string"}),
     ("SkillSourceMetadataDTO", "priority", {"type": "string"}),
+    ("LocalSkillsMetadataDTO", "workspace_id", {"type": "integer"}),
+    ("LocalSkillsMetadataDTO", "entries", {"type": "array", "items": {"type": "string"}}),
+    ("LocalSkillMetadataDTO", "node", {"type": "string"}),
 ])
 def test_skill_metadata_rejects_recursive_structure_drift(
     http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -67,7 +78,7 @@ def test_skill_metadata_rejects_recursive_structure_drift(
     assert "/" + field in str(caught.value)
 
 
-@pytest.mark.parametrize("model", ["SkillSourcesMetadataDTO", "SkillSourceMetadataDTO"])
+@pytest.mark.parametrize("model", ["SkillSourcesMetadataDTO", "SkillSourceMetadataDTO", "LocalSkillsMetadataDTO", "LocalSkillMetadataDTO"])
 def test_candidate_metadata_drift_stops_snapshot_publication(
     skill_descriptor_bundle: FileDescriptorSet, tmp_path: Path, model: str,
     openapi_output: Path, openapi_export: Callable[[Path, Path], None],

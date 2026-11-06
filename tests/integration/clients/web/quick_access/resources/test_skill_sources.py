@@ -1,4 +1,4 @@
-"""真实 Gateway／Workbench 消费 HTTP Skill accepted 快照，不执行 Agent。"""
+"""真实 Gateway／Workbench 发现本地与 HTTP Skill，经原只读入口打开。"""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 
-async def test_configured_http_skills_discover_open_and_fail_without_runtime_or_refetch(
+async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_refetch(
     request: pytest.FixtureRequest, http_skill_server: HttpSkillServer,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
 ) -> None:
@@ -81,10 +81,17 @@ async def test_configured_http_skills_discover_open_and_fail_without_runtime_or_
     other_config.write_text(json.dumps(config, ensure_ascii=False))
     (workspace / "AGENTS.md").write_text("# 工作区 A 根来源\n", encoding="utf-8")
     (other / "AGENTS.md").write_text("# 工作区 B 根来源\n", encoding="utf-8")
+    for root, label in ((workspace, "A"), (other, "B")):
+        local_skill = root / ".boxteam/skills/network-demo/SKILL.md"
+        local_skill.parent.mkdir(parents=True, exist_ok=True)
+        local_skill.write_text(f"---\nname: different-runtime-name\n---\nLOCAL-SKILL-{label} Ω\n", encoding="utf-8")
+        (root / ".boxteam/skills/missing-entry/nested").mkdir(parents=True)
+        (root / ".boxteam/skills/missing-entry/nested/SKILL.md").write_text("不是顶层入口", encoding="utf-8")
     registered = await client.post("/api/gateway/managed-workspaces", json={"root_path": str(other), "name": "Skill B"})
     assert registered.status_code == 200, registered.text
     assert len(source.requests) == 4
     result_path, fault_ready = context.artifacts_dir / "skill-sources.json", context.artifacts_dir / "fault-ready.json"
+    local_fault_ready = context.artifacts_dir / "local-delete-ready.json"
     initial_count = len(source.requests)
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
@@ -93,17 +100,23 @@ async def test_configured_http_skills_discover_open_and_fail_without_runtime_or_
         task = asyncio.create_task(asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
                  "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_SKILL_FAULT_READY": str(fault_ready),
+                 "BOXTEAM_LOCAL_SKILL_FAULT_READY": str(local_fault_ready),
                  "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "skill-sources.png"),
                  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
             capture_output=True, text=True, timeout=195, check=False))
         async with asyncio.timeout(185):
             while not task.done():
-                if fault_ready.with_name(fault_ready.name + ".request").is_file():
+                if local_fault_ready.with_name(local_fault_ready.name + ".request").is_file() and not local_fault_ready.exists():
+                    (other / ".boxteam/skills/network-demo/SKILL.md").unlink()
+                    added = other / ".boxteam/skills/local-new/SKILL.md"
+                    added.parent.mkdir()
+                    added.write_text("LOCAL-NEW-SKILL-B\n", encoding="utf-8")
+                    local_fault_ready.touch()
+                if fault_ready.with_name(fault_ready.name + ".request").is_file() and not fault_ready.exists():
                     assert len(source.requests) == initial_count, "浏览、筛选、取消和原只读打开不得重新获取 manual 来源"
                     # 具名外部来源故障：200 非 UTF-8，经原 refresh 接受为 unavailable，不改 accepted 存储。
                     source.variants["/b/higher/SKILL.md"] = (b"\xff", '"invalid-utf8"')
                     fault_ready.touch()
-                    break
                 await asyncio.sleep(0.05)
         completed = await task
     (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
@@ -118,7 +131,8 @@ async def test_configured_http_skills_discover_open_and_fail_without_runtime_or_
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in ("metadataOnly", "filterReuse", "scopeCancel", "sameNameSources", "originalOpen",
-                                      "readOnly", "sideAndOwner", "explicitOwner", "originalFailure", "unavailable"))
+                                      "readOnly", "sideAndOwner", "explicitOwner", "originalFailure", "unavailable",
+                                      "localDiscovery", "localOpen", "localReadOnly", "localStale", "localFresh"))
     assert result["forbiddenWrites"] == []
     assert len(source.requests) == initial_count + 2, "只允许显式 refresh 获取两项；发现／错误展示不自动重试"
     with provider.control._condition:

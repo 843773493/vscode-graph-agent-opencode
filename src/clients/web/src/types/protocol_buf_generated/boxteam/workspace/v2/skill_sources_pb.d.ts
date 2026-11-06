@@ -4,6 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
+import type { ResourceNavigationNodeDTO } from "./public_pb.js";
 
 /**
  * Describes the file boxteam/workspace/v2/skill_sources.proto.
@@ -96,4 +97,48 @@ export declare type SkillSourcesMetadataDTO = Message<"boxteam.workspace.v2.Skil
  * Use `create(SkillSourcesMetadataDTOSchema)` to create a new message.
  */
 export declare const SkillSourcesMetadataDTOSchema: GenMessage<SkillSourcesMetadataDTO>;
+
+/**
+ * 本地固定 Skill 根的一层文件发现，能力与只读打开共用原导航节点。
+ *
+ * @generated from message boxteam.workspace.v2.LocalSkillMetadataDTO
+ */
+export declare type LocalSkillMetadataDTO = Message<"boxteam.workspace.v2.LocalSkillMetadataDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceNavigationNodeDTO node = 2;
+   */
+  node?: ResourceNavigationNodeDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LocalSkillMetadataDTO.
+ * Use `create(LocalSkillMetadataDTOSchema)` to create a new message.
+ */
+export declare const LocalSkillMetadataDTOSchema: GenMessage<LocalSkillMetadataDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LocalSkillsMetadataDTO
+ */
+export declare type LocalSkillsMetadataDTO = Message<"boxteam.workspace.v2.LocalSkillsMetadataDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.LocalSkillMetadataDTO entries = 2;
+   */
+  entries: LocalSkillMetadataDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LocalSkillsMetadataDTO.
+ * Use `create(LocalSkillsMetadataDTOSchema)` to create a new message.
+ */
+export declare const LocalSkillsMetadataDTOSchema: GenMessage<LocalSkillsMetadataDTO>;
 

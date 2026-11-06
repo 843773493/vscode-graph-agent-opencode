@@ -32,8 +32,10 @@ from app.core.resource_uri import (
     file_uri_root,
     parse_resource_uri,
     resource_display_uri,
+    skill_display_uri,
 )
 from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationBudget,
     ResourceNavigationContextDTO,
     ResourceNavigationMatchDTO,
     ResourceNavigationNodeDTO,
@@ -41,6 +43,10 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationResultDTO,
     ResourceNavigationSearchOptions,
     ResourceNavigationStatDTO,
+)
+from app.schemas.internal_v2.skill_sources import (
+    LocalSkillMetadataDTO,
+    LocalSkillsMetadataDTO,
 )
 from app.services.infrastructure.resource_platform.sources.resource_search_ignore import (
     IgnorePatternError,
@@ -122,7 +128,7 @@ NAVIGATION_DEADLINE_HEADER = "X-BoxTeam-Resource-Navigation-Deadline"
 
 
 def navigation_deadline(
-    request: ResourceNavigationRequest, *, deadline: float | None = None,
+    request: ResourceNavigationBudget, *, deadline: float | None = None,
     deadline_at: str | float | None = None,
 ) -> float:
     """查询限制不随路由改变；执行期限只能扣减，跨进程复用联邦 UTC 期限语义。"""
@@ -175,6 +181,63 @@ class ResourceNavigation:
         self._gateway_id = gateway_id
         self._artifact_reader = artifact_reader
         self._network_skill_reader = network_skill_reader
+
+    async def local_skill_metadata(
+        self, budget: ResourceNavigationBudget, *, deadline: float | None = None,
+    ) -> LocalSkillsMetadataDTO:
+        """只检查固定根下一层；不登记来源、读取正文或物化 runtime。"""
+        deadline = navigation_deadline(budget, deadline=deadline)
+        try:
+            async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                return await asyncio.to_thread(self._local_skill_metadata, budget, deadline)
+        except TimeoutError as error:
+            raise ResourceFileOperationError("output_limit_exceeded", "文件导航超过本次总期限", reason="deadline") from error
+
+    def _local_skill_metadata(self, budget: ResourceNavigationBudget, deadline: float) -> LocalSkillsMetadataDTO:
+        self._check_deadline(deadline)
+        if self._workspace_root is None or self._workspace_id is None:
+            raise ResourceUriResolveError("unknown_resource", "此 owner 未公布工作区本地 Skill 根")
+        collection = self._skill_collection("workspace")
+        result = LocalSkillsMetadataDTO(workspace_id=self._workspace_id, entries=())
+        if not collection.exists():
+            return result
+        if not collection.is_dir():
+            raise ResourceUriResolveError("capability_denied", "Skill 固定根不是目录")
+        before = self._stat(collection)
+        entries: list[LocalSkillMetadataDTO] = []
+        result_bytes = len(result.model_dump_json().encode("utf-8"))
+        with os.scandir(collection) as children:
+            for scanned, child in enumerate(children, 1):
+                self._check_deadline(deadline)
+                if scanned > budget.scan_limit:
+                    raise ResourceFileOperationError("output_limit_exceeded", "目录扫描达到本次节点上限", reason="scan_limit")
+                package = collection / child.name
+                if not package.is_dir() and not package.is_symlink():
+                    continue
+                # 缺少入口的目录不是 Skill；包根链接仍必须交原边界拒绝。
+                if not package.is_symlink() and not (package / "SKILL.md").exists():
+                    continue
+                uri = skill_display_uri(scope="workspace", scope_id=self._workspace_id, skill_name=child.name)
+                parsed = parse_resource_uri(uri)
+                root, parts = self._root(parsed)
+                path = self._contained(root, parts, parsed)
+                node = self._node(parsed, path)
+                if node.resource_shape != "file":
+                    continue
+                if child.name.startswith("http_"):
+                    raise ResourceUriResolveError("capability_denied", "本地 Skill URI 与配置来源路由冲突，无法按本地来源打开")
+                entry = LocalSkillMetadataDTO(name=child.name, node=node)
+                if len(entries) == budget.limit:
+                    raise ResourceFileOperationError("output_limit_exceeded", "本地 Skill 来源超过本次条数上限，无法提供完整列表", reason="entry_limit")
+                result_bytes += len(entry.model_dump_json().encode("utf-8")) + bool(entries)
+                if result_bytes > budget.max_response_bytes:
+                    raise ResourceFileOperationError("output_limit_exceeded", "资源导航响应超过总字节上限", reason="response_byte_limit")
+                entries.append(entry)
+        self._skill_collection("workspace")
+        if self._stat(collection) != before:
+            raise ResourceFileOperationError("execution_failed", "目录在枚举期间改变，请重新读取", reason="directory_changed")
+        self._check_deadline(deadline)
+        return result.model_copy(update={"entries": tuple(sorted(entries, key=lambda entry: entry.name))})
 
     def input_uri(self, value: str) -> str:
         """原生输入只在固定文件 owner 解释；资源 URI 留给唯一 grammar 校验。"""
@@ -791,25 +854,29 @@ class ResourceNavigation:
             return self._workspace_root, ("AGENTS.md",)
         if parsed.kind != "skills":
             raise ResourceUriResolveError("capability_denied", "该资源由领域 owner 访问，不公开文件树")
-        if parsed.scope == "workspace" and self._workspace_root is not None:
-            collection = self._workspace_root / ".boxteam" / "skills"
-        elif parsed.scope == "inline" and self._workspace_root is not None:
-            collection = self._project_root / "resources" / "skills"
-        elif parsed.scope == "gateway" and self._gateway_skills_root is not None:
-            collection = self._gateway_skills_root
-        else:
-            raise ResourceUriResolveError("unknown_resource", "此 owner 未公布对应的 Skill 根")
-        boundary = self._workspace_root if parsed.scope == "workspace" else (
-            self._project_root if parsed.scope == "inline" else collection
-        )
-        if collection.is_symlink() or not _resolve_path(collection).is_relative_to(boundary):
-            raise ResourceUriResolveError("capability_denied", "Skill 固定根越出 owner 边界")
+        collection = self._skill_collection(parsed.scope)
         root = collection / parsed.tail_segments[0]
         if root.is_symlink() or not _resolve_path(root).is_relative_to(_resolve_path(collection)):
             raise ResourceUriResolveError("capability_denied", "Skill 包根越出固定根")
         if not root.is_dir():
             raise ResourceUriResolveError("unknown_resource", "Skill 包不存在")
         return _resolve_path(root), parsed.tail_segments[1:]
+
+    def _skill_collection(self, scope: str) -> Path:
+        if scope == "workspace" and self._workspace_root is not None:
+            collection = self._workspace_root / ".boxteam" / "skills"
+        elif scope == "inline" and self._workspace_root is not None:
+            collection = self._project_root / "resources" / "skills"
+        elif scope == "gateway" and self._gateway_skills_root is not None:
+            collection = self._gateway_skills_root
+        else:
+            raise ResourceUriResolveError("unknown_resource", "此 owner 未公布对应的 Skill 根")
+        boundary = self._workspace_root if scope == "workspace" else (
+            self._project_root if scope == "inline" else collection
+        )
+        if collection.is_symlink() or not _resolve_path(collection).is_relative_to(boundary):
+            raise ResourceUriResolveError("capability_denied", "Skill 固定根越出 owner 边界")
+        return collection
 
     def _contained(self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri) -> Path:
         resolved_root = _resolve_path(root)

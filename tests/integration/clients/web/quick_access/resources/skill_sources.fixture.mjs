@@ -34,11 +34,14 @@ export async function skillSourcesContract(mode) {
       if (mode === 'freeze') return new Promise(resolve => { releaseParse = () => resolve(result()); });
       return result();
     }
-    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources'].includes(path)) throw new Error(`非预期 Skill 请求: ${method} ${path}`);
-    const first = gateway === owners[0].gatewayId, skill = path.endsWith('skill-sources'), currentRound = round;
+    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills'].includes(path)) throw new Error(`非预期 Skill 请求: ${method} ${path}`);
+    const first = gateway === owners[0].gatewayId, skill = path.endsWith('skill-sources'), local = path.includes('local-skills'), currentRound = round;
     const result = () => {
-      if (first && (mode === 'fail-skill' && skill || mode === 'fail-agent' && !skill)) return Response.json({ detail: '具名来源边界失败', request_id: 'source-failure-id' },
+      if (first && (mode === 'fail-skill' && skill || mode === 'fail-agent' && !skill && !local || mode === 'fail-local' && local)) return Response.json({ detail: '具名来源边界失败', request_id: 'source-failure-id' },
         { status: 503, headers: { 'X-Request-ID': 'source-failure-id' } });
+      if (local) return ok({ workspace_id: first && mode === 'local-mismatch' ? '019a0000-0000-7000-8000-000000000099' : owners[0].workspaceId,
+        entries: mode.startsWith('local-') ? [{ name: `同名 Skill ${currentRound}`, node: { uri: skillUri('unused').replace('http_unused', 'local-package'),
+          resource_shape: mode === 'local-unsupported' ? 'directory' : 'file', operations: mode === 'local-unreadable' ? ['describe'] : ['describe', 'read'] } }] : [] });
       if (!skill) return ok({ node: { uri: agentsUri, resource_shape: 'file', operations: ['describe', 'read'] } });
       return ok({ workspace_id: first && mode === 'mismatch' ? '019a0000-0000-7000-8000-000000000099' : owners[0].workspaceId,
         entries: ['first', 'higher'].map((id, i) => ({ name: `同名 Skill ${currentRound}`, display_uri: skillUri(id),
@@ -48,7 +51,7 @@ export async function skillSourcesContract(mode) {
     init.signal.addEventListener('abort', () => { aborted++; });
     let response;
     if (mode === 'parallel' && !parallelReleased) response = new Promise(resolve => { parallel.push(() => resolve(result())); });
-    else if (skill && first && !releaseRead && ['close', 'identity', 'gateway', 'filter-pending', 'scope-pending'].includes(mode)) {
+    else if ((skill && mode !== 'local-close' || local && mode === 'local-close') && first && !releaseRead && ['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {
       response = new Promise(resolve => { releaseRead = () => resolve(result()); });
     } else response = Promise.resolve(result());
     return response.finally(() => { active--; });
@@ -80,18 +83,18 @@ export async function skillSourcesContract(mode) {
       await until(() => parallel.length === 3); barrierRequests = requests.filter(item => item.path.startsWith('/api/v1')).length;
       parallelReleased = true; parallel.forEach(release => release());
     }
-    if (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending'].includes(mode)) {
+    if (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {
       await until(() => releaseRead);
-      if (mode === 'close') lifetime.dispose();
+      if (mode === 'close' || mode === 'local-close') lifetime.dispose();
       else if (mode === 'identity') invalidateGatewayUserSession(0);
       else if (mode === 'gateway') workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
       else if (mode === 'scope-pending') { buttons.fire(picker.buttons[0]); await until(() => shows.length); }
       else { picker.value = 'resource 同名'; changes.fire(picker.value); }
       releaseRead();
-      if (['close', 'identity', 'gateway'].includes(mode)) await new Promise(resolve => setTimeout(resolve, 20));
+      if (['close', 'identity', 'gateway', 'local-close'].includes(mode)) await new Promise(resolve => setTimeout(resolve, 20));
       else await until(() => !picker.busy && picker.items.length > 0);
     } else await until(() => !picker.busy && picker.items.length > 0);
-    if (mode === 'reuse') for (const value of ['同', '同名', 'NO_MATCH', 'ag', '']) await filter(value);
+    if (mode === 'reuse' || mode === 'local-reuse') for (const value of ['同', '同名', 'NO_MATCH', 'ag', '']) await filter(value);
     if (mode === 'reopen') {
       snapshots.push(rows()); lifetime.dispose(); lifetime = provider.provide(picker, cancellation.token, { searchOwners: selected });
       await until(() => !picker.busy && round === 2); snapshots.push(rows());
@@ -99,8 +102,9 @@ export async function skillSourcesContract(mode) {
     if (['scope-change', 'scope-cancel'].includes(mode)) {
       buttons.fire(picker.buttons[0]); await until(() => shows.length && !picker.busy); snapshots.push(rows());
     }
-    if (['open', 'side', 'pinned', 'background', 'freeze'].includes(mode)) {
-      picker.activeItems = picker.selectedItems = [picker.items.find(item => item.id.startsWith(gatewayWorkspaceKey(owners[1])) && item.id.endsWith(skillUri('first')))];
+    if (['open', 'side', 'pinned', 'background', 'freeze', 'local-open'].includes(mode)) {
+      picker.activeItems = picker.selectedItems = [picker.items.find(item => item.id.startsWith(gatewayWorkspaceKey(owners[1]))
+        && (mode === 'local-open' ? item.description.startsWith('本地 Skill') : item.id.endsWith(skillUri('first'))))];
       accepts.fire({ inBackground: mode === 'background' });
       if (mode === 'freeze') {
         await until(() => releaseParse); groups.activeGroup = { id: 9 }; lifetime.dispose(); releaseParse();

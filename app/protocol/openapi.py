@@ -101,7 +101,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     )
 } | {
     name: f"{skill_sources_pb2.DESCRIPTOR.package}.{name}"
-    for name in ("SkillSourceMetadataDTO", "SkillSourcesMetadataDTO")
+    for name in ("SkillSourceMetadataDTO", "SkillSourcesMetadataDTO", "LocalSkillMetadataDTO", "LocalSkillsMetadataDTO")
 } | MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS
 
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
