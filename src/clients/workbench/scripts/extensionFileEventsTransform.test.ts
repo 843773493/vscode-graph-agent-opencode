@@ -11,7 +11,7 @@ import { ProgressLocation } from '../upstream/src/vs/platform/progress/common/pr
 import Severity from '../upstream/src/vs/base/common/severity.js';
 import { NotificationTelemetryId } from '../upstream/src/vs/platform/notification/common/notificationTelemetry.js';
 import { StorageScope, StorageTarget } from '../upstream/src/vs/platform/storage/common/storage.js';
-import { TargetUriTransformer, hostOwnsFileEventResource } from '../src/extensions/targetUris.js';
+import { TargetUriTransformer, assertHostWorkspaceEdit, hostOwnsFileEventResource } from '../src/extensions/targetUris.js';
 import { pinnedUpstreamCommit, sourceTransform } from './sourceTransform.mjs';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
@@ -43,10 +43,10 @@ test('编译执行原文件事件 owner：按宿主隔离广播、拒绝跨 view
   let code = owner.getText(parsed).replace(/^@extHostNamedCustomer\([^\n]*\)\s*/, '').replace(/^export class /, 'class ').replace(/^\s*@\w+\s+/gm, '');
   const javascript = ts.transpile(code, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
   const MainThread = new Function('DisposableMap', 'DisposableStore', 'CancellationTokenSource', 'raceCancellation',
-    'FileOperation', 'ProgressLocation', 'NotificationTelemetryId', 'Severity', 'URI', 'hostOwnsFileEventResource',
+    'FileOperation', 'ProgressLocation', 'NotificationTelemetryId', 'Severity', 'URI', 'hostOwnsFileEventResource', 'assertHostWorkspaceEdit',
     'ExtHostContext', 'StorageScope', 'StorageTarget', 'localize', 'reviveWorkspaceEditDto', `${javascript}\nreturn MainThreadFileSystemEventService;`)(
     DisposableMap, DisposableStore, CancellationTokenSource, raceCancellation, FileOperation, ProgressLocation,
-    NotificationTelemetryId, Severity, URI, hostOwnsFileEventResource, { ExtHostFileSystemEventService: {} }, StorageScope, StorageTarget,
+    NotificationTelemetryId, Severity, URI, hostOwnsFileEventResource, assertHostWorkspaceEdit, { ExtHostFileSystemEventService: {} }, StorageScope, StorageTarget,
     (key: string, ...args: unknown[]) => args.length ? String(args[0]) : key,
     (edit: unknown) => edit,
   ) as new (...args: unknown[]) => {

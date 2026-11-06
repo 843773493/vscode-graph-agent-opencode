@@ -27,3 +27,5 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 语言 Provider 在原 LanguageFeatureRegistry 的每个注册项绑定固定评分回调；归属在原排序和 exclusive 选择前生效，候选与 RelativePattern 只在评分时投向目标原生域，继续复用原 score／glob。共享注册表的缓存仍按原模型失效，不按当前焦点切换评分器；Web 原评分与 Provider 的 RPC／取消链保持。
 
 工作区符号沿原 Provider 登记发起宿主，明确范围在调用前选择完整 host view；原 API 无目录参数，部分视图不得先查询后过滤。符号与原 Provider／cacheId 绑定，resolve 沿同一 RPC；取消和注销不发布迟到结果。原无 scope 的窗口查询及 Web 窗口级能力保持。
+
+直接 workspace.applyEdit 复用原 MainThreadBulkEdits／BulkEditService，不增加编辑应用链。整批端点校验先于 revive，错误保留原 warn／false，代际关闭通过同一原 token 取消；BulkEditService 按实际完成资源区分取消后的零写入与已完成结果，不用关闭标志抹去已经发生的副作用。

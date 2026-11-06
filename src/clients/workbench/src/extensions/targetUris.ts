@@ -10,6 +10,7 @@ import { workspaceFileUri } from '../workspaceFiles.js';
 import type { IExtensionHost } from '../../upstream/src/vs/workbench/services/extensions/common/extensions.js';
 import { WorkspaceFolder } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import { IStoredWorkspaceFolder, toWorkspaceFolders } from '../../upstream/src/vs/platform/workspaces/common/workspaces.js';
+import type { IWorkspaceEditDto } from '../../upstream/src/vs/workbench/api/common/extHost.protocol.js';
 
 class TargetNativeUris extends ExtUri {
   constructor(private readonly windows: boolean) { super(() => windows); }
@@ -134,6 +135,17 @@ export function hostOwnsFileEventResource(host: IExtensionHost, uri: URI, parent
   if (!host.binding) return true;
   if (!(host.uriTransformer instanceof TargetUriTransformer)) throw new Error('Node 宿主缺少已绑定 URI transformer');
   return host.uriTransformer.ownsWorkspaceResource(uri) || host.uriTransformer.ownsConfigurationResource(uri, parent);
+}
+
+/** 编辑先核整批所有端点，不能先写合法首项再发现跨视图后项。 */
+export function assertHostWorkspaceEdit(host: IExtensionHost, edit: IWorkspaceEditDto): void {
+  for (const value of edit.edits) {
+    const resources = ['resource' in value ? value.resource : undefined,
+      'oldResource' in value ? value.oldResource : undefined, 'newResource' in value ? value.newResource : undefined];
+    for (const raw of resources) {
+      if (raw && !hostOwnsFileEventResource(host, URI.revive(raw))) throw new Error('扩展编辑超出发起宿主工作区视图：' + URI.revive(raw).toString());
+    }
+  }
 }
 
 /** 诊断的文档链接可以指向该宿主扩展内的帮助文件；业务文档仍须属于 workspace view。 */

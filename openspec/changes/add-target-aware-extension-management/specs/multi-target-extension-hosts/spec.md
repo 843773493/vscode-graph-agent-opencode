@@ -52,6 +52,8 @@ extensions.all／getExtension／exports SHALL 解析该 host 的合法实例集�
 
 初始模型、dirty buffer、textDocuments、visibleTextEditors、activeTextEditor、文档／编辑器／诊断／watcher 事件 SHALL 按 Node host 明确 workspace view 及资源归属发送，不能广播全窗口模型。焦点在其它 view 时该 host 的 active editor SHALL 为 undefined；版本、取消及 generation 须贯穿请求和结果。跨资源 WorkspaceEdit SHALL 在副作用前核验全部资源归属、映射与版本，拒绝错误目标，不声称新跨目标原子事务。此 API 视图约束不等于 Node 进程的文件系统沙箱。
 
+直接 `workspace.applyEdit` SHALL 在恢复 DTO 与进入原 BulkEditService 前核验整批 `resource`、`oldResource` 和 `newResource`，合法首项不能先于非法后项生效。该入口错误 SHALL 保留原日志与 `false` 返回合同。宿主代际关闭 SHALL 取消原编辑 token；取消后尚未完成任何资源时返回未应用，已经完成的资源 SHALL 保留原结果，不能用外层关闭标志伪装撤销已发生的副作用。文件操作能力缺失时 SHALL 明确拒绝，不以目标 Node 原生文件访问旁路工作区文件 owner。
+
 TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完整 EditorInput；组内增量索引基于投影后的标签顺序，保留原 Tab／TabGroup 的运行态对象身份。其它目标的活动标签 SHALL 表现为该组无 activeTab，实际 activeTabGroup 与 viewColumn 仍由窗口布局决定。混合资源 Diff／Merge／MultiDiff 的所有实际文件端点均属该视图时才可见，不能只展示部分文件却允许操作完整输入。尚无目标归属的无文件标签不进入 Node 视图，Web 原窗口语义保持。关闭组 SHALL 仅关闭该宿主的标签，组中仍有其它目标文件时不得移除真实组；关闭、移动及迟到事件不得越过所属代际或改投其它资源。
 
 文档语言 Provider SHALL 在原注册表的候选评分与独占排序前核对宿主视图；目标 Provider 的 scheme、绝对 glob 和 RelativePattern 按目标原生文件位置匹配，继续复用原 selector／glob 合同，不能仅在错发 RPC 后拒绝 URI。多文档操作的次要文档 SHALL 使用同一注册项的归属及评分，不另存 selector 绕过目标限制。Web 原窗口评分、Provider 对象及取消协议保持。
@@ -63,6 +65,10 @@ TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完�
 #### Scenario: 混合编辑器组的标签事件与关闭
 - **WHEN** 同一真实编辑器组交错打开 A/B 文件，随后移动、切焦点或由 A 扩展关闭自己的 TabGroup
 - **THEN** A/B 分别收到自己标签的连续索引和增量，未关闭标签的 API 对象身份保持；A 只能关闭自己的完整输入，B 文件及仍非空的真实编辑器组保留，宿主关闭后不再发送标签模型或继续处理后继关闭
+
+#### Scenario: 直接编辑的整批准入与代际关闭
+- **WHEN** A 的直接编辑先包含合法文本／文件项，后包含非所属资源；或编辑在预览等待及真实写入完成后的回执等待中遇到宿主关闭
+- **THEN** 非所属批次在任何首项写入前拒绝；预览中关闭产生零写入并返回未应用，已经完成写入的回执保持真实结果，后续新编辑拒绝；原空批次、预览过滤与 Web 编辑范围保持
 
 #### Scenario: 同语言 Provider 按目标原生位置匹配
 - **WHEN** A/B 同时打开同语言文件，各自 Provider 使用语言、file scheme、绝对 glob 或 RelativePattern 注册，并交替请求结果或执行多文档高亮

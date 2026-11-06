@@ -14,6 +14,8 @@
 
 目标 Node 的文件系统事件仅投影当前宿主 workspace view 与具名配置文件；配置父目录可监听但其中其它文件不转发。working-copy participant 与 didRun 仅处理归属完整的文件操作，扩展编辑在应用前完整核验。代际关闭后 watcher 与异步 participant 不得继续发布事件或应用编辑；Web 保留窗口广播语义。
 
+公开 workspace.applyEdit 与文件操作参与者共用整批端点归属检查，resource／oldResource／newResource 全部核验后才恢复 DTO 和进入原 BulkEditService。直接编辑沿原错误日志及 false 合同返回，宿主关闭取消原生命周期 token；零资源完成的取消返回 false，已经完成的资源保留原结果。原 BulkEdit 分组版本检查仍保留，整批版本预检与其它语言 Provider 编辑入口尚待迁齐，不能把本入口保护称为完整编辑隔离。
+
 安装身份来自 API envelope，工作区集合来自原 IWorkspaceContextService；每个 Backend 当前只支持一个明确 default view，集合变更必须 reload。初始化位置只读已认证 binding，URI 只转换 typed 字段并复用 workspaceFiles 原投影；原宿主协议和代际撤销机制保持。测试和临时产物遵守根 AGENTS。
 
 目标配置与 workspace context 由每个 host 的原 WorkspaceService 同时持有；原 MainThread customer 从同一 child DI 取得它。profile／多根配置只访问认证 binding 的两个具名资源，folder 配置复用普通工作区文件链；不轮换窗口 RemoteAgent，不新增正文、保存基线或配置合并实现。共享配置 provider 只合并同一资源的有效传输引用，文件 RPC 仍核发起 host 的精确资源。

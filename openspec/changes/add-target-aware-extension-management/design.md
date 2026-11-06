@@ -180,6 +180,8 @@ VSIX 的启用／禁用范围沿原 profile／workspace view 语义，多根视�
 
 Node host 的文档和编辑器同步同样按明确 view 投影，不能只过滤 workspaceFolders：初始模型、dirty buffer、打开／关闭／变更、visible／active editor、语言诊断和 watcher 事件只到合法资源订阅者；焦点在其它 view 时，该 host 的 active editor 为 undefined，不泄露另一个目标模型。文档版本、RPC generation 与取消贯穿注册、请求和迟到结果回收。跨资源 WorkspaceEdit 在副作用前核验全部目标、映射和版本；不把其它目标 URI 降为本机同名路径，失败沿原编辑合同报告，不声称额外跨目标原子事务。Web UI host 保持原窗口级能力，以上投影不是 Node 文件进程的系统沙箱。
 
+直接 workspace.applyEdit 沿原 MainThreadBulkEdits 在 DTO 恢复前共用整批端点归属检查，再交原 BulkEditService；原 warn／false、undoRedoGroupId 与 refactoring 自动保存选项保持。每个 MainThread 实例以原 cancellation token 绑定宿主代际，取消后的结果由原 bulk owner 实际完成资源决定：零完成为 false，已完成的真实结果不被外层关闭覆盖。文件操作参与者复用相同端点检查，不另建文件 writer。整批跨类型版本预检和其它语言 Provider 编辑仍是未完成边界；当前产品 WorkspaceFiles 只支持原有创建／保存，不支持的重命名／删除明确拒绝，不能用 Node fs 绕过原 owner。
+
 复用原 RPC 的 URI transformation，区分工作台稳定内部 URI 与目标 Node API 的原生文件视图。Node 扩展取得的 workspace／document 文件 URI 及 fsPath 必须能用于该目标真实 Node 文件访问，返回 URI 再投影回同一工作区稳定身份；根绑定只消费已登记 Gateway 事实及 Backend mount view，不持久化另一套路径注册表。转换限定 typed URI／协议字段，不全局替换任意字符串或 env／配置正文。验收必须用真实扩展经 `node:fs` 及 `workspace.fs` 分别读取目标独有文件，并核返回位置在原编辑器打开；只让自定义 URI 在浏览器 VFS 可读不足以证明 Node 扩展兼容。
 
 同目标嵌套根沿原 folder 最长匹配规则；同一本机路径若对应多个业务身份且上下文不足以唯一还原，使用已有请求／文档来源消歧或明确拒绝该投影，不能任选根并声称稳定 URI 往返。`extensions.all`／`getExtension`／exports 也以该 host 合法实例集解析，不能凭公开 ID 取另一个目标的运行对象。

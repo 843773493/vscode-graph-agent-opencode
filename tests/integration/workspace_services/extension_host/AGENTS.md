@@ -31,3 +31,5 @@
 - `extension_language_features.test.mjs` 在真实 Chromium 中运行原 MainThreadLanguageFeatures、共享 LanguageFeatureRegistry、wordHighlighter 多文档入口及 RPCProtocol／TargetUriTransformer；仅认证 binding、内存字节输送、扩展回调和模型的 URI／语言／同步状态为具名装具。覆盖全部文档 selector 注册、目标原生 glob／RelativePattern、exclusive／候选缓存、secondary 归属及真实 RPC 回调／取消／关闭；Windows 仅评分逻辑，不能替代 Gateway、真实 Node、文档同步、Notebook cell 或 Windows 实机验收。
 
 - `extension_workspace_symbols.test.mjs` 运行原 MainThread、WorkspaceSymbolProviderRegistry／getWorkspaceSymbols、RPC、AST 提取的内置命令和真实 CommandService／DI；认证 binding、字节输送、扩展回调及扩展服务清单／激活等待为具名装具。核完整 view 准入、typed URI／resolve／cache、取消／代际及命令来源，不代替 Gateway／Node／SSH 或符号界面验收。
+
+- `extension_workspace_edits.test.mjs` 在真实 Chromium 中经原公开 API、ExtHostBulkEdits、RPC、MainThreadBulkEdits 和 BulkEditService 核整批归属与代际；文本用原 TextModel，文件用原 BulkFileEdits／WorkingCopyFileService／FileService 与内存 Provider。认证 binding、字节输送、文档版本镜像、已加载模型 resolver、配置／UI 和纯文本 TreeSitter 库为具名装具；不替代真实 Gateway／Node／磁盘保存、产品 WorkspaceFiles 的重命名／删除、扩展 FileEvents participant、Notebook 或整批版本预检。
