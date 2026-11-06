@@ -365,6 +365,9 @@ class LangChainMessageCodec:
             )
         if not isinstance(message, BaseMessage):
             raise TypeError("消息 codec 只接受 LangChain BaseMessage")
+        # 复用前直接检查旧组的完整性、顺序和来源，无需为校验构造整条消息投影。
+        if canonical_items:
+            validate_group(canonical_items)
         # 这里只适配正文；typed 身份和 annotations 已从 metadata 单独读取，
         # 不再序列化整份 metadata、artifact 和其它未消费字段。
         data_mapping = message.model_dump(include={"content", "tool_calls", "invalid_tool_calls", "tool_call_id", "name"})

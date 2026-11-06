@@ -71,12 +71,13 @@ def resolve_message_group(
     """返回规范组及新组的已校验投影；复用原 locator 时无需待提交正文。"""
     created = not stored_group
     candidate_message = message
-    stored_value = codec.project_message(stored_group) if stored_group else None
-    body_changed = stored_group and any(
+    # 只有正文修订需要旧投影；幂等写入由 codec 校验旧组，再比较候选的正文 hash 和元数据。
+    stored_value = codec.project_message(stored_group) if stored_group and allow_revisions else None
+    body_changed = stored_value is not None and any(
         message_value["data"].get(field) != stored_value["data"].get(field)
         for field in ("content", "tool_calls", "invalid_tool_calls", "artifact", "tool_call_id")
     )
-    if body_changed and allow_revisions:
+    if body_changed:
         # 镜像只用于定位旧版本；新正文重新产生自己的组和来源关系。
         data = dict(message_value["data"])
         data["response_metadata"] = producer_response_metadata(data.get("response_metadata", {}))
@@ -93,7 +94,7 @@ def resolve_message_group(
         model_call_id=model_call_id,
         canonical_items=stored_group,
     )
-    # codec 已校验候选 group 的完整性和顺序；与已投影旧组比较即可验证复用，
+    # codec 已校验新旧 group 的完整性和顺序；比较规范字段即可验证复用，
     # 不为最终丢弃的候选再次构造 LangChain 消息和整份正文投影。
     if stored_group:
         source = stored_group[-1]
