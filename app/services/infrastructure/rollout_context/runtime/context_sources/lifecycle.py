@@ -35,9 +35,10 @@ class SourceLifecycleMixin:
         _sources: dict[str, SourceState]
         _queue_delta: Callable[[SourceState], None]
 
-        def observe(self, source_id: str, content: str, *, revision: str | None = None) -> SourceObservationResult:
+        def observe(self, source_id: str, content: str, *, revision: str | None = None,
+                    rebuild: ContextSourceRebuildState | None | EllipsisType = ...) -> SourceObservationResult:
             """接收已登记来源快照；处理结果与待封存状态分别返回，不推进 applied。"""
-            self.refresh_context_rebuild_state()
+            self.refresh_context_rebuild_state(rebuild)
             state = self._sources.get(source_id)
             if state is None:
                 raise KeyError(f"Context source 不存在: source_id={source_id}")

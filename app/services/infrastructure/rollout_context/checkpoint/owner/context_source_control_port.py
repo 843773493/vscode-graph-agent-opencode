@@ -114,15 +114,16 @@ class ContextSourceControlOwnerMixin:
                         state.source_id, state.latest_visible_committed_revision,
                     )
                 frozen.append((state, content, baseline))
-        # 同批恢复沿已有批量登记入口，只在批次入口读取一次 rebuild；各来源仍独立核对控制状态。
+        # 同次恢复只取得一次 rebuild；登记和逐来源观察共用冻结结果，控制状态仍独立核对。
+        rebuild = manager.refresh_context_rebuild_state()
         manager.register(*(ContextSourceDescriptor(
                 source_id=state.source_id, source_kind=state.source_kind, name=state.name,
                 description="持久发布的运行态来源", internal_locator=state.source_id,
-            ) for state, _content, _baseline in frozen), tracking_status="tracked")
+            ) for state, _content, _baseline in frozen), tracking_status="tracked", rebuild=rebuild)
         for state, content, baseline in frozen:
             if baseline is not None:
                 manager.restore_committed_baseline(state.source_id, lambda _revision, body=baseline: body)
-            manager.observe(state.source_id, content, revision=state.latest_revision).require_tracked()
+            manager.observe(state.source_id, content, revision=state.latest_revision, rebuild=rebuild).require_tracked()
 
     def receive_team_source_observation(self, session_id: str, thread_id: str, *, ledger_revision: int,
                                        event_hash: str, payload_json: str) -> None:

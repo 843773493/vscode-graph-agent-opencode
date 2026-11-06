@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from types import EllipsisType
 
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
         ContextSourceControlMutation,
         ContextSourceControlOperation,
         ContextSourceControlState,
+        ContextSourceRebuildState,
         ContextSourceTrackingStatus,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
@@ -99,6 +101,7 @@ class SourceRegistryMixin:
             *additional_descriptors: ContextSourceDescriptor,
             binding_revision: str | None = None,
             tracking_status: ContextSourceTrackingStatus = "untracked",
+            rebuild: ContextSourceRebuildState | None | EllipsisType = ...,
         ) -> None:
             """登记来源；恢复后的 registration 在这里重新绑定 Registry descriptor。
 
@@ -120,7 +123,7 @@ class SourceRegistryMixin:
                     f"{tracking_status!r}"
                 )
             # 同批目录只在入口对齐 rebuild；各来源仍独立校验 descriptor 并持久化控制状态。
-            self.refresh_context_rebuild_state()
+            self.refresh_context_rebuild_state(rebuild)
             for candidate_descriptor in (descriptor, *additional_descriptors):
                 state = self._registration_candidate(candidate_descriptor, binding_revision, tracking_status)
                 self._persist_control_state(state, operation="register")
