@@ -48,7 +48,7 @@ function replaceOnce(source, marker, replacement) {
 }
 
 /** 构建与 Vite 共用上游源码定制，不改写固定子模块。 */
-export function sourceTransform(root, productConfiguration, extensions) {
+export function sourceTransform(root, productConfiguration, extensions, { runtime = 'browser' } = {}) {
   if (productConfiguration.commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：要求 ${pinnedUpstreamCommit}`);
   const upstream = join(root, 'upstream');
   const product = {
@@ -64,6 +64,8 @@ export function sourceTransform(root, productConfiguration, extensions) {
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    // Node 宿主复用原 API／RPC，不能带入只属于 renderer 的 FileService 和 UI 定制。
+    if (runtime === 'node') return contents;
     if (path === join(upstream, 'src/vs/workbench/browser/layout.ts')) {
       // 自动恢复关闭面板时不得抢走 Quick Input 等外部控件的焦点；只交回原本属于面板的焦点。
       const start = 'private setPanelHidden(hidden: boolean, skipLayout?: boolean): void {';

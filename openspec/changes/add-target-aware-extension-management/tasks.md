@@ -67,7 +67,15 @@
 ## 5. 多目标 Node Extension Host 闭包
 
 - [ ] 5.1 清点原 Remote 及 extension ID 单例假设：description registry、enablement、RunningLocation／Tracker、HostManager／Factory、activation、依赖、MainThread／ExtHost RPC、贡献／卸载及全部消费者／测试，确定唯一扩展服务内的多目标接入点。
+  - 固定上游 `fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca` 只读盘点：`services/extensions/common/extensionDescriptionRegistry.ts` 的全局 ID map／重复 ID 跳过、依赖环图及查询是描述注册 owner；`extensionRunningLocation.ts`、`extensionRunningLocationTracker.ts` 的 Remote kind 相等与运行/affinity map 按 ID。
+  - `services/extensions/common/abstractExtensionService.ts` 是扫描结果合并、extension point 投影、增量同步、激活状态及 HostManager 集合的唯一协调 owner；`services/extensions/common/extensionHostManagers.ts` 按 RunningLocation 查 host，`extensionHostManager.ts` 将 RPC 回调闭包绑定到 host。
+  - Browser／Electron 原 host 创建 owner 分别为 `services/extensions/browser/extensionService.ts` 的 `BrowserExtensionHostFactory` 与 `services/extensions/electron-browser/nativeExtensionService.ts` 的 `NativeExtensionHostFactory`；前者当前只取一个 `IRemoteAgentService.getConnection()`，Remote 初始化也按单一 authority 过滤。
+  - 迁移顺序：先定义内部实例身份（公开 ID + 稳定安装目标，运行再加 view／client／generation），迁移 registry、按实例解析依赖与 enablement；再迁 tracker／affinity、Remote RunningLocation、manager collection、factory 和 host delta；最后迁 activation／RPC 状态、查询 API、命令与贡献／卸载消费者。
+  - 同一 host 内 `ExtensionDescriptionRegistry`、`ExtensionHostExtensions` (`services/extensions/common/extensions.ts`) 及 ExtHost 的 `myRegistry` 仍可按公开 ID 唯一；多实例按目标分布于不同 host。跨 host 聚合须返回目标限定实例或明确歧义，不可静默按 ID 覆盖。
+  - Window contribution 去重在 `services/extensions/common/abstractExtensionService.ts` 的 `_handleExtensionPoint` 收集 `IExtensionDescription` 后，`services/extensions/common/extensionsRegistry.ts` 的 `ExtensionPointUserDelta._toSet` 按公开 ID 计算增删；命令另由 `api/browser/mainThreadCommands.ts` 的单一 `CommandsRegistry` handler 接收 `$registerCommand(id)`。迁移需保留单窗口公开贡献 owner，对不可共存同名静态贡献在启用前报冲突；动态命令由单 dispatcher 按来源登记并基于发起 view 路由。
+  - 仍待真实源码迁移与验证：以上是固定上游调用闭包盘点，不表示 instance key、双目标 Node host、RPC fencing 或贡献路由已经实现；5.1 保持未勾选。
 - [ ] 5.2 在现有 sourceTransform 与扩展服务闭包中实现稳定目标／客户端／明确 workspace view 的 RunningLocation 和 host 分派；以真实 A/B Node 扩展原型验证协议，不仅修改枚举或轮换全局 remoteAuthority。
+  - 2026-11-06 原宿主协议前置切片：新增固定上游 Node 构建入口，沿同一 sourceTransform／esbuild 管线按运行面排除 renderer 文件链，读取原 .nvmrc 和锁中精确依赖版本；只写全新目录，拒绝覆盖已有产物／固定上游。Linux Node24.22.1／原 TCP socket transfer／PersistentProtocol／RPC 实际运行同公开 ID 的 ESM 扩展 v1／v2，独立激活并由 Node fs 与 workspace.fs 读取 A／B 独有正文；A 正常停止后 B 仍可调用，两个退出码均0，上游commit不符明确55。pytest定向1 passed／2.37秒，内含4项Node检查，实际依赖package版本已逐项核对；主线程UI／配置／存储／注册与CPU估算是明确替身，不证明窗口多目标registry／分派、Gateway授权、目标URI映射、完整依赖锁／发布或Windows／Electron。59份实际转换源码类型、正式Web构建79扩展及静态通过，原始失败、修正、命令、指纹和正式收据见 `out/tests/temp/2026/11/06/node_extension_host/artifacts/verification-v1.json`。5.2／5.3／5.7继续未勾选，后续须迁齐唯一实例身份和产品owner，不把进程或原型通过当作功能完成。
 - [ ] 5.3 在明确后端目标侧接入匹配上游的 Node runtime／host 组件及认证 RPC 通道，复用原启动和 activation 协议；不放到 Gateway 请求进程、Python Agent 或 Electron main。
 - [ ] 5.4 绑定同目标明确 workspace 集合与原 multi-root 事件，分离各客户端活动态；不同 VSIX 启用集使用不同明确视图，不伪报同 host 的 folder 级隔离。验证 A1/A2 不包含 B1、视图变更有明确生命周期、一个客户端不覆盖另一个。
 - [ ] 5.5 迁齐相同扩展 command ID 的来源记录与目标分派，保留 manifest／ID、菜单条件与快捷键；有发起目标直接路由，无上下文且多候选时明确选择，切焦点不改投。
