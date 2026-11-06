@@ -15,7 +15,7 @@ from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
-    contribution_content_hash,
+    contribution_content_hash_and_length,
     copy_json_value,
     validate_hash_token,
 )
@@ -213,10 +213,12 @@ class ContextContribution:
                     or not isinstance(retry_ids, list) or not all(isinstance(value, str) and value for value in retry_ids)
                     or len(retry_ids) != len(set(retry_ids))):
                     raise ItemSchemaError("model_message 的角色、消息数据或 canonical refs 非法")
-            expected_hash = contribution_content_hash(self.contribution_kind, self.body)
+            # 摘要与长度复用同次规范编码；不为构造校验再次遍历整份正文。
+            expected_hash, expected_length = contribution_content_hash_and_length(
+                self.contribution_kind, self.body,
+            )
             if self.content_hash != expected_hash:
                 raise ItemSchemaError("ContextContribution.content_hash 与 body 不一致")
-            expected_length = len(canonical_json_bytes(self.body))
             if self.content_length is not None and self.content_length != expected_length:
                 raise ItemSchemaError("ContextContribution.content_length 与 body 不一致")
             object.__setattr__(self, "content_length", expected_length)
