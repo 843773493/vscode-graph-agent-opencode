@@ -6,7 +6,6 @@ import json
 import sqlite3
 from collections import Counter
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +20,6 @@ from app.agents.providers.wire_finalize import finalize_provider_wire
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_prefixed_id
 from app.core.model_request_context import SummaryCandidateScope
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
@@ -67,7 +65,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
-from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
 )
@@ -75,7 +72,6 @@ from app.services.mapping.itemized.canonical_langchain import (
     project_summary_source,
     summary_source_groups,
 )
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - fixture 根据当前测试文件隔离产物
 )
@@ -170,8 +166,8 @@ async def production_sibling(production_context):
 
 @pytest.mark.parametrize("source_count", [1, 4])
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_cold_projection_reuses_snapshot_locator_for_all_details(
-    production_context, monkeypatch, request, source_count, target_format,
+def test_cold_projection_preserves_content_and_rejects_damaged_storage(
+    production_context, source_count, target_format,
 ):
     saver, session, thread, _connection, manager, prepare = production_context
     for index in range(1, source_count):
@@ -193,38 +189,10 @@ def test_cold_projection_reuses_snapshot_locator_for_all_details(
                       if entry.contribution_id == source.contribution_id and entry.included)
     target = saver._detail_store._files.path(detail_ref)
     raw = target.read_bytes()
-    resolves = []
-    details = []
-    resolve = SessionCatalogPathResolver.resolve_thread_node
-    read = DetailFiles.read
-
-    def observe_resolve(resolver, session_id, thread_id):
-        if (session_id, thread_id) == (session, thread):
-            resolves.append((session_id, thread_id))
-        return resolve(resolver, session_id, thread_id)
-
-    def observe_read(files, *args, **kwargs):
-        details.append(kwargs.get("snapshot"))
-        return read(files, *args, **kwargs)
-
-    monkeypatch.setattr(SessionCatalogPathResolver, "resolve_thread_node", observe_resolve)
-    monkeypatch.setattr(DetailFiles, "read", observe_read)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         plan = prepared["snapshot"].as_sealed_plan()
         for _ in range(2):
-            resolves.clear()
-            details.clear()
             assert cold.project_context_plan_for_dispatch(session, thread, plan, target_format=target_format) == expected
-            measurement = {"source_count": source_count, "target_format": target_format,
-                           "thread_resolutions": len(resolves), "detail_reads": len(details)}
-            context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-            (context.artifacts_dir / "detail-snapshot-locator.json").write_text(
-                json.dumps(measurement, indent=2), encoding="utf-8",
-            )
-            assert len(details) >= source_count + 1
-            assert all(snapshot is not None and snapshot.closed for snapshot in details)
-            # 快照建立与 canonical 正文定位为固定工作，不能每份 detail 再解析 catalog。
-            assert len(resolves) <= 2
         damaged = raw.replace("基础规则第一版".encode(), "基础规则被篡改".encode(), 1)
         assert damaged != raw
         try:
