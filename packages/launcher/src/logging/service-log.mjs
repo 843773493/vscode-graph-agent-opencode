@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync,
-  mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+  mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { createLocker, Lock } from "@lickle/lock";
@@ -123,8 +123,7 @@ export async function openServiceLogFile(logPath, contract, { role = "launcher",
       throw new Error(`日志已由其他进程 owner 登记，拒绝重开: ${logPath}`);
     }
     if (previous !== undefined) {
-      const identity = statSync(logPath, { bigint: true });
-      if (previous.path !== logPath || String(identity.dev) !== previous.device || String(identity.ino) !== previous.inode) {
+      if (previous.path !== logPath || !contract.sinkMatches(previous, [])) {
         throw new Error(`原日志文件身份已变化，拒绝重开或轮转: ${logPath}`);
       }
     }
@@ -157,9 +156,8 @@ export async function openServiceLogFile(logPath, contract, { role = "launcher",
         rotateServiceLog(logPath, contract);
         descriptor = await openLocked();
       }
-      const identity = fstatSync(descriptor, { bigint: true });
       const sink = Object.freeze({ path: logPath, owner_id: randomUUID(), role, source,
-        device: String(identity.dev), inode: String(identity.ino) });
+        ...contract.fileIdentity(descriptor) });
       publishLogOwnership(logPath, sink);
       return { descriptor, sink, close() { closeSync(descriptor); } };
     } catch (error) {
@@ -172,11 +170,10 @@ export async function openServiceLogFile(logPath, contract, { role = "launcher",
   });
 }
 
-function capturedServiceLog(logPath, environment, stdout, stderr) {
+function capturedServiceLog(logPath, environment, stdout, stderr, contract) {
   const sink = JSON.parse(environment.BOXTEAM_RUNTIME_LOG_SINK ?? "null");
   if (!sink || sink.path !== logPath || sink.role !== "launcher") throw new Error("外层日志捕获缺少冻结去向证明");
-  const identities = [fstatSync(1, { bigint: true }), fstatSync(2, { bigint: true }), statSync(logPath, { bigint: true })];
-  if (identities.some((value) => String(value.dev) !== sink.device || String(value.ino) !== sink.inode)) {
+  if (!contract.sinkMatches(sink, [1, 2])) {
     throw new Error("外层日志捕获与实际输出描述符不匹配");
   }
   const record = JSON.parse(readFileSync(`${logPath}.owner.json`, "utf8"));
@@ -188,7 +185,7 @@ export async function openServiceLog({ boxteamHome, contract, environment = proc
   role = "launcher", stdout = process.stdout, stderr = process.stderr }) {
   const logPath = resolveServiceLogPath(boxteamHome, environment, contract, role);
   const captured = environment[SERVICE_LOG_CAPTURED_ENV] === "1";
-  if (role === "launcher" && captured) return capturedServiceLog(logPath, environment, stdout, stderr);
+  if (role === "launcher" && captured) return capturedServiceLog(logPath, environment, stdout, stderr, contract);
   const file = await openServiceLogFile(logPath, contract, { role,
     source: role === "launcher" && environment[SERVICE_LOG_PATH_ENV]?.trim() ? SERVICE_LOG_PATH_ENV : "default" });
   const tee = (primary) => ({

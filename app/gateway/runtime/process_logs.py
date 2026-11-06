@@ -16,7 +16,12 @@ import portalocker
 import psutil
 
 from app.core.file_permissions import restrict_private_path_access
-from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
+from app.core.logging_contract import (
+    RuntimeLogContract,
+    load_runtime_log_contract,
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
 from app.gateway.runtime.process_groups import (
     _capture_posix_group_leader_start_marker,
     _posix_group_is_alive,
@@ -176,8 +181,7 @@ def _previous_writer_is_alive(payload: dict[str, object]) -> bool:
     phase = payload.get("phase")
     if phase == "stream":
         path = Path(str(payload["path"]))
-        identity = path.stat()
-        if (str(identity.st_dev), str(identity.st_ino)) != (payload.get("device"), payload.get("inode")):
+        if runtime_log_path_identity(path) != (payload.get("device"), payload.get("inode")):
             raise RuntimeError("原日志文件身份已变化，拒绝轮转")
         if sys.platform == "win32":
             return _windows_log_has_open_handles(path)
@@ -268,10 +272,9 @@ class ProcessLogStore:
                 try:
                     stage = "file_permissions"
                     restrict_private_path_access(log_path, descriptor=descriptor)
-                    identity = os.fstat(descriptor)
+                    device, inode = runtime_log_file_identity(descriptor)
                     sink = {"path": str(ownership.path), "owner_id": ownership.owner_id,
-                            "role": role, "source": "gateway", "device": str(identity.st_dev),
-                            "inode": str(identity.st_ino)}
+                            "role": role, "source": "gateway", "device": device, "inode": inode}
                     stage = "ownership_record"
                     ownership.write({"version": 1, **sink, "phase": "controller",
                                      "pid": os.getpid(), "created_at": psutil.Process().create_time()})
@@ -304,8 +307,7 @@ class ProcessLogStore:
                         raise RuntimeError(f"受管进程日志去向不匹配: field={key}")
                 if sink.get("path") != str(path) or not _previous_writer_is_alive(payload):
                     raise RuntimeError("受管进程日志写入者已变化")
-                identity = path.stat()
-                if (str(identity.st_dev), str(identity.st_ino)) != (sink.get("device"), sink.get("inode")):
+                if runtime_log_path_identity(path) != (sink.get("device"), sink.get("inode")):
                     raise RuntimeError("受管进程日志文件已被替换")
         except OSError as error:
             logger.exception("接管进程日志访问失败: role=%s path=%s", role, path)

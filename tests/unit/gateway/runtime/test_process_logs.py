@@ -553,7 +553,7 @@ def test_ownership_files_reject_symbolic_links(tmp_path: Path, suffix: str) -> N
 
 
 @pytest.mark.parametrize("runtime", ["python", "node"])
-@pytest.mark.parametrize("mismatch", [None, "stdout", "inode"])
+@pytest.mark.parametrize("mismatch", [None, "stdout", "stderr", "device", "inode", "path"])
 def test_process_state_verifies_inherited_descriptors(
     tmp_path: Path, runtime: str, mismatch: str | None,
 ) -> None:
@@ -575,20 +575,26 @@ console.log(JSON.stringify(runtimeLoggingState('terminal')));
     store = ProcessLogStore(tmp_path)
     with store.open("backend", 12345) as stream:
         sink = dict(stream.sink)
-        if mismatch == "inode":
-            sink["inode"] = "changed"
+        if mismatch in {"device", "inode"}:
+            sink[mismatch] = "changed"
+        elif mismatch == "path":
+            other = tmp_path / "other.log"
+            other.write_text("other", encoding="utf-8")
+            sink["path"] = str(other)
         result = subprocess.run(
-            command, env={**os.environ, "BOXTEAM_RUNTIME_LOG_SINK": json.dumps(sink)},
-            stdout=subprocess.PIPE if mismatch == "stdout" else stream, stderr=stream,
-            check=False, text=True, timeout=15,
+            command, env={**os.environ, "PYTHONIOENCODING": "utf-8", "BOXTEAM_RUNTIME_LOG_SINK": json.dumps(sink)},
+            stdout=subprocess.PIPE if mismatch == "stdout" else stream,
+            stderr=subprocess.PIPE if mismatch == "stderr" else stream,
+            check=False, text=True, encoding="utf-8", timeout=15,
         )
-        text = store.path_for("backend", 12345).read_text()
+        text = store.path_for("backend", 12345).read_text(encoding="utf-8")
         if mismatch is None:
             assert result.returncode == 0, text
             state = json.loads(text)
             assert state["log_sink"] == sink
         else:
-            assert result.returncode != 0 and "实际日志描述符与冻结去向不一致" in text
+            observed = text + (result.stdout or "") + (result.stderr or "")
+            assert result.returncode != 0 and "实际日志描述符与冻结去向不一致" in observed
 
 
 def test_binding_failure_terminates_spawned_process_before_releasing_log(

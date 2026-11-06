@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,14 +11,27 @@ _PRIVATE_SIDS = ("S-1-3-4", "S-1-5-18", "S-1-5-32-544")
 
 
 @contextmanager
-def _native_errors(path: Path) -> Iterator[None]:
+def _native_errors(path: Path | None = None) -> Iterator[None]:
     """保持公共文件系统的 OSError 子类和 Windows 错误码合同。"""
     import pywintypes
 
     try:
         yield
     except pywintypes.error as error:
-        raise OSError(error.winerror, error.strerror, str(path), error.winerror) from error
+        raise OSError(error.winerror, error.strerror, str(path) if path is not None else None, error.winerror) from error
+
+
+def file_identity(descriptor: int) -> tuple[str, str]:
+    """以原生卷序列号和文件索引核验持有的文件，与 Node fstat 共用同一表示。"""
+    if sys.platform != "win32":
+        raise OSError("Windows 文件身份入口只能在 Windows 调用")
+    import msvcrt
+
+    import win32file
+
+    with _native_errors():
+        information = win32file.GetFileInformationByHandle(msvcrt.get_osfhandle(descriptor))
+    return str(information[4]), str((information[8] << 32) | information[9])
 
 
 def flush_directory(directory: Path) -> None:

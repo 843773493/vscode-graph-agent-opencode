@@ -15,6 +15,7 @@ import path from "node:path";
 
 import {
   openServiceLog,
+  openServiceLogFile,
   resolveServiceLogPath,
   SERVICE_LOG_CAPTURED_ENV,
   SERVICE_LOG_PATH_ENV,
@@ -204,16 +205,34 @@ describe("service log", async () => {
     const log = await openServiceLog(options);
     const python = process.env.BOXTEAM_PYTHON_BIN ?? path.resolve(".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
     const script = `from pathlib import Path; from app.gateway.runtime.process_logs import ProcessLogStore; ProcessLogStore(Path(${JSON.stringify(contract.rootFor(home))})).open('launcher').close()`;
+    const environment = { ...process.env, PYTHONIOENCODING: "utf-8" };
     let result;
     try {
-      result = spawnSync(python, ["-c", script], { encoding: "utf8", timeout: 10000 });
+      result = spawnSync(python, ["-c", script], { env: environment, encoding: "utf8", timeout: 10000 });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("活动写入者");
     } finally { log.close(); }
-    result = spawnSync(python, ["-c", script], { encoding: "utf8", timeout: 10000 });
+    result = spawnSync(python, ["-c", script], { env: environment, encoding: "utf8", timeout: 10000 });
     expect(result.status).toBe(0);
     const next = await openServiceLog(options);
     next.close();
+  });
+
+  test("Node 创建的冻结 sink 由 Python 的真实继承描述符核实", async () => {
+    const logPath = path.join(temporaryRoot(), "node-to-python.log");
+    const file = await openServiceLogFile(logPath, contract);
+    const python = process.env.BOXTEAM_PYTHON_BIN ?? path.resolve(".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    const script = "from dataclasses import asdict; import json; from app.core.logging_config import configure_application_logging,runtime_logging_state; configure_application_logging(service='backend'); print(json.dumps(asdict(runtime_logging_state())),flush=True)";
+    let result;
+    try {
+      result = spawnSync(python, ["-c", script], {
+        env: { ...process.env, PYTHONIOENCODING: "utf-8", BOXTEAM_RUNTIME_LOG_SINK: JSON.stringify(file.sink) },
+        stdio: ["ignore", file.descriptor, file.descriptor], timeout: 10000,
+      });
+    } finally { file.close(); }
+    const output = readFileSync(logPath, "utf8");
+    expect(result.status, output).toBe(0);
+    expect(JSON.parse(output).log_sink).toEqual(file.sink);
   });
 
   test("detached 根退出后，后代持有输出时仍不能轮转", async () => {

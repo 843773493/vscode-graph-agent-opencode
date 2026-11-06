@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.core.atomic_fs import native_io_path
+from app.core.logging_contract import (
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
 from app.runtime import windows_fs
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows pywin32")
@@ -59,3 +63,16 @@ def test_exclusive_rename_keeps_both_files_on_conflict(tmp_path: Path) -> None:
     assert raised.value.winerror == 183 and raised.value.filename == str(target)
     assert isinstance(raised.value.__cause__, pywintypes.error)
     assert source.read_bytes() == b"source" and target.read_bytes() == b"target"
+
+
+def test_log_file_identity_matches_reopened_handle_and_rejects_another_file(tmp_path: Path) -> None:
+    path, other = tmp_path / "actual.log", tmp_path / "other.log"
+    path.write_bytes(b"actual")
+    other.write_bytes(b"other")
+    with path.open("rb") as stream:
+        descriptor = stream.fileno()
+        identity = runtime_log_file_identity(descriptor)
+        assert runtime_log_path_identity(path) == identity
+        assert runtime_log_path_identity(other) != identity
+    with pytest.raises(OSError):
+        windows_fs.file_identity(descriptor)

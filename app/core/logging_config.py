@@ -12,7 +12,12 @@ from threading import RLock
 from typing import TextIO
 
 from app.core.identifier import create_uuid_hex
-from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
+from app.core.logging_contract import (
+    RuntimeLogContract,
+    load_runtime_log_contract,
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
 from app.core.trace_middleware import get_current_request_id
 
 APPLICATION_LOG_HANDLER_NAME = "boxteam-application"
@@ -53,8 +58,9 @@ def _verify_runtime_log_sink(sink: dict[str, str] | None) -> dict[str, str] | No
         return None
     expected = (sink["device"], sink["inode"])
     # 不能只信环境里的路径：继承的两个实际输出描述符与当前文件都必须一致。
-    identities = [os.fstat(1), os.fstat(2), Path(sink["path"]).stat()]
-    if any((str(identity.st_dev), str(identity.st_ino)) != expected for identity in identities):
+    identities = [runtime_log_file_identity(1), runtime_log_file_identity(2),
+                  runtime_log_path_identity(Path(sink["path"]))]
+    if any(identity != expected for identity in identities):
         raise RuntimeError("受管进程实际日志描述符与冻结去向不一致")
     return dict(sink)
 

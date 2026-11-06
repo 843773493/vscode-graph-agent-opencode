@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { fstatSync, readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { formatWithOptions } from "node:util";
 
@@ -9,6 +9,22 @@ let settings = null;
 let appliedRevision = null;
 let logSink = readRuntimeLogSink();
 let logDescriptors = [1, 2];
+
+function runtimeLogFileIdentity(descriptor) {
+  const identity = fstatSync(descriptor, { bigint: true });
+  return { device: String(identity.dev), inode: String(identity.ino) };
+}
+
+function runtimeLogPathIdentity(logPath) {
+  const descriptor = openSync(logPath, "r");
+  try { return runtimeLogFileIdentity(descriptor); }
+  finally { closeSync(descriptor); }
+}
+
+function runtimeLogSinkMatches(sink, descriptors) {
+  const identities = [...descriptors.map(runtimeLogFileIdentity), runtimeLogPathIdentity(sink.path)];
+  return identities.every((identity) => identity.device === sink.device && identity.inode === sink.inode);
+}
 
 export function registerRuntimeLogSink(sink, descriptors) {
   if (!Array.isArray(descriptors) || descriptors.length === 0 || descriptors.some((value) => !Number.isInteger(value) || value < 0)) {
@@ -33,9 +49,7 @@ function readRuntimeLogSink() {
 
 function verifiedRuntimeLogSink(sink = logSink, descriptors = logDescriptors) {
   if (sink === null) return null;
-  // bigint 避免 inode 丢失精度；核验实际持有的文件或继承的 stdout/stderr。
-  const identities = [...descriptors.map((descriptor) => fstatSync(descriptor, { bigint: true })), statSync(sink.path, { bigint: true })];
-  if (identities.some((identity) => String(identity.dev) !== sink.device || String(identity.ino) !== sink.inode)) {
+  if (!runtimeLogSinkMatches(sink, descriptors)) {
     throw new Error("受管进程实际日志描述符与冻结去向不一致");
   }
   return { ...sink };
@@ -52,6 +66,8 @@ export function loadRuntimeLogContract(applicationRoot = process.env.BOXTEAM_PRO
     if (payload.version !== 1) throw new Error("不支持的产品日志合同版本");
     contracts.set(resource, {
       ...payload,
+      fileIdentity: runtimeLogFileIdentity,
+      sinkMatches: runtimeLogSinkMatches,
       rootFor(home) { return path.resolve(home, ...payload.root); },
       pathFor(root, role, instance = null) {
         if (!Object.hasOwn(payload.paths, role)) throw new Error("进程日志角色非法");
