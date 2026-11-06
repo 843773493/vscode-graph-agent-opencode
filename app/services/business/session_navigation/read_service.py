@@ -6,12 +6,14 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import cast
 
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
     SessionCatalogSessionProjection,
 )
+from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
     SessionCatalogExportDTO,
@@ -191,19 +193,26 @@ class SessionCatalogReadService:
             and self._cached_snapshot is not None
             and self._cached_snapshot.catalog_revision == current_revision
         ):
-            # provider=None 的含义是当前配置默认值，缓存不能把它冻结成旧 provider。
-            replacements = {}
+            # 同一 catalog revision 的静态字段不变；默认 provider 每次请求按 Agent 解析，
+            # 配置变化时只替换受影响的 DTO，避免缓存命中仍逐会话重建完整投影。
+            provider_by_agent: dict[str, str | None] = {}
+            replacements: dict[str, SessionCatalogNodeDTO] = {}
             for node in self._cached_snapshot.default_provider_nodes:
                 check()
-                replacements[node.node_id] = self._session_service.project_catalog_session(node)
-            if any(
-                self._cached_snapshot.nodes_by_id[node_id].session != session
-                for node_id, session in replacements.items()
-            ):
+                if node.current_agent_id not in provider_by_agent:
+                    provider_by_agent[node.current_agent_id] = (
+                        self._session_service.project_catalog_session(node).current_provider_id
+                    )
+                provider_id = provider_by_agent[node.current_agent_id]
+                cached_node = self._cached_snapshot.nodes_by_id[node.node_id]
+                session = cast(SessionDTO, cached_node.session)
+                if session.current_provider_id != provider_id:
+                    replacements[node.node_id] = cached_node.model_copy(
+                        update={"session": session.model_copy(update={"current_provider_id": provider_id})}
+                    )
+            if replacements:
                 nodes = [
-                    node.model_copy(update={"session": replacements[node.node_id]})
-                    if node.node_id in replacements
-                    else node
+                    replacements.get(node.node_id, node)
                     for node in self._cached_snapshot.nodes
                 ]
                 self._cached_snapshot = replace(
@@ -211,7 +220,7 @@ class SessionCatalogReadService:
                     nodes=nodes,
                     nodes_by_id={
                         **self._cached_snapshot.nodes_by_id,
-                        **{node.node_id: node for node in nodes},
+                        **replacements,
                     },
                     revision=self._revision(nodes, check=check),
                 )
