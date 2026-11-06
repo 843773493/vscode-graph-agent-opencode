@@ -88,42 +88,42 @@ def _merge_activity_items(
     canonical_tool_call_ids_by_raw_id: dict[tuple[str, str | None, str], str | None] = {}
     # 实时消息流的 tool-call 使用 model-call scoped ID；checkpoint shadow
     # 仍携带 provider 原始 ID。先建立 canonical 的 (模型调用, call index)
-    # 映射，checkpoint carrier 通过这张表归一化。
+    # 映射，checkpoint carrier 通过这张表归一化。流式取行并在此解析一次，
+    # 后续归并直接消费 typed 身份与 producer，不再重读同一份 JSON。
+    activities = []
     for (
         turn_id,
-        _item_sequence,
-        _item_id,
+        item_sequence,
+        item_id,
         semantic_kind,
-        _payload_kind,
-        _item_status,
-        _item_created_at,
+        payload_kind,
+        item_status,
+        item_created_at,
         producer_ref_json,
         projection_manifest_json,
-        _content,
-        _content_truncated,
-        _tool_call_id,
-        _logical_item_ordinal,
+        content,
+        content_truncated,
+        indexed_tool_call_id,
+        logical_item_ordinal,
     ) in activity_rows:
-        if semantic_kind != "tool_call":
-            continue
-        manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field="item_catalog.projection_manifest_json:canonical-tool"))
+        turn_id = strict_text(turn_id, field="item_catalog.turn_id")
+        semantic_kind = strict_text(semantic_kind, field=f"item_catalog.semantic_kind:{item_id}")
+        manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
         identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"]) if manifest["projection_identity"] is not None else None
-        block_id = identity.block_id if identity is not None else None
-        if not isinstance(block_id, str) or not block_id:
-            continue
+        projection_group = ProjectionGroup.from_dict(manifest["projection_group"]) if manifest["projection_group"] is not None else None
         producer_ref = _json_object(
-            producer_ref_json, field="item_catalog.producer_ref_json:canonical-tool"
+            producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"
         )
-        model_call_id = identity.model_call_id
-        block_index = identity.block_index
-        if not isinstance(block_index, int) or isinstance(block_index, bool):
-            raise TypeError(
-                "canonical tool_call 缺少稳定 block_index: "
-                f"turn_id={turn_id} block_id={block_id}"
-            )
-        canonical_tool_call_ids_by_model_call[
-            (turn_id, model_call_id, block_index)
-        ] = block_id
+        activities.append((
+            turn_id, item_sequence, item_id, semantic_kind, payload_kind, item_status,
+            item_created_at, producer_ref, identity, projection_group, content,
+            content_truncated, indexed_tool_call_id, logical_item_ordinal,
+        ))
+        # ItemProjectionIdentity 已校验 block_id 与 model-call/index 必须同时存在。
+        if semantic_kind == "tool_call" and identity is not None and identity.block_id is not None:
+            canonical_tool_call_ids_by_model_call[
+                (turn_id, identity.model_call_id, identity.block_index)
+            ] = identity.block_id
 
     canonical_tool_call_keys = {
         (turn_id, model_call_id, call_id)
@@ -154,23 +154,14 @@ def _merge_activity_items(
         payload_kind,
         item_status,
         item_created_at,
-        producer_ref_json,
-        projection_manifest_json,
+        producer_ref,
+        identity,
+        projection_group,
         content,
         content_truncated,
         indexed_tool_call_id,
         logical_item_ordinal,
-    ) in activity_rows:
-        turn_id = strict_text(turn_id, field="item_catalog.turn_id")
-        manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
-        identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"]) if manifest["projection_identity"] is not None else None
-        projection_group = ProjectionGroup.from_dict(manifest["projection_group"]) if manifest["projection_group"] is not None else None
-        producer_ref = _json_object(
-            producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"
-        )
-        semantic_kind = strict_text(
-            semantic_kind, field=f"item_catalog.semantic_kind:{item_id}"
-        )
+    ) in activities:
         source_part_id = identity.block_id if identity is not None else None
         projection_message_id = identity.projection_message_id if identity is not None else None
         activity_model_call_id = identity.model_call_id if identity is not None else None
@@ -179,15 +170,10 @@ def _merge_activity_items(
             if isinstance(projection_message_id, str)
             else []
         )
-        block_ordinal = identity.block_index if identity is not None else None
-        if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
-            block_ordinal = (
-                projection_group.ordinal
-                if projection_group is not None
-                else 0
-            )
-        block_ordinal = strict_non_negative_int(
-            block_ordinal, field=f"activity_item.block_ordinal:{item_id}"
+        block_ordinal = (
+            identity.block_index
+            if identity is not None and identity.block_index is not None
+            else projection_group.ordinal if projection_group is not None else 0
         )
         activity_tools: list[dict[str, object] | None] = [None]
         if semantic_kind in {"tool_call", "tool_result"}:

@@ -152,7 +152,7 @@ class TurnProjectionReadMixin:
             "('failed','cancelled','interrupted','unknown'))))) "
             "ORDER BY ic.turn_id, ic.item_sequence",
             (view_id, *ids),
-        ).fetchall()
+        )
         final_reasoning_rows = connection.execute(
             "SELECT t.turn_id, rb.message_sequence, rb.content_block_index, "
             "rb.item_index, rb.carrier_type, rb.reasoning_text, rb.summary_text, "
