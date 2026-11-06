@@ -375,15 +375,20 @@ class CatalogQueriesMixin:
                     "会话目录父节点缺失: "
                     f"node_id={row['node_id']}, parent_node_id={parent_node_id}"
                 )
+        # 在本次快照内复用已确认无环的父链，避免深层目录重复追溯到根。
+        verified: set[str] = set()
         for row in rows:
             visited: set[str] = set()
             current = row
             while current["parent_node_id"] is not None:
                 current_id = str(current["node_id"])
+                if current_id in verified:
+                    break
                 if current_id in visited:
                     raise RuntimeError(f"会话目录包含循环: {current_id}")
                 visited.add(current_id)
                 current = by_id[str(current["parent_node_id"])]
+            verified.update(visited)
 
     def resolve_session_locator(self, locator: str) -> Path:
         """解析 locator 为 sessions_root 下的绝对路径；先过形态与预算校验。"""
