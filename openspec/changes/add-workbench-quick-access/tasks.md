@@ -189,6 +189,7 @@
   - 当前SSE、Agent／脚本和授权JSON relay均装配同一GatewaySearchService；Workbench名称／正文／文件与原React目录界面沿共享流客户端，原上下文工具只转交同一授权链。全仓调用核对区分文件根元数据Limiter和原目录镜像同步Semaphore，二者不另做请求内领域查询。当前83项调度／编码／传输／relay／公开合同及真实Gateway＋双Backend单文件通过（1 passed／53.30秒），源码前后未变；覆盖快页、三并发、排队期限、慢消费、取消结算、页尾准入、唯一终态、原request_id及重启后的单分支续查。保留2项既有OpenAPI重复operation-ID警告；原件及精确调用图见 `out/tests/temp/2026/11/05/search_dispatch_closure/artifacts/verification.json`。其余缓存／canonical／诊断与跨运行面任务继续独立验收。
 - [x] 16.7 提供冻结范围和 owner 独立 cursor 的类型化续查，保留原数据版本与来源；支持无进程内搜索状态的重启续查、单分支失效／重试，不伪造全域 revision／总数／快照。
 - [ ] 16.8 固定 Gateway 默认稳定类别／范围／owner 查询顺序及显式可比较相关性模式／版本；Quick Access 对已返回候选复用原上游 fuzzy scorer／MRU，不在后端重写上游评分，不为重排增加远端读取。保留正文分组及 Gateway／catalog 导航权威顺序，不混排不可比裸分数或宣称部分页为全域 top K。
+  - 日志分支迁齐既有 `category-scope-owner-v1`：跨 Gateway 按冻结范围首次出现的顺序分配页配额和最终汇总，同 Gateway 的明确来源顺序及独立 cursor 保留；增量页仍及时交付，不按完成快慢改排名、不新增读取。旧实现判别反例1 failed，修复后调度／原日志ASGI／传输／输出82项通过，Ruff通过；生产及新用例Pyright零诊断，原测试45项诊断与前次完整基线逐条消息和数量相同。原始命令、源码、反例、类型比较及退出码在 `out/tests/temp/2026/11/06/search_diagnostic_order/artifacts/verification.json`。未改公开DTO或前端，无须重复生成及构建；全组相关性／MRU和导航排序组合证据尚待汇齐，16.8保持未勾选。
 - [ ] 16.9 将可打开／引用命中的规范 URI 设为默认输出，复用统一寻址 owner 及稳定身份、位置／版本；验证同资源多位置、重命名／移动、route 重用、无 URI 的命令／进度，不把 URI 当所有索引记录主键。
 - [x] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。

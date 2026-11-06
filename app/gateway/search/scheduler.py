@@ -87,6 +87,7 @@ def output_limited(job: SearchJob) -> FederatedSearchBranchDTO:
 def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolutionDTO) -> list[SearchJob]:
     """按类别、冻结范围顺序公平预留配额；不先读大页再丢尾部。"""
     owners = {branch.owner: branch for branch in scope.branches}
+    gateway_order = {gateway_id: index for index, gateway_id in enumerate(dict.fromkeys(owner.gateway_id for owner in scope.scope.owners))}
     selected = {item.branch: item.cursor for item in request.continuations}
     entries: list[tuple[FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO, WorkspaceFileSearchTargetDTO | None]] = []
     # 名称类别沿原固定组序；尚未登记的类别也有确定次序，不按响应快慢决定归属顺序。
@@ -97,6 +98,8 @@ def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolu
                 if not selected_owners or any(workspace_id not in {owner.workspace_id for owner in selected_owners}
                                               for workspace_id in target.scope.workspace_ids):
                     raise SearchScopeError("owner_mismatch", "诊断来源不属于本次冻结 Gateway／工作区集合", status_code=400)
+            # 同 Gateway 的来源保持明确选择顺序；跨 Gateway 与普通分支共用冻结范围顺序。
+            for target in sorted(query.diagnostic_targets, key=lambda target: gateway_order[target.gateway_id]):
                 entries.append((FederatedSearchBranchKeyDTO(diagnostics=target, category=query.category,
                                                            operation=query.operation), query, None))
             continue

@@ -17,6 +17,7 @@ from app.gateway.search.scheduler import (
     search_events,
 )
 from app.gateway.search.scope import SearchScopeError
+from app.schemas.gateway.diagnostics import GatewayDiagnosticLogQueryResultDTO
 from app.schemas.gateway.search import (
     GatewaySearchScopeDTO,
     GatewaySearchScopeResolutionDTO,
@@ -29,6 +30,7 @@ from app.schemas.internal_v2.session_navigation import (
 )
 from app.schemas.internal_v2.turn_search import WorkspaceMessageSearchResultsDTO
 from app.schemas.search_federation import (
+    FederatedSearchEventDTO,
     FederatedSearchRequest,
     FederatedSearchSourceDTO,
 )
@@ -340,6 +342,66 @@ def test_default_order_is_category_then_frozen_scope(
     jobs = plan_search(request, scope)
     assert [job.key.category for job in jobs] == ["catalog"] * 7 + ["thread"] * 7
     assert [job.key.owner for job in jobs[:7]] == list(scope.scope.owners)
+
+
+async def test_diagnostic_order_and_quota_follow_first_gateway_in_frozen_scope() -> None:
+    gateway_a, gateway_b = (f"gateway_{letter * 32}" for letter in ("a", "b"))
+    owners = [{"gateway_id": gateway, "workspace_id": f"00000000-0000-4000-8000-{index:012d}"}
+              for index, gateway in enumerate((gateway_b, gateway_a, gateway_b))]
+    scope = GatewaySearchScopeResolutionDTO.model_validate({
+        "scope": {"gateway_id": gateway_a, "resolved_at": datetime.now(UTC), "mode": "selected", "owners": owners},
+        "branches": [{"owner": owner, "state": "registered"} for owner in owners],
+    })
+    targets = [
+        {"gateway_id": gateway_a, "scope": {"source": "workspace", "workspace_ids": [owners[1]["workspace_id"]]}},
+        {"gateway_id": gateway_b, "scope": {"source": "gateway"}},
+        {"gateway_id": gateway_b, "scope": {"source": "workspace", "workspace_ids": [owners[0]["workspace_id"], owners[2]["workspace_id"]]}},
+    ]
+    request = FederatedSearchRequest.model_validate({"scope": {"mode": "resume", "scope": scope.scope}, "max_results": 5,
+        "queries": [{"category": "runtime_log", "operation": "content", "match_mode": "literal", "query": "needle", "diagnostic_targets": targets}]})
+    jobs = plan_search(request, scope)
+    expected = [request.queries[0].diagnostic_targets[index] for index in (1, 2, 0)]
+    assert [job.key.diagnostics for job in jobs] == expected
+    assert [job.request.limit for job in jobs] == [2, 2, 1]
+    assert [owner.gateway_id for owner in scope.scope.owners] == [gateway_b, gateway_a, gateway_b]
+    assert list(request.queries[0].diagnostic_targets) == [expected[2], expected[0], expected[1]]
+
+    # A 实际先完成；流及时交付，最终汇总仍按冻结顺序，不按完成快慢重排。
+    release_b = asyncio.Event()
+
+    async def query(job: SearchJob) -> SearchPage:
+        target = job.key.diagnostics
+        assert target is not None
+        if target.gateway_id == gateway_b:
+            await release_b.wait()
+        return SearchPage(GatewayDiagnosticLogQueryResultDTO(
+            gateway_id=target.gateway_id, scope=target.scope, query=job.request.query, items=[], sources=[],
+            complete=True, scanned_sources=0, scanned_lines=0, scanned_bytes=0,
+        ))
+
+    def publish(event: FederatedSearchEventDTO) -> bool:
+        if event.type == "page":
+            release_b.set()
+        return True
+
+    events = [event async for event in search_events(jobs, scope, request_id="frozen-log-order", query=query,
+                                                     budget=NameSearchBudget.create(None), publish=publish)]
+    pages = [event for event in events if event.type == "page"]
+    first = pages[0].branch
+    assert first is not None and first.branch.diagnostics is not None
+    assert first.branch.diagnostics.gateway_id == gateway_a
+    summary = events[-1].summary
+    assert summary is not None and summary.state == "complete" and summary.order == "category-scope-owner-v1"
+    assert [branch.branch.diagnostics for branch in summary.branches] == expected
+    assert all(branch.returned_results == 0 and branch.state == "complete" for branch in summary.branches)
+    assert len(pages) == 3
+
+    continuation = FederatedSearchRequest.model_validate({**request.model_dump(), "continuations": [
+        {"branch": jobs[2].key, "cursor": "a-original"}, {"branch": jobs[0].key, "cursor": "b-original"},
+    ]})
+    resumed = plan_search(continuation, scope)
+    assert [job.key for job in resumed] == [jobs[0].key, jobs[2].key]
+    assert [job.request.cursor for job in resumed] == ["b-original", "a-original"]
 
 
 async def test_owner_ignoring_deadline_cancellation_cannot_publish_late_page(
