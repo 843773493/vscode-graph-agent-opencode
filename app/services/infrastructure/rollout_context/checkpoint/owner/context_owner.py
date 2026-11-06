@@ -411,20 +411,6 @@ class ContextOwnerMixin(
             for message in messages
         ])
 
-    def supports_itemized_context(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        checkpoint_ns: str = "",
-    ) -> bool:
-        """返回当前 rollout 是否已切换到 v2 item owner。"""
-        return self._storage.storage.supports_itemized_context(
-            session_id,
-            thread_id,
-            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-        )
-
     def _committed_context_snapshot(
         self,
         expected: ContextRequestPlan | SealedContextDispatchRef | str,

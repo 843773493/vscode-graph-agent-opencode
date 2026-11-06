@@ -17,9 +17,6 @@ from app.services.infrastructure.rollout_context.storage import (
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
     require_v2_runtime,
 )
-from app.services.infrastructure.rollout_context.storage.primitives import (
-    RolloutNotMaterializedError,
-)
 
 
 def canonical_json_text(value: object) -> str:
@@ -144,22 +141,6 @@ class RolloutSerializationMixin:
                 "legacy migration target 在安装完成前不可读取；"
                 "请等待 migration 完成后重新打开 rollout"
             )
-
-    def supports_itemized_context(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        checkpoint_ns: str = "",
-    ) -> bool:
-        """判断 rollout 是否允许 v2 item/context owner 参与 provider 请求。"""
-        try:
-            with self.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-                self._require_v2_runtime(connection)
-                return True
-        except RolloutNotMaterializedError:
-            # 尚未物化的合法 owner 首次写入仍使用唯一 v2 runtime。
-            return True
 
 
 __all__ = [

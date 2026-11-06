@@ -2563,7 +2563,7 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
         saver.get_context_assembly(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID), assembly_id=str(snapshot.assembly_id))
 
 
-def test_itemized_capability_uses_context_owner_for_model_namespace_without_mutation(
+def test_canonical_read_uses_context_owner_for_model_namespace_without_mutation(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
@@ -2580,9 +2580,10 @@ def test_itemized_capability_uses_context_owner_for_model_namespace_without_muta
             "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns"
         ).fetchall()
 
-    assert saver.supports_itemized_context(SESSION_ID, thread, checkpoint_ns="model:provider-call")
+    items = saver.read_canonical_items(SESSION_ID, thread, checkpoint_ns="model:provider-call")
+    assert [(item.item_id, item.payload) for item in items] == [("item-user-1", "请检查当前状态")]
     with pytest.raises(RuntimeError, match="namespace 状态缺失"):
-        saver.supports_itemized_context(SESSION_ID, thread, checkpoint_ns="named-owner")
+        saver.read_canonical_items(SESSION_ID, thread, checkpoint_ns="named-owner")
     with sqlite3.connect(database) as connection:
         namespaces_after = connection.execute(
             "SELECT checkpoint_ns FROM checkpoint_namespace_state ORDER BY checkpoint_ns"
@@ -2593,7 +2594,7 @@ def test_itemized_capability_uses_context_owner_for_model_namespace_without_muta
     with sqlite3.connect(database) as connection:
         connection.execute("DELETE FROM checkpoint_namespace_state WHERE checkpoint_ns = ''")
     with pytest.raises(RuntimeError, match="namespace 状态缺失"):
-        saver.supports_itemized_context(SESSION_ID, thread, checkpoint_ns="model:provider-call")
+        saver.read_canonical_items(SESSION_ID, thread, checkpoint_ns="model:provider-call")
 
 
 @pytest.mark.asyncio

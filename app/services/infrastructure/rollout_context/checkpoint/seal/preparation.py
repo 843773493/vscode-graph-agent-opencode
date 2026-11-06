@@ -181,6 +181,7 @@ def prepare_registered_context(
         session_id, thread_id, execution_id, turn_id,
     ):
         raise RuntimeError("provider context 与当前 execution admission 不一致")
+    # 冻结资源读取已通过 rollout 快照校验格式、schema 和归属，无须再打开快照探测能力。
     owner.require_provider_resource_activation(
         activation_snapshot, session_id=session_id, thread_id=thread_id,
         execution_id=execution_id, turn_id=turn_id, model_call_id=model_call_id,
@@ -188,8 +189,6 @@ def prepare_registered_context(
     )
     if target_format not in {"chat_completions", "responses"}:
         raise ValueError("不支持的 provider context target_format: " + target_format)
-    if not owner.supports_itemized_context(session_id, thread_id, checkpoint_ns=checkpoint_ns):
-        raise RuntimeError("provider dispatch 必须使用可用的 v2 itemized context")
     if not isinstance(context_source_manager, ContextSourceManager):
         raise TypeError("provider context 需要唯一 ContextSourceManager")
     # prepare 冻结身份（seal_input_hash 的一项）：只进注册表与 seal 提交记录，不进 request_hash。
