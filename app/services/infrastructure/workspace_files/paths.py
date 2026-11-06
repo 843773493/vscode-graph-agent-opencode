@@ -235,8 +235,8 @@ class WorkspaceFilePaths:
         if current_root != root:
             raise ForbiddenError("目录扫描期间私有存储边界发生改变，请重新读取")
 
-    def require_public_path(self, target: Path) -> None:
-        if self.is_private(target):
+    def require_public_path(self, target: Path, *, is_private: Callable[[Path], bool] | None = None) -> None:
+        if (is_private or self.is_private)(target):
             raise ForbiddenError("私有存储只允许由业务 owner 访问")
 
     def require_access(self, target: Path, *, root_uri: str, for_write: bool = False) -> None:

@@ -563,7 +563,7 @@ class ResourceNavigation:
         excluded: frozenset[FileEntryIdentity], subtrees: frozenset[FileEntryIdentity], resume: SearchPosition,
         is_private: Callable[[Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
-        path = self._contained(root, children, parsed)
+        path = self._contained(root, children, parsed, is_private)
         candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path)), _entry_identity(root.joinpath(*children), path)),))
         root_stat = path.stat()
         prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
@@ -589,7 +589,7 @@ class ResourceNavigation:
                     raise ResourceFileOperationError("execution_failed", "目录已改变，不能沿旧 cursor 续页", reason="stale_cursor")
                 prefix_checked = True
             skipped = resume.matches if index == resume.offset + 1 else 0
-            hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern) if (
+            hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern, is_private) if (
                 request.operation == "search" and request.search_mode == "content" and child.resource_shape == "file"
             ) else iter((None,))
             for match_index, hit in enumerate(hits):
@@ -605,13 +605,14 @@ class ResourceNavigation:
     def _file_matches(
         self, root: Path, parsed: ParsedResourceUri, child: ResourceNavigationNodeDTO, metadata: FileObservation,
         request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
+        is_private: Callable[[Path], bool] | None,
     ) -> Iterator[ContentMatch | None]:
         target = parse_resource_uri(child.uri)
         name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
         if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
             yield None
             return
-        file = self._contained(root, target.tail_segments[1:], target)
+        file = self._contained(root, target.tail_segments[1:], target, is_private)
         data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
         # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
         if b"\0" in data:
@@ -736,7 +737,7 @@ class ResourceNavigation:
             if not candidate.exists() and not candidate.is_symlink():
                 return None
             self._check_deadline(deadline)
-            file = self._contained(root, parts, parsed)
+            file = self._contained(root, parts, parsed, is_private)
             before = self._stat(file)
             if not stat.S_ISREG(before[2]):
                 raise ResourceFileOperationError("execution_failed", "ignore 规则不是普通文件", reason="invalid_ignore_file")
@@ -752,7 +753,7 @@ class ResourceNavigation:
         while pending:
             self._check_deadline(deadline)
             relative, scope = pending.pop()
-            directory = self._contained(root, relative, parsed)
+            directory = self._contained(root, relative, parsed, is_private)
             if directory in visited:
                 continue
             visited.add(directory)
@@ -799,7 +800,7 @@ class ResourceNavigation:
                     continue
                 if scope is not None and scope.excludes(child_parts, child.is_dir()):
                     continue
-                child_path = self._contained(root, child_parts, parsed)
+                child_path = self._contained(root, child_parts, parsed, is_private)
                 child_node = self._node(parse_resource_uri(uri), child_path)
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
                 yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ()), _entry_identity(entry_path, child_path)
@@ -885,18 +886,21 @@ class ResourceNavigation:
             raise ResourceUriResolveError("capability_denied", "Skill 固定根越出 owner 边界")
         return collection
 
-    def _contained(self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri) -> Path:
+    def _contained(self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
+                   is_private: Callable[[Path], bool] | None = None) -> Path:
         resolved_root = _resolve_path(root)
         if resolved_root != root:
             raise ResourceUriResolveError("capability_denied", "固定资源根已被符号链接替换")
         path = _resolve_path(resolved_root.joinpath(*children))
         if not path.is_relative_to(resolved_root):
             raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
-        if parsed.kind in {"files", "attachments"}:
-            try:
+        try:
+            if parsed.kind == "files":
+                self._file_paths.require_public_path(resolved_root.joinpath(*children), is_private=is_private)
+            elif parsed.kind == "attachments":
                 self._file_paths.require_access(resolved_root.joinpath(*children), root_uri=file_uri_root(parsed.display_uri))
-            except ForbiddenError as error:
-                raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
+        except ForbiddenError as error:
+            raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
         for depth in range(1, len(children)):
             ancestor = resolved_root.joinpath(*children[:depth])
             if ancestor.exists() and not ancestor.is_dir():
