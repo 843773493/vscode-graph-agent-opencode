@@ -70,10 +70,12 @@ class ContextProjectionResult:
     losses: tuple[str, ...]
     native: dict[str, object] | None
     resource_refs: tuple[SessionContextResourceDTO, ...]
+    plan: ContextRequestPlan
 
     def evidence(self, projection: str) -> ProjectionEvidence:
+        # 沿用本次投影已验证的 plan，避免为 evidence 还原并重验整份工具 schema。
         return build_projection_evidence(
-            self.assembly.as_sealed_plan(), projection=projection,
+            self.plan, projection=projection,
             losses=self.losses, resource_refs=self.resource_refs,
         )
 

@@ -395,6 +395,7 @@ class ContextOwnerMixin(
         return ContextProjectionResult(
             assembly=committed_snapshot, messages=messages, tools=tools,
             losses=tuple(losses), native=native, resource_refs=resources,
+            plan=committed_plan,
         )
 
     def project_message_attachment_refs(self, session_id: str, thread_id: str, messages: list[BaseMessage]) -> list[BaseMessage]:

@@ -181,7 +181,7 @@ def test_cold_projection_preserves_content_and_rejects_damaged_storage(
     prepared = prepare("detail-snapshot-locator", target_format=target_format)
     expected = ContextProjectionResult(
         prepared["snapshot"], prepared["messages"], prepared["tools"], prepared["losses"],
-        prepared.get("native_projection"), prepared["resource_refs"],
+        prepared.get("native_projection"), prepared["resource_refs"], prepared["plan"],
     )
     source = next(source for source in prepared["snapshot"].contributions
                   if source.source_binding is not None and source.source_binding.source_ref == "instruction:R01")
@@ -637,7 +637,7 @@ def test_new_prepare_reuses_seal_validation_and_cold_projection_revalidates(
     phase = "cold-projection"
     assert saver.project_context_plan_for_dispatch(
         session, thread, result["plan"], target_format="chat_completions",
-    ) == ContextProjectionResult(result["snapshot"], result["messages"], result["tools"], result["losses"], None, result["resource_refs"])
+    ) == ContextProjectionResult(result["snapshot"], result["messages"], result["tools"], result["losses"], None, result["resource_refs"], result["plan"])
     assert validated == [
         ("seal", result["assembly_id"]), ("dispatch-reference", result["assembly_id"]),
         ("cold-projection", result["assembly_id"]),
@@ -757,7 +757,7 @@ def test_seal_projection_is_reused_and_independent_cold_projection_maps_after_cl
     assert sealed[0].snapshot == result["snapshot"]
     assert sealed[0].projection == ContextProjectionResult(
         result["snapshot"], result["messages"], result["tools"], result["losses"],
-        result.get("native_projection"), result["resource_refs"],
+        result.get("native_projection"), result["resource_refs"], result["plan"],
     )
     assert len(prepare_callbacks) > 1
     phase["name"] = "cold"
@@ -1198,7 +1198,7 @@ def test_source_returning_to_root_revision_preserves_distinct_frozen_selections(
             session, thread, restored.as_sealed_plan(), target_format=target_format,
         ) == ContextProjectionResult(
             snapshot, third["messages"], third["tools"], third["losses"],
-            third.get("native_projection"), third["resource_refs"],
+            third.get("native_projection"), third["resource_refs"], third["plan"],
         )
 
 
@@ -1234,7 +1234,7 @@ async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
         restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
         assert cold.project_context_plan_for_dispatch(
             session, thread, restored.as_sealed_plan(), target_format=target_format,
-        ) == ContextProjectionResult(second["snapshot"], second["messages"], second["tools"], second["losses"], second.get("native_projection"), second["resource_refs"])
+        ) == ContextProjectionResult(second["snapshot"], second["messages"], second["tools"], second["losses"], second.get("native_projection"), second["resource_refs"], second["plan"])
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
@@ -1273,7 +1273,7 @@ def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_
         assert tuple(selection_ref_identity(ref) for ref in restored.refs if ref.ref_id == item.item_id) == expected_keys
         assert cold.project_context_plan_for_dispatch(
             session, thread, restored.as_sealed_plan(), target_format=target_format,
-        ) == ContextProjectionResult(second["snapshot"], second["messages"], second["tools"], second["losses"], second.get("native_projection"), second["resource_refs"])
+        ) == ContextProjectionResult(second["snapshot"], second["messages"], second["tools"], second["losses"], second.get("native_projection"), second["resource_refs"], second["plan"])
 
 
 def test_failed_seal_never_acknowledges_source(production_context):

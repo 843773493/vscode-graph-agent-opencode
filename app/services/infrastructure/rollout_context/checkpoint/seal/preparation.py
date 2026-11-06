@@ -560,7 +560,7 @@ def prepare_registered_context(
                 raise RuntimeError("source-mismatch: Provider seal 未返回本次 wire projection")
             if summary_candidate is None:
                 context_source_manager.acknowledge_sealed_pending(csm_batch, snapshot.seal_binding)
-        plan = snapshot.as_sealed_plan()
+        plan = projection.plan
         preimage = normalize_wire_request(finalize_provider_wire(
             messages=projection.messages, tools=projection.tools,
             native_request=None if projection.native is None else projection.native["request"],

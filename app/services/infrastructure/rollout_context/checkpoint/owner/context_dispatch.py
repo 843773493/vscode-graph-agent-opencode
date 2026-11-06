@@ -137,7 +137,7 @@ class ContextDispatchOwnerMixin:
             )
             snapshot = projection.assembly
         result: ContextDispatchPayload = {"snapshot": snapshot, "dispatch_ref": reference,
-                  "assembly_id": snapshot.assembly_id, "plan": snapshot.as_sealed_plan(),
+                  "assembly_id": snapshot.assembly_id, "plan": projection.plan,
                   "execution_id": snapshot.execution_id,
                   "messages": projection.messages, "tools": projection.tools,
                   "losses": projection.losses, "resource_refs": projection.resource_refs}
