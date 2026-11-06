@@ -28,6 +28,56 @@ def parse_source_text(text: str) -> dict[str, object]:
     return payload
 
 
+def set_source_value(text: str, path: tuple[str, ...], value: object) -> str:
+    """用原 JSONC 语法树和 lexer 定位单个成员，保留其余注释、格式与秘密占位。"""
+    parse_source_text(text)
+    if not path:
+        raise ValueError("来源编辑必须指定成员路径")
+    tree = parser.parse(text)
+    tokens = list(parser.lex(text))
+    indices = {token.pos_in_stream: index for index, token in enumerate(tokens)}
+    closing: dict[int, int] = {}
+    stack: list[int] = []
+    for index, token in enumerate(tokens):
+        if token.type in {"LBRACE", "LSQB"}:
+            stack.append(index)
+        elif token.type in {"RBRACE", "RSQB"}:
+            closing[stack.pop()] = index
+    opening = 0
+    newline = "\r\n" if "\r\n" in text else "\n"
+    for depth, part in enumerate(path):
+        if tree.data != "object":
+            raise ValueError("来源编辑的祖先成员必须是对象")
+        pairs = [child for child in tree.children if isinstance(child, Tree)]
+        matches = [pair for pair in pairs if json.loads(str(pair.children[0].children[0])) == part]
+        if len(matches) > 1:
+            raise ValueError("来源编辑路径存在重复成员，不能猜测目标")
+        position = tokens[opening].pos_in_stream
+        prefix = text[text.rfind("\n", 0, position) + 1:position]
+        indent = prefix[:len(prefix) - len(prefix.lstrip(" \t"))]
+        if not matches:
+            nested = value
+            for key in reversed(path[depth + 1:]):
+                nested = {key: nested}
+            fragment = json.dumps({part: nested}, ensure_ascii=False, indent=2)[1:-1]
+            fragment = fragment.replace("\n", newline + indent)
+            start = tokens[opening].pos_in_stream + 1
+            return text[:start] + fragment.rstrip() + ("," if pairs else "") + newline + indent + text[start:]
+        pair, = matches
+        key_token = pair.children[0].children[0]
+        opening = indices[key_token.pos_in_stream] + 2  # key、冒号、value 均由同一官方 lexer 提供。
+        if depth == len(path) - 1:
+            end = tokens[closing.get(opening, opening)]
+            start = tokens[opening].pos_in_stream
+            position = key_token.pos_in_stream
+            prefix = text[text.rfind("\n", 0, position) + 1:position]
+            indent = prefix[:len(prefix) - len(prefix.lstrip(" \t"))]
+            replacement = json.dumps(value, ensure_ascii=False, indent=2).replace("\n", newline + indent)
+            return text[:start] + replacement + text[end.pos_in_stream + len(end):]
+        tree = pair.children[1]
+    raise RuntimeError("来源成员编辑未取得目标")
+
+
 def _strings(node: Tree, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Token]]:
     if node.data == "string":
         yield path, node.children[0]

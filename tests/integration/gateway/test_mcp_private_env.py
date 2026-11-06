@@ -76,12 +76,13 @@ async def test_private_env_survives_original_thread_restart_and_rejects_borrowed
         assert response.status_code == status, response.text
         return payload
 
-    async def edit_source(base: str, servers: dict, key: str) -> dict:
+    async def edit_source(base: str, servers: dict | None, key: str) -> dict:
         document = (await exchange("GET", base + "/config/sources/" + SOURCE))["data"]
         config = commentjson.loads(document["jsonc"])
-        config["mcp"] = {"servers": servers}
+        if servers is not None:
+            config["mcp"] = {"servers": servers}
         return {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"], "source_key": SOURCE,
-            "jsonc": json.dumps(config, ensure_ascii=False, indent=2) + "\n", "base_file_digest": document["file_digest"],
+            "jsonc": document["jsonc"] if servers is None else json.dumps(config, ensure_ascii=False, indent=2) + "\n", "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
             "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
             "idempotency_key": key}
@@ -167,15 +168,30 @@ async def test_private_env_survives_original_thread_restart_and_rejects_borrowed
         artifact = await install(base, candidate, plan["plan_digest"], "private-env-install-" + label)
         directory = {"enabled": True, "transport": "stdio", "managed_launch": artifact["binding"], "args": [],
             "env": {TOKEN_KEY: reference, RECEIPT_KEY: str(receipts)}}
-        edit = await edit_source(base, {"secure": directory}, label + "-catalog-source")
+        edit = await edit_source(base, None, label + "-catalog-source")
+        source_file = case.workspaces[label] / ".boxteam/workspace.jsonc"
+        original_bytes = source_file.read_bytes()
+        draft = (await exchange("POST", base + "/mcp/candidate-configurations/draft", {
+            "target": target, "server_id": "secure", "plan": {"candidate": candidate, "plan_digest": plan["plan_digest"]},
+            "managed_launch": artifact["binding"], "source_edit": edit, "enabled": True}))["data"]
+        assert source_file.read_bytes() == original_bytes
+        assert str(receipts) not in json.dumps(draft)
+        assert draft["preflight"]["document"]["file_digest"] == edit["base_file_digest"]
+        generated = commentjson.loads(draft["source_edit"]["jsonc"])["mcp"]["servers"]["secure"]
+        assert generated["managed_launch"] == artifact["binding"] and generated["env"][TOKEN_KEY] == reference
+        assert generated["env"][RECEIPT_KEY].startswith("boxteam-redacted:")
         configuration = {"target": target, "server_id": "secure", "plan": {"candidate": candidate, "plan_digest": plan["plan_digest"]},
-            "managed_launch": artifact["binding"], "source_edit": edit}
+            "managed_launch": artifact["binding"], "source_edit": draft["source_edit"]}
         saved = (await exchange("PUT", base + "/mcp/candidate-configurations", configuration))["data"]
         assert saved["edit"]["state"] == "active" and saved["edit"]["source_saved"] and saved["edit"]["layer_imported"]
         assert json.loads(saved["jsonc"])["mcp"]["servers"]["secure"]["env"][TOKEN_KEY] == reference
+        persisted = commentjson.loads(source_file.read_text(encoding="utf-8"))["mcp"]["servers"]["secure"]
+        assert persisted == directory
+        retried = (await exchange("PUT", base + "/mcp/candidate-configurations", configuration))["data"]
+        assert retried["edit"] == saved["edit"] and retried["active_revision"] == saved["active_revision"]
         before_stale = (case.workspaces[label] / ".boxteam/workspace.jsonc").read_bytes()
         await exchange("PUT", base + "/mcp/candidate-configurations", {**configuration,
-            "source_edit": {**edit, "idempotency_key": label + "-stale-source"}}, status=409)
+            "source_edit": {**draft["source_edit"], "idempotency_key": label + "-stale-source"}}, status=409)
         assert (case.workspaces[label] / ".boxteam/workspace.jsonc").read_bytes() == before_stale
         # 手动场景直接运行独立脚本，避免绕过 managed_launch 的隔离参数污染已发布 wheel。
         launch = {"command": sys.executable, "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/private_env_server.py")],

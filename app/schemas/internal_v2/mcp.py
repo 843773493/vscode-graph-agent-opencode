@@ -16,6 +16,7 @@ from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceI
 from app.schemas.internal_v2.config import (
     ConfigSourceDocumentDTO,
     ConfigSourceEditRequest,
+    ConfigSourcePreflightDTO,
 )
 
 
@@ -387,6 +388,24 @@ class McpCandidateConfigurationRequestDTO(BaseModel):
 
 class McpCandidateConfigurationResponseDTO(_McpResponse):
     data: ConfigSourceDocumentDTO
+
+
+class McpCandidateConfigurationDraftRequestDTO(_McpCandidateModel):
+    target: McpWorkspaceTargetDTO
+    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
+    plan: McpCandidatePlanValidationRequestDTO
+    managed_launch: McpManagedLaunchDTO | None = None
+    enabled: bool
+    source_edit: ConfigSourceEditRequest
+
+
+class McpCandidateConfigurationDraftDTO(_McpCandidateModel):
+    source_edit: ConfigSourceEditRequest
+    preflight: ConfigSourcePreflightDTO
+
+
+class McpCandidateConfigurationDraftResponseDTO(_McpResponse):
+    data: McpCandidateConfigurationDraftDTO
 
 
 class McpInstallationRequestDTO(McpCandidatePlanValidationRequestDTO):

@@ -22,6 +22,8 @@ from app.schemas.internal_v2.mcp import (
     McpArtifactReferencesResponseDTO,
     McpAuthorizationCallbackDTO,
     McpAuthorizationResponseDTO,
+    McpCandidateConfigurationDraftRequestDTO,
+    McpCandidateConfigurationDraftResponseDTO,
     McpCandidateConfigurationRequestDTO,
     McpCandidateConfigurationResponseDTO,
     McpCandidateInspectRequestDTO,
@@ -125,6 +127,25 @@ async def write_mcp_candidate_private_env(
     with _candidate_errors():
         data = await owner.write_private_env(payload, actual_target=target, installation_target=installation_target, candidate_required=True)
     return McpPrivateEnvWriteResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.post("/candidate-configurations/draft", response_model=McpCandidateConfigurationDraftResponseDTO, summary="由原候选生成脱敏 JSONC 配置提案并无副作用预检")
+async def draft_mcp_candidate_configuration(
+    payload: McpCandidateConfigurationDraftRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+    installation_target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    target = _target(service)
+    with _candidate_errors():
+        data = await owner.draft_candidate_configuration(payload, actual_target=target,
+            installation_target=installation_target, config_service=config_service)
+    return McpCandidateConfigurationDraftResponseDTO(data=data, request_id=request_id, target=target)
 
 
 @router.put("/candidate-configurations", response_model=McpCandidateConfigurationResponseDTO, summary="重新消费原 MCP 候选并经原来源候选／CAS 保存配置")

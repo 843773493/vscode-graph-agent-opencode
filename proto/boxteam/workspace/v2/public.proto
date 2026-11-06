@@ -899,6 +899,30 @@ message McpCandidateConfigurationResponseDTO {
   uint32 protocol_version = 6;
 }
 
+// JSONC 正文及 CAS 基线由来源 owner 提供，launch 由原候选 owner 生成。
+message McpCandidateConfigurationDraftRequestDTO {
+  McpWorkspaceTargetDTO target = 1;
+  string server_id = 2;
+  McpCandidatePlanValidationRequestDTO plan = 3;
+  optional McpManagedLaunchDTO managed_launch = 4;
+  bool enabled = 5;
+  ConfigSourceEditRequest source_edit = 6;
+}
+
+message McpCandidateConfigurationDraftDTO {
+  ConfigSourceEditRequest source_edit = 1;
+  ConfigSourcePreflightDTO preflight = 2;
+}
+
+message McpCandidateConfigurationDraftResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpCandidateConfigurationDraftDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
 message McpInstallationRequestDTO {
   McpCandidatePlanRequestDTO candidate = 1;
   string plan_digest = 2;

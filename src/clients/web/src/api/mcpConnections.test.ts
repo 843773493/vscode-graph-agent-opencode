@@ -3,7 +3,7 @@ import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
-  writeMcpPrivateHeader, writeMcpPrivateEnv,
+  writeMcpPrivateHeader, writeMcpPrivateEnv, draftMcpCandidateConfiguration,
   getMcpArtifactReferences, uninstallMcpArtifact,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
@@ -40,6 +40,38 @@ function installFetch(respond: (url: URL, init: RequestInit | undefined) => unkn
 }
 
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("配置提案消费原脱敏JSONC，冻结来源与幂等键，拒绝异主回执", async () => {
+  const edit = { ...target, source_key: "workspace_root_mutable_override", jsonc: "// 原件\n{}", idempotency_key: "draft-operation",
+    base_file_digest: "base", base_layer_revision: 1, base_layer_digest: "layer", expected_active_revision: 1, expected_active_digest: "active" };
+  const payload = { target: { kind: "workspace", ...target }, server_id: "secure", enabled: false, source_edit: edit,
+    plan: { candidate: { server_id: "secure", target: { kind: "backend", gateway_id: target.gateway_id,
+      backend_id: "00000000-0000-4000-8000-000000000011" },
+      source: { kind: "manual", name: "secure", version: "1", definition: { transport: "stdio", command: "/target/python" } },
+      manifest_digest: "sha256:jcs:v1:" + "a".repeat(64),
+      variant: { kind: "manual", index: 0, digest: "sha256:jcs:v1:" + "b".repeat(64) }, inputs: {} },
+    plan_digest: "sha256:jcs:v1:" + "c".repeat(64) } };
+  const draft = { source_edit: { ...edit, jsonc: '{"mcp":{"servers":{"secure":{"enabled":false}}}}' },
+    preflight: { document: { ...target, source_key: edit.source_key } } };
+  let actual = draft;
+  const requests: RequestInit[] = [];
+  const port = installFetch((url, init) => {
+    expect(url.pathname).toBe("/api/v1/mcp/candidate-configurations/draft");
+    expect(init?.method).toBe("POST"); expect(init?.cache).toBe("no-store");
+    requests.push(init!);
+    return envelope(actual);
+  });
+  expect(JSON.stringify(await draftMcpCandidateConfiguration(port, target, payload))).toBe(JSON.stringify(draft));
+  expect(JSON.parse(String(requests[0]!.body))).toEqual(payload);
+  for (const change of [{ workspace_id: "other" }, { source_key: "inline" }, { idempotency_key: "another-operation" }]) {
+    actual = { ...draft, source_edit: { ...draft.source_edit, ...change } };
+    await expect(draftMcpCandidateConfiguration(port, target, payload)).rejects.toThrow("原目标或来源");
+  }
+  actual = draft;
+  const pending = draftMcpCandidateConfiguration(port, { ...target }, payload);
+  payload.source_edit.source_key = "changed";
+  expect(JSON.stringify(await pending)).toBe(JSON.stringify(draft));
+});
 
 test("私有 env 按手动或原目录请求选择能力路由，只消费精确引用", async () => {
   const payload = { target: { kind: "workspace", ...target }, server_id: "secure", input_key: "API_KEY",

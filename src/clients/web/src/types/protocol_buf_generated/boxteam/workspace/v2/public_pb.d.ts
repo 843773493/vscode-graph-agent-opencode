@@ -3943,6 +3943,111 @@ export declare type McpCandidateConfigurationResponseDTO = Message<"boxteam.work
 export declare const McpCandidateConfigurationResponseDTOSchema: GenMessage<McpCandidateConfigurationResponseDTO>;
 
 /**
+ * JSONC 正文及 CAS 基线由来源 owner 提供，launch 由原候选 owner 生成。
+ *
+ * @generated from message boxteam.workspace.v2.McpCandidateConfigurationDraftRequestDTO
+ */
+export declare type McpCandidateConfigurationDraftRequestDTO = Message<"boxteam.workspace.v2.McpCandidateConfigurationDraftRequestDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 1;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: string server_id = 2;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpCandidatePlanValidationRequestDTO plan = 3;
+   */
+  plan?: McpCandidatePlanValidationRequestDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.McpManagedLaunchDTO managed_launch = 4;
+   */
+  managedLaunch?: McpManagedLaunchDTO | undefined;
+
+  /**
+   * @generated from field: bool enabled = 5;
+   */
+  enabled: boolean;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigSourceEditRequest source_edit = 6;
+   */
+  sourceEdit?: ConfigSourceEditRequest | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCandidateConfigurationDraftRequestDTO.
+ * Use `create(McpCandidateConfigurationDraftRequestDTOSchema)` to create a new message.
+ */
+export declare const McpCandidateConfigurationDraftRequestDTOSchema: GenMessage<McpCandidateConfigurationDraftRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpCandidateConfigurationDraftDTO
+ */
+export declare type McpCandidateConfigurationDraftDTO = Message<"boxteam.workspace.v2.McpCandidateConfigurationDraftDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigSourceEditRequest source_edit = 1;
+   */
+  sourceEdit?: ConfigSourceEditRequest | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigSourcePreflightDTO preflight = 2;
+   */
+  preflight?: ConfigSourcePreflightDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCandidateConfigurationDraftDTO.
+ * Use `create(McpCandidateConfigurationDraftDTOSchema)` to create a new message.
+ */
+export declare const McpCandidateConfigurationDraftDTOSchema: GenMessage<McpCandidateConfigurationDraftDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpCandidateConfigurationDraftResponseDTO
+ */
+export declare type McpCandidateConfigurationDraftResponseDTO = Message<"boxteam.workspace.v2.McpCandidateConfigurationDraftResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpCandidateConfigurationDraftDTO data = 3;
+   */
+  data?: McpCandidateConfigurationDraftDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCandidateConfigurationDraftResponseDTO.
+ * Use `create(McpCandidateConfigurationDraftResponseDTOSchema)` to create a new message.
+ */
+export declare const McpCandidateConfigurationDraftResponseDTOSchema: GenMessage<McpCandidateConfigurationDraftResponseDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.McpInstallationRequestDTO
  */
 export declare type McpInstallationRequestDTO = Message<"boxteam.workspace.v2.McpInstallationRequestDTO"> & {

@@ -7,6 +7,7 @@ import type {
   McpPrivateHeaderRefDTO, McpPrivateHeaderWriteRequestDTO, McpPrivateHeaderWriteResponseDTO,
   McpPrivateEnvRefDTO, McpPrivateEnvWriteRequestDTO, McpPrivateEnvWriteResponseDTO,
   McpCandidateConfigurationRequestDTO, McpCandidateConfigurationResponseDTO,
+  McpCandidateConfigurationDraftRequestDTO, McpCandidateConfigurationDraftResponseDTO,
   McpArtifactReferencesResponseDTO, McpManagedLaunchDTO, McpUninstallationRequestDTO,
 } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
@@ -85,7 +86,8 @@ export function uninstallMcpArtifact(port: number, workspace: GatewayWorkspaceRe
 }
 
 type McpResponse = McpServerListResponseDTO | McpConnectionOperationListResponseDTO | McpConnectionOperationResponseDTO | McpAuthorizationResponseDTO
-  | McpPrivateHeaderWriteResponseDTO | McpPrivateEnvWriteResponseDTO | McpCandidateConfigurationResponseDTO;
+  | McpPrivateHeaderWriteResponseDTO | McpPrivateEnvWriteResponseDTO | McpCandidateConfigurationResponseDTO
+  | McpCandidateConfigurationDraftResponseDTO;
 
 async function request<T extends McpResponse>(port: number, target: GatewayWorkspaceRequestTarget, path: string, init: RequestInit = {}): Promise<T> {
   const { gateway_id, workspace_id } = target;
@@ -139,6 +141,28 @@ export async function writeMcpPrivateEnv(
     throw new Error("MCP 私有 env 回执不属于原输入身份或缺少精确版本");
   }
   return reference;
+}
+
+export async function draftMcpCandidateConfiguration(
+  port: number, target: GatewayWorkspaceRequestTarget, payload: McpCandidateConfigurationDraftRequestDTO, signal?: AbortSignal,
+) {
+  const { gateway_id, workspace_id } = target;
+  const { source_key, idempotency_key } = payload.source_edit!;
+  if (payload.target?.gateway_id !== gateway_id || payload.target.workspace_id !== workspace_id) {
+    throw new Error("MCP 配置提案必须提交给原 Gateway／工作区");
+  }
+  const response = await request<McpCandidateConfigurationDraftResponseDTO>(port, target, "candidate-configurations/draft",
+    { method: "POST", body: JSON.stringify(payload), signal });
+  const draft = unwrapApiData({ ...response, data: response.data ?? null });
+  const edit = draft.source_edit;
+  const document = draft.preflight?.document;
+  if (edit?.gateway_id !== gateway_id || edit.workspace_id !== workspace_id
+      || edit.source_key !== source_key || edit.idempotency_key !== idempotency_key
+      || document?.gateway_id !== gateway_id || document.workspace_id !== workspace_id
+      || document.source_key !== source_key) {
+    throw new Error("MCP 配置提案不属于原目标或来源提交");
+  }
+  return draft;
 }
 
 export async function saveMcpCandidateConfiguration(

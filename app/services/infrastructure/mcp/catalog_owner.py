@@ -47,6 +47,8 @@ from app.domain.mcp_candidates import (
 )
 from app.schemas.internal_v2.config import ConfigSourceDocumentDTO, McpCleanupDTO
 from app.schemas.internal_v2.mcp import (
+    McpCandidateConfigurationDraftDTO,
+    McpCandidateConfigurationDraftRequestDTO,
     McpCandidateConfigurationRequestDTO,
     McpCandidateInspectDTO,
     McpCandidateInspectRequestDTO,
@@ -70,6 +72,9 @@ from app.services.infrastructure.config.contracts import (
 from app.services.infrastructure.config.source_document import (
     parse_source_text,
     redact_source_payload,
+    redact_source_text,
+    restore_source_text,
+    set_source_value,
 )
 from app.services.infrastructure.events.channel_events import (
     McpCatalogEventPublisher,
@@ -670,29 +675,30 @@ class McpCatalogOwner:
                         raise ValueError("MCP 私有 env 候选必须指定精确 server_id")
                     store.require_env_binding(McpPrivateEnvRefDTO.model_validate(value), server_id=server_id,
                         input_key=key, definition_digest=definition)
+        normalized = parameters
         if disposition != "requires_artifact":
             server, = parse_mcp_server_configs({"servers": {server_id: parameters}}, workspace_root=self._workspace_root,
                 installation_resolver=self._installation_resolver)
             # 沿原配置 parser 在目标侧解析环境引用，不向浏览器泄露 env/headers 值。
-            parameters = dict(server.connection)
+            normalized = dict(server.connection)
             if server.managed_launch is not None:
-                parameters["managed_launch"] = server.managed_launch.model_dump(mode="json")
-                parameters.pop("command")
+                normalized["managed_launch"] = server.managed_launch.model_dump(mode="json")
+                normalized.pop("command")
             if server.private_env:
-                parameters["env"] = {**cast(dict[str, object], parameters.get("env", {})),
+                normalized["env"] = {**cast(dict[str, object], normalized.get("env", {})),
                     **{reference.input_key: reference.model_dump(mode="json") for reference in server.private_env}}
             if server.private_headers:
-                parameters["headers"] = {**cast(dict[str, object], parameters.get("headers", {})),
+                normalized["headers"] = {**cast(dict[str, object], normalized.get("headers", {})),
                     **{reference.header_name: reference.model_dump(mode="json") for reference in server.private_headers}}
             if server.oauth is not None:
-                parameters["oauth"] = {"redirect_uri": server.oauth.redirect_uri}
+                normalized["oauth"] = {"redirect_uri": server.oauth.redirect_uri}
         platform = native_mcp_platform()
         fingerprint = {"target": actual_target.model_dump(), "source": provenance.model_dump(),
                        "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform.model_dump(),
-                       "disposition": disposition, "parameters": parameters}
+                       "disposition": disposition, "parameters": normalized}
         if request.server_id is not None:
             fingerprint["server_id"] = request.server_id
-        redacted = redact_source_payload(parameters, ("mcp", "servers", "candidate"))
+        redacted = redact_source_payload(normalized, ("mcp", "servers", "candidate"))
         return McpCandidatePlanDTO.model_validate({
             "source": provenance, "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform,
             "plan_digest": sha256_jcs(fingerprint), "disposition": disposition,
@@ -720,11 +726,11 @@ class McpCatalogOwner:
             raise McpCandidateConflict("MCP 安装候选的目标、平台或参数已改变，请重新生成计划")
         return await self.installations.install(request, plan=plan, parameters=parameters)
 
-    async def save_candidate_configuration(
-        self, request: McpCandidateConfigurationRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
-        installation_target: McpInstallationTargetDTO, config_service: ConfigService,
-    ) -> ConfigSourceDocumentDTO:
-        """只消费原请求，不保存展示 parameters；唯一来源 writer 负责候选与 CAS。"""
+    async def _candidate_configuration_parameters(
+        self, request: McpCandidateConfigurationRequestDTO | McpCandidateConfigurationDraftRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
+        installation_target: McpInstallationTargetDTO,
+    ) -> dict[str, object]:
+        """候选和制品由原 owner 重新消费，绝不保存展示 parameters。"""
         if request.target != actual_target or actual_target.workspace_id != read_workspace_id(self._workspace_root):
             raise McpCandidateConflict("MCP 配置目标已改变，必须重新读取原工作区")
         if actual_target.gateway_id is None:
@@ -748,20 +754,48 @@ class McpCatalogOwner:
             if request.managed_launch is not None:
                 raise ValueError("显式命令或 HTTP 候选不能附加另一受管制品")
             expected = dict(parameters)
-        config_service.preflight_source_edit(source_key=request.source_edit.source_key,
-            gateway_id=actual_target.gateway_id, request=request.source_edit)
+        return expected
+
+    async def draft_candidate_configuration(
+        self, request: McpCandidateConfigurationDraftRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
+        installation_target: McpInstallationTargetDTO, config_service: ConfigService,
+    ) -> McpCandidateConfigurationDraftDTO:
+        expected = await self._candidate_configuration_parameters(request, actual_target=actual_target,
+            installation_target=installation_target)
+        expected["enabled"] = request.enabled
+        text = set_source_value(request.source_edit.jsonc, ("mcp", "servers", request.server_id), expected)
+        edit = request.source_edit.model_copy(update={"jsonc": text})
+        assert actual_target.gateway_id is not None
+        preflight = config_service.preflight_source_edit(source_key=edit.source_key,
+            gateway_id=actual_target.gateway_id, request=edit)
+        return McpCandidateConfigurationDraftDTO(
+            source_edit=edit.model_copy(update={"jsonc": redact_source_text(text)}), preflight=preflight)
+
+    async def save_candidate_configuration(
+        self, request: McpCandidateConfigurationRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
+        installation_target: McpInstallationTargetDTO, config_service: ConfigService,
+    ) -> ConfigSourceDocumentDTO:
+        expected = await self._candidate_configuration_parameters(request, actual_target=actual_target,
+            installation_target=installation_target)
         source = parse_source_text(request.source_edit.jsonc)
         servers = cast(dict[str, object], cast(dict[str, object], source.get("mcp", {})).get("servers", {}))
         actual = servers.get(request.server_id)
         if not isinstance(actual, dict):
             raise TypeError("MCP 来源编辑缺少精确 Server 配置")
         expected["enabled"] = actual.get("enabled", False)
+        # 新候选的遮罩仅以已验证的原候选还原；其它来源占位仍交原文件 writer 处理。
+        original = set_source_value(request.source_edit.jsonc, ("mcp", "servers", request.server_id), expected)
+        text = restore_source_text(request.source_edit.jsonc, original)
+        edit = request.source_edit.model_copy(update={"jsonc": text})
+        assert actual_target.gateway_id is not None
+        source = parse_source_text(text)
+        actual = cast(dict[str, object], cast(dict[str, object], source["mcp"])["servers"])[request.server_id]
         normalize = partial(parse_mcp_server_configs, workspace_root=self._workspace_root,
                             installation_resolver=self._installation_resolver)
         if normalize({"servers": {request.server_id: actual}}) != normalize({"servers": {request.server_id: expected}}):
             raise McpCandidateConflict("MCP 来源编辑与原候选实际 launch 或输入不一致，不能保存展示投影")
-        return await config_service.save_source_edit(source_key=request.source_edit.source_key,
-            gateway_id=actual_target.gateway_id, request=request.source_edit)
+        return await config_service.save_source_edit(source_key=edit.source_key,
+            gateway_id=actual_target.gateway_id, request=edit)
 
     async def prepare_config(
         self, raw_config: object, scope: LifetimeScope, record_side_effect: ConfigApplyRecorder,

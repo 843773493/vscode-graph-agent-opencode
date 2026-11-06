@@ -244,7 +244,8 @@ async def test_manual_env_uses_configuration_permissions_without_installation_pe
     assert case.registry.route_reference_counts(case.workspace_id) == (0, 0)
 
 
-@pytest.mark.parametrize("method,path", [("POST", "candidate-plans/private-env"), ("PUT", "candidate-configurations")])
+@pytest.mark.parametrize("method,path", [("POST", "candidate-plans/private-env"), ("PUT", "candidate-configurations"),
+                                         ("POST", "candidate-configurations/draft")])
 async def test_catalog_secret_and_configuration_also_require_installation_before_backend(mcp_access: McpAccess, method: str, path: str) -> None:
     case = mcp_access
     case.allow("configuration_read", "configuration_write")

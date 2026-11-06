@@ -98,6 +98,8 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 候选原件读取、计划与重验直接扩展原 `McpCatalogOwner`，不建立计划数据库、缓存或 token。目标侧按显式 endpoint／协议／entry URL 有界读取完整原件；v0.1 的 official metadata 只认 envelope 顶层 `_meta`，不从发布者 `server._meta` 借用身份，无稳定 ID 就保持缺省。完整 manifest digest、原 variant ordinal／digest、目标原生平台及解析参数共同冻结计划；消费时同 owner 重读并核原 digest，变化返回冲突。返回的 parameters 只是脱敏展示，配置保存须重新提交原请求并经原 source／CAS owner，不能把该投影保存作 launch。package 计划只表达待制品准备的意图，HTTP 表达纯配置，既有显式动态命令仍不受管；候选阶段不下载、不启动 MCP、不写配置或安装记录。
 
+配置提案由同一 owner 消费原候选、已发布制品及来源 CAS 生成，返回脱敏 JSONC 和原来源预检；不回显候选输入，不维护草稿账本。JSONC 单成员编辑复用现有 commentjson 语法树和 lexer，只替换精确 Server，保留外围原件。保存时仅以重验后的原候选还原新 Server 的秘密占位，其余占位继续交原文件 writer；整份配置的最终 CAS、幂等键和副作用准入只由原 writer 结算。显式环境引用保留原表达式，计划指纹仍核目标侧实际解释后的参数，不把展开的环境值回写来源。
+
 上游 MCP “安装”主要写 manifest／launch configuration，并以 npx／uvx／docker／dnx 运行时解析包；它不是本设计要求的已验证制品发布。新增的目标安装服务沿原 install seam 工作，但必须准备锁定依赖的隔离环境／精确可执行制品，容器使用不可变镜像 digest；项目连接的实际 launch 绑定安装 generation／digest，不能配置看似 pinned、实际仍运行动态 latest。生态无法提供该链时，条目标明不支持制品安装。用户已有的显式动态命令仍按原合同运行，不能追认成受管安装或在升级界面时擅自改写。
 
 目标安装服务唯一持有安装记录、制品、锁定版本及有引用的保留信息。制品和安装元数据位于目标环境 `${BOXTEAM_HOME:-~/.boxteams}/` 的基础设施区域；workspace 配置、连接与调用记录继续位于各工作区 `.boxteam/`。Gateway 仅提供可标记 stale 的状态投影，不写第二份安装账本。Web 扩展资源沿 Workbench 现有 profile／浏览器资源机制保存，不能要求浏览器写服务器路径。
