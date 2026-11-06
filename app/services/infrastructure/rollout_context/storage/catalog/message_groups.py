@@ -55,16 +55,8 @@ def read_message_group(
     read_item: Callable[..., CanonicalItemRecord],
 ) -> tuple[CanonicalItemRecord, ...]:
     """message_sequence 与 item_sequence 独立；先解析 anchor 的真实坐标。"""
-    anchors = connection.execute(
-        "SELECT item_sequence FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ?",
-        (offset, length),
-    ).fetchall()
-    if len(anchors) != 1:
-        raise RuntimeError("message locator 必须恰好指向一个 canonical item")
     anchor = read_item(
-        connection, stream,
-        sequence=strict_non_negative_int(anchors[0][0], field="item_catalog.item_sequence"),
-        offset=offset, length=length,
+        connection, stream, offset=offset, length=length,
     )
     manifest = anchor.projection_group
     if manifest is None:

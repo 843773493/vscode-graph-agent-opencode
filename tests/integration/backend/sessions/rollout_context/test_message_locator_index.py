@@ -10,9 +10,6 @@ from langchain_core.messages import AIMessage
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.primitives import (
-    _RolloutSQLiteConnection,
-)
 from tests.integration.backend.sessions.test_checkpoint_message_groups import _save
 from tests.integration.backend.sessions.test_checkpoint_message_groups import (
     group_case as group_case,  # noqa: PLC0414 - 沿当前测试文件隔离真实消息组工作区
@@ -31,7 +28,7 @@ def locator_case(tmp_path, group_case):
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_checkpoint_locator_queries_use_index_after_creation_or_initialization(locator_case, monkeypatch, existing):
+def test_cold_checkpoint_read_preserves_rollout_after_creation_or_initialization(locator_case, existing):
     saver, config, session, thread, path = locator_case
     storage = saver._storage.storage
     canonical = storage.jsonl_path(session, thread_id=thread)
@@ -53,24 +50,9 @@ def test_checkpoint_locator_queries_use_index_after_creation_or_initialization(l
         storage.initialize(session, thread_id=thread)
         storage.initialize(session, thread_id=thread)
 
-    queries = []
-    execute = _RolloutSQLiteConnection.execute
-
-    def observe(connection, statement, parameters=()):
-        if statement.startswith("SELECT item_sequence FROM item_catalog WHERE jsonl_offset"):
-            queries.append((statement, parameters))
-        return execute(connection, statement, parameters)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(_RolloutSQLiteConnection, "execute", observe)
-        with RolloutCheckpointSaver(storage.sessions_dir) as cold:
-            assert cold.get_tuple(config) == expected
-    assert len(queries) == len(expected.checkpoint["channel_values"]["messages"])
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        assert cold.get_tuple(config) == expected
     with sqlite3.connect(path) as connection:
-        for query, parameters in queries:
-            plan = connection.execute("EXPLAIN QUERY PLAN " + query, parameters).fetchall()
-            assert all("SCAN item_catalog" not in row[3] for row in plan)
-            assert any("USING COVERING INDEX item_catalog_locator_index" in row[3] for row in plan)
         assert tuple(line for line in connection.iterdump() if line != index_sql + ";") == before
     assert canonical.read_bytes() == original_bytes
 

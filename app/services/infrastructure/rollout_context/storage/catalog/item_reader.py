@@ -76,7 +76,7 @@ class RolloutCanonicalReadMixin:
         connection: sqlite3.Connection,
         stream: BinaryIO,
         *,
-        sequence: int,
+        sequence: int | None = None,
         offset: int,
         length: int,
         validated_commits: set[int] | None = None,
@@ -88,7 +88,8 @@ class RolloutCanonicalReadMixin:
         恢复都必须先通过它定位 item，再从 JSONL/catalog 校验 identity、hash
         和不可变 envelope；envelope 不允许包含 message projection。
         """
-        sequence = strict_non_negative_int(sequence, field="v2 item sequence")
+        if sequence is not None:
+            sequence = strict_non_negative_int(sequence, field="v2 item sequence")
         offset = strict_non_negative_int(offset, field="v2 item offset")
         length = strict_non_negative_int(length, field="v2 item length")
         if length == 0:
@@ -99,14 +100,24 @@ class RolloutCanonicalReadMixin:
         raw = stream.read(length)
         if len(raw) != length:
             raise RuntimeError(f"v2 item locator 超出 JSONL: sequence={sequence}")
-        catalog = connection.execute(
+        # 消息 locator 只有字节坐标；同次 catalog 查询解析 sequence，避免先定位再回查。
+        predicate, parameters = (
+            ("item.item_sequence=?", (sequence,)) if sequence is not None
+            else ("item.jsonl_offset=? AND item.jsonl_length=? LIMIT 2", (offset, length))
+        )
+        rows = connection.execute(
             "SELECT item.item_id,item.content_hash,item.jsonl_offset,item.jsonl_length,"
             "item.projection_manifest_json,item.tool_call_id,item.payload_length,item.source_revision,"
-            + CATALOG_READ_COLUMNS + CATALOG_READ_JOINS + "WHERE item.item_sequence=?",
-            (sequence,),
-        ).fetchone()
-        if catalog is None:
+            + CATALOG_READ_COLUMNS + ",item.item_sequence" + CATALOG_READ_JOINS + "WHERE " + predicate,
+            parameters,
+        ).fetchall()
+        if sequence is None and len(rows) != 1:
+            raise RuntimeError("message locator 必须恰好指向一个 canonical item")
+        if not rows:
             raise RuntimeError(f"v2 item 缺少 item_catalog: sequence={sequence}")
+        catalog = rows[0]
+        if sequence is None:
+            sequence = strict_non_negative_int(catalog[-1], field="item_catalog.item_sequence")
         item_id = strict_text(catalog[0], field="item_catalog.item_id")
         catalog_offset = strict_non_negative_int(
             catalog[2], field=f"item_catalog.jsonl_offset: {item_id}"
@@ -123,7 +134,7 @@ class RolloutCanonicalReadMixin:
                 f"v2 item catalog 与 JSONL locator/hash 不一致: {item_id}"
             )
         validate_catalog_read_boundary(
-            connection, catalog[8:], item_id=item_id, offset=offset, length=length,
+            connection, catalog[8:-1], item_id=item_id, offset=offset, length=length,
             validated_commits=set() if validated_commits is None else validated_commits,
             validated_scopes=set() if validated_scopes is None else validated_scopes,
         )
