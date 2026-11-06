@@ -7,6 +7,7 @@ export const extensionHostStateSourcePaths = [
   'src/vs/workbench/services/extensions/common/abstractExtensionService.ts',
   'src/vs/workbench/services/extensions/common/extensionHostManager.ts',
   'src/vs/workbench/services/extensions/common/lazyCreateExtensionHostManager.ts',
+  'src/vs/workbench/api/browser/mainThreadExtensionService.ts',
 ];
 
 /** 浏览器和 Node 宿主共用描述版本、候选验证和原子发布合同。 */
@@ -73,7 +74,8 @@ export function transformExtensionHostState(root, path, source, replaceOnce) {
     contents = replaceOnce(contents, 'export interface IInternalExtensionService {',
       `export interface IInternalExtensionService {
   // 宿主准入与此内部回调对象同寿命，关闭后不能写入下一代的全局状态。
-  dispose(): void;`);
+  dispose(): void;
+  getExtension(id: string): Promise<IExtensionDescription | undefined>;`);
     return contents + `
 function uniqueExtensionIdentifiers(ids: readonly ExtensionIdentifier[]): ExtensionIdentifierSet {
   const result = new ExtensionIdentifierSet();
@@ -127,27 +129,79 @@ function extensionDescriptionsEqual(a: IExtensionDescription, b: IExtensionDescr
 `);
   }
   if (path === paths[3]) {
-    let contents = replaceOnce(source,
-      '\tprivate _acquireInternalAPI(extensionHost: IExtensionHost): IInternalExtensionService {\n\t\treturn {',
-      `\tprivate _acquireInternalAPI(extensionHost: IExtensionHost): IInternalExtensionService {
-    // TODO(5.6)：其余MainThread查询、UI异步回调及RPC载荷还须沿各owner迁齐代际和视图投影。
+    const start = source.indexOf('\tprivate _acquireInternalAPI(');
+    const end = source.indexOf('\tprivate _onWillActivateExtension(', start);
+    let contents = replaceOnce(source, source.slice(start, end), `
+  private _acquireInternalAPI(extensionHost: IExtensionHost): IInternalExtensionService {
+    // TODO(5.6)：其余MainThread异步UI及RPC载荷还须沿各owner迁齐代际和视图投影。
     let active = true;
     const assertActive = () => {
       if (!active) throw new Error('Extension host callback generation is closed');
     };
+    const assertOwned = (id: ExtensionIdentifier) => {
+      assertActive();
+      if (!extensionHost.extensions?.containsExtension(id)) {
+        throw new Error('Extension does not belong to the calling host: ' + id.value);
+      }
+    };
+    const assertActivatable = (id: ExtensionIdentifier) => {
+      assertActive();
+      const extensions = extensionHost.extensions;
+      const description = extensions?.allExtensions.find(extension => ExtensionIdentifier.equals(extension.identifier, id));
+      if (!extensions || !description || (!extensions.containsExtension(id) &&
+          (!(description.main || description.browser) || description.api !== 'none'))) {
+        throw new Error('Extension is not activatable from the calling host: ' + id.value);
+      }
+    };
     return {
-      dispose: () => { active = false; },`);
-    contents = replaceOnce(contents,
-      `_activateById: (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void> => {
-\t\t\t\treturn this._activateById(extensionId, reason);`,
-      `_activateById: async (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void> => {
+      dispose: () => { active = false; },
+      getExtension: async (id: string) => {
         assertActive();
-        await this._activateById(extensionId, reason);
+        await this._installedExtensionsReady.wait();
+        assertActive();
+        return extensionHost.extensions?.allExtensions.find(extension => ExtensionIdentifier.equals(extension.identifier, id));
+      },
+      _activateById: async (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void> => {
+        assertActivatable(extensionId);
+        await this._activateById(extensionId, reason, extensionHost);
         // 已准入操作可能仍在结算；迟到完成不能重新授权原宿主或重放到新代际。
-        assertActive();`);
-    for (const callback of ['_onWillActivateExtension', '_onDidActivateExtension', '_onDidActivateExtensionError', '_onExtensionRuntimeError']) {
-      contents = replaceOnce(contents, `return this.${callback}(`, `assertActive();\n\t\t\t\treturn this.${callback}(`);
+        assertActive();
+      },
+      _onWillActivateExtension: extensionId => {
+        assertOwned(extensionId);
+        this._onWillActivateExtension(extensionId, extensionHost.runningLocation);
+      },
+      _onDidActivateExtension: (extensionId, codeLoadingTime, activateCallTime, activateResolvedTime, activationReason) => {
+        assertOwned(extensionId);
+        this._onDidActivateExtension(extensionId, codeLoadingTime, activateCallTime, activateResolvedTime, activationReason);
+      },
+      _onDidActivateExtensionError: (extensionId, error) => {
+        // 原activator也报告合法api:none依赖的激活失败；这条诊断不写它的运行状态。
+        assertActivatable(extensionId);
+        this._onDidActivateExtensionError(extensionId, error);
+      },
+      _onExtensionRuntimeError: (extensionId, error) => {
+        assertOwned(extensionId);
+        this._onExtensionRuntimeError(extensionId, error);
+      }
+    };
+  }
+
+  public async _activateById(extensionId: ExtensionIdentifier, reason: ExtensionActivationReason, source?: IExtensionHost): Promise<void> {
+    // 只向实际持有者发送一次；无发起上下文的同ID多实例必须明确消解，不能广播副作用。
+    const managers = this._extensionHostManagers.filter(manager => manager.containsExtension(extensionId)
+      && (!source?.extensions?.containsExtension(extensionId) || manager.representsRunningLocation(source.runningLocation)));
+    if (managers.length !== 1) {
+      throw new Error((managers.length ? 'Ambiguous extension ' : 'Unknown extension ') + extensionId.value);
     }
+    if (!await managers[0].activate(extensionId, reason)) throw new Error('Extension activation was refused: ' + extensionId.value);
+  }
+
+`);
+    contents = replaceOnce(contents, `await Promise.all(
+\t\t\t\tthis._extensionHostManagers.map(extHostManager => extHostManager.activate(extensionDescription.identifier, { startup: false, extensionId: extensionDescription.identifier, activationEvent: shouldActivateReason }))
+\t\t\t);`,
+      'await this._activateById(extensionDescription.identifier, { startup: false, extensionId: extensionDescription.identifier, activationEvent: shouldActivateReason });');
     contents = replaceOnce(contents,
       'await extensionHostManager.deltaExtensions({ versionId, toRemove, toAdd, addActivationEvents, myToRemove, myToAdd: myToAdd.map(extension => extension.identifier) });',
       `try {
@@ -192,6 +246,13 @@ function extensionDescriptionsEqual(a: IExtensionDescription, b: IExtensionDescr
     this._internalExtensionService.dispose();`);
     const dispose = path === paths[4] ? '\tpublic override dispose(): void {' : '\toverride dispose(): void {';
     return replaceOnce(contents, dispose, `${dispose}\n    this._internalExtensionService.dispose();`);
+  }
+  if (path === paths[6]) {
+    let contents = replaceOnce(source, 'ExtensionActivationReason, IExtensionService, IInternalExtensionService',
+      'ExtensionActivationReason, IInternalExtensionService');
+    contents = replaceOnce(contents, '\t\t@IExtensionService private readonly _extensionService: IExtensionService,\n', '');
+    contents = replaceOnce(contents, 'this._extensionService.getExtension(extensionId)', 'this._internalExtensionService.getExtension(extensionId)');
+    return replaceOnce(contents, 'this._extensionService.getExtension(extensionId.value)', 'this._internalExtensionService.getExtension(extensionId.value)');
   }
   if (path !== paths[2]) return source;
   let contents = replaceOnce(source, 'asPromise, Barrier, IntervalTimer, timeout', 'asPromise, Barrier, IntervalTimer, Sequencer, timeout');
