@@ -330,6 +330,8 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         "turn:job_2",
         "turn:job_1",
     ]
+    assert [(item.summary.files, item.summary.additions, item.summary.deletions)
+            for item in changesets.items] == [(2, 4, 0), (1, 1, 0), (2, 3, 0)]
 
     all_changes = await service.get_changeset(
         session_id=session.session_id,

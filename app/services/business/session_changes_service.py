@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import cache
 
 from app.abstractions.session_changes import (
     FileEditSnapshot,
@@ -108,6 +110,8 @@ class SessionChangesService:
     async def list_changesets(self, session_id: str) -> SessionChangesetListDTO:
         def read() -> SessionChangesetListDTO:
             records = self._store.read_records(session_id)
+            # 同一次列表里的 all/Turn 可消费相同快照，只复用纯 diff 计算。
+            build_diff = cache(build_unified_diff)
             items: list[SessionChangesetListItemDTO] = []
             for changeset_id in (
                 "all",
@@ -117,6 +121,7 @@ class SessionChangesService:
                     session_id=session_id,
                     changeset_id=changeset_id,
                     records=changeset_records(records, changeset_id),
+                    build_diff=build_diff,
                 )
                 items.append(
                     SessionChangesetListItemDTO(
@@ -197,6 +202,7 @@ class SessionChangesService:
         changeset_id: str,
         records: list[StoredFileEdit],
         persist: bool = False,
+        build_diff: Callable[..., str] = build_unified_diff,
     ) -> SessionChangesetDTO:
         reviewed_map = self._store.read_reviewed_map(session_id)
         changes = aggregate_records(
@@ -209,7 +215,7 @@ class SessionChangesService:
         )
         files: list[SessionFileChangeDTO] = []
         for change in changes:
-            diff_text = build_unified_diff(
+            diff_text = build_diff(
                 file_path=change.file_path,
                 before_content=change.before_content or "",
                 after_content=change.after_content or "",
