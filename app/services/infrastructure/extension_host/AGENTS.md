@@ -6,6 +6,7 @@
 
 - 已选定运行时的直接启动、私有 IPC、输出收集及原进程退出核验。
 - 后续目标宿主管理 owner 的生命周期接线。
+- 专用运行时从 Launcher runtime manifest 的 extension_host 声明解析；缺失表示不可用，不借应用通用 Node 或 PATH。
 
 # 不可修改内容
 

@@ -15,6 +15,7 @@ import pytest
 from app.core.child_process import OwnedChildProcess
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
+from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.extension_host.test_node_host import (
     node_host_runtime as node_host_runtime,  # noqa: PLC0414 - 复用显式匹配上游的运行时准入
@@ -61,7 +62,8 @@ async def unconnected_host(node_host_runtime: tuple[str, str], process_context: 
                       "writeFileSync('started', 'ready');\nconsole.log('waiting-for-ipc');\n"
                       "setInterval(() => {}, 1000);\n", encoding="utf-8")
     with log.open("wb") as output:
-        host = NodeExtensionHost(request.node.nodeid, executable=Path(node_host_runtime[0]), entrypoint=source,
+        host = NodeExtensionHost(request.node.nodeid,
+            runtime=NodeHostRuntime(Path(node_host_runtime[0]), source, "0" * 40, "fixture", "24.22.1"),
             directory=runtime / "host", environment=os.environ, output=output, startup_timeout=2)
         try:
             yield host, source, log

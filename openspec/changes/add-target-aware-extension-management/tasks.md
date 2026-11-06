@@ -10,6 +10,7 @@
 - [ ] 1.4 在原联邦 policy 登记安装／宿主管理能力及 configuration_read／configuration_write 与 schema，迁齐默认拒绝／认证主体规则和调用方；覆盖脱敏读取、订阅披露、预检／提交／pending 管理和独立重启权限，验证撤权、Relay 不提权、只有发现权限时无目标写入，不另建权限系统。
   - 配置能力已沿原 policy／schema 接入 Gateway 自有配置路由与两种 workspace 代理 mount；安装／宿主管理能力和实网目标验收仍未完成，整项保持未勾选。
   - MCP 候选规划切片沿原 policy／schema 登记独立 `mcp_installation_manage`，默认拒绝且须精确绑定认证主体；两种 workspace mount 的原件读取／计划／重验共用原生 Gateway 权限边界。该切片不代替后续制品安装、宿主管理及整项验收，本项保持未勾选。
+  - 2026-11-06 扩展权限注册切片：原 policy／schema 登记独立 `extension_installation_manage`、`extension_host_manage`，管理能力默认拒绝且须精确绑定认证主体，彼此不代授；87项policy定向通过。实际宿主管理入口／联邦通道尚未接入，不将注册等同完整授权验收。
 - [ ] 1.5 实现绑定稳定目标的能力／状态发现及实际路由，区分离线镜像和实时状态；验证同名、route 变化／重用、停止和权限撤销，无隐式启动或本地 fallback。
 - [ ] 1.6 清点各功能将使用的既有 URI 与字段；在原配置／联邦／MCP owner 补本稿已明确需要的 source 读写、私有输入引用、受管 launch binding、管理能力正式 delta／schema／消费者；确需新增 URI 时补原寻址 owner delta，不在前端拼 grammar。
 
@@ -79,6 +80,7 @@
   - 2026-11-06 完整依赖锁前置切片：构建从固定上游 npm v3 锁提取真实运行闭包，保留嵌套版本、原制品 URL／integrity、peer 归属、平台 optional 与安装元数据；不继承上游根脚本／开发依赖，不重新选传递版本。循环终止、optional→required 后代升级及缺失制品拒绝均已定向覆盖。Linux Bun1.3.11 实际冻结安装成功，按真实 Node 解析逐条核对77条依赖边（允许安装器提升目录，不借用安装目录外开发依赖），原 npm 子锁字节保持。
   - 同批指定 Node24.22.1／原 headers 构建并实际载入 watchdog、spdlog；真实宿主启用 parentPid，原生日志写盘、ripgrep 目标文件读取和两个同公开 ID 扩展独立激活均通过。Kerberos 源码编译缺系统 GSSAPI 头文件，改用该固定版本官方 N-API4 预编译包验证载入，未修改系统环境。最终 pytest 1 passed／4.08秒，内含7项Node检查，Node语法与差异检查通过；原浏览器转换源码未改，复用上一切片类型检查及正式Web构建证据。独立只读复审无阻塞意见；原始命令、失败归因、指纹、原生构建与77条解析回执见 `out/tests/temp/2026/11/06/node_host_lock/artifacts/verification-v1.json`。尚未证明各平台制品发布、目标管理／认证通道、父进程丢失回收或窗口多目标身份；5.2／5.3／5.7仍未完成。
 - [ ] 5.3 在明确后端目标侧接入匹配上游的 Node runtime／host 组件及认证 RPC 通道，复用原启动和 activation 协议；不放到 Gateway 请求进程、Python Agent 或 Electron main。
+  - 2026-11-06 专用runtime绑定切片：原Launcher manifest可选extension_host，明确绑定目标Node和宿主组件；缺失／null表示不可用，配置损坏直接失败。相对路径只按manifest目录解析，开发入口仅显式成对参数启用；原进程消费该绑定，不借应用通用Node／PATH、不额外启动版本探针或扫描hash。21项绑定校验、34项JS启动接线和5项真实原Node RPC／A/B扩展／IPC失败／取消回收通过；Python Ruff／Pyright零诊断。准确命令及原件见 `out/tests/temp/2026/11/06/node_host_binding/artifacts/verification-v1.json`。管理通道、FastAPI宿主生命周期、Windows／Electron和发行制品尚未完成，本项保持未勾选。
   - 2026-11-06 Linux 进程／IPC 切片：新增 Backend 内部 `NodeExtensionHost`，直接启动固定原宿主、通过私有 Unix socket 传原 PersistentProtocol 字节；复用 `OwnedChildProcess`，移除测试原有 fork／socket-transfer 启动链，不增加 Node broker 或 RPC 编码。原生 stdout／stderr 经同一公共进程入口直接写目标日志，避免后台 collector 和退出丢尾。定向22项Python通过（含8项真实Node检查），覆盖同ID不同版本独立激活／原生与API文件读取、A关闭后B继续、版本拒绝55、断连正常退出、真实SIGKILL(-9)、IPC前退出／启动超时／取消／同一对象不能重复启动，以及512KiB完整日志和调用者句柄归属。Windows `hyf-win` 正式快照实机另9项通过，核文件输出、原MCP stdio及不合作后代的原Job退出；这不代表Windows宿主IPC已接入。
   - 最终Ruff／Node语法／差异检查通过，Pyright零错误、保留Linux缺Win32原生模块的4条source warning；浏览器生产源码未改，复用前片类型检查与Web构建。首轮Python3.12 `Server.wait_closed`先等活连接造成的外层超时已按连接先关闭的顺序修正；第二轮原宿主拦截`process.exit`的测试失败改用真实OS信号，不放宽退出断言。准确命令、源码前后指纹、失败原件与Linux／Windows收据见 `out/tests/temp/2026/11/06/node_host_owner/artifacts/verification-v1.json`。本片直接集成Backend基础设施模块，未接FastAPI lifespan／Gateway授权／安装发布／稳定目标view与窗口registry；非LinuxIPC保留明确代码TODO，5.3／5.6／5.7仍未勾选。
 - [ ] 5.4 绑定同目标明确 workspace 集合与原 multi-root 事件，分离各客户端活动态；不同 VSIX 启用集使用不同明确视图，不伪报同 host 的 folder 级隔离。验证 A1/A2 不包含 B1、视图变更有明确生命周期、一个客户端不覆盖另一个。

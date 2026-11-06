@@ -28,13 +28,15 @@ import {
 
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
 
-const developmentLayout = resolveDevelopmentLayout();
+const cliArguments = process.argv.slice(2);
+const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });
 const {
   projectRoot,
   boxteamHome,
   defaultWorkspaceRoot,
   portOffset,
   ports,
+  extensionHost,
 } = developmentLayout;
 const logContract = loadRuntimeLogContract(projectRoot);
 const webRoot = path.join(projectRoot, "src", "clients", "workbench");
@@ -69,7 +71,6 @@ const pythonBin = path.resolve(
 );
 const nodeBin =
   process.env.NODE_BIN ?? (process.platform === "win32" ? "node.exe" : "node");
-const cliArguments = process.argv.slice(2);
 const onlyLaunch = cliArguments.includes("--only-launch");
 const serviceArgumentIndex = cliArguments.findIndex(
   (argument) => argument === "--service" || argument.startsWith("--service="),
@@ -198,6 +199,12 @@ function writeDevelopmentManifest() {
         web_assets: null,
         chromium_executable:
           process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
+        extension_host: extensionHost === null
+          ? null
+          : {
+              node_executable: extensionHost.nodeExecutable,
+              component_root: extensionHost.componentRoot,
+            },
         node: {
           source: "launcher",
           executable: null,

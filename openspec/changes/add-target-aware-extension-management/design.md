@@ -68,9 +68,13 @@
 
 MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_installation_manage`。该能力默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin 和配置读写均不代授，安装管理也不授予配置写入、Backend 重启或宿主管理。两种 workspace API mount 的候选原件读取、计划生成和消费前重验均在下游请求前及实际披露前核现行能力；Relay 沿原目标路由透传，原生 Gateway 最终判权，无权限时不访问 Backend 或目录来源。
 
+目标扩展管理新增两个互不代授的原生 policy capability：`extension_installation_manage` 只覆盖明确目标上的 VSIX 制品安装、更新、移除及其安装状态；`extension_host_manage` 只覆盖明确目标 Node Extension Host 的启动、通道管理、运行状态和停止。两者均沿原 `ADMINISTRATIVE_CAPABILITIES` 注册并默认拒绝，仅精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置能力及另一个扩展能力均不得代授。制品管理权限不授予进程控制，宿主管理权限也不授予安装或替换制品。Relay 透传目标和原操作，由目标原生 Gateway 最终判权；没有授权时不得触达目标 Backend、文件或宿主进程。
+
 | 操作 | 权限与执行边界 |
 |---|---|
 | MCP 候选原件读取、确切 variant 计划、消费前重验及后续制品安装管理 | `mcp_installation_manage`，原生 Gateway 按精确认证主体校验；配置提交、重启与宿主管理分别核其能力 |
+| VSIX 制品安装、更新、移除及安装状态 | `extension_installation_manage`，目标原生 Gateway 按精确认证主体校验；不授予 Node 宿主进程控制 |
+| 目标 Node Extension Host 启动、通道管理、状态读取与停止 | `extension_host_manage`，目标原生 Gateway 按精确认证主体校验；不授予 VSIX 制品变更 |
 | source／effective／pending／操作状态读取和事件 | `configuration_read`，按目标和实际披露内容校验 |
 | 预检、创建／提交、删除覆盖、pending retry／discard／resolve／失败记录 | `configuration_write`；返回配置投影另核 read，保留原 CAS／证明／fencing 校验。retry 状态不等于执行重启，resolve 不接受客户端伪造健康证明 |
 | 实际重启受管 Backend | 原 `managed_backend_restart` 是操作名，仍核 `managed_workspace_admin` 管理能力；若消费配置 candidate，再核 `configuration_write`，不以 retry 按钮绕过 |

@@ -91,6 +91,15 @@
           ]
         }
       }
+    },
+    "extension_host": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["node_executable", "component_root"],
+      "properties": {
+        "node_executable": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "component_root": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 const SUPPORTED_SCHEMA_VERSION = 1;
@@ -72,6 +72,20 @@ export function validateRuntimeManifest(value) {
   if (node.source === "bundled" && nodeExecutable === null) {
     throw new Error("node.source=bundled 时必须提供 executable");
   }
+  let extensionHost = null;
+  if (manifest.extension_host !== null && manifest.extension_host !== undefined) {
+    const value = requireObject(manifest.extension_host, "runtime manifest.extension_host");
+    const unknownKeys = Object.keys(value).filter(
+      (key) => !["node_executable", "component_root"].includes(key),
+    );
+    if (unknownKeys.length > 0) {
+      throw new Error(`runtime manifest.extension_host 包含未知字段: ${unknownKeys.join(", ")}`);
+    }
+    extensionHost = Object.freeze({
+      nodeExecutable: requireString(value.node_executable, "runtime manifest.extension_host.node_executable"),
+      componentRoot: requireString(value.component_root, "runtime manifest.extension_host.component_root"),
+    });
+  }
   return Object.freeze({
     schemaVersion: manifest.schema_version,
     distribution: manifest.distribution,
@@ -108,6 +122,7 @@ export function validateRuntimeManifest(value) {
       source: node.source,
       executable: nodeExecutable,
     }),
+    extensionHost,
   });
 }
 
@@ -149,6 +164,13 @@ export function resolveRuntimeManifest(manifestPath, value) {
           ? null
           : resolveResource(runtimeRoot, manifest.node.executable),
     }),
+    extensionHost:
+      manifest.extensionHost === null
+        ? null
+        : Object.freeze({
+            nodeExecutable: resolveResource(runtimeRoot, manifest.extensionHost.nodeExecutable),
+            componentRoot: resolveResource(runtimeRoot, manifest.extensionHost.componentRoot),
+          }),
   });
 }
 
@@ -192,6 +214,30 @@ export function assertRuntimeResources(manifest) {
         `${label}资源不存在: ${resourcePath} ` +
           `(distribution=${manifest.distribution}, manifest=${manifest.manifestPath})`,
       );
+    }
+  }
+  if (manifest.extensionHost !== null) {
+    const root = manifest.extensionHost.componentRoot;
+    const extensionHostResources = [
+      ["Extension Host Node", manifest.extensionHost.nodeExecutable, "file"],
+      ["Extension Host component root", root, "directory"],
+      ...["extensionHostProcess.mjs", "version.json", "package.json", "package-lock.json"].map((name) => [
+        `Extension Host component ${name}`,
+        path.join(root, name),
+        "file",
+      ]),
+    ];
+    for (const [label, resourcePath, type] of extensionHostResources) {
+      if (!existsSync(resourcePath)) {
+        throw new Error(
+          `${label}资源不存在: ${resourcePath} ` +
+            `(distribution=${manifest.distribution}, manifest=${manifest.manifestPath})`,
+        );
+      }
+      const stat = statSync(resourcePath);
+      if (type === "file" ? !stat.isFile() : !stat.isDirectory()) {
+        throw new Error(`${label}资源类型无效: ${resourcePath}`);
+      }
     }
   }
 }

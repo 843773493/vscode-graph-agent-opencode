@@ -23,8 +23,8 @@ const STATUS_GATEWAY_TIMEOUT_MS = 2_000;
 const OPERATION_LOCK_TIMEOUT_MS = MANAGER_START_TIMEOUT_MS * 2 + 30_000;
 const PROCESS_POLL_INTERVAL_MS = 100;
 
-function createManagerLayout(environment = process.env, cwd = process.cwd()) {
-  const layout = resolveDevelopmentLayout({ environment, cwd });
+function createManagerLayout(environment = process.env, cwd = process.cwd(), args = []) {
+  const layout = resolveDevelopmentLayout({ environment, cwd, args });
   const runtimeRoot = path.join(layout.projectRoot, "out", "development-runtime");
   return {
     ...layout,
@@ -277,6 +277,14 @@ async function startPortable(layout) {
       process.execPath,
       path.join(layout.projectRoot, "scripts", "launch", "dev.mjs"),
       "--only-launch",
+      ...(layout.extensionHost === null
+        ? []
+        : [
+            "--extension-host-node",
+            layout.extensionHost.nodeExecutable,
+            "--extension-host-component",
+            layout.extensionHost.componentRoot,
+          ]),
     ];
     const result = Bun.spawnSync(command, {
       cwd: layout.projectRoot,
@@ -443,7 +451,7 @@ export async function main(args = process.argv.slice(2)) {
     await systemdMain(args);
     return;
   }
-  const layout = createManagerLayout();
+  const layout = createManagerLayout(process.env, process.cwd(), args.slice(1));
   if (action === "start") await startPortable(layout);
   if (action === "stop") await stopPortable(layout);
   if (action === "status") await statusPortable(layout);

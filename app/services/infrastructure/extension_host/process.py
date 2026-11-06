@@ -13,20 +13,21 @@ from typing import BinaryIO
 
 from app.core.child_process import OwnedChildProcess
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 
 
 class NodeExtensionHost:
     """一个已准入 generation 的一次性进程；运行时和路径只能由目标 owner 提供。"""
 
-    def __init__(self, instance_id: str, *, executable: Path, entrypoint: Path,
+    def __init__(self, instance_id: str, *, runtime: NodeHostRuntime,
                  directory: Path, environment: Mapping[str, str], output: BinaryIO,
                  startup_timeout: float) -> None:
-        if not executable.is_absolute() or not entrypoint.is_absolute() or not directory.is_absolute():
+        if not runtime.executable.is_absolute() or not runtime.entrypoint.is_absolute() or not directory.is_absolute():
             raise ValueError("Node 宿主运行时、入口和基础设施目录必须是目标本机绝对路径")
         if startup_timeout <= 0:
             raise ValueError("Node 宿主启动期限必须为正数")
         self.child = OwnedChildProcess(instance_id)
-        self._executable, self._entrypoint, self._directory = executable, entrypoint, directory
+        self._runtime, self._directory = runtime, directory
         self._environment, self._output = dict(environment), output
         self._startup_timeout = startup_timeout
         self._started = False
@@ -96,7 +97,7 @@ class NodeExtensionHost:
             # 先断开原 IPC，原宿主可沿 renderer-closed 正常退出；其后才等待/终止进程组。
             cleanup.push_async_callback(close_connection)
             # 原生标准流直接写目标日志，不增加collector或在退出时丢弃未读尾部。
-            await self.child.start([str(self._executable), str(self._entrypoint), "--useHostProxy=false"],
+            await self.child.start([str(self._runtime.executable), str(self._runtime.entrypoint), "--useHostProxy=false"],
                                    env=environment, cwd=self._directory, stderr=-2, stdout=self._output)
             assert self.child.process is not None
             exited = asyncio.create_task(self.child.process.wait(), name=f"extension-exit:{self.child.state.instance_id}")

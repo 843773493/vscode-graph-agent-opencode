@@ -43,6 +43,8 @@ from app.gateway.federation.identity import (
     public_key_pem,
 )
 from app.gateway.federation.policy import (
+    ADMINISTRATIVE_CAPABILITIES,
+    CAPABILITIES,
     Capability,
     FederationPolicyStore,
     default_policy_payload,
@@ -57,6 +59,7 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
+from configs.runtime import read_jsonc_object, validate_config
 from tests.support.communication.probe import TARGET_SESSION, WORKSPACE_ID
 
 
@@ -74,6 +77,10 @@ def test_default_policy_allows_all_core_capabilities() -> None:
             origin_gateway_id="gateway_peer",
             principal_ref="prn_x",
         )
+    assert {"extension_installation_manage", "extension_host_manage"} <= set(CAPABILITIES)
+    assert {"extension_installation_manage", "extension_host_manage"} <= set(ADMINISTRATIVE_CAPABILITIES)
+    for capability in ADMINISTRATIVE_CAPABILITIES:
+        assert not snapshot.evaluate(capability=capability, origin_gateway_id="gateway_peer", principal_ref="prn_x")
 
 
 @pytest.mark.parametrize("rules, expected", [
@@ -91,7 +98,7 @@ def test_workspace_admin_requires_explicit_authenticated_peer_principal(rules, e
     assert snapshot.evaluate(capability="managed_workspace_admin", origin_gateway_id="peer", principal_ref="peer-principal") is expected
 
 
-@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write", "mcp_installation_manage"])
+@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write", "mcp_installation_manage", "extension_installation_manage", "extension_host_manage"])
 @pytest.mark.parametrize("binding,expected", [
     ({}, False),
     ({"origin_gateway_id": "peer"}, False),
@@ -104,7 +111,13 @@ def test_configuration_management_requires_exact_authenticated_principal(
     rules = [{"capability": capability, "effect": "allow", **binding}]
     snapshot = normalize_policy({"default_effect": "allow", "rules": rules})
     assert snapshot.evaluate(capability=capability, origin_gateway_id="peer", principal_ref="peer-principal") is expected
-    other: Capability = "configuration_write" if capability == "configuration_read" else "configuration_read"
+    other: Capability = {
+        "configuration_read": "configuration_write",
+        "configuration_write": "configuration_read",
+        "mcp_installation_manage": "configuration_write",
+        "extension_installation_manage": "extension_host_manage",
+        "extension_host_manage": "extension_installation_manage",
+    }[capability]
     assert not snapshot.evaluate(capability=other, origin_gateway_id="peer", principal_ref="peer-principal")
     revoked = normalize_policy({"rules": [*rules, {"capability": capability, "effect": "deny"}]})
     assert not revoked.evaluate(capability=capability, origin_gateway_id="peer", principal_ref="peer-principal")
@@ -150,6 +163,17 @@ def test_default_policy_payload_matches_design_contract() -> None:
         "rules": [],
         "hardening_enabled": False,
     }
+
+
+@pytest.mark.parametrize("capability", ["extension_installation_manage", "extension_host_manage"])
+def test_gateway_schema_accepts_registered_extension_management_capabilities(capability: str) -> None:
+    config = read_jsonc_object(Path("configs/gateway_inline.jsonc"))
+    config["permissions"] = {"federation": {"rules": [{
+        "capability": capability,
+        "effect": "allow",
+        "principal_ref": "prn_exact",
+    }]}}
+    validate_config(config, schema_path=Path("configs/gateway_schema.jsonc"))
 
 
 def _identity(root: Path, gateway_id: str) -> FederationPeerIdentity:

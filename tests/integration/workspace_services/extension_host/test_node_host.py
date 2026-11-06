@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
+from app.services.infrastructure.extension_host.runtime import load_node_host_runtime
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -39,6 +40,16 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         pytest.skip("UNMET_PREREQUISITE: 目标私有 named pipe 尚未实现")
     handlers: list[asyncio.Task[None]] = []
     hosts: dict[str, NodeExtensionHost] = {}
+    manifest = context.run_root / "runtime-manifest.json"
+    manifest.write_text(json.dumps({
+        "schema_version": 1, "distribution": "source-development", "version": "0.0.1",
+        "python_executable": sys.executable, "application_root": str(context.project_root),
+        "config_resources": {key: str(context.project_root / "configs" / f"{key}.jsonc")
+                             for key in ("gateway_inline", "gateway_schema", "workspace_inline", "workspace_schema")},
+        "skill_resources": str(context.project_root / "resources/skills"),
+        "node": {"source": "launcher", "executable": None},
+        "extension_host": {"node_executable": executable, "component_root": "runtime/host"},
+    }), encoding="utf-8")
 
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         while data := await reader.read(65536):
@@ -52,8 +63,9 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             assert label in {"A", "B", "wrong-commit", "disconnect", "crash"}
             assert label not in hosts
             with (context.artifacts_dir / f"host-{label}.raw").open("wb") as output:
-                host = NodeExtensionHost(label, executable=Path(executable),
-                    entrypoint=context.run_root / "runtime/host/extensionHostProcess.mjs",
+                runtime = load_node_host_runtime(manifest)
+                assert runtime is not None
+                host = NodeExtensionHost(label, runtime=runtime,
                     directory=context.run_root / "runtime/backend" / label,
                     environment=os.environ, output=output, startup_timeout=10)
                 hosts[label] = host

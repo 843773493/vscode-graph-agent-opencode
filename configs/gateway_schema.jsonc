@@ -146,7 +146,7 @@
                 "additionalProperties": false,
                 "required": ["capability"],
                 "properties": {
-                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "mcp_installation_manage"] },
+                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "mcp_installation_manage", "extension_installation_manage", "extension_host_manage"] },
                   "effect": { "enum": ["allow", "deny"], "default": "deny" },
                   "origin_gateway_id": { "type": ["string", "null"], "minLength": 1 },
                   "principal_ref": { "type": ["string", "null"], "minLength": 1 }

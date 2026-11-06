@@ -14,6 +14,20 @@
 - **WHEN** 精确主体获准的候选请求正在等待 Backend 或等待完整响应，原生 Gateway 撤销 mcp_installation_manage
 - **THEN** 原生 Gateway 在下一准入或实际披露点拒绝，关闭已取得响应并结清本次路由引用，不返回冻结前的旧授权结果
 
+### Requirement: 目标扩展安装与宿主管理使用独立联邦能力
+
+原联邦 policy 与 Gateway schema SHALL 登记 `extension_installation_manage` 和 `extension_host_manage` 两项独立管理能力，且均归入管理员能力集合并默认拒绝。只有精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置读写及另一项扩展管理能力均不得代授。`extension_installation_manage` 只授权明确目标上的 VSIX 制品安装、更新、移除及安装状态；`extension_host_manage` 只授权该目标 Node Extension Host 的启动、通道管理、状态读取及停止。两种能力不得互相扩大权限。
+
+经 Relay 发起的请求 SHALL 保留明确目标和原始错误，并由目标原生 Gateway 在访问 Backend、制品或宿主进程前按当前策略最终判权。未获授权时 MUST 明确拒绝，不访问目标资源，也不改投本机或其他目标。
+
+#### Scenario: 普通能力或通配规则不能管理目标扩展
+- **WHEN** 主体只有 discovery、read、`managed_workspace_admin`、配置能力，或管理 allow 没有精确绑定该认证主体
+- **THEN** 目标原生 Gateway 在任何 Backend、制品或宿主访问前拒绝请求，Relay 不以本机或其它能力代授
+
+#### Scenario: 安装管理与宿主管理彼此隔离
+- **WHEN** 主体只有 `extension_installation_manage` 却请求启动、查询运行态、管理通道或停止 Node 宿主，或只有 `extension_host_manage` 却请求安装、更新或移除 VSIX
+- **THEN** 目标原生 Gateway 拒绝缺少的对应能力，另一项能力不代授
+
 ### Requirement: 远端配置管理必须使用独立读写能力
 
 远端配置管理 SHALL 在原联邦 policy 注册 `configuration_read` 与 `configuration_write`，两者默认拒绝，仅精确绑定已认证主体的显式 allow 授权。discovery、普通 read 或 managed_workspace_admin 不代授配置能力；Relay 透传原请求、稳定目标、CAS／幂等身份及错误，由原生 Gateway 最终判权和配置 owner 执行，不保存可生效远端副本。
