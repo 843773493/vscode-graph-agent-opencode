@@ -12,7 +12,6 @@ from app.domain.itemized.plans.contributions import (
     ContextContribution,
     parse_contribution_binding_manifest,
 )
-from app.domain.itemized.schema import validate_extensions
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     DetailRegistryMixin,
 )
@@ -101,117 +100,22 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             raise TypeError("context_contribution.checkpoint_ns 必须是字符串")
         if not isinstance(contribution, ContextContribution):
             raise TypeError("context registry 必须接收 typed ContextContribution")
-        values = {
-            name: getattr(contribution, name, None)
-            for name in (
-                "contribution_id",
-                "source_kind",
-                "source_revision",
-                "content_hash",
-                "request_only",
-                "extensions",
-                "content_length",
-                "contribution_kind",
-                "visibility",
-                "protection",
-                "selection_role",
-                "replacement_policy",
-            )
-        }
-        if (
-            not all(
-                isinstance(values[name], str) and values[name]
-                for name in (
-                    "contribution_id",
-                    "source_kind",
-                    "source_revision",
-                )
-            )
-            or not isinstance(values["request_only"], bool)
-            or not isinstance(values["extensions"], Mapping)
-            or values["selection_role"] not in {"direct", "backing_only"}
-            or values["replacement_policy"] not in {"immutable", "replaceable"}
-        ):
-            raise ValueError("context contribution 字段不完整")
-        if not isinstance(values["content_hash"], str) or not values["content_hash"]:
-            raise ValueError("context contribution 必须携带 content_hash")
-        if values["request_only"] is not True:
-            raise ValueError("context contribution 必须是 request-only")
-        if values["source_kind"] == "tool_set":
-            raise ValueError("tool_set 必须通过 ToolSetSnapshot/ToolSetRef 保存")
-        if values["contribution_kind"] not in {
-            "prompt",
-            "overlay_base",
-            "overlay_delta",
-            "notice",
-            "model_message",
-        }:
-            raise ValueError(
-                f"不支持的 context contribution kind: {values['contribution_kind']}"
-            )
-        if values["visibility"] not in {"public", "internal", "private"}:
-            raise ValueError(
-                f"未知 context contribution visibility: {values['visibility']}"
-            )
-        if values["protection"] not in {"public", "redacted", "protected"}:
-            raise ValueError(
-                f"未知 context contribution protection: {values['protection']}"
-            )
-        if values["content_length"] is None:
-            raise ValueError("context contribution 必须提供 content_length")
-        if values["content_length"] is not None and (
-            not isinstance(values["content_length"], int)
-            or isinstance(values["content_length"], bool)
-            or values["content_length"] < 0
-        ):
-            raise ValueError("context contribution content_length 非法")
-        contribution_id = strict_text(
-            values["contribution_id"], field="context_contribution.contribution_id"
+        # ContextContribution 已在构造时校验闭合字段并冻结正文/扩展快照。
+        # 写入只投影该 typed manifest，不再额外复制和校验扩展；SQLite 旧行、
+        # owner、幂等及 CAS 仍在唯一 writer 中逐次核验。
+        return contribution.contribution_id, (
+            contribution.source_kind,
+            contribution.source_revision,
+            contribution.content_hash,
+            contribution.content_length,
+            int(contribution.request_only),
+            contribution.contribution_kind,
+            contribution.visibility,
+            contribution.protection,
+            contribution.selection_role,
+            contribution.replacement_policy,
+            _json(contribution.binding_manifest()),
         )
-        source_kind = strict_text(
-            values["source_kind"], field="context_contribution.source_kind"
-        )
-        source_revision = strict_text(
-            values["source_revision"], field="context_contribution.source_revision"
-        )
-        content_hash = strict_optional_text(
-            values["content_hash"], field="context_contribution.content_hash"
-        )
-        contribution_kind = strict_text(
-            values["contribution_kind"], field="context_contribution.contribution_kind"
-        )
-        visibility = strict_text(
-            values["visibility"], field="context_contribution.visibility"
-        )
-        protection = strict_text(
-            values["protection"], field="context_contribution.protection"
-        )
-        content_length = strict_non_negative_int(
-            values["content_length"], field="context_contribution.content_length"
-        )
-        selection_role = strict_text(
-            values["selection_role"], field="context_contribution.selection_role"
-        )
-        replacement_policy = strict_text(
-            values["replacement_policy"],
-            field="context_contribution.replacement_policy",
-        )
-        validate_extensions(values["extensions"], field="ContextContribution.extensions")
-        binding_manifest_json = _json(contribution.binding_manifest())
-        expected = (
-            source_kind,
-            source_revision,
-            content_hash,
-            content_length,
-            int(values["request_only"]),
-            contribution_kind,
-            visibility,
-            protection,
-            selection_role,
-            replacement_policy,
-            binding_manifest_json,
-        )
-        return contribution_id, expected
 
     def _write_context_contribution(
         self, connection: sqlite3.Connection, contribution_id: str, expected: tuple[object, ...],
