@@ -203,14 +203,10 @@ class RolloutLangGraphCheckpointMixin:
             owner.thread_id,
             checkpoint_ns,
             before_checkpoint_id=before_id,
-            limit=None if filter else limit,
+            metadata_filter=filter,
+            limit=limit,
         )
         for index in indexes:
-            metadata = self._decode_metadata(index)
-            if filter and not all(
-                metadata.get(key) == value for key, value in filter.items()
-            ):
-                continue
             with session_thread_owner_scope(
                 owner,
                 langgraph_thread_id=owner.thread_id,

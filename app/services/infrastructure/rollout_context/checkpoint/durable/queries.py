@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.base import (
@@ -414,6 +414,7 @@ class RolloutCheckpointQueriesMixin:
         checkpoint_ns: str | None,
         *,
         before_checkpoint_id: str | None,
+        metadata_filter: Mapping[str, object] | None,
         limit: int | None,
     ) -> list[RolloutCheckpointIndex]:
         session_id = strict_text(session_id, field="list_checkpoints.session_id")
@@ -440,6 +441,7 @@ class RolloutCheckpointQueriesMixin:
                     if before_checkpoint_id
                     else None
                 )
+                query_limit = None if metadata_filter else limit
                 query = (
                     "SELECT c.checkpoint_id, c.checkpoint_ns, c.commit_id, c.message_sequence, "
                     "c.message_count, c.parent_checkpoint_id, c.view_id, c.branch_id, "
@@ -449,7 +451,7 @@ class RolloutCheckpointQueriesMixin:
                     "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
                     "WHERE (? IS NULL OR c.checkpoint_ns = ?) AND c.status = 'active' "
                     "AND (? IS NULL OR cv.control_sequence < ?) ORDER BY cv.control_sequence DESC"
-                    + (" LIMIT ?" if limit is not None else "")
+                    + (" LIMIT ?" if query_limit is not None else "")
                 )
                 before_control_sequence = (
                     strict_non_negative_int(before[0], field="checkpoint context_views.control_sequence")
@@ -461,17 +463,24 @@ class RolloutCheckpointQueriesMixin:
                     checkpoint_ns,
                     before_control_sequence,
                     before_control_sequence,
-                ) + ((limit,) if limit is not None else ())
-                rows = connection.execute(query, params).fetchall()
+                ) + ((query_limit,) if query_limit is not None else ())
+                indexes: list[RolloutCheckpointIndex] = []
+                # LIMIT 计算过滤后的结果；逐行消费，命中足够结果就停止构造历史索引。
+                # metadata 保留 Python 比较语义，不把缺省值或嵌套容器改成 SQL 比较。
+                for row in connection.execute(query, params):
+                    # channel/metadata 变化可共用 item commit，创建顺序取 checkpoint 控制序。
+                    strict_non_negative_int(row[-1], field="checkpoint context_views.control_sequence")
+                    index = self._storage._checkpoint_index(row[:-1])
+                    if metadata_filter:
+                        metadata = self.metadata(index)
+                        if not all(metadata.get(key) == value for key, value in metadata_filter.items()):
+                            continue
+                    indexes.append(index)
+                    if limit is not None and len(indexes) >= limit:
+                        break
         except RolloutNotMaterializedError:
             return []
-        # 仅 channel/metadata 变化的 checkpoint 可以共用 item commit，
-        # 已有 checkpoint_created 的控制序才是其唯一创建顺序。
-        for row in rows:
-            strict_non_negative_int(
-                row[-1], field="checkpoint context_views.control_sequence"
-            )
-        return [self._storage._checkpoint_index(row[:-1]) for row in rows]
+        return indexes
 
     def checkpoint_values(
         self,
