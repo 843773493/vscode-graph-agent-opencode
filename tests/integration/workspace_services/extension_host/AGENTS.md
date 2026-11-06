@@ -29,3 +29,5 @@
 - `extension_diagnostics.test.mjs` 运行原 MainThreadDiagnostics／MarkerService／ExtHostDiagnostics／DiagnosticCollection 及 RPCProtocol，验证同名集合、重叠视图、代际清理、整批准入、事件与关联位置投影、目标原生帮助链接及 Web 原合同。认证 binding、字节传输及文档版本服务为具名装具，不代替 Gateway、真实 Node 进程或浏览器页面验收；沿 `integration-extension-host-state` 的外部超时与内存保护运行。
 
 - `extension_language_features.test.mjs` 在真实 Chromium 中运行原 MainThreadLanguageFeatures、共享 LanguageFeatureRegistry、wordHighlighter 多文档入口及 RPCProtocol／TargetUriTransformer；仅认证 binding、内存字节输送、扩展回调和模型的 URI／语言／同步状态为具名装具。覆盖全部文档 selector 注册、目标原生 glob／RelativePattern、exclusive／候选缓存、secondary 归属及真实 RPC 回调／取消／关闭；Windows 仅评分逻辑，不能替代 Gateway、真实 Node、文档同步、Notebook cell 或 Windows 实机验收。
+
+- `extension_workspace_symbols.test.mjs` 运行原 MainThread、WorkspaceSymbolProviderRegistry／getWorkspaceSymbols、RPC、AST 提取的内置命令和真实 CommandService／DI；认证 binding、字节输送、扩展回调及扩展服务清单／激活等待为具名装具。核完整 view 准入、typed URI／resolve／cache、取消／代际及命令来源，不代替 Gateway／Node／SSH 或符号界面验收。

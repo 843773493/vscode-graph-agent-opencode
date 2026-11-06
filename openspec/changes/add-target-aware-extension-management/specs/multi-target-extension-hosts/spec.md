@@ -68,6 +68,10 @@ TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完�
 - **WHEN** A/B 同时打开同语言文件，各自 Provider 使用语言、file scheme、绝对 glob 或 RelativePattern 注册，并交替请求结果或执行多文档高亮
 - **THEN** 仅所属目标的 Provider 参与候选，模式匹配目标真实位置；外部目标的 exclusive Provider 不压制自身候选，多文档操作不向该 Provider 发送其它目标文档，切焦点不改变已发起目标
 
+#### Scenario: 工作区符号查询限定完整宿主视图
+- **WHEN** A 的符号 Provider 绑定 A1/A2，B 绑定 B1，用户明确选择工作区范围或 A 扩展在 B 获得焦点时发起公开符号查询
+- **THEN** 完整选择 A1/A2 才调用 A，单选 A1 时在调用前说明缺少完整视图，不查询 A2 后再过滤；A 扩展的查询只进入原 A 宿主，结果与解析保留同一 Provider、缓存身份和 typed URI，取消或注销不发布迟到结果；原无 scope 的窗口查询及 Web 窗口级能力保持
+
 ### Requirement: 扩展启用范围与版本激活必须区别于安装位置
 
 VSIX 安装位置 SHALL 与原 profile／workspace view 的启用状态分别表达；同一 multi-root view 不得伪报每文件夹独立运行隔离，需要不同启用集的业务工作区须使用不同明确宿主视图。版本更新、停用与卸载 SHALL 沿原宿主 reload／重启及引用规则，保留未结算旧进程／操作所需制品；安装新版本不得伪报运行实例已切换，操作失败不得改变其它目标的配置或版本。

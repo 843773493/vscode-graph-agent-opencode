@@ -7,7 +7,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { ExtensionHostKind } from '../../upstream/src/vs/workbench/services/extensions/common/extensionHostKind.js';
-import type { IExtensionHost, IExtensionService } from '../../upstream/src/vs/workbench/services/extensions/common/extensions.js';
+import { IExtensionService, type IExtensionHost } from '../../upstream/src/vs/workbench/services/extensions/common/extensions.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 
 class ExtensionCommandSource {
@@ -34,7 +34,7 @@ export async function captureCommandHost(service: IExtensionService, id: string,
   const candidates = commandHosts(service, id, hosts);
   if (source) {
     if (candidates.includes(source)) return source;
-    if (!candidates.length) return undefined;
+    if (!candidates.length) return id === '_executeWorkspaceSymbolProvider' ? source : undefined;
     const legal = candidates.filter(host => host.extensions?.allExtensions.some(extension => host.extensions!.containsExtension(extension.identifier)
       && source.extensions?.allExtensions.some(visible => visible.identifier.value.toLowerCase() === extension.identifier.value.toLowerCase()
         && JSON.stringify(visible.installationTarget) === JSON.stringify(extension.installationTarget))));
@@ -108,5 +108,10 @@ export function registerTargetCommand(service: IExtensionService, host: IExtensi
 
 export function executeCommandForHost(command: ICommand, accessor: ServicesAccessor, args: unknown[], host?: IExtensionHost): unknown {
   const dispatcher = dispatchers.get(command.handler);
+  // 原内置符号命令没有资源参数；私有来源只在同窗口传给原 handler，不进入扩展 RPC。
+  if (!dispatcher && host && command.id === '_executeWorkspaceSymbolProvider') {
+    if (!accessor.get(IExtensionService).getExtensionHosts().includes(host)) throw new Error('发起符号查询的扩展宿主代际已经关闭');
+    return command.handler(accessor, args[0], new ExtensionCommandSource(host, []));
+  }
   return dispatcher ? dispatcher(accessor, args, host) : command.handler(accessor, ...args);
 }

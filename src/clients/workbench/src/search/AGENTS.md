@@ -21,3 +21,5 @@ Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显�
 `workspace ` 只调用原 Gateway 登记发现 API，沿原导航 cursor 有界续查；浏览、范围选择和取消不启动、连接或激活目标。工作区切换、连接与启动分别注册一个具名 Action／Command，Gateway 菜单和 Quick Access 共用它们；执行前固定并重新核验完整 owner，最终交原导航 runtime 和 Backend 完整组确认，不新增业务状态机。
 
 运行日志与 Gateway 自有日志使用同一联邦客户端的 `runtime_log` 查询；每个 Gateway 的每种明确来源各一条分支，同时选择时保留两者。工作区只筛选关联进程，共享文件不按工作区重复查询。原行引用仅作具名诊断定位动作，不新造资源 URI，接受后交给原 Gateway 诊断视图精确读取。
+
+`#` 的明确工作区范围仅调用完整包含于该范围的目标宿主符号 Provider；部分宿主视图和没有 Provider 时显示具体原因，不查询 Web／其它目标后再过滤。原符号排序、接受、resolve 和取消继续由原 SymbolsQuickAccessProvider 持有；默认列表的符号聚合仍为 TODO。

@@ -245,7 +245,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     }
     if (this.contentMode && !filter) return [{ id: 'content-query-empty', label: '输入要搜索的正文（区分大小写的字面量）' }];
     if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
-    if (!this.contentMode && !this.category && this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
+    // TODO: 默认列表的符号聚合仍需共用本次 query 的取消和发布；明确范围查询已由 # 原 Provider 提供。
+    if (!this.contentMode && !this.category && this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '默认列表的工作区符号未启用：请使用 # 在明确范围内查询' });
 
     const categories: readonly SearchCategory[] = this.contentMode ? run.options.contentCategories! : this.category ? [this.category]
       : run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];

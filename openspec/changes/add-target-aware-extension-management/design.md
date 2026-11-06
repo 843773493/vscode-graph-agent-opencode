@@ -176,6 +176,8 @@ VSIX 的启用／禁用范围沿原 profile／workspace view 语义，多根视�
 
 扩展自己发起的 `executeCommand` 继承调用 host／view，不借用此刻窗口焦点；资源参数的归属须与所选服务一致。未激活命令按选定来源触发 activation，不向全部目标广播同名 `onCommand`。同 ID 静态贡献按选定 manifest 版本登记一次，保留来源对应关系；运行态 TreeView／WebviewView resolver、菜单上下文及 `setContext` 按所属 host／view 投影，切焦点只改变展示绑定，dispose 只撤销原注册者。主题、快捷键、schema 等窗口级贡献不能靠重复注册覆盖；同扩展不同版本的声明冲突须在启用前给出明确诊断并要求选择可共存版本或不同窗口，不篡改公开 ID 掩盖冲突。
 
+工作区符号 Provider 继续登记在原窗口注册表，条目携带发起宿主；明确工作区查询在调用前选定完整 host view，结果及 resolve 复用原 Provider／cacheId／RPC。原公开 Provider 没有目录参数，因此只选 A1 而宿主绑定 A1/A2 时明确提示需要完整视图，不先查询 A2 后过滤。目标扩展的公开符号查询继承原宿主代际，Web 及原无 scope 的窗口查询保持原窗口级范围；默认列表的符号聚合仍待迁齐同次查询发布，不以 `#` 闭包宣称完成所有符号入口。
+
 Node host 的文档和编辑器同步同样按明确 view 投影，不能只过滤 workspaceFolders：初始模型、dirty buffer、打开／关闭／变更、visible／active editor、语言诊断和 watcher 事件只到合法资源订阅者；焦点在其它 view 时，该 host 的 active editor 为 undefined，不泄露另一个目标模型。文档版本、RPC generation 与取消贯穿注册、请求和迟到结果回收。跨资源 WorkspaceEdit 在副作用前核验全部目标、映射和版本；不把其它目标 URI 降为本机同名路径，失败沿原编辑合同报告，不声称额外跨目标原子事务。Web UI host 保持原窗口级能力，以上投影不是 Node 文件进程的系统沙箱。
 
 复用原 RPC 的 URI transformation，区分工作台稳定内部 URI 与目标 Node API 的原生文件视图。Node 扩展取得的 workspace／document 文件 URI 及 fsPath 必须能用于该目标真实 Node 文件访问，返回 URI 再投影回同一工作区稳定身份；根绑定只消费已登记 Gateway 事实及 Backend mount view，不持久化另一套路径注册表。转换限定 typed URI／协议字段，不全局替换任意字符串或 env／配置正文。验收必须用真实扩展经 `node:fs` 及 `workspace.fs` 分别读取目标独有文件，并核返回位置在原编辑器打开；只让自定义 URI 在浏览器 VFS 可读不足以证明 Node 扩展兼容。

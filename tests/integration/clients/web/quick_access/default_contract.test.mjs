@@ -499,11 +499,11 @@ test('原帮助的确认和精确前缀转接都保留归属与接收者，返�
   expect(result.sourceHelpUnchanged).toBe(true);
 });
 
-test('业务符号在调用全局 Provider 前明确拒绝，身份错误不改投，原生调用保留原符号服务', async () => {
+test('没有目标符号 Provider 时不改投全局，身份错误明确显示，原生调用保留原符号服务', async () => {
   const result = await exercise('symbolContract');
-  expect(result.scopedLabel).toContain('工作区符号未启用');
+  expect(result.scopedLabel).toContain('所选工作区没有已注册的目标符号 Provider');
   expect(result.errorLabel).toContain('原 Gateway 身份失效');
-  expect(result.multiLabel).toContain('工作区符号未启用');
+  expect(result.multiLabel).toContain('所选工作区没有已注册的目标符号 Provider');
   expect(result.multiPlaceholder).toBe('工作区符号 · workspace-a、workspace-b');
   expect(result.scopedCalls).toEqual([]);
   expect(result.nativeCalls).toEqual(['needle']);

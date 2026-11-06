@@ -25,3 +25,5 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 标签投影只维护原 MainThreadEditorTabs 模型及索引；完整 EditorInput 的全部资源决定可见性，不把混合 MultiDiff 拆成可单独关闭的假标签。增量使用本宿主数组索引，结构重同步保留 Tab 对象身份；关闭混合组仅关闭当前宿主的完整输入，真实非空组不得移除。初始化、observable 和异步关闭遵守同一代际，错误不通过全量重建掩盖。
 
 语言 Provider 在原 LanguageFeatureRegistry 的每个注册项绑定固定评分回调；归属在原排序和 exclusive 选择前生效，候选与 RelativePattern 只在评分时投向目标原生域，继续复用原 score／glob。共享注册表的缓存仍按原模型失效，不按当前焦点切换评分器；Web 原评分与 Provider 的 RPC／取消链保持。
+
+工作区符号沿原 Provider 登记发起宿主，明确范围在调用前选择完整 host view；原 API 无目录参数，部分视图不得先查询后过滤。符号与原 Provider／cacheId 绑定，resolve 沿同一 RPC；取消和注销不发布迟到结果。原无 scope 的窗口查询及 Web 窗口级能力保持。
