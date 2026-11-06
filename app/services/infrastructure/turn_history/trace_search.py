@@ -129,7 +129,7 @@ def search_trace_events(
             break
         texts = [(record, _text(record.event)) for record in reversed(page.records)]
         candidates = [record.event for record, text in texts if query in text]
-        owners = event_threads(candidates) if candidates else {}
+        owners: dict[str, str] = {}
         for record, text in texts:
             reason = budget.limited_reason(include_bytes=False)
             if reason:
@@ -142,6 +142,9 @@ def search_trace_events(
             if offset and (position is None or position.content_version != version):
                 raise TraceSearchError("stale_trace_search_cursor", "record_changed", "Trace 当前记录已变化，请重新查询")
             while (start := text.find(query, offset)) >= 0:
+                # 归属解析可能耗尽预算，先交付当前命中，再按预算返回续页。
+                if not owners:
+                    owners = event_threads(candidates)
                 end = start + len(query)
                 preview_start = max(0, start - 80)
                 items.append(TraceMatchDTO(reference=TraceReferenceDTO(
