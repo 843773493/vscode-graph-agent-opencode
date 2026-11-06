@@ -72,9 +72,9 @@ class ContextProjectionResult:
     plan: ContextRequestPlan
 
     def evidence(self, projection: str) -> ProjectionEvidence:
-        # 沿用本次投影已验证的 plan，避免为 evidence 还原并重验整份工具 schema。
+        # authority 已核验 assembly 的摘要；证据直接消费同一份封存身份。
         return build_projection_evidence(
-            self.plan, projection=projection,
+            self.assembly, projection=projection,
             losses=self.losses, resource_refs=self.resource_refs,
         )
 
@@ -235,7 +235,13 @@ class ContextProjectionOwnerMixin:
             seal_binding=context.assembly.seal_binding,
             attachment_projector=lambda payload: self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, payload),
         )
-        native["resource_refs"] = [ref.model_dump(mode="json") for ref in resource_refs]
+        # wire projector 只编码请求；同次已验证的 owner/hash 不再由它重算。
+        native.update(
+            assembly_id=context.assembly.assembly_id,
+            session_id=context.assembly.session_id,
+            plan_hash=context.assembly.plan_hash,
+            resource_refs=[ref.model_dump(mode="json") for ref in resource_refs],
+        )
         return messages, native
 
     def read_context_assembly_history(

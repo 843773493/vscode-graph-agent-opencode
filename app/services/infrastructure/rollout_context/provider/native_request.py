@@ -122,7 +122,7 @@ def project_native_context(
     *, seal_binding: ContextSealBinding | None = None,
     attachment_projector: Callable[[object], object] | None = None,
 ) -> tuple[list[BaseMessage] | None, dict[str, object]]:
-    """返回同次校验的封存消息与 Native 投影；request 只携带原生协议字段。"""
+    """编码封存消息、Native 请求与来源映射；assembly 身份由调用 owner 附加。"""
     if plan.plan_state != "sealed" or plan.assembly_id is None:
         raise ValueError("context plan 未 sealed，不能进入 projector")
     # Responses 的另一份消息视图直接消费此次校验结果，不再重放整段封存前缀。
@@ -301,9 +301,6 @@ def project_native_context(
         )
     return messages, {
         "request": {"input": inputs, "tools": tools},
-        "assembly_id": plan.assembly_id,
-        "session_id": plan.session_id,
-        "plan_hash": plan.plan_hash(),
         "selection": [entry.to_dict() for entry in plan.selection],
         "wire_sources": wire_sources,
         "losses": losses,

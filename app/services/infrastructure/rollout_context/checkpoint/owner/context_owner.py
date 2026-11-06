@@ -277,7 +277,7 @@ class ContextOwnerMixin(
             resource_refs=resources,
         )
         evidence = build_projection_evidence(
-            committed.plan, projection="native",
+            committed.assembly, projection="native",
             losses=native["losses"], resource_refs=resources,
         )
         if native["selection"] != list(evidence.selection):

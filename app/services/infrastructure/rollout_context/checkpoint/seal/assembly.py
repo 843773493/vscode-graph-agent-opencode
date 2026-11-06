@@ -123,14 +123,13 @@ def _activation_binding_callable(
 ):
     """把 activation 绑定参与者包装成 assembly 事务内的单次回调。
 
-    selection manifest hash 由同一 sealed plan 纯映射导出（无 I/O），必须与
+    selection manifest hash 由同一 sealed snapshot 纯映射导出（无 I/O），必须与
     assembly 的 plan/request hash 在同一次提交里绑定。
     """
 
     if activation_binding is None:
         return None
-    sealed_plan = snapshot.as_sealed_plan()
-    evidence = build_projection_evidence(sealed_plan, projection="assembly-seal")
+    evidence = build_projection_evidence(snapshot, projection="assembly-seal")
 
     def _bind(connection) -> None:
         activation_binding.bind_assembly(
