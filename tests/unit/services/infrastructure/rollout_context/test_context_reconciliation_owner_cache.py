@@ -69,6 +69,7 @@ class _Assemblies:
         thread_id: str,
         *,
         checkpoint_ns: str,
+        active_only: bool = False,
         snapshot: _Snapshot,
     ) -> list[dict[str, str]]:
         assert (snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns) == (

@@ -451,6 +451,7 @@ class ContextOverlayStorageMixin:
         *,
         source_overlay_epoch: int | None = None,
         checkpoint_ns: str = "",
+        active_only: bool = False,
         snapshot: RolloutReadSnapshot | None = None,
     ) -> list[dict[str, object]]:
         if not isinstance(session_id, str) or not session_id:
@@ -475,9 +476,12 @@ class ContextOverlayStorageMixin:
             with self._storage.read_connection(
                 session_id, thread_id, checkpoint_ns, snapshot=snapshot,
             ) as connection:
-                self._storage._require_v2_runtime(connection)
                 query = 'SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE checkpoint_ns = ?'
                 params: list[object] = [checkpoint_ns]
+                # 普通选集只消费活动记录，不把已替代/物化的全部历史搬回 Python 校验。
+                # 显式全量列表仍读取并验证全部状态；当前读取仍经统一快照校验格式与归属。
+                if active_only:
+                    query += " AND status = 'active'"
                 if source_overlay_epoch is not None:
                     query += " AND source_overlay_epoch = ?"
                     params.append(source_overlay_epoch)

@@ -201,22 +201,9 @@ class ContextPlanCompositionMixin:
             session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,
+            active_only=True,
             snapshot=snapshot,
         )
-        for overlay in persisted_overlays:
-            status = overlay.get("status")
-            if status not in {"active", "superseded", "materialized"}:
-                raise ValueError(
-                    "plan-order-integrity: source overlay status 非法: "
-                    f"{overlay.get('overlay_id')}"
-                )
-            _manifest_string(overlay.get("overlay_id"), field="overlay_id")
-            _manifest_string(overlay.get("source_revision"), field="source_revision")
-            _manifest_non_negative_int(
-                overlay.get("source_overlay_epoch"),
-                field="source_overlay_epoch",
-            )
-            _manifest_string(overlay.get("created_at"), field="created_at")
         inherited_selections = {
             entry.contribution_id for entry in (() if predecessor is None else predecessor.selection)
             if entry.included and entry.availability == "available"
@@ -230,22 +217,13 @@ class ContextPlanCompositionMixin:
         active_overlays = [
             overlay
             for overlay in persisted_overlays
-            if overlay.get("status") == "active"
-            and ((overlay.get("session_id"), overlay.get("thread_id")) == (session_id, thread_id)
-                 or overlay.get("overlay_id") in inherited_overlays)
+            if (overlay.get("session_id"), overlay.get("thread_id")) == (session_id, thread_id)
+            or overlay.get("overlay_id") in inherited_overlays
         ]
         # storage 当前已经按 epoch/created_at/overlay_id 返回，但组合器不能
         # 把 SQL 的返回顺序当作领域合同。这里再次建立有显式校验的稳定
         # 顺序，确保重启、不同 SQLite query plan 以及多个同 epoch source
         # overlay 都不会改变 base -> delta 的 request selection。
-        for overlay in active_overlays:
-            overlay_id = _manifest_string(
-                overlay.get("overlay_id"), field="overlay_id"
-            )
-            overlay_epoch = _manifest_non_negative_int(
-                overlay.get("source_overlay_epoch"),
-                field=f"source_overlay_epoch:{overlay_id}",
-            )
         def overlay_sort_key(overlay: Mapping[str, object]) -> tuple[int, str, str]:
             current_overlay_id = _manifest_string(
                 overlay.get("overlay_id"), field="overlay_id"
@@ -265,6 +243,8 @@ class ContextPlanCompositionMixin:
             for overlay in active_overlays
         }
         for overlay in active_overlays:
+            # 每份 backing contribution 绑定当前 overlay，不能沿用前一轮校验残留的 ID。
+            overlay_id = _manifest_string(overlay.get("overlay_id"), field="overlay_id")
             for field_name in ("base_ref", "delta_ref"):
                 source_ref_value = overlay.get(field_name)
                 if source_ref_value is None:

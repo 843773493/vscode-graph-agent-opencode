@@ -1452,6 +1452,10 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
 
     def ref_ids(checkpoint_saver: RolloutCheckpointSaver) -> list[str]:
         plan = checkpoint_saver.compose_committed_context_plan(SESSION_ID, thread_id=thread_id, plan_id='plan-overlay-order', tool_set=EMPTY_TOOL_SET)
+        assert [entry.contribution_id for entry in plan.contributions] == [
+            "overlay:overlay-2:base", "overlay:overlay-2:delta",
+            "overlay:overlay-3:base", "overlay:overlay-3:delta",
+        ]
         return [ref.ref_id for ref in plan.refs]
 
     expected = [
