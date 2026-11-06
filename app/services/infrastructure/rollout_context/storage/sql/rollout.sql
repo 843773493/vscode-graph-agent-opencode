@@ -549,7 +549,6 @@
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_source_index ON context_assembly_contributions(source_kind, source_revision);
         CREATE INDEX IF NOT EXISTS tool_set_snapshots_assembly_index ON tool_set_snapshots(assembly_id, tool_set_snapshot_id);
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_ordinal_index ON context_assembly_contributions(assembly_id, contribution_ordinal);
-        CREATE INDEX IF NOT EXISTS source_overlays_epoch_index ON source_overlays(session_id, thread_id, source_overlay_epoch);
         CREATE UNIQUE INDEX IF NOT EXISTS context_contributions_source_ordinal_unique
             ON context_contributions(source_ordinal)
             WHERE source_ordinal IS NOT NULL;

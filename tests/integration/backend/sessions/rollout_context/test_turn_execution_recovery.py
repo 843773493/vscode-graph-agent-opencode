@@ -1561,18 +1561,11 @@ def test_source_overlay_writer_persists_the_complete_session_thread_owner(
             "AND checkpoint_ns = ?",
             (SESSION_ID, thread_id, ""),
         ).fetchone()
-        epoch_index = tuple(
-            row[2]
-            for row in connection.execute(
-                "PRAGMA index_info(source_overlays_epoch_index)"
-            ).fetchall()
-        )
 
     assert owner == (SESSION_ID, thread_id)
     assert registered is not None
     assert registered[:3] == (SESSION_ID, thread_id, 0)
     assert isinstance(registered[3], str) and registered[3].startswith("overlay:")
-    assert epoch_index == ("session_id", "thread_id", "source_overlay_epoch")
     assert saver._request_only_content[(SESSION_ID, thread_id, "", "policy-base")] == {
         "policy": "persisted"
     }
