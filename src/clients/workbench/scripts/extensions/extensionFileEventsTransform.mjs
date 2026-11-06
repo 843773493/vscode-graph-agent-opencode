@@ -11,7 +11,52 @@ export const extensionFileEventsSourcePaths = [
 export function transformExtensionFileEvents(root, path, source, replaceOnce) {
   const paths = extensionFileEventsSourcePaths.map(value => join(root, 'upstream', value));
   if (path === paths[4]) {
-    return replaceOnce(source, 'isApplied: edits.length > 0 };', 'isApplied: edits.length > 0 && !(options?.token?.isCancellationRequested && resources.length === 0) };');
+    let contents = `import { IModelService } from '../../../../editor/common/services/model.js';
+import { ITextModelService } from '../../../../editor/common/services/resolverService.js';
+import { CellUri } from '../../notebook/common/notebookCommon.js';
+import { INotebookEditorModelResolverService } from '../../notebook/common/notebookEditorModelResolverService.js';\n` + source;
+    contents = replaceOnce(contents, 'import { IDisposable, toDisposable }', 'import { DisposableStore, IDisposable, toDisposable }');
+    contents = replaceOnce(contents, 'if (this._edits.length === 0) {\n\t\t\treturn [];', 'if (this._edits.length === 0 || this._token.isCancellationRequested) {\n\t\t\treturn [];');
+    // 最终预览集合先核现有模型版本；原各组临执行检查继续处理随后发生的变化。
+    // TODO: CodeAction／Notebook 宿主尚未提供的版本仍需沿原文档 owner 接线，此处不合成版本。
+    contents = replaceOnce(contents, '\n\t\tconst ranges: number[] = [1];', `
+    const references = new DisposableStore();
+    try {
+      const textVersions = new ResourceMap<() => number | undefined>();
+      const notebookVersions = new ResourceMap<() => number>();
+      const versions: { current: () => number | undefined; expected: number; message: string }[] = [];
+      for (const edit of this._edits) {
+        if (this._token.isCancellationRequested) return [];
+        if (edit instanceof ResourceTextEdit && typeof edit.versionId === 'number') {
+          let current = textVersions.get(edit.resource);
+          if (!current) {
+            const model = this._instaService.invokeFunction(accessor => accessor.get(IModelService).getModel(edit.resource));
+            if (model && model.getVersionId() !== edit.versionId) throw new Error(edit.resource.toString() + ' has changed in the meantime');
+            // 引用保持到整批完成，防止前序文件操作等待时关闭模型并重置其版本计数。
+            const ref = references.add(await this._instaService.invokeFunction(accessor => accessor.get(ITextModelService).createModelReference(edit.resource)));
+            if (model && ref.object.textEditorModel !== model) throw new Error(edit.resource.toString() + ' has changed in the meantime');
+            current = () => ref.object.textEditorModel.isDisposed() ? undefined : ref.object.textEditorModel.getVersionId();
+            textVersions.set(edit.resource, current);
+          }
+          versions.push({ current, expected: edit.versionId, message: edit.resource.toString() + ' has changed in the meantime' });
+        } else if (edit instanceof ResourceNotebookCellEdit && typeof edit.notebookVersionId === 'number') {
+          const resource = edit.resource.scheme === CellUri.scheme ? CellUri.parse(edit.resource)?.notebook : edit.resource;
+          if (!resource) throw new Error('Invalid notebook URI: ' + edit.resource.toString());
+          let current = notebookVersions.get(resource);
+          if (!current) {
+            const ref = references.add(await this._instaService.invokeFunction(accessor => accessor.get(INotebookEditorModelResolverService).resolve(resource)));
+            current = () => ref.object.notebook.versionId;
+            notebookVersions.set(resource, current);
+          }
+          versions.push({ current, expected: edit.notebookVersionId, message: "Notebook '" + resource.toString() + "' has changed in the meantime" });
+        }
+      }
+      if (this._token.isCancellationRequested) return [];
+      // 所有异步解析结算后同一轮核对，后一次解析不能掩盖先前模型的变化。
+      for (const version of versions) if (version.current() !== version.expected) throw new Error(version.message);
+\t\tconst ranges: number[] = [1];`);
+    contents = replaceOnce(contents, 'return resources.flat();', 'return resources.flat();\n    } finally { references.dispose(); }');
+    return replaceOnce(contents, 'isApplied: edits.length > 0 };', 'isApplied: edits.length > 0 && !(options?.token?.isCancellationRequested && resources.length === 0) };');
   }
   if (path === paths[3]) {
     let contents = `import { assertHostWorkspaceEdit } from ${JSON.stringify(join(root, 'src/extensions/targetUris.js'))};
@@ -25,7 +70,7 @@ import { CancellationTokenSource } from '../../../base/common/cancellation.js';\
       if (this._disposed) throw new Error('扩展编辑所属宿主代际已经关闭');
       assertHostWorkspaceEdit(this._extHostContext.extensionHost, dto.value);
       const edits = reviveWorkspaceEditDto(dto.value, this._uriIdentService);
-      // TODO: 6.2 的整批版本预检仍需在原 BulkEdit owner 迁齐；目前保留其分组版本校验。`);
+      // 无版本字段的文件／opaque 操作继续沿原 FileService 合同，不合成另一套版本。`);
     return replaceOnce(contents, 'respectAutoSaveConfig: isRefactoring }).then((res)', 'respectAutoSaveConfig: isRefactoring, token: this._lifetime.token });\n    }).then((res)');
   }
   if (path === paths[1] || path === paths[2]) {

@@ -28,6 +28,6 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 
 工作区符号沿原 Provider 登记发起宿主，明确范围在调用前选择完整 host view；原 API 无目录参数，部分视图不得先查询后过滤。符号与原 Provider／cacheId 绑定，resolve 沿同一 RPC；取消和注销不发布迟到结果。原无 scope 的窗口查询及 Web 窗口级能力保持。
 
-直接 workspace.applyEdit 复用原 MainThreadBulkEdits／BulkEditService，不增加编辑应用链。整批端点校验先于 revive，错误保留原 warn／false，代际关闭通过同一原 token 取消；BulkEditService 按实际完成资源区分取消后的零写入与已完成结果，不用关闭标志抹去已经发生的副作用。
+直接 workspace.applyEdit 复用原 MainThreadBulkEdits／BulkEditService，不增加编辑应用链。整批端点校验先于 revive，错误保留原 warn／false，代际关闭通过同一原 token 取消；BulkEditService 按实际完成资源区分取消后的零写入与已完成结果，不用关闭标志抹去已经发生的副作用。 原 BulkEdit 在预览最终集合确定后、任一类型副作用前核已有文本／Notebook版本；已加载文本先由原 ModelService 拒绝已知冲突，所有带版本的资源沿原 resolver 本次去重并持有到整批结束，结算后释放，不新增版本账本。全部异步解析结束后统一核对，保留各类型临执行检查处理随后变化；未携带版本的文件／opaque／文本不合成版本，尚缺的宿主版本生产接线继续保留 TODO。
 
 Code action 的 provide／resolve 在原 MainThread 内先核整批 edit，非法后项不能发布合法前项。请求 token 同时响应调用取消和注册释放；迟到 provide 释放准确的新 cache，resolve 拒绝后不改原 action。已发布 list 继续持有原 cache，由其幂等 dispose 收尾，不增加 session registry。目标 Provider 将同一注册生命周期留在原 Provider，原 CodeActionItem／applyCodeAction 合并调用方取消，并将同一 token 交原 BulkEditService；撤代后不启动编辑或后继 command，已开始的副作用不回滚。普通 Web／内置 Provider 不附带目标生命周期；不把本闭包扩大为其它语言编辑入口。

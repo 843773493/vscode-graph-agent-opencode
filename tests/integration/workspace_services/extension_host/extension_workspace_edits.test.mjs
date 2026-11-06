@@ -32,6 +32,10 @@ export { Range } from '${upstream}workbench/api/common/extHostTypes/range.js';
 export { Position } from '${upstream}workbench/api/common/extHostTypes/position.js';
 export { BulkEditService } from '${upstream}workbench/contrib/bulkEdit/browser/bulkEditService.js';
 export { ResourceTextEdit, ResourceFileEdit } from '${upstream}editor/browser/services/bulkEditService.js';
+export { ResourceNotebookCellEdit } from '${upstream}workbench/contrib/bulkEdit/browser/bulkCellEdits.js';
+export { ResourceAttachmentEdit } from '${upstream}workbench/contrib/bulkEdit/browser/opaqueEdits.js';
+export { CellEditType, CellUri } from '${upstream}workbench/contrib/notebook/common/notebookCommon.js';
+export { INotebookEditorModelResolverService } from '${upstream}workbench/contrib/notebook/common/notebookEditorModelResolverService.js';
 export { ModelService } from '${upstream}editor/common/services/modelService.js';
 export { IModelService } from '${upstream}editor/common/services/model.js';
 export { ITextModelService } from '${upstream}editor/common/services/resolverService.js';
@@ -65,6 +69,7 @@ export { RPCProtocol } from '${upstream}workbench/services/extensions/common/rpc
 export { SerializableObjectWithBuffers } from '${upstream}workbench/services/extensions/common/proxyIdentifier.js';
 export { DisposableStore } from '${upstream}base/common/lifecycle.js';
 export { Event, Emitter } from '${upstream}base/common/event.js';
+export { CancellationTokenSource } from '${upstream}base/common/cancellation.js';
 export { URI } from '${upstream}base/common/uri.js';
 export { dirname } from '${upstream}base/common/resources.js';
 export { VSBuffer, encodeBase64 } from '${upstream}base/common/buffer.js';
@@ -78,6 +83,8 @@ const sources = ['scripts/sourceTransform.mjs', 'scripts/extensions/extensionFil
   'upstream/src/vs/workbench/api/common/extHostTypeConverters.ts', 'upstream/src/vs/workbench/api/common/extHostTypes/workspaceEdit.ts',
   'upstream/src/vs/workbench/api/browser/mainThreadBulkEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkEditService.ts',
   'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkFileEdits.ts',
+  'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkCellEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/opaqueEdits.ts',
+  'upstream/src/vs/workbench/contrib/notebook/common/notebookCommon.ts',
   'upstream/src/vs/editor/common/model/textModel.ts', 'upstream/src/vs/editor/common/services/modelService.ts',
   'upstream/src/vs/workbench/services/workingCopy/common/workingCopyFileService.ts'];
 const fingerprints = Object.fromEntries(await Promise.all(sources.map(async path => [path, createHash('sha256').update(await readFile(join(root, path))).digest('hex')])));
@@ -97,14 +104,14 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkEditService、BulkTextEdits/ModelService/TextModel/UndoRedoService 和 BulkFileEdits/WorkingCopyFileService/FileService。认证 binding、字节输送、文档版本镜像、已加载模型 resolver、配置/UI 与纯文本 TreeSitter 库是具名装具；目标 WorkspaceFiles 和配置文件 provider 明确由原 InMemoryFileSystemProvider 替代。具名配置仅验证原资源映射和已加载模型编辑，不代表真实配置保存、产品 WorkspaceFiles 的 rename/delete 支持、Gateway、真实 Node、磁盘保存、Notebook、Windows、整批版本原子性或所有取消时点。',
+      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkEditService、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、文档版本镜像、文本 resolver 的请求延迟/失败/按需创建原模型、配置/UI 与纯文本 TreeSitter 库是具名装具；resolver引用只观察请求/释放，不实现原TextModelResolver的引用计数及关模/重开保护。目标 WorkspaceFiles 和配置文件 provider 明确由原 InMemoryFileSystemProvider 替代。版本测试核预览最终集合和首项类型副作用前的现有versionId/notebookVersionId；Notebook只经原版本DTO/RPC或直接ResourceEdit和具名resolver提供版本，不能证明Notebook真实模型编辑或版本producer。具名配置仅验证原资源映射和模型编辑，不代表真实配置保存、产品 WorkspaceFiles 的 rename/delete 支持、Gateway、真实 Node、磁盘保存、Windows、无版本字段的原子性或所有取消时点。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
   }
 });
 
-async function inBrowser(name, body) {
+async function inBrowser(name, body, argument) {
   const context = await browser.newContext(), page = await context.newPage(), errors = [];
   page.on('pageerror', error => { errors.push(error.message); browserEvents.push({ name, message: error.message }); });
   try {
@@ -144,12 +151,24 @@ async function inBrowser(name, body) {
       const insta = lifetime.add(new m.InstantiationService(services, true));
       const languageConfig = lifetime.add(insta.createInstance(m.LanguageConfigurationService)); services.set(m.ILanguageConfigurationService, languageConfig);
       const models = lifetime.add(insta.createInstance(m.ModelService)); services.set(m.IModelService, models);
-      // resolver 仅取得原 ModelService 已有的真实 TextModel；不实现编辑算法或文件写入。
+      // resolver 只提供原 TextModel；引用释放只作观察，不模拟原 resolver 的引用计数与关模／重开保护。
+      const lazyTexts = new Map(), resolver = { requests: [], onResolve: async () => {} };
       services.set(m.ITextModelService, { async createModelReference(resource) {
-        const model = models.getModel(resource);
+        resolver.requests.push(resource.toString());
+        await resolver.onResolve(resource);
+        let model = models.getModel(resource);
+        if (!model && lazyTexts.has(resource.toString())) {
+          model = models.createModel(lazyTexts.get(resource.toString()), null, resource); lazyTexts.delete(resource.toString());
+        }
         if (!model) throw new Error('装具没有载入该模型：' + resource.toString());
-        const observation = { resource: resource.toString(), disposed: false }; resolutions.push(observation);
-        return { object: { textEditorModel: model }, dispose() { observation.disposed = true; } };
+        const observation = { resource: resource.toString(), disposed: false, disposeCount: 0 }; resolutions.push(observation);
+        return { object: { textEditorModel: model }, dispose() { observation.disposed = true; observation.disposeCount++; } };
+      } });
+      const notebooks = { requests: [], references: [], writes: 0, onResolve: unexpected('Notebook resolver 未配置') };
+      services.set(m.INotebookEditorModelResolverService, { async resolve(resource) {
+        notebooks.requests.push(resource.toString()); const notebook = await notebooks.onResolve(resource);
+        const observation = { resource: resource.toString(), disposed: false, disposeCount: 0 }; notebooks.references.push(observation);
+        return { object: { notebook, isReadonly: () => false }, dispose() { observation.disposed = true; observation.disposeCount++; } };
       } });
       const workingFiles = lifetime.add(insta.createInstance(m.WorkingCopyFileService)); services.set(m.IWorkingCopyFileService, workingFiles);
       lifetime.add(workingFiles.onWillRunWorkingCopyFileOperation(event => operations.push({ phase: 'will', operation: event.operation,
@@ -189,17 +208,24 @@ async function inBrowser(name, body) {
         const model = models.createModel(value, null, client.logical(native));
         client.documents.set(native.toString(), { version: model.getVersionId() }); return model;
       }
+      function unloadedText(client, native, value) {
+        // 镜像版本先取自原 TextModel；仅在原 resolver 被请求时再由原 ModelService 创建真实模型。
+        const model = openText(client, native, value), version = model.getVersionId(), resource = model.uri;
+        model.dispose(); lazyTexts.set(resource.toString(), value); return { resource, version };
+      }
       const native = (client, rootIndex, name) => m.URI.joinPath(client.host.uriTransformer.folders[rootIndex].native, name);
       const seed = async (resource, value) => { await files.createFolder(m.dirname(resource)); await files.createFile(resource, m.VSBuffer.fromString(value)); };
       const read = async resource => (await files.readFile(resource)).value.toString();
       const dtoText = (resource, text = 'changed') => ({ resource, textEdit: { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 4 }, text } });
       const dtoCreate = (newResource, text = 'created') => ({ newResource, options: { contents: { type: 'base64', value: m.encodeBase64(m.VSBuffer.fromString(text)) } } });
+      const notebookVersion = (resource, versionId) => ({ uri: resource, versionId,
+        applyEdits() { notebooks.writes++; throw new Error('本版本冲突场景不应执行 Notebook 编辑'); } });
       const defer = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-      globalThis.editProbe = { m, target, connect, openText, native, seed, read, dtoText, dtoCreate, defer, files, models, workingFiles,
-        warnings, failures, resolutions, operations, lifetime,
+      globalThis.editProbe = { m, target, connect, openText, unloadedText, native, seed, read, dtoText, dtoCreate, defer, files, models, workingFiles,
+        warnings, failures, resolutions, resolver, notebooks, notebookVersion, operations, lifetime,
         dispose() { for (const client of clients.reverse()) client.close(); for (const model of models.getModels()) model.dispose(); lifetime.dispose(); } };
     });
-    const result = await page.evaluate(body); expect(errors).toEqual([]); observations.push({ name, result }); return result;
+    const result = await page.evaluate(body, argument); expect(errors).toEqual([]); observations.push({ name, result }); return result;
   } finally {
     try { await page.evaluate(() => globalThis.editProbe?.dispose()); }
     finally { await context.close(); }
@@ -333,8 +359,7 @@ test('原分组版本错误与 DTO revive 错误仍记录原日志并返回 fals
   expect(result.warnings).toHaveLength(2); expect(result.warnings[0]).toContain('IGNORING workspace edit:'); expect(result.warnings[0]).toContain('has changed in the meantime');
   expect(result.warnings[1]).toContain('IGNORING workspace edit:'); expect(result.warnings[1]).toContain('Could not revive data transfer file');
   expect(result.failures).toHaveLength(1); expect(result.failures[0]).toContain('has changed in the meantime');
-  // TODO: 这里只证明原 BulkTextEdits 分组版本校验，整批跨类型版本预检仍由产品 owner 迁齐。
-  checks.push('原分组版本校验和revive错误保留原warn/false，不写模型或文件；不代表整批版本原子性');
+  checks.push('已加载模型原版本错误和revive错误保留原warn/false，不额外解析错误版本，不写模型或文件');
 });
 
 test('预览等待时 dispose 取消原 token，迟到预览零写入且新编辑不进入原 bulk.apply', async () => {
@@ -374,7 +399,8 @@ test('未取消的原空批次、no-op 与预览过滤结果保持原 isApplied 
       tokens: a.calls.map(call => call.options.token.isCancellationRequested), resolutions: p.resolutions, operations: p.operations, warnings: p.warnings, failures: p.failures };
   });
   expect(result.empty).toBe(false); expect(result.noop).toBe(true); expect(result.filtered).toBe(false); expect(result.value).toBe('old-noop'); expect(result.currentVersion).toBe(result.version);
-  expect(result.calls).toBe(3); expect(result.tokens).toEqual([false, false, false]); expect(result.resolutions).toHaveLength(1); expect(result.resolutions[0].disposed).toBe(true);
+  expect(result.calls).toBe(3); expect(result.tokens).toEqual([false, false, false]); expect(result.resolutions).toHaveLength(2);
+  for (const reference of result.resolutions) { expect(reference.disposed).toBe(true); expect(reference.disposeCount).toBe(1); }
   expect(result.operations).toEqual([]); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('非取消empty=false、原无实际资源no-op=true、预览过滤空=false保持');
 });
 
@@ -397,4 +423,198 @@ test('真实文件已完成但原回执仍等待时 dispose，保留已完成资
   expect(result.before).toEqual({ content: 'already-created', operations: 2, calls: 1 }); expect(result.cancelled).toBe(true); expect(result.applied).toBe(true);
   expect(result.content).toBe('already-created'); expect(result.calls).toBe(1); expect(result.operations).toEqual(result.expectedOperations); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
   checks.push('原WorkingCopyFileService完成真实内存文件后等待did回执，撤代保留原实际资源成功');
+});
+
+for (const leadingText of [false, true]) test(`预览等待中后项文本版本改变时，${leadingText ? '先前文本组和文件' : '首项文件'}均不产生副作用`, async () => {
+  const result = await inBrowser('预览后整批版本预检-' + leadingText, async leadingText => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), release = p.defer();
+    const first = p.native(a, 0, 'first.ts'), later = p.native(a, 1, 'later.ts'), created = p.native(a, 0, 'must-not-create.ts');
+    const firstModel = p.openText(a, first, 'old-first'), laterModel = p.openText(a, later, 'old-later'), version = laterModel.getVersionId();
+    let previewTypes;
+    p.lifetime.add(a.actualBulk.setPreviewHandler(async edits => {
+      previewTypes = edits.map(edit => edit instanceof m.ResourceTextEdit ? 'text' : 'file'); entered.resolve(); await release.promise; return edits;
+    }));
+    const edit = new m.WorkspaceEdit(); if (leadingText) edit.replace(first, new m.Range(0, 0, 0, 3), 'BAD');
+    edit.createFile(created, { contents: new TextEncoder().encode('must-not-create') });
+    edit.replace(later, new m.Range(0, 0, 0, 3), 'BAD', { needsConfirmation: true, label: '版本等待' });
+    const pending = a.workspace.applyEdit(edit);
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('编辑未经过原预览等待'); })]);
+    laterModel.applyEdits([{ range: laterModel.getFullModelRange(), text: 'newer-later' }]); release.resolve();
+    return { applied: await pending, values: [firstModel.getValue(), laterModel.getValue()], exists: await p.files.exists(a.logical(created)),
+      previewTypes, version, currentVersion: laterModel.getVersionId(), dtoVersion: a.calls[0].edits.at(-1).versionId,
+      operations: p.operations, released: p.resolutions.every(ref => ref.disposed), warnings: p.warnings, failures: p.failures };
+  }, leadingText);
+  expect(result.applied).toBe(false); expect(result.values).toEqual(['old-first', 'newer-later']); expect(result.exists).toBe(false); expect(result.operations).toEqual([]);
+  expect(result.previewTypes).toEqual(leadingText ? ['text', 'file', 'text'] : ['file', 'text']); expect(result.dtoVersion).toBe(result.version); expect(result.currentVersion).toBeGreaterThan(result.version);
+  expect(result.released).toBe(true); expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('IGNORING workspace edit:'); expect(result.warnings[0]).toContain('has changed in the meantime');
+  expect(result.failures).toHaveLength(1); expect(result.failures[0]).toContain('has changed in the meantime');
+  checks.push(`预览后版本冲突在${leadingText ? '前置文本组及' : ''}首file副作用前拒绝，原公开API版本DTO、真实模型变化和warn/false保留`);
+});
+
+test('预览移除版本冲突项后只核最终集合，保留项经原文件和文本 owner 成功应用', async () => {
+  const result = await inBrowser('预览最终集合版本预检', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), release = p.defer();
+    const good = p.native(a, 0, 'good.ts'), stale = p.native(a, 1, 'filtered.ts'), created = p.native(a, 0, 'retained.ts');
+    const goodModel = p.openText(a, good, 'old-good'), staleModel = p.openText(a, stale, 'old-filtered'), staleResource = a.logical(stale).toString(), version = staleModel.getVersionId();
+    let finalResources;
+    p.lifetime.add(a.actualBulk.setPreviewHandler(async edits => {
+      entered.resolve(); await release.promise; const final = edits.filter(edit => edit.resource?.toString() !== staleResource);
+      finalResources = final.map(edit => (edit.resource ?? edit.newResource).toString()); return final;
+    }));
+    const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new TextEncoder().encode('retained') });
+    edit.replace(good, new m.Range(0, 0, 0, 3), 'NEW'); edit.replace(stale, new m.Range(0, 0, 0, 3), 'BAD', { needsConfirmation: true, label: '移除冲突项' });
+    const pending = a.workspace.applyEdit(edit); await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入原预览'); })]);
+    staleModel.applyEdits([{ range: staleModel.getFullModelRange(), text: 'newer-filtered' }]); release.resolve();
+    return { applied: await pending, values: [goodModel.getValue(), staleModel.getValue()], created: await p.read(a.logical(created)), finalResources,
+      expected: [created, good].map(uri => a.logical(uri).toString()), dtoVersion: a.calls[0].edits.at(-1).versionId, version,
+      resolvedFiltered: p.resolver.requests.includes(staleResource), released: p.resolutions.every(ref => ref.disposed), warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.applied).toBe(true); expect(result.values).toEqual(['NEW-good', 'newer-filtered']); expect(result.created).toBe('retained'); expect(result.finalResources).toEqual(result.expected);
+  expect(result.dtoVersion).toBe(result.version); expect(result.resolvedFiltered).toBe(false); expect(result.released).toBe(true); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
+  checks.push('原预览删除冲突项后仅最终集合参与版本核对，保留file/text成功，已过滤旧版本不再阻断');
+});
+
+test('后一个模型解析等待时前一个真实模型改变，最终同步核对在首 file 前失败并释放所有引用', async () => {
+  const result = await inBrowser('异步多模型解析后的最终版本核对', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), release = p.defer();
+    const first = p.native(a, 0, 'cold-first.ts'), second = p.native(a, 1, 'cold-second.ts'), created = p.native(a, 0, 'must-not-create.ts');
+    const one = p.unloadedText(a, first, 'old-first'), two = p.unloadedText(a, second, 'old-second');
+    p.resolver.onResolve = async resource => { if (resource.toString() === two.resource.toString()) { entered.resolve(); await release.promise; } };
+    const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new Uint8Array([1]) });
+    edit.replace(first, new m.Range(0, 0, 0, 3), 'BAD'); edit.replace(second, new m.Range(0, 0, 0, 3), 'BAD');
+    const pending = a.workspace.applyEdit(edit); await Promise.race([entered.promise, pending.then(() => { throw new Error('未经过第二个真实模型解析等待'); })]);
+    const firstModel = p.models.getModel(one.resource); if (!firstModel) throw new Error('第一个原模型尚未由 resolver 创建');
+    const before = { exists: await p.files.exists(a.logical(created)), operations: p.operations.length, references: p.resolutions.length, firstDisposed: p.resolutions[0].disposed };
+    firstModel.applyEdits([{ range: firstModel.getFullModelRange(), text: 'newer-first' }]); release.resolve();
+    const applied = await pending;
+    return { applied, before, values: [firstModel.getValue(), p.models.getModel(two.resource).getValue()], exists: await p.files.exists(a.logical(created)),
+      versions: a.calls[0].edits.filter(edit => edit.textEdit).map(edit => edit.versionId), expectedVersions: [one.version, two.version],
+      references: p.resolutions, requests: p.resolver.requests, expectedResources: [one.resource, two.resource].map(uri => uri.toString()), operations: p.operations, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.before).toEqual({ exists: false, operations: 0, references: 1, firstDisposed: false }); expect(result.applied).toBe(false); expect(result.exists).toBe(false);
+  expect(result.values).toEqual(['newer-first', 'old-second']); expect(result.versions).toEqual(result.expectedVersions); expect(result.operations).toEqual([]); expect(result.requests).toEqual(result.expectedResources);
+  expect(result.references.map(ref => [ref.resource, ref.disposed, ref.disposeCount])).toEqual(result.expectedResources.map(resource => [resource, true, 1]));
+  expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('has changed in the meantime'); expect(result.failures).toHaveLength(1); expect(result.failures[0]).toContain('has changed in the meantime');
+  checks.push('原公开API的未加载模型经resolver创建，后一次解析等待期间前模型变更，首file前最终统一核对拒绝且全部引用只释放一次');
+});
+
+test('同一文本资源的多个版本编辑在首 file 前只持有一次预检引用，原文本组仍独立解析和编辑', async () => {
+  const result = await inBrowser('重复文本资源的引用与原分组编辑', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'repeated.ts'), created = p.native(a, 1, 'created.ts');
+    const cold = p.unloadedText(a, native, 'abcdefgh'), beforeFile = []; let heldThroughFile;
+    p.lifetime.add(p.workingFiles.onWillRunWorkingCopyFileOperation(event => {
+      if (event.operation === m.FileOperation.CREATE) beforeFile.push(p.resolutions.map(ref => ({ resource: ref.resource, disposed: ref.disposed })));
+    }));
+    p.lifetime.add(p.workingFiles.onDidRunWorkingCopyFileOperation(event => {
+      if (event.operation === m.FileOperation.CREATE) heldThroughFile = p.resolutions.every(ref => !ref.disposed);
+    }));
+    const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new TextEncoder().encode('created') });
+    edit.replace(native, new m.Range(0, 0, 0, 1), 'A'); edit.replace(native, new m.Range(0, 3, 0, 4), 'D');
+    const applied = await a.workspace.applyEdit(edit);
+    return { applied, value: p.models.getModel(cold.resource).getValue(), created: await p.read(a.logical(created)), beforeFile, heldThroughFile,
+      requests: p.resolver.requests, references: p.resolutions, resource: cold.resource.toString(), versions: a.calls[0].edits.filter(edit => edit.textEdit).map(edit => edit.versionId),
+      version: cold.version, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.applied).toBe(true); expect(result.value).toBe('AbcDefgh'); expect(result.created).toBe('created'); expect(result.versions).toEqual([result.version, result.version]);
+  expect(result.beforeFile).toEqual([[{ resource: result.resource, disposed: false }]]); expect(result.heldThroughFile).toBe(true); expect(result.requests).toEqual([result.resource, result.resource]);
+  expect(result.references.map(ref => [ref.disposed, ref.disposeCount])).toEqual([[true, 1], [true, 1]]); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
+  checks.push('重复text版本项在首file前只取得一份预检引用，原BulkTextEdits随后仍独立解析一次，原编辑及两份引用回收成功');
+});
+
+for (const outcome of ['failure', 'cancel']) test(`后一个 resolver ${outcome} 时释放已有预检引用，整批零副作用`, async () => {
+  const result = await inBrowser('预检解析等待的' + outcome, async outcome => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), entered = p.defer(), release = p.defer();
+    const first = p.native(a, 0, 'first.ts'), second = p.native(a, 1, 'second.ts'), created = p.native(a, 0, 'must-not-create.ts');
+    const one = p.unloadedText(a, first, 'old-first'), two = p.unloadedText(a, second, 'old-second');
+    p.resolver.onResolve = async resource => {
+      if (resource.toString() === two.resource.toString()) { entered.resolve(); await release.promise; if (outcome === 'failure') throw new Error('预检第二个模型解析失败'); }
+    };
+    const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new Uint8Array([1]) });
+    edit.replace(first, new m.Range(0, 0, 0, 3), 'BAD'); edit.replace(second, new m.Range(0, 0, 0, 3), 'BAD');
+    const pending = a.workspace.applyEdit(edit); await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入第二个模型解析等待'); })]);
+    const before = { exists: await p.files.exists(a.logical(created)), operations: p.operations.length, references: p.resolutions.length, disposed: p.resolutions[0].disposed };
+    if (outcome === 'cancel') a.main.dispose(); const cancelled = a.calls[0].options.token.isCancellationRequested;
+    release.resolve(); const applied = await pending;
+    return { applied, before, cancelled, exists: await p.files.exists(a.logical(created)), values: p.models.getModels().map(model => model.getValue()).sort(),
+      references: p.resolutions, requests: p.resolver.requests, expected: [one.resource, two.resource].map(uri => uri.toString()), operations: p.operations, warnings: p.warnings, failures: p.failures };
+  }, outcome);
+  expect(result.before).toEqual({ exists: false, operations: 0, references: 1, disposed: false }); expect(result.applied).toBe(false); expect(result.exists).toBe(false); expect(result.operations).toEqual([]);
+  expect(result.cancelled).toBe(outcome === 'cancel'); expect(result.requests).toEqual(result.expected); expect(result.values).toEqual(outcome === 'failure' ? ['old-first'] : ['old-first', 'old-second']);
+  expect(result.references).toHaveLength(outcome === 'failure' ? 1 : 2); for (const ref of result.references) { expect(ref.disposed).toBe(true); expect(ref.disposeCount).toBe(1); }
+  expect(result.warnings).toHaveLength(outcome === 'failure' ? 1 : 0); expect(result.failures).toHaveLength(outcome === 'failure' ? 1 : 0);
+  if (outcome === 'failure') { expect(result.warnings[0]).toContain('IGNORING workspace edit:'); expect(result.warnings[0]).toContain('预检第二个模型解析失败'); expect(result.failures[0]).toContain('预检第二个模型解析失败'); }
+  checks.push(`原resolver第二次${outcome}后已取得引用全部只释放一次，原公开API返回false且零文本/文件副作用`);
+});
+
+test('无 versionId 的文本不增加预检读取，文件及 opaque 继续各自原语义', async () => {
+  const result = await inBrowser('无版本字段保持原owner语义', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'unversioned.ts'), created = p.native(a, 1, 'created.ts');
+    const model = p.openText(a, native, 'old-value'); a.documents.delete(native.toString());
+    model.applyEdits([{ range: model.getFullModelRange(), text: 'newer-value' }]); const beforeFile = [];
+    p.lifetime.add(p.workingFiles.onWillRunWorkingCopyFileOperation(event => {
+      if (event.operation === m.FileOperation.CREATE) beforeFile.push(p.resolver.requests.length);
+    }));
+    const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new TextEncoder().encode('created') }); edit.replace(native, new m.Range(0, 0, 0, 3), 'NEW');
+    const applied = await a.workspace.applyEdit(edit), requests = [...p.resolver.requests]; let redos = 0, undos = 0;
+    // 函数不能经扩展 RPC 序列化；opaque 只走原 BulkEditService／OpaqueEdits，回调是明确边界。
+    const opaque = await a.actualBulk.apply([new m.ResourceAttachmentEdit(a.logical(native), () => { undos++; }, () => { redos++; })]);
+    return { applied, value: model.getValue(), created: await p.read(a.logical(created)), versionAbsent: a.calls[0].edits.every(item => item.versionId === undefined && item.notebookVersionId === undefined),
+      beforeFile, requests, resource: model.uri.toString(), opaqueApplied: opaque.isApplied, redos, undos, extraRequests: p.resolver.requests.length - requests.length,
+      references: p.resolutions, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.applied).toBe(true); expect(result.value).toBe('NEWer-value'); expect(result.created).toBe('created'); expect(result.versionAbsent).toBe(true);
+  expect(result.beforeFile).toEqual([0]); expect(result.requests).toEqual([result.resource]); expect(result.opaqueApplied).toBe(true); expect([result.redos, result.undos, result.extraRequests]).toEqual([1, 0, 0]);
+  expect(result.references).toHaveLength(1); expect(result.references[0].disposed).toBe(true); expect(result.references[0].disposeCount).toBe(1); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]);
+  checks.push('原公开API无versionId文本只由原文本组解析，首file无额外预检，opaque沿原BulkEdit/OpaqueEdits执行且不编造版本或resolver读取');
+});
+
+test('入口已取消的版本编辑不请求 resolver，也不开始任何文本或文件副作用', async () => {
+  const result = await inBrowser('版本预检入口取消', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'cancelled.ts'), created = a.logical(p.native(a, 1, 'must-not-create.ts'));
+    const model = p.openText(a, native, 'old-value'), version = model.getVersionId(), source = new m.CancellationTokenSource(); source.cancel();
+    const applied = await a.actualBulk.apply([new m.ResourceFileEdit(undefined, created, { contents: m.VSBuffer.fromString('bad') }),
+      new m.ResourceTextEdit(model.uri, p.dtoText(model.uri, 'BAD').textEdit, version)], { token: source.token }); source.dispose();
+    return { applied: applied.isApplied, value: model.getValue(), exists: await p.files.exists(created), requests: p.resolver.requests, references: p.resolutions, operations: p.operations, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.applied).toBe(false); expect(result.value).toBe('old-value'); expect(result.exists).toBe(false); expect(result.requests).toEqual([]); expect(result.references).toEqual([]);
+  expect(result.operations).toEqual([]); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('原BulkEditService入口已取消时零版本解析、零file/text副作用且isApplied=false');
+});
+
+test('同资源的文本与 Notebook 版本分别核对，重复 Notebook 后项冲突在首 file 前拒绝', async () => {
+  const result = await inBrowser('Notebook已有版本字段整批门禁与重复资源', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'shared.ipynb'), resource = a.logical(native), created = p.native(a, 1, 'must-not-create.ts');
+    const model = p.openText(a, native, 'old-text'), version = model.getVersionId(), notebook = p.notebookVersion(resource, version + 10);
+    p.notebooks.onResolve = async () => notebook;
+    // 现有宿主未产出 Notebook 版本；显式 DTO 仅证明已有字段经原 RPC/MainThread/BulkEdit 的门禁。
+    const applied = await a.remote.$tryApplyWorkspaceEdit(new m.SerializableObjectWithBuffers({ edits: [p.dtoCreate(created),
+      { ...p.dtoText(native, 'BAD'), versionId: version },
+      { resource: native, notebookVersionId: notebook.versionId, cellEdit: { editType: m.CellEditType.DocumentMetadata, metadata: { first: true } } },
+      { resource: native, notebookVersionId: notebook.versionId - 1, cellEdit: { editType: m.CellEditType.DocumentMetadata, metadata: { late: true } } },
+    ] }));
+    return { applied, value: model.getValue(), exists: await p.files.exists(a.logical(created)), notebookWrites: p.notebooks.writes,
+      textReferences: p.resolutions, notebookReferences: p.notebooks.references, textRequests: p.resolver.requests, notebookRequests: p.notebooks.requests, resource: resource.toString(),
+      versions: a.calls[0].edits.map(edit => edit.versionId ?? edit.notebookVersionId ?? null), expectedVersions: [null, version, notebook.versionId, notebook.versionId - 1],
+      operations: p.operations, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.applied).toBe(false); expect(result.value).toBe('old-text'); expect(result.exists).toBe(false); expect(result.notebookWrites).toBe(0); expect(result.operations).toEqual([]);
+  expect(result.versions).toEqual(result.expectedVersions); expect(result.textRequests).toEqual([result.resource]); expect(result.notebookRequests).toEqual([result.resource]);
+  for (const references of [result.textReferences, result.notebookReferences]) { expect(references).toHaveLength(1); expect(references[0].disposed).toBe(true); expect(references[0].disposeCount).toBe(1); }
+  expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('IGNORING workspace edit:'); expect(result.warnings[0]).toContain('Notebook'); expect(result.warnings[0]).toContain('has changed in the meantime');
+  expect(result.failures).toHaveLength(1); expect(result.failures[0]).toContain('Notebook'); checks.push('原版本DTO/RPC分别核同URI文本与Notebook，Notebook重复resource单引用但逐项核版本，后项冲突在首file前零副作用');
+});
+
+test('Notebook cell URI 通过原 CellUri 归一，版本冲突在文件及 Notebook 写入前失败', async () => {
+  const result = await inBrowser('Notebook cell已有版本字段归一', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), resource = a.logical(p.native(a, 0, 'cells.ipynb')), cell = m.CellUri.generate(resource, 7), created = a.logical(p.native(a, 1, 'must-not-create.ts'));
+    const notebook = p.notebookVersion(resource, 4); p.notebooks.onResolve = async () => notebook;
+    let error;
+    try { await a.actualBulk.apply([new m.ResourceFileEdit(undefined, created, { contents: m.VSBuffer.fromString('bad') }),
+      new m.ResourceNotebookCellEdit(cell, { editType: m.CellEditType.DocumentMetadata, metadata: { changed: true } }, notebook.versionId - 1)]); }
+    catch (failure) { error = failure.message; }
+    return { error, exists: await p.files.exists(created), requests: p.notebooks.requests, references: p.notebooks.references,
+      resource: resource.toString(), writes: p.notebooks.writes, textRequests: p.resolver.requests, operations: p.operations, failures: p.failures };
+  });
+  expect(result.error).toContain('Notebook'); expect(result.error).toContain('has changed in the meantime'); expect(result.exists).toBe(false); expect(result.writes).toBe(0); expect(result.operations).toEqual([]);
+  expect(result.requests).toEqual([result.resource]); expect(result.references).toHaveLength(1); expect(result.references[0].disposed).toBe(true); expect(result.references[0].disposeCount).toBe(1); expect(result.textRequests).toEqual([]);
+  expect(result.failures).toHaveLength(1); checks.push('直接原ResourceEdit的cell URI由原CellUri归一到Notebook resolver，已有版本冲突首file前失败；不代表Notebook版本producer或真实编辑');
 });
