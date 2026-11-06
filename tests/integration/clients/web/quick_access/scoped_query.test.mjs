@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
@@ -86,6 +87,20 @@ describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
       expect(restored).toEqual(dispose ? ['original'] : ['original', 'next']);
       state.dispose();
     }
+  });
+
+  test('整批固定上游在LF和CRLF输入下转换字节一致，检出原件保持不变', async () => {
+    const hash = value => createHash('sha256').update(value).digest('hex'), receipts = [];
+    for (const path of transformedSourcePaths) {
+      const absolute = join(workbench, 'upstream', path), original = await readFile(absolute);
+      const lf = original.toString('utf8').replace(/\r\n/g, '\n'), crlf = lf.replace(/\n/g, '\r\n');
+      const generatedLf = Buffer.from(await transform(absolute, lf)), generatedCrlf = Buffer.from(await transform(absolute, crlf));
+      expect(generatedCrlf.equals(generatedLf)).toBe(true);
+      const unchanged = await readFile(absolute);
+      expect(unchanged.equals(original)).toBe(true);
+      receipts.push({ path, original: hash(original), after: hash(unchanged), lf: hash(generatedLf), crlf: hash(generatedCrlf) });
+    }
+    await writeFile(join(run.artifactsDir, 'source-newlines.json'), JSON.stringify({ commit: pinnedUpstreamCommit, receipts }, null, 2) + '\n');
   });
 
   test('固定提交及每个锚点缺失、重复均失败，实际上游原件保持不变', async () => {

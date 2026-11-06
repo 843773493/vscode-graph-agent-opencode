@@ -49,7 +49,8 @@ export function sourceTransform(root, productConfiguration, extensions) {
     webviewContentExternalBaseUrlTemplate: 'https://{{uuid}}.vscode-cdn.net/stable/a717861c07586a53d83b80d742cd3f59b20a6273/out/vs/workbench/contrib/webview/browser/pre/',
   };
   return async function transformSource(path, source) {
-    let contents = source;
+    // 严格文本锚点使用统一行尾，不改写固定上游的检出原件。
+    let contents = source.replace(/\r\n/g, '\n');
     const replacements = {
       '/*BUILD->INSERT_PRODUCT_CONFIGURATION*/': JSON.stringify(product).slice(1, -1),
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),

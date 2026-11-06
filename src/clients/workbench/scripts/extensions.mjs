@@ -1,5 +1,5 @@
 import { cp, mkdir, readdir, readFile, writeFile, symlink, rm, lstat } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { extensionDependencies } from './dependencies.mjs';
 import { transformedSourcePaths } from './sourceTransform.mjs';
@@ -71,7 +71,7 @@ export async function buildExtensions(root, dist, transformSource) {
       const entry = resolve(folder, manifest.browser);
       // Bun.file 不用于这里，构建工具保持标准 ESM 文件 API。
       const outputNames = await readdir(join(entry, '..'));
-      if (!outputNames.includes(entry.split('/').at(-1)) && !outputNames.includes(entry.split('/').at(-1) + '.js')) {
+      if (!outputNames.includes(basename(entry)) && !outputNames.includes(basename(entry) + '.js')) {
         throw new Error(`扩展入口未产出：${name}/${manifest.browser}`);
       }
     }
