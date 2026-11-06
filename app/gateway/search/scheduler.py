@@ -1,6 +1,7 @@
 """请求内有界调度；只传输原 owner 的完整页，不实现领域匹配或网络协议。"""
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from time import monotonic, time
@@ -40,6 +41,8 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
 )
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
+
+logger = logging.getLogger(__name__)
 
 
 class SearchBranchError(ValueError):
@@ -140,6 +143,7 @@ async def search_events(
     publish: Callable[[FederatedSearchEventDTO], bool] = lambda _: True,
 ) -> AsyncGenerator[FederatedSearchEventDTO, None]:
     """最多并发三个整页；消费暂停时不补新任务，缓冲最多三个已分配页。"""
+    queued_at = monotonic()
     sequence = 1
     event = FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="scope", scope=scope)
     if not publish(event):
@@ -173,11 +177,30 @@ async def search_events(
 
     async def execute(job: SearchJob) -> SearchPage:
         budget.check()
-        return await query(SearchJob(
-            key=job.key, scope_branch=job.scope_branch, max_bytes=job.max_bytes,
-            allow_catalog_mirror=job.allow_catalog_mirror,
-            request=job.request.model_copy(update={"deadline_at": time() + budget.remaining()}),
-        ))
+        started_at = monotonic()
+        reply: SearchPage | None = None
+        try:
+            reply = await query(SearchJob(
+                key=job.key, scope_branch=job.scope_branch, max_bytes=job.max_bytes,
+                allow_catalog_mirror=job.allow_catalog_mirror,
+                request=job.request.model_copy(update={"deadline_at": time() + budget.remaining()}),
+            ))
+            return reply
+        finally:
+            if logger.isEnabledFor(logging.DEBUG):
+                # 接收量不是最终交付量；未取得领域页时保留空值，失败和取消仍沿原出口。
+                logger.debug(
+                    "搜索分支读取 request_id=%(request_id)s branch=%(branch)s queue_ms=%(queue_ms).3f "
+                    "provider_ms=%(provider_ms).3f provider_id=%(provider_id)s state=%(state)s "
+                    "received_results=%(received_results)s source=%(source)s stale=%(stale)s",
+                    {"request_id": request_id, "branch": job.key, "queue_ms": (started_at - queued_at) * 1000,
+                     "provider_ms": (monotonic() - started_at) * 1000,
+                     "provider_id": reply.result.provider_id if reply is not None else None,
+                     "state": reply.result.state if reply is not None else None,
+                     "received_results": reply.result.result_count if reply is not None else None,
+                     "source": reply.source.kind if reply is not None else None,
+                     "stale": reply.source.stale if reply is not None else None},
+                )
 
     async def settle() -> None:
         for task in pending:

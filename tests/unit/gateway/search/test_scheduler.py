@@ -1,6 +1,7 @@
 """调度的时序、配额、整页交付及安全结算；这里不证明真实网络和领域匹配。"""
 
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
@@ -27,7 +28,10 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultsDTO,
 )
 from app.schemas.internal_v2.turn_search import WorkspaceMessageSearchResultsDTO
-from app.schemas.search_federation import FederatedSearchRequest
+from app.schemas.search_federation import (
+    FederatedSearchRequest,
+    FederatedSearchSourceDTO,
+)
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 
 
@@ -147,6 +151,103 @@ async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(
     assert [item.branch.owner.workspace_id for item in summary.branches] == [f"00000000-0000-4000-8000-{index:012d}" for index in range(7)]
     assert summary.branches[1].code == "target_unavailable"
     assert len([event for event in received if event.type == "branch"]) == 7
+
+
+async def test_local_diagnostics_separate_queue_from_owner_and_keep_actual_source(
+    scope: GatewaySearchScopeResolutionDTO, request_body: FederatedSearchRequest,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    release = asyncio.Event()
+    entered: list[SearchJob] = []
+    caplog.set_level(logging.DEBUG, logger="app.gateway.search.scheduler")
+
+    async def query(job: SearchJob) -> SearchPage:
+        entered.append(job)
+        if len(entered) <= 3:
+            await release.wait()
+        result = page(job)
+        assert isinstance(result.result, WorkspaceSearchResultDTO) and result.result.catalog is not None
+        result.result.catalog.items = [SessionCatalogSearchResultDTO.model_validate({
+            "node": {"node_id": "one", "kind": "folder", "name": "needle", "node_revision": 1},
+            "relative_path": "needle",
+        })]
+        if job == entered[0]:
+            result = replace(result, source=FederatedSearchSourceDTO(kind="gateway_catalog_mirror",
+                updated_at=datetime(2026, 11, 1, tzinfo=UTC), stale=True, unavailable_reason="目标停止"))
+        return result
+
+    jobs = plan_search(request_body, scope)
+    events = search_events(jobs, scope, request_id="local-diagnostics", query=query, budget=NameSearchBudget.create(None))
+    assert (await anext(events)).type == "scope"
+    next_event = asyncio.create_task(anext(events))
+    while len(entered) < 3:
+        await asyncio.sleep(0)
+    # 真实阻塞原并发槽位；后面的 owner 尚未发起读取。
+    await asyncio.sleep(0.02)
+    release.set()
+    await next_event
+    remaining = [event async for event in events]
+    records = [record.args for record in caplog.records
+               if record.name == "app.gateway.search.scheduler" and isinstance(record.args, dict)]
+    assert len(records) == len(jobs)
+    assert {record["request_id"] for record in records} == {"local-diagnostics"}
+    assert {record["branch"] for record in records} == {job.key for job in jobs}
+    assert all(record["provider_id"] == "catalog" and record["received_results"] == 1 for record in records)
+    queued: list[float] = []
+    first: list[float] = []
+    for record in records:
+        queue_ms, provider_ms = record["queue_ms"], record["provider_ms"]
+        assert isinstance(queue_ms, float) and isinstance(provider_ms, float)
+        assert queue_ms >= 0 and provider_ms >= 0
+        if record["branch"] in {job.key for job in jobs[3:]}:
+            queued.append(queue_ms)
+        else:
+            first.append(provider_ms)
+    assert min(queued) >= 20 and min(first) >= 20
+    mirror, = [record for record in records if record["branch"] == jobs[0].key]
+    assert mirror["source"] == "gateway_catalog_mirror" and mirror["stale"] is True
+    assert all(record["source"] == "owner" and record["stale"] is False
+               for record in records if record is not mirror)
+    assert all("needle" not in record.message for record in caplog.records)
+    summary = remaining[-1].summary
+    assert summary is not None and summary.state == "complete" and summary.returned_results == len(jobs)
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_local_diagnostics_do_not_fabricate_page_metrics_after_failure(
+    scope: GatewaySearchScopeResolutionDTO, request_body: FederatedSearchRequest,
+    caplog: pytest.LogCaptureFixture, cancelled: bool,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="app.gateway.search.scheduler")
+
+    async def query(job: SearchJob) -> SearchPage:
+        if cancelled:
+            raise asyncio.CancelledError()
+        raise SearchBranchError("target_unavailable", "原连接失败", retryable=True)
+
+    job = plan_search(request_body, scope)[0]
+    events = [event async for event in search_events([job], scope, request_id="failed-diagnostics", query=query,
+                                                    budget=NameSearchBudget.create(None))]
+    record, = [record.args for record in caplog.records
+               if record.name == "app.gateway.search.scheduler" and isinstance(record.args, dict)]
+    assert record["branch"] == job.key and record["request_id"] == "failed-diagnostics"
+    queue_ms, provider_ms = record["queue_ms"], record["provider_ms"]
+    assert isinstance(queue_ms, float) and isinstance(provider_ms, float)
+    assert queue_ms >= 0 and provider_ms >= 0
+    assert all(record[field] is None for field in ("provider_id", "state", "received_results", "source", "stale"))
+    summary = events[-1].summary
+    assert summary is not None
+    branch, = summary.branches
+    assert branch.state == ("cancelled" if cancelled else "failed")
+    assert branch.code == ("cancelled" if cancelled else "target_unavailable")
+    assert branch.returned_results == 0 and branch.http_status is None
+    caplog.clear()
+    skipped = replace(job, request=job.request.model_copy(update={"limit": 0}))
+    events = [event async for event in search_events([skipped], scope, request_id="not-dispatched", query=query,
+                                                    budget=NameSearchBudget.create(None))]
+    assert not any(record.name == "app.gateway.search.scheduler" for record in caplog.records)
+    summary = events[-1].summary
+    assert summary is not None and summary.branches[0].code == "output_limit"
 
 
 async def test_deadline_includes_queue_and_waits_for_cancelled_owner_cleanup(
