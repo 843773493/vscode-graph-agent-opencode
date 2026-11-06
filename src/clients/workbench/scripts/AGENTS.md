@@ -46,4 +46,6 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 
 原 WebExtensionsScannerService 区分可再生 system／custom 缓存与受保护的 profile 安装记录。前者保留原跳过坏项和扫描回退；后者损坏或拒绝读取时向上传递原错误，禁止以空列表覆盖原件。初次缺失仍走原安装链，不增加安装账本或缓存服务。
 
+`nodeHost.mjs`构建原宿主和目标管理两个独立进程入口，共用固定上游与冻结依赖闭包。管理入口只装配原生安装／profile／scanner服务，不启动整套Remote Agent或扩展代码；当前只发行空的内置扩展目录，不承诺Node内置扩展可用。`typecheckNode.mjs`从明确组件manifest解析真实运行依赖并检查Node源码；浏览器类型检查仍覆盖全部实际转换源码。原安装器尚未创建任务时直接保留前置错误；原scanner的后台缓存校验消费dispose取消，其他错误仍走原unexpected-error处理，不加全局rejection吞噬。
+
 直接位置和原 Gallery 安装写入前消费同次 toScannedExtension 的 isValid／validations，拒绝无效版本并保留原件；警告及原扫描诊断语义不变，不重复计算 manifest 校验。

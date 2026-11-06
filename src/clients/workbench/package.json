@@ -6,7 +6,8 @@
   "scripts": {
     "build": "bun scripts/build.mjs",
     "dev": "node scripts/dev.mjs",
-    "typecheck": "bun scripts/typecheck.mjs"
+    "typecheck": "bun scripts/typecheck.mjs",
+    "typecheck:node": "bun scripts/typecheckNode.mjs"
   },
   "dependencies": {
     "@hpke/core": "^1.9.0",
@@ -106,7 +107,9 @@
   },
   "devDependencies": {
     "@types/http-proxy": "^1.17.17",
+    "@types/kerberos": "1.1.2",
     "@types/markdown-it": "14.1.2",
+    "@types/minimist": "1.2.1",
     "@types/node": "^22.0.0",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
@@ -114,6 +117,8 @@
     "@types/trusted-types": "^2.0.7",
     "@types/vscode-notebook-renderer": "^1.72.0",
     "@types/wicg-file-system-access": "^2023.10.7",
+    "@types/yauzl": "2.10.3",
+    "@types/yazl": "2.4.2",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vitejs/plugin-react-swc": "3.11.0",
     "@webgpu/types": "^0.1.66",

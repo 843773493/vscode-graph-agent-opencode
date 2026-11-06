@@ -28,6 +28,8 @@ export const transformedSourcePaths = [
   'src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts',
   'src/vs/editor/contrib/documentSymbols/browser/outlineModel.ts',
   'src/vs/workbench/services/extensionManagement/browser/webExtensionsScannerService.ts',
+  'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts',
+  'src/vs/platform/extensionManagement/common/extensionsScannerService.ts',
   'src/vs/workbench/browser/parts/editor/editorGroupView.ts',
   'src/vs/workbench/browser/parts/editor/editorPanes.ts',
   'src/vs/workbench/browser/parts/editor/editorWithViewState.ts',
@@ -67,6 +69,20 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
     contents = transformExtensionHostState(root, path, contents, replaceOnce);
+    if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
+      // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
+      contents = replaceOnce(contents, '} catch (error) {\n\t\t\tconst getAllDepsAndPacks =',
+        `} catch (error) {
+      if (!installingExtensionsMap.size && !alreadyRequestedInstallations.length) throw error;
+      const getAllDepsAndPacks =`);
+    }
+    if (path === join(upstream, 'src/vs/platform/extensionManagement/common/extensionsScannerService.ts')) {
+      contents = replaceOnce(contents, "import { getErrorMessage } from '../../../base/common/errors.js';",
+        "import { getErrorMessage, onUnexpectedError } from '../../../base/common/errors.js';");
+      // 原缓存校验任务由 scanner 持有；dispose 的预期取消不能成为未处理 rejection。
+      contents = replaceOnce(contents, 'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches());',
+        'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches()).catch(onUnexpectedError);');
+    }
     // Node 宿主复用共同状态合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
     if (path === join(upstream, 'src/vs/workbench/browser/layout.ts')) {

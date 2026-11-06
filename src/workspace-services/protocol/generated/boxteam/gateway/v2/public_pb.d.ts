@@ -4396,3 +4396,154 @@ export declare type ExtensionHostTargetDTO = Message<"boxteam.gateway.v2.Extensi
  */
 export declare const ExtensionHostTargetDTOSchema: GenMessage<ExtensionHostTargetDTO>;
 
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionValidation
+ */
+export declare type ExtensionValidation = Message<"boxteam.gateway.v2.ExtensionValidation"> & {
+  /**
+   * @generated from field: uint32 severity = 1;
+   */
+  severity: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionValidation.
+ * Use `create(ExtensionValidationSchema)` to create a new message.
+ */
+export declare const ExtensionValidationSchema: GenMessage<ExtensionValidation>;
+
+/**
+ * 描述保留 Code OSS 原始 JSON；无效条目和具体诊断仍属于库存。
+ *
+ * @generated from message boxteam.gateway.v2.InstalledExtension
+ */
+export declare type InstalledExtension = Message<"boxteam.gateway.v2.InstalledExtension"> & {
+  /**
+   * @generated from field: string source = 1;
+   */
+  source: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct description = 2;
+   */
+  description?: JsonObject | undefined;
+
+  /**
+   * @generated from field: bool is_valid = 3;
+   */
+  isValid: boolean;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.ExtensionValidation validations = 4;
+   */
+  validations: ExtensionValidation[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.InstalledExtension.
+ * Use `create(InstalledExtensionSchema)` to create a new message.
+ */
+export declare const InstalledExtensionSchema: GenMessage<InstalledExtension>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ProfileExtensionInventory
+ */
+export declare type ProfileExtensionInventory = Message<"boxteam.gateway.v2.ProfileExtensionInventory"> & {
+  /**
+   * @generated from field: string profile_id = 1;
+   */
+  profileId: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.InstalledExtension extensions = 2;
+   */
+  extensions: InstalledExtension[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ProfileExtensionInventory.
+ * Use `create(ProfileExtensionInventorySchema)` to create a new message.
+ */
+export declare const ProfileExtensionInventorySchema: GenMessage<ProfileExtensionInventory>;
+
+/**
+ * 只读查询必须绑定已知 Backend；不启动 Backend，也不切换默认目标。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationInventoryRequest
+ */
+export declare type ExtensionInstallationInventoryRequest = Message<"boxteam.gateway.v2.ExtensionInstallationInventoryRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationInventoryRequest.
+ * Use `create(ExtensionInstallationInventoryRequestSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationInventoryRequestSchema: GenMessage<ExtensionInstallationInventoryRequest>;
+
+/**
+ * 只承诺目标默认 profile 的用户安装项，不代表窗口的启用或激活视图。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationInventoryDTO
+ */
+export declare type ExtensionInstallationInventoryDTO = Message<"boxteam.gateway.v2.ExtensionInstallationInventoryDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string profile_scope = 5;
+   */
+  profileScope: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ProfileExtensionInventory inventory = 6;
+   */
+  inventory?: ProfileExtensionInventory | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationInventoryDTO.
+ * Use `create(ExtensionInstallationInventoryDTOSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationInventoryDTOSchema: GenMessage<ExtensionInstallationInventoryDTO>;
+

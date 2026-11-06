@@ -13,6 +13,9 @@ from uuid import uuid4
 
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.services.infrastructure.extension_host.management import (
+    NodeExtensionManagement,
+)
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 
@@ -106,6 +109,7 @@ class NodeExtensionHostOwner:
         self._startup_timeout = startup_timeout
         self._sessions: dict[str, _HostSession] = {}
         self._admission_closed = False
+        self._management: NodeExtensionManagement | None = None
 
     @property
     def active(self) -> tuple[NodeHostIdentity, ...]:
@@ -113,6 +117,24 @@ class NodeExtensionHostOwner:
 
     def close_admission(self) -> None:
         self._admission_closed = True
+        if self._management is not None:
+            self._management.close_admission()
+
+    @property
+    def management(self) -> NodeExtensionManagement:
+        if self._admission_closed:
+            raise RuntimeError("Backend 正在关闭，拒绝扩展管理")
+        if self.runtime is None:
+            raise NotImplementedError("目标未提供专用 Node 扩展管理运行时")
+        if self._management is None:
+            self._management = NodeExtensionManagement(runtime=self.runtime,
+                directory=self._home / "state/backend/extension-management" / self.backend_id,
+                environment=self._environment, startup_timeout=self._startup_timeout, operation_timeout=120)
+        return self._management
+
+    @property
+    def drained(self) -> bool:
+        return not self._sessions and (self._management is None or self._management.drained)
 
     def describe(self, *, expected_backend_id: str | None, workspace_ids: tuple[str, ...]) -> NodeHostStatus:
         if expected_backend_id is not None and expected_backend_id != self.backend_id:
@@ -173,8 +195,10 @@ class NodeExtensionHostOwner:
         self.close_admission()
 
         async def close_all() -> None:
-            results = await asyncio.gather(*(self._release(session) for session in tuple(self._sessions.values())),
-                                           return_exceptions=True)
+            pending = [self._release(session) for session in tuple(self._sessions.values())]
+            if self._management is not None:
+                pending.append(self._management.close())
+            results = await asyncio.gather(*pending, return_exceptions=True)
             errors = [result for result in results if isinstance(result, BaseException)]
             if errors:
                 raise BaseExceptionGroup("Backend Node 宿主关闭未完成，保留原进程与输出归属", errors)

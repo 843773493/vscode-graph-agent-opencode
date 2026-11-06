@@ -40,6 +40,7 @@ from app.gateway.control.user_access import (
     UserAccessService,
 )
 from app.gateway.federation.policy import (
+    Capability,
     FederationPolicyStore,
     require_federation_capability,
 )
@@ -53,6 +54,10 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostOpenRequest,
     ExtensionHostTargetDTO,
     ExtensionHostTargetRequest,
+)
+from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationInventoryDTO,
+    ExtensionInstallationInventoryRequest,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
@@ -93,8 +98,8 @@ def _users(websocket: HTTPConnection) -> UserAccessService:
 
 
 def _check(websocket: HTTPConnection, auth: GatewayAuthContext, access: UserAccessContext | None,
-           leases: list[WorkspaceRouteLease]) -> None:
-    require_federation_capability(websocket, auth, "extension_host_manage")
+           leases: list[WorkspaceRouteLease], *, capability: Capability) -> None:
+    require_federation_capability(websocket, auth, capability)
     if access is not None and access.invalidated.is_set():
         raise PermissionError("Node 宿主客户端租约已失效")
     if any(lease.invalidated.is_set() for lease in leases):
@@ -152,11 +157,11 @@ async def resolve_extension_host(
     try:
         with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
                            auth=auth, streaming=False) as route:
-            _check(request, auth, access, route.leases)
+            _check(request, auth, access, route.leases, capability="extension_host_manage")
             path = "api/gateway/extension-hosts/resolve" if route.remote else "api/internal/extension-hosts/resolve"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
                 headers=route.headers, json=payload.model_dump(), timeout=10)
-            _check(request, auth, access, route.leases)
+            _check(request, auth, access, route.leases, capability="extension_host_manage")
             if access is not None:
                 expires_at = _users(request).expires_at(access)
                 if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
@@ -177,6 +182,52 @@ async def resolve_extension_host(
         raise HTTPException(409, str(error)) from error
     except (httpx.RequestError, ValidationError) as error:
         raise HTTPException(502, f"Node 宿主目标发现失败: {error}") from error
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@router.post("/api/gateway/extension-installations/inventory", response_model=APIResponse[ExtensionInstallationInventoryDTO])
+async def extension_installation_inventory(
+    payload: ExtensionInstallationInventoryRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationInventoryDTO] | Response:
+    require_federation_capability(request, auth, "extension_installation_manage")
+    try:
+        with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
+                           auth=auth, streaming=False) as route:
+            _check(request, auth, access, route.leases, capability="extension_installation_manage")
+            path = "api/gateway/extension-installations/inventory" if route.remote else "api/internal/extension-installations/inventory"
+            response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
+                headers=route.headers, json=payload.model_dump(), timeout=120)
+            # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
+            _check(request, auth, access, route.leases, capability="extension_installation_manage")
+            if access is not None:
+                expires_at = _users(request).expires_at(access)
+                if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
+                    raise PermissionError("扩展库存客户端租约已过期")
+            if response.headers.get("X-Request-ID") != request_id:
+                raise ValueError("扩展库存返回了不同请求身份")
+            if not response.is_success:
+                failure = response.json()
+                if not isinstance(failure, dict) or failure.get("request_id") != request_id:
+                    raise ValueError("扩展库存错误回执不属于原请求")
+                return Response(response.content, status_code=response.status_code, media_type="application/json")
+            result = APIResponse[ExtensionInstallationInventoryDTO].model_validate_json(response.content)
+            target = result.data
+            if (result.code != 0 or result.request_id != request_id or target is None
+                or target.model_dump(include=set(ExtensionInstallationInventoryRequest.model_fields)) != payload.model_dump()):
+                raise ValueError("扩展库存返回了不同目标或请求身份")
+            return result
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(502, f"目标扩展库存读取失败: {error}") from error
+    except ValidationError as error:
+        raise HTTPException(502, f"目标扩展库存回执结构无效: {error.errors(include_input=False)}") from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
 
@@ -226,7 +277,7 @@ async def _relay(websocket: WebSocket, upstream: ClientConnection, *, outbound: 
             data = message.get("bytes")
         else:
             data = await upstream.recv()
-        _check(websocket, auth, access, leases)
+        _check(websocket, auth, access, leases, capability="extension_host_manage")
         if not isinstance(data, bytes):
             raise TypeError("宿主握手后只接受原协议二进制帧")
         if outbound:
@@ -240,7 +291,7 @@ async def _upstream(websocket: WebSocket, *, url: str, headers: dict[str, str], 
                     leases: list[WorkspaceRouteLease], expected_client_id: str) -> None:
     async with connect(url, additional_headers=headers, compression=None,
                        open_timeout=10, close_timeout=10) as upstream:
-        _check(websocket, auth, access, leases)
+        _check(websocket, auth, access, leases, capability="extension_host_manage")
         await upstream.send(payload.model_dump_json())
         async with asyncio.timeout(15):
             raw = await upstream.recv()
@@ -250,7 +301,7 @@ async def _upstream(websocket: WebSocket, *, url: str, headers: dict[str, str], 
         if (binding.model_dump(include=set(ExtensionHostOpenRequest.model_fields)) != payload.model_dump()
             or binding.request_id != get_request_id(websocket) or binding.client_id != expected_client_id):
             raise ValueError("Node 宿主返回了不同目标、视图或请求身份")
-        _check(websocket, auth, access, leases)
+        _check(websocket, auth, access, leases, capability="extension_host_manage")
         await websocket.send_text(binding.model_dump_json())
         await run_channel(
             _relay(websocket, upstream, outbound=True, auth=auth, access=access, leases=leases),
@@ -281,7 +332,7 @@ async def extension_host_channel(websocket: WebSocket) -> None:
                 expected_client_id = client_id
                 path = "api/internal/extension-hosts/channel"
             url = _websocket_target(route.base_url, path)
-            _check(websocket, auth, access, leases)
+            _check(websocket, auth, access, leases, capability="extension_host_manage")
             # 所有监视与启动在同一作用域；连接等待期间撤权也会取消原上游。
             operations = [
                 _upstream(websocket, url=url, headers=headers, payload=payload, auth=auth, access=access,

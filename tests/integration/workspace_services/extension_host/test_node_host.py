@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict
 from pathlib import Path
@@ -16,7 +15,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-import uvicorn
 from fastapi import FastAPI
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
@@ -53,16 +51,11 @@ def node_host_runtime() -> tuple[str, str]:
     return executable, modules
 
 
-@pytest.fixture
-async def network_scope() -> AsyncIterator[AsyncExitStack]:
-    async with AsyncExitStack() as scope:
-        yield scope
-
-
 @pytest.mark.parametrize("transport", ["ipc", "gateway", "relay"])
 async def test_original_node_host_protocol_and_dual_native_extensions(
     node_host_runtime: tuple[str, str], monkeypatch: pytest.MonkeyPatch, transport: str,
     request: pytest.FixtureRequest, network_scope: AsyncExitStack,
+    serve_extension_application: Callable[[FastAPI], Awaitable[str]],
 ) -> None:
     # Python 与 Node 共用运行身份，避免各自按进程 PID 建立不同证据目录。
     monkeypatch.setenv("BOXTEAM_TEST_RUN_ID", f"node-host-{uuid4()}")
@@ -107,37 +100,13 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     network = network_scope
     http = await network.enter_async_context(httpx.AsyncClient(timeout=10))
 
-    async def serve_application(app: FastAPI) -> str:
-        # 本用例以真实 Uvicorn 网络接入产品路由；工作区服务图与窗口主线程不在此装配。
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.setblocking(False)
-        network.callback(listener.close)
-        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, lifespan="off", log_level="warning"))
-        task = asyncio.create_task(server.serve(sockets=[listener]))
-
-        async def close_server() -> None:
-            server.should_exit = True
-            async with asyncio.timeout(10):
-                await task
-
-        network.push_async_callback(close_server)
-        async with asyncio.timeout(10):
-            while not server.started:
-                if task.done():
-                    task.result()
-                    raise RuntimeError("真实宿主测试服务在就绪前退出")
-                await asyncio.sleep(0.01)
-        return f"http://127.0.0.1:{listener.getsockname()[1]}"
-
     gateway_id = "gateway_" + "a" * 32
     token = get_gateway_local_token()
     monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
     gateway_url = ""
     cookie = ""
     if transport != "ipc":
-        backend_url = await serve_application(application)
+        backend_url = await serve_extension_application(application)
         gateway = FastAPI()
         gateway.add_middleware(TraceMiddleware)
         gateway.include_router(gateway_host_router)
@@ -156,7 +125,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         gateway.state.user_access_service = users
         gateway.state.federation_policy_store = FederationPolicyStore()
         gateway.state.http_client = http
-        gateway_url = (await serve_application(gateway)).replace("http://", "ws://")
+        gateway_url = (await serve_extension_application(gateway)).replace("http://", "ws://")
         if transport == "relay":
             relay_id = "gateway_" + "b" * 32
             relay_registry = GatewayWorkspaceRegistry(storage_path=home / "relay-workspaces.json", gateway_id=relay_id)
@@ -182,7 +151,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             relay.state.user_access_service = users
             relay.state.federation_policy_store = FederationPolicyStore()
             relay.state.http_client = http
-            gateway_url = (await serve_application(relay)).replace("http://", "ws://")
+            gateway_url = (await serve_extension_application(relay)).replace("http://", "ws://")
 
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         while data := await reader.read(65536):

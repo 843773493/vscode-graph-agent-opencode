@@ -1035,3 +1035,39 @@ message ExtensionHostTargetDTO {
   optional string reason = 8;
   ExtensionHostRuntimeDTO runtime = 9;
 }
+
+message ExtensionValidation {
+  uint32 severity = 1;
+  string message = 2;
+}
+
+// 描述保留 Code OSS 原始 JSON；无效条目和具体诊断仍属于库存。
+message InstalledExtension {
+  string source = 1;
+  google.protobuf.Struct description = 2;
+  bool is_valid = 3;
+  repeated ExtensionValidation validations = 4;
+}
+
+message ProfileExtensionInventory {
+  string profile_id = 1;
+  repeated InstalledExtension extensions = 2;
+}
+
+// 只读查询必须绑定已知 Backend；不启动 Backend，也不切换默认目标。
+message ExtensionInstallationInventoryRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  string backend_id = 4;
+}
+
+// 只承诺目标默认 profile 的用户安装项，不代表窗口的启用或激活视图。
+message ExtensionInstallationInventoryDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  string backend_id = 4;
+  string profile_scope = 5;
+  ProfileExtensionInventory inventory = 6;
+}

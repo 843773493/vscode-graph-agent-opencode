@@ -76,9 +76,14 @@ export async function buildNodeExtensionHost(root, output) {
   await mkdir(dirname(output), { recursive: true });
   // 每次构建占用全新的专用目录；拒绝覆盖项目文件、链接或混入旧 generation。
   await mkdir(output);
+  // 本组件尚未发行 Node 内置扩展；原安装器仍要求一个明确的发行目录，不能扫描用户目录代替。
+  await mkdir(join(output, 'builtin-extensions'));
   const result = await build({
-    entryPoints: [join(upstream, 'src/vs/workbench/api/node/extensionHostProcess.ts')],
-    outfile: join(output, 'extensionHostProcess.mjs'),
+    entryPoints: {
+      extensionHostProcess: join(upstream, 'src/vs/workbench/api/node/extensionHostProcess.ts'),
+      extensionManagement: join(root, 'node/extensionManagementProcess.ts'),
+    },
+    outdir: output, outExtension: { '.js': '.mjs' },
     bundle: true, format: 'esm', platform: 'node', target: `node${nodeVersion}`,
     packages: 'external', metafile: true, tsconfig: join(root, 'tsconfig.jsonc'),
     plugins: [buildSourcePlugin(root, sourceTransform(root,

@@ -1023,6 +1023,42 @@ export interface ExtensionHostTargetDTO {
   runtime: ExtensionHostRuntimeDTO | undefined;
 }
 
+export interface ExtensionValidation {
+  severity: number;
+  message: string;
+}
+
+/** 描述保留 Code OSS 原始 JSON；无效条目和具体诊断仍属于库存。 */
+export interface InstalledExtension {
+  source: string;
+  description: { [key: string]: any } | undefined;
+  is_valid: boolean;
+  validations: ExtensionValidation[];
+}
+
+export interface ProfileExtensionInventory {
+  profile_id: string;
+  extensions: InstalledExtension[];
+}
+
+/** 只读查询必须绑定已知 Backend；不启动 Backend，也不切换默认目标。 */
+export interface ExtensionInstallationInventoryRequest {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id: string;
+}
+
+/** 只承诺目标默认 profile 的用户安装项，不代表窗口的启用或激活视图。 */
+export interface ExtensionInstallationInventoryDTO {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id: string;
+  profile_scope: string;
+  inventory: ProfileExtensionInventory | undefined;
+}
+
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
   return { uri: "", local_gateway_id: "", resource_gateway_id: undefined };
 }
@@ -7812,6 +7848,241 @@ export const ExtensionHostTargetDTO: MessageFns<ExtensionHostTargetDTO> = {
     message.reason = object.reason ?? undefined;
     message.runtime = (object.runtime !== undefined && object.runtime !== null)
       ? ExtensionHostRuntimeDTO.fromPartial(object.runtime)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionValidation(): ExtensionValidation {
+  return { severity: 0, message: "" };
+}
+
+export const ExtensionValidation: MessageFns<ExtensionValidation> = {
+  fromJSON(object: any): ExtensionValidation {
+    return {
+      severity: isSet(object.severity) ? globalThis.Number(object.severity) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+    };
+  },
+
+  toJSON(message: ExtensionValidation): unknown {
+    const obj: any = {};
+    if (message.severity !== 0) {
+      obj.severity = Math.round(message.severity);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionValidation>, I>>(base?: I): ExtensionValidation {
+    return ExtensionValidation.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionValidation>, I>>(object: I): ExtensionValidation {
+    const message = createBaseExtensionValidation();
+    message.severity = object.severity ?? 0;
+    message.message = object.message ?? "";
+    return message;
+  },
+};
+
+function createBaseInstalledExtension(): InstalledExtension {
+  return { source: "", description: undefined, is_valid: false, validations: [] };
+}
+
+export const InstalledExtension: MessageFns<InstalledExtension> = {
+  fromJSON(object: any): InstalledExtension {
+    return {
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      description: isObject(object.description) ? object.description : undefined,
+      is_valid: isSet(object.is_valid) ? globalThis.Boolean(object.is_valid) : false,
+      validations: globalThis.Array.isArray(object?.validations)
+        ? object.validations.map((e: any) => ExtensionValidation.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: InstalledExtension): unknown {
+    const obj: any = {};
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.description !== undefined) {
+      obj.description = message.description;
+    }
+    if (message.is_valid !== false) {
+      obj.is_valid = message.is_valid;
+    }
+    if (message.validations?.length) {
+      obj.validations = message.validations.map((e) => ExtensionValidation.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<InstalledExtension>, I>>(base?: I): InstalledExtension {
+    return InstalledExtension.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InstalledExtension>, I>>(object: I): InstalledExtension {
+    const message = createBaseInstalledExtension();
+    message.source = object.source ?? "";
+    message.description = object.description ?? undefined;
+    message.is_valid = object.is_valid ?? false;
+    message.validations = object.validations?.map((e) => ExtensionValidation.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseProfileExtensionInventory(): ProfileExtensionInventory {
+  return { profile_id: "", extensions: [] };
+}
+
+export const ProfileExtensionInventory: MessageFns<ProfileExtensionInventory> = {
+  fromJSON(object: any): ProfileExtensionInventory {
+    return {
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      extensions: globalThis.Array.isArray(object?.extensions)
+        ? object.extensions.map((e: any) => InstalledExtension.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ProfileExtensionInventory): unknown {
+    const obj: any = {};
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.extensions?.length) {
+      obj.extensions = message.extensions.map((e) => InstalledExtension.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ProfileExtensionInventory>, I>>(base?: I): ProfileExtensionInventory {
+    return ProfileExtensionInventory.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ProfileExtensionInventory>, I>>(object: I): ProfileExtensionInventory {
+    const message = createBaseProfileExtensionInventory();
+    message.profile_id = object.profile_id ?? "";
+    message.extensions = object.extensions?.map((e) => InstalledExtension.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationInventoryRequest(): ExtensionInstallationInventoryRequest {
+  return { protocol_version: 0, gateway_id: "", workspace_ids: [], backend_id: "" };
+}
+
+export const ExtensionInstallationInventoryRequest: MessageFns<ExtensionInstallationInventoryRequest> = {
+  fromJSON(object: any): ExtensionInstallationInventoryRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+    };
+  },
+
+  toJSON(message: ExtensionInstallationInventoryRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationInventoryRequest>, I>>(
+    base?: I,
+  ): ExtensionInstallationInventoryRequest {
+    return ExtensionInstallationInventoryRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationInventoryRequest>, I>>(
+    object: I,
+  ): ExtensionInstallationInventoryRequest {
+    const message = createBaseExtensionInstallationInventoryRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationInventoryDTO(): ExtensionInstallationInventoryDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    workspace_ids: [],
+    backend_id: "",
+    profile_scope: "",
+    inventory: undefined,
+  };
+}
+
+export const ExtensionInstallationInventoryDTO: MessageFns<ExtensionInstallationInventoryDTO> = {
+  fromJSON(object: any): ExtensionInstallationInventoryDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      profile_scope: isSet(object.profile_scope) ? globalThis.String(object.profile_scope) : "",
+      inventory: isSet(object.inventory) ? ProfileExtensionInventory.fromJSON(object.inventory) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionInstallationInventoryDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.profile_scope !== "") {
+      obj.profile_scope = message.profile_scope;
+    }
+    if (message.inventory !== undefined) {
+      obj.inventory = ProfileExtensionInventory.toJSON(message.inventory);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationInventoryDTO>, I>>(
+    base?: I,
+  ): ExtensionInstallationInventoryDTO {
+    return ExtensionInstallationInventoryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationInventoryDTO>, I>>(
+    object: I,
+  ): ExtensionInstallationInventoryDTO {
+    const message = createBaseExtensionInstallationInventoryDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? "";
+    message.profile_scope = object.profile_scope ?? "";
+    message.inventory = (object.inventory !== undefined && object.inventory !== null)
+      ? ProfileExtensionInventory.fromPartial(object.inventory)
       : undefined;
     return message;
   },

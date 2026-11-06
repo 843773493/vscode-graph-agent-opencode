@@ -573,7 +573,7 @@ class WorkspaceContainerRegistry:
     def close(self) -> None:
         """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
         self.close_admission()
-        if self._extension_hosts is not None and self._extension_hosts.active:
+        if self._extension_hosts is not None and not self._extension_hosts.drained:
             raise RuntimeError("Node 宿主尚未回收，须先 await close_extension_hosts()")
         with self._lock:
             errors: list[Exception] = []

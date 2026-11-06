@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.jsonc",
+  "compilerOptions": {
+    "types": ["node"],
+    "allowJs": false,
+    "noEmit": true
+  },
+  "include": ["*.ts", "../upstream/src/typings/*.d.ts"]
+}

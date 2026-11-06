@@ -1709,3 +1709,59 @@ class ExtensionHostTargetDTO(_message.Message):
     reason: str
     runtime: ExtensionHostRuntimeDTO
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source: _Optional[str] = ..., platform: _Optional[str] = ..., channel_state: _Optional[str] = ..., reason: _Optional[str] = ..., runtime: _Optional[_Union[ExtensionHostRuntimeDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionValidation(_message.Message):
+    __slots__ = ("severity", "message")
+    SEVERITY_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    severity: int
+    message: str
+    def __init__(self, severity: _Optional[int] = ..., message: _Optional[str] = ...) -> None: ...
+
+class InstalledExtension(_message.Message):
+    __slots__ = ("source", "description", "is_valid", "validations")
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    IS_VALID_FIELD_NUMBER: _ClassVar[int]
+    VALIDATIONS_FIELD_NUMBER: _ClassVar[int]
+    source: str
+    description: _struct_pb2.Struct
+    is_valid: bool
+    validations: _containers.RepeatedCompositeFieldContainer[ExtensionValidation]
+    def __init__(self, source: _Optional[str] = ..., description: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., is_valid: _Optional[bool] = ..., validations: _Optional[_Iterable[_Union[ExtensionValidation, _Mapping]]] = ...) -> None: ...
+
+class ProfileExtensionInventory(_message.Message):
+    __slots__ = ("profile_id", "extensions")
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSIONS_FIELD_NUMBER: _ClassVar[int]
+    profile_id: str
+    extensions: _containers.RepeatedCompositeFieldContainer[InstalledExtension]
+    def __init__(self, profile_id: _Optional[str] = ..., extensions: _Optional[_Iterable[_Union[InstalledExtension, _Mapping]]] = ...) -> None: ...
+
+class ExtensionInstallationInventoryRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionInstallationInventoryDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "profile_scope", "inventory")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    INVENTORY_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    profile_scope: str
+    inventory: ProfileExtensionInventory
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ...) -> None: ...

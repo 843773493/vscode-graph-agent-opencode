@@ -1,0 +1,113 @@
+import { format } from 'node:util';
+import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
+import { Schemas } from '../upstream/src/vs/base/common/network.js';
+import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { ConfigurationService } from '../upstream/src/vs/platform/configuration/common/configurationService.js';
+import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
+import { DownloadService } from '../upstream/src/vs/platform/download/common/downloadService.js';
+import { IDownloadService } from '../upstream/src/vs/platform/download/common/download.js';
+import { IAllowedExtensionsService, IExtensionGalleryService } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
+import { AllowedExtensionsService } from '../upstream/src/vs/platform/extensionManagement/common/allowedExtensionsService.js';
+import { ExtensionGalleryServiceWithNoStorageService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryService.js';
+import { IExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifest.js';
+import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifestService.js';
+import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
+import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
+import { ExtensionManagementService, INativeServerExtensionManagementService } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
+import { ExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/node/extensionsProfileScannerService.js';
+import { ExtensionSignatureVerificationService, IExtensionSignatureVerificationService } from '../upstream/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.js';
+import { FileService } from '../upstream/src/vs/platform/files/common/fileService.js';
+import { IFileService } from '../upstream/src/vs/platform/files/common/files.js';
+import { DiskFileSystemProvider } from '../upstream/src/vs/platform/files/node/diskFileSystemProvider.js';
+import { SyncDescriptor } from '../upstream/src/vs/platform/instantiation/common/descriptors.js';
+import { InstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiationService.js';
+import { ServiceCollection } from '../upstream/src/vs/platform/instantiation/common/serviceCollection.js';
+import { AdapterLogger, ILogService, LogLevel } from '../upstream/src/vs/platform/log/common/log.js';
+import { LogService } from '../upstream/src/vs/platform/log/common/logService.js';
+import { NullPolicyService } from '../upstream/src/vs/platform/policy/common/policy.js';
+import product from '../upstream/src/vs/platform/product/common/product.js';
+import { IProductService } from '../upstream/src/vs/platform/product/common/productService.js';
+import { IRequestService } from '../upstream/src/vs/platform/request/common/request.js';
+import { RequestService } from '../upstream/src/vs/platform/request/node/requestService.js';
+import { ITelemetryService } from '../upstream/src/vs/platform/telemetry/common/telemetry.js';
+import { NullTelemetryService } from '../upstream/src/vs/platform/telemetry/common/telemetryUtils.js';
+import { IUriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
+import { UriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentityService.js';
+import { IUserDataProfilesService } from '../upstream/src/vs/platform/userDataProfile/common/userDataProfile.js';
+import { ServerUserDataProfilesService } from '../upstream/src/vs/platform/userDataProfile/node/userDataProfile.js';
+import { ExtensionsScannerService } from '../upstream/src/vs/server/node/extensionsScannerService.js';
+import { IServerEnvironmentService, ServerEnvironmentService, type ServerParsedArgs } from '../upstream/src/vs/server/node/serverEnvironmentService.js';
+
+/** 与官方 server 使用相同的安装／扫描 owner，只装配本组件需要的原生服务。 */
+export async function createExtensionManagement(directory: string, builtinExtensionsPath: string) {
+  const scope = new DisposableStore();
+  try {
+    const services = new ServiceCollection();
+    const args: ServerParsedArgs = {
+      _: [], 'user-data-dir': `${directory}/data`, 'extensions-dir': `${directory}/extensions`,
+      'builtin-extensions-dir': builtinExtensionsPath, 'disable-telemetry': true,
+      'accept-server-license-terms': true, help: false, version: false, workspace: '', folder: '', compatibility: '',
+    };
+    const productService: IProductService = { _serviceBrand: undefined, ...product };
+    const environment = new ServerEnvironmentService(args, productService);
+    services.set(IProductService, productService);
+    services.set(IServerEnvironmentService, environment);
+    const logger = scope.add(new AdapterLogger({ log: (level, args) => process.stderr.write(`[${level}] ${format(...args)}\n`) }, LogLevel.Info));
+    const log = scope.add(new LogService(logger));
+    services.set(ILogService, log);
+    const files = scope.add(new FileService(log));
+    scope.add(files.registerProvider(Schemas.file, scope.add(new DiskFileSystemProvider(log))));
+    services.set(IFileService, files);
+    if (!(await files.resolve(URI.file(builtinExtensionsPath))).isDirectory) throw new Error('目标扩展运行时的内置扩展目录无效');
+    await files.createFolder(URI.file(environment.extensionsPath));
+    const identity = scope.add(new UriIdentityService(files));
+    services.set(IUriIdentityService, identity);
+    const profiles = scope.add(new ServerUserDataProfilesService(identity, environment, files, log));
+    services.set(IUserDataProfilesService, profiles);
+    const configuration = scope.add(new ConfigurationService(profiles.defaultProfile.settingsResource, files, new NullPolicyService(), log));
+    services.set(IConfigurationService, configuration);
+    await Promise.all([profiles.init(), configuration.initialize()]);
+    services.set(IRequestService, new SyncDescriptor(RequestService, ['remote']));
+    services.set(IDownloadService, new SyncDescriptor(DownloadService));
+    services.set(ITelemetryService, NullTelemetryService);
+    services.set(IExtensionGalleryManifestService, new SyncDescriptor(ExtensionGalleryManifestService));
+    services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryServiceWithNoStorageService));
+    services.set(IExtensionSignatureVerificationService, new SyncDescriptor(ExtensionSignatureVerificationService));
+    services.set(IAllowedExtensionsService, new SyncDescriptor(AllowedExtensionsService));
+    services.set(IExtensionsProfileScannerService, new SyncDescriptor(ExtensionsProfileScannerService));
+    services.set(IExtensionsScannerService, new SyncDescriptor(ExtensionsScannerService));
+    services.set(INativeServerExtensionManagementService, new SyncDescriptor(ExtensionManagementService));
+    const instantiation = scope.add(new InstantiationService(services, true));
+    return instantiation.invokeFunction(accessor => {
+      const management = accessor.get(INativeServerExtensionManagementService);
+      const scanner = accessor.get(IExtensionsScannerService);
+      const profileScanner = accessor.get(IExtensionsProfileScannerService);
+      const profile = profiles.defaultProfile;
+      return {
+        dispose: () => scope.dispose(),
+        async inventory() {
+          // 不调用 scanAllExtensions 的跨来源 dedup；此库存只承诺同一默认 profile。
+          const extensions = await scanner.scanUserExtensions({ profileLocation: profile.extensionsResource, includeInvalid: true });
+          const members = await profileScanner.scanProfileExtensions(profile.extensionsResource);
+          const byId = new Map(members.map(extension => [extension.identifier.id.toLowerCase(), extension]));
+          if (byId.size !== members.length) throw new Error('目标 profile 存在重复扩展 ID，不能静默选择版本');
+          if (extensions.length !== members.length || extensions.some(extension => {
+            const member = byId.get(extension.identifier.id.toLowerCase());
+            return !member || member.version !== extension.manifest.version || !identity.extUri.isEqual(member.location, extension.location);
+          })) throw new Error('目标 profile 包含无法解析的已安装扩展');
+          return { profile_id: profile.id, extensions: extensions.map(extension => ({
+            source: 'profile' as const, description: toExtensionDescription(extension, false),
+            is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
+          })) };
+        },
+        async install(vsixPath: string) {
+          const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource });
+          return { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id };
+        },
+      };
+    });
+  } catch (error) {
+    scope.dispose();
+    throw error;
+  }
+}
