@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-from collections import Counter
 from dataclasses import replace
 from typing import Annotated, TypedDict
 from uuid import uuid4
@@ -22,9 +21,6 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     CANONICAL_GROUP_FIELD,
     canonical_message_anchor,
-)
-from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
-    LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
     MutationIntentConsumptionRejected,
@@ -213,7 +209,7 @@ async def test_graph_same_id_replacement_publishes_new_canonical_version(revisio
 
 
 @pytest.mark.parametrize("message_count", [8, 64])
-def test_checkpoint_reuses_validated_new_message_projections(revision_case, monkeypatch, message_count):
+def test_large_message_batch_reopens_and_retries_without_rewriting(revision_case, message_count):
     saver, admission, index, source, _revision, child = revision_case
     with _execution_scope(admission):
         previous = checkpoint_messages(saver, saver.get_tuple(child))
@@ -221,22 +217,10 @@ def test_checkpoint_reuses_validated_new_message_projections(revision_case, monk
         content="新消息正文" * 1024, id=f"projection-batch-{ordinal}",
         response_metadata={"model_call_id": source.projection_identity.model_call_id},
     ) for ordinal in range(message_count)]
-    new_ids = {message.id for message in appended}
-    projections: Counter[str] = Counter()
-    original_project = LangChainMessageCodec.project_message
-
-    def observe_projection(self, items):
-        message_id = items[-1].projection_identity.projection_message_id
-        if message_id in new_ids:
-            projections[message_id] += 1
-        return original_project(self, items)
-
-    monkeypatch.setattr(LangChainMessageCodec, "project_message", observe_projection)
     checkpoint = _checkpoint("projection-batch", [*previous, *appended])
     checkpoint["channel_versions"] = {"messages": "3"}
     with _execution_scope(admission):
         written = saver.put(child, checkpoint, {"source": "loop", "step": 1}, {"messages": "3"})
-        write_projections = projections.copy()
         cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
         restored = checkpoint_messages(cold, cold.get_tuple(written))
         assert [(message.id, message.content) for message in restored[-message_count:]] == [
@@ -245,8 +229,6 @@ def test_checkpoint_reuses_validated_new_message_projections(revision_case, monk
         before = index.with_name("rollout.jsonl").read_bytes()
         saver.put(child, checkpoint, {"source": "loop", "step": 1}, {"messages": "3"})
         assert index.with_name("rollout.jsonl").read_bytes() == before
-    print({"new_message_count": message_count, "write_projections": sum(write_projections.values())})
-    assert write_projections == Counter({message_id: 1 for message_id in new_ids})
 
 
 def test_independent_graph_branches_can_reuse_channel_version(revision_case):

@@ -260,6 +260,7 @@ def restore_group_manifests(
     """临时 carrier 携带无正文 typed 镜像，逐成员恢复并拒绝展示坐标冲突。"""
     raw = response.get(CANONICAL_GROUP_FIELD)
     if raw is None:
+        validate_group(items)
         return tuple(items)
     if not isinstance(raw, list) or len(raw) != len(items):
         raise ValueError("checkpoint canonical group manifest 成员数不一致")

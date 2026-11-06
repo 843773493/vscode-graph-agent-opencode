@@ -383,8 +383,10 @@ class LangChainMessageCodec:
             if not isinstance(raw_relations, list) or tuple(ItemProvenanceRelation.from_dict(entry) for entry in raw_relations) != stored.provenance_relations:
                 raise ValueError("compaction summary 的来源关系发生变化")
             payload = {**stored.payload, "summary": data_mapping.get("content")}
-            return (replace(stored, item_sequence=item_sequence, payload=payload,
-                            content_hash=content_hash(PayloadKind.SUMMARY, payload)),)
+            group = (replace(stored, item_sequence=item_sequence, payload=payload,
+                             content_hash=content_hash(PayloadKind.SUMMARY, payload)),)
+            validate_group(group)
+            return group
         role = self.message_role(message)
         internal = self.is_internal(message)
         content = data_mapping.get("content")

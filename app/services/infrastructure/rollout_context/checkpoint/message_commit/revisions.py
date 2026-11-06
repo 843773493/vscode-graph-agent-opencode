@@ -87,8 +87,8 @@ def resolve_message_group(
         model_call_id=model_call_id,
         canonical_items=stored_group,
     )
-    # codec 自身验证 group 完整性；不能接受返回顺序与投影不一致的适配器。
-    projected = codec.project_message(group)
+    # codec 已校验候选 group 的完整性和顺序；与已投影旧组比较即可验证复用，
+    # 不为最终丢弃的候选再次构造 LangChain 消息和整份正文投影。
     if stored_group:
         source = stored_group[-1]
         source_revisions = tuple(relation for relation in source.provenance_relations
@@ -127,8 +127,6 @@ def resolve_message_group(
                                            if not (relation.relation == "replaces" and relation.target_kind == "canonical_item"))
                 + ((relation,) if ordinal == len(group) - 1 else ()),
             ) for ordinal, item in enumerate(group))
-            projected = codec.project_message(group)
             created = True
-    # 新组的最终投影同时用于校验和提交，不能在 prepare 中重走长正文。
-    # revision 替换身份/来源后已重新投影；既有组只校验，不再准备写入。
-    return tuple(group), projected if created else None
+    # 新组或 revision 完成最终身份/来源分配后只投影一次，供同一事务提交。
+    return tuple(group), codec.project_message(group) if created else None
