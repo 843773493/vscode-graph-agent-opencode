@@ -26,19 +26,12 @@ def team_guidance_content(payload: object) -> str:
     return payload["content"]
 
 
-def team_facet_payload(payload_json: str, thread_id: str, facet: str) -> dict[str, str]:
+def team_facet_payload(
+    ledger: dict[str, object], *, thread_id: str, facet: str
+) -> dict[str, str]:
     """唯一投影同时供 loader 与 Saver 校验原持久 observation 使用。"""
     if facet not in TEAM_FACETS:
         raise ValueError(f"未知团队 facet: {facet}")
-    return _team_facet_payload_from_ledger(
-        json.loads(payload_json), thread_id=thread_id, facet=facet
-    )
-
-
-def _team_facet_payload_from_ledger(
-    ledger: dict[str, object], *, thread_id: str, facet: str
-) -> dict[str, str]:
-    """复用已解码的冻结账本，并只解析一次成员 task_seed。"""
     members_by_team_id: dict[str, list[dict[str, object]]] = {}
     if ledger["boards"]:
         for member in ledger["members"]:
@@ -108,7 +101,7 @@ class TeamFacetLoader:
         ):
             return SemanticPayload(available=False, error="Team 已接受来源 owner/revision/event 向量不一致")
         return SemanticPayload(
-            payload=_team_facet_payload_from_ledger(
+            payload=team_facet_payload(
                 value, thread_id=self.thread_id, facet=self.facet
             )
         )

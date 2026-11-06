@@ -232,6 +232,7 @@ class ContextSourceActivationMixin:
     def validate_team_activation_observations(self, connection: sqlite3.Connection,
                                              snapshot: ResourceActivationSnapshotRef) -> None:
         """冻结向量与原 pending 状态索引核对；不读取当前 collaboration ledger。"""
+        ledgers: dict[int, dict[str, object]] = {}
         for binding in snapshot.bindings:
             if binding.resource_kind != "team_state":
                 continue
@@ -247,8 +248,12 @@ class ContextSourceActivationMixin:
                                          (snapshot.owner_session_id, snapshot.owner_thread_id, revision)).fetchone()
                 if row is None or row[0] != lineage[TEAM_EVENT_SOURCE_ID]:
                     raise ItemSchemaError("team-state-not-ready: required revision 尚未持久 reconcile")
-                payload = team_facet_payload(str(row[1]), snapshot.owner_thread_id, binding.facet)
-            if binding.revision != sha256_jcs(payload) or binding.content_hash != sha256_jcs(payload):
+                # 同一事务中的冻结 observation 只解码一次；每个 facet 仍核对原 event。
+                if revision not in ledgers:
+                    ledgers[revision] = json.loads(str(row[1]))
+                payload = team_facet_payload(ledgers[revision], thread_id=snapshot.owner_thread_id, facet=binding.facet)
+            digest = sha256_jcs(payload)
+            if binding.revision != digest or binding.content_hash != digest:
                 raise ItemSchemaError("team-state-snapshot-conflict: facet 与原 pending observation 不一致")
     def _apply_sealed_context_sources(
         self,
