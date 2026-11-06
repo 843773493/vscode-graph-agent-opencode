@@ -133,6 +133,7 @@ class RolloutWriteMixin:
                 parameters,
             ).fetchall()
             result: list[PendingWrite] = []
+            references: PendingMessageReferences | None = None
             for raw_row in rows:
                 (
                     task_id,
@@ -146,14 +147,17 @@ class RolloutWriteMixin:
                     _status,
                     _created_at,
                 ) = _pending_write_row(tuple(raw_row))
-                value = (
-                    PendingMessageReferences(
-                        self._storage, connection, session_id=session_id,
-                        thread_id=thread_id, checkpoint_ns=checkpoint_ns,
-                    ).restore(serializer, blob)
-                    if serializer.startswith(MESSAGE_REFERENCE_SERIALIZER)
-                    else self._storage.decode_value((serializer, blob))
-                )
+                if serializer.startswith(MESSAGE_REFERENCE_SERIALIZER):
+                    # 同一读取事务只定位一次 JSONL；每条引用仍完整核对归属、版本与正文。
+                    # 没有 canonical 引用的暂存/控制写入无需解析路径。
+                    if references is None:
+                        references = PendingMessageReferences(
+                            self._storage, connection, session_id=session_id,
+                            thread_id=thread_id, checkpoint_ns=checkpoint_ns,
+                        )
+                    value = references.restore(serializer, blob)
+                else:
+                    value = self._storage.decode_value((serializer, blob))
                 result.append((task_id, channel, value))
             return result
 
