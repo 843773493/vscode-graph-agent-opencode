@@ -294,6 +294,39 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     } finally { f.instantiation.dispose(); }
   });
 
+  test('受限预热不缓存为完整结果，同cacheKey的上限外匹配及另一owner仍独立查询', async () => {
+    const f = fixture([]), cacheKey = 'same-picker-cache';
+    const common = { type: 1, folderQueries: [{ folder: uri(ownerA) }], cacheKey };
+    const prefix = Array.from({ length: 500 }, (_, index) => `entry-${String(index).padStart(3, '0')}.txt`);
+    const tail = 'only-after-prewarm-cap.txt';
+    try {
+      await withTransport(async calls => {
+        const warm = await f.search.fileSearch({ ...common, filePattern: '', maxResults: 0 });
+        expect(warm.results).toHaveLength(500); expect(warm.limitHit).toBe(true);
+        expect(warm.results.some(item => item.resource.toString() === uri(ownerA, tail).toString())).toBe(false);
+        expect(calls).toHaveLength(2);
+        expect(calls[0].request.queries[0].limit).toBe(500);
+        expect(calls[1].request.continuations[0].cursor).toBe('after-500');
+        expect(calls.every(call => call.request.queries[0].file_targets.every(item => item.owner.gateway_id === ownerA.gatewayId))).toBe(true);
+
+        const later = await f.search.fileSearch({ ...common, filePattern: 'only-after-prewarm-cap', maxResults: 10 });
+        expect(later.results.map(item => item.resource.toString())).toEqual([uri(ownerA, tail).toString()]);
+        expect(later.limitHit).toBe(false); expect(calls).toHaveLength(3);
+        const other = await f.search.fileSearch({ ...common, folderQueries: [{ folder: uri(ownerB) }], filePattern: 'only-after-prewarm-cap', maxResults: 10 });
+        expect(other.results.map(item => item.resource.toString())).toEqual([uri(ownerB, tail).toString()]);
+        expect(other.limitHit).toBe(false); expect(calls).toHaveLength(4);
+
+        await f.search.clearCache(cacheKey);
+        expect(calls).toHaveLength(4);
+        const reopened = await f.search.fileSearch({ ...common, filePattern: 'only-after-prewarm-cap', maxResults: 10 });
+        expect(reopened.results.map(item => item.resource.toString())).toEqual([uri(ownerA, tail).toString()]);
+        expect(reopened.limitHit).toBe(false); expect(calls).toHaveLength(5);
+      }, async (target, cursor, q) => q.query === '**/*'
+        ? files(target, cursor ? [tail] : prefix, cursor ? {} : { truncated: true, next_cursor: 'after-500' })
+        : files(target, [tail]));
+    } finally { f.instantiation.dispose(); }
+  });
+
   test('正则、整词、多行、ignore、context 和文件字节上限完整送至原 owner', async () => {
     const f = fixture([]);
     try {

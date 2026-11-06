@@ -20,6 +20,7 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationOperation,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
+    ResourceNavigationSearchOptions,
 )
 from app.services.infrastructure.resource_platform.sources import resource_navigation
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
@@ -336,6 +337,35 @@ async def test_fuzzy_file_recall_pages_relative_unicode_paths_without_reading(na
             assert not empty.entries and not empty.truncated
         legacy = await navigate(query.model_copy(update={"search_mode": "path"}))
         assert not legacy.entries  # 原大小写敏感包含语义保持。
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_limited_name_page_keeps_continuation_and_does_not_hide_later_query(navigation_case, monkeypatch, synchronous):
+    owner, workspace, uri = navigation_case
+    prefix = [f"entry-{index:03}.txt" for index in range(500)]
+    tail = "z-only-after-prewarm-cap.txt"
+    for name in [*prefix, tail]:
+        (workspace / name).write_bytes(b"\xff\x00body must not be read")
+
+    def no_body(*args, **kwargs):
+        pytest.fail("名称预热和后续查询不得读取正文")
+
+    async def navigate(payload):
+        return owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="glob", query="**/*", limit=500,
+        search_options=ResourceNavigationSearchOptions(files_only=True))
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", no_body)
+        warm = await navigate(query)
+        assert [entry.uri for entry in warm.entries] == [uri + "/" + name for name in prefix]
+        assert warm.truncated and warm.truncation_reason == "entry_limit" and warm.next_cursor
+        remainder = await navigate(query.model_copy(update={"cursor": warm.next_cursor}))
+        assert [entry.uri for entry in remainder.entries] == [uri + "/" + tail]
+        assert not remainder.truncated and remainder.next_cursor is None
+        matching = await navigate(query.model_copy(update={"search_mode": "fuzzy", "query": "onlyafterprewarmcap"}))
+        assert [entry.uri for entry in matching.entries] == [uri + "/" + tail]
+        assert not matching.truncated and matching.next_cursor is None
 
 
 @pytest.mark.parametrize("synchronous", [False, True])
