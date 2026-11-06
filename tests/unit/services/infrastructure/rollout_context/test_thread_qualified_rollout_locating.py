@@ -721,7 +721,7 @@ def test_checkpoint_reads_reject_cross_owner_config_and_snapshot(
         )
 
 
-def test_indexed_history_cache_keeps_same_local_ids_and_revisions_in_each_thread(
+def test_indexed_history_keeps_same_local_ids_and_revisions_in_each_thread(
     storage: RolloutContextStore,
 ) -> None:
     main = storage.storage.main_thread_id(SESSION_ID)
@@ -738,10 +738,12 @@ def test_indexed_history_cache_keeps_same_local_ids_and_revisions_in_each_thread
         with history.snapshot as snapshot:
             assert (snapshot.session_id, snapshot.thread_id) == (SESSION_ID, thread)
             revisions.append((snapshot.manifest.history_view_revision, snapshot.manifest.committed_sequence))
-            key = (SESSION_ID, thread)
-            cached = snapshots._indexed_history_cache[key]
-            if key in entries:
-                assert cached is entries[key]
-            entries[key] = cached
+            assert history.view_id == saver._context_reader.active_view_id(snapshot)
+            items = saver._context_reader.read_context_items(snapshot, chain=history.chain)
+            assert [item.payload for item in items] == ["cache-local question", "cache-local answer"]
+            identity = (history.view_id, history.chain)
+            if thread in entries:
+                assert identity == entries[thread]
+            entries[thread] = identity
     assert len(set(revisions)) == 1
-    assert set(snapshots._indexed_history_cache) == {(SESSION_ID, main), (SESSION_ID, CHILD_THREAD_ID)}
+    assert entries[main][0] != entries[CHILD_THREAD_ID][0]

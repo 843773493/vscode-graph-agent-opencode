@@ -1691,7 +1691,7 @@ def test_history_index_failure_closes_read_snapshot(
     def fail_after_open(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("模拟索引解析失败")
 
-    monkeypatch.setattr(snapshots, "_read_indexed_history_snapshot", fail_after_open)
+    monkeypatch.setattr(context_reader, "resolve_chain", fail_after_open)
 
     with pytest.raises(RuntimeError, match="模拟索引解析失败"):
         snapshots.read(SESSION_ID, thread_id)
