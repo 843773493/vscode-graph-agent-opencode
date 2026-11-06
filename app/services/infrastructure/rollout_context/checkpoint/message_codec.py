@@ -742,48 +742,6 @@ class LangChainMessageCodec:
             if isinstance(row.get("kind"), str)
         ]
 
-    def projection_content(self, item: CanonicalItemRecord) -> str:
-        payload = item.payload
-        if item.semantic_kind == SemanticKind.TOOL_CALL:
-            raw_calls = (
-                payload.get("tool_calls") if isinstance(payload, Mapping) else None
-            )
-            calls = raw_calls if isinstance(raw_calls, list) else [payload]
-            return ", ".join(
-                str(call.get("name"))
-                for call in calls
-                if isinstance(call, Mapping)
-                and isinstance(call.get("name"), str)
-                and call.get("name")
-            )
-        if item.semantic_kind == SemanticKind.TOOL_RESULT:
-            value = payload.get("content") if isinstance(payload, Mapping) else None
-            return provider_visible_text(value) or _stringify_content(value)
-        if item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
-            value = payload.get("summary") if isinstance(payload, Mapping) else None
-            return provider_visible_text(value) or _stringify_content(value)
-        if item.semantic_kind in {
-            SemanticKind.USER_INPUT,
-            SemanticKind.ASSISTANT_OUTPUT,
-            SemanticKind.REASONING,
-            SemanticKind.RUNTIME_NOTICE,
-        }:
-            if (
-                item.semantic_kind == SemanticKind.RUNTIME_NOTICE
-                and item.payload_kind == PayloadKind.STRUCTURED_CONTENT
-                and isinstance(item.payload, Mapping)
-                and set(item.payload) & {"prompt", "display_part"}
-            ):
-                return RuntimeNoticePayload.from_dict(item.payload).prompt
-            if (
-                item.semantic_kind == SemanticKind.ASSISTANT_OUTPUT
-                and isinstance(payload, Mapping)
-                and "content" in payload
-            ):
-                payload = payload["content"]
-            return provider_visible_text(payload) or _stringify_content(payload)
-        return ""
-
     def from_dict(self, value: object) -> object:
         if not isinstance(value, dict):
             raise TypeError("rollout message 必须是对象")

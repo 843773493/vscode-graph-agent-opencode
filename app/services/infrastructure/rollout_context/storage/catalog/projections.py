@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -24,58 +24,62 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 _VISIBLE_TEXT_LIMIT = 64 * 1024
 
 
-def _preview_text(value: object) -> str:
-    """从 canonical payload 生成 bounded projection 文本。
+def _preview_text_parts(value: object) -> Iterator[str]:
+    """从 canonical payload 逐段提取可见文本。
 
     这是 storage 自己的有界索引投影，不是 LangChain/provider 映射。完整
     payload 仍只由 JSONL 保存；这里不依赖 ``MessageCodec``，使一次性
     legacy import 在没有 checkpoint 适配器时也能原子建立 v2 item projection。
     """
     if isinstance(value, str):
-        return value
-    if isinstance(value, Mapping):
+        yield value
+    elif isinstance(value, Mapping):
         block_type = value.get("type")
         if block_type in {"text", "input_text", "output_text"}:
             text = value.get("text")
-            return text if isinstance(text, str) else ""
-        if block_type == "refusal":
+            if isinstance(text, str):
+                yield text
+        elif block_type == "refusal":
             refusal = value.get("refusal")
-            return f"[拒绝]{refusal}" if isinstance(refusal, str) else ""
-        return ""
-    if isinstance(value, (list, tuple)):
-        return "".join(_preview_text(item) for item in value)
-    return ""
+            if isinstance(refusal, str):
+                yield "[拒绝]"
+                yield refusal
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _preview_text_parts(item)
 
 
 def canonical_projection_content(item: CanonicalItemRecord) -> str:
     """从唯一正文取得可见文本；投影写入方另行裁剪，不构造消息对象。"""
+    return "".join(_projection_text_parts(item))
+
+
+def _projection_text_parts(item: CanonicalItemRecord) -> Iterator[str]:
     payload = item.payload
     if item.semantic_kind == SemanticKind.TOOL_CALL:
         raw_calls = payload.get("tool_calls") if isinstance(payload, Mapping) else None
         calls = raw_calls if isinstance(raw_calls, list) else [payload]
-        return ", ".join(
-            str(call.get("name"))
-            for call in calls
-            if isinstance(call, Mapping)
-            and isinstance(call.get("name"), str)
-            and call.get("name")
-        )
-    if item.semantic_kind == SemanticKind.TOOL_RESULT:
+        separator = ""
+        for call in calls:
+            if (isinstance(call, Mapping)
+                    and isinstance(call.get("name"), str)
+                    and call.get("name")):
+                yield separator
+                yield call["name"]
+                separator = ", "
+    elif item.semantic_kind == SemanticKind.TOOL_RESULT:
         value = payload.get("content") if isinstance(payload, Mapping) else None
-        return _preview_text(value) or (str(value) if isinstance(value, str) else "")
-    if item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
+        yield from _preview_text_parts(value)
+    elif item.semantic_kind == SemanticKind.COMPACTION_SUMMARY:
         value = payload.get("summary") if isinstance(payload, Mapping) else None
-        return _preview_text(value) or (str(value) if isinstance(value, str) else "")
-    if item.semantic_kind in {
+        yield from _preview_text_parts(value)
+    elif item.semantic_kind in {
         SemanticKind.USER_INPUT,
         SemanticKind.ASSISTANT_OUTPUT,
         SemanticKind.REASONING,
         SemanticKind.RUNTIME_NOTICE,
     }:
-        return _preview_text(payload) or (
-            str(payload) if isinstance(payload, str) else ""
-        )
-    return ""
+        yield from _preview_text_parts(payload)
 
 
 def _projection_bool(value: object, *, field: str) -> int:
@@ -216,8 +220,13 @@ class RolloutProjectionMixin:
         commit_recorded_at: str,
     ) -> None:
         """写入 bounded projection；updated_at 取本次提交记录时刻。"""
-        content = canonical_projection_content(item)
-        truncated = len(content) > _VISIBLE_TEXT_LIMIT
+        # 摘要只保留前缀；逐段累计原始字符数，避免先拼接完整长正文再丢弃。
+        parts: list[str] = []
+        content_length = 0
+        for text in _projection_text_parts(item):
+            if content_length < _VISIBLE_TEXT_LIMIT:
+                parts.append(text[:_VISIBLE_TEXT_LIMIT - content_length])
+            content_length += len(text)
         phase = {
             SemanticKind.USER_INPUT: "user_input",
             SemanticKind.ASSISTANT_OUTPUT: "assistant_text",
@@ -240,9 +249,9 @@ class RolloutProjectionMixin:
                 item.turn_scope,
                 item.message_group_id,
                 item.wire_role,
-                content[:_VISIBLE_TEXT_LIMIT],
-                len(content),
-                int(truncated),
+                "".join(parts),
+                content_length,
+                int(content_length > _VISIBLE_TEXT_LIMIT),
                 int(item.semantic_kind == SemanticKind.REASONING),
                 int(item.semantic_kind == SemanticKind.TOOL_CALL),
                 phase,
