@@ -164,18 +164,19 @@ class ContextAssemblyReaderMixin:
     ) -> str | None:
         """只判定当前 snapshot 的前驱身份；调用方负责完整校验。"""
         # 导入请求只有真实输出在当前 view 可见时才能继承，正文 backing 不扩大前缀。
+        # 同一快照的可见 call 集合只查询一次，避免每个历史 assembly 都重扫 view。
         row = connection.execute(
             "SELECT assembly.assembly_id FROM context_assemblies assembly "
             "WHERE assembly.status IN ('sealed','terminal') "
             "AND json_extract(assembly.snapshot_json,'$.selection_policy') <> 'summary_candidate' "
             "AND (? IS NULL OR assembly.assembly_id<>?) "
-            "AND ((assembly.session_id=? AND assembly.thread_id=?) OR EXISTS ("
-            "SELECT 1 FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
+            "AND ((assembly.session_id=? AND assembly.thread_id=?) OR assembly.model_call_id IN ("
+            "SELECT COALESCE(json_extract(item.producer_ref_json,'$.model_call_id'),"
+            "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id')) "
+            "FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
             "JOIN branches branch ON branch.head_view_id=member.view_id "
             "JOIN checkpoint_namespace_state namespace ON namespace.active_branch_id=branch.branch_id "
-            "WHERE namespace.checkpoint_ns=? AND member.visible=1 "
-            "AND COALESCE(json_extract(item.producer_ref_json,'$.model_call_id'),"
-            "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'))=assembly.model_call_id)) "
+            "WHERE namespace.checkpoint_ns=? AND member.visible=1)) "
             "ORDER BY assembly.rowid DESC LIMIT 1",
             (excluding_assembly_id, excluding_assembly_id, session_id, thread_id, checkpoint_ns),
         ).fetchone()
