@@ -12,6 +12,10 @@
 
 # 规范
 
+`test_web_extensions.py` 使用真实 Gateway／Backend、正式 Workbench 独占副本和持久 Chromium profile，原安装 Quick Input 生成记录；真实 Web Worker 命令、声明式主题、正常重启、升级、Node-only 拒绝及损坏记录保护经原入口验证。记录编辑使用原粘贴命令并等待完成，恢复后关闭模型重开核原件，不预写 IndexedDB 或安装状态。启动模型装具要求零调用；不代替 VSIX／市场、目标 Node 宿主或原生平台验收。
+
+`web_extensions_scanner.test.mjs` 编译原扫描器及 FileService，验证 manifest 复用、升级／卸载、profile 隔离与拒写；资源、内建目录和兼容能力是显式服务边界。`web_extensions_cache_browser.test.mjs` 另在真实 Chromium 的 `isWeb=true` 下，使用原内建扫描器／manifest／配置／profile／存储服务验证 system／custom 派生缓存跳过坏项和读取失败回退，以及 profile 的相同故障保留原件、原 Provider 错误不变。故障预备仅用于缓存读取，不能表述为真实安装或宿主验收。
+
 pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Workbench 构建继续使用 Bun；Windows 实测 Bun 会在 `chromium.launch()` 挂起，不能以增加超时替代正确运行时。保留原进程外超时、内存保护和业务断言。
 
 `test_resource_opener_sources` 经真实执行生成工具结果，再由正式 Workbench 的原只读编辑器打开、分屏和恢复；复制通过真实命令面板、原 Command 与候选按钮，核对完整 Gateway 引用、原 request_id、零额外正文读取和不打开候选、保留搜索框焦点。剪贴板使用浏览器权限，不预写历史或替换资源响应；不据此证明 Composer 附加、固定版本或 Electron。

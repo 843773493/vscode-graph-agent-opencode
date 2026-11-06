@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-web-extensions` 用正式 Workbench、真实 Gateway／Backend及原 Web Worker 验证安装、声明式主题、升级／正常重启、Node-only拒绝与 profile 损坏保护，固定480秒／4GiB及原集成独占闸门。`integration-web-extension-scanner` 用原服务的显式依赖边界及真实Chromium检查system／custom派生缓存与profile故障差异，固定90秒／4GiB；不代替市场、VSIX、远端Node或Electron验收。
+
 `integration-web-language-models` 经真实 Gateway 与正式 Workbench，在 A/B 同名 JSON 上调用原 Web 扩展的符号服务，核真实编辑、放弃修改和重开后的模型更新及身份隔离。固定300秒／4GiB及原集成独占闸门；启动模型回放零调用，不代替远端语言宿主或全部缓存验收。
 
 `integration-web-configuration-cache` 顺序验证正式 Workbench 的原 Profile／A-B 资源配置，以及独占资产副本中的精确 IDB 写入屏障。固定480秒／4GiB并沿原集成独占闸门；不修改共享构建，不代替 Electron 或全部缓存验收。

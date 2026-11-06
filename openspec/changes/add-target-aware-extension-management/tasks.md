@@ -58,7 +58,8 @@
 ## 4. 原版扩展管理与 Web 宿主
 
 - [ ] 4.1 复用原扩展视图、详情和安装服务，接入经验证目录及用户明确 VSIX；安装前校验 manifest、版本、依赖、平台、所需 API／运行位置，区分安装与激活。
-- [ ] 4.2 将纯声明式及 browser 扩展接入原 Web Extension Host／Workbench profile，验证真实命令和 UI 贡献；Node-only 扩展没有合法目标时明确不可用。
+- [x] 4.2 将纯声明式及 browser 扩展接入原 Web Extension Host／Workbench profile，验证真实命令和 UI 贡献；Node-only 扩展没有合法目标时明确不可用。
+  - 2026-11-06 当前 Web 宿主闭包：真实 Gateway／Backend／正式 Workbench 独占副本，经原安装 Quick Input 生成 profile，browser 扩展命令在原 Web Worker 返回 v1，正常重开仍为 v1，显式升级重开为 v2；纯声明式主题经原选择器实际改变编辑器背景并在重启后保持，Node-only明确拒绝。原profile记录损坏后安装失败且原件保留，恢复原文后两扩展均由原命令卸载。最终1 passed／111.09秒，pageErrors为空、模型零调用、受影响源码前后不变；扫描器及真实Chromium派生缓存边界8项／88断言通过，59份实际转换源码类型、相关Python静态和正式构建通过。准确命令、修前吞错反例、页面接线／粘贴竞态失败原件、指纹及边界见 `out/tests/temp/2026/11/06/web_extension_scan/artifacts/verification-001.json`。市场／VSIX、安装前完整兼容性、目标Node宿主及Electron未由本项验收，4.1等保持未完成。
 - [ ] 4.3 将安装选择器与目标分组接入原 Quick Input，冻结发起身份与版本；验证切 Tab、目录失败、目标离线不改投，不抢占默认 Ctrl+P 查询范围。
 - [ ] 4.4 统一 VSIX 安装与目标安装服务的操作／版本／引用事实，保持 Web profile 资源与目标制品各自存储；实现原 profile／workspace view 启用、版本更新／停用／卸载和 reload，分清新版安装与运行激活，保留旧实例引用制品，不伪造动态卸载支持。
 
