@@ -7,6 +7,7 @@ import math
 import re
 import sys
 from collections.abc import Mapping
+from operator import itemgetter
 
 import orjson
 import rfc8785
@@ -80,10 +81,13 @@ def _jcs_input(value: object) -> object:
     if isinstance(value, float):
         return orjson.Fragment(rfc8785.dumps(float(value)))
     if isinstance(value, Mapping):
-        return {
-            str.__str__(key): _jcs_input(child)
-            for key, child in sorted(value.items(), key=lambda item: item[0].encode("utf-16be"))
-        }
+        items = list(value.items())
+        # ASCII 键的字符串序与 UTF-16 序相同，不为排序逐键编码。
+        # 字符串子类保留原 encode 语义；仅选择比较键，不改变 JCS 投影。
+        items.sort(key=itemgetter(0) if all(
+            type(key) is str and key.isascii() for key, _ in items
+        ) else lambda item: item[0].encode("utf-16be"))
+        return {str.__str__(key): _jcs_input(child) for key, child in items}
     if isinstance(value, (list, tuple)):
         return [_jcs_input(child) for child in value]
     raise TypeError(f"不是 JSON value: {type(value).__name__}")
