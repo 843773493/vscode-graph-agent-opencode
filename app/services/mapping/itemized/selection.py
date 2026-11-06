@@ -11,7 +11,7 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, ref_identity
-from app.domain.itemized.plans.request import ContextRequestPlan
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
@@ -130,7 +130,7 @@ def resolve_selected_item(
 
 
 def resolve_selected_request_body(
-    plan: ContextRequestPlan,
+    contributions: Mapping[str, ContextContribution],
     entry: ContextSelectionEntry,
     bodies: Mapping[str, object],
 ) -> object:
@@ -139,14 +139,8 @@ def resolve_selected_request_body(
     body_key = entry.contribution_id or ref.ref_id
     if body_key not in bodies:
         raise ValueError(f"detail-unavailable: request-only ref 缺失: {ref.ref_id}")
-    contribution = next(
-        (
-            item
-            for item in plan.contributions
-            if item.contribution_id == entry.contribution_id
-        ),
-        None,
-    )
+    # 各投影共用本次 plan 的索引，避免每条正文都重新线性扫描全部 contribution。
+    contribution = contributions.get(entry.contribution_id) if entry.contribution_id is not None else None
     if entry.contribution_id is not None and contribution is None:
         raise ValueError(
             f"plan-order-integrity: contribution manifest 缺失: {entry.contribution_id}"

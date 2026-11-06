@@ -143,6 +143,7 @@ def project_native_context(
     losses: list[str] = []
     wire_sources: list[dict[str, object]] = []
     entries = list(validate_projection_selection(plan.selection))
+    contributions = {source.contribution_id: source for source in plan.contributions}
     frame_by_ref = {}
     root_source_refs: set[tuple[str, ...]] = set()
     if seal_binding is not None:
@@ -177,16 +178,8 @@ def project_native_context(
             continue
         start = len(inputs)
         if ref.ref_type == "request_only":
-            body = resolve_selected_request_body(plan, entry, request_only_content)
-            source = (
-                next(
-                    source
-                    for source in plan.contributions
-                    if source.contribution_id == entry.contribution_id
-                )
-                if entry.contribution_id is not None
-                else None
-            )
+            body = resolve_selected_request_body(contributions, entry, request_only_content)
+            source = contributions.get(entry.contribution_id)
             if source is not None and source.contribution_kind == "model_message":
                 if plan.selection_policy != "summary_candidate":
                     raise ValueError("source-mismatch: model_message 只能属于摘要候选")

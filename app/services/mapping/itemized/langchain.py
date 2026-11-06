@@ -139,13 +139,8 @@ def project_context_plan(
             flush_canonical()
             continue
         flush_canonical()
-        body = resolve_selected_request_body(plan, entry, bodies)
+        body = resolve_selected_request_body(contribution_registry, entry, bodies)
         contribution = contribution_registry.get(entry.contribution_id)
-        if entry.contribution_id is not None and contribution is None:
-            raise ValueError(
-                "plan-order-integrity: request-only contribution manifest 缺失: "
-                f"{entry.contribution_id}"
-            )
         system_run.extend(body if isinstance(body, list) else [body])
         entry_metadata = {
             "context_ref_id": ref.ref_id,

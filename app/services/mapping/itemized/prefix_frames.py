@@ -26,6 +26,7 @@ from app.domain.itemized.hashing import canonical_json_bytes, contribution_conte
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.mapping.itemized.canonical_langchain import (
     project_canonical_items,
     project_summary_source,
@@ -100,22 +101,21 @@ def project_sealed_prefix(
         blocks = parse_source_blocks(root.content, expected_version=root.source_protocol) if root.source_protocol is not None else ()
         if blocks and len(blocks) != len(root.sources):
             raise ValueError("source-mismatch: compiled root 来源块数量不一致")
+        # root 来源按身份与 revision 一次分组；保留重复项，仍要求唯一 selection。
+        root_entries: dict[tuple[str | None, str], list[ContextSelectionEntry]] = {}
+        for entry in entries.values():
+            source = contributions.get(entry.contribution_id)
+            if (entry.ref.ref_type == "request_only" and source is not None
+                and source.source_binding is not None
+                and source.root_placement == "root_eligible" and source.contribution_kind == "prompt"):
+                root_entries.setdefault((source.source_binding.source_ref, entry.ref.source_revision), []).append(entry)
         root_bodies = []
         for index, provenance in enumerate(root.sources):
-            matches = [
-                entry for entry in entries.values()
-                if entry.ref.ref_type == "request_only"
-                and entry.ref.source_revision == provenance.revision
-                and (source := contributions.get(entry.contribution_id)) is not None
-                and source.source_binding is not None
-                and source.source_binding.source_ref == provenance.source_identity
-                and source.root_placement == "root_eligible"
-                and source.contribution_kind == "prompt"
-            ]
+            matches = root_entries.get((provenance.source_identity, provenance.revision), ())
             if len(matches) != 1:
                 raise ValueError("source-mismatch: compiled root 缺少唯一来源 selection")
             entry = matches[0]
-            body = resolve_selected_request_body(plan, entry, bodies)
+            body = resolve_selected_request_body(contributions, entry, bodies)
             if not isinstance(body, str) or contribution_content_hash("root_source", body) != provenance.content_hash:
                 raise ValueError("source-mismatch: compiled root 正文与 provenance 不一致")
             if blocks:
@@ -159,7 +159,7 @@ def project_sealed_prefix(
                     or entry.ref.source_revision != member.source_revision
                 ):
                     raise ValueError("source-mismatch: source frame identity/revision 不一致")
-                body = resolve_selected_request_body(plan, entry, bodies)
+                body = resolve_selected_request_body(contributions, entry, bodies)
                 if blocks:
                     block = blocks[index]
                     if (block.source_identity, block.source_kind, block.revision,
