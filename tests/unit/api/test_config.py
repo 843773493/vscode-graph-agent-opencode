@@ -133,7 +133,7 @@ async def test_config_sources_endpoint_never_exposes_real_path(
     assert response.data.sources[2].uri is None
     assert response.data.sources[0].layer == "inline"
     assert response.data.sources[0].precedence == 0
-    assert response.data.sources[0].source_key is None
+    assert response.data.sources[0].source_key == "inline"
     assert response.data.sources[1].layer == "user"
     assert response.data.sources[1].precedence == 1
     assert response.data.sources[2].layer == "user_local"

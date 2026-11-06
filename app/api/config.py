@@ -86,7 +86,7 @@ async def get_config_sources(
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,
-                    source_key=source.source_key,
+                    source_key=config_service.get_source_document_key(layer=source.layer, precedence=source.precedence),
                     presence=source.presence,
                     layer_revision=source.layer_revision,
                     layer_digest=source.layer_digest,

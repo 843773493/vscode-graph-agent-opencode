@@ -11,6 +11,7 @@ import portalocker
 
 from app.core.atomic_fs import atomic_write_bytes
 from app.core.config_sources import (
+    ConfigSourceLayer,
     StableConfigFile,
     config_revision,
     read_stable_config_file,
@@ -55,6 +56,14 @@ _WORKSPACE_SOURCE = "workspace_root_mutable_override"
 
 
 class ConfigSourceEditMixin:
+    @staticmethod
+    def get_source_document_key(*, layer: ConfigSourceLayer, precedence: int) -> str:
+        """文档目录使用来源权威键，不把诊断的 nullable key 或持久化 baseline 当作标识。"""
+        for source_key, authority in _SOURCE_LAYER_AUTHORITY.items():
+            if authority == (layer, precedence):
+                return source_key
+        raise ValueError(f"来源文档没有登记的权威键: layer={layer}, precedence={precedence}")
+
     def _saved_source_edit_candidate(self, snapshot: ConfigSnapshot) -> ConfigPendingCandidateRecord | None:
         """watcher 只认领原文件中已有、且完整基线仍吻合的来源意图。"""
         service = cast("ConfigService", self)

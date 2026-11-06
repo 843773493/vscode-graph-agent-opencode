@@ -308,6 +308,30 @@ async def test_source_preflight_reads_real_instruction_file_without_changing_rea
     assert source.read_bytes() == original and _source_rows(case) == rows and case.service.get_snapshot() is snapshot
 
 
+async def test_source_list_keys_open_original_documents_without_changing_diagnostics(source_edit_case) -> None:
+    case, client = source_edit_case
+    rows, snapshot = _source_rows(case), case.service.get_snapshot()
+    diagnostics = case.service.get_source_diagnostics()[2]
+    assert diagnostics[0].source_key is None
+    listed = await client.get("/api/v1/config/sources")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["request_id"] == listed.headers["X-Request-ID"] == "source-edit"
+    sources = listed.json()["data"]["sources"]
+    assert [source["source_key"] for source in sources] == [
+        "inline", "workspace_mutable_override", "workspace_local_mutable_override", _SOURCE_KEY, "workspace_runtime_override",
+    ]
+    for source in sources:
+        response = await client.get(f'/api/v1/config/sources/{source["source_key"]}')
+        assert response.status_code == 200, response.text
+        document = response.json()["data"]
+        assert response.json()["request_id"] == response.headers["X-Request-ID"] == "source-edit"
+        assert document["source_key"] == source["source_key"] and document["layer"] == source["layer"]
+        assert document["writable"] is (source["source_key"] == _SOURCE_KEY)
+        assert document["gateway_id"] == _SOURCE_GATEWAY
+    assert _source_rows(case) == rows and case.service.get_snapshot() is snapshot
+    assert case.service.get_source_diagnostics()[2] == diagnostics
+
+
 @pytest.mark.parametrize("source_key", ["inline", "workspace_mutable_override", "workspace_local_mutable_override", "workspace_runtime_override"])
 async def test_source_layers_without_writer_are_readable_but_reject_save(source_edit_case, source_key) -> None:
     case, client = source_edit_case

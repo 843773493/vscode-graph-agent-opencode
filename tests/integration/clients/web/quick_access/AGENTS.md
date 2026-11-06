@@ -75,3 +75,5 @@ pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Work
 `workspace_actions.test.mjs` 在 Chromium 中编译真实控制面 Provider、CommandsRegistry 与 HTTP 客户端，仅 Picker／宿主视图 writer 和 HTTP 响应为装具，核 cursor、迟到响应、原查询重试、稳定 owner 与三个独立命令。`test_workspace_actions.py` 经真实 Gateway 和正式 Workbench 验证候选浏览零生命周期写入、范围取消恢复、离线范围选择、明确启动不激活、独立切换及原导航入口；B 只在准备阶段登记并停止，模型回放仅供启动且要求零调用。前者不代替 React writer，后者不证明真实远程 Gateway 连接或多成员 Backend 确认。
 
 `language_analysis.test.mjs` 编译真实 OutlineModelService、LRU、语言 Provider registry 和取消令牌；仅文本模型与异步符号源为受控依赖。核旧版本取消／迟到不删除新缓存、同版本在途共享及模型移除／owner隔离；不将此装具称为真实 Worker，产品语言回归另由 `test_language_models.py` 证明。
+
+`target_settings.test.mjs` 编译真实设置 Command、原 JSONC AST／scanner 与配置来源 API；仅 Quick Input、通知及 HTTP 回执是服务边界，覆盖取消、只读、注释保留、409 显式重新预检、未知保存仅查原幂等键、pending 操作及身份失效。`test_target_settings.py` 经正式 Workbench、真实 Gateway 与 A/B 工作区，从原命令面板进入；注释预备也通过来源 API，核导航切换后的冻结目标保存、真实 source_saved／layer_imported／pending_restart 提示、原 active CAS 丢弃候选及删除本层覆盖。模型回放仅供启动且要求零调用；不预写配置文件或浏览器存储，不代替完整 Settings Editor、Backend 重启健康证明或原生客户端验收。

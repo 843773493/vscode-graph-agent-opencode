@@ -10,6 +10,7 @@ import { McpServersListView } from '../upstream/src/vs/workbench/contrib/mcp/bro
 import './workspacePanelState.js';
 import './workspaceIdentityRecovery.js';
 import './search/searchService.js';
+import './settings/commands.js';
 
 const views = Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry);
 // Agent 入口用会话树替换文件树；文件保留在对应会话编辑器的资源面板中。

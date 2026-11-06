@@ -112,6 +112,7 @@
 ## 7. 目标感知设置编辑
 
 - [ ] 7.1 在原 Settings Editor／命令接入目标及来源层选择，持续展示 scope、目标、可写能力与原发起上下文，切导航不改投未提交内容。
+  - 2026-11-06 默认 Agent 命令切片：原 F1／Quick Input 选择明确工作区与来源，支持原 owner 预检／完整 CAS／固定幂等保存、单键 JSONC 编辑／删除覆盖、只读查看和原 pending retry／discard；列表由来源 owner 发布既有 inline 文档键，诊断 baseline 不变。真实 Gateway／Workbench 页面验证冻结 A 后切换 B 仍只写 A、待重启提示、只读、discard 与删除覆盖，25 份回执 request_id 一致；39 项 API／命令和 130 项后端检查通过，真实 Workbench 类型检查与完整构建通过。准确命令、退出码与 16 份最终指纹见 `out/tests/temp/2026/11/06/target_settings_ui/artifacts/final-owned-20261106.sources` 及相邻原件；正式页面为 `out/tests/integration/clients/web/quick_access/test_target_settings/runs/run-1174bbbf8d2e/`。完整 SettingsEditor、真实 Backend 重启健康证明、远端故障及原生客户端仍未验，7.1／7.3／7.4 均不因本切片勾选。旧 Web tsconfig 的 28 条既存诊断和整包 Ruff 的 38 条既存诊断未扩修，本轮源码定向检查通过。
 - [x] 7.2 在原 Gateway／Workspace 配置 owner 补现有 REST 缺失的合法来源层能力、脱敏正文、schema、完整 effective／遮蔽读取及 source writer，迁齐协议和消费者；区分 SQLite 物化与文件回写，无 writer 层明确只读，不以摘要或有限 runtime PATCH 冒充完整能力。
   - 2026-11-04 Workspace 后端切片：原配置 API 提供按 source_key 的脱敏 JSONC、schema、各层正文、最终来源／遮蔽及 active 状态；仅工作区来源层提供 writer，其余层明确只读。原 proto／descriptor／OpenAPI／SSE 生成物已迁齐，未登记来源 URI 保持为空。用户级 source fan-out 仍归 7.5，设置界面仍归 7.1／7.3，不因本后端任务完成而勾选。
   - 2026-11-04 Gateway 后端切片：原配置 owner 提供 user／user_local 来源正文、纯预检和文件／层／active CAS 保存，inline 明确只读；writer 与 watcher 共用原 reload 锁、pending／claim／restart 链及原幂等键查询，不新增提交账本。脱敏占位按原字段还原，注释、格式及下层遮蔽保留；无变化保存不提升 active。真实进程覆盖 local／user 保存、原生文件删除 watcher、pending restart／重试及 request_id；恢复批覆盖真实 runtime snapshot 身份、六类启动恢复与撤权，不以假 applier 代替运行快照验证。Gateway schema 20 的 SQL、协议生成物和原消费者已迁齐。
