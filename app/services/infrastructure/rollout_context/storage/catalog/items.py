@@ -492,11 +492,13 @@ class RolloutItemsMixin:
                 validated_commits: set[int] = set()
                 validated_scopes: set[tuple[str, str]] = set()
                 result: list[CanonicalItemRecord] = []
-                with self.jsonl_path(
+                # 快照已冻结并核验 thread locator；逐条搜索不再重复打开 catalog/control。
+                path = snapshot.thread_node / "rollout" / "rollout.jsonl" if snapshot is not None else self.jsonl_path(
                     session_id,
                     checkpoint_ns,
                     thread_id=thread_id,
-                ).open("rb") as stream:
+                )
+                with path.open("rb") as stream:
                     for (
                         sequence_value,
                         item_id,
