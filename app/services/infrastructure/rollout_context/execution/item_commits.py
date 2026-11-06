@@ -250,7 +250,8 @@ class CanonicalItemCommitMixin:
             resolved_item_ids: list[str] = []
             pending: list[CanonicalItemRecord] = []
             for item in items:
-                item.validate()
+                # 新 item 分配序号及提交前都会校验当前正文，无需在定位前再扫描。
+                # 复用旧 item 的分支不经过追加，仍须先校验传入的可变正文。
                 existing = connection.execute(
                     "SELECT semantic_kind, payload_kind, status, turn_id, turn_scope, "
                     "message_group_id, wire_role, producer_ref_json, content_hash, "
@@ -260,6 +261,7 @@ class CanonicalItemCommitMixin:
                 ).fetchone()
                 if existing is None:
                     if item.semantic_kind == SemanticKind.TOOL_RESULT:
+                        item.validate()
                         existing_result = _select_existing_tool_result(
                             connection, item
                         )
@@ -309,6 +311,7 @@ class CanonicalItemCommitMixin:
                             continue
                     pending.append(item)
                     continue
+                item.validate()
                 with self._storage.jsonl_path(
                     session_id, checkpoint_ns, thread_id=thread_id
                 ).open("rb") as source_stream:
