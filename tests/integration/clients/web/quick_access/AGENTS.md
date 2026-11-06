@@ -34,6 +34,8 @@
 
 首范围事件前断流仅将一次真实 Gateway 搜索的浏览器 HTTP 正文截为空，保留原响应头及 request_id；核对失败状态、原请求身份、零自动重试，以及使用同次成功文件流的真实冻结 scope 精确重试一个 Thread 分支，其他失败保留原身份。完全没有 scope 时重查原范围由 Chromium 内容合同装具另核。不将该具名 HTTP 故障注入称为真实 TCP 断连；API 单测另核流错误的机器代码、取消和超时类型。
 
+`test_search_disconnect` 使用独立本地 HTTP 故障服务与生产 `_encode_search_sse`，按真实 Content-Length 截断区分网络错误和正常 EOF；Chromium 原 API 与 Python 搜索 SDK 分别覆盖首范围事件前后，消费确认屏障控制断连。响应头观察器只放行原响应，不替换正文或协议解码；核原 request_id、原网络 cause／HTTPX 类型和零自动重试。该传输检查不替代真实 Gateway 产品页面；Provider 的错误展示及已完成分支保留由 `default_contract` 显式宿主装具另证。
+
 整份编辑器设置使用 `tests/support/workbench/settings.mjs` 经真实剪贴板粘贴、保存，并只读实际存储核对 JSON；不要用逐键多行插入留下自动补括号生成的无效配置，也不要直接预写 IndexedDB 替产品完成保存。真实搜索观察同样复用该 support 目录；`query_faults.mjs` 只控制本组显式故障装具，不供 E2E 调用。
 
 页面端口复用本目录 `conftest.py` 的租约 fixture，在各测试自己的端口块内有界选择空闲端口并保留绑定，记录探测原件；占用不终止未知进程，其他租约错误立即暴露。

@@ -153,6 +153,17 @@ async function federatedBranchContract(mode, category, diagnostic) {
       (item, owner) => ({ id: `${owner.gatewayId}/${owner.workspaceId}/${content ? item.message.reference.start_codepoint : `${item.kind}/${item.title}`}`, label: item.title, accept() {} }),
       () => updates++, value => { busy = value; }, value => { label = value; }, instantiation ?? {});
     await until(() => connections.length === 1); const first = connections[0];
+    if (mode === 'read-error-before-scope' || mode === 'read-error-after-scope') {
+      if (mode === 'read-error-after-scope') {
+        scope(first); page(first, 0, 2);
+        await until(() => branches[0].picks.length === 1);
+      }
+      first.controller.error(new TypeError('目标网络连接被重置'));
+      await until(() => !busy);
+      return { details: branches.map(branch => branch.status.detail), labels: branches.map(branch => branch.status.label),
+        requests: connections.map(connection => connection.request), pending: branches.map(branch => branch.pending),
+        picks: branches.map(branch => branch.picks.map(pick => pick.id)), busy };
+    }
     if (mode === 'disconnect-before-scope') {
       first.controller.close();
       await until(() => !busy);

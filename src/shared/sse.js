@@ -45,7 +45,7 @@ export function parseSseFrameBlock(block) {
   return { event, id, data: dataLines.join('\n') };
 }
 
-function readStreamChunk(reader, { idleTimeoutMs, idleTimeoutError, signal }) {
+function readStreamChunk(reader, { idleTimeoutMs, idleTimeoutError, signal }, readError) {
   if (idleTimeoutMs !== undefined && idleTimeoutMs <= 0) {
     throw new Error(`SSE 空闲超时必须大于 0: ${idleTimeoutMs}`);
   }
@@ -84,7 +84,7 @@ function readStreamChunk(reader, { idleTimeoutMs, idleTimeoutError, signal }) {
     }
     void reader.read().then(
       (result) => finish(resolve, result),
-      (error) => finish(reject, error),
+      (error) => finish(reject, readError(error)),
     );
   });
 }
@@ -114,6 +114,11 @@ export async function consumeSseResponse(response, options) {
   let buffer = '';
   let pendingCarriageReturn = false;
   let reachedEnd = false;
+  let readFailed = false;
+  const readError = (cause) => {
+    readFailed = true;
+    return options.readError?.(cause) ?? cause;
+  };
 
   const dispatchBlock = (block) => {
     const frame = parseSseFrameBlock(block);
@@ -134,7 +139,7 @@ export async function consumeSseResponse(response, options) {
 
   try {
     while (true) {
-      const { done, value } = await readStreamChunk(reader, options);
+      const { done, value } = await readStreamChunk(reader, options, readError);
       if (value && value.byteLength > 0) {
         options.onActivity?.();
       }
@@ -186,9 +191,11 @@ export async function consumeSseResponse(response, options) {
     }
     throw error;
   } finally {
-    if (!reachedEnd) {
-      await reader.cancel();
+    try {
+      // 已出错的 reader 再 cancel 会以原异常拒绝，覆盖领域错误及其请求身份。
+      if (!reachedEnd && !readFailed) await reader.cancel();
+    } finally {
+      reader.releaseLock();
     }
-    reader.releaseLock();
   }
 }

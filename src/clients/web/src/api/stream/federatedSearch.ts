@@ -20,6 +20,16 @@ export class IncompleteSearchStreamError extends Error {
   }
 }
 
+/** 真实正文读取失败保留原始原因，不与正常 EOF、取消或协议错误混用。 */
+export class SearchStreamReadError extends Error {
+  readonly code = "stream_read_failed";
+
+  constructor(readonly requestId: string, cause: unknown) {
+    super(`搜索连接读取失败: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "SearchStreamReadError";
+  }
+}
+
 export function searchBranchKey(branch: FederatedSearchBranchKeyDTO): string {
   if (branch.diagnostics) {
     if (branch.owner || branch.category !== "runtime_log" || !branch.diagnostics.scope) throw new Error("诊断搜索分支归属无效");
@@ -68,6 +78,7 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
     const pages = new Set<string>(), terminals = new Set<string>();
     let summary: FederatedSearchSummaryDTO | undefined;
     await consumeSseResponse(response, { signal: abort.signal,
+      readError: cause => new SearchStreamReadError(requestId, cause),
       events: { search: defineSseEvent((data, frame) => {
         const event = validateFederatedSearchEvent(decodeJsonSseData(data, frame));
         if (summary || event.sequence !== ++sequence || frame.id !== String(sequence) || event.request_id !== requestId) {
@@ -144,6 +155,6 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
     clearTimeout(timer);
     options.signal.removeEventListener("abort", cancel);
     // 协议错误发生在开始消费前时，同样回收响应体。
-    if (response?.body && !response.body.locked) await response.body.cancel();
+    if (response?.body && !response.bodyUsed && !response.body.locked) await response.body.cancel();
   }
 }

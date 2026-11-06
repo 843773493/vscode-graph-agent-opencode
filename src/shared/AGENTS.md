@@ -25,6 +25,7 @@
 ## 规范
 
 - SSE 字节流统一由 `sse.js` 消费，业务模块不得维护第二套分帧逻辑。
+- `readError` 仅映射实际 reader 读取失败，默认保留原异常；已出错流不再次取消，任何收尾出口均释放 reader 锁，取消失败保持可见。
 - SSE JSON 必须通过 `sseRuntime.js` 中的运行时校验器校验，不能只依赖 TypeScript 类型断言。
 - 生成文件 `sseRuntimeValidators.js` 和对应声明只能由协议生成流程覆盖。
 - 共享模块不得依赖具体客户端入口；新增源码子目录必须包含四段式 `AGENTS.md`。

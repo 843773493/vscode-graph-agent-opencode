@@ -14,6 +14,7 @@ export interface ConsumeSseResponseOptions {
   signal?: AbortSignal;
   idleTimeoutMs?: number;
   idleTimeoutError?: (timeoutMs: number) => Error;
+  readError?: (cause: unknown) => Error;
   onActivity?: () => void;
   yieldBetweenEvents?: boolean;
 }

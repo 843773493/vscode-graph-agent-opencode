@@ -46,6 +46,23 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+for (const mode of ['read-error-before-scope', 'read-error-after-scope']) test(`真实 Provider ${mode} 展示原网络原因与响应身份且零自动重试`, async () => {
+  const result = await exercise('contentBranchContract', mode);
+  expect(result.requests).toHaveLength(1);
+  expect(result.pending).toEqual([false, false]);
+  expect(result.busy).toBe(false);
+  const unfinished = mode === 'read-error-after-scope' ? [1] : [0, 1];
+  for (const index of unfinished) {
+    expect(result.details[index]).toBe('request_id: request-0');
+    expect(result.labels[index]).toContain('搜索连接读取失败: 目标网络连接被重置');
+  }
+  if (mode === 'read-error-after-scope') {
+    expect(result.labels[0]).toContain('本次查询完成');
+    expect(result.details[0]).toBe('本次读取 1 项，不代表全局快照 · request_id: request-0');
+  }
+  expect(result.picks.map(items => items.length)).toEqual(mode === 'read-error-after-scope' ? [1, 0] : [0, 0]);
+});
+
 for (const entry of [
   { title: '多选确认返回全部目标且阻止原打开动作', action: 'accept', canPickMany: true, labels: ['alpha.txt', 'beta.txt'], cancelled: 0, executions: 0 },
   { title: '多选勾选后 Esc 返回空集合并取消读取', action: 'cancel', canPickMany: true, labels: [], cancelled: 1, executions: 0 },

@@ -20,6 +20,37 @@ function streamResponse(chunks: string[]): Response {
 }
 
 describe("通用 SSE 传输层", () => {
+  test("默认保留读取异常实例，已出错流不再取消且始终释放锁", async () => {
+    const failure = new TypeError("连接重置"), response = new Response(new ReadableStream({
+      start(controller) { controller.error(failure); },
+    }), { headers: { "content-type": "text/event-stream" } });
+    await expect(consumeSseResponse(response, { events: {} })).rejects.toBe(failure);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  test("读取错误映射不接管解码异常，取消失败也释放原锁", async () => {
+    const failure = new TypeError("领域解码失败");
+    let mapped = 0, cancelled = 0;
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("event: trace\ndata: {}\n\n")); },
+      cancel() { cancelled++; },
+    }), { headers: { "content-type": "text/event-stream" } });
+    await expect(consumeSseResponse(response, {
+      readError(cause) { mapped++; return new Error("读取失败", { cause }); },
+      events: { trace: defineSseEvent(() => { throw failure; }, () => undefined) },
+    })).rejects.toBe(failure);
+    expect(mapped).toBe(0);
+    expect(cancelled).toBe(1);
+    expect(response.body!.locked).toBe(false);
+
+    const cancelFailure = new Error("取消失败"), abort = new AbortController();
+    const cancelledResponse = new Response(new ReadableStream({ cancel() { throw cancelFailure; } }),
+      { headers: { "content-type": "text/event-stream" } });
+    abort.abort();
+    await expect(consumeSseResponse(cancelledResponse, { events: {}, signal: abort.signal })).rejects.toBe(cancelFailure);
+    expect(cancelledResponse.body!.locked).toBe(false);
+  });
+
   test("解析 event、id 和多行 data", () => {
     expect(parseSseFrameBlock(
       "id: evt_1\nevent: trace\ndata: {\"a\":\ndata: 1}",

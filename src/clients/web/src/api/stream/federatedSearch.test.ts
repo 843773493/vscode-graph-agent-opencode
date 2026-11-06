@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { FederatedSearchRequest } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../session/sessionApiFetchMock";
-import { IncompleteSearchStreamError, streamFederatedSearch } from "./federatedSearch";
+import { IncompleteSearchStreamError, SearchStreamReadError, streamFederatedSearch } from "./federatedSearch";
 
 const owners = ["A", "B"].map(workspace_id => ({ gateway_id: "gateway", workspace_id }));
 const scope = { version: 1, gateway_id: "gateway", resolved_at: "2026-11-03T00:00:00Z", mode: "selected", owners };
@@ -21,18 +21,20 @@ function install() {
   const calls: Array<{ body: ReturnType<typeof request>; signal?: AbortSignal | null }> = [];
   const encoder = new TextEncoder();
   let control!: ReadableStreamDefaultController<Uint8Array>, sequence = 0, cancelled = false;
+  let response!: Response;
   installSessionApiFetchMock(({ path, init }) => {
     expect(path).toBe("/api/gateway/search");
     expect(new Headers(init?.headers).get("Content-Type")).toBe("application/json");
     calls.push({ body: JSON.parse(String(init?.body)), signal: init?.signal });
-    return new Response(new ReadableStream<Uint8Array>({ start(controller) { control = controller; }, cancel() { cancelled = true; } }),
+    response = new Response(new ReadableStream<Uint8Array>({ start(controller) { control = controller; }, cancel() { cancelled = true; } }),
       { headers: { "Content-Type": "text/event-stream", "X-Request-ID": "original-request" } });
+    return response;
   });
-  return { calls, get cancelled() { return cancelled; },
+  return { calls, get cancelled() { return cancelled; }, get locked() { return response.body!.locked; },
     send(type: string, payload: Payload = {}, overrides: Payload = {}) {
       const event = { type, sequence: ++sequence, request_id: "original-request", ...payload, ...overrides };
       control.enqueue(encoder.encode(`id: ${sequence}\nevent: search\ndata: ${JSON.stringify(event)}\n\n`));
-    }, close() { control.close(); } };
+    }, close() { control.close(); }, fail(error: Error) { control.error(error); } };
 }
 async function until(condition: () => boolean) {
   for (let index = 0; index < 100; index++) {
@@ -42,6 +44,25 @@ async function until(condition: () => boolean) {
   throw new Error("搜索测试条件未收敛");
 }
 afterEach(unwrapSessionApiFetch);
+
+test.each([false, true])("真实读取失败保留请求身份与原始 cause：已收到范围=%s", async scoped => {
+  const backend = install(), events: string[] = [], failure = new TypeError("目标连接被重置");
+  const outcome = streamFederatedSearch(49_357, request(), { signal: new AbortController().signal,
+    onEvent: event => events.push(event.type) }).catch(error => error);
+  await until(() => backend.calls.length === 1);
+  if (scoped) {
+    backend.send("scope", { scope: resolution() });
+    await until(() => events.length === 1);
+  }
+  backend.fail(failure);
+  const error = await outcome;
+  expect(error).toBeInstanceOf(SearchStreamReadError);
+  expect(error).toMatchObject({ code: "stream_read_failed", requestId: "original-request", cause: failure });
+  expect(error.message).toContain(failure.message);
+  expect(backend.locked).toBe(false);
+  expect(events).toEqual(scoped ? ["scope"] : []);
+  expect(backend.calls).toHaveLength(1);
+});
 
 test.each([false, true])("未收到完整终态时保留响应头请求身份：已收到范围=%s", async scoped => {
   const backend = install(), events: string[] = [];

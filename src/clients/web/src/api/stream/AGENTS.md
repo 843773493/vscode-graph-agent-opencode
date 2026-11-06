@@ -6,6 +6,8 @@
 
 流正常结束但缺少最终汇总时直接抛出 `IncompleteSearchStreamError`，携带机器代码及原响应头的 request_id；即使尚无范围事件也保留请求归属，不把取消、超时或 HTTP 拒绝改标为该错误。
 
+真实响应正文读取失败使用 `SearchStreamReadError`，保留响应头 request_id、机器代码及原异常 cause；只有 reader 的拒绝进入该出口，解码、领域校验、取消和总期限保持原错误。
+
 与相邻文件的边界：
 
 - `api/http.ts`（上级目录）：统一请求屏障（Gateway 凭据、用户会话、重试、超时）与 JSON 解包。本包所有 HTTP 入口都基于它，不自带传输层。`sessionTraceStream` 走 `requestJson`，SSE 入口走 `requestGatewayResponse`。
