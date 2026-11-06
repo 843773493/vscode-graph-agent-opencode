@@ -3,6 +3,7 @@ import * as api from '../../web/src/api/mcpConnections.js';
 import { galleryInstallationSource, publishMcpArtifact } from '../src/mcp/installation.js';
 import type { IGalleryMcpServer } from '../upstream/src/vs/platform/mcp/common/mcpManagement.js';
 import type { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 
 const workspace = Object.freeze({ gateway_id: 'gateway_00000000000040008000000000000001', workspace_id: '00000000-0000-4000-8000-000000000001' });
 const target = { kind: 'backend', gateway_id: workspace.gateway_id, backend_id: '00000000-0000-4000-8000-000000000011' };
@@ -31,7 +32,7 @@ function prepare() {
 
 test('原安装工作流使用来源owner给出的精确URI和用户选择，返回发布回执不生成local配置', async () => {
   const { plan, install, quickInput } = prepare();
-  const receipt = await publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} });
+  const receipt = await publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None);
   expect(receipt).toEqual(artifact);
   expect(plan.mock.calls[0]![2].variant?.index).toBe(1);
   expect(plan.mock.calls[0]![2].source?.entry_url).toBe(galleryInstallationSource(gallery).entry_url);
@@ -42,7 +43,7 @@ test('原安装工作流使用来源owner给出的精确URI和用户选择，返
 test('安装结果未知时不重放原意图，也不生成虚假的已安装回执', async () => {
   const { install, quickInput } = prepare();
   install.mockRejectedValueOnce(new Error('socket disconnected'));
-  await expect(publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} })).rejects.toThrow('不能自动重放');
+  await expect(publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None)).rejects.toThrow('不能自动重放');
   expect(install).toHaveBeenCalledTimes(1);
 });
 

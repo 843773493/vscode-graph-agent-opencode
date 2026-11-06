@@ -7,6 +7,7 @@ import type {
   McpPrivateHeaderRefDTO, McpPrivateHeaderWriteRequestDTO, McpPrivateHeaderWriteResponseDTO,
   McpPrivateEnvRefDTO, McpPrivateEnvWriteRequestDTO, McpPrivateEnvWriteResponseDTO,
   McpCandidateConfigurationRequestDTO, McpCandidateConfigurationResponseDTO,
+  McpArtifactReferencesResponseDTO, McpManagedLaunchDTO, McpUninstallationRequestDTO,
 } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData } from "./http";
@@ -14,7 +15,7 @@ import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData } from "./ht
 export type { McpConnectionOperationDTO, McpServerDTO };
 
 type InstallationResponse = McpCandidateInspectResponseDTO | McpCandidatePlanResponseDTO | McpInstallationCapabilitiesResponseDTO
-  | McpInstallationOperationResponseDTO | McpInstalledArtifactListResponseDTO;
+  | McpInstallationOperationResponseDTO | McpInstalledArtifactListResponseDTO | McpArtifactReferencesResponseDTO;
 
 async function installationRequest<T extends InstallationResponse>(port: number, workspace: GatewayWorkspaceRequestTarget, path: string,
   init: RequestInit = {}, expected?: McpInstallationTargetDTO): Promise<T> {
@@ -32,8 +33,8 @@ async function installationRequest<T extends InstallationResponse>(port: number,
   return response;
 }
 
-export function getMcpInstallationCapabilities(port: number, workspace: GatewayWorkspaceRequestTarget) {
-  return installationRequest<McpInstallationCapabilitiesResponseDTO>(port, workspace, "installation-capabilities");
+export function getMcpInstallationCapabilities(port: number, workspace: GatewayWorkspaceRequestTarget, signal?: AbortSignal) {
+  return installationRequest<McpInstallationCapabilitiesResponseDTO>(port, workspace, "installation-capabilities", { signal });
 }
 
 export function inspectMcpInstallationCandidate(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidateInspectRequestDTO) {
@@ -51,8 +52,8 @@ export function installMcpArtifact(port: number, workspace: GatewayWorkspaceRequ
     { method: "POST", body: JSON.stringify(request) }, request.candidate!.target);
 }
 
-export function getMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string) {
-  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}`, {}, target);
+export function getMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string, signal?: AbortSignal) {
+  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}`, { signal }, target);
 }
 
 export function cancelMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string) {
@@ -60,8 +61,27 @@ export function cancelMcpInstallationOperation(port: number, workspace: GatewayW
     { method: "POST", body: JSON.stringify(target) }, target);
 }
 
-export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO) {
-  return installationRequest<McpInstalledArtifactListResponseDTO>(port, workspace, "installations", {}, target);
+export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, signal?: AbortSignal) {
+  return installationRequest<McpInstalledArtifactListResponseDTO>(port, workspace, "installations", { signal }, target);
+}
+
+export async function getMcpArtifactReferences(port: number, workspace: GatewayWorkspaceRequestTarget,
+  target: McpInstallationTargetDTO, binding: McpManagedLaunchDTO, signal?: AbortSignal) {
+  const expected = { ...binding };
+  const response = await installationRequest<McpArtifactReferencesResponseDTO>(port, workspace,
+    `installations/${encodeURIComponent(expected.installation_id)}/references`, { signal }, target);
+  const actual = response.data?.binding;
+  if (!actual || actual.backend_id !== expected.backend_id || actual.installation_id !== expected.installation_id
+      || actual.generation !== expected.generation || actual.artifact_digest !== expected.artifact_digest) {
+    throw new Error("MCP 制品引用不属于原 generation，不能用于卸载决定");
+  }
+  return response;
+}
+
+export function uninstallMcpArtifact(port: number, workspace: GatewayWorkspaceRequestTarget, request: McpUninstallationRequestDTO, signal?: AbortSignal) {
+  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace,
+    `installations/${encodeURIComponent(request.binding!.installation_id)}`,
+    { method: "DELETE", body: JSON.stringify(request), signal }, request.target);
 }
 
 type McpResponse = McpServerListResponseDTO | McpConnectionOperationListResponseDTO | McpConnectionOperationResponseDTO | McpAuthorizationResponseDTO

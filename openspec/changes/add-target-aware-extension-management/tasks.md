@@ -106,6 +106,7 @@
 
 - [ ] 8.1 原扩展／MCP 视图按此工作台及目标分组，详情显示安装／启用范围、来源版本、连接与日志；主窗口底部仍按工作区，右侧仍按会话，不维护重复状态卡片。
 - [ ] 8.2 将合法操作与设置定位贡献到原 Action／Command／Opener，复用 `>`、`view `、`ext `、`mcpr ` 和帮助的真实能力；不因注册入口而承诺整个市场或全部 Node API 已可用。
+  - 2026-11-06 MCP 制品管理入口：原 Action／F1 提供“管理目标制品”，明确选择已就绪工作区并冻结 Gateway／workspace／Backend；沿唯一安装 owner 列制品、实际引用、物理卸载和查询原操作，不修改工作区配置或创建新账本。取消浏览／确认不发 DELETE，有引用拒绝；确认期间新增引用由后端409拒绝并展示实际引用，结果未知保留原 operation ID 且不重放。原身份或Gateway失效中止同一信号，阻止401恢复后重发旧确认；409后回读失败同时保留两因及原request_id，两项独审问题已修复并复审。最终真实 Gateway／Backend／uv 发布与正式 Workbench 页面 1 passed／94.85秒，覆盖前述正常分支、实际文件删除、列表移除、原操作成功／removed／完整 binding 和 request_id；401及回读失败由请求／服务边界测试证明，未称页面已覆盖。其它命令、设置及 VSIX 入口仍未完成，本项不勾选。
 - [ ] 8.3 按迁移清单迁齐旧 API、UI、间接调用与测试后物理删除同义实现和死命令，核无第二 MCP client、安装账本、有效设置或扩展服务。
 - [ ] 8.4 迁移稳定目标格式及来源记录，核旧记录拒绝／官方迁移，保留 profile、草稿、凭据和引用；回退源码不自动反向执行已提交外部操作。
 
@@ -116,6 +117,7 @@
 - [ ] 9.3 用真实 MCP 工具、真实 Web／Node 扩展完成调用／文件／配置／终端及不支持能力断言；覆盖并发、取消、冲突、断流、迟到结果和重启，不以进程启动代替业务验收。
 - [ ] 9.4 在源码目录外且关闭开发服务器的 Electron 打包产物验证静态资源、相同目标链、设置与扩展状态重启恢复；目标侧运行时独立发行可核，不增加 main/preload 原生能力。
 - [ ] 9.5 每批完成相关静态分析、真实类型检查、协议生成一致性及受影响构建；涉及浏览器前端完成 `bun run --cwd src/clients/web build`。测试统一使用现有 runner 或进程外超时／内存保护，复用同源码已有构建证据。
+  - 2026-11-06 MCP 制品管理切片：最终相关 MCP／安装／目录／转换／API／共享HTTP 113项通过，不与此前75项／29项重叠批次相加；57份实际转换源码的正式类型检查通过，最终产品测试已完成同源码的完整 Workbench 构建（Web build 指向同一脚本）。Web 完整 tsc 与前批基线均为完全相同28条既有诊断；额外将 Bun 测试并入浏览器类型程序的检查因全局计时器声明冲突及旧安装测试 DTO 不完整未通过，不记作正式类型程序通过。新正式 Python 测试 Ruff／Pyright 和页面脚本语法检查通过；未修改公开协议，未将本页验证扩大为 Windows／Electron／远端全部验收。准确命令、逐文件指纹、原始成功／失败输出、前轮驱动误判、独审修复及正式页面原件见 `out/tests/temp/2026/11/06/mcp_artifact_management/artifacts/verification-v1.json`。
   - 2026-11-04 Workspace 来源编辑切片：来源 API 恢复批 29 passed，启动／MCP／原故障合同批 22 passed，合法 pending 启动补验 1 passed，配置与旧库迁移单元批 128 passed；各批有重叠，不汇总相加。Buf 格式／lint／build／breaking、协议生成一致性、OpenAPI 导出及 Web 构建通过。Web 实际 tsc 退出 2，完整 HEAD 解包基线与当前均为相同 28 条诊断、无新增；新生产文件及 API／协议 Pyright 零诊断，其余生产组按真实 HEAD 对照无新增，调用方扩大类型检查被资源保护终止，未完成。
   - 扩大协议／reload 合同批为 81 passed 后遇旧 ValueError 文案预期失败，完整 HEAD 单例同样失败。发行 SQL 单例先遇既有 Gateway schema 18 断言（实际及 HEAD 迁移均为 19），尚未执行到已迁齐的 Workspace schema 24 断言，不记作发行验收通过。本批最终证据及 39 个文件指纹见 `out/tests/temp/workspace_config_source_edit_20261104/artifacts/workspace-source-edit-final-evidence-20261104T174359459564Z.json`；Ruff 最终与原 HEAD 对照无新增，仅合并嵌套条件的修订按短路语义等价核验复用行为证据。不将本后端切片扩为整个设置模块、真实 Web 交互或原生目标验收。
   - 2026-11-04 Gateway 来源编辑切片：30 个不同来源单元参数实例有逐项通过记录，非一次整组全绿；SQL 升级／冷重开 21 项、HTTP／descriptor／Node 与 Web 协议消费者 51 项、原 loader／迁移／pending／hot／restart／补偿 12 项通过。真实来源进程的两项分别通过，restart 单例 55.37 秒，不重复计算前轮已通过实例。Buf 格式、breaking 与生成一致性及完整 Workbench 构建通过；Web tsc 与完整旧版本均为相同 28 条诊断，生产 Pyright 与完整 dc660 归档均为相同 25 条诊断，新增测试及独立网络测试 Pyright 零诊断，Ruff 无新增。原状态文件 current／dc660 基线均为 43 passed／16 failed，失败实例及异常原文一致，保留既有失败。发行 SQL 单例已迁齐 Gateway 20／Workspace 24 并通过，覆盖重开及缺 SQL 资产明确失败。各批可能重叠，不相加；准确命令、逐文件指纹、旧失败对照及原始输出见 `out/tests/temp/gateway_config_source_edit_20261104/artifacts/gateway-source-final-evidence-20261104.json`，独立网络证据见 7.6。最终仅清除 SQL owner 文件末尾空行，AST 不变并复用行为证据；该后端边界不代表设置界面、真实 SSH、Windows 或全部扩展功能验收。

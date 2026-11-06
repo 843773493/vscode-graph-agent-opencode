@@ -4,10 +4,12 @@ import {
   listMcpOperations, getMcpCatalog, submitMcpOperation,
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
   writeMcpPrivateHeader, writeMcpPrivateEnv,
+  getMcpArtifactReferences, uninstallMcpArtifact,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
 import type { McpServerListResponseDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
+import { onGatewayUserSessionInvalidated } from "./http";
 
 const originalFetch = globalThis.fetch;
 const target: GatewayWorkspaceRequestTarget = {
@@ -129,6 +131,61 @@ test("制品入口冻结原生 Backend，实际安装与查询沿相同目标且
   actual = { ...native, backend_id: "00000000-0000-4000-8000-000000000012" };
   await expect(getMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
   await expect(cancelMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
+});
+
+test("制品引用核原generation，卸载向原安装域传递完整binding与唯一操作", async () => {
+  const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  const binding = { backend_id: native.backend_id, installation_id: "artifact/id", generation: "original", artifact_digest: revision };
+  let actual = binding;
+  const requests: { url: URL; init: RequestInit | undefined }[] = [];
+  const port = installFetch((url, init) => {
+    requests.push({ url, init });
+    return envelope({ binding: actual, references: [] }, { target: native });
+  });
+  expect((await getMcpArtifactReferences(port, target, native, binding)).data?.binding).toEqual(binding);
+  const intent = { target: native, binding, operation_id: "one-removal" };
+  await uninstallMcpArtifact(port, target, intent);
+  expect(requests[0]!.url.pathname).toBe("/api/v1/mcp/installations/artifact%2Fid/references");
+  expect(requests[1]!.url.pathname).toBe("/api/v1/mcp/installations/artifact%2Fid");
+  expect(requests[1]!.init?.method).toBe("DELETE");
+  expect(JSON.parse(String(requests[1]!.init?.body))).toEqual(intent);
+  for (const { init } of requests) {
+    expect(new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
+    expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+    expect(init?.cache).toBe("no-store");
+  }
+  actual = { ...binding, generation: "different" };
+  await expect(getMcpArtifactReferences(port, target, native, binding)).rejects.toThrow("原 generation");
+});
+
+test("卸载收到会话401触发原身份屏障后，真实HTTP恢复链不重发旧确认", async () => {
+  const port = nextPort++;
+  const controller = new AbortController();
+  const release = onGatewayUserSessionInvalidated(port, () => controller.abort(new Error("原确认身份已失效")));
+  const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  const binding = { backend_id: native.backend_id, installation_id: "artifact", generation: "original", artifact_digest: revision };
+  let deletions = 0, sessions = 0;
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args, path = new URL(String(input)).pathname;
+    if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "mcp-test-token" } });
+    if (path === "/api/gateway/users/current") {
+      ++sessions;
+      return Response.json({ data: { kind: "guest", user_id: null }, request_id: "recovered-identity" });
+    }
+    expect(path).toBe("/api/v1/mcp/installations/artifact");
+    expect(init?.method).toBe("DELETE");
+    expect(JSON.parse(String(init?.body))).toEqual({ target: native, binding, operation_id: "old-confirmation" });
+    ++deletions;
+    return Response.json({ detail: "user_session_required" }, { status: 401, headers: { "X-Request-ID": "expired-identity" } });
+  }, { preconnect: originalFetch.preconnect });
+  try {
+    const failure = await uninstallMcpArtifact(port, target, { target: native, binding, operation_id: "old-confirmation" }, controller.signal)
+      .catch((cause: unknown) => cause);
+    expect(failure).toBe(controller.signal.reason);
+    expect(controller.signal.aborted).toBe(true);
+    expect(sessions).toBe(2);
+    expect(deletions).toBe(1);
+  } finally { release(); }
 });
 
 test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操作对象", async () => {
