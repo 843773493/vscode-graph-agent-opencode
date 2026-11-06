@@ -42,7 +42,7 @@ PreparedMessage = tuple[
     str,
     str | None,
     str,
-    str,
+    dict[str, object],
     int,
     int,
     str,
@@ -252,7 +252,7 @@ def prepare_messages(
                 if message_role == "assistant"
                 else None
             )
-            group, serialized = resolve_message_group(
+            group, projected = resolve_message_group(
                 connection, codec=codec, message=message, message_value=message_value,
                 explicit_anchor=explicit_anchor, stored_group=message_item_group,
                 message_id=canonical_message_id, turn_id=turn_id, execution_id=execution_id,
@@ -275,7 +275,7 @@ def prepare_messages(
                         continue
                 if item.turn_scope is None or item.semantic_kind == "runtime_notice":
                     batch.display_only_item_ids.append(item.item_id)
-            if serialized is None:
+            if projected is None:
                 # 候选组只验证内容与身份；已存消息继续引用原 locator，不写候选坐标。
                 batch.visible_sequences.append(message_locator[0])
                 continue
@@ -294,7 +294,7 @@ def prepare_messages(
                     canonical_message_id,
                     turn_id,
                     codec.message_role(message),
-                    serialized,
+                    projected,
                     message_offset,
                     message_length,
                     "internal" if codec.is_internal(message) else "visible",

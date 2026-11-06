@@ -113,7 +113,7 @@ def prepare_compaction(
         raw = canonical_json_line(item.to_dict())
         sequence = batch.last_message_sequence + 1
         batch.prepared.append((
-            sequence, summary_id, admission.turn_id, "user", canonical_json_text(codec.project_message((item,))),
+            sequence, summary_id, admission.turn_id, "user", codec.project_message((item,)),
             offset, len(raw), "internal", ((item, offset, len(raw)),), admission.execution_id,
         ))
         batch.next_item_sequence += 1

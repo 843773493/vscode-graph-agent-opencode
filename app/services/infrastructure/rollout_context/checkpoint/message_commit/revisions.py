@@ -61,7 +61,7 @@ def resolve_message_group(
     stored_group: Sequence[CanonicalItemRecord], message_id: str,
     turn_id: str | None, execution_id: str, model_call_id: str | None,
     next_item_sequence: int, timestamp: str, allow_revisions: bool,
-) -> tuple[tuple[CanonicalItemRecord, ...], str | None]:
+) -> tuple[tuple[CanonicalItemRecord, ...], dict[str, object] | None]:
     """返回规范组及新组的已校验投影；复用原 locator 时无需待提交正文。"""
     created = not stored_group
     candidate_message = message
@@ -131,4 +131,4 @@ def resolve_message_group(
             created = True
     # 新组的最终投影同时用于校验和提交，不能在 prepare 中重走长正文。
     # revision 替换身份/来源后已重新投影；既有组只校验，不再准备写入。
-    return tuple(group), canonical_json_text(projected) if created else None
+    return tuple(group), projected if created else None

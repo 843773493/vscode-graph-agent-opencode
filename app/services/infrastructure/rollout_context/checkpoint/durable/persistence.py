@@ -6,7 +6,6 @@ LangChain message，也不读取 v1 数据。
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Callable, Mapping
 from functools import partial
@@ -299,19 +298,15 @@ class RolloutCheckpointPersistenceMixin:
                 message_id,
                 turn_id,
                 role,
-                serialized_json,
+                message_value,
                 message_offset,
                 byte_length,
                 visibility,
                 canonical_locations,
                 execution_id,
             ) in prepared:
-                message_value = json.loads(serialized_json)
-                content = (
-                    message_value.get("data", {}).get("content")
-                    if isinstance(message_value, Mapping)
-                    else None
-                )
+                # 投影已由同批 canonical group 校验，直接取内容；不为元数据往返编码整条消息。
+                content = message_value.get("data", {}).get("content")
                 content_bytes = _json(content).encode("utf-8")
                 connection.execute(
                     "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, role, jsonl_offset, jsonl_length, content_length, content_hash, visibility, commit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
