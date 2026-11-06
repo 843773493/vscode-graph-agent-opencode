@@ -89,6 +89,7 @@ GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
         "x-boxteam-gateway-id",
         "x-boxteam-target-gateway-id",
         "x-boxteam-navigation-actor",
+        "x-boxteam-extension-client-id",
     }
 )
 

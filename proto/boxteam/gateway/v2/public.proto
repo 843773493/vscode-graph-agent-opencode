@@ -987,3 +987,24 @@ message WorkspaceNavigationTreeDTO {
   string revision = 1;
   repeated WorkspaceNavigationNodeDTO nodes = 2;
 }
+
+// 独立宿主通道的首个 JSON 帧；后续帧保持原上游扩展协议的二进制字节。
+// 客户端身份由 Gateway 认证产生，不能由此请求指定。
+message ExtensionHostOpenRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+}
+
+message ExtensionHostConnectionDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string client_id = 6;
+  string generation = 7;
+  string request_id = 8;
+}

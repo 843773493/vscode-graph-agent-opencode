@@ -17,5 +17,6 @@
 
 - 子进程统一由 OwnedChildProcess 持有；取消、断连与启动失败均等待实际回收。
 - IPC 只传原协议字节，不在此解析、重放或改写扩展调用。
+- 公开传输先登记settled占用；owner通知stopping并等待传输双向任务结清，才关闭IPC和实际进程。
 - 管理授权、稳定目标与 view 必须在公开入口接线时完成；本层不提供 HTTP 入口。
-- owner只冻结内部已准入身份和原mount中的有序工作区集合；完整窗口投影、认证通道和持续撤权仍须各自接入，不能将内部集合校验当作RPC载荷隔离验收。
+- Gateway独立通道认证、原生管理权限和持续撤权归`app/gateway/server/extension_host.py`；Backend私有入口归`app/api/extension_host.py`。owner冻结已准入身份和原mount中的有序工作区集合，完整窗口投影尚未接入，不能将认证或集合校验当作RPC载荷隔离验收。

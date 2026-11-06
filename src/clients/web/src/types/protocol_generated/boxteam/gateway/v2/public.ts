@@ -973,6 +973,29 @@ export interface WorkspaceNavigationTreeDTO {
   nodes: WorkspaceNavigationNodeDTO[];
 }
 
+/**
+ * 独立宿主通道的首个 JSON 帧；后续帧保持原上游扩展协议的二进制字节。
+ * 客户端身份由 Gateway 认证产生，不能由此请求指定。
+ */
+export interface ExtensionHostOpenRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+}
+
+export interface ExtensionHostConnectionDTO {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  client_id: string;
+  generation: string;
+  request_id: string;
+}
+
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
   return { uri: "", local_gateway_id: "", resource_gateway_id: undefined };
 }
@@ -7469,6 +7492,132 @@ export const WorkspaceNavigationTreeDTO: MessageFns<WorkspaceNavigationTreeDTO> 
     const message = createBaseWorkspaceNavigationTreeDTO();
     message.revision = object.revision ?? "";
     message.nodes = object.nodes?.map((e) => WorkspaceNavigationNodeDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseExtensionHostOpenRequest(): ExtensionHostOpenRequest {
+  return { protocol_version: 0, gateway_id: "", backend_id: "", view_id: "", workspace_ids: [] };
+}
+
+export const ExtensionHostOpenRequest: MessageFns<ExtensionHostOpenRequest> = {
+  fromJSON(object: any): ExtensionHostOpenRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ExtensionHostOpenRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostOpenRequest>, I>>(base?: I): ExtensionHostOpenRequest {
+    return ExtensionHostOpenRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostOpenRequest>, I>>(object: I): ExtensionHostOpenRequest {
+    const message = createBaseExtensionHostOpenRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseExtensionHostConnectionDTO(): ExtensionHostConnectionDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    client_id: "",
+    generation: "",
+    request_id: "",
+  };
+}
+
+export const ExtensionHostConnectionDTO: MessageFns<ExtensionHostConnectionDTO> = {
+  fromJSON(object: any): ExtensionHostConnectionDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      client_id: isSet(object.client_id) ? globalThis.String(object.client_id) : "",
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+    };
+  },
+
+  toJSON(message: ExtensionHostConnectionDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.client_id !== "") {
+      obj.client_id = message.client_id;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostConnectionDTO>, I>>(base?: I): ExtensionHostConnectionDTO {
+    return ExtensionHostConnectionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostConnectionDTO>, I>>(object: I): ExtensionHostConnectionDTO {
+    const message = createBaseExtensionHostConnectionDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.client_id = object.client_id ?? "";
+    message.generation = object.generation ?? "";
+    message.request_id = object.request_id ?? "";
     return message;
   },
 };

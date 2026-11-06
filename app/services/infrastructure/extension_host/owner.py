@@ -33,6 +33,8 @@ class NodeHostConnection:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     host: NodeExtensionHost
+    stopping: asyncio.Event
+    transport_settled: asyncio.Event
 
 
 class _HostSession:
@@ -46,6 +48,9 @@ class _HostSession:
         self._output: BinaryIO | None = None
         self.host: NodeExtensionHost | None = None
         self.closed = False
+        self.stopping = asyncio.Event()
+        self.transport_settled = asyncio.Event()
+        self.transport_settled.set()
 
     async def open(self) -> NodeHostConnection:
         async with self._lock:
@@ -57,9 +62,12 @@ class _HostSession:
                 directory=self._directory, environment=self._environment,
                 output=self._output, startup_timeout=self._startup_timeout)
             reader, writer = await self._scope.enter_async_context(self.host.connect())
-            return NodeHostConnection(self.identity, reader, writer, self.host)
+            return NodeHostConnection(self.identity, reader, writer, self.host, self.stopping, self.transport_settled)
 
     async def close(self) -> None:
+        # 通知公开传输先停止收发；随后关闭IPC时不能再写入已关闭的writer。
+        self.stopping.set()
+        await self.transport_settled.wait()
         async with self._lock:
             if self.closed:
                 return
@@ -76,8 +84,8 @@ class _HostSession:
 class NodeExtensionHostOwner:
     """一个 Backend 的惰性宿主集合；内部准入只接受入口已认证的客户端身份。"""
 
-    # TODO(5.3/5.4/5.6)：正式通道须冻结认证会话、持续处理撤权，并迁齐
-    # MainThread初始载荷和事件的工作区投影；内部集合校验不能代替这三项。
+    # TODO(5.4/5.6)：迁齐MainThread初始载荷、事件的工作区投影与窗口贡献代际；
+    # 已认证通道和内部集合校验不能代替RPC载荷的视图隔离。
 
     def __init__(self, *, backend_id: str, mounted_workspaces: MountedWorkspaceRegistry,
                  runtime: NodeHostRuntime | None, home: Path, environment: Mapping[str, str],

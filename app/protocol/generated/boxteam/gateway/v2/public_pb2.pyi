@@ -1631,3 +1631,37 @@ class WorkspaceNavigationTreeDTO(_message.Message):
     revision: str
     nodes: _containers.RepeatedCompositeFieldContainer[WorkspaceNavigationNodeDTO]
     def __init__(self, revision: _Optional[str] = ..., nodes: _Optional[_Iterable[_Union[WorkspaceNavigationNodeDTO, _Mapping]]] = ...) -> None: ...
+
+class ExtensionHostOpenRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ExtensionHostConnectionDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "client_id", "generation", "request_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    client_id: str
+    generation: str
+    request_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ...) -> None: ...

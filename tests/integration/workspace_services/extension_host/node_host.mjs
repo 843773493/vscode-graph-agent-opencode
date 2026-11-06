@@ -47,7 +47,9 @@ after(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'node-host-checks.json'), JSON.stringify({
-      boundary: '真实Backend registry/宿主owner/关闭生命周期、专用manifest、私有Unix IPC、固定上游Node宿主、原PersistentProtocol/RPC与ESM扩展；TCP仅为测试传输。主线程UI/配置/存储/注册回调及CPU负载估算为明确替身。未经过Gateway授权、安装管理或窗口多目标registry，不代表产品完整验收。',
+      boundary: '真实Backend registry/宿主owner/关闭生命周期、专用manifest、私有Unix IPC、固定上游Node宿主、原PersistentProtocol/RPC与ESM扩展；TCP是装具到通道的字节桥。gateway/relay模式额外经过真实Uvicorn、Gateway路由、认证与宿主管理通道，ipc模式直接接owner。主线程UI/配置/存储/注册回调及CPU负载估算为明确替身；未装配完整业务图、SSH、安装管理或窗口多目标registry，不代表产品完整验收。',
+      transport: process.env.BOXTEAM_TEST_HOST_TRANSPORT ?? 'ipc',
+      // gateway/relay由Python装具以真实Uvicorn路由和原认证owner承载；未装配完整工作区服务图或SSH隧道。
       metadata, receipts,
     }, null, 2) + '\n');
   }

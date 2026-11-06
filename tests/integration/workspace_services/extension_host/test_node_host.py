@@ -5,18 +5,37 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import uvicorn
 from fastapi import FastAPI
+from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 
+from app.api.extension_host import router as backend_host_router
 from app.backend_lifecycle import BackendLifespan
 from app.container import WorkspaceContainerRegistry
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.core.path_utils import get_gateway_root
+from app.core.trace_middleware import TraceMiddleware
+from app.gateway.auth import get_gateway_local_token
+from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME, UserAccessService
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation.policy import FederationPolicyStore
+from app.gateway.federation.ports import principal_ref_for_gateway
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.server.extension_host import router as gateway_host_router
 from app.services.infrastructure.extension_host.owner import NodeHostIdentity
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from tests.harness.python.run_context import TestRunContext
@@ -33,8 +52,16 @@ def node_host_runtime() -> tuple[str, str]:
     return executable, modules
 
 
+@pytest.fixture
+async def network_scope() -> AsyncIterator[AsyncExitStack]:
+    async with AsyncExitStack() as scope:
+        yield scope
+
+
+@pytest.mark.parametrize("transport", ["ipc", "gateway", "relay"])
 async def test_original_node_host_protocol_and_dual_native_extensions(
-    node_host_runtime: tuple[str, str], monkeypatch: pytest.MonkeyPatch,
+    node_host_runtime: tuple[str, str], monkeypatch: pytest.MonkeyPatch, transport: str,
+    request: pytest.FixtureRequest, network_scope: AsyncExitStack,
 ) -> None:
     # Python 与 Node 共用运行身份，避免各自按进程 PID 建立不同证据目录。
     monkeypatch.setenv("BOXTEAM_TEST_RUN_ID", f"node-host-{uuid4()}")
@@ -55,7 +82,9 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         "extension_host": {"node_executable": executable, "component_root": "runtime/host"},
     }), encoding="utf-8")
     monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(manifest))
-    monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
+    home = context.boxteam_home_for_node(request.node.nodeid)
+    home.mkdir(parents=True)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
     workspace_ids = {label: str(uuid4()) for label in (
         "A", "B", "wrong-commit", "disconnect", "crash", "backend-shutdown")}
     mounts = []
@@ -66,9 +95,88 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     mounted = MountedWorkspaceRegistry(mounts)
     backend_id = str(uuid4())
     application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(backend_host_router)
     lifecycle = BackendLifespan(None, application)
     registry: WorkspaceContainerRegistry | None = None
     identities: dict[str, NodeHostIdentity] = {}
+    channel_bindings: dict[str, object] = {}
+    network = network_scope
+
+    async def serve_application(app: FastAPI) -> str:
+        # 本用例以真实 Uvicorn 网络接入产品路由；工作区服务图与窗口主线程不在此装配。
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.setblocking(False)
+        network.callback(listener.close)
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, lifespan="off", log_level="warning"))
+        task = asyncio.create_task(server.serve(sockets=[listener]))
+
+        async def close_server() -> None:
+            server.should_exit = True
+            async with asyncio.timeout(10):
+                await task
+
+        network.push_async_callback(close_server)
+        async with asyncio.timeout(10):
+            while not server.started:
+                if task.done():
+                    task.result()
+                    raise RuntimeError("真实宿主测试服务在就绪前退出")
+                await asyncio.sleep(0.01)
+        return f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+    gateway_id = "gateway_" + "a" * 32
+    token = get_gateway_local_token()
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
+    gateway_url = ""
+    cookie = ""
+    if transport != "ipc":
+        backend_url = await serve_application(application)
+        gateway = FastAPI()
+        gateway.add_middleware(TraceMiddleware)
+        gateway.include_router(gateway_host_router)
+        gateway_registry = GatewayWorkspaceRegistry(storage_path=home / "workspaces.json", gateway_id=gateway_id)
+        network.callback(gateway_registry.close)
+        for mount in mounts:
+            gateway_registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id,
+                name="same-name", root_path=str(mount.workspace_root), backend_url=backend_url, connection_kind="local"), activate=False)
+        state = GatewayStateStore(path=home / "gateway.sqlite")
+        network.callback(state.close)
+        users = UserAccessService(state=state)
+        users.create_user(display_name="Node host", user_id="node-host")
+        access = users.acquire_user(user_id="node-host", client_label="protocol-client")
+        cookie = f"{USER_ACCESS_COOKIE_NAME}={access.access_session_id}"
+        gateway.state.registry = gateway_registry
+        gateway.state.user_access_service = users
+        gateway.state.federation_policy_store = FederationPolicyStore()
+        gateway_url = (await serve_application(gateway)).replace("http://", "ws://")
+        if transport == "relay":
+            relay_id = "gateway_" + "b" * 32
+            relay_registry = GatewayWorkspaceRegistry(storage_path=home / "relay-workspaces.json", gateway_id=relay_id)
+            network.callback(relay_registry.close)
+            credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+                connection_id="native-host", peer_gateway_id=relay_id)
+            relay_registry.upsert_remote_gateway(RemoteGatewayConnection(
+                connection_id=credential.connection_id, name="native", host="127.0.0.1", port=22,
+                username="fixture", private_key_path=None, ssh_config_host=None, remote_gateway_port=1,
+                remote_gateway_id=gateway_id, protocol_version=2, source_owner="manual"),
+                runtime=WorkspaceRuntime(service_urls={"workspace_api": gateway_url.replace("ws://", "http://")}))
+            for mount in mounts:
+                relay_registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id,
+                    name="same-name", root_path=None, backend_url="", connection_kind="remote_gateway",
+                    owner="remote_projection", remote_gateway_connection_ids=(credential.connection_id,),
+                    remote_service_names=("workspace_api",)), activate=False)
+            gateway.state.federation_policy_store.publish({"rules": [{"capability": "extension_host_manage", "effect": "allow",
+                "principal_ref": principal_ref_for_gateway(relay_id)}]})
+            relay = FastAPI()
+            relay.add_middleware(TraceMiddleware)
+            relay.include_router(gateway_host_router)
+            relay.state.registry = relay_registry
+            relay.state.user_access_service = users
+            relay.state.federation_policy_store = FederationPolicyStore()
+            gateway_url = (await serve_application(relay)).replace("http://", "ws://")
 
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         while data := await reader.read(65536):
@@ -92,6 +200,42 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
                 lifecycle.registry = registry
                 application.state.workspace_container_registry = registry
                 application.state.workspace_lifespan = lifecycle
+            if transport != "ipc":
+                async with connect(f"{gateway_url}/api/gateway/extension-hosts/channel?token={token}",
+                        additional_headers={"Cookie": cookie, "X-Request-ID": f"request-{label}"}, compression=None) as channel:
+                    await channel.send(json.dumps({"protocol_version": 1, "gateway_id": gateway_id,
+                        "backend_id": backend_id, "view_id": label, "workspace_ids": [workspace_ids[label]]}))
+                    binding = json.loads(await channel.recv())
+                    assert binding["request_id"] == f"request-{label}"
+                    assert binding["gateway_id"] == gateway_id
+                    assert binding["backend_id"] == backend_id
+                    assert binding["view_id"] == label and binding["workspace_ids"] == [workspace_ids[label]]
+                    session = registry.extension_hosts._sessions[binding["generation"]]
+                    assert session.host is not None
+                    hosts[label], identities[label] = session.host, session.identity
+                    channel_bindings[label] = binding
+
+                    async def to_channel() -> None:
+                        while data := await reader.read(65536):
+                            await channel.send(data)
+
+                    async def from_channel() -> None:
+                        try:
+                            async for data in channel:
+                                assert isinstance(data, bytes)
+                                writer.write(data)
+                                await writer.drain()
+                        except ConnectionClosed as error:
+                            # 原TCP装具以EOF表示宿主退出；保留WS关闭原件，并由原断言核PID与实际返回码。
+                            assert label in {"crash", "backend-shutdown"}
+                            channel_bindings[f"{label}-closed"] = {"code": channel.close_code, "reason": channel.close_reason}
+                            assert error.rcvd is not None and error.rcvd.code == 1011
+
+                    from app.services.infrastructure.extension_host.channel import (
+                        run_channel,
+                    )
+                    await run_channel(to_channel(), from_channel())
+                return
             async with registry.extension_hosts.connect(gateway_id="gateway-probe", expected_backend_id=backend_id,
                     client_id="protocol-probe", view_id=label, workspace_ids=(workspace_ids[label],)) as connection:
                 hosts[label] = connection.host
@@ -129,7 +273,8 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         result = await asyncio.to_thread(subprocess.run,
             command, cwd=context.project_root,
             env={**os.environ, "BOXTEAM_TEST_NODE_HOST_EXECUTABLE": executable,
-                 "BOXTEAM_TEST_NODE_HOST_MODULES": modules, "BOXTEAM_TEST_HOST_BACKEND_PORT": str(port)},
+                 "BOXTEAM_TEST_NODE_HOST_MODULES": modules, "BOXTEAM_TEST_HOST_BACKEND_PORT": str(port),
+                 "BOXTEAM_TEST_HOST_TRANSPORT": transport},
             capture_output=True, timeout=55, check=False)
     finally:
         server.close()
@@ -139,10 +284,12 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         outcomes = await asyncio.gather(*handlers, return_exceptions=True)
         await server.wait_closed()
         await lifecycle.close()
+        await network.aclose()
         (context.artifacts_dir / "backend-host-processes.json").write_text(json.dumps(
             {label: asdict(host.child.state) for label, host in hosts.items()}, ensure_ascii=False, indent=2) + "\n")
         (context.artifacts_dir / "backend-host-bindings.json").write_text(json.dumps(
             {label: asdict(identity) for label, identity in identities.items()}, indent=2) + "\n")
+        (context.artifacts_dir / "gateway-host-bindings.json").write_text(json.dumps(channel_bindings, indent=2) + "\n")
         for outcome in outcomes:
             if isinstance(outcome, Exception):
                 raise outcome
@@ -169,7 +316,14 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     assert registry is not None and registry._extension_hosts is not None and not registry._extension_hosts.active
     assert len({identity.generation for identity in identities.values()}) == len(workspace_ids)
     for label, identity in identities.items():
-        assert (identity.gateway_id, identity.backend_id, identity.client_id, identity.view_id) == (
-            "gateway-probe", backend_id, "protocol-probe", label)
+        assert (identity.gateway_id, identity.backend_id, identity.view_id) == (
+            gateway_id if transport != "ipc" else "gateway-probe", backend_id, label)
+        if transport == "ipc":
+            assert identity.client_id == "protocol-probe"
+        elif transport == "gateway":
+            assert len(identity.client_id) == 64
+        else:
+            assert identity.client_id.startswith("peer:gateway_" + "b" * 32 + ":")
+            assert len(identity.client_id.rsplit(":", 1)[1]) == 64
         assert identity.workspace_ids == (workspace_ids[label],)
-        assert (context.boxteam_home / "state/backend/extension-hosts" / identity.generation / "host.log").is_file()
+        assert (home / "state/backend/extension-hosts" / identity.generation / "host.log").is_file()

@@ -162,6 +162,21 @@ async def test_cancelled_start_releases_the_original_generation_and_log(case: Ca
         await asyncio.gather(opening, return_exceptions=True)
 
 
+async def test_owner_waits_for_transport_settlement_before_closing_ipc(case: Case) -> None:
+    async with case.owner.connect(gateway_id="gateway", expected_backend_id=case.owner.backend_id,
+            client_id="client", view_id="view", workspace_ids=case.workspace_ids) as connection:
+        connection.transport_settled.clear()
+        closing = asyncio.create_task(case.owner.close())
+        try:
+            await connection.stopping.wait()
+            assert not closing.done()
+            assert not connection.host.child.state.exit_verified
+        finally:
+            connection.transport_settled.set()
+            await closing
+        assert connection.host.child.state.exit_verified
+
+
 async def test_cleanup_failure_preserves_original_error_generation_and_log_until_retry(case: Case) -> None:
     failure = OSError("原子进程退出未核实")
     original = ValueError("原RPC失败")

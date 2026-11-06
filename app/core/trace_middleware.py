@@ -5,6 +5,7 @@ from contextvars import ContextVar, Token
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.failures import failure_detail, public_failure_message
@@ -30,8 +31,8 @@ _CURRENT_NAVIGATION_ACTOR: ContextVar[str | None] = ContextVar(
 )
 
 
-def get_request_id(request: Request) -> str:
-    """读取 TraceMiddleware 为当前 HTTP 请求创建的权威 request_id。"""
+def get_request_id(request: HTTPConnection) -> str:
+    """读取 TraceMiddleware 为当前 HTTP／WebSocket 请求创建的权威 request_id。"""
     request_id = getattr(request.state, "request_id", None)
     if not isinstance(request_id, str) or not request_id:
         raise RuntimeError("TraceMiddleware 未向当前请求注入 request_id")
@@ -152,11 +153,11 @@ class TraceMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
 
-        request = Request(scope, receive=receive)
+        request = Request(scope, receive=receive) if scope["type"] == "http" else HTTPConnection(scope)
         incoming_request_id = request.headers.get("X-Request-ID", "").strip()
         request_id = incoming_request_id or str(uuid.uuid4())
         start_time = time.perf_counter()
@@ -176,6 +177,25 @@ class TraceMiddleware:
         # 同时绑定到请求级 ContextVar：后台 job 创建点在请求作用域内读取该值，
         # 显式随 job 携带，避免下游补造第二个 request ID。
         request_id_token = set_current_request_id(request_id)
+
+        if scope["type"] == "websocket":
+            async def websocket_send(message: Message) -> None:
+                if message["type"] == "websocket.accept":
+                    headers = [(name, value) for name, value in message.get("headers", [])
+                               if name.lower() != b"x-request-id"]
+                    headers.append((b"x-request-id", request_id.encode("latin-1")))
+                    message = {**message, "headers": headers}
+                await send(message)
+
+            try:
+                await self.app(scope, receive, websocket_send)
+            finally:
+                reset_current_request_id(request_id_token)
+                reset_current_navigation_actor(navigation_actor_token)
+                reset_current_gateway_id(gateway_id_token)
+            return
+
+        assert isinstance(request, Request)
 
         response_started = False
         response_status = 500

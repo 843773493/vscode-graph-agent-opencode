@@ -11,13 +11,15 @@ canonical item 或 sealed assembly；因此权限更新不改变已提交 wire p
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
+from starlette.requests import HTTPConnection
 
 from app.gateway.auth import GatewayAuthContext
 from app.gateway.federation.ports import principal_ref_for_gateway
@@ -184,6 +186,12 @@ class FederationPolicyStore:
 
     def __init__(self, *, initial: Mapping[str, object] | None = None) -> None:
         self._snapshot = normalize_policy(initial)
+        self._changed = asyncio.Event()
+
+    @property
+    def changed(self) -> asyncio.Event:
+        """取得当前快照的失效信号；发布与换代之间没有 await。"""
+        return self._changed
 
     @property
     def snapshot(self) -> FederationPolicySnapshot:
@@ -200,11 +208,13 @@ class FederationPolicyStore:
             hardening_enabled=candidate.hardening_enabled,
             content_hash=candidate.content_hash,
         )
+        previous, self._changed = self._changed, asyncio.Event()
+        previous.set()
         return self._snapshot
 
 
 def federation_capability_allowed(
-    request: Request, auth: GatewayAuthContext, capability: Capability,
+    request: HTTPConnection, auth: GatewayAuthContext, capability: Capability,
 ) -> bool:
     """只用本跳已认证主体和当前策略判权；本机访问沿原认证契约。"""
     if auth.kind == "local":
@@ -222,7 +232,7 @@ def federation_capability_allowed(
 
 
 def require_federation_capability(
-    request: Request, auth: GatewayAuthContext, capability: Capability,
+    request: HTTPConnection, auth: GatewayAuthContext, capability: Capability,
 ) -> None:
     if not federation_capability_allowed(request, auth, capability):
         raise HTTPException(status_code=403, detail=f"目标 Gateway 未授权 {capability}")

@@ -80,6 +80,12 @@ MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_insta
 | 实际重启受管 Backend | 原 `managed_backend_restart` 是操作名，仍核 `managed_workspace_admin` 管理能力；若消费配置 candidate，再核 `configuration_write`，不以 retry 按钮绕过 |
 | Gateway 自身／开发栈重启 | 保留原 `restart-development` 的 local-only 与源码环境要求；远端入口只显示需在原生管理端处理，不假定 Backend 重启权限涵盖 Gateway，不新增联邦 Gateway 重启能力 |
 
+宿主传输沿独立 WebSocket 通道协商，不把 RPC 混入普通工作区 API。首个 JSON 请求固定协议版本、原生 Gateway、稳定 Backend、view 和有序 workspace 集合；原生 Backend 返回同一绑定、目标生成的 generation 与原 request_id，随后只传原上游协议二进制字节。Gateway 在披露握手前核对目标、视图、客户端绑定及 request_id，不重编码或重放扩展 RPC。
+
+本地通道同时核本机管理 token 与既有 UserAccess cookie；客户端身份由访问会话及租约代际派生，不接受浏览器自报，也不把原 cookie 传给 Backend。用户与游客沿既有有效访问租约，续租仍由原 heartbeat 入口负责，宿主通道不替闲置客户端续租。联邦入站按已认证 peer 划定客户端命名空间，并在原生 Gateway 核独立宿主管理权限；已认证联邦请求不能再次转发到另一远端目标。每个 workspace 分别取得原 route reference，集合须抵达同一 Backend；任一路由失效、租约失效或权限撤销均结束连接，策略发布直接唤醒空闲连接，不增加逐帧数据库轮询。
+
+Backend 私有通道只接受 loopback、无浏览器来源头及已配置运行时控制凭据的请求，且复用唯一宿主 owner。关闭先通知传输停止，再等待双向任务实际结清，随后关闭 IPC 并核实原子进程退出；不能用通知已发出代替收发任务已退出。传输认证和内部 mount 集合校验不代表 MainThread 初始载荷、事件和窗口贡献已完成工作区投影，后者继续按 D7／D8 单独迁齐与验收。
+
 ### D4. 目录发现、安装、配置与运行分别报告事实
 
 安装取消按 operation 独立结算，并使用独立 `cancelled` 终态。共享 producer 的下载／准备只有最后一个使用者取消才停止，且须核实际执行进程退出；其它消费者不随之取消。同安装域的另一后端可在原 SQLite 安装账本写入取消意图，由 producer 原执行者处理，不新增第二取消存储或重放未知脚本。取消与发布在原事务中决定先后，已经提交的 `succeeded` 不被迟到取消覆盖。

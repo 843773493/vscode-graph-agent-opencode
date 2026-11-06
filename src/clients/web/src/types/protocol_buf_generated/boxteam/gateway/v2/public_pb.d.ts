@@ -4189,3 +4189,93 @@ export declare type WorkspaceNavigationTreeDTO = Message<"boxteam.gateway.v2.Wor
  */
 export declare const WorkspaceNavigationTreeDTOSchema: GenMessage<WorkspaceNavigationTreeDTO>;
 
+/**
+ * 独立宿主通道的首个 JSON 帧；后续帧保持原上游扩展协议的二进制字节。
+ * 客户端身份由 Gateway 认证产生，不能由此请求指定。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionHostOpenRequest
+ */
+export declare type ExtensionHostOpenRequest = Message<"boxteam.gateway.v2.ExtensionHostOpenRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostOpenRequest.
+ * Use `create(ExtensionHostOpenRequestSchema)` to create a new message.
+ */
+export declare const ExtensionHostOpenRequestSchema: GenMessage<ExtensionHostOpenRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionHostConnectionDTO
+ */
+export declare type ExtensionHostConnectionDTO = Message<"boxteam.gateway.v2.ExtensionHostConnectionDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string client_id = 6;
+   */
+  clientId: string;
+
+  /**
+   * @generated from field: string generation = 7;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: string request_id = 8;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostConnectionDTO.
+ * Use `create(ExtensionHostConnectionDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostConnectionDTOSchema: GenMessage<ExtensionHostConnectionDTO>;
+
