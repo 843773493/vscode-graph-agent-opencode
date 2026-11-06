@@ -91,6 +91,11 @@ def validate_sealed_plan(
         elif field.name == "contributions":
             expected_value = [{**item.to_dict(), "body": None} for item in expected_value]
             actual_value = [{**item.to_dict(), "body": None} for item in actual_value]
+            # 核心字段已由 domain 限定类型；自由 JSON 保留 JCS 的数字/容器语义。
+            for row in (*expected_value, *actual_value):
+                row["extensions"] = canonical_json_bytes(row["extensions"]).decode("utf-8")
+        if field.name != "tool_set_refs" and expected_value == actual_value:
+            continue
         if canonical_json_bytes(expected_value) != canonical_json_bytes(actual_value):
             raise ValueError(
                 "plan-order-integrity: sealed snapshot 与当前 draft registry 不一致"
