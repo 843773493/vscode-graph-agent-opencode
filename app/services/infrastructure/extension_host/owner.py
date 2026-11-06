@@ -16,7 +16,12 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationViewRequest,
+)
 from app.schemas.gateway.extension_host import (
+    ExtensionHostConfigurationResourceDTO,
+    ExtensionHostEnvironmentDTO,
     ExtensionHostFolderDTO,
     ExtensionHostInitializationDTO,
     ExtensionHostWorkspaceDTO,
@@ -25,11 +30,18 @@ from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
 )
+from app.services.infrastructure.config.source_uri import extension_configuration_uri
+from app.services.infrastructure.extension_host.configuration import (
+    ExtensionConfigurationFiles,
+)
 from app.services.infrastructure.extension_host.management import (
     NodeExtensionManagement,
 )
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
+)
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
@@ -72,6 +84,7 @@ class _HostSession:
         self._lock = asyncio.Lock()
         self._output: BinaryIO | None = None
         self.host: NodeExtensionHost | None = None
+        self.configuration: ExtensionConfigurationFiles | None = None
         self.closed = False
         self.stopping = asyncio.Event()
         self.transport_settled = asyncio.Event()
@@ -124,6 +137,8 @@ class NodeExtensionHostOwner:
         self._sessions: dict[str, _HostSession] = {}
         self._admission_closed = False
         self._management: NodeExtensionManagement | None = None
+        self._configuration_watch = WorkspaceFileWatchService(workspace_root=home / "state/backend/extension-management" / backend_id)
+        self._configuration_closed = True
 
     @property
     def active(self) -> tuple[NodeHostIdentity, ...]:
@@ -148,7 +163,15 @@ class NodeExtensionHostOwner:
 
     @property
     def drained(self) -> bool:
-        return not self._sessions and (self._management is None or self._management.drained)
+        return not self._sessions and self._configuration_closed and (self._management is None or self._management.drained)
+
+    def configuration_files(self, request: ExtensionConfigurationViewRequest, *, client_id: str) -> ExtensionConfigurationFiles:
+        session = self._sessions.get(request.generation)
+        if (self._admission_closed or session is None or session.closed or session.stopping.is_set()
+            or session.identity != NodeHostIdentity(request.gateway_id, request.backend_id, client_id,
+                request.view_id, tuple(request.workspace_ids), request.generation) or session.configuration is None):
+            raise ValueError("配置请求不属于当前已认证的宿主代际和明确工作区视图")
+        return session.configuration
 
     def describe(self, *, expected_backend_id: str | None, workspace_ids: tuple[str, ...]) -> NodeHostStatus:
         if expected_backend_id is not None and expected_backend_id != self.backend_id:
@@ -179,7 +202,11 @@ class NodeExtensionHostOwner:
         self._sessions.pop(session.identity.generation, None)
 
     async def _initialization(self, identity: NodeHostIdentity, directory: Path) -> ExtensionHostInitializationDTO:
-        environment = await self.management.environment()
+        native_environment = await self.management.environment()
+        environment = ExtensionHostEnvironmentDTO(**native_environment.model_dump(exclude={"settings_native_uri"}),
+            remote_settings=ExtensionHostConfigurationResourceDTO(native_uri=native_environment.settings_native_uri,
+                resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id, backend_id=identity.backend_id,
+                                                        profile_id=native_environment.profile_id)))
         folders = []
         for workspace_id in identity.workspace_ids:
             mount = self._mounts.resolve(workspace_id)
@@ -191,6 +218,12 @@ class NodeExtensionHostOwner:
         view = json.dumps([identity.gateway_id, identity.backend_id, identity.view_id, identity.workspace_ids], separators=(",", ":"))
         workspace = ExtensionHostWorkspaceDTO(id=str(uuid5(NAMESPACE_URL, view)),
             name=", ".join(folder.name for folder in folders), folders=folders)
+        if len(folders) > 1:
+            location = await self.management.prepare_configuration_view(workspace.id,
+                [{"native_uri": folder.native_uri, "name": folder.name} for folder in folders])
+            workspace = workspace.model_copy(update={"configuration": ExtensionHostConfigurationResourceDTO(
+                native_uri=location.native_uri, resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id,
+                    backend_id=identity.backend_id, workspace_id=workspace.id))})
         return ExtensionHostInitializationDTO(os="windows" if sys.platform == "win32" else "linux",
             parent_pid=os.getpid(), environment=environment, logs_location_uri=directory.as_uri(), workspace=workspace)
 
@@ -221,6 +254,9 @@ class NodeExtensionHostOwner:
         failure: BaseException | None = None
         try:
             initialization = await self._initialization(identity, directory)
+            self._configuration_closed = False
+            session.configuration = ExtensionConfigurationFiles(initialization, self.management,
+                self._configuration_watch, session.stopping)
             connection = await session.open(initialization)
             if self._admission_closed:
                 raise RuntimeError("Node 宿主启动期间 Backend 已撤销准入")
@@ -240,12 +276,20 @@ class NodeExtensionHostOwner:
         self.close_admission()
 
         async def close_all() -> None:
-            pending = [self._release(session) for session in tuple(self._sessions.values())]
+            sessions = tuple(self._sessions.values())
+            for session in sessions:
+                session.stopping.set()
+            results = await asyncio.gather(*(self._release(session) for session in sessions), return_exceptions=True)
+            pending = [self._close_configuration()]
             if self._management is not None:
                 pending.append(self._management.close())
-            results = await asyncio.gather(*pending, return_exceptions=True)
+            results.extend(await asyncio.gather(*pending, return_exceptions=True))
             errors = [result for result in results if isinstance(result, BaseException)]
             if errors:
                 raise BaseExceptionGroup("Backend Node 宿主关闭未完成，保留原进程与输出归属", errors)
 
         await run_cleanup_shielded(close_all)
+
+    async def _close_configuration(self) -> None:
+        await self._configuration_watch.shutdown()
+        self._configuration_closed = True

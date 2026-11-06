@@ -46,7 +46,9 @@ export interface WorkspaceFileLocation {
 
 // 原生路径只作为输入原样交给固定目标；URI 的完整解析归后端唯一 grammar。
 export function decodeFileTreePath(path: string): WorkspaceFileLocation {
-  return { path, scope: path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) ? "filesystem" : "workspace" };
+  const scope = path.startsWith("boxteam://workspace/") ? "workspace"
+    : path.startsWith("boxteam://gateway/") || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) ? "filesystem" : "workspace";
+  return { path, scope };
 }
 
 /**

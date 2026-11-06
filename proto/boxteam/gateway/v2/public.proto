@@ -1015,6 +1015,13 @@ message ExtensionHostEnvironmentDTO {
   string app_root_uri = 1;
   string global_storage_home_uri = 2;
   string workspace_storage_home_uri = 3;
+  string profile_id = 4;
+  ExtensionHostConfigurationResourceDTO remote_settings = 5;
+}
+
+message ExtensionHostConfigurationResourceDTO {
+  string native_uri = 1;
+  string resource_uri = 2;
 }
 
 message ExtensionHostFolderDTO {
@@ -1028,6 +1035,71 @@ message ExtensionHostWorkspaceDTO {
   string id = 1;
   string name = 2;
   repeated ExtensionHostFolderDTO folders = 3;
+  ExtensionHostConfigurationResourceDTO configuration = 4;
+}
+
+message ExtensionConfigurationViewRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string generation = 6;
+}
+
+message ExtensionConfigurationFileRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string generation = 6;
+  string resource_uri = 7;
+}
+
+message ExtensionConfigurationWriteOptions {
+  bool create = 1;
+  bool overwrite = 2;
+  bool unlock = 3;
+  bool atomic = 4;
+  bool append = 5;
+}
+
+message ExtensionConfigurationWriteRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string generation = 6;
+  string resource_uri = 7;
+  string content_base64 = 8;
+  ExtensionConfigurationWriteOptions options = 9;
+}
+
+message ExtensionConfigurationStatDTO {
+  string resource_uri = 1;
+  uint32 type = 2;
+  double ctime = 3;
+  double mtime = 4;
+  uint64 size = 5;
+  optional uint32 permissions = 6;
+}
+
+message ExtensionConfigurationReadDTO {
+  string resource_uri = 1;
+  string content_base64 = 2;
+}
+
+message ExtensionConfigurationChangeDTO {
+  string resource_uri = 1;
+  string kind = 2;
+}
+
+message ExtensionConfigurationEventDTO {
+  repeated ExtensionConfigurationChangeDTO changes = 1;
+  bool overflow = 2;
+  optional string error = 3;
 }
 
 message ExtensionHostInitializationDTO {

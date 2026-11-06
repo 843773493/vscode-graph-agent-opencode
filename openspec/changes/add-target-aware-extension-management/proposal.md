@@ -33,6 +33,7 @@
 - `configuration-domains`: 补明确选中来源文件的读取、无副作用预检与文件 CAS writer，保留原单工作区 SQLite 层物化及用户 source fan-out 语义。
 - `configuration-evolution`: 区分来源保存、层物化与 active／pending 生效，沿原候选、幂等提交及配置事件报告真实状态。
 - `remote-gateway-federation`: 登记默认拒绝且绑定认证主体的 configuration_read／configuration_write，覆盖实际披露与写入点，并与原生命周期权限分开。
+- `virtual-resource-addressing`: 为目标原 Code OSS profile settings 和稳定多根 workspace 文件登记两个具名 `config` URI 模板、精确文件／直接父级能力及认证宿主映射，不改变既有业务 ConfigSource 的单段逻辑名。
 
 现行 `mcp-connection-supervision`、`extension-connection-management` 和多工作区挂载的原业务状态机保持不变；私有输入引用、受管 launch binding 及安装／宿主管理合同仍须随对应实施切片按 task 1.6 补齐原 owner delta／schema／消费者。涉及原合同的其它变化须先明确规划，不借 UI 接入默改行为。
 

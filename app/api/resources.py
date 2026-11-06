@@ -102,7 +102,7 @@ def _navigation_errors() -> Iterator[None]:
         status = 404 if error.reason_code == "unknown_resource" else 403
         raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
     except ResourceFileOperationError as error:
-        raise HTTPException(400, detail=error.detail()) from error
+        raise HTTPException(404 if error.code == "file_not_found" else 400, detail=error.detail()) from error
     except (OSError, UnicodeError) as error:
         raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
 

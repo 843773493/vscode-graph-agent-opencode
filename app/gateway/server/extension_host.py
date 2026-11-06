@@ -77,19 +77,24 @@ def _access(websocket: WebSocket) -> tuple[GatewayAuthContext, UserAccessContext
         x_local_token=websocket.headers.get("x-local-token") or websocket.query_params.get("token"),
         x_boxteam_federation_token=websocket.headers.get("x-boxteam-federation-token"))
     require_federation_capability(websocket, auth, "extension_host_manage")
+    access = None if auth.kind == "federation" else _users(websocket).resolve_cookie(websocket.cookies.get(USER_ACCESS_COOKIE_NAME))
+    return auth, access, extension_client_identity(websocket, auth, access)
+
+
+def extension_client_identity(connection: HTTPConnection, auth: GatewayAuthContext,
+                              access: UserAccessContext | None) -> str:
+    """WS 和配置 HTTP 共用认证租约身份；公开 body 不接受客户端声明。"""
     if auth.kind == "federation":
-        client_id = websocket.headers.get(CLIENT_HEADER)
+        client_id = connection.headers.get(CLIENT_HEADER)
         if not client_id or len(client_id) > 256 or not client_id.isascii():
             raise HTTPException(400, "联邦宿主通道缺少原始客户端绑定")
         # 远端只能在本跳已认证 peer 的命名空间中声明客户端，不能覆盖原生会话。
-        return auth, None, f"peer:{auth.peer_gateway_id}:{client_id}"
-    service = _users(websocket)
-    access = service.resolve_cookie(websocket.cookies.get(USER_ACCESS_COOKIE_NAME))
+        return f"peer:{auth.peer_gateway_id}:{client_id}"
     if access is None:
         raise HTTPException(401, "user_session_required")
     # cookie 是访问凭据，只派生不含凭据正文的客户端身份；guest 同样沿既有租约。
     identity = f"{access.kind}:{access.user_id}:{access.access_session_id}:{access.lease_generation}"
-    return auth, access, hashlib.sha256(identity.encode()).hexdigest()
+    return hashlib.sha256(identity.encode()).hexdigest()
 
 
 def _users(websocket: HTTPConnection) -> UserAccessService:

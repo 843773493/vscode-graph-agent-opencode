@@ -154,9 +154,19 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
     local_data = await navigate(target, local, "read")
     same = await target.client.post("/api/v1/resources/navigation", json={"uri": explicit, "operation": "read"})
     assert same.status_code == 200 and same.json()["data"] == local_data
+    owner_missing = await source.client.post("/api/v1/resources/navigation", json={
+        "uri": uri("files", "root", "missing.txt"), "operation": "read",
+    })
+    assert owner_missing.status_code == 404, owner_missing.text
+    assert owner_missing.json()["detail"] == {
+        "owner": "resource_file_operations", "code": "file_not_found",
+        "reason": "not_found", "message": "目标文件不存在",
+    }
+    assert owner_missing.headers["X-Request-ID"] == owner_missing.json()["request_id"]
+    assert str(target.workspace) not in owner_missing.text
+
     missing_codes = []
     for address, code in (
-        (uri("files", "root", "missing.txt"), "target_not_resolvable"),
         (uri("files", "root", workspace_id=str(uuid4())), "target_not_resolvable"),
         (uri("files", "root", ".boxteam", "workspace-identity.json"), "target_not_resolvable"),
         (uri("files", "root", authority="gateway_unknown"), "federation-unknown-peer"),
@@ -167,7 +177,7 @@ async def test_navigation_uses_original_star_channels_and_fixed_owner(communicat
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         assert str(target.workspace) not in response.text
         missing_codes.append(response.json()["detail"])
-    assert missing_codes[0] == missing_codes[1] == missing_codes[2]
+    assert missing_codes[0] == missing_codes[1]
     assert _tracking_counts(target.workspace / ".boxteam") == before
     assert not case.requests()
     assert {(peer, direction) for peer, direction in source.channels()} == {(hub.gateway_id, "inbound")}

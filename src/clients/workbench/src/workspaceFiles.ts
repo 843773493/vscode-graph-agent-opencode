@@ -12,14 +12,18 @@ import type { EditorInput } from '../upstream/src/vs/workbench/common/editor/edi
 import type { IEditorGroup } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import type { IWorkingCopyBackupService } from '../upstream/src/vs/workbench/services/workingCopy/common/workingCopyBackup.js';
 import { newWriteableStream, ReadableStreamEvents } from '../upstream/src/vs/base/common/stream.js';
-import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability, IFileReadStreamOptions, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult } from '../upstream/src/vs/platform/files/common/files.js';
+import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability, IFileReadStreamOptions, IFileWriteOptions, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult, toFileSystemProviderErrorCode } from '../upstream/src/vs/platform/files/common/files.js';
 import type { WorkspaceFileContentDTO, WorkspaceFileReferencesDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { WorkspaceFileList } from '../../web/src/types/backend.js';
 import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
-import { getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
+import { getWorkspaceFileRoots, getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
+import { openWorkspaceFileIntentStore } from '../../web/src/state/workspaceFiles/intentStore.js';
+import { waitForWorkspaceFileOperation, WorkspaceFileIntentRejectedError } from '../../web/src/state/workspaceFiles/dispatcher.js';
 
 const scheme = 'boxteam-file';
 interface FileWatch {
@@ -75,7 +79,7 @@ export async function canonicalWorkspaceFileResources(resources: readonly URI[],
     group.indices.push(index); groups.set(key, group);
   });
   await Promise.all([...groups.values()].map(async ({ source, indices }) => {
-    const workspaceKey = await gateway.resolveWorkspace(source, signal);
+    const workspaceKey = gatewayWorkspaceKey(source);
     for (let offset = 0; offset < indices.length; offset += 100) {
       signal?.throwIfAborted();
       const batch = indices.slice(offset, offset + 100);
@@ -183,7 +187,8 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
 
   private async access<T>(resource: URI, action: (workspaceKey: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const source = workspaceFileSource(resource);
-    const workspaceKey = await gateway.resolveWorkspace(source, signal);
+    // 真实请求由 Gateway 按完整 owner 解析和授权，不在每次 I/O 前重复枚举登记表。
+    const workspaceKey = gatewayWorkspaceKey(source);
     signal?.throwIfAborted();
     try { return await action(workspaceKey); }
     catch (error) {
@@ -201,6 +206,67 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     const file = await this.request<WorkspaceFileContentDTO>(resource, `/api/v1/workspace/files/content?${query}`, options);
     if (file.path !== source.path || !/^[0-9a-f]{64}$/.test(file.revision)) throw new Error('文件响应的资源 URI 或 revision 不匹配');
     return file;
+  }
+  private async createEntry(resource: URI, kind: 'file' | 'directory'): Promise<void> {
+    const source = workspaceFileSource(resource);
+    const workspaceKey = gatewayWorkspaceKey(source);
+    const roots = await getWorkspaceFileRoots(0, workspaceKey);
+    const root = source.root;
+    const scope: 'workspace' | 'filesystem' | null = root === roots.workspace_uri ? 'workspace'
+      : root === roots.filesystem_uri ? 'filesystem' : null;
+    if (!scope) {
+      throw new Error('文件创建必须来自后端明确公布的工作区或文件系统 URI 根');
+    }
+    const parent = URI.from({ scheme: resource.scheme, authority: resource.authority,
+      path: resource.path.substring(0, resource.path.lastIndexOf('/')) });
+    const parentSource = workspaceFileSource(parent);
+    const directoryPath = parentSource.path;
+    const intentStore = await openWorkspaceFileIntentStore();
+    const intentScope = { gatewayId: source.gatewayId, workspaceId: source.workspaceId, workspaceRoot: roots.workspace_uri, actor: 'local' as const };
+    for (const previous of await intentStore.load(intentScope)) {
+      const previousReceipt = await waitForWorkspaceFileOperation(0, previous, intentStore);
+      await intentStore.remove(previous);
+      if (previousReceipt.state !== 'committed') throw new Error(`前序文件操作未提交: ${previousReceipt.error_detail ?? previousReceipt.state}`);
+    }
+    const query = new URLSearchParams({ path: directoryPath, scope });
+    const snapshot = await gateway.request<WorkspaceFileList>(`/api/v1/workspace/files?${query}`, {}, workspaceKey);
+    if (!snapshot.directory_key || snapshot.directory_key.path !== directoryPath || snapshot.directory_key.workspace_id !== source.workspaceId) {
+      throw new Error('创建目标目录响应缺少配对 URI、owner 与 revision');
+    }
+    const record = await intentStore.insert({
+      scope: intentScope,
+      directoryPath, directoryKey: snapshot.directory_key, directoryRevision: snapshot.directory_revision,
+      command: { kind: 'create', name: resource.path.slice(resource.path.lastIndexOf('/') + 1), entryKind: kind },
+    });
+    let conflict = false;
+    try {
+      const receipt = await waitForWorkspaceFileOperation(0, record, intentStore);
+      if (receipt.state !== 'committed') {
+        if (['rejected', 'cancelled', 'dependency_failed'].includes(receipt.state)) await intentStore.remove(record);
+        conflict = receipt.state === 'rejected' && receipt.error_code === 'file_operation_conflict'
+          && receipt.effect === 'none' && receipt.created_path === source.path;
+        throw new Error(`文件${kind === 'file' ? '创建' : '目录创建'}失败: ${receipt.error_detail ?? receipt.state}`);
+      }
+      if (receipt.created_path !== source.path) throw new Error('文件创建回执与原资源 URI 不一致，保留回执供核实');
+      await intentStore.remove(record);
+    } catch (error) {
+      if (error instanceof WorkspaceFileIntentRejectedError) {
+        await intentStore.remove(record);
+        conflict = error.errors[0] instanceof GatewayRequestError && error.errors[0].status === 409;
+      }
+      // 原 mkdirp 允许并发建立同一目录；只有已结清冲突且准确目标确为目录才沿原 FileExists 合同交还。
+      if (kind === 'directory' && conflict) {
+        let stat: IStat;
+        try { stat = await this.stat(resource); }
+        catch (statError) {
+          if (toFileSystemProviderErrorCode(statError) === FileSystemProviderErrorCode.FileNotFound) throw error;
+          throw new AggregateError([error, statError], '目录创建冲突后无法核实准确目标');
+        }
+        if (stat.type & FileType.Directory) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.FileExists);
+      }
+      throw error;
+    }
+    this.changes.fire([{ resource, type: FileChangeType.ADDED }]);
   }
   async stat(resource: URI): Promise<IStat> {
     const source = workspaceFileSource(resource);
@@ -245,9 +311,36 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     }).finally(() => cancellation.dispose());
     return stream;
   }
-  async writeFile(resource: URI, bytes: Uint8Array): Promise<void> {
-    const expectedRevision = this.revisions.get(this.key(resource));
-    if (!expectedRevision) throw new Error('保存前必须先读取后端文件，不能跳过 revision 校验');
+  async writeFile(resource: URI, bytes: Uint8Array, options: IFileWriteOptions): Promise<void> {
+    let expectedRevision = this.revisions.get(this.key(resource));
+    let existsBeforeWrite = expectedRevision !== undefined;
+    if (!expectedRevision || !options.overwrite) {
+      try { await this.stat(resource); existsBeforeWrite = true; }
+      catch (error) {
+        if (toFileSystemProviderErrorCode(error) !== FileSystemProviderErrorCode.FileNotFound) throw error;
+        existsBeforeWrite = false;
+        expectedRevision = undefined;
+      }
+    }
+    if (existsBeforeWrite && !options.overwrite) {
+      throw createFileSystemProviderError(`目标文件已存在: ${resource.toString()}`, FileSystemProviderErrorCode.FileExists);
+    }
+    if (!existsBeforeWrite && !options.create) {
+      throw createFileSystemProviderError(`目标文件不存在: ${resource.toString()}`, FileSystemProviderErrorCode.FileNotFound);
+    }
+    if (!expectedRevision) {
+      if (existsBeforeWrite) {
+        await this.readBytes(resource);
+        expectedRevision = this.revisions.get(this.key(resource));
+      } else {
+        await this.createEntry(resource, 'file');
+        // create 回执确认的是空文件；不能重读并把随后他人的正文当成本次保存基线。
+        expectedRevision = encodeHex(VSBuffer.wrap(sha256(new Uint8Array())));
+        this.revisions.set(this.key(resource), expectedRevision);
+        if (bytes.byteLength === 0) return;
+      }
+    }
+    if (!expectedRevision) throw new Error('保存前未能建立后端 revision');
     try {
       const file = await this.content(resource, { method: 'PUT', body: JSON.stringify({ content: new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected_revision: expectedRevision }) });
       this.revisions.set(this.key(resource), file.revision);
@@ -285,7 +378,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   /** 同一规范根只订阅一次原 watcher／SSE；通知不读正文或推进保存基线。 */
   private async watchRoot(source: ReturnType<typeof workspaceFileSource>, watch: FileWatch): Promise<void> {
     const signal = watch.controller.signal;
-    const workspaceKey = await gateway.resolveWorkspace(source, signal);
+    const workspaceKey = gatewayWorkspaceKey(source);
     if (signal.aborted) return;
     const invalidate = () => this.changes.fire([...watch.resources.values()].map(({ resource }) => ({ resource, type: FileChangeType.UPDATED })));
     let connected = false;
@@ -311,7 +404,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     if (!signal.aborted) throw new Error('文件监听流意外结束');
   }
   // 此 provider 读取原字节并沿原文本合同保存；目录管理复用会话文件树的 operation receipt 链路。
-  async mkdir(): Promise<void> { throw new Error('请在会话文件树中新建目录'); }
+  async mkdir(resource: URI): Promise<void> { await this.createEntry(resource, 'directory'); }
   async readdir(): Promise<[string, FileType][]> { throw createFileSystemProviderError('请在 Thread 的文件资源中浏览目录', FileSystemProviderErrorCode.FileNotADirectory); }
   async delete(): Promise<void> { throw new Error('文本资源不支持直接删除后端文件'); }
   async rename(): Promise<void> { throw new Error('文本资源不支持直接重命名后端文件'); }

@@ -17,6 +17,7 @@ from app.api.artifacts import router as artifacts_router
 from app.api.config import router as config_router
 from app.api.context import router as context_router
 from app.api.deps import get_workspace_container, workspace_container_scope
+from app.api.extension_configuration import router as extension_configuration_router
 from app.api.extension_host import router as extension_host_router
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
@@ -209,6 +210,7 @@ app.add_exception_handler(RequestValidationError, request_validation_error_respo
 
 
 app.include_router(extension_host_router)
+app.include_router(extension_configuration_router)
 app.include_router(runtime_logging_router(
     prefix="/api/v1/internal/runtime-logging", verify_token=verify_runtime_control_token,
 ))

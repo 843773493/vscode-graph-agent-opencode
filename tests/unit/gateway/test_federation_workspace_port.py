@@ -82,10 +82,9 @@ async def http_context(monkeypatch: pytest.MonkeyPatch):
     client = httpx.AsyncClient(transport=transport, trust_env=False)
     port = WorkspaceSessionMainPort(http_client=client)
     catalog = WorkspaceCatalogPort(http_client=client)
-    for owner in (port, catalog):
-        owner.project_workspaces(
-            (("gateway-route", "http://workspace.test", WORKSPACE_ID),)
-        )
+    routes = ((WORKSPACE_ID, "http://workspace.test"),)
+    port.project_workspaces(routes)
+    catalog.project_workspaces(routes)
     context = _HTTPContext(port, catalog)
     monkeypatch.setattr(
         "app.gateway.federation.workspace_port.load_proxy_gateway_id",
@@ -150,7 +149,6 @@ async def test_main_http_uses_backend_uuid_and_preserves_request_identity(
     assert request.extensions["timeout"] == {
         "connect": 5, "read": 5, "write": 5, "pool": 5,
     }
-    assert http_context.port.canonical_workspace_id("gateway-route") == WORKSPACE_ID
 
 
 @pytest.mark.parametrize(
@@ -243,8 +241,8 @@ async def test_main_http_pool_keeps_concurrent_identity_and_current_projection(
     async with httpx.AsyncClient(transport=httpx.MockTransport(response), trust_env=False) as client:
         port = WorkspaceSessionMainPort(http_client=client, request_timeout=3)
         port.project_workspaces((
-            ("route-one", "http://workspace-one.test", "workspace_one"),
-            ("route-two", "http://workspace-two.test", "workspace_two"),
+            ("workspace_one", "http://workspace-one.test"),
+            ("workspace_two", "http://workspace-two.test"),
         ))
 
         async def resolve(workspace_id: str, request_id: str, origin: str) -> str:
@@ -271,7 +269,7 @@ async def test_main_http_pool_keeps_concurrent_identity_and_current_projection(
         assert all(request.extensions["timeout"] == {
             "connect": 3, "read": 3, "write": 3, "pool": 3,
         } for request in requests)
-        port.project_workspaces((("route-one", "http://workspace-new.test", "workspace_one"),))
+        port.project_workspaces((("workspace_one", "http://workspace-new.test"),))
         assert await resolve("workspace_one", "req_pool_new", "gateway_new") == TARGET_THREAD
         assert requests[-1].url.host == "workspace-new.test"
         assert requests[-1].headers["X-Request-ID"] == "req_pool_new"

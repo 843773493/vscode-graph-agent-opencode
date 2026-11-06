@@ -633,3 +633,22 @@ async def test_navigation_policy_denial_and_missing_resource_are_indistinguishab
         assert response.status_code == 409
         details.append(response.json()["detail"])
     assert details[0] == details[1] == {"code": "target_not_resolvable", "message": "导航资源未共享或不存在", "detail": {}}
+
+
+async def test_navigation_preserves_only_explicit_owner_missing_as_not_found(navigation_proxy, navigation_relay: _NavigationRelay) -> None:
+    client, _, _ = navigation_proxy
+    uri = f"boxteam://{REMOTE_GATEWAY_ID}/workspace/{WORKSPACE_ID}/resources/files/root/.vscode/settings.json"
+    navigation_relay.error = FederationError(
+        "federation-target-owner-rejected", "目标文件不存在",
+        detail={"owner": "resource_file_operations", "code": "file_not_found", "reason": "not_found", "message": "目标文件不存在"},
+    )
+
+    missing = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"})
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["owner"] == "resource_file_operations"
+    assert missing.json()["detail"]["code"] == "file_not_found"
+
+    navigation_relay.error = FederationError("target_not_resolvable", "权限拒绝")
+    denied = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"})
+    assert denied.status_code == 409
+    assert denied.json()["detail"]["code"] == "target_not_resolvable"

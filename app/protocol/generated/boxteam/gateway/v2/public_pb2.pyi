@@ -1669,14 +1669,26 @@ class ExtensionHostConnectionDTO(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ..., initialization: _Optional[_Union[ExtensionHostInitializationDTO, _Mapping]] = ...) -> None: ...
 
 class ExtensionHostEnvironmentDTO(_message.Message):
-    __slots__ = ("app_root_uri", "global_storage_home_uri", "workspace_storage_home_uri")
+    __slots__ = ("app_root_uri", "global_storage_home_uri", "workspace_storage_home_uri", "profile_id", "remote_settings")
     APP_ROOT_URI_FIELD_NUMBER: _ClassVar[int]
     GLOBAL_STORAGE_HOME_URI_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_STORAGE_HOME_URI_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    REMOTE_SETTINGS_FIELD_NUMBER: _ClassVar[int]
     app_root_uri: str
     global_storage_home_uri: str
     workspace_storage_home_uri: str
-    def __init__(self, app_root_uri: _Optional[str] = ..., global_storage_home_uri: _Optional[str] = ..., workspace_storage_home_uri: _Optional[str] = ...) -> None: ...
+    profile_id: str
+    remote_settings: ExtensionHostConfigurationResourceDTO
+    def __init__(self, app_root_uri: _Optional[str] = ..., global_storage_home_uri: _Optional[str] = ..., workspace_storage_home_uri: _Optional[str] = ..., profile_id: _Optional[str] = ..., remote_settings: _Optional[_Union[ExtensionHostConfigurationResourceDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionHostConfigurationResourceDTO(_message.Message):
+    __slots__ = ("native_uri", "resource_uri")
+    NATIVE_URI_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    native_uri: str
+    resource_uri: str
+    def __init__(self, native_uri: _Optional[str] = ..., resource_uri: _Optional[str] = ...) -> None: ...
 
 class ExtensionHostFolderDTO(_message.Message):
     __slots__ = ("workspace_id", "resource_uri", "native_uri", "name")
@@ -1691,14 +1703,128 @@ class ExtensionHostFolderDTO(_message.Message):
     def __init__(self, workspace_id: _Optional[str] = ..., resource_uri: _Optional[str] = ..., native_uri: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
 
 class ExtensionHostWorkspaceDTO(_message.Message):
-    __slots__ = ("id", "name", "folders")
+    __slots__ = ("id", "name", "folders", "configuration")
     ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     FOLDERS_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_FIELD_NUMBER: _ClassVar[int]
     id: str
     name: str
     folders: _containers.RepeatedCompositeFieldContainer[ExtensionHostFolderDTO]
-    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., folders: _Optional[_Iterable[_Union[ExtensionHostFolderDTO, _Mapping]]] = ...) -> None: ...
+    configuration: ExtensionHostConfigurationResourceDTO
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., folders: _Optional[_Iterable[_Union[ExtensionHostFolderDTO, _Mapping]]] = ..., configuration: _Optional[_Union[ExtensionHostConfigurationResourceDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionConfigurationViewRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    generation: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ...) -> None: ...
+
+class ExtensionConfigurationFileRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "resource_uri")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    generation: str
+    resource_uri: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., resource_uri: _Optional[str] = ...) -> None: ...
+
+class ExtensionConfigurationWriteOptions(_message.Message):
+    __slots__ = ("create", "overwrite", "unlock", "atomic", "append")
+    CREATE_FIELD_NUMBER: _ClassVar[int]
+    OVERWRITE_FIELD_NUMBER: _ClassVar[int]
+    UNLOCK_FIELD_NUMBER: _ClassVar[int]
+    ATOMIC_FIELD_NUMBER: _ClassVar[int]
+    APPEND_FIELD_NUMBER: _ClassVar[int]
+    create: bool
+    overwrite: bool
+    unlock: bool
+    atomic: bool
+    append: bool
+    def __init__(self, create: _Optional[bool] = ..., overwrite: _Optional[bool] = ..., unlock: _Optional[bool] = ..., atomic: _Optional[bool] = ..., append: _Optional[bool] = ...) -> None: ...
+
+class ExtensionConfigurationWriteRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "resource_uri", "content_base64", "options")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_BASE64_FIELD_NUMBER: _ClassVar[int]
+    OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    generation: str
+    resource_uri: str
+    content_base64: str
+    options: ExtensionConfigurationWriteOptions
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., resource_uri: _Optional[str] = ..., content_base64: _Optional[str] = ..., options: _Optional[_Union[ExtensionConfigurationWriteOptions, _Mapping]] = ...) -> None: ...
+
+class ExtensionConfigurationStatDTO(_message.Message):
+    __slots__ = ("resource_uri", "type", "ctime", "mtime", "size", "permissions")
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    CTIME_FIELD_NUMBER: _ClassVar[int]
+    MTIME_FIELD_NUMBER: _ClassVar[int]
+    SIZE_FIELD_NUMBER: _ClassVar[int]
+    PERMISSIONS_FIELD_NUMBER: _ClassVar[int]
+    resource_uri: str
+    type: int
+    ctime: float
+    mtime: float
+    size: int
+    permissions: int
+    def __init__(self, resource_uri: _Optional[str] = ..., type: _Optional[int] = ..., ctime: _Optional[float] = ..., mtime: _Optional[float] = ..., size: _Optional[int] = ..., permissions: _Optional[int] = ...) -> None: ...
+
+class ExtensionConfigurationReadDTO(_message.Message):
+    __slots__ = ("resource_uri", "content_base64")
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_BASE64_FIELD_NUMBER: _ClassVar[int]
+    resource_uri: str
+    content_base64: str
+    def __init__(self, resource_uri: _Optional[str] = ..., content_base64: _Optional[str] = ...) -> None: ...
+
+class ExtensionConfigurationChangeDTO(_message.Message):
+    __slots__ = ("resource_uri", "kind")
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    resource_uri: str
+    kind: str
+    def __init__(self, resource_uri: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
+
+class ExtensionConfigurationEventDTO(_message.Message):
+    __slots__ = ("changes", "overflow", "error")
+    CHANGES_FIELD_NUMBER: _ClassVar[int]
+    OVERFLOW_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    changes: _containers.RepeatedCompositeFieldContainer[ExtensionConfigurationChangeDTO]
+    overflow: bool
+    error: str
+    def __init__(self, changes: _Optional[_Iterable[_Union[ExtensionConfigurationChangeDTO, _Mapping]]] = ..., overflow: _Optional[bool] = ..., error: _Optional[str] = ...) -> None: ...
 
 class ExtensionHostInitializationDTO(_message.Message):
     __slots__ = ("os", "parent_pid", "environment", "logs_location_uri", "workspace")

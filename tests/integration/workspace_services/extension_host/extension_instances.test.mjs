@@ -122,7 +122,8 @@ test('挂接原命令只进入原工作区 owner，持久文件重读保留完�
 
 test('原文件系统能力标记经真实 RPC 只投影scheme，未绑定真实文件仍拒绝', async () => {
   const binding = { initialization: { os: 'linux', logs_location_uri: 'file:///host/logs',
-    environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace' },
+    environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace', profile_id: 'profile-target',
+      remote_settings: { native_uri: 'file:///host/profile/settings.json', resource_uri: 'boxteam://gateway-a/gateway/gateway-a/resources/config/extension-host/backend-a/profiles/profile-target/settings' } },
     workspace: { folders: [] } } };
   const transformer = new m.TargetUriTransformer(binding, () => []);
   const toMain = new m.Emitter(), toHost = new m.Emitter(), registrations = new m.Emitter(), capabilities = new m.Emitter();
@@ -185,6 +186,35 @@ test('相同声明的相对资源不因同版本被错误共享，循环图只�
   expect(() => registry.deltaExtensions([root, root], [])).toThrow('Duplicate');
   registry.dispose();
   receipt.checks.push('相对资源 base 不等价拒绝、Backend B 的同名依赖不能打破 A 的循环、循环前重复校验');
+});
+
+test('相同设置声明在窗口只登记一次，schema及信任限制冲突仍拒绝', () => {
+  const a = extension(targetA, '1.0.0', { contributes: { configuration: { title: 'Shared', properties: {
+    'probe.setting': { type: 'string', scope: 'language-overridable', default: 'default' },
+  } } }, capabilities: { untrustedWorkspaces: { supported: true } } });
+  const b = { ...a, version: '2.0.0', installationTarget: targetB, extensionLocation: m.URI.file('/other/shared') };
+  const registry = new m.ExtensionDescriptionRegistry(reader, [a, b], true);
+  expect(registry.getAllExtensionDescriptions()).toEqual([b, a]);
+  expect(registry.getWindowExtensionDescriptions()).toEqual([b]);
+  const before = registry.getSnapshot();
+  const changed = { ...b, contributes: { configuration: { title: 'Shared', properties: {
+    'probe.setting': { type: 'string', scope: 'machine', default: 'changed' },
+  } } } };
+  expect(() => registry.deltaExtensions([changed], [b])).toThrow('Conflicting');
+  expect(registry.getSnapshot()).toEqual(before);
+  expect(() => registry.deltaExtensions([{ ...b, capabilities: { untrustedWorkspaces: {
+    supported: 'limited', restrictedConfigurations: ['probe.setting'],
+  } } }], [b])).toThrow('Conflicting');
+  expect(registry.getSnapshot()).toEqual(before);
+  expect(() => registry.deltaExtensions([{ ...b, extensionLocation: a.extensionLocation,
+    capabilities: { untrustedWorkspaces: { supported: false } },
+  }], [b])).toThrow('Conflicting');
+  expect(() => registry.deltaExtensions([{ ...b, extensionLocation: a.extensionLocation,
+    enabledApiProposals: ['configurationDefaults'],
+  }], [b])).toThrow('Conflicting');
+  expect(registry.getSnapshot()).toEqual(before);
+  registry.dispose();
+  receipt.checks.push('原窗口相同configuration声明共享一次，schema／scope／默认值及信任限制冲突仍候选原子拒绝');
 });
 
 function tracker(registry) {
@@ -288,7 +318,8 @@ test('原文档状态计算器初始与增量只暴露所属视图，外部焦�
   const modelService = { getModels: () => models, getModel: uri => models.find(item => item.uri.toString() === uri.toString()), onModelAdded: added.event, onModelRemoved: removed.event };
   const editorService = { activeTextEditorControl: editors[1], onDidActiveEditorChange: active.event, onDidVisibleEditorsChange: m.Event.None }, deltas = [];
   const binding = { gateway_id: targetA.gatewayId, backend_id: targetA.backendId, initialization: { os: 'linux', logs_location_uri: 'file:///host/logs',
-    environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace' },
+    environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace', profile_id: 'profile-target',
+      remote_settings: { native_uri: 'file:///host/profile/settings.json', resource_uri: 'boxteam://gateway-a/gateway/gateway-a/resources/config/extension-host/backend-a/profiles/profile-target/settings' } },
     workspace: { folders: [{ workspace_id: 'a1', name: 'A1', resource_uri: 'root', native_uri: 'file:///work/a' }] } } };
   const host = { runningLocation: new m.RemoteRunningLocation(targetA, 'default', ['a1']), binding, uriTransformer: new m.TargetUriTransformer(binding, () => []) };
   const computer = new m.MainThreadDocumentAndEditorStateComputer(delta => deltas.push(delta), uri => m.hostOwnsWorkspaceResource(host, uri), modelService,
@@ -356,7 +387,8 @@ test('原 CommandsRegistry 单入口按编辑器／原host冻结调用，dispose
     extensions: new m.ExtensionHostExtensions(1, [extension], [extension.identifier]),
   }));
   let live = [...hosts], picks = 0;
-  const service = { getExtensionHosts: () => live, whenInstalledExtensionsRegistered: async () => true }, calls = [];
+  const service = { getExtensionHosts: () => live, getHostExtensions: host => host.extensions.allExtensions,
+    whenInstalledExtensionsRegistered: async () => true }, calls = [];
   const registrations = hosts.map((host, index) => m.registerTargetCommand(service, host, 'probe.shared', async () => { calls.push(index); return index; }));
   const picker = { pick: async values => { picks++; return values[1]; } };
   const resource = m.workspaceFileUri({ gatewayId: targetB.gatewayId, workspaceId: 'b1' }, 'root', 'root');
@@ -376,12 +408,36 @@ test('原 CommandsRegistry 单入口按编辑器／原host冻结调用，dispose
   expect(m.CommandsRegistry.getCommand('probe.shared')).toBeUndefined(); receipt.checks.push('单窗口原命令入口、发起目标冻结、无上下文明确选择、来源撤销及旧代际拒绝');
 });
 
+test('首次命令在宿主尚未绑定时从原 Registry 与 Tracker 选择目标', async () => {
+  const a = extension(targetA), b = extension(targetB, '2.0.0');
+  const registry = new m.ExtensionDescriptionRegistry(reader, [a, b], true), running = tracker(registry);
+  running.setRemoteViews([targetA, targetB].map((installationTarget, index) => ({ installationTarget,
+    viewId: 'default', workspaceIds: [index ? 'b1' : 'a1'] })));
+  running.initializeRunningLocation([], [a, b]);
+  let live = running.remoteRunningLocations.map(runningLocation => ({ runningLocation, extensions: null })), picks = 0;
+  const hosts = [...live];
+  const service = { getExtensionHosts: () => live, whenInstalledExtensionsRegistered: async () => true,
+    getHostExtensions: host => live.includes(host) ? running.filterByRunningLocation(registry.getAllExtensionDescriptions(), host.runningLocation) : [] };
+  try {
+    const picked = await m.captureCommandHost(service, 'probe.shared', () => undefined, () => ({ pick: async values => {
+      picks++; expect(values.map(value => value.host)).toEqual(hosts); return values[1];
+    } }));
+    expect(picked).toBe(hosts[1]); expect(picks).toBe(1);
+    const resource = m.workspaceFileUri({ gatewayId: targetA.gatewayId, workspaceId: 'a1' }, 'root', 'root');
+    expect(await m.captureCommandHost(service, 'probe.shared', () => resource, () => { throw new Error('已有资源目标不应弹选择'); })).toBe(hosts[0]);
+    await expect(m.captureCommandHost(service, 'probe.shared', () => undefined, () => ({ pick: async values => {
+      live = []; return values[0];
+    } }))).rejects.toThrow('关闭');
+  } finally { registry.dispose(); }
+  receipt.checks.push('首次命令在绑定前使用原registry运行位置，明确选择／编辑器目标及等待中代际撤销');
+});
+
 test('原 CommandService 经真实 DI 构造不提前依赖 QuickInput 或 Editor，启动内置命令可执行', async () => {
   let pickerCreations = 0, editorCreations = 0;
   class QuickInput { constructor(commandService) { this.commands = commandService; pickerCreations++; } }
   class Editor { constructor(commandService) { this.commands = commandService; editorCreations++; } }
   m.ICommandService(QuickInput, undefined, 0); m.ICommandService(Editor, undefined, 0);
-  const extensions = { getExtensionHosts: () => [], whenInstalledExtensionsRegistered: async () => true,
+  const extensions = { getExtensionHosts: () => [], getHostExtensions: () => [], whenInstalledExtensionsRegistered: async () => true,
     activationEventIsDone: () => true, activateByEvent: async () => {} };
   const services = new m.ServiceCollection([m.ICommandService, new m.SyncDescriptor(m.CommandService)],
     [m.IQuickInputService, new m.SyncDescriptor(QuickInput)], [m.IEditorService, new m.SyncDescriptor(Editor)],
@@ -399,7 +455,8 @@ test('原 CommandService 经真实 DI 构造不提前依赖 QuickInput 或 Edito
 
 test('typed URI 沿认证根往返，嵌套根最长匹配，未知文件与同路径多身份明确拒绝', () => {
   const binding = { gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['a1'], initialization: { os: 'linux', logs_location_uri: 'file:///host/logs',
-    environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace' },
+    environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace', profile_id: 'profile-target',
+      remote_settings: { native_uri: 'file:///host/profile/settings.json', resource_uri: 'boxteam://gateway-a/gateway/gateway-a/resources/config/extension-host/backend-a/profiles/profile-target/settings' } },
     workspace: { folders: [{ workspace_id: 'a1', name: 'A1', resource_uri: 'boxteam://gateway-a/workspace/a1/files/root', native_uri: 'file:///work/a' }] } } };
   const transformer = new m.TargetUriTransformer(binding, () => [extension(targetA)]);
   const projected = m.URI.revive(transformer.transformIncoming(m.URI.file('/work/a/src/file.ts').toJSON()));
@@ -426,7 +483,8 @@ test('typed URI 沿认证根往返，嵌套根最长匹配，未知文件与同�
 test('typed URI 使用目标 Windows 盘符、目录及 UNC 大小写语义，逻辑身份和 Linux 路径保持严格', () => {
   const binding = { gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['DriveView', 'ShareView'], initialization: {
     os: 'windows', logs_location_uri: 'file:///C:/Host/Logs',
-    environment: { app_root_uri: 'file:///C:/Host/App', global_storage_home_uri: 'file:///C:/Host/Global', workspace_storage_home_uri: 'file:///C:/Host/Workspace' },
+    environment: { app_root_uri: 'file:///C:/Host/App', global_storage_home_uri: 'file:///C:/Host/Global', workspace_storage_home_uri: 'file:///C:/Host/Workspace', profile_id: 'profile-target',
+      remote_settings: { native_uri: 'file:///C:/Host/Profile/settings.json', resource_uri: 'boxteam://gateway-a/gateway/gateway-a/resources/config/extension-host/backend-a/profiles/profile-target/settings' } },
     workspace: { folders: [
       { workspace_id: 'DriveView', name: 'Drive', resource_uri: 'boxteam://workspace/DriveView/resources/files/root', native_uri: 'file:///C:/Work/Project' },
       { workspace_id: 'ShareView', name: 'Share', resource_uri: 'boxteam://workspace/ShareView/resources/files/root', native_uri: 'file://BuildServer/Share/Project' },
@@ -448,6 +506,21 @@ test('typed URI 使用目标 Windows 盘符、目录及 UNC 大小写语义，�
     'file://OtherServer/Share/Project/file.ts', 'file://BuildServer/OtherShare/Project/file.ts', 'file:///C:/Work/Project/../../outside.ts']) {
     expect(() => transformer.transformIncoming(m.URI.parse(value).toJSON())).toThrow('超出');
   }
+  binding.initialization.workspace.configuration = {
+    native_uri: 'file:///C:/Host/View/workspace.code-workspace',
+    resource_uri: 'boxteam://gateway-a/gateway/gateway-a/resources/config/extension-host/backend-a/views/view-a/workspace',
+  };
+  const configured = new m.TargetUriTransformer(binding, () => []);
+  const configuration = m.URI.parse(binding.initialization.workspace.configuration.resource_uri);
+  const stored = [{ path: '../../Work/Project', name: 'Custom Drive' }, { path: '\\\\buildserver\\share\\project', name: 'Custom Share' }];
+  const folders = configured.workspaceFolders(stored, configuration);
+  expect(folders.map(folder => folder.uri.toString())).toEqual(configured.folders.map(folder => folder.uri.toString()));
+  expect(folders.map(folder => folder.name)).toEqual(['Custom Drive', 'Custom Share']);
+  expect(folders[0].raw).toEqual(stored[0]);
+  expect(() => configured.workspaceFolders([...stored].reverse(), configuration)).toThrow('重新挂接');
+  expect(() => configured.workspaceFolders([{ path: 'D:\\Other' }, stored[1]], configuration)).toThrow('重新挂接');
+  expect(configured.transformOutgoingURI(configuration).toString()).toBe(m.URI.parse(binding.initialization.workspace.configuration.native_uri).toString());
+  expect(m.URI.revive(configured.transformIncoming(m.URI.parse(binding.initialization.workspace.configuration.native_uri))).toString()).toBe(configuration.toString());
   const linux = new m.TargetUriTransformer({ ...binding, initialization: { ...binding.initialization, os: 'linux',
     workspace: { folders: [{ ...binding.initialization.workspace.folders[0], native_uri: 'file:///Work/Project' }] } } }, () => []);
   const linuxFile = m.URI.parse('file:///Work/Project/Src/Case.ts');
@@ -455,6 +528,7 @@ test('typed URI 使用目标 Windows 盘符、目录及 UNC 大小写语义，�
   expect(m.URI.revive(linux.transformOutgoing(projected)).toString()).toBe(linuxFile.toString());
   expect(() => linux.transformIncoming(m.URI.parse('file:///work/project/Src/Case.ts').toJSON())).toThrow('超出');
   receipt.checks.push('实际运行面' + process.platform + '：Windows盘符/目录及UNC大小写匹配并保留子路径，宿主目录同语义；跨驱动器/共享/越界拒绝，逻辑身份和Linux大小写严格');
+  receipt.checks.push('原toWorkspaceFolders在目标Windows语义下解析相对盘符/UNC，保留raw及名称；视图根重排/替换拒绝，配置typed URI往返');
 });
 
 afterAll(async () => {

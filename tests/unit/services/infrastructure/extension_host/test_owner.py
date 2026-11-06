@@ -15,11 +15,13 @@ import pytest
 
 from app.core.exceptions import ForbiddenError
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
-from app.schemas.gateway.extension_host import ExtensionHostEnvironmentDTO
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallRequest,
 )
+from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.management import (
+    NativeConfigurationLocation,
+    NativeManagementEnvironment,
     NodeExtensionManagement,
 )
 from app.services.infrastructure.extension_host.owner import (
@@ -39,6 +41,7 @@ class Case:
     started: asyncio.Event = field(default_factory=asyncio.Event)
     hosts: list[NodeExtensionHost] = field(default_factory=list)
     close_failures: list[OSError] = field(default_factory=list)
+    configuration_views: list[tuple[str, list[dict[str, str]]]] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -72,12 +75,19 @@ async def case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
             await host.child.close()
 
     monkeypatch.setattr(NodeExtensionHost, "connect", connect)
-    async def environment(_management: NodeExtensionManagement) -> ExtensionHostEnvironmentDTO:
-        return ExtensionHostEnvironmentDTO(app_root_uri=tmp_path.as_uri(),
+    async def environment(_management: NodeExtensionManagement) -> NativeManagementEnvironment:
+        return NativeManagementEnvironment(app_root_uri=tmp_path.as_uri(),
             global_storage_home_uri=(tmp_path / "profile/globalStorage").as_uri(),
-            workspace_storage_home_uri=(tmp_path / "profile/workspaceStorage").as_uri())
+            workspace_storage_home_uri=(tmp_path / "profile/workspaceStorage").as_uri(), profile_id="test-profile",
+            settings_native_uri=(tmp_path / "profile/settings.json").as_uri())
+
+    async def prepare_configuration_view(_management: NodeExtensionManagement, workspace_id: str,
+                                         folders: list[dict[str, str]]) -> NativeConfigurationLocation:
+        result.configuration_views.append((workspace_id, folders))
+        return NativeConfigurationLocation(native_uri=(tmp_path / "views" / workspace_id / "workspace.code-workspace").as_uri())
 
     monkeypatch.setattr(NodeExtensionManagement, "environment", environment)
+    monkeypatch.setattr(NodeExtensionManagement, "prepare_configuration_view", prepare_configuration_view)
     # 测试的是owner的身份及生命周期；平台IPC由真实进程集成验证。
     monkeypatch.setattr(sys, "platform", "linux")
     try:
@@ -116,9 +126,18 @@ async def test_views_preserve_client_identity_and_independent_generations(case: 
             case.owner._mounts.resolve(workspace_id).workspace_root.as_uri() for workspace_id in case.workspace_ids]
         assert [folder.resource_uri for folder in first_view.workspace.folders] == [
             f"boxteam://workspace/{workspace_id}/resources/files/root" for workspace_id in case.workspace_ids]
+        assert first_view.environment.profile_id == "test-profile"
+        assert first_view.environment.remote_settings.resource_uri == extension_configuration_uri(
+            gateway_id="gateway_" + "a" * 32, backend_id=case.owner.backend_id, profile_id="test-profile")
+        assert first_view.workspace.configuration is not None
+        assert first_view.workspace.configuration.resource_uri == extension_configuration_uri(
+            gateway_id="gateway_" + "a" * 32, backend_id=case.owner.backend_id, workspace_id=first_view.workspace.id)
+        assert case.configuration_views == [(first_view.workspace.id, [
+            {"native_uri": folder.native_uri, "name": folder.name} for folder in first_view.workspace.folders])]
         async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="two", view_id="same", workspace_ids=case.workspace_ids[::-1]) as second:
             assert second.initialization.workspace.id != first_view.workspace.id
+            assert second.initialization.workspace.configuration != first_view.workspace.configuration
             assert second.initialization.environment == first_view.environment
             assert second.initialization.logs_location_uri != first_view.logs_location_uri
             assert first.identity.workspace_ids == case.workspace_ids
@@ -137,8 +156,18 @@ async def test_views_preserve_client_identity_and_independent_generations(case: 
         assert restarted.identity.generation != first.identity.generation
         assert restarted.initialization.workspace.id == first_view.workspace.id
         assert restarted.initialization.workspace.folders == first_view.workspace.folders
+        assert restarted.initialization.workspace.configuration == first_view.workspace.configuration
         assert restarted.initialization.logs_location_uri != first_view.logs_location_uri
     assert len(case.hosts) == 3
+
+
+async def test_single_root_keeps_profile_without_materializing_workspace_configuration(case: Case) -> None:
+    async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
+            client_id="single-root", view_id="single", workspace_ids=case.workspace_ids[:1]) as connection:
+        assert connection.initialization.workspace.configuration is None
+        assert connection.initialization.environment.remote_settings.resource_uri == extension_configuration_uri(
+            gateway_id="gateway_" + "a" * 32, backend_id=case.owner.backend_id, profile_id="test-profile")
+        assert case.configuration_views == []
 
 
 async def test_vsix_install_keeps_private_file_protection_before_management_start(case: Case) -> None:

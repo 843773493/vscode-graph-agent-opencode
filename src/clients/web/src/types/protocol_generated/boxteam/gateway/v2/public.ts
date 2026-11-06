@@ -1002,6 +1002,13 @@ export interface ExtensionHostEnvironmentDTO {
   app_root_uri: string;
   global_storage_home_uri: string;
   workspace_storage_home_uri: string;
+  profile_id: string;
+  remote_settings: ExtensionHostConfigurationResourceDTO | undefined;
+}
+
+export interface ExtensionHostConfigurationResourceDTO {
+  native_uri: string;
+  resource_uri: string;
 }
 
 export interface ExtensionHostFolderDTO {
@@ -1015,6 +1022,71 @@ export interface ExtensionHostWorkspaceDTO {
   id: string;
   name: string;
   folders: ExtensionHostFolderDTO[];
+  configuration: ExtensionHostConfigurationResourceDTO | undefined;
+}
+
+export interface ExtensionConfigurationViewRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  generation: string;
+}
+
+export interface ExtensionConfigurationFileRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  generation: string;
+  resource_uri: string;
+}
+
+export interface ExtensionConfigurationWriteOptions {
+  create: boolean;
+  overwrite: boolean;
+  unlock: boolean;
+  atomic: boolean;
+  append: boolean;
+}
+
+export interface ExtensionConfigurationWriteRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  generation: string;
+  resource_uri: string;
+  content_base64: string;
+  options: ExtensionConfigurationWriteOptions | undefined;
+}
+
+export interface ExtensionConfigurationStatDTO {
+  resource_uri: string;
+  type: number;
+  ctime: number;
+  mtime: number;
+  size: number;
+  permissions?: number | undefined;
+}
+
+export interface ExtensionConfigurationReadDTO {
+  resource_uri: string;
+  content_base64: string;
+}
+
+export interface ExtensionConfigurationChangeDTO {
+  resource_uri: string;
+  kind: string;
+}
+
+export interface ExtensionConfigurationEventDTO {
+  changes: ExtensionConfigurationChangeDTO[];
+  overflow: boolean;
+  error?: string | undefined;
 }
 
 export interface ExtensionHostInitializationDTO {
@@ -7751,7 +7823,13 @@ export const ExtensionHostConnectionDTO: MessageFns<ExtensionHostConnectionDTO> 
 };
 
 function createBaseExtensionHostEnvironmentDTO(): ExtensionHostEnvironmentDTO {
-  return { app_root_uri: "", global_storage_home_uri: "", workspace_storage_home_uri: "" };
+  return {
+    app_root_uri: "",
+    global_storage_home_uri: "",
+    workspace_storage_home_uri: "",
+    profile_id: "",
+    remote_settings: undefined,
+  };
 }
 
 export const ExtensionHostEnvironmentDTO: MessageFns<ExtensionHostEnvironmentDTO> = {
@@ -7764,6 +7842,10 @@ export const ExtensionHostEnvironmentDTO: MessageFns<ExtensionHostEnvironmentDTO
       workspace_storage_home_uri: isSet(object.workspace_storage_home_uri)
         ? globalThis.String(object.workspace_storage_home_uri)
         : "",
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      remote_settings: isSet(object.remote_settings)
+        ? ExtensionHostConfigurationResourceDTO.fromJSON(object.remote_settings)
+        : undefined,
     };
   },
 
@@ -7778,6 +7860,12 @@ export const ExtensionHostEnvironmentDTO: MessageFns<ExtensionHostEnvironmentDTO
     if (message.workspace_storage_home_uri !== "") {
       obj.workspace_storage_home_uri = message.workspace_storage_home_uri;
     }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.remote_settings !== undefined) {
+      obj.remote_settings = ExtensionHostConfigurationResourceDTO.toJSON(message.remote_settings);
+    }
     return obj;
   },
 
@@ -7789,6 +7877,48 @@ export const ExtensionHostEnvironmentDTO: MessageFns<ExtensionHostEnvironmentDTO
     message.app_root_uri = object.app_root_uri ?? "";
     message.global_storage_home_uri = object.global_storage_home_uri ?? "";
     message.workspace_storage_home_uri = object.workspace_storage_home_uri ?? "";
+    message.profile_id = object.profile_id ?? "";
+    message.remote_settings = (object.remote_settings !== undefined && object.remote_settings !== null)
+      ? ExtensionHostConfigurationResourceDTO.fromPartial(object.remote_settings)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionHostConfigurationResourceDTO(): ExtensionHostConfigurationResourceDTO {
+  return { native_uri: "", resource_uri: "" };
+}
+
+export const ExtensionHostConfigurationResourceDTO: MessageFns<ExtensionHostConfigurationResourceDTO> = {
+  fromJSON(object: any): ExtensionHostConfigurationResourceDTO {
+    return {
+      native_uri: isSet(object.native_uri) ? globalThis.String(object.native_uri) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+    };
+  },
+
+  toJSON(message: ExtensionHostConfigurationResourceDTO): unknown {
+    const obj: any = {};
+    if (message.native_uri !== "") {
+      obj.native_uri = message.native_uri;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionHostConfigurationResourceDTO>, I>>(
+    base?: I,
+  ): ExtensionHostConfigurationResourceDTO {
+    return ExtensionHostConfigurationResourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionHostConfigurationResourceDTO>, I>>(
+    object: I,
+  ): ExtensionHostConfigurationResourceDTO {
+    const message = createBaseExtensionHostConfigurationResourceDTO();
+    message.native_uri = object.native_uri ?? "";
+    message.resource_uri = object.resource_uri ?? "";
     return message;
   },
 };
@@ -7838,7 +7968,7 @@ export const ExtensionHostFolderDTO: MessageFns<ExtensionHostFolderDTO> = {
 };
 
 function createBaseExtensionHostWorkspaceDTO(): ExtensionHostWorkspaceDTO {
-  return { id: "", name: "", folders: [] };
+  return { id: "", name: "", folders: [], configuration: undefined };
 }
 
 export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = {
@@ -7849,6 +7979,9 @@ export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = 
       folders: globalThis.Array.isArray(object?.folders)
         ? object.folders.map((e: any) => ExtensionHostFolderDTO.fromJSON(e))
         : [],
+      configuration: isSet(object.configuration)
+        ? ExtensionHostConfigurationResourceDTO.fromJSON(object.configuration)
+        : undefined,
     };
   },
 
@@ -7863,6 +7996,9 @@ export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = 
     if (message.folders?.length) {
       obj.folders = message.folders.map((e) => ExtensionHostFolderDTO.toJSON(e));
     }
+    if (message.configuration !== undefined) {
+      obj.configuration = ExtensionHostConfigurationResourceDTO.toJSON(message.configuration);
+    }
     return obj;
   },
 
@@ -7874,6 +8010,453 @@ export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = 
     message.id = object.id ?? "";
     message.name = object.name ?? "";
     message.folders = object.folders?.map((e) => ExtensionHostFolderDTO.fromPartial(e)) || [];
+    message.configuration = (object.configuration !== undefined && object.configuration !== null)
+      ? ExtensionHostConfigurationResourceDTO.fromPartial(object.configuration)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationViewRequest(): ExtensionConfigurationViewRequest {
+  return { protocol_version: 0, gateway_id: "", backend_id: "", view_id: "", workspace_ids: [], generation: "" };
+}
+
+export const ExtensionConfigurationViewRequest: MessageFns<ExtensionConfigurationViewRequest> = {
+  fromJSON(object: any): ExtensionConfigurationViewRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationViewRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationViewRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationViewRequest {
+    return ExtensionConfigurationViewRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationViewRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationViewRequest {
+    const message = createBaseExtensionConfigurationViewRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.generation = object.generation ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationFileRequest(): ExtensionConfigurationFileRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    generation: "",
+    resource_uri: "",
+  };
+}
+
+export const ExtensionConfigurationFileRequest: MessageFns<ExtensionConfigurationFileRequest> = {
+  fromJSON(object: any): ExtensionConfigurationFileRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationFileRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationFileRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationFileRequest {
+    return ExtensionConfigurationFileRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationFileRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationFileRequest {
+    const message = createBaseExtensionConfigurationFileRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.generation = object.generation ?? "";
+    message.resource_uri = object.resource_uri ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationWriteOptions(): ExtensionConfigurationWriteOptions {
+  return { create: false, overwrite: false, unlock: false, atomic: false, append: false };
+}
+
+export const ExtensionConfigurationWriteOptions: MessageFns<ExtensionConfigurationWriteOptions> = {
+  fromJSON(object: any): ExtensionConfigurationWriteOptions {
+    return {
+      create: isSet(object.create) ? globalThis.Boolean(object.create) : false,
+      overwrite: isSet(object.overwrite) ? globalThis.Boolean(object.overwrite) : false,
+      unlock: isSet(object.unlock) ? globalThis.Boolean(object.unlock) : false,
+      atomic: isSet(object.atomic) ? globalThis.Boolean(object.atomic) : false,
+      append: isSet(object.append) ? globalThis.Boolean(object.append) : false,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationWriteOptions): unknown {
+    const obj: any = {};
+    if (message.create !== false) {
+      obj.create = message.create;
+    }
+    if (message.overwrite !== false) {
+      obj.overwrite = message.overwrite;
+    }
+    if (message.unlock !== false) {
+      obj.unlock = message.unlock;
+    }
+    if (message.atomic !== false) {
+      obj.atomic = message.atomic;
+    }
+    if (message.append !== false) {
+      obj.append = message.append;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationWriteOptions>, I>>(
+    base?: I,
+  ): ExtensionConfigurationWriteOptions {
+    return ExtensionConfigurationWriteOptions.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationWriteOptions>, I>>(
+    object: I,
+  ): ExtensionConfigurationWriteOptions {
+    const message = createBaseExtensionConfigurationWriteOptions();
+    message.create = object.create ?? false;
+    message.overwrite = object.overwrite ?? false;
+    message.unlock = object.unlock ?? false;
+    message.atomic = object.atomic ?? false;
+    message.append = object.append ?? false;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationWriteRequest(): ExtensionConfigurationWriteRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    generation: "",
+    resource_uri: "",
+    content_base64: "",
+    options: undefined,
+  };
+}
+
+export const ExtensionConfigurationWriteRequest: MessageFns<ExtensionConfigurationWriteRequest> = {
+  fromJSON(object: any): ExtensionConfigurationWriteRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      content_base64: isSet(object.content_base64) ? globalThis.String(object.content_base64) : "",
+      options: isSet(object.options) ? ExtensionConfigurationWriteOptions.fromJSON(object.options) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationWriteRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.content_base64 !== "") {
+      obj.content_base64 = message.content_base64;
+    }
+    if (message.options !== undefined) {
+      obj.options = ExtensionConfigurationWriteOptions.toJSON(message.options);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationWriteRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationWriteRequest {
+    return ExtensionConfigurationWriteRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationWriteRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationWriteRequest {
+    const message = createBaseExtensionConfigurationWriteRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.generation = object.generation ?? "";
+    message.resource_uri = object.resource_uri ?? "";
+    message.content_base64 = object.content_base64 ?? "";
+    message.options = (object.options !== undefined && object.options !== null)
+      ? ExtensionConfigurationWriteOptions.fromPartial(object.options)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationStatDTO(): ExtensionConfigurationStatDTO {
+  return { resource_uri: "", type: 0, ctime: 0, mtime: 0, size: 0, permissions: undefined };
+}
+
+export const ExtensionConfigurationStatDTO: MessageFns<ExtensionConfigurationStatDTO> = {
+  fromJSON(object: any): ExtensionConfigurationStatDTO {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      type: isSet(object.type) ? globalThis.Number(object.type) : 0,
+      ctime: isSet(object.ctime) ? globalThis.Number(object.ctime) : 0,
+      mtime: isSet(object.mtime) ? globalThis.Number(object.mtime) : 0,
+      size: isSet(object.size) ? globalThis.Number(object.size) : 0,
+      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationStatDTO): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.type !== 0) {
+      obj.type = Math.round(message.type);
+    }
+    if (message.ctime !== 0) {
+      obj.ctime = message.ctime;
+    }
+    if (message.mtime !== 0) {
+      obj.mtime = message.mtime;
+    }
+    if (message.size !== 0) {
+      obj.size = Math.round(message.size);
+    }
+    if (message.permissions !== undefined) {
+      obj.permissions = Math.round(message.permissions);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationStatDTO>, I>>(base?: I): ExtensionConfigurationStatDTO {
+    return ExtensionConfigurationStatDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationStatDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationStatDTO {
+    const message = createBaseExtensionConfigurationStatDTO();
+    message.resource_uri = object.resource_uri ?? "";
+    message.type = object.type ?? 0;
+    message.ctime = object.ctime ?? 0;
+    message.mtime = object.mtime ?? 0;
+    message.size = object.size ?? 0;
+    message.permissions = object.permissions ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationReadDTO(): ExtensionConfigurationReadDTO {
+  return { resource_uri: "", content_base64: "" };
+}
+
+export const ExtensionConfigurationReadDTO: MessageFns<ExtensionConfigurationReadDTO> = {
+  fromJSON(object: any): ExtensionConfigurationReadDTO {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      content_base64: isSet(object.content_base64) ? globalThis.String(object.content_base64) : "",
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationReadDTO): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.content_base64 !== "") {
+      obj.content_base64 = message.content_base64;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationReadDTO>, I>>(base?: I): ExtensionConfigurationReadDTO {
+    return ExtensionConfigurationReadDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationReadDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationReadDTO {
+    const message = createBaseExtensionConfigurationReadDTO();
+    message.resource_uri = object.resource_uri ?? "";
+    message.content_base64 = object.content_base64 ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationChangeDTO(): ExtensionConfigurationChangeDTO {
+  return { resource_uri: "", kind: "" };
+}
+
+export const ExtensionConfigurationChangeDTO: MessageFns<ExtensionConfigurationChangeDTO> = {
+  fromJSON(object: any): ExtensionConfigurationChangeDTO {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationChangeDTO): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationChangeDTO>, I>>(base?: I): ExtensionConfigurationChangeDTO {
+    return ExtensionConfigurationChangeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationChangeDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationChangeDTO {
+    const message = createBaseExtensionConfigurationChangeDTO();
+    message.resource_uri = object.resource_uri ?? "";
+    message.kind = object.kind ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationEventDTO(): ExtensionConfigurationEventDTO {
+  return { changes: [], overflow: false, error: undefined };
+}
+
+export const ExtensionConfigurationEventDTO: MessageFns<ExtensionConfigurationEventDTO> = {
+  fromJSON(object: any): ExtensionConfigurationEventDTO {
+    return {
+      changes: globalThis.Array.isArray(object?.changes)
+        ? object.changes.map((e: any) => ExtensionConfigurationChangeDTO.fromJSON(e))
+        : [],
+      overflow: isSet(object.overflow) ? globalThis.Boolean(object.overflow) : false,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationEventDTO): unknown {
+    const obj: any = {};
+    if (message.changes?.length) {
+      obj.changes = message.changes.map((e) => ExtensionConfigurationChangeDTO.toJSON(e));
+    }
+    if (message.overflow !== false) {
+      obj.overflow = message.overflow;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationEventDTO>, I>>(base?: I): ExtensionConfigurationEventDTO {
+    return ExtensionConfigurationEventDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationEventDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationEventDTO {
+    const message = createBaseExtensionConfigurationEventDTO();
+    message.changes = object.changes?.map((e) => ExtensionConfigurationChangeDTO.fromPartial(e)) || [];
+    message.overflow = object.overflow ?? false;
+    message.error = object.error ?? undefined;
     return message;
   },
 };

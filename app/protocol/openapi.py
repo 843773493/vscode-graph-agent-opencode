@@ -142,10 +142,14 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "ExtensionHostTargetRequest", "ExtensionHostTargetDTO",
         "ExtensionInstallationInventoryRequest", "ExtensionInstallationInventoryDTO",
         "ExtensionInstallationInstallRequest", "ExtensionInstallationInstallDTO",
+        "ExtensionConfigurationViewRequest", "ExtensionConfigurationFileRequest",
+        "ExtensionConfigurationWriteRequest", "ExtensionConfigurationStatDTO", "ExtensionConfigurationReadDTO",
+        "ExtensionConfigurationEventDTO",
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    "ExtensionConfigurationEventDTO": gateway_public_pb2.DESCRIPTOR.message_types_by_name["ExtensionConfigurationEventDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
     "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],

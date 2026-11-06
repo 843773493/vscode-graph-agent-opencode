@@ -188,9 +188,12 @@ function sameWindowContributions(a: IExtensionDescription, b: IExtensionDescript
   if (!equals(a.contributes ?? {}, b.contributes ?? {})) return false;
   if (!a.contributes || !Object.keys(a.contributes).length) return true;
   if (a.displayName !== b.displayName || a.name !== b.name || a.publisher !== b.publisher) return false;
+  // 原配置扩展点消费信任限制和 proposed API 准入；不同机器上的相同路径不能跳过比较。
+  if (a.contributes.configuration && (!equals(a.capabilities?.untrustedWorkspaces, b.capabilities?.untrustedWorkspaces)
+    || !equals(a.enabledApiProposals, b.enabledApiProposals))) return false;
   if (a.extensionLocation.toString() === b.extensionLocation.toString()) return true;
   // 这些原扩展点只消费声明字面值；其它扩展点可能按包目录读取资源，不能推测同版本即同制品。
-  const literalPoints = new Set(['commands', 'menus', 'keybindings', 'configurationDefaults']);
+  const literalPoints = new Set(['commands', 'menus', 'keybindings', 'configuration', 'configurationDefaults']);
   for (const point of Object.keys(a.contributes)) {
     if (!literalPoints.has(point)) return false;
   }

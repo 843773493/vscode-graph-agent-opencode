@@ -250,6 +250,10 @@ class WorkspaceSessionMainPort:
             logger.error("工作区 HTTP 拒绝: workspace_id=%s, method=%s, path=%s, request_id=%s, stage=http_response, status=%s；原始响应=%s", workspace_id, method, path, request_id, response.status_code, response.text[:2000])
             if response.headers.get("X-Request-ID") != request_id or not isinstance(payload, dict) or payload.get("request_id") != request_id:
                 raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区错误响应 request_id 漂移或信封无效: workspace_id={workspace_id}, method={method}, path={path}, request_id={request_id}, stage=http_response, status={response.status_code}")
+            if (path == "/api/v1/resources/navigation" and response.status_code == 404
+                    and isinstance(detail, dict) and detail.get("owner") == "resource_file_operations"
+                    and detail.get("code") == "file_not_found" and detail.get("reason") == "not_found"):
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标文件不存在", detail=detail)
             if path == "/api/v1/sessions/fork-transfer" and response.status_code == 409 and isinstance(detail, dict) and detail.get("owner") == "fork_source_capture" and detail.get("code") == "fork_source_capture_incomplete":
                 raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝 fork 来源捕获", detail=detail)
             if path in {"/api/v1/context/read", "/api/v1/context/search", "/api/v1/resources/navigation"}:

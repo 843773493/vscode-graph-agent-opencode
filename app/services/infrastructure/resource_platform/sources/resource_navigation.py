@@ -119,7 +119,7 @@ class ResourceFileOperationError(ValueError):
         super().__init__(message)
         self.code, self.reason = code, reason
 
-    def detail(self) -> dict[str, str]:
+    def detail(self) -> dict[str, object]:
         return {"owner": "resource_file_operations", "code": self.code,
                 "reason": self.reason, "message": str(self)}
 
@@ -902,6 +902,8 @@ class ResourceNavigation:
             if ancestor.exists() and not ancestor.is_dir():
                 raise ResourceUriResolveError("capability_denied", "单文件节点不允许追加子路径")
         if not path.exists():
+            if parsed.kind == "files":
+                raise ResourceFileOperationError("file_not_found", "目标文件不存在", reason="not_found")
             raise ResourceUriResolveError("unknown_resource", "资源不存在")
         return path
 

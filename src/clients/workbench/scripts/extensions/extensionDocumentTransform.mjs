@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
 export const extensionDocumentSourcePaths = [
+  // TODO: 任务 6.2 仍须迁齐 MainThreadEditorTabs 的视图与索引投影，不能向其它宿主发送整窗口标签。
   'src/vs/workbench/api/browser/mainThreadDocumentsAndEditors.ts',
   'src/vs/workbench/api/browser/mainThreadDocuments.ts',
   'src/vs/workbench/api/browser/mainThreadDiagnostics.ts',

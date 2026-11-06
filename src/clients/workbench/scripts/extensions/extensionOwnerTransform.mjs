@@ -19,6 +19,21 @@ export function transformExtensionOwner(root, path, source, replaceOnce) {
   if (path === paths[9]) {
     // provider info 的 URI 只标记 scheme，没有文件身份；不能交给真实路径转换。
     let contents = replaceOnce(source, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
+    contents = `import { assertHostConfigurationFile } from ${JSON.stringify(join(root, 'src/extensions/targetUris.js'))};\n` + contents;
+    for (const [signature, parent] of [
+      ['async $stat(uri: UriComponents): Promise<IStat> {', true],
+      ['async $readdir(uri: UriComponents): Promise<[string, FileType][]> {', false],
+      ['async $readFile(uri: UriComponents): Promise<VSBuffer> {', false],
+      ['async $writeFile(uri: UriComponents, content: VSBuffer): Promise<void> {', false],
+      ['async $mkdir(uri: UriComponents): Promise<void> {', true],
+      ['async $delete(uri: UriComponents, opts: IFileDeleteOptions): Promise<void> {', false],
+    ]) contents = replaceOnce(contents, signature, `${signature}\nassertHostConfigurationFile(this.extHostContext.extensionHost, URI.revive(uri), ${parent});`);
+    for (const method of ['$rename', '$copy']) {
+      const signature = `async ${method}(source: UriComponents, target: UriComponents, opts: IFileOverwriteOptions): Promise<void> {`;
+      contents = replaceOnce(contents, signature, `${signature}
+assertHostConfigurationFile(this.extHostContext.extensionHost, URI.revive(source));
+assertHostConfigurationFile(this.extHostContext.extensionHost, URI.revive(target));`);
+    }
     contents = replaceOnce(contents, '\n\tdispose(): void {\n\t\tthis._disposables.dispose();', `
   private providerInfo(scheme: string): UriComponents {
     return { scheme: this.extHostContext.extensionHost.uriTransformer?.transformOutgoingScheme(scheme) ?? scheme, path: '/dummy' };
@@ -28,19 +43,21 @@ export function transformExtensionOwner(root, path, source, replaceOnce) {
     return contents.replaceAll("URI.from({ scheme: e.scheme, path: '/dummy' })", 'this.providerInfo(e.scheme)');
   }
   if (path === paths[1]) {
-    let contents = `import type { IURITransformer } from '../../../../base/common/uriIpc.js';
+    let contents = `import type { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import type { IURITransformer } from '../../../../base/common/uriIpc.js';
 import type { ExtensionHostConnectionDTO } from ${JSON.stringify(join(root, '../web/src/types/protocol_generated/boxteam/gateway/v2/public.js'))};\n` + source;
     contents = replaceOnce(contents, 'ExtensionIdentifier, ExtensionIdentifierMap,', 'ExtensionIdentifier, ExtensionInstallationTarget, ExtensionIdentifierMap,');
     contents = replaceOnce(contents, 'export interface IExtensionHost {', `export interface IExtensionHost {
   readonly binding?: ExtensionHostConnectionDTO;
+  readonly customerInstantiationService?: IInstantiationService;
   readonly uriTransformer?: IURITransformer;`);
     contents = replaceOnce(contents, 'export interface IExtensionsStatus {', 'export interface IExtensionsStatus {\n  installationTarget: ExtensionInstallationTarget;');
     contents = replaceOnce(contents, 'export interface IMessage {', 'export interface IMessage {\n  installationTarget?: ExtensionInstallationTarget;');
-    contents = replaceOnce(contents, '\tgetExtension(id: string): Promise<IExtensionDescription | undefined>;', '\tgetExtension(id: string, target?: ExtensionInstallationTarget): Promise<IExtensionDescription | undefined>;\n  getExtensionHosts(): readonly IExtensionHost[];');
+    contents = replaceOnce(contents, '\tgetExtension(id: string): Promise<IExtensionDescription | undefined>;', '\tgetExtension(id: string, target?: ExtensionInstallationTarget): Promise<IExtensionDescription | undefined>;\n  getExtensionHosts(): readonly IExtensionHost[];\n  getHostExtensions(host: IExtensionHost): readonly IExtensionDescription[];');
     contents = replaceOnce(contents, 'activateByEvent(activationEvent: string, activationKind?: ActivationKind): Promise<void>;', 'activateByEvent(activationEvent: string, activationKind?: ActivationKind, host?: IExtensionHost): Promise<void>;');
     contents = replaceOnce(contents, 'canAddExtension(extension: IExtensionDescription): boolean;', 'canAddExtension(extension: IExtension): boolean;');
     contents = replaceOnce(contents, 'canRemoveExtension(extension: IExtensionDescription): boolean;', 'canRemoveExtension(extension: IExtension): boolean;');
-    contents = replaceOnce(contents, '\tgetExtension() { return Promise.resolve(undefined); }', '\tgetExtension() { return Promise.resolve(undefined); }\n  getExtensionHosts(): readonly IExtensionHost[] { return []; }');
+    contents = replaceOnce(contents, '\tgetExtension() { return Promise.resolve(undefined); }', '\tgetExtension() { return Promise.resolve(undefined); }\n  getExtensionHosts(): readonly IExtensionHost[] { return []; }\n  getHostExtensions(): readonly IExtensionDescription[] { return []; }');
     contents = replaceOnce(contents, '\t\tvalidations: [],\n\t\tisValid: true,', '\t\tvalidations: extensionDescription.validations ?? [],\n\t\tisValid: extensionDescription.isValid ?? true,\n    installationTarget: extensionDescription.installationTarget,\n    enablementView: extensionDescription.enablementView,');
     contents = replaceOnce(contents, '\t\t...extension.manifest\n\t};', '\t\t...extension.manifest,\n    installationTarget: extension.installationTarget,\n    enablementView: extension.enablementView,\n    isValid: extension.isValid,\n    validations: extension.validations\n\t};');
     return contents;
@@ -54,6 +71,12 @@ import type { ExtensionHostConnectionDTO } from ${JSON.stringify(join(root, '../
     if (path === paths[3]) {
       contents = replaceOnce(contents, 'new RPCProtocol(protocol, logger)', 'new RPCProtocol(protocol, logger, this._extensionHost.uriTransformer ?? null)');
       contents = replaceOnce(contents, 'const extHostContext: IInternalExtHostContext = {', 'const extHostContext: IInternalExtHostContext = {\n      extensionHost: this._extensionHost,');
+      contents = replaceOnce(contents, '// Named customers', `const instantiationService = this._extensionHost.customerInstantiationService ?? this._instantiationService;
+      if (this._extensionHost.binding && !this._extensionHost.customerInstantiationService) throw new Error('目标宿主缺少已初始化的配置／工作区服务');
+      // Named customers`);
+      const customer = 'this._instantiationService.createInstance(ctor, extHostContext)';
+      if (contents.split(customer).length !== 3) throw new Error('原两类 MainThread customer 构造点已变化');
+      contents = contents.replaceAll(customer, 'instantiationService.createInstance(ctor, extHostContext)');
     }
     return contents;
   }
@@ -63,15 +86,9 @@ import type { ExtensionHostConnectionDTO } from ${JSON.stringify(join(root, '../
   }
   if (path === paths[6]) {
     let contents = replaceOnce(source, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
-    contents = replaceOnce(contents, 'private getWorkspaceData(workspace: IWorkspace): IWorkspaceData | null {', `private getWorkspaceData(workspace: IWorkspace): IWorkspaceData | null {
-    const host = this.extHostContext.extensionHost, binding = host.binding;
-    if (binding) {
-      const projected = host.uriTransformer;
-      const target = binding.initialization?.workspace;
-      if (!projected || !target) throw new Error('Node 宿主工作区 binding 未初始化');
-      return { id: target.id, name: target.name, transient: false, isUntitled: false,
-        folders: target.folders.map((folder, index) => ({ index, name: folder.name, uri: URI.parse(folder.native_uri) })) };
-    }`);
+    // 根与配置文件来自同一原 WorkspaceService，统一交原 typed RPC transformer 投影。
+    contents = replaceOnce(contents, 'name: this._labelService.getWorkspaceLabel(workspace),',
+      'name: this.extHostContext.extensionHost.binding?.initialization?.workspace?.name ?? this._labelService.getWorkspaceLabel(workspace),');
     contents = replaceOnce(contents, 'const workspaceFoldersToAdd = foldersToAdd.map', "if (this.extHostContext.extensionHost.binding) return Promise.reject(new Error('修改 Node 宿主工作区集合需要由窗口明确挂接并重新载入'));\n\t\tconst workspaceFoldersToAdd = foldersToAdd.map");
     return contents;
   }
@@ -124,6 +141,10 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
     return extension.installationTarget;
   }
   public getExtensionHosts(): readonly IExtensionHost[] { return this._extensionHostManagers.map(manager => manager.extensionHost); }
+  public getHostExtensions(host: IExtensionHost): readonly IExtensionDescription[] {
+    return this.getExtensionHosts().includes(host)
+      ? this._runningLocations.filterByRunningLocation(this._registry.getAllExtensionDescriptions(), host.runningLocation) : [];
+  }
 \tprotected _getExtensionHostManagers(`);
   contents = replaceOnce(contents, 'this._registry.getExtensionDescription(extensionId);', 'this._registry.getExtensionDescription(extensionId, this._removalTarget(extension ?? undefined));');
   contents = replaceOnce(contents, 'toExtensionDescription(extension, false);', 'toExtensionDescription(this._bindExtension(extension), false);');

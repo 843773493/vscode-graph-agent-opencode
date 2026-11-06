@@ -35,6 +35,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.server import extension_host
 from app.gateway.server.extension_host import _upstream as real_upstream
 from app.schemas.gateway.extension_host import (
+    ExtensionHostConfigurationResourceDTO,
     ExtensionHostConnectionDTO,
     ExtensionHostEnvironmentDTO,
     ExtensionHostFolderDTO,
@@ -42,6 +43,7 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostOpenRequest,
     ExtensionHostWorkspaceDTO,
 )
+from app.services.infrastructure.config.source_uri import extension_configuration_uri
 
 GATEWAY = "gateway_" + "a" * 32
 PEER = "gateway_" + "b" * 32
@@ -66,15 +68,24 @@ class Harness:
 @pytest.fixture
 def host_initialization(tmp_path: Path) -> Callable[[ExtensionHostOpenRequest], ExtensionHostInitializationDTO]:
     def build(payload: ExtensionHostOpenRequest) -> ExtensionHostInitializationDTO:
+        profile_id = "test-profile"
+        configuration = ExtensionHostConfigurationResourceDTO(
+            native_uri=(tmp_path / "view/workspace.code-workspace").as_uri(),
+            resource_uri=extension_configuration_uri(gateway_id=payload.gateway_id,
+                backend_id=payload.backend_id, workspace_id="explicit-view"),
+        ) if len(payload.workspace_ids) > 1 else None
         return ExtensionHostInitializationDTO(os="linux", parent_pid=123,
             environment=ExtensionHostEnvironmentDTO(app_root_uri=(tmp_path / "component").as_uri(),
                 global_storage_home_uri=(tmp_path / "globalStorage").as_uri(),
-                workspace_storage_home_uri=(tmp_path / "workspaceStorage").as_uri()),
+                workspace_storage_home_uri=(tmp_path / "workspaceStorage").as_uri(), profile_id=profile_id,
+                remote_settings=ExtensionHostConfigurationResourceDTO(native_uri=(tmp_path / "profile/settings.json").as_uri(),
+                    resource_uri=extension_configuration_uri(gateway_id=payload.gateway_id,
+                        backend_id=payload.backend_id, profile_id=profile_id))),
             logs_location_uri=(tmp_path / "logs").as_uri(),
             workspace=ExtensionHostWorkspaceDTO(id="explicit-view", name="View", folders=[
                 ExtensionHostFolderDTO(workspace_id=workspace_id, name="Workspace", native_uri=(tmp_path / workspace_id).as_uri(),
                     resource_uri=resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
-                        tail_segments=("root",))) for workspace_id in payload.workspace_ids]))
+                        tail_segments=("root",))) for workspace_id in payload.workspace_ids], configuration=configuration))
     return build
 
 

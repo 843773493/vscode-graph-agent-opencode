@@ -188,6 +188,33 @@ def navigation_case(tmp_path: Path) -> tuple[ResourceNavigation, Path, str]:
     return owner, workspace, uri
 
 
+@pytest.mark.parametrize("operation", ["describe", "read", "list"])
+async def test_missing_registered_file_is_file_operation_not_resolver_rejection(navigation_case, operation):
+    owner, _workspace, root_uri = navigation_case
+    uri = root_uri + "/missing.txt"
+
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation=operation), local_gateway_id=GATEWAY_ID)
+
+    assert failure.value.detail() == {
+        "owner": "resource_file_operations", "code": "file_not_found",
+        "reason": "not_found", "message": "目标文件不存在",
+    }
+
+
+@pytest.mark.asyncio
+async def test_private_file_remains_resolver_denied_when_missing(navigation_case):
+    owner, workspace, root_uri = navigation_case
+    private = workspace / ".boxteam"
+    private.mkdir()
+    uri = root_uri + "/.boxteam/missing.txt"
+
+    with pytest.raises(ResourceUriResolveError) as failure:
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read"), local_gateway_id=GATEWAY_ID)
+
+    assert failure.value.reason_code == "capability_denied"
+
+
 @pytest.mark.asyncio
 async def test_pages_return_reopenable_uris_without_creating_resource_state(navigation_case) -> None:
     owner, workspace, uri = navigation_case
@@ -811,8 +838,9 @@ async def test_describe_reports_real_stat_without_reading_binary_content(
         assert result.content is None and result.content_hash is None
         assert ResourceNavigationResultDTO.model_validate_json(result.model_dump_json()).node.stat == result.node.stat
     missing = ResourceNavigationRequest(uri=uri + "/missing-directory", operation="describe")
-    with pytest.raises(ResourceUriResolveError, match="资源不存在"):
+    with pytest.raises(ResourceFileOperationError) as failure:
         if synchronous:
             owner.navigate_sync(missing, local_gateway_id=GATEWAY_ID)
         else:
             await owner.navigate(missing, local_gateway_id=GATEWAY_ID)
+    assert (failure.value.code, failure.value.reason) == ("file_not_found", "not_found")

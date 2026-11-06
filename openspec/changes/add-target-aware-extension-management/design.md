@@ -218,6 +218,8 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 
 原 `IConfigurationService`／`IWorkspaceContextService` 是单窗口上下文，不能轮换它们的全局 active workspace 代替多视图。须在原配置服务边界按 host／view 构造或路由相应 WorkspaceConfiguration／配置模型，复用同一 registry、scope 合并与 JSON editing；目标 `.code-workspace` 和 folder 资源经已登记目标 FileService 读写，renderer 不猜服务器本地路径。
 
+目标 settings 与多根 workspace 文件使用本 change 的 `virtual-resource-addressing` delta 登记的两个具名 `config` URI，由原配置 URI owner 构造；原生 settings 地址只取原 `profiles.defaultProfile.settingsResource`。目标管理 Node 复用已登记的 FileService／DiskFileSystemProvider，renderer 的原 FileService 只准入两个精确文件和可 stat／watch 的直接父级，不开放 readdir 或任意 BOXTEAM_HOME 文件。变化复用原 WorkspaceFileWatchService 的两个精确父目录、非递归订阅和稳定 filter 对象，只投影具名文件事件，不增设轮询或 OS watcher。私有请求核 Gateway、Backend、认证 client、generation、view 和有序根，Gateway 由原用户租约派生 client，不能信请求正文身份。重连／overflow 只 invalidate 原模型；保存沿原 mtime／etag、dirty 和队列，不新增 hash／CAS／保存基线或跨客户端原子事务。
+
 现有 `/api/v1/config` PATCH 只允许 Workspace-owned `runtime_override` 的有限字段；sources 诊断不能代替来源正文读取、schema 发现与 source writer。实施须在原配置 owner 增补目标来源的可编辑能力、正文／脱敏投影、revision／digest、预检和 CAS 写入合同，并同步正式 delta／生成协议及消费者，不能把既有 PATCH 放宽成任意路径或任意 JSON 写入。Gateway 与 Workspace 来源分别核实真实可写层；没有 writer 的层只读并明确缺口，不用通用文件 API 补旁路。
 
 原单 workspace API 对来源层的 SQLite 物化语义保持不变；“编辑来源文件”是明确选中 source 的操作，由新增原 owner writer 做文件 CAS／原子写入后再沿原导入链处理，用户级来源沿既有 fan-out。不能让一次 runtime／SQLite 更新顺带回写 JSONC，也不能把来源文件编辑伪装成已经同时激活全部工作区。入口与结果明确是来源正文写入、层物化还是 active 生效，避免引入双写事实源。

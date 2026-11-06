@@ -4304,6 +4304,16 @@ export declare type ExtensionHostEnvironmentDTO = Message<"boxteam.gateway.v2.Ex
    * @generated from field: string workspace_storage_home_uri = 3;
    */
   workspaceStorageHomeUri: string;
+
+  /**
+   * @generated from field: string profile_id = 4;
+   */
+  profileId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostConfigurationResourceDTO remote_settings = 5;
+   */
+  remoteSettings?: ExtensionHostConfigurationResourceDTO | undefined;
 };
 
 /**
@@ -4311,6 +4321,27 @@ export declare type ExtensionHostEnvironmentDTO = Message<"boxteam.gateway.v2.Ex
  * Use `create(ExtensionHostEnvironmentDTOSchema)` to create a new message.
  */
 export declare const ExtensionHostEnvironmentDTOSchema: GenMessage<ExtensionHostEnvironmentDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionHostConfigurationResourceDTO
+ */
+export declare type ExtensionHostConfigurationResourceDTO = Message<"boxteam.gateway.v2.ExtensionHostConfigurationResourceDTO"> & {
+  /**
+   * @generated from field: string native_uri = 1;
+   */
+  nativeUri: string;
+
+  /**
+   * @generated from field: string resource_uri = 2;
+   */
+  resourceUri: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionHostConfigurationResourceDTO.
+ * Use `create(ExtensionHostConfigurationResourceDTOSchema)` to create a new message.
+ */
+export declare const ExtensionHostConfigurationResourceDTOSchema: GenMessage<ExtensionHostConfigurationResourceDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.ExtensionHostFolderDTO
@@ -4361,6 +4392,11 @@ export declare type ExtensionHostWorkspaceDTO = Message<"boxteam.gateway.v2.Exte
    * @generated from field: repeated boxteam.gateway.v2.ExtensionHostFolderDTO folders = 3;
    */
   folders: ExtensionHostFolderDTO[];
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostConfigurationResourceDTO configuration = 4;
+   */
+  configuration?: ExtensionHostConfigurationResourceDTO | undefined;
 };
 
 /**
@@ -4368,6 +4404,294 @@ export declare type ExtensionHostWorkspaceDTO = Message<"boxteam.gateway.v2.Exte
  * Use `create(ExtensionHostWorkspaceDTOSchema)` to create a new message.
  */
 export declare const ExtensionHostWorkspaceDTOSchema: GenMessage<ExtensionHostWorkspaceDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationViewRequest
+ */
+export declare type ExtensionConfigurationViewRequest = Message<"boxteam.gateway.v2.ExtensionConfigurationViewRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string generation = 6;
+   */
+  generation: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationViewRequest.
+ * Use `create(ExtensionConfigurationViewRequestSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationViewRequestSchema: GenMessage<ExtensionConfigurationViewRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationFileRequest
+ */
+export declare type ExtensionConfigurationFileRequest = Message<"boxteam.gateway.v2.ExtensionConfigurationFileRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string generation = 6;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: string resource_uri = 7;
+   */
+  resourceUri: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationFileRequest.
+ * Use `create(ExtensionConfigurationFileRequestSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationFileRequestSchema: GenMessage<ExtensionConfigurationFileRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationWriteOptions
+ */
+export declare type ExtensionConfigurationWriteOptions = Message<"boxteam.gateway.v2.ExtensionConfigurationWriteOptions"> & {
+  /**
+   * @generated from field: bool create = 1;
+   */
+  create: boolean;
+
+  /**
+   * @generated from field: bool overwrite = 2;
+   */
+  overwrite: boolean;
+
+  /**
+   * @generated from field: bool unlock = 3;
+   */
+  unlock: boolean;
+
+  /**
+   * @generated from field: bool atomic = 4;
+   */
+  atomic: boolean;
+
+  /**
+   * @generated from field: bool append = 5;
+   */
+  append: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationWriteOptions.
+ * Use `create(ExtensionConfigurationWriteOptionsSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationWriteOptionsSchema: GenMessage<ExtensionConfigurationWriteOptions>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationWriteRequest
+ */
+export declare type ExtensionConfigurationWriteRequest = Message<"boxteam.gateway.v2.ExtensionConfigurationWriteRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string generation = 6;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: string resource_uri = 7;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string content_base64 = 8;
+   */
+  contentBase64: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionConfigurationWriteOptions options = 9;
+   */
+  options?: ExtensionConfigurationWriteOptions | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationWriteRequest.
+ * Use `create(ExtensionConfigurationWriteRequestSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationWriteRequestSchema: GenMessage<ExtensionConfigurationWriteRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationStatDTO
+ */
+export declare type ExtensionConfigurationStatDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationStatDTO"> & {
+  /**
+   * @generated from field: string resource_uri = 1;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: uint32 type = 2;
+   */
+  type: number;
+
+  /**
+   * @generated from field: double ctime = 3;
+   */
+  ctime: number;
+
+  /**
+   * @generated from field: double mtime = 4;
+   */
+  mtime: number;
+
+  /**
+   * @generated from field: uint64 size = 5;
+   */
+  size: bigint;
+
+  /**
+   * @generated from field: optional uint32 permissions = 6;
+   */
+  permissions?: number | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationStatDTO.
+ * Use `create(ExtensionConfigurationStatDTOSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationStatDTOSchema: GenMessage<ExtensionConfigurationStatDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationReadDTO
+ */
+export declare type ExtensionConfigurationReadDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationReadDTO"> & {
+  /**
+   * @generated from field: string resource_uri = 1;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string content_base64 = 2;
+   */
+  contentBase64: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationReadDTO.
+ * Use `create(ExtensionConfigurationReadDTOSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationReadDTOSchema: GenMessage<ExtensionConfigurationReadDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationChangeDTO
+ */
+export declare type ExtensionConfigurationChangeDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationChangeDTO"> & {
+  /**
+   * @generated from field: string resource_uri = 1;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationChangeDTO.
+ * Use `create(ExtensionConfigurationChangeDTOSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationChangeDTOSchema: GenMessage<ExtensionConfigurationChangeDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationEventDTO
+ */
+export declare type ExtensionConfigurationEventDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationEventDTO"> & {
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.ExtensionConfigurationChangeDTO changes = 1;
+   */
+  changes: ExtensionConfigurationChangeDTO[];
+
+  /**
+   * @generated from field: bool overflow = 2;
+   */
+  overflow: boolean;
+
+  /**
+   * @generated from field: optional string error = 3;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationEventDTO.
+ * Use `create(ExtensionConfigurationEventDTOSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationEventDTOSchema: GenMessage<ExtensionConfigurationEventDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.ExtensionHostInitializationDTO

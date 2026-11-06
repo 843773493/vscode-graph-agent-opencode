@@ -57,10 +57,10 @@ export async function captureCommandHost(service: IExtensionService, id: string,
 }
 
 function commandHosts(service: IExtensionService, id: string, hosts: readonly IExtensionHost[]): IExtensionHost[] {
-  return hosts.filter(host => commands.get(service)?.get(id)?.sources.has(host) || host.extensions?.myExtensions.some(identifier => {
-    const extension = host.extensions!.allExtensions.find(extension => extension.identifier.value.toLowerCase() === identifier.value.toLowerCase());
-    return extension && (ImplicitActivationEvents.readActivationEvents(extension).includes('onCommand:' + id)
-      || extension.contributes?.commands && (Array.isArray(extension.contributes.commands) ? extension.contributes.commands : [extension.contributes.commands]).some(command => command.command === id));
+  // 首次命令可以先于宿主绑定；候选直接读原 registry 的运行位置投影。
+  return hosts.filter(host => commands.get(service)?.get(id)?.sources.has(host) || service.getHostExtensions(host).some(extension => {
+    return ImplicitActivationEvents.readActivationEvents(extension).includes('onCommand:' + id)
+      || extension.contributes?.commands && (Array.isArray(extension.contributes.commands) ? extension.contributes.commands : [extension.contributes.commands]).some(command => command.command === id);
   }));
 }
 

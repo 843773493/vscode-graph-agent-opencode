@@ -17,6 +17,7 @@ from app.gateway.route_registry import register_gateway_routes
 from app.gateway.server.static_ui import install_static_web_ui
 from app.protocol.codecs.http_validation import request_validation_error_response
 from app.schemas.gateway.config import GatewayConfigEventDTO
+from app.schemas.gateway.extension_configuration import ExtensionConfigurationEventDTO
 from app.schemas.internal_v2.sse import SseErrorDTO, install_sse_openapi_components
 from app.schemas.search_federation import (
     FederatedSearchEventDTO,
@@ -75,6 +76,7 @@ install_sse_openapi_components(app, models={"FederatedSearchEventDTO": Federated
                                            "GatewayContextSearchRequest": GatewayContextSearchRequest,
                                            "GatewayContextSearchResultDTO": GatewayContextSearchResultDTO,
                                            "GatewayConfigEventDTO": GatewayConfigEventDTO,
+                                           "ExtensionConfigurationEventDTO": ExtensionConfigurationEventDTO,
                                            "SseErrorDTO": SseErrorDTO})
 
 # 静态 UI 必须最后挂载，确保 Gateway API、工作区代理、SSE 和 WebSocket

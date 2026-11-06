@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  createWorkspaceFileEntry,
-  copyWorkspaceFileEntry,
   getWorkspace,
   getWorkspaceFileRoots,
   getWorkspaceFileOperations,
   getWorkspaceFiles,
-  pasteWorkspaceFileEntries,
   resolveWorkspaceFileReferences,
-  uploadWorkspaceFileEntries,
 } from "../../../api";
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../../api/workspaceIdentity";
-import { HttpRequestError } from "../../../api/http";
 import { NAVIGATION_MUTATION_TERMINAL_STATES } from "../../../api/session/sessionCatalogOperations";
+import { dispatchWorkspaceFileIntent, WorkspaceFileIntentRejectedError } from "../../../state/workspaceFiles/dispatcher";
 import type { WorkspaceDirectoryKey, WorkspaceDirectoryRevision, WorkspaceFileList, WorkspaceFileOperationReceipt } from "../../../types/backend";
 import {
   openWorkspaceFileIntentStore,
@@ -56,6 +52,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
   const driver = useRef<Promise<Driver> | null>(null);
   const generation = useRef(0);
   const pump = useRef<Promise<void> | null>(null);
+  const pumpController = useRef<AbortController | null>(null);
 
   const open = useCallback(async (): Promise<Driver> => {
     if (!workspaceId) throw new Error("文件操作需要固定的 Gateway 工作区身份");
@@ -78,6 +75,8 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
   const run = useCallback((): Promise<void> => {
     if (pump.current) return pump.current;
     const epoch = generation.current;
+    const controller = new AbortController();
+    pumpController.current = controller;
     const current = () => epoch === generation.current;
     const task = (async () => {
       const target = await open();
@@ -117,49 +116,16 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         }
         try {
         let receipt: WorkspaceFileOperationReceipt;
-        try {
-          const status = await getWorkspaceFileOperations(port, [record.intent.client_operation_id], gatewayWorkspaceKey(target.scope), target.scope.workspaceId);
-          if (!current()) return;
-          if (status.worker_state === "failed") throw new Error(`文件 worker 已停止: ${status.worker_error}`);
-          const found = status.operations.find((value) => value.operation_id === record.intent.client_operation_id);
-          if (!found) throw new Error("原文件操作查询缺少对应回执");
-          receipt = found;
-        } catch (error) {
-          if (!current()) return;
-          if (!(error instanceof HttpRequestError) || error.status !== 404) throw error;
-          // 只有原 ID 明确不存在才重发；Blob 与 intent 均来自同一持久记录。
-          try {
-            const command = record.command;
-            switch (command.kind) {
-              case "create": receipt = await createWorkspaceFileEntry(port, record.directoryPath,
-                { name: command.name, kind: command.entryKind, intent: record.intent }, gatewayWorkspaceKey(target.scope)); break;
-              case "copy": receipt = await copyWorkspaceFileEntry(port, record.directoryPath,
-                { source_path: command.sourcePath, source_scope: command.sourceScope, intent: record.intent }, gatewayWorkspaceKey(target.scope)); break;
-              case "paste": receipt = await pasteWorkspaceFileEntries(port, record.directoryPath,
-                { source_paths: command.sourcePaths, intent: record.intent }, gatewayWorkspaceKey(target.scope)); break;
-              case "upload": receipt = await uploadWorkspaceFileEntries(port, record.directoryPath,
-                command.entries, record.intent, gatewayWorkspaceKey(target.scope)); break;
-            }
-          } catch (sendError) {
+        try { receipt = await dispatchWorkspaceFileIntent(port, record, controller.signal); }
+        catch (error) {
+          if (error instanceof WorkspaceFileIntentRejectedError && current()) {
+            await callbacks.current.reconcileDirectories([], record.directoryPath);
             if (!current()) return;
-            // 4xx 也先查询原 ID：并发 tab 可能已受理，不能删除未知结果。
-            try {
-              const status = await getWorkspaceFileOperations(port, [record.intent.client_operation_id], gatewayWorkspaceKey(target.scope), target.scope.workspaceId);
-              const found = status.operations.find((value) => value.operation_id === record.intent.client_operation_id);
-              if (!found) throw new Error("重试查询缺少原文件操作");
-              receipt = found;
-            } catch (queryError) {
-              if (!current()) return;
-              if (sendError instanceof HttpRequestError && sendError.status >= 400 && sendError.status < 500
-                && queryError instanceof HttpRequestError && queryError.status === 404) {
-                await callbacks.current.reconcileDirectories([], record.directoryPath);
-                if (!current()) return;
-                await target.store.remove(record);
-              }
-              throw new AggregateError([sendError, queryError], "文件受理失败或结果未知，保留原身份核实");
-            }
+            await target.store.remove(record);
           }
+          throw error;
         }
+        if (!current()) return;
         await target.store.accept(record, receipt);
         receipts.set(record.intent.client_operation_id, receipt);
         if (!current()) return;
@@ -189,11 +155,14 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       updatePending(await target.store.load(target.scope));
     })();
     pump.current = task;
-    void task.finally(() => { if (pump.current === task) pump.current = null; }).catch(() => undefined);
+    void task.finally(() => {
+      if (pump.current === task) { pump.current = null; pumpController.current = null; }
+    }).catch(() => undefined);
     return task;
   }, [open, port]);
 
   useEffect(() => {
+    pumpController.current?.abort();
     generation.current += 1;
     driver.current = null;
     pump.current = null;
@@ -210,7 +179,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       if (!stopped) timer = setTimeout(() => void poll(), 500);
     };
     void poll();
-    return () => { stopped = true; generation.current += 1; clearTimeout(timer); };
+    return () => { stopped = true; generation.current += 1; pumpController.current?.abort(); clearTimeout(timer); };
   }, [run, workspaceId]);
 
   const submit = useCallback(async (directoryPath: string, command: FileIntentCommand,

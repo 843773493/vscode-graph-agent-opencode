@@ -28,6 +28,7 @@ from app.gateway.federation.errors import (
     FEDERATION_MALFORMED_FRAME,
     FEDERATION_TARGET_AMBIGUOUS,
     FEDERATION_TARGET_NOT_RESOLVABLE,
+    FEDERATION_TARGET_OWNER_REJECTED,
     FederationError,
 )
 from app.gateway.federation.grants import ResourceNavigationGrantTarget
@@ -176,6 +177,11 @@ async def _navigate_target(
             if len(result.model_dump_json().encode("utf-8")) > payload.max_response_bytes:
                 raise ResourceFileOperationError("output_limit_exceeded", "限定 Gateway 后的导航响应超过总字节上限", reason="response_byte_limit")
     except FederationError as error:
+        if (error.code == FEDERATION_TARGET_OWNER_REJECTED
+                and error.detail.get("owner") == "resource_file_operations"
+                and error.detail.get("code") == "file_not_found"
+                and error.detail.get("reason") == "not_found"):
+            raise HTTPException(404, detail=error.detail) from error
         if error.code in {FEDERATION_CAPABILITY_DENIED, FEDERATION_HARDENING_ACTIVE, FEDERATION_TARGET_NOT_RESOLVABLE} or (error.code == FEDERATION_AUTHORIZATION_REVOKED and error.detail.get("capability") == "read"):
             error = FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航资源未共享或不存在")
         raise HTTPException(409, detail=error.to_wire()) from error
@@ -184,7 +190,7 @@ async def _navigate_target(
     except ResourceUriResolveError as error:
         raise HTTPException(404 if error.reason_code == "unknown_resource" else 403, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
     except ResourceFileOperationError as error:
-        raise HTTPException(400, detail=error.detail()) from error
+        raise HTTPException(404 if error.code == "file_not_found" else 400, detail=error.detail()) from error
     except (OSError, UnicodeError) as error:
         raise HTTPException(400, detail={"owner": "resource_navigation", "type": type(error).__name__, "errno": getattr(error, "errno", None)}) from error
     request_id = get_request_id(request)

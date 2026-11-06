@@ -15,7 +15,10 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 
 from app.core.child_process import OwnedChildProcess
 from app.core.shielded_cleanup import run_cleanup_shielded
-from app.schemas.gateway.extension_host import ExtensionHostEnvironmentDTO
+from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationWriteOptions,
+)
+from app.schemas.gateway.extension_host import NativeFileURI
 from app.schemas.gateway.extension_installation import (
     ProfileExtensionInventory,
     VsixInstallResult,
@@ -31,6 +34,38 @@ class InstalledProfile(BaseModel):
 
 class ExtensionManagementError(RuntimeError):
     """原安装／扫描服务已经明确回报失败，传输本身仍可继续查询。"""
+
+    def __init__(self, message: str, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class NativeManagementEnvironment(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    app_root_uri: NativeFileURI
+    global_storage_home_uri: NativeFileURI
+    workspace_storage_home_uri: NativeFileURI
+    profile_id: str
+    settings_native_uri: NativeFileURI
+
+
+class NativeConfigurationLocation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    native_uri: NativeFileURI
+
+
+class NativeConfigurationStat(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    type: int
+    ctime: float
+    mtime: float
+    size: int
+    permissions: int | None
+
+
+class NativeConfigurationRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    content_base64: str
 
 
 Result = TypeVar("Result", bound=BaseModel)
@@ -90,7 +125,7 @@ class NodeExtensionManagement:
             if await self._receive() != {"ready": True}:
                 raise ValueError("扩展管理组件启动握手无效")
 
-    async def _request(self, command: dict[str, str], *, response_type: type[Result]) -> Result:
+    async def _request(self, command: Mapping[str, JsonValue], *, response_type: type[Result]) -> Result:
         async with self._lock:
             if self._closing or self._failed:
                 raise RuntimeError("扩展管理组件已关闭或控制结果未知，不能自动重启并重放")
@@ -101,11 +136,11 @@ class NodeExtensionManagement:
                 async with asyncio.timeout(self._operation_timeout):
                     await self.child.process.stdin.send((json.dumps(command) + "\n").encode())
                     reply = await self._receive()
-                if set(reply) not in ({"result"}, {"error"}):
+                if set(reply) not in ({"result"}, {"error", "code"}):
                     raise ValueError("扩展管理控制回执不完整")
                 if "result" in reply:
                     return response_type.model_validate(reply["result"])
-                if not isinstance(reply["error"], str):
+                if not isinstance(reply["error"], str) or not isinstance(reply["code"], str):
                     raise TypeError("扩展管理错误回执不是字符串")
             except BaseException as error:
                 # 取消／断流／损坏回执后必须回收原进程；安装是否已发布只能在新 Backend 中读取原 profile，
@@ -116,13 +151,32 @@ class NodeExtensionManagement:
                 except BaseException as close_error:  # noqa: BLE001 - 取消及回收失败必须同时保留。
                     raise BaseExceptionGroup("扩展管理操作及原进程回收均失败", [error, close_error]) from None
                 raise
-            raise ExtensionManagementError(reply["error"])
+            raise ExtensionManagementError(reply["error"], reply["code"])
 
     async def inventory(self) -> ProfileExtensionInventory:
         return await self._request({"method": "inventory"}, response_type=ProfileExtensionInventory)
 
-    async def environment(self) -> ExtensionHostEnvironmentDTO:
-        return await self._request({"method": "environment"}, response_type=ExtensionHostEnvironmentDTO)
+    async def environment(self) -> NativeManagementEnvironment:
+        return await self._request({"method": "environment"}, response_type=NativeManagementEnvironment)
+
+    async def prepare_configuration_view(self, workspace_id: str, folders: list[dict[str, str]]) -> NativeConfigurationLocation:
+        folder_values: list[JsonValue] = [{key: value for key, value in folder.items()} for folder in folders]
+        return await self._request({"method": "configuration-view", "id": workspace_id, "folders": folder_values},
+                                   response_type=NativeConfigurationLocation)
+
+    async def configuration_stat(self, native_uri: str) -> NativeConfigurationStat:
+        return await self._request({"method": "configuration-stat", "native_uri": native_uri},
+                                   response_type=NativeConfigurationStat)
+
+    async def configuration_read(self, native_uri: str) -> NativeConfigurationRead:
+        return await self._request({"method": "configuration-read", "native_uri": native_uri},
+                                   response_type=NativeConfigurationRead)
+
+    async def configuration_write(self, native_uri: str, content_base64: str,
+                                  options: ExtensionConfigurationWriteOptions) -> NativeConfigurationStat:
+        return await self._request({"method": "configuration-write", "native_uri": native_uri,
+                                   "content_base64": content_base64, "options": options.model_dump(mode="json")},
+                                   response_type=NativeConfigurationStat)
 
     async def install(self, vsix_path: Path) -> InstalledProfile:
         if not vsix_path.is_absolute():

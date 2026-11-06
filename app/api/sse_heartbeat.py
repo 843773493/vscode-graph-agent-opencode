@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from typing import TypeVar
 
@@ -26,7 +26,7 @@ async def stream_sse_with_heartbeat(
     heartbeat_interval_seconds: float,
     close_source_on_exit: bool,
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
-) -> AsyncIterator[T | str]:
+) -> AsyncGenerator[T | str, None]:
     """把源迭代器包装成带空闲心跳的 SSE 事件流。
 
     产出源元素本身，或在空闲超时窗口产出 ``SSE_HEARTBEAT_COMMENT`` 注释帧。

@@ -12,6 +12,8 @@ import { extensionStatusSourcePaths, transformExtensionStatus } from './extensio
 import { extensionEnablementSourcePaths, transformExtensionEnablement } from './extensions/extensionEnablementTransform.mjs';
 import { extensionDocumentSourcePaths, transformExtensionDocuments } from './extensions/extensionDocumentTransform.mjs';
 import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
+import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
+import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -61,6 +63,8 @@ export const transformedSourcePaths = [...new Set([
   ...extensionEnablementSourcePaths,
   ...extensionDocumentSourcePaths,
   ...extensionStorageSourcePaths,
+  ...extensionConfigurationSourcePaths,
+  ...extensionFileEventsSourcePaths,
 ])];
 
 function replaceOnce(source, marker, replacement) {
@@ -110,6 +114,8 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     }
     // Node 宿主复用共同状态合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
+    contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
+    contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/workspaces/common/workspaces.ts')) {
       // 不透明文件根已在 URI.path 内编码；原 skipEncoding 会让重读时的 URI.parse 折叠路径段。
       contents = replaceOnce(contents, 'export function getStoredWorkspaceFolder(folderURI: URI, forceAbsolute: boolean, folderName: string | undefined, targetConfigFolderURI: URI, extUri: IExtUri): IStoredWorkspaceFolder {',

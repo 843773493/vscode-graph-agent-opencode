@@ -7,6 +7,7 @@ import type { IMessagePassingProtocol } from '../../upstream/src/vs/base/parts/i
 import { ISocket, PersistentProtocol, SocketCloseEvent, SocketCloseEventType } from '../../upstream/src/vs/base/parts/ipc/common/ipc.net.js';
 import { installationTargetKey } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
 import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
+import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IProductService } from '../../upstream/src/vs/platform/product/common/productService.js';
 import { ITelemetryService } from '../../upstream/src/vs/platform/telemetry/common/telemetry.js';
@@ -21,6 +22,7 @@ import { IDefaultLogLevelsService } from '../../upstream/src/vs/workbench/servic
 import { getGatewayToken } from '../../../web/src/api/http.js';
 import type { ExtensionHostConnectionDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { TargetUriTransformer } from './targetUris.js';
+import { targetConfigurationServices } from './configuration.js';
 
 /** 原 IExtensionHost 的目标侧传输；Gateway 只转发原 PersistentProtocol 字节。 */
 export class TargetExtensionHost extends Disposable implements IExtensionHost {
@@ -31,6 +33,8 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
   extensions: ExtensionHostExtensions | null = null;
   binding: ExtensionHostConnectionDTO | undefined;
   uriTransformer: TargetUriTransformer | undefined;
+  customerInstantiationService: IInstantiationService | undefined;
+  private readonly configurationLifetime = this._register(new DisposableStore());
   private readonly exited = this._register(new Emitter<[number, string | null]>());
   readonly onExit = this.exited.event;
   private socket: WebSocket | undefined;
@@ -47,12 +51,14 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
     @ITelemetryService private readonly telemetry: ITelemetryService,
     @IDefaultLogLevelsService private readonly defaultLogs: IDefaultLogLevelsService,
     @INotificationService private readonly notifications: INotificationService,
+    @IInstantiationService private readonly instantiation: IInstantiationService,
   ) {
     super();
     this.remoteAuthority = installationTargetKey(runningLocation.installationTarget);
   }
   start(): Promise<IMessagePassingProtocol> {
     return this.startPromise ??= this.connect().catch(error => {
+      this.configurationLifetime.dispose();
       this.socket?.close();
       this.notifications.error(error instanceof Error ? error : String(error));
       throw error;
@@ -104,8 +110,11 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
     });
     const protocol = this.protocol!;
     this._register(protocol.onSocketClose(event => {
+      this.configurationLifetime.dispose();
       if (!this.closing) this.exited.fire([1, event && 'reason' in event ? event.reason : 'extension_host_channel_closed']);
     }));
+    this.customerInstantiationService = await targetConfigurationServices(this.instantiation, binding, this.uriTransformer!, this.configurationLifetime);
+    if (this.closing || this.configurationLifetime.isDisposed) throw new Error('Node 宿主在配置初始化时关闭');
     await new Promise<void>((resolve, reject) => {
       const listeners = new DisposableStore();
       const timer = setTimeout(() => finish(new Error('Node 宿主原初始化握手超时')), 60_000);
@@ -148,6 +157,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
   async disconnect(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.configurationLifetime.dispose();
     if (this.protocol) {
       this.protocol.send(createMessageOfType(MessageType.Terminate));
       this.protocol.sendDisconnect();

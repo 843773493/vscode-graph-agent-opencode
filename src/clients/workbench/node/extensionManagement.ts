@@ -37,6 +37,7 @@ import { IUserDataProfilesService } from '../upstream/src/vs/platform/userDataPr
 import { ServerUserDataProfilesService } from '../upstream/src/vs/platform/userDataProfile/node/userDataProfile.js';
 import { ExtensionsScannerService } from '../upstream/src/vs/server/node/extensionsScannerService.js';
 import { IServerEnvironmentService, ServerEnvironmentService, type ServerParsedArgs } from '../upstream/src/vs/server/node/serverEnvironmentService.js';
+import { ExtensionConfiguration } from './extensionConfiguration.js';
 
 /** 与官方 server 使用相同的安装／扫描 owner，只装配本组件需要的原生服务。 */
 export async function createExtensionManagement(directory: string, builtinExtensionsPath: string) {
@@ -56,7 +57,8 @@ export async function createExtensionManagement(directory: string, builtinExtens
     const log = scope.add(new LogService(logger));
     services.set(ILogService, log);
     const files = scope.add(new FileService(log));
-    scope.add(files.registerProvider(Schemas.file, scope.add(new DiskFileSystemProvider(log))));
+    const disk = scope.add(new DiskFileSystemProvider(log));
+    scope.add(files.registerProvider(Schemas.file, disk));
     services.set(IFileService, files);
     if (!(await files.resolve(URI.file(builtinExtensionsPath))).isDirectory) throw new Error('目标扩展运行时的内置扩展目录无效');
     await files.createFolder(URI.file(environment.extensionsPath));
@@ -83,14 +85,18 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const scanner = accessor.get(IExtensionsScannerService);
       const profileScanner = accessor.get(IExtensionsProfileScannerService);
       const profile = profiles.defaultProfile;
+      const configurationFiles = new ExtensionConfiguration(files, disk, identity, environment, profile);
       return {
         dispose: () => scope.dispose(),
-        environment() {
+        async environment() {
+          await configurationFiles.initialize();
           // bundle 的实际根就是发行组件目录；存储沿原环境/profile，不按客户端或进程代际重建。
           return { app_root_uri: URI.file(import.meta.dirname).toString(),
             global_storage_home_uri: profile.globalStorageHome.toString(),
-            workspace_storage_home_uri: environment.workspaceStorageHome.toString() };
+            workspace_storage_home_uri: environment.workspaceStorageHome.toString(),
+            profile_id: profile.id, settings_native_uri: profile.settingsResource.toString() };
         },
+        configurationFiles,
         async inventory() {
           // 不调用 scanAllExtensions 的跨来源 dedup；此库存只承诺同一默认 profile。
           const extensions = await scanner.scanUserExtensions({ profileLocation: profile.extensionsResource, includeInvalid: true });

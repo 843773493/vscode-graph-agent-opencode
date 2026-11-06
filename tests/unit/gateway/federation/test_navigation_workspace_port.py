@@ -7,7 +7,10 @@ import json
 import httpx
 import pytest
 
-from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    set_current_gateway_id,
+)
 from app.gateway.federation.errors import (
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
     FEDERATION_TARGET_OWNER_REJECTED,
@@ -21,8 +24,9 @@ from tests.unit.gateway.test_federation_workspace_port import (
 
 GATEWAY_ID = "gateway_3097a8378d6e2c98a52a687e4a004769"
 URI = f"boxteam://{GATEWAY_ID}/workspace/{WORKSPACE_ID}/resources/files/root"
-TARGET = {"gateway_id": GATEWAY_ID, "uri": URI}
-BODY = {"source_gateway_id": "gateway_source", "navigation_target": TARGET, "navigation": {"uri": URI, "operation": "list"}}
+TARGET: dict[str, object] = {"gateway_id": GATEWAY_ID, "uri": URI}
+BODY: dict[str, object] = {"source_gateway_id": "gateway_source", "navigation_target": TARGET,
+                          "navigation": {"uri": URI, "operation": "list"}}
 
 
 @pytest.fixture(autouse=True)
@@ -43,8 +47,8 @@ async def test_native_navigation_uses_local_executor_and_preserves_gateway_root(
     body = {"source_gateway_id": "gateway_source", "navigation_target": target,
             "navigation": {"uri": qualified, "operation": "list"}}
     executor_id = "00000000-0000-4000-8000-000000000001"
-    http_context.port.project_workspaces((("later", "http://later.test", WORKSPACE_ID),
-                                           ("executor", "http://native.test", executor_id)) if available else ())
+    http_context.port.project_workspaces(((WORKSPACE_ID, "http://later.test"),
+                                           (executor_id, "http://native.test")) if available else ())
     http_context.data["data"] = {"node": {"uri": native, "resource_shape": "directory", "operations": ["describe", "list"], "child_path": "file_segments"}}
     if not available:
         with pytest.raises(FederationError) as error:
@@ -96,6 +100,28 @@ async def test_navigation_preserves_file_error_only_with_matching_request_identi
         assert error.value.detail == detail
     else:
         assert error.value.code == FEDERATION_SESSION_MAIN_UNAVAILABLE
+
+
+@pytest.mark.parametrize("status,detail,expected", [
+    (404, {"owner": "resource_file_operations", "code": "file_not_found", "reason": "not_found", "message": "目标文件不存在"}, FEDERATION_TARGET_OWNER_REJECTED),
+    (403, {"owner": "resource_uri_resolver", "code": "capability_denied", "message": "未授权"}, "target_not_resolvable"),
+    (404, {"owner": "resource_uri_resolver", "code": "unknown_resource", "message": "资源未共享"}, "target_not_resolvable"),
+])
+async def test_navigation_distinguishes_owner_missing_from_hidden_resource(
+    http_context: _HTTPContext, status: int, detail: dict[str, str], expected: str,
+) -> None:
+    http_context.status = status
+    http_context.data = {"request_id": REQUEST_ID, "detail": detail}
+
+    with pytest.raises(FederationError) as error:
+        await http_context.port.execute(operation="read", target=TARGET, body=BODY,
+                                        origin="gateway_source", timeout=2.5)
+
+    assert error.value.code == expected
+    if expected == FEDERATION_TARGET_OWNER_REJECTED:
+        assert error.value.detail == detail
+    else:
+        assert error.value.detail == {}
 
 
 @pytest.mark.parametrize("failure,code", [
