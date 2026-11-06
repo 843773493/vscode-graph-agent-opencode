@@ -139,9 +139,10 @@ class TurnProjectionReadMixin:
             "ic.payload_kind, ic.status, ic.created_at, ic.producer_ref_json, "
             "ic.projection_manifest_json, ip.content, ip.content_truncated, ic.tool_call_id, "
             "membership.logical_item_ordinal "
-            "FROM item_catalog AS ic JOIN item_projections AS ip "
+            # 先按本页 Turn 定位 activity，再查可见成员，避免每次翻页扫描整个 view。
+            "FROM item_catalog AS ic CROSS JOIN item_projections AS ip "
             "ON ip.item_id = ic.item_id AND ip.item_sequence = ic.item_sequence "
-            "JOIN context_view_items AS membership ON membership.item_id = ic.item_id "
+            "CROSS JOIN context_view_items AS membership ON membership.item_id = ic.item_id "
             "AND membership.view_id = ? AND membership.visible = 1 "
             "AND membership.source_kind = 'canonical' "
             "LEFT JOIN turn_records AS tr ON tr.turn_id = ic.turn_id "
