@@ -5,6 +5,8 @@ export const extensionHostStateSourcePaths = [
   'src/vs/workbench/services/extensions/common/extensionDescriptionRegistry.ts',
   'src/vs/workbench/api/common/extHostExtensionService.ts',
   'src/vs/workbench/services/extensions/common/abstractExtensionService.ts',
+  'src/vs/workbench/services/extensions/common/extensionHostManager.ts',
+  'src/vs/workbench/services/extensions/common/lazyCreateExtensionHostManager.ts',
 ];
 
 /** 浏览器和 Node 宿主共用描述版本、候选验证和原子发布合同。 */
@@ -68,6 +70,10 @@ export function transformExtensionHostState(root, path, source, replaceOnce) {
       'function extensionDescriptionArrayToMap(extensions: readonly IExtensionDescription[]):');
     contents = replaceOnce(contents, '\t\tresult.set(extension.identifier, extension);',
       "\t\tif (result.has(extension.identifier)) throw new Error('Duplicate extension description: ' + extension.identifier.value);\n\t\tresult.set(extension.identifier, extension);");
+    contents = replaceOnce(contents, 'export interface IInternalExtensionService {',
+      `export interface IInternalExtensionService {
+  // 宿主准入与此内部回调对象同寿命，关闭后不能写入下一代的全局状态。
+  dispose(): void;`);
     return contents + `
 function uniqueExtensionIdentifiers(ids: readonly ExtensionIdentifier[]): ExtensionIdentifierSet {
   const result = new ExtensionIdentifierSet();
@@ -122,6 +128,27 @@ function extensionDescriptionsEqual(a: IExtensionDescription, b: IExtensionDescr
   }
   if (path === paths[3]) {
     let contents = replaceOnce(source,
+      '\tprivate _acquireInternalAPI(extensionHost: IExtensionHost): IInternalExtensionService {\n\t\treturn {',
+      `\tprivate _acquireInternalAPI(extensionHost: IExtensionHost): IInternalExtensionService {
+    // TODO(5.6)：其余MainThread查询、UI异步回调及RPC载荷还须沿各owner迁齐代际和视图投影。
+    let active = true;
+    const assertActive = () => {
+      if (!active) throw new Error('Extension host callback generation is closed');
+    };
+    return {
+      dispose: () => { active = false; },`);
+    contents = replaceOnce(contents,
+      `_activateById: (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void> => {
+\t\t\t\treturn this._activateById(extensionId, reason);`,
+      `_activateById: async (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void> => {
+        assertActive();
+        await this._activateById(extensionId, reason);
+        // 已准入操作可能仍在结算；迟到完成不能重新授权原宿主或重放到新代际。
+        assertActive();`);
+    for (const callback of ['_onWillActivateExtension', '_onDidActivateExtension', '_onDidActivateExtensionError', '_onExtensionRuntimeError']) {
+      contents = replaceOnce(contents, `return this.${callback}(`, `assertActive();\n\t\t\t\treturn this.${callback}(`);
+    }
+    contents = replaceOnce(contents,
       'await extensionHostManager.deltaExtensions({ versionId, toRemove, toAdd, addActivationEvents, myToRemove, myToAdd: myToAdd.map(extension => extension.identifier) });',
       `try {
       await extensionHostManager.deltaExtensions({ versionId, toRemove, toAdd, addActivationEvents, myToRemove, myToAdd: myToAdd.map(extension => extension.identifier) });
@@ -158,6 +185,13 @@ function extensionDescriptionsEqual(a: IExtensionDescription, b: IExtensionDescr
       try { await extensionHostManager.disconnect(); } catch (error) { failures.push(error); }
       try { extensionHostManager.dispose(); } catch (error) { failures.push(error); }
       if (failures.length) throw new AggregateError(failures, 'Extension host cleanup failed');`);
+  }
+  if (path === paths[4] || path === paths[5]) {
+    let contents = replaceOnce(source, '\tpublic async disconnect(): Promise<void> {',
+      `\tpublic async disconnect(): Promise<void> {
+    this._internalExtensionService.dispose();`);
+    const dispose = path === paths[4] ? '\tpublic override dispose(): void {' : '\toverride dispose(): void {';
+    return replaceOnce(contents, dispose, `${dispose}\n    this._internalExtensionService.dispose();`);
   }
   if (path !== paths[2]) return source;
   let contents = replaceOnce(source, 'asPromise, Barrier, IntervalTimer, timeout', 'asPromise, Barrier, IntervalTimer, Sequencer, timeout');

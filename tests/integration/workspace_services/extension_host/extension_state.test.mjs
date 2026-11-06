@@ -14,6 +14,7 @@ export { ExtensionHostExtensions } from '${upstream}workbench/services/extension
 export { AbstractExtHostExtensionService } from '${upstream}workbench/api/common/extHostExtensionService.js';
 export { AbstractExtensionService } from '${upstream}workbench/services/extensions/common/abstractExtensionService.js';
 export { ExtensionHostManager } from '${upstream}workbench/services/extensions/common/extensionHostManager.js';
+export { LazyCreateExtensionHostManager } from '${upstream}workbench/services/extensions/common/lazyCreateExtensionHostManager.js';
 export { RemoteRunningLocation } from '${upstream}workbench/services/extensions/common/extensionRunningLocation.js';
 export { Emitter, Event } from '${upstream}base/common/event.js';
 export { DisposableStore } from '${upstream}base/common/lifecycle.js';
@@ -194,29 +195,31 @@ test('首次等版本空start合法，重复／冲突start不写状态，eager�
 });
 
 // 真实owner、collection、Manager和receiver；仅进程启动／RPC传输与主线程服务为替身。
-function ownerFixture(f, { disconnectError, disposeError } = {}) {
+function ownerFixture(f, { disconnectError, disposeError, sharedOwner, activate, disconnect } = {}) {
   const notifications = [], notified = Promise.withResolvers(), lifecycle = [], exit = new m.Emitter();
-  const owner = new m.AbstractExtensionService({ hasLocalProcess: false, allowRemoteExtensionsInLocalWebWorker: false },
+  const owner = sharedOwner ?? new m.AbstractExtensionService({ hasLocalProcess: false, allowRemoteExtensionsInLocalWebWorker: false },
     {}, {}, {}, {}, { error(error) { notifications.push(error); notified.resolve(); } }, {}, {},
     { onEnablementChanged: m.Event.None }, { onWillActivateFileSystemProvider: m.Event.None }, {},
     { onDidChangeProfile: m.Event.None, onDidEnableExtensions: m.Event.None,
       onDidInstallExtensions: m.Event.None, onDidUninstallExtension: m.Event.None },
     {}, {}, {}, new m.NullLogService(), {}, {}, { onWillShutdown: m.Event.None }, {}, {});
   const mirror = new m.ExtensionHostExtensions(1, [base], [base.identifier]);
-  const proxy = { startExtensionHost: delta => f.service.$startExtensionHost(delta), deltaExtensions: delta => f.service.$deltaExtensions(delta) };
+  const proxy = { startExtensionHost: delta => f.service.$startExtensionHost(delta), deltaExtensions: delta => f.service.$deltaExtensions(delta),
+    activate: activate ?? (async () => false) };
   class Manager extends m.ExtensionHostManager {
     _createExtensionHostCustomers() { return proxy; }
   }
   const host = { runningLocation: new m.RemoteRunningLocation(), startup: 2, extensions: mirror, onExit: exit.event,
     start: async () => ({}),
-    async disconnect() { lifecycle.push('disconnect'); exit.fire([0, null]); if (disconnectError) throw disconnectError; },
+    async disconnect() { lifecycle.push('disconnect'); exit.fire([0, null]); await disconnect?.(); if (disconnectError) throw disconnectError; },
     dispose() { lifecycle.push('dispose'); if (disposeError) throw disposeError; } };
-  const manager = new Manager(host, [], {}, {}, {}, { publicLog2() {} }, new m.NullLogService());
+  const internal = owner._acquireInternalAPI(host);
+  const manager = new Manager(host, [], internal, {}, {}, { publicLog2() {} }, new m.NullLogService());
   let exits = 0;
   const listeners = new m.DisposableStore();
   listeners.add(manager.onDidExit(() => { exits++; }));
   owner._extensionHostManagers.add(manager, listeners);
-  return { owner, manager, mirror, notifications, notified: notified.promise, lifecycle, exits: () => exits,
+  return { owner, manager, mirror, internal, notifications, notified: notified.promise, lifecycle, exits: () => exits,
     async prepare() {
       await manager.ready();
       const lock = await owner._registry.acquireLock('test initial state');
@@ -292,8 +295,93 @@ test('失败代际清理始终尝试disconnect和dispose，原更新错误与两
     expect(o.lifecycle).toEqual(['disconnect', 'dispose']);
     expect(o.owner._extensionHostManagers.map(manager => manager)).toEqual([]);
     expect(o.notifications[0]).toContain('状态更新失败');
+    expect(() => o.internal._onWillActivateExtension(base.identifier)).toThrow('generation is closed');
     receipt.checks.push('原RPC错误／断连错误／dispose错误全部保留，退出订阅撤销，不剩失败Manager');
   } finally { o.owner.dispose(); o.manager._extensionHost.dispose = () => {}; o.manager.dispose(); f.close(); }
+});
+
+test('关闭原Manager在断连等待前撤销内部回调，不污染同位置新代际的状态', async () => {
+  const f = receiver(), o = ownerFixture(f), nextReceiver = receiver();
+  let next;
+  try {
+    await o.prepare();
+    await o.owner._extensionHostManagers.stopOne(o.manager);
+    next = ownerFixture(nextReceiver, { sharedOwner: o.owner });
+    await next.manager.ready();
+    next.internal._onWillActivateExtension(base.identifier);
+    const liveError = new Error('新代际错误');
+    next.internal._onExtensionRuntimeError(base.identifier, liveError);
+    const reason = { startup: false, extensionId: base.identifier, activationEvent: 'api' };
+    for (const callback of [
+      () => o.internal._onWillActivateExtension(base.identifier),
+      () => o.internal._onDidActivateExtension(base.identifier, 1, 2, 3, reason),
+      () => o.internal._onDidActivateExtensionError(base.identifier, new Error('旧激活错误')),
+      () => o.internal._onExtensionRuntimeError(base.identifier, new Error('旧运行错误')),
+    ]) expect(callback).toThrow('generation is closed');
+    await expect(o.internal._activateById(base.identifier, reason)).rejects.toThrow('generation is closed');
+    expect(o.owner.getExtensionsStatus()['probe.base'].runtimeErrors).toEqual([liveError]);
+    expect(o.owner.getExtensionsStatus()['probe.base'].activationTimes).toBeUndefined();
+    expect(o.owner._extensionHostManagers.map(manager => manager)).toEqual([next.manager]);
+    receipt.checks.push('原Manager关闭先撤销回调；同位置新代际保持状态和归属；旧激活及四类状态回调明确拒绝');
+  } finally { o.close(); nextReceiver.close(); f.close(); }
+});
+
+test('实际断连尚未完成或直接dispose时，原内部回调均已撤销', async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = receiver(), o = ownerFixture(f, { disconnect: async () => { entered.resolve(); await release.promise; } });
+  let closing;
+  try {
+    await o.prepare();
+    closing = o.owner._extensionHostManagers.stopOne(o.manager);
+    await entered.promise;
+    expect(o.lifecycle).toEqual(['disconnect']);
+    expect(() => o.internal._onWillActivateExtension(base.identifier)).toThrow('generation is closed');
+    release.resolve(); await closing;
+    const direct = ownerFixture(f);
+    try {
+      await direct.manager.ready();
+      direct.manager.dispose();
+      expect(() => direct.internal._onExtensionRuntimeError(base.identifier, new Error('迟到'))).toThrow('generation is closed');
+    } finally { direct.close(); }
+    receipt.checks.push('真实断连在阻塞时已撤销回调；直接dispose也撤销，不依赖transport清理成功');
+  } finally { release.resolve(); if (closing) await closing; o.close(); f.close(); }
+});
+
+test('旧代际已准入激活迟到完成明确失败，不转交或重放到替换宿主', async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = receiver(), nextReceiver = receiver();
+  let attempts = 0, nextAttempts = 0;
+  const o = ownerFixture(f, { activate: async () => { attempts++; entered.resolve(); await release.promise; return true; } });
+  let activation, next;
+  try {
+    await o.prepare();
+    activation = o.internal._activateById(base.identifier, { startup: false, extensionId: base.identifier, activationEvent: 'api' });
+    await entered.promise;
+    await o.owner._extensionHostManagers.stopOne(o.manager);
+    next = ownerFixture(nextReceiver, { sharedOwner: o.owner, activate: async () => { nextAttempts++; return true; } });
+    await next.manager.ready();
+    release.resolve();
+    await expect(activation).rejects.toThrow('generation is closed');
+    expect(attempts).toBe(1); expect(nextAttempts).toBe(0);
+    expect(o.owner._extensionHostManagers.map(manager => manager)).toEqual([next.manager]);
+    receipt.checks.push('原service→真实Manager→受控RPC的激活结算被旧回调代际拒绝；没有重发至替换宿主');
+  } finally { release.resolve(); if (activation) await activation.catch(() => {}); o.close(); nextReceiver.close(); f.close(); }
+});
+
+test('惰性Manager未创建实际进程时关闭也撤销原回调准入', async () => {
+  const f = receiver(), o = ownerFixture(f);
+  let disposed = 0;
+  const host = { startup: 3, runningLocation: new m.RemoteRunningLocation(), onExit: m.Event.None, dispose() { disposed++; } };
+  const internal = o.owner._acquireInternalAPI(host);
+  const lazy = new m.LazyCreateExtensionHostManager(host, [], internal,
+    { createInstance() { throw new Error('不应启动惰性宿主'); } }, new m.NullLogService());
+  try {
+    await lazy.disconnect();
+    expect(() => internal._onWillActivateExtension(base.identifier)).toThrow('generation is closed');
+    lazy.dispose();
+    expect(disposed).toBe(1);
+    receipt.checks.push('惰性Manager未启动即关闭也撤销内部API，无新进程或回调fallback');
+  } finally { o.close(); f.close(); }
 });
 
 afterAll(async () => {

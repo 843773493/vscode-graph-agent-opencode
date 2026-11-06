@@ -14,6 +14,8 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 
 `extensionHostStateTransform.mjs` 在浏览器与 Node 构建分流前应用同一宿主状态合同。描述和归属先验证候选，路径索引成功后一次发布两个原 registry、激活事件和 wire 版本，再发通知；registry 本地 revision 不代替 wire 版本。状态 RPC 失败由原扩展服务移除准确宿主代际、撤销退出订阅并报告，不能继续消费后续增量或自动重放。原 Node／Worker RPC 与 eager 启动语义保持，不能为此增加另一套协议或状态存储。
 
+每代`IInternalExtensionService`闭包在eager／lazy Manager的disconnect首次await前及dispose入口撤销；状态回调不能更新后续代际，已准入激活迟到完成明确失败，不自动重放。其它MainThread异步UI／查询及RPC载荷仍须按各owner完成代际与视图投影，不把这一准入闭包当作完整隔离。
+
 保留完整原版 Workbench 的服务和行为，不以 Grid 仿制替代。bun 管理独立依赖；生成文件写 dist 并忽略；测试及临时工作区遵守根 AGENTS。原版子模块沿用其目录和上游指引，项目新增源码目录须有四段式 AGENTS。
 
 `server.mjs` 是 Electron 与独立静态服务的同一 HTTP／SSE／WebSocket 代理；响应关闭时释放对应 HTTP 上游请求，不等待已经结束的请求体再次触发 aborted，也不能关闭其它 owner 的连接。传输边界验证归 `tests/integration/clients/web/workbench_server.test.mjs`，不替代真实 Gateway 或原生宿主验收。
