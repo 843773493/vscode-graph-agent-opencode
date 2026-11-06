@@ -22,11 +22,13 @@ def locator_database():
         connection.executescript("""
             CREATE TABLE messages(message_sequence INTEGER PRIMARY KEY, message_id TEXT, turn_id TEXT,
                 execution_id TEXT, jsonl_offset INTEGER, jsonl_length INTEGER);
-            CREATE TABLE item_catalog(item_id TEXT UNIQUE, jsonl_offset INTEGER, jsonl_length INTEGER);
+            CREATE TABLE item_catalog(item_id TEXT UNIQUE, jsonl_offset INTEGER, jsonl_length INTEGER,
+                turn_id TEXT, execution_id TEXT);
             CREATE INDEX messages_logical_identity ON messages(message_id,message_sequence);
             INSERT INTO messages VALUES (1,'logical','turn','execution-old',0,10),
                 (2,'logical','turn','execution-new',10,20),(3,'other','turn','execution-other',30,30);
-            INSERT INTO item_catalog VALUES ('old-item',0,10),('new-item',10,20),('other-item',30,30);
+            INSERT INTO item_catalog VALUES ('old-item',0,10,'turn','execution-old'),
+                ('new-item',10,20,'turn','execution-new'),('other-item',30,30,'turn','execution-other');
         """)
         yield connection
 
@@ -125,8 +127,8 @@ def test_selected_message_version_does_not_join_every_historical_version(locator
         ((index, "logical", "turn", f"execution-{index}", index * 100, 10) for index in range(4, 1028)),
     )
     locator_database.executemany(
-        "INSERT INTO item_catalog VALUES (?,?,?)",
-        ((f"item-{index}", index * 100, 10) for index in range(4, 1028)),
+        "INSERT INTO item_catalog VALUES (?,?,?,?,?)",
+        ((f"item-{index}", index * 100, 10, "turn", f"execution-{index}") for index in range(4, 1028)),
     )
     instructions = 0
 

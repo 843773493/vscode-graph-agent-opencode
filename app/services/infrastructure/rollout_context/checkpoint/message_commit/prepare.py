@@ -148,24 +148,15 @@ def prepare_messages(
                 connection, canonical_message_id, item_id=explicit_anchor,
                 sequences=locator_sequences if multiple_versions else None,
             )
-            canonical_anchor = connection.execute(
-                "SELECT jsonl_offset, jsonl_length, turn_id, execution_id "
-                "FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ?",
-                message_locator[3:5],
-            ).fetchone() if message_locator is not None else None
-            if message_locator is not None and canonical_anchor is None:
-                raise RuntimeError(
-                    f"v2 message projection 缺少 canonical item: {canonical_message_id}"
-                )
             message_item_group = (
                 read_message_group(
                     connection,
                     stream,
-                    offset=canonical_anchor[0],
-                    length=canonical_anchor[1],
+                    offset=message_locator[3],
+                    length=message_locator[4],
                     read_item=read_item,
                 )
-                if canonical_anchor is not None
+                if message_locator is not None
                 else ()
             )
             message_role = codec.message_role(message)
@@ -176,8 +167,14 @@ def prepare_messages(
                         f"canonical message group Turn identity 不一致: {canonical_message_id}"
                     )
                 stored_turn_id = next(iter(stored_turn_ids))
-                stored_execution_ids: set[str] = set()
-                for item in message_item_group:
+                stored_execution_id = message_locator[2]
+                if not isinstance(stored_execution_id, str) or not stored_execution_id:
+                    raise RuntimeError(
+                        f"canonical item 缺少 execution attribution: {message_item_group[-1].item_id}"
+                    )
+                # 末尾 anchor 的归属已由 locator 核对；这里只查询其余成员，不重复读取 anchor。
+                stored_execution_ids = {stored_execution_id}
+                for item in message_item_group[:-1]:
                     canonical_item_id = item.item_id
                     execution_row = connection.execute(
                         "SELECT execution_id FROM item_catalog WHERE item_id = ?",
@@ -196,19 +193,9 @@ def prepare_messages(
                     raise RuntimeError(
                         f"canonical message group execution identity 不一致: {canonical_message_id}"
                     )
-                stored_execution_id = next(iter(stored_execution_ids))
-                if canonical_anchor is None or (
-                    canonical_anchor[2] != stored_turn_id or canonical_anchor[3] != stored_execution_id
-                ):
+                if message_locator[1] != stored_turn_id:
                     raise RuntimeError(
                         "canonical item 与 message-root catalog attribution 不一致: "
-                        f"{canonical_message_id}"
-                    )
-                if (
-                    message_locator[1] != stored_turn_id or message_locator[2] != stored_execution_id
-                ):
-                    raise RuntimeError(
-                        "message projection 与 canonical item attribution 不一致: "
                         f"{canonical_message_id}"
                     )
                 turn_id = stored_turn_id

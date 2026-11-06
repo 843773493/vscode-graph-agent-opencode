@@ -345,22 +345,12 @@ class RolloutItemsMixin:
             with self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id).open("rb") as stream:
                 for message_id, item_id in message_locators:
                     locator = find_message_locator(connection, message_id, item_id=item_id)
-                    indexed = locator[1:] if locator is not None else None
-                    catalog = connection.execute(
-                        "SELECT turn_id,execution_id,jsonl_offset,jsonl_length FROM item_catalog "
-                        "WHERE jsonl_offset=? AND jsonl_length=?",
-                        indexed[2:4],
-                    ).fetchone() if indexed is not None else None
-                    if indexed is not None and catalog is None:
-                        raise RuntimeError(f"message projection 缺少 canonical item: {message_id}")
-                    if indexed is not None and indexed[:2] != catalog[:2]:
-                        raise RuntimeError(f"message projection 与 canonical item attribution 不一致: {message_id}")
-                    attribution = catalog[:2] if catalog is not None else (turn_id, execution_id)
+                    attribution = locator[1:3] if locator is not None else (turn_id, execution_id)
                     if not isinstance(attribution[1], str) or not attribution[1]:
                         raise RuntimeError(f"request message 缺少 canonical execution attribution: {message_id}")
                     items = tuple(read_message_group(
-                        connection, stream, offset=catalog[2], length=catalog[3], read_item=read_item,
-                    )) if catalog is not None else ()
+                        connection, stream, offset=locator[3], length=locator[4], read_item=read_item,
+                    )) if locator is not None else ()
                     groups.append(RequestMessageGroup(message_id, attribution[0], attribution[1], items))
         return tuple(groups)
 

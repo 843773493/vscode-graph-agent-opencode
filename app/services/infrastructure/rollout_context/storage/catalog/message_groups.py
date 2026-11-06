@@ -32,7 +32,7 @@ def find_message_locator(
     # 两条候选已足以证明歧义，禁止先物化完整版本集合再在 Python 过滤。
     rows = connection.execute(
         "SELECT message.message_sequence,message.turn_id,message.execution_id,"
-        "message.jsonl_offset,message.jsonl_length,item.item_id "
+        "message.jsonl_offset,message.jsonl_length,item.item_id,item.turn_id,item.execution_id "
         "FROM messages message LEFT JOIN item_catalog item "
         "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
         "WHERE " + " AND ".join(predicates) + " LIMIT 2",
@@ -46,6 +46,9 @@ def find_message_locator(
         if item_id is not None:
             raise RuntimeError(f"message locator 缺少指定 canonical item: {message_id}/{item_id}")
         return None
+    # locator 已连接唯一 anchor，同次核对归属，消费者无需再按字节坐标回查 catalog。
+    if rows[0][1:3] != rows[0][6:8]:
+        raise RuntimeError(f"message projection 与 canonical item attribution 不一致: {message_id}")
     return tuple(rows[0][:5])
 
 
