@@ -8,6 +8,7 @@ export const extensionLanguageFeaturesSourcePaths = [
   'src/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.ts',
   'src/vs/editor/common/languages.ts',
   'src/vs/editor/contrib/wordHighlighter/browser/textualHighlightProvider.ts',
+  'src/vs/editor/contrib/codeAction/browser/codeAction.ts',
 ];
 
 export function transformExtensionLanguageFeatures(root, path, source, replaceOnce) {
@@ -40,11 +41,27 @@ export function transformExtensionLanguageFeatures(root, path, source, replaceOn
   }
   if (path === paths[4]) {
     let contents = replaceOnce(source, "import { LanguageSelector } from './languageSelector.js';\n", '');
-    return replaceOnce(contents, '\n\treadonly selector: LanguageSelector;\n', '');
+    contents = replaceOnce(contents, '\n\treadonly selector: LanguageSelector;\n', '');
+    return replaceOnce(contents, 'export interface CodeActionProvider {', 'export interface CodeActionProvider {\n\treadonly lifecycleToken?: CancellationToken;');
   }
   if (path === paths[5]) {
     let contents = replaceOnce(source, "import { LanguageFilter } from '../../../common/languageSelector.js';\n", '');
     return replaceOnce(contents, "\n\tselector: LanguageFilter = { language: '*' };\n", '');
+  }
+  if (path === paths[6]) {
+    let contents = replaceOnce(source, 'import { CancellationToken }', 'import { CancellationToken, CancellationTokenSource }');
+    // 原 item 已持有 provider；生命周期只在本次应用合并，不进入 action DTO 或第二份索引。
+    contents = replaceOnce(contents, '\n\tconst bulkEditService = accessor.get(IBulkEditService);', `
+  if (token.isCancellationRequested || item.provider?.lifecycleToken?.isCancellationRequested) return;
+  const request = new CancellationTokenSource(token);
+  const cancellation = item.provider?.lifecycleToken?.onCancellationRequested(() => request.cancel());
+  try {
+    token = request.token;
+\tconst bulkEditService = accessor.get(IBulkEditService);`);
+    contents = replaceOnce(contents, "\n\t\t\tcode: 'undoredo.codeAction',", "\n\t\t\tcode: 'undoredo.codeAction',\n      token,");
+    contents = replaceOnce(contents, 'if (!result.isApplied) {', 'if (!result.isApplied || token.isCancellationRequested) {');
+    return replaceOnce(contents, 'setTimeout(() => accessibilitySignalService.playSignal(AccessibilitySignal.codeActionApplied), CODE_ACTION_SOUND_APPLIED_DURATION);', `setTimeout(() => accessibilitySignalService.playSignal(AccessibilitySignal.codeActionApplied), CODE_ACTION_SOUND_APPLIED_DURATION);
+  } finally { cancellation?.dispose(); request.dispose(); }`);
   }
   if (path !== paths[2]) return source;
   let contents = `import { assertHostWorkspaceEdit } from ${JSON.stringify(join(root, 'src/extensions/targetUris.js'))};
@@ -66,7 +83,8 @@ import type { score } from '../../../editor/common/languageSelector.js';\n` + so
       try { return await operation(request.token); }
       finally { cancellation.dispose(); request.dispose(); }
     };
-    const provider: languages.CodeActionProvider = {`);
+    const provider: languages.CodeActionProvider = {
+      lifecycleToken: this.extHostContext.extensionHost.binding ? lifetime.token : undefined,`);
   contents = replaceOnce(contents, `const listDto = await this._proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, context, token);
 \t\t\t\tif (!listDto) {
 \t\t\t\t\treturn undefined;

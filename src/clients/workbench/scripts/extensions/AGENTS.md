@@ -30,4 +30,4 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 
 直接 workspace.applyEdit 复用原 MainThreadBulkEdits／BulkEditService，不增加编辑应用链。整批端点校验先于 revive，错误保留原 warn／false，代际关闭通过同一原 token 取消；BulkEditService 按实际完成资源区分取消后的零写入与已完成结果，不用关闭标志抹去已经发生的副作用。
 
-Code action 的 provide／resolve 在原 MainThread 内先核整批 edit，非法后项不能发布合法前项。请求 token 同时响应调用取消和注册释放；迟到 provide 释放准确的新 cache，resolve 拒绝后不改原 action。已发布 list 继续持有原 cache，由其幂等 dispose 收尾，不增加 session registry；此闭包不代表已发布 action 的 UI 应用生命周期或其它语言编辑入口已迁齐。
+Code action 的 provide／resolve 在原 MainThread 内先核整批 edit，非法后项不能发布合法前项。请求 token 同时响应调用取消和注册释放；迟到 provide 释放准确的新 cache，resolve 拒绝后不改原 action。已发布 list 继续持有原 cache，由其幂等 dispose 收尾，不增加 session registry。目标 Provider 将同一注册生命周期留在原 Provider，原 CodeActionItem／applyCodeAction 合并调用方取消，并将同一 token 交原 BulkEditService；撤代后不启动编辑或后继 command，已开始的副作用不回滚。普通 Web／内置 Provider 不附带目标生命周期；不把本闭包扩大为其它语言编辑入口。

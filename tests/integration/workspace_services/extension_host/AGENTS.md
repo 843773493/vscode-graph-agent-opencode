@@ -34,4 +34,4 @@
 
 - `extension_workspace_edits.test.mjs` 在真实 Chromium 中经原公开 API、ExtHostBulkEdits、RPC、MainThreadBulkEdits 和 BulkEditService 核整批归属与代际；文本用原 TextModel，文件用原 BulkFileEdits／WorkingCopyFileService／FileService 与内存 Provider。认证 binding、字节输送、文档版本镜像、已加载模型 resolver、配置／UI 和纯文本 TreeSitter 库为具名装具；不替代真实 Gateway／Node／磁盘保存、产品 WorkspaceFiles 的重命名／删除、扩展 FileEvents participant、Notebook 或整批版本预检。
 
-- `extension_code_actions.test.mjs` 在真实 Chromium 中运行原 MainThreadLanguageFeatures、LanguageFeaturesService 注册表和 RPC；认证 binding、字节输送、扩展 callback／cache、模型 URI／语言为具名装具。核 provide／resolve 整批归属、原 action 身份、取消与注销／宿主关闭、新代际隔离及准确 cache 释放；不替代真实 Node／Gateway、磁盘编辑、已发布 action 的 UI 应用生命周期或其余 Provider。
+- `extension_code_actions.test.mjs` 在真实 Chromium 中运行原 MainThreadLanguageFeatures、LanguageFeaturesService 注册表、RPC、CodeActionItem 和 applyCodeAction；认证 binding、字节输送、扩展 callback／cache、模型 URI／语言为具名装具。核 provide／resolve 整批归属、原 action 身份、已发布 action 的应用取消、注销／宿主关闭、resolve／预览／已生效回执等待、新代际隔离和准确 cache 释放，并保持 Web／内置直接 action 行为。BulkEdit、命令与 UI DI 服务为具名边界装具，预览只模拟 BulkEdit 内部取消检查，内存效果不是真实磁盘写入；不替代真实 Node／Gateway、BulkEditService、命令处理器、UI 点击或其余 Provider 验收。

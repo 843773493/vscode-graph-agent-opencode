@@ -14,6 +14,13 @@ const built = await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { MainThreadLanguageFeatures } from '${upstream}workbench/api/browser/mainThreadLanguageFeatures.js';
 export { LanguageFeaturesService } from '${upstream}editor/common/services/languageFeaturesService.js';
 export { ILanguageFeaturesService } from '${upstream}editor/common/services/languageFeatures.js';
+export { CodeActionItem } from '${upstream}editor/contrib/codeAction/common/types.js';
+export { applyCodeAction, ApplyCodeActionReason } from '${upstream}editor/contrib/codeAction/browser/codeAction.js';
+export { IBulkEditService } from '${upstream}editor/browser/services/bulkEditService.js';
+export { ICommandService } from '${upstream}platform/commands/common/commands.js';
+export { ITelemetryService } from '${upstream}platform/telemetry/common/telemetry.js';
+export { INotificationService } from '${upstream}platform/notification/common/notification.js';
+export { IAccessibilitySignalService } from '${upstream}platform/accessibilitySignal/browser/accessibilitySignalService.js';
 export { InstantiationService } from '${upstream}platform/instantiation/common/instantiationService.js';
 export { ServiceCollection } from '${upstream}platform/instantiation/common/serviceCollection.js';
 export { MainContext, ExtHostContext } from '${upstream}workbench/api/common/extHost.protocol.js';
@@ -31,6 +38,8 @@ await writeFile(join(run.artifactsDir, 'bundle-meta.json'), JSON.stringify(built
 const sources = ['scripts/sourceTransform.mjs', 'scripts/extensions/extensionLanguageFeaturesTransform.mjs',
   'scripts/extensions/extensionWorkspaceSymbolsTransform.mjs', 'src/extensions/languageFeatures.ts', 'src/extensions/targetUris.ts',
   'upstream/src/vs/editor/common/languageFeatureRegistry.ts', 'upstream/src/vs/workbench/api/browser/mainThreadLanguageFeatures.ts',
+  'upstream/src/vs/editor/common/languages.ts', 'upstream/src/vs/editor/contrib/codeAction/common/types.ts',
+  'upstream/src/vs/editor/contrib/codeAction/browser/codeAction.ts',
   'upstream/src/vs/workbench/api/browser/mainThreadBulkEdits.ts', 'upstream/src/vs/workbench/services/extensions/common/rpcProtocol.ts'];
 const fingerprints = Object.fromEntries(await Promise.all(sources.map(async path => [path, createHash('sha256').update(await readFile(join(root, path))).digest('hex')])));
 const checks = [], observations = [], browserEvents = [];
@@ -49,7 +58,7 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中的原 MainThreadLanguageFeatures、LanguageFeaturesService/共享 registry、DI、RPCProtocol/TargetUriTransformer 与 WorkspaceEdit revive。认证 binding、内存字节输送、扩展 provide/resolve 回调及 cache 分配/释放接收端、模型 URI/语言/同步状态和 canonical URI 服务是具名装具；注册、注销、主线程生命周期、结果准入、action 修改与 release 派发均执行转换后的原 MainThread。未运行 Gateway、真实 Node、ExtHost CodeActionAdapter、实际编辑应用、命令执行、Notebook 或 Windows；不扩展 list 已 dispose 后 resolve 的合同。',
+      boundary: '真实 Chromium 中的原 MainThreadLanguageFeatures、LanguageFeaturesService/共享 registry、DI、RPCProtocol/TargetUriTransformer、WorkspaceEdit revive、CodeActionItem 与 applyCodeAction。认证 binding、内存字节输送、扩展 provide/resolve 回调及 cache 分配/释放接收端、模型 URI/语言/同步状态和 canonical URI 服务是具名装具；BulkEdit、命令、遥测、通知与无障碍服务为具名边界装具，预览只模拟 BulkEdit 内部取消检查，内存副作用不是真实磁盘编辑。注册、注销、主线程生命周期、结果准入、action 修改、应用取消检查与 release 派发执行转换后的原入口。未运行 Gateway、真实 Node、ExtHost CodeActionAdapter、真实 BulkEditService、命令处理器、UI 点击、Notebook 或 Windows；不扩展 list 已 dispose 后 resolve 的合同。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
@@ -134,8 +143,34 @@ async function inBrowser(name, body, argument) {
       const provide = (client, token = m.CancellationToken.None, index = 0) => client.provider.provideCodeActions(document(client.host, index), range, actionContext, token);
       const editUris = action => action.edit?.edits.map(edit => edit.resource.toString());
       const disposeList = async list => { list.dispose(); list.dispose(); await tick(); };
+      function applyBoundary() {
+        // 原 apply 通过真实 DI 取服务；边界仅记录派发和内存效果，不复制应用流程或执行磁盘／命令处理器。
+        const state = { bulk: [], commands: [], effects: [], order: [], notifications: [], telemetry: [], signals: [] };
+        const commit = call => {
+          state.effects.push(call.edit.edits.map(edit => ({ resource: edit.resource.toString(), versionId: edit.versionId, text: edit.textEdit.text })));
+          state.order.push('effect');
+        };
+        state.onBulk = async call => { commit(call); return { isApplied: true, ariaSummary: '内存编辑边界' }; };
+        const di = new m.InstantiationService(new m.ServiceCollection(
+          [m.IBulkEditService, { apply: async (edit, options) => {
+            const call = { edit, options }; state.bulk.push(call); state.order.push('bulk'); return state.onBulk(call);
+          } }],
+          [m.ICommandService, { executeCommand: async (id, ...args) => { state.commands.push({ id, args }); state.order.push('command'); } }],
+          [m.ITelemetryService, { publicLog2: (event, data) => state.telemetry.push({ event, data }) }],
+          [m.INotificationService, { error: error => state.notifications.push(String(error)) }],
+          [m.IAccessibilitySignalService, { playSignal: signal => { state.signals.push(signal); } }],
+        ), true);
+        lifetimes.push(() => di.dispose());
+        return Object.assign(state, { commit,
+          apply: (item, token = m.CancellationToken.None, options) => di.invokeFunction(m.applyCodeAction, item, m.ApplyCodeActionReason.FromCodeActions, options, token),
+          snapshot: () => ({ bulk: state.bulk.map(({ edit, options }) => ({ resources: editUris({ edit }), versions: edit.edits.map(value => value.versionId),
+            tokenPresent: options.token !== undefined, tokenCancelled: options.token?.isCancellationRequested === true, preview: options.showPreview === true,
+            label: options.label, code: options.code, respectAutoSaveConfig: options.respectAutoSaveConfig })),
+          commands: [...state.commands], effects: [...state.effects], order: [...state.order], notifications: [...state.notifications], telemetry: [...state.telemetry] }),
+        });
+      }
       globalThis.actionProbe = { m, target, connect, service, document, provide, textEdit, ownEdit, invalidEdits, nativeResources, logicalResources,
-        literalCommand, range, actionContext, editUris, disposeList, tick, failure, lifetimes, dispose() { for (const dispose of lifetimes.reverse()) dispose(); } };
+        literalCommand, range, actionContext, editUris, disposeList, applyBoundary, tick, failure, lifetimes, dispose() { for (const dispose of lifetimes.reverse()) dispose(); } };
     });
     const result = await page.evaluate(body, argument); expect(errors).toEqual([]); observations.push({ name, result }); return result;
   } finally {
@@ -285,4 +320,109 @@ for (const operation of ['cancel', 'unregister', 'dispose']) test(`${operation} 
   expect(result.isolated).toEqual({ nextCaches: [1], nextReleases: [], peerCaches: [1], peerReleases: [] }); expect(result.nextTitle).toBe('new-generation editable'); expect(result.peerTitle).toBe('backend-B editable');
   expect(result.nextReleases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.peerReleases).toEqual([{ handle: 1, id: 1, existed: true }]);
   checks.push(`${operation}取消原linked token，迟到provide仅释放新cache、resolve不改action，原list双dispose单次收尾，新代际/peer独立`);
+});
+
+test('原 apply 先派发直接 edit 再执行 command，command-only 经过原 resolve 后保留命令正文', async () => {
+  const result = await inBrowser('原CodeActionItem与apply的正常应用', async () => {
+    const p = globalThis.actionProbe, m = p.m, a = await p.connect(p.target('A')), list = await p.provide(a), boundary = p.applyBoundary();
+    await boundary.apply(new m.CodeActionItem(list.actions[0], a.provider)); const directResolves = a.resolves.length;
+    a.onResolve = async () => ({}); await boundary.apply(new m.CodeActionItem(list.actions[1], a.provider));
+    const command = p.literalCommand('正文'), state = { ...boundary.snapshot(), directResolves, resolveIds: a.resolves.map(value => value.cacheId),
+      resources: p.logicalResources(a.host).map(uri => uri.toString()), command: { id: command.id, args: command.arguments } };
+    await p.disposeList(list); return { ...state, releases: a.releases, caches: [...a.caches] };
+  });
+  expect(result.directResolves).toBe(0); expect(result.resolveIds).toEqual([[1, 1]]);
+  expect(result.bulk).toEqual([{ resources: result.resources, versions: [7, 7], tokenPresent: true, tokenCancelled: false, preview: false,
+    label: 'backend-A editable', code: 'undoredo.codeAction', respectAutoSaveConfig: true }]);
+  expect(result.effects).toEqual([result.resources.map(resource => ({ resource, versionId: 7, text: 'replacement' }))]);
+  expect(result.commands).toEqual([result.command, result.command]); expect(result.order).toEqual(['bulk', 'effect', 'command', 'command']); expect(result.notifications).toEqual([]);
+  expect(result.releases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.caches).toEqual([]);
+  checks.push('原CodeActionItem/apply的直接edit零resolve、edit先于command、command-only原resolve与完整命令参数；BulkEdit/命令为边界记录');
+});
+
+for (const operation of ['cancel', 'unregister', 'dispose']) test(`已发布 action 在 ${operation} 后进入原 apply 时零 BulkEdit／命令派发，新代际和 B 仍可应用`, async () => {
+  const result = await inBrowser(`${operation}后应用已发布action`, async operation => {
+    const p = globalThis.actionProbe, m = p.m, a = await p.connect(p.target('A')), b = await p.connect(p.target('B')), list = await p.provide(a);
+    const source = new m.CancellationTokenSource(), original = JSON.stringify(list.actions), boundary = p.applyBoundary();
+    if (operation === 'cancel') source.cancel(); else if (operation === 'unregister') await a.remote.$unregister(1); else a.main.dispose();
+    await boundary.apply(new m.CodeActionItem(list.actions[0], a.provider), source.token);
+    await boundary.apply(new m.CodeActionItem(list.actions[1], a.provider), source.token);
+    const stopped = { ...boundary.snapshot(), resolves: a.resolves.length, unchanged: JSON.stringify(list.actions) === original,
+      providerCancelled: a.provider.lifecycleToken.isCancellationRequested, registered: p.service.codeActionProvider.allNoModel().includes(a.provider),
+      releases: [...a.releases], caches: [...a.caches] };
+    const next = await p.connect(p.target('A'), 'new-generation'), nextList = await p.provide(next), peerList = await p.provide(b), active = p.applyBoundary();
+    await active.apply(new m.CodeActionItem(nextList.actions[0], next.provider)); await active.apply(new m.CodeActionItem(peerList.actions[0], b.provider));
+    await p.disposeList(list); const isolated = { next: [...next.caches], peer: [...b.caches], nextReleases: [...next.releases], peerReleases: [...b.releases] };
+    await p.disposeList(nextList); await p.disposeList(peerList); source.dispose();
+    return { stopped, active: active.snapshot(), isolated, oldReleases: a.releases, oldCaches: [...a.caches], nextReleases: next.releases, peerReleases: b.releases };
+  }, operation);
+  expect(result.stopped.bulk).toEqual([]); expect(result.stopped.effects).toEqual([]); expect(result.stopped.commands).toEqual([]); expect(result.stopped.resolves).toBe(0);
+  expect(result.stopped.telemetry).toEqual([]); expect(result.stopped.notifications).toEqual([]); expect(result.stopped.unchanged).toBe(true);
+  expect(result.stopped.providerCancelled).toBe(operation !== 'cancel'); expect(result.stopped.registered).toBe(operation === 'cancel');
+  expect(result.stopped.releases).toEqual([]); expect(result.stopped.caches).toEqual([1]);
+  expect(result.active.bulk).toHaveLength(2); expect(result.active.effects).toHaveLength(2); expect(result.active.commands).toHaveLength(2); expect(result.active.notifications).toEqual([]);
+  expect(result.active.bulk.map(value => value.tokenCancelled)).toEqual([false, false]); expect(result.active.bulk.map(value => value.label)).toEqual(['new-generation editable', 'backend-B editable']);
+  expect(result.isolated).toEqual({ next: [1], peer: [1], nextReleases: [], peerReleases: [] });
+  expect(result.oldReleases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.oldCaches).toEqual([]);
+  expect(result.nextReleases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.peerReleases).toEqual([{ handle: 1, id: 1, existed: true }]);
+  checks.push(`${operation}后原apply拒绝已发布直接edit/command-only且零resolve，原cache由list释放，同binding新registration与B仍成功`);
+});
+
+for (const operation of ['cancel', 'unregister', 'dispose']) for (const phase of ['resolve', 'preview', 'applied']) test(`${phase} 等待中 ${operation} 取消原 apply，已完成效果保留而 command 不执行`, async () => {
+  const result = await inBrowser(`${phase}等待中的${operation}`, async ({ operation, phase }) => {
+    const p = globalThis.actionProbe, m = p.m, a = await p.connect(p.target('A')), list = await p.provide(a), boundary = p.applyBoundary();
+    const source = new m.CancellationTokenSource(), entered = Promise.withResolvers(), gate = Promise.withResolvers(), action = list.actions[phase === 'resolve' ? 1 : 0];
+    const snapshot = () => JSON.stringify({ ...action, edit: action.edit && { ...action.edit,
+      edits: action.edit.edits.map(edit => ({ ...edit, resource: edit.resource.toString() })) } });
+    const original = snapshot(), savedEdit = action.edit, savedCommand = action.command;
+    if (phase === 'resolve') {
+      a.onResolve = async (request, value) => { entered.resolve(request); await gate.promise; return value; };
+    } else {
+      boundary.onBulk = async call => {
+        // 仅预览边界模拟 BulkEdit 内部的取消检查；applied 边界已产生不可回滚效果，但故意延迟成功回执。
+        if (phase === 'applied') boundary.commit(call);
+        entered.resolve(call); await gate.promise;
+        if (phase === 'preview' && !call.options.token?.isCancellationRequested) boundary.commit(call);
+        return { isApplied: phase === 'applied' || !call.options.token?.isCancellationRequested, ariaSummary: '等待边界' };
+      };
+    }
+    const applying = boundary.apply(new m.CodeActionItem(action, a.provider), source.token, { preview: phase === 'preview' });
+    const request = await Promise.race([entered.promise, applying.then(() => { throw new Error('原apply在等待边界前结束'); })]);
+    const token = phase === 'resolve' ? request.token : request.options.token, before = { present: token !== undefined, cancelled: token?.isCancellationRequested === true, effects: boundary.effects.length };
+    let cancellationEvents = 0; const subscription = token?.onCancellationRequested(() => cancellationEvents++);
+    if (operation === 'cancel') source.cancel(); else if (operation === 'unregister') await a.remote.$unregister(1); else a.main.dispose();
+    await p.tick(); const after = { cancelled: token?.isCancellationRequested === true, cancellationEvents, effects: boundary.effects.length };
+    gate.resolve(); await applying; subscription?.dispose();
+    const state = { ...boundary.snapshot(), before, after, resolveIds: a.resolves.map(value => value.cacheId),
+      unchanged: action.edit === savedEdit && action.command === savedCommand && snapshot() === original,
+      beforeListDispose: { releases: [...a.releases], caches: [...a.caches] } };
+    await p.disposeList(list); source.dispose(); return { ...state, releases: a.releases, caches: [...a.caches] };
+  }, { operation, phase });
+  expect(result.before).toEqual({ present: true, cancelled: false, effects: phase === 'applied' ? 1 : 0 });
+  expect(result.after).toEqual({ cancelled: true, cancellationEvents: 1, effects: phase === 'applied' ? 1 : 0 });
+  expect(result.bulk).toHaveLength(phase === 'resolve' ? 0 : 1); expect(result.effects).toHaveLength(phase === 'applied' ? 1 : 0);
+  if (phase !== 'resolve') { expect(result.bulk[0].tokenCancelled).toBe(true); expect(result.bulk[0].preview).toBe(phase === 'preview'); }
+  expect(result.commands).toEqual([]); expect(result.notifications).toEqual([]); expect(result.unchanged).toBe(true);
+  expect(result.resolveIds).toEqual(phase === 'resolve' ? [[1, 1]] : []); expect(result.beforeListDispose).toEqual({ releases: [], caches: [1] });
+  expect(result.releases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.caches).toEqual([]);
+  checks.push(`${phase}/${operation}通过原apply合并token并取消；resolve不修改action，预览边界无效果，已生效边界保留效果但零command，list单次release`);
+});
+
+test('Web 和无 provider 的内置直接 action 仍经原 apply 成功，Web 生命周期不增加 Node 限制', async () => {
+  const result = await inBrowser('Web与内置直接action保留原应用行为', async () => {
+    const p = globalThis.actionProbe, m = p.m, web = await p.connect({ runningLocation: { kind: 2 } }), list = await p.provide(web), boundary = p.applyBoundary();
+    web.onResolve = async () => ({});
+    await boundary.apply(new m.CodeActionItem(list.actions[0], web.provider)); await boundary.apply(new m.CodeActionItem(list.actions[1], web.provider));
+    const noLifetime = web.provider.lifecycleToken === undefined; web.main.dispose();
+    await boundary.apply(new m.CodeActionItem(list.actions[0], web.provider));
+    const builtin = { title: 'builtin direct', edit: { edits: [p.textEdit(m.URI.file('/outside/builtin.ts'))] }, command: p.literalCommand('builtin') };
+    await boundary.apply(new m.CodeActionItem(builtin, undefined));
+    const state = { ...boundary.snapshot(), noLifetime, resources: p.logicalResources(web.host).map(uri => uri.toString()), resolveIds: web.resolves.map(value => value.cacheId) };
+    await p.disposeList(list); return { ...state, releases: web.releases, caches: [...web.caches] };
+  });
+  expect(result.noLifetime).toBe(true); expect(result.bulk.map(value => value.resources)).toEqual([result.resources, result.resources, ['file:///outside/builtin.ts']]);
+  expect(result.bulk.map(value => [value.tokenPresent, value.tokenCancelled])).toEqual([[true, false], [true, false], [true, false]]);
+  expect(result.effects).toHaveLength(3); expect(result.commands).toHaveLength(4); expect(result.resolveIds).toEqual([[1, 1]]); expect(result.notifications).toEqual([]);
+  expect(result.releases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.caches).toEqual([]);
+  checks.push('Web的原file/untitled直接应用与command-only、关闭后已发布直接action及无provider内置直接action成功，不增加Node归属限制');
 });
