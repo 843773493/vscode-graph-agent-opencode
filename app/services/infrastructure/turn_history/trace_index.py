@@ -75,7 +75,7 @@ class TraceTurnIndex:
             source_compacted=compact_payload != full_payload,
             compact_event=compact_payload,
         )
-        line = entry.model_dump_json().encode("utf-8") + b"\n"
+        line = entry.__pydantic_serializer__.to_json(entry) + b"\n"
         if len(line) > MAX_COMPACT_LINE_BYTES:
             raise RuntimeError(
                 "Trace Turn index 事件超过固定上限: "

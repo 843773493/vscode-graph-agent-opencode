@@ -135,7 +135,7 @@ class TraceIndexStorage:
             f".{self.manifest_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
         )
         with temp.open("wb") as stream:
-            stream.write(manifest.model_dump_json().encode("utf-8"))
+            stream.write(manifest.__pydantic_serializer__.to_json(manifest))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, self.manifest_path)

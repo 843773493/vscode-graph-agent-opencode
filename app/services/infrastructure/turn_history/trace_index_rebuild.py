@@ -80,7 +80,7 @@ def _write_entry(
         source_compacted=compact_payload != event_json,
         compact_event=compact_payload,
     )
-    line = entry.model_dump_json().encode("utf-8") + b"\n"
+    line = entry.__pydantic_serializer__.to_json(entry) + b"\n"
     if len(line) > MAX_COMPACT_LINE_BYTES:
         raise RuntimeError(
             "重建 Trace Turn index 事件超过固定上限: "
@@ -181,7 +181,7 @@ def rebuild_trace_turn_index(
             indexed_event_types=indexed_event_types,
         )
         with temp_manifest.open("wb") as stream:
-            stream.write(manifest.model_dump_json().encode("utf-8"))
+            stream.write(manifest.__pydantic_serializer__.to_json(manifest))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_index, index_path)

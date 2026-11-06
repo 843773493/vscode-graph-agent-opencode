@@ -47,7 +47,8 @@ class TraceEventWriter:
         self._turn_index = TraceTurnIndex(trace_file.parent)
 
     def append(self, session_id: str, event: Event) -> TraceAppendReceipt:
-        line = event.model_dump_json().encode("utf-8") + b"\n"
+        # 复用模型自身的序列化规则，直接输出 UTF-8，省去中文 JSON 的解码再编码。
+        line = event.__pydantic_serializer__.to_json(event) + b"\n"
         manifest, trace_start = self._turn_index.recover_before_append()
         if event.type not in self._indexed_event_types:
             written_end = self._append_bytes(
