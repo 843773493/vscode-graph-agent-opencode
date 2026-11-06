@@ -35,9 +35,13 @@ def prepare_message_values(
             state = "snapshot"
     else:
         state = "delta" if delta else "view"
-        if parent_config is not None and not delta and "_summarization_event" not in values:
+        if (
+            parent_config is not None and (not delta or "messages" not in new_versions)
+            and "_summarization_event" not in values
+        ):
             # None 表示继承冻结 selection，绝不把省略值伪装成空消息。
-            # Delta 依赖祖先 pending writes，压缩消费正文，仍走官方恢复链路。
+            # Delta 仅在 messages 更新时消费父 pending writes；版本未变无需恢复旧正文。
+            # 压缩仍消费正文，沿官方恢复链路取得完整输入。
             return None, state
         parent = saver.get_tuple(parent_config) if parent_config is not None else None
         if parent_config is not None and parent is None:
