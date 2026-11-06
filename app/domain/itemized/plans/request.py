@@ -411,7 +411,9 @@ class ContextRequestPlan:
     def plan_hash(self) -> str:
         return context_plan_hash(self)
 
-    def to_dict(self, *, include_plan_hash: bool = True) -> dict[str, object]:
+    def to_dict(
+        self, *, include_plan_hash: bool = True, include_contribution_bodies: bool = True,
+    ) -> dict[str, object]:
         result = {
             "session_id": self.session_id,
             "thread_id": self.thread_id,
@@ -426,7 +428,7 @@ class ContextRequestPlan:
             "refs": [ref.to_dict() for ref in self.refs],
             "tool_set_refs": [ref.to_dict() for ref in self.tool_set_refs],
             "contributions": [
-                item.to_dict()
+                item.to_dict(include_body=include_contribution_bodies)
                 for item in self.contributions
             ],
             "selection": [entry.to_dict() for entry in self.selection],

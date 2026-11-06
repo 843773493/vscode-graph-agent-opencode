@@ -61,7 +61,7 @@ def write_registry(
                 plan.thread_id,
                 plan.plan_id,
                 contribution.contribution_id,
-                json_text({**contribution.to_dict(), "body": None}),
+                json_text(contribution.to_dict(include_body=False)),
             )
             for contribution in plan.contributions
         ],
@@ -97,7 +97,7 @@ def validate_registry(
         identity,
     ).fetchall()
     if set(contributions) != {
-        (contribution.contribution_id, json_text({**contribution.to_dict(), "body": None}))
+        (contribution.contribution_id, json_text(contribution.to_dict(include_body=False)))
         for contribution in plan.contributions
     }:
         raise ValueError("source-mismatch: plan contribution registry 不一致")

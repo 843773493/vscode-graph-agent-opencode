@@ -28,11 +28,8 @@ def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:
         raise ValueError("plan-order-integrity: plan registry 只接收 unsealed draft")
     if not plan.plan_creation_idempotency_key:
         raise ValueError("plan-idempotency-conflict: 创建 draft 必须有显式幂等键")
-    # 领域载体已隔离嵌套 JSON；本次投影不再序列化后反解析同一份 draft。
-    manifest = plan.to_dict()
-    for contribution in cast(list[dict[str, object]], manifest["contributions"]):
-        contribution["body"] = None
-    return manifest
+    # registry 不消费正文，直接生成无正文投影，不随正文规模做无效深拷贝。
+    return plan.to_dict(include_contribution_bodies=False)
 
 
 def creation_hash(plan: ContextRequestPlan) -> str:
@@ -89,8 +86,8 @@ def validate_sealed_plan(
             expected_value = [item.to_dict() for item in expected_value]
             actual_value = [item.to_dict() for item in actual_value]
         elif field.name == "contributions":
-            expected_value = [{**item.to_dict(), "body": None} for item in expected_value]
-            actual_value = [{**item.to_dict(), "body": None} for item in actual_value]
+            expected_value = [item.to_dict(include_body=False) for item in expected_value]
+            actual_value = [item.to_dict(include_body=False) for item in actual_value]
             # 核心字段已由 domain 限定类型；自由 JSON 保留 JCS 的数字/容器语义。
             for row in (*expected_value, *actual_value):
                 row["extensions"] = canonical_json_bytes(row["extensions"]).decode("utf-8")

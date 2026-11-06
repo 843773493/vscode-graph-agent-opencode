@@ -267,11 +267,13 @@ class ContextContribution:
         object.__setattr__(self, "extensions", {})
 
 
-    def to_dict(self) -> dict[str, object]:
+    def to_dict(self, *, include_body: bool = True) -> dict[str, object]:
         """草稿与封存共享唯一字段投影；保护正文与 registry ordinal 不补写。"""
-        # 保护正文直接省略，避免深拷贝后丢弃；其余 JSON getter 已隔离嵌套容器。
+        # 无正文 manifest 和保护正文均直接省略，避免深拷贝后丢弃。
         result = {
-            entry.name: None if entry.name == "body" and self.protection != DetailProtection.PUBLIC
+            entry.name: None if entry.name == "body" and (
+                not include_body or self.protection != DetailProtection.PUBLIC
+            )
             else getattr(self, entry.name)
             for entry in fields(self)
             if entry.init
