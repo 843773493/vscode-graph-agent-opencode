@@ -248,33 +248,29 @@ def set_exact_returned_chars(
     operation: str,
 ) -> _SerializedResultT:
     """把 result.returned_chars 收敛为序列化后的真实字符数。"""
-    for _ in range(8):
-        length = len(result.model_dump_json())
-        if result.returned_chars == length:
-            return result
-        result.returned_chars = length
-    raise RuntimeError(f"无法稳定计算 {operation} 响应字符数")
+    result.returned_chars = exact_json_result_chars(
+        serialized_chars=len(result.model_dump_json()),
+        reported_chars=result.returned_chars,
+        operation=operation,
+    )
+    return result
 
 
-def exact_returned_chars_with_appended_json(
+def exact_json_result_chars(
     *,
-    empty_result_returned_chars: int,
-    appended_json_chars: int,
+    serialized_chars: int,
+    reported_chars: int,
+    operation: str = "session context",
 ) -> int:
-    """加上条目 JSON 与数组逗号，计算空集合响应的精确 returned_chars。"""
-    base_returned_chars = empty_result_returned_chars + appended_json_chars
-    candidate_returned_chars = base_returned_chars
-    empty_returned_chars_digits = len(str(empty_result_returned_chars))
+    """returned_chars 只改变自身的十进制位数；完整响应与增量预算共用这次收敛。"""
+    base_returned_chars = serialized_chars - len(str(reported_chars))
+    candidate_returned_chars = serialized_chars
     for _ in range(8):
-        exact_returned_chars = (
-            base_returned_chars
-            + len(str(candidate_returned_chars))
-            - empty_returned_chars_digits
-        )
+        exact_returned_chars = base_returned_chars + len(str(candidate_returned_chars))
         if exact_returned_chars == candidate_returned_chars:
             return exact_returned_chars
         candidate_returned_chars = exact_returned_chars
-    raise RuntimeError("无法稳定计算 session context 响应字符数")
+    raise RuntimeError(f"无法稳定计算 {operation} 响应字符数")
 
 
 class SessionContextCursorCodec:

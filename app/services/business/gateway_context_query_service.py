@@ -24,7 +24,7 @@ from app.schemas.search_federation import (
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
-    exact_returned_chars_with_appended_json,
+    exact_json_result_chars,
     gateway_session_inventory_identity,
     parse_session_context_ref,
     require_cursor_offset_in_range,
@@ -131,11 +131,11 @@ class GatewayContextQueryService:
                 offset=offset,
                 total_items=len(inventory.items),
             )
-            candidate_returned_chars = exact_returned_chars_with_appended_json(
-                empty_result_returned_chars=empty_candidate.returned_chars,
-                appended_json_chars=(
-                    accepted_item_json_chars + len(serialized_item) + len(accepted)
+            candidate_returned_chars = exact_json_result_chars(
+                serialized_chars=(
+                    empty_candidate.returned_chars + accepted_item_json_chars + len(serialized_item) + len(accepted)
                 ),
+                reported_chars=empty_candidate.returned_chars,
             )
             if candidate_returned_chars > request.max_chars:
                 break

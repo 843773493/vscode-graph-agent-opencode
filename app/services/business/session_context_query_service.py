@@ -39,7 +39,7 @@ from app.services.business.session_context_projection import (
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
-    exact_returned_chars_with_appended_json,
+    exact_json_result_chars,
     parse_session_context_ref,
     require_cursor_offset_in_range,
     require_session_context_revision,
@@ -281,11 +281,11 @@ class SessionContextQueryService:
                     total_matches=len(found),
                     budget_truncated=budget_truncated,
                 )
-                candidate_returned_chars = exact_returned_chars_with_appended_json(
-                    empty_result_returned_chars=empty_candidate.returned_chars,
-                    appended_json_chars=(
-                        match_json_chars + len(serialized_match) + len(matches)
+                candidate_returned_chars = exact_json_result_chars(
+                    serialized_chars=(
+                        empty_candidate.returned_chars + match_json_chars + len(serialized_match) + len(matches)
                     ),
+                    reported_chars=empty_candidate.returned_chars,
                 )
                 if candidate_returned_chars <= request.max_chars:
                     matches.append(dto)

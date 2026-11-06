@@ -15,7 +15,7 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.services.business.session_context_resource import (
     SessionContextCursorCodec,
-    exact_returned_chars_with_appended_json,
+    exact_json_result_chars,
     require_cursor_offset_in_range,
     require_session_context_revision,
     session_context_read_operation,
@@ -218,11 +218,11 @@ def paginate_read_items(
                 effective_record_count=effective_record_count,
                 budget_truncated=budget_truncated,
             )
-            candidate_returned_chars = exact_returned_chars_with_appended_json(
-                empty_result_returned_chars=empty_candidate.returned_chars,
-                appended_json_chars=(
-                    returned_item_json_chars + len(serialized_item) + len(returned)
+            candidate_returned_chars = exact_json_result_chars(
+                serialized_chars=(
+                    empty_candidate.returned_chars + returned_item_json_chars + len(serialized_item) + len(returned)
                 ),
+                reported_chars=empty_candidate.returned_chars,
             )
             if candidate_returned_chars <= request.max_chars:
                 returned.append(item)
