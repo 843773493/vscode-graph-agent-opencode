@@ -26,6 +26,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 _RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files", "attachments"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_CONTROL_CHAR: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _DIRECTORY_ID: Final = re.compile(r"[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}")
 _GATEWAY_ID: Final = re.compile(r"gateway_[0-9a-f]{32}")
 # 产物末段保留原 owner 的业务 profile；工具结果的固定 .txt 不代表开放文件 child。
@@ -98,10 +99,6 @@ class ParsedResourceUri:
         return None
 
 
-def _has_control_char(value: str) -> bool:
-    return any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in value)
-
-
 def _reject_identity_escape(segment: str) -> None:
     if "%" in segment:
         raise ResourceUriGrammarError(
@@ -132,7 +129,7 @@ def _encode_file_segment(segment: str) -> str:
         raise ResourceUriGrammarError("invalid_character", "URI 文件段不得包含分隔符")
     if "\\" in segment:
         raise ResourceUriGrammarError("backslash_rejected", "URI 文件段不得包含反斜杠")
-    if _has_control_char(segment):
+    if _CONTROL_CHAR.search(segment):
         raise ResourceUriGrammarError("control_char_rejected", "URI 文件段含控制字符")
     try:
         return quote(segment, safe="", encoding="utf-8", errors="strict")
@@ -243,7 +240,7 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
         raise ResourceUriGrammarError("query_rejected", "URI 不得携带 query")
     if "#" in uri:
         raise ResourceUriGrammarError("fragment_rejected", "URI 不得携带 fragment")
-    if _has_control_char(uri):
+    if _CONTROL_CHAR.search(uri):
         raise ResourceUriGrammarError("control_char_rejected", "URI 含控制字符")
     if not uri.isascii():
         raise ResourceUriGrammarError("non_ascii_rejected", "URI 必须是纯 ASCII")
