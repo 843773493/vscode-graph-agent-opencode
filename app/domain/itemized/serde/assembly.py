@@ -98,149 +98,10 @@ def context_assembly_snapshot_from_dict(
     raw_selection = value["selection"]
     if not isinstance(raw_selection, (list, tuple)):
         raise ItemSchemaError("ContextAssemblySnapshot.selection 必须是 array")
-    parsed_selection: list[ContextSelectionEntry] = []
-    for raw_entry in raw_selection:
-        if not isinstance(raw_entry, Mapping) or not isinstance(
-            raw_entry.get("ref"), Mapping
-        ):
-            raise ItemSchemaError("ContextSelectionEntry 结构非法")
-        if set(raw_entry) & {"ref_kind", "request_only"}:
-            raise FormatDispatchError("ContextSelectionEntry 禁止 ref_kind/request_only alias")
-        if type(raw_entry.get("format_version")) is not int or raw_entry["format_version"] != 2:
-            raise ItemSchemaError("ContextSelectionEntry.format_version 必须为 2")
-        missing_selection_fields = sorted(
-            {
-                "assembly_id",
-                "plan_ordinal",
-                "ref",
-                "selection_kind",
-                "included",
-                "omission_reason",
-                "loss",
-                "visibility",
-                "protection",
-                "availability",
-                "source_revision",
-                "content_length",
-                "content_hash",
-                "base_delta_role",
-                "source_overlay_epoch",
-                "overlay_from_revision",
-                "overlay_to_revision",
-                "overlay_diff_hash",
-                "contribution_ordinal",
-                "detail_ref",
-                "contribution_id",
-            }
-            - set(raw_entry)
-        )
-        if missing_selection_fields:
-            raise ItemSchemaError(
-                "ContextSelectionEntry 缺少字段: " + ",".join(missing_selection_fields)
-            )
-        if not isinstance(raw_entry["included"], bool):
-            raise ItemSchemaError("ContextSelectionEntry.included 必须是 boolean")
-        if not isinstance(raw_entry["loss"], (list, tuple)) or not all(
-            isinstance(item, str) and item for item in raw_entry["loss"]
-        ):
-            raise ItemSchemaError("ContextSelectionEntry.loss 必须是字符串数组")
-        raw_ref = raw_entry["ref"]
-        if raw_ref.get("ref_type") == "tool_set" and not raw_entry["included"]:
-            # 此分支只解析 selection 自带的 identity，不能查工具 registry 或正文。
-            identity_fields = {item.name for item in fields(ToolSetIdentityRef)}
-            if set(raw_ref) != identity_fields:
-                raise ItemSchemaError("omitted ToolSetRef identity 字段不完整或包含正文")
-            selection_ref = ToolSetIdentityRef(
-                **{key: raw_ref[key] for key in identity_fields}
-            )
-        else:
-            selection_ref = (
-                next(
-                    (item for item in tool_refs if item.ref_id == raw_ref.get("ref_id")),
-                    None,
-                )
-                if raw_ref.get("ref_type") == "tool_set"
-                else parse_context_ref(raw_ref)
-            )
-        if selection_ref is None:
-            raise ItemSchemaError("selection ToolSetRef 不存在")
-        if (
-            isinstance(selection_ref, ToolSetRef)
-            and raw_entry["included"]
-            and dict(raw_ref) != selection_ref.to_dict()
-        ):
-            raise ItemSchemaError("selection ToolSetRef manifest 与 registry 不一致")
-        parsed_selection.append(
-            ContextSelectionEntry(
-                assembly_id=_required_string(
-                    raw_entry["assembly_id"], "ContextSelectionEntry.assembly_id"
-                ),
-                plan_ordinal=_required_non_negative_int(
-                    raw_entry["plan_ordinal"], "ContextSelectionEntry.plan_ordinal"
-                ),
-                ref=selection_ref,
-                selection_kind=_required_string(
-                    raw_entry["selection_kind"],
-                    "ContextSelectionEntry.selection_kind",
-                ),
-                included=raw_entry["included"],
-                omission_reason=_optional_string(
-                    raw_entry, "omission_reason", "ContextSelectionEntry.omission_reason"
-                ),
-                loss=tuple(raw_entry["loss"]),
-                visibility=_required_string(
-                    raw_entry["visibility"], "ContextSelectionEntry.visibility"
-                ),
-                protection=_required_string(
-                    raw_entry["protection"], "ContextSelectionEntry.protection"
-                ),
-                availability=_required_string(
-                    raw_entry["availability"], "ContextSelectionEntry.availability"
-                ),
-                source_revision=_optional_string(
-                    raw_entry, "source_revision", "ContextSelectionEntry.source_revision"
-                ),
-                content_length=_optional_non_negative_int(
-                    raw_entry.get("content_length"),
-                    "ContextSelectionEntry.content_length",
-                ),
-                # selection entry 的完整性字段属于 entry 自身。尤其是
-                # optional omitted entry，ref manifest 仍可有正文 hash，但
-                # 这里不能把它回填成“已包含正文”，否则恢复会改变
-                # included/loss 语义并绕过 omission gate。
-                content_hash=_optional_string(
-                    raw_entry, "content_hash", "ContextSelectionEntry.content_hash"
-                ),
-                base_delta_role=_required_string(
-                    raw_entry["base_delta_role"],
-                    "ContextSelectionEntry.base_delta_role",
-                ),
-                source_overlay_epoch=_optional_non_negative_int(
-                    raw_entry.get("source_overlay_epoch"),
-                    "ContextSelectionEntry.source_overlay_epoch",
-                ),
-                overlay_from_revision=_optional_string(
-                    raw_entry, "overlay_from_revision", "ContextSelectionEntry.overlay_from_revision"
-                ),
-                overlay_to_revision=_optional_string(
-                    raw_entry, "overlay_to_revision", "ContextSelectionEntry.overlay_to_revision"
-                ),
-                overlay_diff_hash=_optional_string(
-                    raw_entry, "overlay_diff_hash", "ContextSelectionEntry.overlay_diff_hash"
-                ),
-                contribution_ordinal=_optional_non_negative_int(
-                    raw_entry.get("contribution_ordinal"),
-                    "ContextSelectionEntry.contribution_ordinal",
-                ),
-                detail_ref=(
-                    DetailRef.from_dict(raw_entry["detail_ref"])
-                    if raw_entry["detail_ref"] is not None else None
-                ),
-                contribution_id=_optional_string(
-                    raw_entry, "contribution_id", "ContextSelectionEntry.contribution_id"
-                ),
-            )
-        )
+    parsed_selection = tuple(
+        parse_context_selection_entry(raw_entry, tool_refs=tool_refs)
+        for raw_entry in raw_selection
+    )
     return cls(
         assembly_id=_required_string(value["assembly_id"], "assembly_id"),
         session_id=_required_string(value["session_id"], "session_id"),
@@ -291,5 +152,150 @@ def context_assembly_snapshot_from_dict(
         seal_binding=(
             context_seal_binding_from_dict(value["seal_binding"])
             if value["seal_binding"] is not None else None
+        ),
+    )
+
+
+def parse_context_selection_entry(
+    raw_entry: object, *, tool_refs: tuple[ToolSetRef, ...] = (),
+) -> ContextSelectionEntry:
+    """封存恢复与按需元数据读取共用同一 selection 字段校验。"""
+    if not isinstance(raw_entry, Mapping) or not isinstance(
+        raw_entry.get("ref"), Mapping
+    ):
+        raise ItemSchemaError("ContextSelectionEntry 结构非法")
+    if set(raw_entry) & {"ref_kind", "request_only"}:
+        raise FormatDispatchError("ContextSelectionEntry 禁止 ref_kind/request_only alias")
+    if type(raw_entry.get("format_version")) is not int or raw_entry["format_version"] != 2:
+        raise ItemSchemaError("ContextSelectionEntry.format_version 必须为 2")
+    missing_selection_fields = sorted(
+        {
+            "assembly_id",
+            "plan_ordinal",
+            "ref",
+            "selection_kind",
+            "included",
+            "omission_reason",
+            "loss",
+            "visibility",
+            "protection",
+            "availability",
+            "source_revision",
+            "content_length",
+            "content_hash",
+            "base_delta_role",
+            "source_overlay_epoch",
+            "overlay_from_revision",
+            "overlay_to_revision",
+            "overlay_diff_hash",
+            "contribution_ordinal",
+            "detail_ref",
+            "contribution_id",
+        }
+        - set(raw_entry)
+    )
+    if missing_selection_fields:
+        raise ItemSchemaError(
+            "ContextSelectionEntry 缺少字段: " + ",".join(missing_selection_fields)
+        )
+    if not isinstance(raw_entry["included"], bool):
+        raise ItemSchemaError("ContextSelectionEntry.included 必须是 boolean")
+    if not isinstance(raw_entry["loss"], (list, tuple)) or not all(
+        isinstance(item, str) and item for item in raw_entry["loss"]
+    ):
+        raise ItemSchemaError("ContextSelectionEntry.loss 必须是字符串数组")
+    raw_ref = raw_entry["ref"]
+    if raw_ref.get("ref_type") == "tool_set" and not raw_entry["included"]:
+        # 此分支只解析 selection 自带的 identity，不能查工具 registry 或正文。
+        identity_fields = {item.name for item in fields(ToolSetIdentityRef)}
+        if set(raw_ref) != identity_fields:
+            raise ItemSchemaError("omitted ToolSetRef identity 字段不完整或包含正文")
+        selection_ref = ToolSetIdentityRef(
+            **{key: raw_ref[key] for key in identity_fields}
+        )
+    else:
+        selection_ref = (
+            next(
+                (item for item in tool_refs if item.ref_id == raw_ref.get("ref_id")),
+                None,
+            )
+            if raw_ref.get("ref_type") == "tool_set"
+            else parse_context_ref(raw_ref)
+        )
+    if selection_ref is None:
+        raise ItemSchemaError("selection ToolSetRef 不存在")
+    if (
+        isinstance(selection_ref, ToolSetRef)
+        and raw_entry["included"]
+        and dict(raw_ref) != selection_ref.to_dict()
+    ):
+        raise ItemSchemaError("selection ToolSetRef manifest 与 registry 不一致")
+    return ContextSelectionEntry(
+        assembly_id=_required_string(
+            raw_entry["assembly_id"], "ContextSelectionEntry.assembly_id"
+        ),
+        plan_ordinal=_required_non_negative_int(
+            raw_entry["plan_ordinal"], "ContextSelectionEntry.plan_ordinal"
+        ),
+        ref=selection_ref,
+        selection_kind=_required_string(
+            raw_entry["selection_kind"],
+            "ContextSelectionEntry.selection_kind",
+        ),
+        included=raw_entry["included"],
+        omission_reason=_optional_string(
+            raw_entry, "omission_reason", "ContextSelectionEntry.omission_reason"
+        ),
+        loss=tuple(raw_entry["loss"]),
+        visibility=_required_string(
+            raw_entry["visibility"], "ContextSelectionEntry.visibility"
+        ),
+        protection=_required_string(
+            raw_entry["protection"], "ContextSelectionEntry.protection"
+        ),
+        availability=_required_string(
+            raw_entry["availability"], "ContextSelectionEntry.availability"
+        ),
+        source_revision=_optional_string(
+            raw_entry, "source_revision", "ContextSelectionEntry.source_revision"
+        ),
+        content_length=_optional_non_negative_int(
+            raw_entry.get("content_length"),
+            "ContextSelectionEntry.content_length",
+        ),
+        # selection entry 的完整性字段属于 entry 自身。尤其是
+        # optional omitted entry，ref manifest 仍可有正文 hash，但
+        # 这里不能把它回填成“已包含正文”，否则恢复会改变
+        # included/loss 语义并绕过 omission gate。
+        content_hash=_optional_string(
+            raw_entry, "content_hash", "ContextSelectionEntry.content_hash"
+        ),
+        base_delta_role=_required_string(
+            raw_entry["base_delta_role"],
+            "ContextSelectionEntry.base_delta_role",
+        ),
+        source_overlay_epoch=_optional_non_negative_int(
+            raw_entry.get("source_overlay_epoch"),
+            "ContextSelectionEntry.source_overlay_epoch",
+        ),
+        overlay_from_revision=_optional_string(
+            raw_entry, "overlay_from_revision", "ContextSelectionEntry.overlay_from_revision"
+        ),
+        overlay_to_revision=_optional_string(
+            raw_entry, "overlay_to_revision", "ContextSelectionEntry.overlay_to_revision"
+        ),
+        overlay_diff_hash=_optional_string(
+            raw_entry, "overlay_diff_hash", "ContextSelectionEntry.overlay_diff_hash"
+        ),
+        contribution_ordinal=_optional_non_negative_int(
+            raw_entry.get("contribution_ordinal"),
+            "ContextSelectionEntry.contribution_ordinal",
+        ),
+        detail_ref=(
+            DetailRef.from_dict(raw_entry["detail_ref"])
+            if raw_entry["detail_ref"] is not None else None
+        ),
+        contribution_id=_optional_string(
+            raw_entry, "contribution_id", "ContextSelectionEntry.contribution_id"
         ),
     )

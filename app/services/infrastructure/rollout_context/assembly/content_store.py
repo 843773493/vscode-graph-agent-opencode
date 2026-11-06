@@ -244,7 +244,8 @@ def store_snapshot(connection: sqlite3.Connection, snapshot: dict[str, object]) 
         return canonical_json_bytes(manifest).decode("utf-8")
 
 
-def _manifest(raw: str) -> dict[str, object]:
+def read_snapshot_manifest(raw: str) -> dict[str, object]:
+    """读取规范封存清单；内容 DAG 仅由实际消费正文的调用方展开。"""
     manifest = json.loads(raw)
     if canonical_json_bytes(manifest).decode("utf-8") != raw:
         raise ValueError("source-mismatch: assembly content manifest 非canonical JSON")
@@ -257,7 +258,7 @@ def snapshot_node_references(
     connection: sqlite3.Connection, raw: str, *, owner: tuple[str, str],
 ) -> set[tuple[str, str, str]]:
     """只遍历冻结DAG；fork的header证据不承诺能展开未捕获的canonical正文。"""
-    manifest = _manifest(raw)
+    manifest = read_snapshot_manifest(raw)
     if (manifest["session_id"], manifest["thread_id"]) != owner:
         raise ValueError("source-mismatch: assembly content manifest owner不一致")
     with _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"]) as store:
@@ -294,7 +295,7 @@ def load_snapshot(
     connection: sqlite3.Connection, raw: str, *, canonical_item_ids: set[str] | None = None,
 ) -> dict[str, object]:
     """schema22仅接受引用manifest；重建依赖历史内容，不访问当前文件或配置。"""
-    manifest = _manifest(raw)
+    manifest = read_snapshot_manifest(raw)
     with _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"]) as store:
         for field in _FIELDS:
             manifest[field] = store.decode(manifest[field])

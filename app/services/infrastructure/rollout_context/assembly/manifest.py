@@ -7,15 +7,17 @@ from collections.abc import Iterable
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.refs import selection_ref_identity
+from app.domain.itemized.serde.assembly import parse_context_selection_entry
+from app.domain.itemized.serde.registry import parse_contribution
 from app.domain.itemized.serialization import ordered_selection
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    read_snapshot_manifest,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     optional_detail_ref_key,
 )
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     validate_assembly_details,
-)
-from app.services.infrastructure.rollout_context.assembly.plans.registry import (
-    _ValidatedPredecessors,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
@@ -26,7 +28,7 @@ from app.services.infrastructure.rollout_context.assembly.validation import (
     required_text,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
-    current_scope,
+    require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
@@ -87,13 +89,84 @@ def _frozen_source_refs(
 class ContextAssemblyManifestMixin:
     """只验证 sealed assembly 的派生 SQLite manifest。"""
 
+    @staticmethod
+    def _read_source_cut_frontiers(
+        connection: sqlite3.Connection, assembly_id: str,
+    ) -> tuple[dict[str, tuple[str, str]], dict[str, tuple[str, str | None]]]:
+        """继承来源位置只消费封存的来源身份和位置，不恢复旧请求正文。"""
+        row = connection.execute(
+            "SELECT assembly.snapshot_json, assembly.session_id, assembly.thread_id, "
+            "assembly.plan_id, assembly.plan_hash, assembly.request_hash, assembly.status, "
+            "plan.plan_state, plan.assembly_id FROM context_assemblies AS assembly "
+            "LEFT JOIN context_plans AS plan ON plan.session_id=assembly.session_id "
+            "AND plan.thread_id=assembly.thread_id AND plan.plan_id=assembly.plan_id "
+            "WHERE assembly.assembly_id=?", (assembly_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"context assembly 不存在: {assembly_id}")
+        require_historical_scope(connection, row[1], row[2])
+        manifest = read_snapshot_manifest(row[0])
+        exact_row(
+            (*row[1:6], assembly_id, row[7], row[8]),
+            (*(manifest[key] for key in ("session_id", "thread_id", "plan_id", "plan_hash", "request_hash")),
+             manifest["assembly_id"], "sealed", assembly_id),
+            field="source-cut predecessor identity",
+        )
+        if row[6] not in {"sealed", "terminal"} or manifest["sealed"] is not True:
+            raise RuntimeError("source-cut-frontier-conflict: predecessor 尚未封存")
+        if manifest["selection_policy"] == "summary_candidate" or manifest["seal_binding"] == {"literal": None}:
+            return {}, {}
+        contributions = {
+            source.contribution_id: source for raw in manifest["contributions"]
+            for source in (parse_contribution(raw),)
+        }
+        sources, frontiers, expected = {}, {}, {}
+        for raw in manifest["selection"]:
+            if raw["ref"]["ref_type"] != "request_only":
+                continue
+            entry = parse_context_selection_entry(raw)
+            ref = entry.ref
+            if ref.ref_id in expected or (ref.session_id, ref.thread_id, ref.plan_id, entry.assembly_id) != (*row[1:4], assembly_id):
+                raise RuntimeError("source-cut-frontier-conflict: predecessor 来源身份重复或归属不一致")
+            source = contributions[entry.contribution_id] if entry.contribution_id is not None else None
+            expected[ref.ref_id] = (
+                int(entry.included), entry.availability, ref.thread_id, entry.source_revision,
+                entry.contribution_id, _json(source.binding_manifest()) if source is not None else None,
+            )
+            if entry.included and entry.availability == "available" and source is not None and source.source_binding is not None:
+                if entry.source_revision != source.source_revision:
+                    raise RuntimeError("source-cut-frontier-conflict: predecessor 来源 revision 不一致")
+                sources[ref.ref_id] = (source.source_binding.source_ref, source.source_revision)
+        rows = connection.execute(
+            "SELECT selection.ref_id, selection.included, selection.availability, selection.ref_thread_id, "
+            "selection.source_revision, selection.contribution_id, contribution.binding_manifest_json, "
+            "selection.source_cut_position_kind, selection.source_cut_item_id "
+            "FROM context_assembly_selections AS selection LEFT JOIN context_assembly_contributions AS contribution "
+            "ON contribution.assembly_id=selection.assembly_id AND contribution.contribution_id=selection.contribution_id "
+            "WHERE selection.assembly_id=? AND selection.ref_type='request_only'", (assembly_id,),
+        ).fetchall()
+        for ref_id, *values in rows:
+            if ref_id not in expected:
+                raise RuntimeError("source-cut-frontier-conflict: predecessor 出现未封存来源")
+            exact_row(tuple(values[:-2]), expected.pop(ref_id), field="source-cut predecessor source")
+            kind, item_id = values[-2:]
+            if ref_id not in sources:
+                exact_row((kind, item_id), (None, None), field="source-cut unbound source")
+                continue
+            item_id = optional_text(item_id, field="source-cut.source_cut_item_id")
+            if kind not in {"start", "after_canonical"} or (kind == "start") != (item_id is None):
+                raise RuntimeError("source-cut-frontier-conflict: predecessor 来源位置字段不一致")
+            frontiers[ref_id] = (kind, item_id)
+        if expected:
+            raise RuntimeError("source-cut-frontier-conflict: predecessor 精确来源位置不完整")
+        return sources, frontiers
+
     def _context_source_cut_frontiers(
         self,
         connection: sqlite3.Connection,
         snapshot: ContextAssemblySnapshot,
         *,
         checkpoint_ns: str,
-        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> dict[str, tuple[str, str | None]]:
         """seal 冻结 source 与 canonical 输入边界；恢复只核验已写的同行字段。
 
@@ -168,30 +241,7 @@ class ContextAssemblyManifestMixin:
         previous_sources: dict[str, tuple[str, str]] = {}
         previous_frontiers: dict[str, tuple[str, str | None]] = {}
         if predecessor_id is not None:
-            predecessor = self._read_context_assembly_header(
-                connection, *current_scope(connection), assembly_id=predecessor_id,
-                validated_predecessors=validated_predecessors,
-            )[0]
-            previous_sources, _ = _frozen_source_refs(predecessor)
-            rows = connection.execute(
-                "SELECT ref_id, source_revision, source_cut_position_kind, source_cut_item_id "
-                "FROM context_assembly_selections WHERE assembly_id = ? "
-                "AND included = 1 AND ref_type = 'request_only' AND ref_thread_id = ?",
-                (predecessor_id, predecessor.thread_id),
-            ).fetchall()
-            for ref_id, revision, kind, item_id in rows:
-                if ref_id not in previous_sources:
-                    continue
-                if previous_sources[ref_id][1] != revision or kind not in {"start", "after_canonical"}:
-                    raise RuntimeError("source-cut-frontier-conflict: predecessor 来源位置缺失或 revision 不一致")
-                item_id = optional_text(item_id, field="source-cut.source_cut_item_id")
-                if (kind == "start") != (item_id is None):
-                    raise RuntimeError("source-cut-frontier-conflict: predecessor 来源位置字段不一致")
-                # 已封存的来源位置是审计事实，不是本次请求的正文依赖。
-                # 精确前任的 owner/hash/revision 和 kind/id 形状仍由上述校验固定。
-                previous_frontiers[ref_id] = (kind, item_id)
-            if set(previous_frontiers) != set(previous_sources):
-                raise RuntimeError("source-cut-frontier-conflict: predecessor 精确来源位置不完整")
+            previous_sources, previous_frontiers = self._read_source_cut_frontiers(connection, predecessor_id)
         # root 提升按原来源版本继承前沿；保留全部候选以继续拒绝歧义，不重复扫描前驱。
         previous_refs: dict[tuple[str, str], list[str]] = {}
         for previous_ref, identity in previous_sources.items():
@@ -215,7 +265,6 @@ class ContextAssemblyManifestMixin:
     def _write_context_assembly_manifest(
         self, connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot,
         *, checkpoint_ns: str,
-        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> None:
         """runtime seal 与 fork import 共用唯一 selection/contribution 索引 writer。"""
         if not connection.in_transaction:
@@ -275,7 +324,6 @@ class ContextAssemblyManifestMixin:
             self._require_manifest_insert(cursor, "assembly contribution")
         source_frontiers = self._context_source_cut_frontiers(
             connection, snapshot, checkpoint_ns=checkpoint_ns,
-            validated_predecessors=validated_predecessors,
         )
         for entry in snapshot.selection:
             cursor = connection.execute(
@@ -318,7 +366,6 @@ class ContextAssemblyManifestMixin:
         registration: ContextPlanRegistration,
         header_detail_ref: str | None = None,
         checkpoint_ns: str = "",
-        validated_predecessors: _ValidatedPredecessors | None = None,
     ) -> None:
         """校验 snapshot JSON 与 assembly manifest 表的逐字段一致性。
 
@@ -417,7 +464,6 @@ class ContextAssemblyManifestMixin:
         )
         source_frontiers = self._context_source_cut_frontiers(
             connection, snapshot, checkpoint_ns=checkpoint_ns,
-            validated_predecessors=validated_predecessors,
         )
         selection_rows = connection.execute(
             'SELECT plan_ordinal, selection_kind, ref_type, ref_id, ref_thread_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id FROM context_assembly_selections WHERE assembly_id = ? ORDER BY plan_ordinal',

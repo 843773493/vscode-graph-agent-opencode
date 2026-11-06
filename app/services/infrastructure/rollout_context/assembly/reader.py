@@ -199,7 +199,6 @@ class ContextAssemblyReaderMixin:
             registration=registration,
             header_detail_ref=optional_detail_ref_key(header_ref),
             checkpoint_ns=checkpoint_ns,
-            validated_predecessors=validated_predecessors,
         )
         return snapshot, header_ref
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections import Counter
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -273,9 +272,7 @@ def test_prepare_reads_predecessor_once_per_attempt_and_public_composition_per_s
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_prepare_shares_predecessor_validation_with_source_frontiers(
-    production_context, monkeypatch, target_format,
-):
+def test_prepare_preserves_source_frontiers_and_provider_request(production_context, target_format):
     saver, session, thread, connection, manager, prepare = production_context
     selected = ToolSetSnapshot(
         selection_revision=sha256_jcs("source-frontier-tools"),
@@ -286,70 +283,50 @@ def test_prepare_shares_predecessor_validation_with_source_frontiers(
             }},
         },),
     )
-    first = prepare("frontier-first", target_format=target_format, supplier=lambda: selected)
-    original_registration = assembly_reader.read_registration
-    original_hash = plan_registry.persisted_runtime_seal_hash
-    original_registry = plan_registry.validate_registry
-    reads, hashes, registries = [], [], []
-
-    def seal_hash(snapshot_json, *args):
-        result = original_hash(snapshot_json, *args)
-        hashes.append(json.loads(snapshot_json)["assembly_id"])
-        return result
-
-    def validate_registry(connection, plan, assembly_id):
-        original_registry(connection, plan, assembly_id)
-        registries.append(assembly_id)
-
-    def read_registration(connection, *args, **kwargs):
-        before = len(registries)
-        registered = original_registration(connection, *args, **kwargs)
-        assert registries[before:] == [registered.assembly_id]
-        reads.append((kwargs.get("validated_predecessors"), registered))
-        return registered
-
-    monkeypatch.setattr(assembly_reader, "read_registration", read_registration)
-    monkeypatch.setattr(plan_registry, "persisted_runtime_seal_hash", seal_hash)
-    monkeypatch.setattr(plan_registry, "validate_registry", validate_registry)
-    predecessors = {first["assembly_id"]}
-    attempts = []
+    prepare("frontier-first", target_format=target_format, supplier=lambda: selected)
     for key in ("frontier-second", "frontier-third"):
-        before_reads, before_hashes = len(reads), len(hashes)
         manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
         prepared = prepare(key, target_format=target_format, supplier=lambda: selected)
-        current_reads = reads[before_reads:]
-        assert {registered.assembly_id for _, registered in current_reads} == predecessors
-        token = current_reads[0][0]
-        assert token is not None and all(state is token for state, _ in current_reads)
-        attempts.append(token)
-        assert Counter(hashes[before_hashes:]) == Counter(dict.fromkeys(predecessors, 1))
-        # source frontier 的写入、writer 重读和最终逐字段校验均保留真实 registry 读取。
-        assert len(current_reads) > len(predecessors)
-        assert len({id(registered.sealed_snapshot) for _, registered in current_reads}) == len(current_reads)
         source_positions = connection.execute(
             "SELECT source_cut_position_kind,source_cut_item_id FROM context_assembly_selections "
             "WHERE assembly_id=? AND included=1 AND ref_type='request_only'",
             (prepared["assembly_id"],),
         ).fetchall()
         assert source_positions and all(kind == "after_canonical" and item_id for kind, item_id in source_positions)
-        predecessors.add(prepared["assembly_id"])
-    assert attempts[0] is not attempts[1]
-
-    # 独立冷恢复不消费前一 prepare 的成功行，完整校验当前和精确来源前驱。
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        for _ in range(2):
-            before_reads, before_hashes = len(reads), len(hashes)
-            restored = cold.get_context_assembly(session, thread, assembly_id=prepared["assembly_id"])
-            current_reads = reads[before_reads:]
-            assert all(token is None for token, _ in current_reads)
-            assert Counter(hashes[before_hashes:]) == Counter(
-                registered.assembly_id for _, registered in current_reads
-            )
-            assert restored.to_dict() == prepared["snapshot"].to_dict()
-            assert cold.project_context_plan_to_provider(
-                session, thread, restored.as_sealed_plan(), target_format=target_format,
-                include_runtime_notices=True, include_summaries=True,
-            ) == (prepared["messages"], prepared["tools"], prepared["losses"])
+        restored = cold.get_context_assembly(session, thread, assembly_id=prepared["assembly_id"])
+        assert restored.to_dict() == prepared["snapshot"].to_dict()
+        assert cold.project_context_plan_to_provider(
+            session, thread, restored.as_sealed_plan(), target_format=target_format,
+            include_runtime_notices=True, include_summaries=True,
+        ) == (prepared["messages"], prepared["tools"], prepared["losses"])
+
+
+@pytest.mark.parametrize("damage", ["old-request-body", "source-binding", "source-position"])
+def test_source_frontier_reads_only_its_consumed_history(production_context, damage):
+    saver, session, thread, connection, manager, prepare = production_context
+    first = prepare("source-history-first")
+    manager.observe("instruction:R01", "基础规则第二版", revision="instructions:2")
+    prepare("source-history-second")
+    if damage == "old-request-body":
+        raw = connection.execute("SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (first["assembly_id"],)).fetchone()[0]
+        node_id = json.loads(raw)["request_hash_preimage"]["node"]
+        connection.execute("UPDATE assembly_content_nodes SET body_json='{}' WHERE node_id=?", (node_id,))
+    elif damage == "source-binding":
+        connection.execute("UPDATE context_assembly_contributions SET binding_manifest_json=json_set(binding_manifest_json, '$.source_binding.source_ref', 'forged-source') WHERE assembly_id=?", (first["assembly_id"],))
+    else:
+        connection.execute("UPDATE context_assembly_selections SET source_cut_position_kind=NULL, source_cut_item_id=NULL WHERE assembly_id=?", (first["assembly_id"],))
+    connection.commit()
+    if damage == "old-request-body":
+        third = prepare("source-history-third")
+        assert third["snapshot"].seal_binding.previous_assembly_id != first["assembly_id"]
+        with pytest.raises(ValueError, match="assembly content hash"):
+            saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
+    else:
+        before = connection.execute("SELECT assembly_id FROM context_assemblies").fetchall()
+        with pytest.raises(RuntimeError, match="source-cut"):
+            prepare("source-history-third")
+        assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == before
 
 
 @pytest.mark.parametrize("production_context", [False], indirect=True, ids=["no-sources"])
