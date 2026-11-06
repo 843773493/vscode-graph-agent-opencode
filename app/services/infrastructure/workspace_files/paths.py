@@ -202,15 +202,20 @@ class WorkspaceFilePaths:
         else:
             root = Path(os.path.realpath(self.workspace / ".boxteam"))
             attachment_scope = False
+        root_parts = tuple(map(os.path.normcase, root.parts))
+        root_depth = len(root_parts)
 
         def is_private(target: Path) -> bool:
             # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
             resolved = Path(os.path.realpath(target))
+            # 按路径段比较归属，避免逐 child 构造整条祖先 Path 链。
+            target_parts = tuple(map(os.path.normcase, target.parts))
+            resolved_parts = tuple(map(os.path.normcase, resolved.parts))
             if attachment_scope:
-                return (not target.is_relative_to(root) or not resolved.is_relative_to(root)
-                        or any(os.path.normcase(part) == ".boxteam" for part in target.relative_to(root).parts))
-            return (any(os.path.normcase(part) == ".boxteam" for part in (*target.parts, *resolved.parts))
-                    or resolved.is_relative_to(root))
+                return (target_parts[:root_depth] != root_parts or resolved_parts[:root_depth] != root_parts
+                        or ".boxteam" in target_parts[root_depth:])
+            return (".boxteam" in (*target_parts, *resolved_parts)
+                    or resolved_parts[:root_depth] == root_parts)
 
         return root, is_private
 
