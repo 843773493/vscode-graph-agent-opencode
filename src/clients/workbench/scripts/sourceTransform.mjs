@@ -12,6 +12,7 @@ import { extensionStatusSourcePaths, transformExtensionStatus } from './extensio
 import { extensionEnablementSourcePaths, transformExtensionEnablement } from './extensions/extensionEnablementTransform.mjs';
 import { extensionDocumentSourcePaths, transformExtensionDocuments } from './extensions/extensionDocumentTransform.mjs';
 import { extensionTabsSourcePaths, transformExtensionTabs } from './extensions/extensionTabsTransform.mjs';
+import { extensionLanguageFeaturesSourcePaths, transformExtensionLanguageFeatures } from './extensions/extensionLanguageFeaturesTransform.mjs';
 import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
 import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
@@ -64,6 +65,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionEnablementSourcePaths,
   ...extensionDocumentSourcePaths,
   ...extensionTabsSourcePaths,
+  ...extensionLanguageFeaturesSourcePaths,
   ...extensionStorageSourcePaths,
   ...extensionConfigurationSourcePaths,
   ...extensionFileEventsSourcePaths,
@@ -119,6 +121,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);
+    contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/workspaces/common/workspaces.ts')) {
       // 不透明文件根已在 URI.path 内编码；原 skipEncoding 会让重读时的 URI.parse 折叠路径段。
       contents = replaceOnce(contents, 'export function getStoredWorkspaceFolder(folderURI: URI, forceAbsolute: boolean, folderName: string | undefined, targetConfigFolderURI: URI, extUri: IExtUri): IStoredWorkspaceFolder {',

@@ -241,3 +241,5 @@
 
 - `integration-web-mixed-source-freezing` 复用正式 Workbench 和来源冻结唯一驱动，以真实 Composer/Gateway/Backend 与 model_stream 验证 Turn AGENTS/model_call Skill 的同请求混合边界、原调用 Skill 选择及安全重启后的完整 API/UI/冷 Saver 检查；固定660秒/4GiB，沿原集成独占闸门。不改公共构建 fixture，不替代 Section8、Windows、真实 Provider 或默认构建期限的验收。
 - `integration-web-policy-source-freezing`复用同一驱动与正式构建，验证真实文件watcher发布next_job后同Turn不漂移、下个Turn采用新策略，以及安全重启后冻结API/UI/正文/hash；固定660秒/4GiB和原集成独占闸门，不代Section8、Windows或真实Provider。
+
+`integration-extension-language-features` 独立进程运行原 MainThread 的33类文档 Provider 注册、原 registry／wordHighlighter 与 typed RPC，核目标 scheme／glob／RelativePattern、exclusive／缓存、次要文档及取消／关闭，固定90秒／4GiB；目标平台与 Windows renderer 仅为评分模拟，不代替真实 Gateway／Node／文档同步或 Windows 实机。与原宿主状态 suite 分开，保留组合运行时 HTTP 监听句柄失效的 TODO 与原始证据，不放宽行为断言。
