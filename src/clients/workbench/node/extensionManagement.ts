@@ -107,8 +107,12 @@ export async function createExtensionManagement(directory: string, builtinExtens
           })) };
         },
         async install(vsixPath: string) {
-          const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource });
-          return { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id };
+          // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。
+          // TODO(4.4): 宿主引用闭包接通后，沿原卸载服务回收不再使用的版本。
+          const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource, keepExisting: true });
+          // 在同一串行控制请求内读取发布后的库存，避免并发安装把回执拼成另一版本。
+          return { installed: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id },
+            inventory: await this.inventory() };
         },
       };
     });

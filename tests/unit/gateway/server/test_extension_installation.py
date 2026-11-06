@@ -23,19 +23,27 @@ from tests.unit.gateway.server.test_extension_host import (
 from tests.unit.gateway.server.test_extension_host import (
     host_gateway as host_gateway,  # noqa: PLC0414
 )
+from tests.unit.gateway.server.test_extension_host import (
+    host_initialization as host_initialization,  # noqa: PLC0414
+)
 
 PATH = "/api/gateway/extension-installations/inventory"
 ResponseHandler = Callable[[httpx.Request], httpx.Response]
 
 
 def _data(request: httpx.Request) -> dict[str, object]:
-    return {**json.loads(request.content), "profile_scope": "default", "inventory": {
+    payload = json.loads(request.content)
+    source = payload.pop("source_uri", None)
+    result = {**payload, "profile_scope": "default", "inventory": {
         "profile_id": "default-profile", "extensions": [{"source": "profile", "description": {
             "identifier": {"value": "publisher.probe"}, "version": "1.0.0",
             "extensionLocation": {"scheme": "file", "path": "/target/extensions/probe"},
             "contributes": {"commands": [{"command": "probe.run", "title": "原始贡献"}]},
         }, "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}]}],
     }}
+    if source is not None:
+        result["installed"] = {"id": "publisher.probe", "version": "1.0.0", "profile_id": "default-profile"}
+    return result
 
 
 def _reply(request: httpx.Request, data: dict[str, object] | None = None) -> httpx.Response:
@@ -64,8 +72,11 @@ def inventory_proxy(host_gateway: Harness) -> Iterator[tuple[Harness, list[httpx
         assert all(h.registry.route_reference_counts(target.key) == (0, 0) for target in h.registry.targets())
 
 
-def _payload(h: Harness) -> dict[str, object]:
-    return h.request.model_dump(exclude={"view_id"})
+def _payload(h: Harness, operation: str = "inventory") -> dict[str, object]:
+    result = h.request.model_dump(exclude={"view_id"})
+    if operation == "install":
+        result["source_uri"] = f"boxteam://{GATEWAY}/workspace/{h.request.workspace_ids[0]}/resources/files/root/probe.vsix"
+    return result
 
 
 def test_inventory_forwards_only_explicit_owner_and_control_headers(inventory_proxy) -> None:
@@ -95,17 +106,38 @@ def test_inventory_requires_token_and_user_lease_before_transport(inventory_prox
     assert requests == []
 
 
-def test_inventory_permission_is_default_denied_and_independent_of_host_and_read(inventory_proxy) -> None:
+@pytest.mark.parametrize("operation", ["inventory", "install"])
+def test_inventory_permission_is_default_denied_and_independent_of_host_and_read(inventory_proxy, operation: str) -> None:
     h, requests, _ = inventory_proxy
     headers = {"X-BoxTeam-Federation-Token": h.federation_token}
     for capability in (None, "discovery", "read", "extension_host_manage"):
         rules = [] if capability is None else [{"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]
         h.policy.publish({"rules": rules})
-        assert h.client.post(PATH, json=_payload(h), headers=headers).status_code == 403
+        assert h.client.post(PATH.rsplit("/", 1)[0] + f"/{operation}", json=_payload(h, operation), headers=headers).status_code == 403
     assert requests == []
     h.policy.publish({"rules": [{"capability": "extension_installation_manage", "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
-    assert h.client.post(PATH, json=_payload(h), headers=headers).status_code == 200
+    assert h.client.post(PATH.rsplit("/", 1)[0] + f"/{operation}", json=_payload(h, operation), headers=headers).status_code == 200
     assert len(requests) == 1
+
+
+def test_install_forwards_exact_target_and_never_replays_unknown_result(inventory_proxy) -> None:
+    h, requests, handlers = inventory_proxy
+    path = "/api/gateway/extension-installations/install"
+    payload = _payload(h, "install")
+    response = h.client.post(path, json=payload, headers={"X-Local-Token": h.token, "X-Request-ID": "install-once"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == _data(requests[0])
+    assert requests[0].url.path == "/api/internal/extension-installations/install"
+    assert json.loads(requests[0].content) == payload
+    assert requests[0].headers["X-Request-ID"] == response.headers["X-Request-ID"] == "install-once"
+
+    def lost_reply(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("安装可能已完成，回执丢失", request=request)
+
+    handlers[0] = lost_reply
+    failed = h.client.post(path, json=payload, headers={"X-Local-Token": h.token})
+    assert failed.status_code == 502 and len(requests) == 2
+    assert "回执未确认，请先查询原目标库存" in failed.json()["detail"]
 
 
 @pytest.mark.parametrize("invalid", ["missing-backend", "null-backend", "duplicate", "version", "boolean-version", "view", "foreign", "mixed", "offline"])
@@ -134,7 +166,8 @@ def test_inventory_refuses_invalid_or_stopped_target_without_fallback(inventory_
 
 
 @pytest.mark.parametrize("invalidate", ["route", "user", "policy", "expiry"])
-def test_inventory_rechecks_authority_before_any_disclosure(inventory_proxy, invalidate: str) -> None:
+@pytest.mark.parametrize("operation", ["inventory", "install"])
+def test_inventory_rechecks_authority_before_any_disclosure(inventory_proxy, invalidate: str, operation: str) -> None:
     h, requests, handlers = inventory_proxy
     h.policy.publish({"rules": [{"capability": "extension_installation_manage", "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
 
@@ -156,7 +189,7 @@ def test_inventory_rechecks_authority_before_any_disclosure(inventory_proxy, inv
 
     handlers[0] = respond
     headers = {"X-BoxTeam-Federation-Token": h.federation_token} if invalidate == "policy" else {"X-Local-Token": h.token}
-    response = h.client.post(PATH, json=_payload(h), headers=headers)
+    response = h.client.post(PATH.rsplit("/", 1)[0] + f"/{operation}", json=_payload(h, operation), headers=headers)
     assert response.status_code == (409 if invalidate == "route" else 403)
     assert "must_not_be_disclosed" not in response.text and len(requests) == 1
 
@@ -196,7 +229,8 @@ def test_inventory_preserves_target_rejection_and_original_request_id(inventory_
 
 
 @pytest.mark.parametrize("federated", [False, True])
-def test_inventory_relay_uses_original_remote_owner_and_forbids_nested_relay(inventory_proxy, federated: bool) -> None:
+@pytest.mark.parametrize("operation", ["inventory", "install"])
+def test_inventory_relay_uses_original_remote_owner_and_forbids_nested_relay(inventory_proxy, federated: bool, operation: str) -> None:
     h, requests, _ = inventory_proxy
     h.registry.upsert_remote_gateway(RemoteGatewayConnection(connection_id="test-peer", name="remote", host="remote.test", port=22,
         username="unit", private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
@@ -208,14 +242,17 @@ def test_inventory_relay_uses_original_remote_owner_and_forbids_nested_relay(inv
             remote_service_names=("workspace_api",)), activate=False)
     h.policy.publish({"rules": [{"capability": "extension_installation_manage", "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
     headers = {"X-BoxTeam-Federation-Token": h.federation_token} if federated else {"X-Local-Token": h.token}
-    payload = {**_payload(h), "gateway_id": PEER}
-    response = h.client.post(PATH, json=payload, headers={**headers, "X-Request-ID": "relay-inventory"})
+    payload = {**_payload(h, operation), "gateway_id": PEER}
+    if operation == "install":
+        payload["source_uri"] = payload["source_uri"].replace(GATEWAY, PEER)
+    path = PATH.rsplit("/", 1)[0] + f"/{operation}"
+    response = h.client.post(path, json=payload, headers={**headers, "X-Request-ID": "relay-inventory"})
     if federated:
         assert response.status_code == 403 and requests == []
     else:
         assert response.status_code == 200, response.text
         [forwarded] = requests
-        assert forwarded.url.path == PATH and forwarded.url.host == "remote.test"
+        assert forwarded.url.path == path and forwarded.url.host == "remote.test"
         assert json.loads(forwarded.content) == payload
         assert forwarded.headers["X-BoxTeam-Federation-Token"] == h.federation_token
         assert forwarded.headers["X-BoxTeam-Target-Gateway-Id"] == PEER

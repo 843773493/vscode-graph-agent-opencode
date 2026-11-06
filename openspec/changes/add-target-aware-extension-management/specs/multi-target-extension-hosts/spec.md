@@ -12,6 +12,10 @@
 - **WHEN** 用户在纯 Web 宿主选择仅有 Node 入口的 VSIX，且没有可用目标宿主
 - **THEN** 明确说明所需能力和可选择的合法目标，不安装后伪报已可运行，也不在 Electron main 自动执行
 
+#### Scenario: 目标侧 VSIX 安装与并发回执
+- **WHEN** 用户通过已认证管理入口，以稳定目标及其挂接工作区的文件 URI 安装 VSIX，且另一安装先于本次 HTTP 回执完成
+- **THEN** 原生目标按独立安装权限解析来源并交原安装器处理，本次回执中的安装版本与完整库存来自同一串行发布操作；其它目标不变，已有版本目录保留，安装不被表述为运行版本切换，断流不重放安装
+
 ### Requirement: Web 与目标侧 Node 宿主必须分别归属
 
 browser 扩展 SHALL 在 Workbench 原 Web 宿主执行，需要 Node 的扩展 SHALL 在明确本地／远端后端目标侧宿主执行；Node 宿主不得由 Gateway 请求进程、Python Agent 或 Electron main 执行。Web 与 Electron SHALL 共用 renderer 贡献及目标协议；桌面仅承担已约定的窗口、生命周期及 profile。

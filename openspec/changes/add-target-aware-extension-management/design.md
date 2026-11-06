@@ -92,6 +92,8 @@ Backend 私有通道只接受 loopback、无浏览器来源头及已配置运行
 
 目标安装库存使用 `POST /api/gateway/extension-installations/inventory`，必须提交稳定 Backend 身份和明确 workspace 集合，单独核 `extension_installation_manage`；宿主权限不代授。原生 Backend 通过同一专用运行时中的惰性管理进程读取 Code OSS 默认 profile，安装、profile 成员与 scanner 共用原服务实例，Python 不扫描安装目录或持有第二份清单。响应绑定原 Gateway／Backend／workspace 和 `profile_scope=default`，保留原描述及 invalid 诊断，不声称已覆盖系统扩展、开发扩展或窗口启用集。Relay 保留目标和 request_id，读取前及披露前核现行权限与路由；身份不符、离线及损坏明确报错。管理进程正常关闭保留 profile；取消或控制结果未知后回收原进程，不自动重启并重放安装。Backend 排空还须等管理日志和跨进程锁实际释放，关闭失败保留原 owner 供重试。
 
+用户明确选择的目标侧 VSIX 通过 `POST /api/gateway/extension-installations/install` 进入同一原生管理 owner；请求冻结稳定目标、有序工作区集合及 `source_uri`，当前支持该目标已挂接工作区的普通文件来源，由原文件 owner 保护私有目录并解析目标路径。安装回执返回原安装器的 ID／版本／profile 与完整库存，不表示已有宿主切换版本。原安装器保留已存在版本的目录；同版本沿其复用规则处理，新版本发布不自动卸载旧版。传输失败不重放安装，客户端应先查询原目标库存；物理卸载与在用版本回收仍须另行闭合原引用规则。Gateway 只沿原安装管理权限及同一短请求路由转送，不能按当前导航替换目标或把中继机器的路径当作来源。
+
 ### D4. 目录发现、安装、配置与运行分别报告事实
 
 安装取消按 operation 独立结算，并使用独立 `cancelled` 终态。共享 producer 的下载／准备只有最后一个使用者取消才停止，且须核实际执行进程退出；其它消费者不随之取消。同安装域的另一后端可在原 SQLite 安装账本写入取消意图，由 producer 原执行者处理，不新增第二取消存储或重放未知脚本。取消与发布在原事务中决定先后，已经提交的 `succeeded` 不被迟到取消覆盖。

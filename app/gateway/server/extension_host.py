@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal, TypeVar
 
 import httpx
 from fastapi import (
@@ -56,6 +56,8 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostTargetRequest,
 )
 from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationInstallDTO,
+    ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
 )
@@ -193,12 +195,37 @@ async def extension_installation_inventory(
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[ExtensionInstallationInventoryDTO] | Response:
+    return await _installation_request(payload, request, auth, access, request_id,
+        operation="inventory", response_type=APIResponse[ExtensionInstallationInventoryDTO])
+
+
+@router.post("/api/gateway/extension-installations/install", response_model=APIResponse[ExtensionInstallationInstallDTO])
+async def extension_installation_install(
+    payload: ExtensionInstallationInstallRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationInstallDTO] | Response:
+    return await _installation_request(payload, request, auth, access, request_id,
+        operation="install", response_type=APIResponse[ExtensionInstallationInstallDTO])
+
+
+InstallationResult = TypeVar("InstallationResult", bound=ExtensionInstallationInventoryDTO)
+
+
+async def _installation_request(
+    payload: ExtensionInstallationInventoryRequest, request: Request, auth: GatewayAuthContext,
+    access: UserAccessContext | None, request_id: str, *,
+    operation: Literal["inventory", "install"], response_type: type[APIResponse[InstallationResult]],
+) -> APIResponse[InstallationResult] | Response:
     require_federation_capability(request, auth, "extension_installation_manage")
+    label = "扩展安装" if operation == "install" else "扩展库存"
     try:
         with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
                            auth=auth, streaming=False) as route:
             _check(request, auth, access, route.leases, capability="extension_installation_manage")
-            path = "api/gateway/extension-installations/inventory" if route.remote else "api/internal/extension-installations/inventory"
+            prefix = "api/gateway" if route.remote else "api/internal"
+            path = f"{prefix}/extension-installations/{operation}"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
                 headers=route.headers, json=payload.model_dump(), timeout=120)
             # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
@@ -206,28 +233,31 @@ async def extension_installation_inventory(
             if access is not None:
                 expires_at = _users(request).expires_at(access)
                 if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
-                    raise PermissionError("扩展库存客户端租约已过期")
+                    raise PermissionError(f"{label}客户端租约已过期")
             if response.headers.get("X-Request-ID") != request_id:
-                raise ValueError("扩展库存返回了不同请求身份")
+                raise ValueError(f"{label}返回了不同请求身份")
             if not response.is_success:
                 failure = response.json()
                 if not isinstance(failure, dict) or failure.get("request_id") != request_id:
-                    raise ValueError("扩展库存错误回执不属于原请求")
+                    raise ValueError(f"{label}错误回执不属于原请求")
                 return Response(response.content, status_code=response.status_code, media_type="application/json")
-            result = APIResponse[ExtensionInstallationInventoryDTO].model_validate_json(response.content)
+            result = response_type.model_validate_json(response.content)
             target = result.data
             if (result.code != 0 or result.request_id != request_id or target is None
-                or target.model_dump(include=set(ExtensionInstallationInventoryRequest.model_fields)) != payload.model_dump()):
-                raise ValueError("扩展库存返回了不同目标或请求身份")
+                or target.model_dump(include=set(ExtensionInstallationInventoryRequest.model_fields))
+                != payload.model_dump(include=set(ExtensionInstallationInventoryRequest.model_fields))):
+                raise ValueError(f"{label}返回了不同目标或请求身份")
             return result
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
     except LookupError as error:
         raise HTTPException(409, str(error)) from error
     except httpx.RequestError as error:
-        raise HTTPException(502, f"目标扩展库存读取失败: {error}") from error
+        detail = (f"目标扩展库存读取失败: {error}" if operation == "inventory"
+                  else f"扩展安装回执未确认，请先查询原目标库存: {error}")
+        raise HTTPException(502, detail) from error
     except ValidationError as error:
-        raise HTTPException(502, f"目标扩展库存回执结构无效: {error.errors(include_input=False)}") from error
+        raise HTTPException(502, f"目标{label}回执结构无效: {error.errors(include_input=False)}") from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
 

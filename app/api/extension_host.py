@@ -29,6 +29,8 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostTargetRequest,
 )
 from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationInstallDTO,
+    ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
 )
@@ -36,6 +38,9 @@ from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
     run_channel,
+)
+from app.services.infrastructure.extension_host.management import (
+    ExtensionManagementError,
 )
 from app.services.infrastructure.extension_host.owner import NodeHostConnection
 
@@ -71,6 +76,23 @@ async def resolve_extension_host(
         channel_state="draining" if status.reason == "backend_draining" else "unavailable" if status.reason else "available",
         reason=status.reason, runtime=ExtensionHostRuntimeDTO(commit=runtime.commit, vscode_version=runtime.vscode_version,
             node_version=runtime.node_version) if runtime is not None else None)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/api/internal/extension-installations/install", response_model=APIResponse[ExtensionInstallationInstallDTO], include_in_schema=False)
+async def extension_installation_install(
+    payload: ExtensionInstallationInstallRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationInstallDTO]:
+    if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
+        raise HTTPException(400, "扩展安装目标 Gateway 身份冲突")
+    try:
+        result = await registry.extension_hosts.install(payload)
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
+    except ExtensionManagementError as error:
+        raise HTTPException(400, str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 

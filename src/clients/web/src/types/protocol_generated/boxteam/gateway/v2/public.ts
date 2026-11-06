@@ -1088,6 +1088,32 @@ export interface ExtensionInstallationInventoryDTO {
   inventory: ProfileExtensionInventory | undefined;
 }
 
+/** VSIX 从同目标已挂接工作区的文件 owner 解析；不接受中继机器的原生路径。 */
+export interface ExtensionInstallationInstallRequest {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id: string;
+  source_uri: string;
+}
+
+export interface VsixInstallResult {
+  id: string;
+  version: string;
+  profile_id: string;
+}
+
+/** 安装回执及完整 profile 库存，不声明现有宿主已经切换运行版本。 */
+export interface ExtensionInstallationInstallDTO {
+  protocol_version: number;
+  gateway_id: string;
+  workspace_ids: string[];
+  backend_id: string;
+  profile_scope: string;
+  inventory: ProfileExtensionInventory | undefined;
+  installed: VsixInstallResult | undefined;
+}
+
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
   return { uri: "", local_gateway_id: "", resource_gateway_id: undefined };
 }
@@ -8305,6 +8331,175 @@ export const ExtensionInstallationInventoryDTO: MessageFns<ExtensionInstallation
     message.profile_scope = object.profile_scope ?? "";
     message.inventory = (object.inventory !== undefined && object.inventory !== null)
       ? ProfileExtensionInventory.fromPartial(object.inventory)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationInstallRequest(): ExtensionInstallationInstallRequest {
+  return { protocol_version: 0, gateway_id: "", workspace_ids: [], backend_id: "", source_uri: "" };
+}
+
+export const ExtensionInstallationInstallRequest: MessageFns<ExtensionInstallationInstallRequest> = {
+  fromJSON(object: any): ExtensionInstallationInstallRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      source_uri: isSet(object.source_uri) ? globalThis.String(object.source_uri) : "",
+    };
+  },
+
+  toJSON(message: ExtensionInstallationInstallRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.source_uri !== "") {
+      obj.source_uri = message.source_uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationInstallRequest>, I>>(
+    base?: I,
+  ): ExtensionInstallationInstallRequest {
+    return ExtensionInstallationInstallRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationInstallRequest>, I>>(
+    object: I,
+  ): ExtensionInstallationInstallRequest {
+    const message = createBaseExtensionInstallationInstallRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? "";
+    message.source_uri = object.source_uri ?? "";
+    return message;
+  },
+};
+
+function createBaseVsixInstallResult(): VsixInstallResult {
+  return { id: "", version: "", profile_id: "" };
+}
+
+export const VsixInstallResult: MessageFns<VsixInstallResult> = {
+  fromJSON(object: any): VsixInstallResult {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+    };
+  },
+
+  toJSON(message: VsixInstallResult): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<VsixInstallResult>, I>>(base?: I): VsixInstallResult {
+    return VsixInstallResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<VsixInstallResult>, I>>(object: I): VsixInstallResult {
+    const message = createBaseVsixInstallResult();
+    message.id = object.id ?? "";
+    message.version = object.version ?? "";
+    message.profile_id = object.profile_id ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationInstallDTO(): ExtensionInstallationInstallDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    workspace_ids: [],
+    backend_id: "",
+    profile_scope: "",
+    inventory: undefined,
+    installed: undefined,
+  };
+}
+
+export const ExtensionInstallationInstallDTO: MessageFns<ExtensionInstallationInstallDTO> = {
+  fromJSON(object: any): ExtensionInstallationInstallDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      profile_scope: isSet(object.profile_scope) ? globalThis.String(object.profile_scope) : "",
+      inventory: isSet(object.inventory) ? ProfileExtensionInventory.fromJSON(object.inventory) : undefined,
+      installed: isSet(object.installed) ? VsixInstallResult.fromJSON(object.installed) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionInstallationInstallDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.profile_scope !== "") {
+      obj.profile_scope = message.profile_scope;
+    }
+    if (message.inventory !== undefined) {
+      obj.inventory = ProfileExtensionInventory.toJSON(message.inventory);
+    }
+    if (message.installed !== undefined) {
+      obj.installed = VsixInstallResult.toJSON(message.installed);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationInstallDTO>, I>>(base?: I): ExtensionInstallationInstallDTO {
+    return ExtensionInstallationInstallDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationInstallDTO>, I>>(
+    object: I,
+  ): ExtensionInstallationInstallDTO {
+    const message = createBaseExtensionInstallationInstallDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? "";
+    message.profile_scope = object.profile_scope ?? "";
+    message.inventory = (object.inventory !== undefined && object.inventory !== null)
+      ? ProfileExtensionInventory.fromPartial(object.inventory)
+      : undefined;
+    message.installed = (object.installed !== undefined && object.installed !== null)
+      ? VsixInstallResult.fromPartial(object.installed)
       : undefined;
     return message;
   },

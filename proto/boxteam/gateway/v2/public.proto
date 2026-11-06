@@ -1100,3 +1100,29 @@ message ExtensionInstallationInventoryDTO {
   string profile_scope = 5;
   ProfileExtensionInventory inventory = 6;
 }
+
+// VSIX 从同目标已挂接工作区的文件 owner 解析；不接受中继机器的原生路径。
+message ExtensionInstallationInstallRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  string backend_id = 4;
+  string source_uri = 5;
+}
+
+message VsixInstallResult {
+  string id = 1;
+  string version = 2;
+  string profile_id = 3;
+}
+
+// 安装回执及完整 profile 库存，不声明现有宿主已经切换运行版本。
+message ExtensionInstallationInstallDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string workspace_ids = 3;
+  string backend_id = 4;
+  string profile_scope = 5;
+  ProfileExtensionInventory inventory = 6;
+  VsixInstallResult installed = 7;
+}

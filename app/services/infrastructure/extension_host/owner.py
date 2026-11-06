@@ -14,18 +14,23 @@ from typing import BinaryIO, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
-from app.core.resource_uri import resource_display_uri
+from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.schemas.gateway.extension_host import (
     ExtensionHostFolderDTO,
     ExtensionHostInitializationDTO,
     ExtensionHostWorkspaceDTO,
 )
+from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationInstallDTO,
+    ExtensionInstallationInstallRequest,
+)
 from app.services.infrastructure.extension_host.management import (
     NodeExtensionManagement,
 )
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +160,19 @@ class NodeExtensionHostOwner:
         reason = ("backend_draining" if self._admission_closed else "runtime_missing" if self.runtime is None
                   else "platform_unsupported" if sys.platform not in {"linux", "win32"} else None)
         return NodeHostStatus(self.backend_id, sys.platform, reason, self.runtime)
+
+    async def install(self, request: ExtensionInstallationInstallRequest) -> ExtensionInstallationInstallDTO:
+        status = self.describe(expected_backend_id=request.backend_id, workspace_ids=tuple(request.workspace_ids))
+        if status.reason is not None:
+            raise ValueError(f"目标扩展安装不可用: {status.reason}")
+        source = parse_resource_uri(request.source_uri, local_gateway_id=request.gateway_id)
+        mount = self._mounts.resolve(source.scope_id)
+        # 沿原文件 owner 解析及保护私有目录；不装配 Agent 容器或另建根绑定。
+        paths = WorkspaceFilePaths(workspace=mount.workspace_root, workspace_id=mount.workspace_id, bindings=None)
+        path = await run_sync_shielded(lambda: paths.native(source.display_uri))
+        publication = await self.management.install(path)
+        return ExtensionInstallationInstallDTO(**request.model_dump(exclude={"source_uri"}),
+            installed=publication.installed, inventory=publication.inventory)
 
     async def _release(self, session: _HostSession) -> None:
         await session.close()

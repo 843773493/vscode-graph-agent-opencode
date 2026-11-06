@@ -1813,3 +1813,45 @@ class ExtensionInstallationInventoryDTO(_message.Message):
     profile_scope: str
     inventory: ProfileExtensionInventory
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ...) -> None: ...
+
+class ExtensionInstallationInstallRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "source_uri")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    source_uri: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source_uri: _Optional[str] = ...) -> None: ...
+
+class VsixInstallResult(_message.Message):
+    __slots__ = ("id", "version", "profile_id")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    version: str
+    profile_id: str
+    def __init__(self, id: _Optional[str] = ..., version: _Optional[str] = ..., profile_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionInstallationInstallDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "profile_scope", "inventory", "installed")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    INVENTORY_FIELD_NUMBER: _ClassVar[int]
+    INSTALLED_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    backend_id: str
+    profile_scope: str
+    inventory: ProfileExtensionInventory
+    installed: VsixInstallResult
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ..., installed: _Optional[_Union[VsixInstallResult, _Mapping]] = ...) -> None: ...

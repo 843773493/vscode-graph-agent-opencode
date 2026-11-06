@@ -55,7 +55,7 @@ class ExtensionHostInitializationDTO(_HostValue):
     workspace: ExtensionHostWorkspaceDTO
 
 
-class _WorkspaceView(BaseModel):
+class ExtensionWorkspaceTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
 
     protocol_version: int = Field(ge=1, le=1)
@@ -63,17 +63,17 @@ class _WorkspaceView(BaseModel):
     workspace_ids: list[CanonicalWorkspaceId] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def unique_workspaces(self) -> _WorkspaceView:
+    def unique_workspaces(self) -> ExtensionWorkspaceTarget:
         if len(set(self.workspace_ids)) != len(self.workspace_ids):
             raise ValueError("Node 宿主工作区视图不能重复")
         return self
 
 
-class ExtensionHostTargetRequest(_WorkspaceView):
+class ExtensionHostTargetRequest(ExtensionWorkspaceTarget):
     backend_id: BackendId | None = None
 
 
-class ExtensionHostOpenRequest(_WorkspaceView):
+class ExtensionHostOpenRequest(ExtensionWorkspaceTarget):
     backend_id: BackendId
     view_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
@@ -105,7 +105,7 @@ class ExtensionHostRuntimeDTO(BaseModel):
     node_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
 
 
-class ExtensionHostTargetDTO(_WorkspaceView):
+class ExtensionHostTargetDTO(ExtensionWorkspaceTarget):
     backend_id: BackendId
     source: Literal["live"] = "live"
     platform: str = Field(min_length=1)

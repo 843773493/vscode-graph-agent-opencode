@@ -66,6 +66,7 @@
   - 2026-11-06 当前 Web 宿主闭包：真实 Gateway／Backend／正式 Workbench 独占副本，经原安装 Quick Input 生成 profile，browser 扩展命令在原 Web Worker 返回 v1，正常重开仍为 v1，显式升级重开为 v2；纯声明式主题经原选择器实际改变编辑器背景并在重启后保持，Node-only明确拒绝。原profile记录损坏后安装失败且原件保留，恢复原文后两扩展均由原命令卸载。最终1 passed／111.09秒，pageErrors为空、模型零调用、受影响源码前后不变；扫描器及真实Chromium派生缓存边界8项／88断言通过，59份实际转换源码类型、相关Python静态和正式构建通过。准确命令、修前吞错反例、页面接线／粘贴竞态失败原件、指纹及边界见 `out/tests/temp/2026/11/06/web_extension_scan/artifacts/verification-001.json`。市场／VSIX、安装前完整兼容性、目标Node宿主及Electron未由本项验收，4.1等保持未完成。
 - [ ] 4.3 将安装选择器与目标分组接入原 Quick Input，冻结发起身份与版本；验证切 Tab、目录失败、目标离线不改投，不抢占默认 Ctrl+P 查询范围。
 - [ ] 4.4 统一 VSIX 安装与目标安装服务的操作／版本／引用事实，保持 Web profile 资源与目标制品各自存储；实现原 profile／workspace view 启用、版本更新／停用／卸载和 reload，分清新版安装与运行激活，保留旧实例引用制品，不伪造动态卸载支持。
+  - 2026-11-06 目标侧 VSIX 安装 API 切片：原 Gateway／Backend 管理入口冻结稳定目标与挂接 workspace 的文件 URI，复用原文件 owner 和原生 Code OSS 安装器；安装与完整库存由同一次串行 Node 操作返回，强制晚到回执仍保留本次版本，升级保留原制品且不声称切换运行实例。150项单元／公开合同通过，最终37项 Gateway 回归及8项真实 Node／HTTP／profile 集成通过，覆盖双目标隔离、不兼容安装、升级、并发回执、重启及原进程回收。真实安装后的取消／损坏回执沿同一结果未知关闭链拒绝重放，明确业务错误仍可查库存。Python 类型／Ruff、专用 Node 类型、真实基线 Buf breaking 和生成一致性通过；准确命令、指纹、失败原件及适用构建证据见 `out/tests/temp/2026/11/06/target_vsix_install/artifacts/verification-v1.json`。窗口安装 UI、完整运行引用／卸载、SSH／Windows及Electron尚未验，本项保持未勾选。
 
 ## 5. 多目标 Node Extension Host 闭包
 

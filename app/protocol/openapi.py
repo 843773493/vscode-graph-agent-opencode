@@ -141,6 +141,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "WorkspaceNavigationTreeDTO", "WorkspaceNavigationBreadcrumbDTO",
         "ExtensionHostTargetRequest", "ExtensionHostTargetDTO",
         "ExtensionInstallationInventoryRequest", "ExtensionInstallationInventoryDTO",
+        "ExtensionInstallationInstallRequest", "ExtensionInstallationInstallDTO",
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 

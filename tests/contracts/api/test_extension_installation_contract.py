@@ -16,17 +16,21 @@ from app.protocol import openapi
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import assert_public_schema, descriptor_pool_from_set
 from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationInstallDTO,
+    ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
     ExtensionValidation,
     InstalledExtension,
     ProfileExtensionInventory,
+    VsixInstallResult,
 )
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 PATH = "/api/gateway/extension-installations/inventory"
 MODELS = (ExtensionInstallationInventoryRequest, ExtensionInstallationInventoryDTO,
-          ProfileExtensionInventory, InstalledExtension, ExtensionValidation)
+          ProfileExtensionInventory, InstalledExtension, ExtensionValidation,
+          ExtensionInstallationInstallRequest, ExtensionInstallationInstallDTO, VsixInstallResult)
 
 
 def test_inventory_contract_follows_actual_read_only_route(gateway_openapi: JsonSchemaValue) -> None:
@@ -35,11 +39,36 @@ def test_inventory_contract_follows_actual_read_only_route(gateway_openapi: Json
     response = operation["responses"]["200"]["content"]["application/json"]["schema"]
     envelope = gateway_openapi["components"]["schemas"][response["$ref"].rsplit("/", 1)[1]]
     assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/ExtensionInstallationInventoryDTO")
-    assert [path for path in gateway_openapi["paths"] if path.startswith("/api/gateway/extension-installations")] == [PATH]
+    install_path = "/api/gateway/extension-installations/install"
+    assert {path for path in gateway_openapi["paths"] if path.startswith("/api/gateway/extension-installations")} == {PATH, install_path}
+    install = gateway_openapi["paths"][install_path]["post"]
+    assert install["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/ExtensionInstallationInstallRequest")
     assert set(gateway_openapi["paths"][PATH]) == {"post"}
     openapi.assert_gateway_http_schemas(gateway_openapi)
     for model in MODELS:
         assert_public_schema(model.model_json_schema(), public_pb2.DESCRIPTOR.message_types_by_name[model.__name__])
+
+
+@pytest.mark.parametrize("source", ["foreign-gateway", "foreign-workspace", "directory", "native", "private-kind"])
+def test_vsix_install_source_must_belong_to_explicit_target(source: str) -> None:
+    gateway_id, workspace_id = "gateway_" + "a" * 32, str(uuid4())
+    uri = f"boxteam://{gateway_id}/workspace/{workspace_id}/resources/files/root/probe.vsix"
+    payload = {"protocol_version": 1, "gateway_id": gateway_id, "backend_id": str(uuid4()),
+        "workspace_ids": [workspace_id], "source_uri": uri}
+    valid = ExtensionInstallationInstallRequest.model_validate(payload)
+    assert valid.source_uri == uri
+    if source == "foreign-gateway":
+        payload["source_uri"] = uri.replace(gateway_id, "gateway_" + "b" * 32)
+    elif source == "foreign-workspace":
+        payload["source_uri"] = uri.replace(workspace_id, str(uuid4()))
+    elif source == "directory":
+        payload["source_uri"] = uri.rsplit("/", 1)[0]
+    elif source == "native":
+        payload["source_uri"] = "/tmp/probe.vsix"
+    else:
+        payload["source_uri"] = f"boxteam://{gateway_id}/workspace/{workspace_id}/resources/config/workspace"
+    with pytest.raises(ValidationError):
+        ExtensionInstallationInstallRequest.model_validate(payload)
 
 
 def test_inventory_proto_preserves_original_description_and_invalid_entry() -> None:

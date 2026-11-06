@@ -4673,3 +4673,115 @@ export declare type ExtensionInstallationInventoryDTO = Message<"boxteam.gateway
  */
 export declare const ExtensionInstallationInventoryDTOSchema: GenMessage<ExtensionInstallationInventoryDTO>;
 
+/**
+ * VSIX 从同目标已挂接工作区的文件 owner 解析；不接受中继机器的原生路径。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationInstallRequest
+ */
+export declare type ExtensionInstallationInstallRequest = Message<"boxteam.gateway.v2.ExtensionInstallationInstallRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string source_uri = 5;
+   */
+  sourceUri: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationInstallRequest.
+ * Use `create(ExtensionInstallationInstallRequestSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationInstallRequestSchema: GenMessage<ExtensionInstallationInstallRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.VsixInstallResult
+ */
+export declare type VsixInstallResult = Message<"boxteam.gateway.v2.VsixInstallResult"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string version = 2;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string profile_id = 3;
+   */
+  profileId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.VsixInstallResult.
+ * Use `create(VsixInstallResultSchema)` to create a new message.
+ */
+export declare const VsixInstallResultSchema: GenMessage<VsixInstallResult>;
+
+/**
+ * 安装回执及完整 profile 库存，不声明现有宿主已经切换运行版本。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationInstallDTO
+ */
+export declare type ExtensionInstallationInstallDTO = Message<"boxteam.gateway.v2.ExtensionInstallationInstallDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string profile_scope = 5;
+   */
+  profileScope: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ProfileExtensionInventory inventory = 6;
+   */
+  inventory?: ProfileExtensionInventory | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.VsixInstallResult installed = 7;
+   */
+  installed?: VsixInstallResult | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationInstallDTO.
+ * Use `create(ExtensionInstallationInstallDTOSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationInstallDTOSchema: GenMessage<ExtensionInstallationInstallDTO>;
+

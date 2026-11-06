@@ -6,32 +6,34 @@ import asyncio
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import IO, TextIO
+from typing import IO, TextIO, TypeVar
 from uuid import uuid4
 
 import portalocker
 from anyio.streams.buffered import BufferedByteReceiveStream
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from app.core.child_process import OwnedChildProcess
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.gateway.extension_host import ExtensionHostEnvironmentDTO
-from app.schemas.gateway.extension_installation import ProfileExtensionInventory
+from app.schemas.gateway.extension_installation import (
+    ProfileExtensionInventory,
+    VsixInstallResult,
+)
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 
 
-class _ControlValue(BaseModel):
+class InstalledProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-
-class VsixInstallResult(_ControlValue):
-    id: str = Field(min_length=1)
-    version: str = Field(min_length=1)
-    profile_id: str = Field(min_length=1)
+    installed: VsixInstallResult
+    inventory: ProfileExtensionInventory
 
 
 class ExtensionManagementError(RuntimeError):
     """原安装／扫描服务已经明确回报失败，传输本身仍可继续查询。"""
+
+
+Result = TypeVar("Result", bound=BaseModel)
 
 
 class NodeExtensionManagement:
@@ -86,7 +88,7 @@ class NodeExtensionManagement:
             if await self._receive() != {"ready": True}:
                 raise ValueError("扩展管理组件启动握手无效")
 
-    async def _request(self, command: dict[str, str]) -> JsonValue:
+    async def _request(self, command: dict[str, str], *, response_type: type[Result]) -> Result:
         async with self._lock:
             if self._closing or self._failed:
                 raise RuntimeError("扩展管理组件已关闭或控制结果未知，不能自动重启并重放")
@@ -99,8 +101,12 @@ class NodeExtensionManagement:
                     reply = await self._receive()
                 if set(reply) not in ({"result"}, {"error"}):
                     raise ValueError("扩展管理控制回执不完整")
+                if "result" in reply:
+                    return response_type.model_validate(reply["result"])
+                if not isinstance(reply["error"], str):
+                    raise TypeError("扩展管理错误回执不是字符串")
             except BaseException as error:
-                # 取消／断流后必须回收原进程；安装是否已发布只能在新 Backend 中读取原 profile，
+                # 取消／断流／损坏回执后必须回收原进程；安装是否已发布只能在新 Backend 中读取原 profile，
                 # 不能因为没有回执就自动重放写入。
                 self._failed = True
                 try:
@@ -108,20 +114,18 @@ class NodeExtensionManagement:
                 except BaseException as close_error:  # noqa: BLE001 - 取消及回收失败必须同时保留。
                     raise BaseExceptionGroup("扩展管理操作及原进程回收均失败", [error, close_error]) from None
                 raise
-            if "error" in reply:
-                raise ExtensionManagementError(str(reply["error"]))
-            return reply["result"]
+            raise ExtensionManagementError(reply["error"])
 
     async def inventory(self) -> ProfileExtensionInventory:
-        return ProfileExtensionInventory.model_validate(await self._request({"method": "inventory"}))
+        return await self._request({"method": "inventory"}, response_type=ProfileExtensionInventory)
 
     async def environment(self) -> ExtensionHostEnvironmentDTO:
-        return ExtensionHostEnvironmentDTO.model_validate(await self._request({"method": "environment"}))
+        return await self._request({"method": "environment"}, response_type=ExtensionHostEnvironmentDTO)
 
-    async def install(self, vsix_path: Path) -> VsixInstallResult:
+    async def install(self, vsix_path: Path) -> InstalledProfile:
         if not vsix_path.is_absolute():
             raise ValueError("VSIX 必须由目标文件 owner 解析为本机绝对路径")
-        return VsixInstallResult.model_validate(await self._request({"method": "install", "vsix_path": str(vsix_path)}))
+        return await self._request({"method": "install", "vsix_path": str(vsix_path)}, response_type=InstalledProfile)
 
     async def _close_process(self) -> None:
         await self.child.close()

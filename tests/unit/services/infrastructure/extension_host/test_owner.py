@@ -13,8 +13,12 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.exceptions import ForbiddenError
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.schemas.gateway.extension_host import ExtensionHostEnvironmentDTO
+from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationInstallRequest,
+)
 from app.services.infrastructure.extension_host.management import (
     NodeExtensionManagement,
 )
@@ -133,6 +137,17 @@ async def test_views_preserve_client_identity_and_independent_generations(case: 
         assert restarted.initialization.workspace.folders == first_view.workspace.folders
         assert restarted.initialization.logs_location_uri != first_view.logs_location_uri
     assert len(case.hosts) == 3
+
+
+async def test_vsix_install_keeps_private_file_protection_before_management_start(case: Case) -> None:
+    gateway = "gateway_" + "a" * 32
+    workspace_id = case.workspace_ids[0]
+    request = ExtensionInstallationInstallRequest(protocol_version=1, gateway_id=gateway,
+        backend_id=case.owner.backend_id, workspace_ids=[workspace_id],
+        source_uri=f"boxteam://{gateway}/workspace/{workspace_id}/resources/files/root/.boxteam/private.vsix")
+    with pytest.raises(ForbiddenError, match="私有存储"):
+        await case.owner.install(request)
+    assert case.owner._management is None and case.hosts == []
 
 
 async def test_shutdown_during_start_cannot_publish_or_abandon_the_reserved_host(case: Case) -> None:
