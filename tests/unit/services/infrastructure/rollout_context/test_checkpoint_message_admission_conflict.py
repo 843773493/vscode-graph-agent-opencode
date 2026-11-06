@@ -84,7 +84,6 @@ def test_user_turn_admission_rejects_internal_human_message(tmp_path: Path) -> N
                 messages=[message],
                 last_message_sequence=0,
                 next_item_sequence=1,
-                offset=0,
             )
 
         assert connection.execute("SELECT * FROM messages").fetchall() == []

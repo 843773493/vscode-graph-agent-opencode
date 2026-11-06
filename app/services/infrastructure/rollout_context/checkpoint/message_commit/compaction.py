@@ -22,7 +22,6 @@ from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepa
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
 from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line,
     canonical_json_text,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
@@ -55,7 +54,7 @@ def new_compaction_event(
 def prepare_compaction(
     *, connection: sqlite3.Connection, codec: MessageCodec, batch: MessageBatch,
     event: Mapping[str, object], messages: Sequence[object], thread_id: str,
-    checkpoint_id: str, timestamp: str, offset: int,
+    checkpoint_id: str, timestamp: str,
 ) -> tuple[tuple[str, ...], int]:
     """摘要归属触发执行；原 messages channel 及 cutoff 坐标保持不变。"""
     cutoff = event.get("cutoff_index")
@@ -110,11 +109,10 @@ def prepare_compaction(
                       admission.execution_id, canonical_json_text(item.producer_ref), canonical_json_text(item.projection_manifest())):
             raise ValueError("compaction summary identity 已用于不同正文、执行归属或 checkpoint")
     else:
-        raw = canonical_json_line(item.to_dict())
         sequence = batch.last_message_sequence + 1
         batch.prepared.append((
             sequence, summary_id, admission.turn_id, "user", codec.project_message((item,)),
-            offset, len(raw), "internal", ((item, offset, len(raw)),), admission.execution_id,
+            "internal", (item,), admission.execution_id,
         ))
         batch.next_item_sequence += 1
         batch.last_message_sequence = sequence

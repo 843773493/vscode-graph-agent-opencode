@@ -31,22 +31,18 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
 from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line,
     canonical_json_text,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
-ItemLocation = tuple[CanonicalItemRecord, int, int]
 PreparedMessage = tuple[
     int,
     str,
     str | None,
     str,
     dict[str, object],
-    int,
-    int,
     str,
-    tuple[ItemLocation, ...],
+    tuple[CanonicalItemRecord, ...],
     str,
 ]
 
@@ -123,7 +119,6 @@ def prepare_messages(
     messages: Sequence[object],
     last_message_sequence: int,
     next_item_sequence: int,
-    offset: int,
     read_locator_sequences: Callable[[], Sequence[int]] | None = None,
     allow_revisions: bool = False,
 ) -> MessageBatch:
@@ -280,12 +275,6 @@ def prepare_messages(
                 batch.visible_sequences.append(message_locator[0])
                 continue
             sequence = batch.last_message_sequence + 1
-            locations: list[ItemLocation] = []
-            for item in group:
-                raw = canonical_json_line(item.to_dict())
-                locations.append((item, offset, len(raw)))
-                offset += len(raw)
-            _, message_offset, message_length = locations[-1]
             batch.next_item_sequence += len(group)
             # 派生 message projection 也从唯一 canonical group 构造，不保存第二份正文。
             batch.prepared.append(
@@ -295,10 +284,8 @@ def prepare_messages(
                     turn_id,
                     codec.message_role(message),
                     projected,
-                    message_offset,
-                    message_length,
                     "internal" if codec.is_internal(message) else "visible",
-                    tuple(locations),
+                    group,
                     execution_id,
                 )
             )

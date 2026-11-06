@@ -212,7 +212,7 @@ class RolloutCheckpointPersistenceMixin:
                     read_item=partial(self._storage._read_v2_item_at, validated_commits=set(), validated_scopes=set()),
                     thread_id=thread_id,
                     messages=current_messages, last_message_sequence=last_message_sequence,
-                    next_item_sequence=next_item_sequence, offset=jsonl_offset_before,
+                    next_item_sequence=next_item_sequence,
                     read_locator_sequences=(
                         lambda: self._storage._view_message_sequences_from_connection(connection, locator_view[0])
                     ) if locator_view else None,
@@ -231,7 +231,6 @@ class RolloutCheckpointPersistenceMixin:
                     connection=connection, codec=self._storage._codec(), batch=batch,
                     event=compaction_event, messages=current_messages, thread_id=thread_id,
                     checkpoint_id=checkpoint_id, timestamp=checkpoint_timestamp_value,
-                    offset=jsonl_offset_before + sum(location[2] for row in batch.prepared for location in row[8]),
                 )
             prepared = batch.prepared
             first_sequence = batch.first_message_sequence
@@ -266,7 +265,7 @@ class RolloutCheckpointPersistenceMixin:
             transaction_id = uuid4().hex
             timestamp = _now()
             canonical_items = tuple(
-                item for row in prepared for item, _offset, _length in row[8]
+                item for row in prepared for item in row[6]
             )
             if canonical_items:
                 # 唯一 storage writer 在本事务内完成 durability/catalog/offset；
@@ -299,30 +298,31 @@ class RolloutCheckpointPersistenceMixin:
                 turn_id,
                 role,
                 message_value,
-                message_offset,
-                byte_length,
                 visibility,
-                canonical_locations,
+                message_items,
                 execution_id,
             ) in prepared:
                 # 投影已由同批 canonical group 校验，直接取内容；不为元数据往返编码整条消息。
                 content = message_value.get("data", {}).get("content")
                 content_bytes = _json(content).encode("utf-8")
+                # 直接引用唯一 writer 分配的实际坐标，不预估位置或再次编码整份 canonical 正文。
                 connection.execute(
-                    "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, role, jsonl_offset, jsonl_length, content_length, content_hash, visibility, commit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, role, "
+                    "jsonl_offset, jsonl_length, content_length, content_hash, visibility, commit_id, created_at) "
+                    "SELECT ?, ?, ?, ?, ?, jsonl_offset, jsonl_length, ?, ?, ?, ?, ? "
+                    "FROM item_catalog WHERE item_id=?",
                     (
                         sequence,
                         message_id,
                         turn_id,
                         execution_id,
                         role,
-                        message_offset,
-                        byte_length,
                         len(content_bytes),
                         _hash_bytes(content_bytes),
                         visibility,
                         commit_id,
                         timestamp,
+                        message_items[-1].item_id,
                     ),
                 )
                 if turn_id is not None:
@@ -335,7 +335,7 @@ class RolloutCheckpointPersistenceMixin:
                         active_branch,
                         timestamp,
                     )
-                for canonical_item, _item_offset, _item_length in canonical_locations:
+                for canonical_item in message_items:
                     self._storage._bind_canonical_item_execution(
                         connection, item_id=canonical_item.item_id,
                         execution_id=execution_id,
@@ -356,7 +356,7 @@ class RolloutCheckpointPersistenceMixin:
                         )
                 self._insert_message_projection(
                     connection, sequence, message_value, timestamp,
-                    canonical_items=tuple(item for item, _offset, _length in canonical_locations),
+                    canonical_items=message_items,
                 )
             if current_messages is not None and parent_checkpoint_id is not None:
                 # 纯 selection 继承没有消费 pending 正文，也无需顺便发布旧引用。
