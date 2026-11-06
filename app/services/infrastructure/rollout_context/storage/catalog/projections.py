@@ -278,9 +278,10 @@ class RolloutProjectionMixin:
         try:
             with self.read_connection(session_id, thread_id, checkpoint_ns) as connection:
                 self._require_v2_runtime(connection)
-                columns = "item_sequence, item_id, id, semantic_kind, payload_kind, status, turn_id, turn_scope, message_group_id, wire_role, content, content_length, content_truncated, has_reasoning, has_tool_calls, phase, content_hash, projection_version, created_at, updated_at"
-                invalid = connection.execute(
-                    "SELECT ip.item_id FROM item_projections AS ip "
+                columns = "ip.item_sequence, ip.item_id, ip.id, ip.semantic_kind, ip.payload_kind, ip.status, ip.turn_id, ip.turn_scope, ip.message_group_id, ip.wire_role, ip.content, ip.content_length, ip.content_truncated, ip.has_reasoning, ip.has_tool_calls, ip.phase, ip.content_hash, ip.projection_version, ip.created_at, ip.updated_at"
+                # 身份校验与读取共用本次选中的行，不为读取单条投影审计全部历史。
+                query = (
+                    f"SELECT {columns}, ic.item_id FROM item_projections AS ip "
                     "LEFT JOIN item_catalog AS ic ON ic.item_id = ip.item_id "
                     "AND ic.item_sequence = ip.item_sequence "
                     "AND ic.semantic_kind = ip.semantic_kind "
@@ -292,19 +293,17 @@ class RolloutProjectionMixin:
                     "AND ic.wire_role IS ip.wire_role "
                     "AND ic.content_hash = ip.content_hash "
                     "AND ic.created_at = ip.created_at "
-                    "WHERE ic.item_id IS NULL LIMIT 1"
-                ).fetchone()
+                )
+                if values:
+                    query += f"WHERE ip.item_id IN ({','.join('?' for _ in values)}) "
+                rows = connection.execute(query + "ORDER BY ip.item_sequence", values).fetchall()
+                invalid = next((row[1] for row in rows if row[-1] is None), None)
                 if invalid is not None:
                     raise RuntimeError(
                         "item projection 与 canonical catalog identity/hash 不一致: "
-                        f"{invalid[0]}"
+                        f"{invalid}"
                     )
                 if values:
-                    placeholders = ",".join("?" for _ in values)
-                    rows = connection.execute(
-                        f"SELECT {columns} FROM item_projections WHERE item_id IN ({placeholders}) ORDER BY item_sequence",
-                        values,
-                    ).fetchall()
                     found_ids = {
                         strict_text(row[1], field="item_projections.item_id")
                         for row in rows
@@ -317,14 +316,10 @@ class RolloutProjectionMixin:
                             "item projection 缺少请求的 canonical item: "
                             + ",".join(missing_ids)
                         )
-                else:
-                    rows = connection.execute(
-                        f"SELECT {columns} FROM item_projections ORDER BY item_sequence"
-                    ).fetchall()
         except RolloutNotMaterializedError:
             if values:
                 raise KeyError(
                     "item projection 缺少请求的 canonical item: " + ",".join(values)
                 ) from None
             return []
-        return [_decode_item_projection_row(row) for row in rows]
+        return [_decode_item_projection_row(row[:-1]) for row in rows]
