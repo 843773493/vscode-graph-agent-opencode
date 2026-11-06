@@ -15,6 +15,7 @@ from app.protocol.generated.boxteam.workspace.v2 import (
     public_pb2,
     session_interaction_pb2,
     session_stream_pb2,
+    skill_sources_pb2,
     trace_pb2,
 )
 from app.protocol.schema import assert_public_schema
@@ -98,6 +99,9 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
         "ConfigSourceEditRequest", "ConfigSourceDocumentDTO", "ConfigSourcePreflightDTO", "ConfigEventDTO",
     )
+} | {
+    name: f"{skill_sources_pb2.DESCRIPTOR.package}.{name}"
+    for name in ("SkillSourceMetadataDTO", "SkillSourcesMetadataDTO")
 } | MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS
 
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {

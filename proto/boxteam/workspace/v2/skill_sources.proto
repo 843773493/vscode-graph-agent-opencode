@@ -8,3 +8,17 @@ message SkillSourcesRefreshDTO {
   string revision = 2;
   bool available = 3;
 }
+
+// 只投影原 owner 已接受的来源 metadata，不传输正文或获取地址。
+message SkillSourceMetadataDTO {
+  string name = 1;
+  string display_uri = 2;
+  bool available = 3;
+  optional string error_code = 4;
+  int64 priority = 5;
+}
+
+message SkillSourcesMetadataDTO {
+  string workspace_id = 1;
+  repeated SkillSourceMetadataDTO entries = 2;
+}

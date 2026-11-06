@@ -36,7 +36,11 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
 )
-from app.schemas.internal_v2.skill_sources import SkillSourcesRefreshDTO
+from app.schemas.internal_v2.skill_sources import (
+    SkillSourceMetadataDTO,
+    SkillSourcesMetadataDTO,
+    SkillSourcesRefreshDTO,
+)
 from app.schemas.internal_v2.text_mutation import (
     TextMutationReceiptDTO,
     TextMutationRequest,
@@ -83,6 +87,18 @@ from app.services.infrastructure.workspace_files.text_transfer import (
 from app.services.infrastructure.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/resources", tags=["resources"])
+
+
+@router.get("/skill-sources", response_model=APIResponse[SkillSourcesMetadataDTO], summary="发现工作区配置的 Skill 来源")
+async def list_skill_sources(
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[ConfiguredSkillSources, Depends(get_configured_skill_sources)],
+) -> APIResponse[SkillSourcesMetadataDTO]:
+    return APIResponse(data=SkillSourcesMetadataDTO(workspace_id=owner.owner_id, entries=tuple(
+        SkillSourceMetadataDTO(name=entry.name, display_uri=entry.display_uri, available=entry.available,
+                               error_code=entry.error_code, priority=entry.priority)
+        for entry in owner.entries()
+    )), request_id=request_id)
 
 
 @router.post("/skill-sources/refresh", response_model=APIResponse[SkillSourcesRefreshDTO])

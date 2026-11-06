@@ -15,6 +15,20 @@ export interface SkillSourcesRefreshDTO {
   available: boolean;
 }
 
+/** 只投影原 owner 已接受的来源 metadata，不传输正文或获取地址。 */
+export interface SkillSourceMetadataDTO {
+  name: string;
+  display_uri: string;
+  available: boolean;
+  error_code?: string | undefined;
+  priority: number;
+}
+
+export interface SkillSourcesMetadataDTO {
+  workspace_id: string;
+  entries: SkillSourceMetadataDTO[];
+}
+
 function createBaseSkillSourcesRefreshDTO(): SkillSourcesRefreshDTO {
   return { workspace_id: "", revision: "", available: false };
 }
@@ -50,6 +64,91 @@ export const SkillSourcesRefreshDTO: MessageFns<SkillSourcesRefreshDTO> = {
     message.workspace_id = object.workspace_id ?? "";
     message.revision = object.revision ?? "";
     message.available = object.available ?? false;
+    return message;
+  },
+};
+
+function createBaseSkillSourceMetadataDTO(): SkillSourceMetadataDTO {
+  return { name: "", display_uri: "", available: false, error_code: undefined, priority: 0 };
+}
+
+export const SkillSourceMetadataDTO: MessageFns<SkillSourceMetadataDTO> = {
+  fromJSON(object: any): SkillSourceMetadataDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      display_uri: isSet(object.display_uri) ? globalThis.String(object.display_uri) : "",
+      available: isSet(object.available) ? globalThis.Boolean(object.available) : false,
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+      priority: isSet(object.priority) ? globalThis.Number(object.priority) : 0,
+    };
+  },
+
+  toJSON(message: SkillSourceMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.display_uri !== "") {
+      obj.display_uri = message.display_uri;
+    }
+    if (message.available !== false) {
+      obj.available = message.available;
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    if (message.priority !== 0) {
+      obj.priority = Math.round(message.priority);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SkillSourceMetadataDTO>, I>>(base?: I): SkillSourceMetadataDTO {
+    return SkillSourceMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SkillSourceMetadataDTO>, I>>(object: I): SkillSourceMetadataDTO {
+    const message = createBaseSkillSourceMetadataDTO();
+    message.name = object.name ?? "";
+    message.display_uri = object.display_uri ?? "";
+    message.available = object.available ?? false;
+    message.error_code = object.error_code ?? undefined;
+    message.priority = object.priority ?? 0;
+    return message;
+  },
+};
+
+function createBaseSkillSourcesMetadataDTO(): SkillSourcesMetadataDTO {
+  return { workspace_id: "", entries: [] };
+}
+
+export const SkillSourcesMetadataDTO: MessageFns<SkillSourcesMetadataDTO> = {
+  fromJSON(object: any): SkillSourcesMetadataDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => SkillSourceMetadataDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SkillSourcesMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => SkillSourceMetadataDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SkillSourcesMetadataDTO>, I>>(base?: I): SkillSourcesMetadataDTO {
+    return SkillSourcesMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SkillSourcesMetadataDTO>, I>>(object: I): SkillSourcesMetadataDTO {
+    const message = createBaseSkillSourcesMetadataDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.entries = object.entries?.map((e) => SkillSourceMetadataDTO.fromPartial(e)) || [];
     return message;
   },
 };

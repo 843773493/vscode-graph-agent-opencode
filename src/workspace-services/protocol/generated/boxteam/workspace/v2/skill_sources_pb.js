@@ -8,7 +8,7 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
  * Describes the file boxteam/workspace/v2/skill_sources.proto.
  */
 export const file_boxteam_workspace_v2_skill_sources = /*@__PURE__*/
-  fileDesc("Cihib3h0ZWFtL3dvcmtzcGFjZS92Mi9za2lsbF9zb3VyY2VzLnByb3RvEhRib3h0ZWFtLndvcmtzcGFjZS52MiJTChZTa2lsbFNvdXJjZXNSZWZyZXNoRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRIQCghyZXZpc2lvbhgCIAEoCRIRCglhdmFpbGFibGUYAyABKAhiBnByb3RvMw");
+  fileDesc("Cihib3h0ZWFtL3dvcmtzcGFjZS92Mi9za2lsbF9zb3VyY2VzLnByb3RvEhRib3h0ZWFtLndvcmtzcGFjZS52MiJTChZTa2lsbFNvdXJjZXNSZWZyZXNoRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRIQCghyZXZpc2lvbhgCIAEoCRIRCglhdmFpbGFibGUYAyABKAgiiAEKFlNraWxsU291cmNlTWV0YWRhdGFEVE8SDAoEbmFtZRgBIAEoCRITCgtkaXNwbGF5X3VyaRgCIAEoCRIRCglhdmFpbGFibGUYAyABKAgSFwoKZXJyb3JfY29kZRgEIAEoCUgAiAEBEhAKCHByaW9yaXR5GAUgASgDQg0KC19lcnJvcl9jb2RlIm4KF1NraWxsU291cmNlc01ldGFkYXRhRFRPEhQKDHdvcmtzcGFjZV9pZBgBIAEoCRI9CgdlbnRyaWVzGAIgAygLMiwuYm94dGVhbS53b3Jrc3BhY2UudjIuU2tpbGxTb3VyY2VNZXRhZGF0YURUT2IGcHJvdG8z");
 
 /**
  * Describes the message boxteam.workspace.v2.SkillSourcesRefreshDTO.
@@ -16,4 +16,18 @@ export const file_boxteam_workspace_v2_skill_sources = /*@__PURE__*/
  */
 export const SkillSourcesRefreshDTOSchema = /*@__PURE__*/
   messageDesc(file_boxteam_workspace_v2_skill_sources, 0);
+
+/**
+ * Describes the message boxteam.workspace.v2.SkillSourceMetadataDTO.
+ * Use `create(SkillSourceMetadataDTOSchema)` to create a new message.
+ */
+export const SkillSourceMetadataDTOSchema = /*@__PURE__*/
+  messageDesc(file_boxteam_workspace_v2_skill_sources, 1);
+
+/**
+ * Describes the message boxteam.workspace.v2.SkillSourcesMetadataDTO.
+ * Use `create(SkillSourcesMetadataDTOSchema)` to create a new message.
+ */
+export const SkillSourcesMetadataDTOSchema = /*@__PURE__*/
+  messageDesc(file_boxteam_workspace_v2_skill_sources, 2);
 

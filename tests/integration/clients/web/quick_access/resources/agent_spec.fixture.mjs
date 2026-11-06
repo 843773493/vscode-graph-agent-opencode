@@ -25,6 +25,7 @@ export async function agentSpecContract(mode) {
     const headers = new Headers(init?.headers), body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, body, gateway: headers.get('X-BoxTeam-Target-Gateway-Id') });
     if (path === '/api/gateway/workspaces') return ok({ items: targets, active_workspace: targets[0] });
+    if (path === '/api/v1/resources/skill-sources') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
     if (path === '/api/v1/resources/agent-spec') {
       const result = () => ok({ node: { uri, resource_shape: mode === 'unsupported' ? 'domain_object' : 'file', operations: ['describe', 'read'] },
         entries: [], matches: [], contexts: [], truncated: false, view: 'live' });

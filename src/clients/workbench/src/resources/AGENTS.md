@@ -12,4 +12,4 @@
 
 # 规范
 
-本片只发现工作区根 AGENTS；查询固定发起 owner，取消释放实际读取。打开复用原 Opener、来源只读 Provider 和编辑器组选项，不额外 describe/read；其它类别按各自原合同继续接入。
+发现工作区根 AGENTS 和工作区已配置 HTTP Skill；Skill 只消费原 owner 的 accepted metadata，不抓取上游、扫描本地 Skill 或编译 runtime。同次 provide 只发现一次、逐键本地过滤，不保留跨打开缓存。查询固定发起 owner，结束选择器或身份失效时取消实际读取，全部 metadata 请求共用三并发限制且各分支独立报告失败。打开复用原 Opener、来源只读 Provider 和编辑器组选项，不额外 describe/read；其它类别按各自原合同继续接入。

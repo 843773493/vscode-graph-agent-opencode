@@ -38,3 +38,62 @@ export declare type SkillSourcesRefreshDTO = Message<"boxteam.workspace.v2.Skill
  */
 export declare const SkillSourcesRefreshDTOSchema: GenMessage<SkillSourcesRefreshDTO>;
 
+/**
+ * 只投影原 owner 已接受的来源 metadata，不传输正文或获取地址。
+ *
+ * @generated from message boxteam.workspace.v2.SkillSourceMetadataDTO
+ */
+export declare type SkillSourceMetadataDTO = Message<"boxteam.workspace.v2.SkillSourceMetadataDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string display_uri = 2;
+   */
+  displayUri: string;
+
+  /**
+   * @generated from field: bool available = 3;
+   */
+  available: boolean;
+
+  /**
+   * @generated from field: optional string error_code = 4;
+   */
+  errorCode?: string | undefined;
+
+  /**
+   * @generated from field: int64 priority = 5;
+   */
+  priority: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SkillSourceMetadataDTO.
+ * Use `create(SkillSourceMetadataDTOSchema)` to create a new message.
+ */
+export declare const SkillSourceMetadataDTOSchema: GenMessage<SkillSourceMetadataDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SkillSourcesMetadataDTO
+ */
+export declare type SkillSourcesMetadataDTO = Message<"boxteam.workspace.v2.SkillSourcesMetadataDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SkillSourceMetadataDTO entries = 2;
+   */
+  entries: SkillSourceMetadataDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SkillSourcesMetadataDTO.
+ * Use `create(SkillSourcesMetadataDTOSchema)` to create a new message.
+ */
+export declare const SkillSourcesMetadataDTOSchema: GenMessage<SkillSourcesMetadataDTO>;
+
