@@ -133,6 +133,7 @@ def project_sealed_prefix(
     replacements = SourceReplacementIndex()
     messages: list[BaseMessage] = []
     groups: dict[tuple[str, ...], tuple[list[dict[str, object]], int]] = {}
+    retry_variants: dict[tuple[str, ...], dict[str, tuple[BaseMessage, ...]]] = {}
     for frame in binding.prefix.state.frames:
         if frame.source_protocol is not None:
             for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
@@ -189,17 +190,20 @@ def project_sealed_prefix(
                 ordinal, separator, phase = source.source_revision.partition(":")
                 if not separator or not ordinal.isdecimal() or phase not in {"initial", "tool_free", "visible_text"}:
                     raise ValueError("source-mismatch: 摘要候选重试身份非法")
-                retry_items = []
-                for item_id in body["retry_source_item_ids"]:
-                    selected = canonical_entries.get(("canonical_item", item_id, plan.thread_id))
-                    if selected is None:
-                        raise ValueError("source-mismatch: 摘要重试中段没有封存 canonical 来源")
-                    retry_items.append(resolve_selected_item(selected, items))
-                if retry_items and int(ordinal) == 0:
+                retry_ids = tuple(body["retry_source_item_ids"])
+                if retry_ids not in retry_variants:
+                    # 同次投影的相同有序重试中段只校验、投影一次；不能为每帧重做整段历史。
+                    retry_items = []
+                    for item_id in retry_ids:
+                        selected = canonical_entries.get(("canonical_item", item_id, plan.thread_id))
+                        if selected is None:
+                            raise ValueError("source-mismatch: 摘要重试中段没有封存 canonical 来源")
+                        retry_items.append(resolve_selected_item(selected, items))
+                    retry_messages = [project_summary_source(value) for value in summary_source_groups(retry_items).values()]
+                    retry_variants[retry_ids] = summary_retry_variants(retry_messages) if retry_items else {}
+                if retry_ids and int(ordinal) == 0:
                     raise ValueError("source-mismatch: 初始候选不能声明重试变换来源")
-                retry_messages = [project_summary_source(value) for value in summary_source_groups(retry_items).values()]
-                variants = summary_retry_variants(retry_messages) if retry_items else {}
-                validate_summary_source(projected, group, retry_variants=variants.get(projected.id, ()))
+                validate_summary_source(projected, group, retry_variants=retry_variants[retry_ids].get(projected.id, ()))
                 messages.append(projected)
                 used.add(("request_only", ref.ref_id, plan.thread_id))
                 continue
