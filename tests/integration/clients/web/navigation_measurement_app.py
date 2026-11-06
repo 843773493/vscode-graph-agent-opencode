@@ -315,14 +315,7 @@ if _kind == "backend":
         node = _entry_to_node(self, cast("os.DirEntry[str]", _ObservedEntry(entry)), parent_path, scope=scope)
         members = getattr(_scan_state, "members", None)
         if _trace_enabled and members is not None and parent_path == "concurrent" and scope == "workspace":
-            members.append({
-                "name": node.name,
-                "path": node.path,
-                "kind": node.kind,
-                "size": node.size,
-                "has_children": node.has_children,
-                "modified_at": node.modified_at,
-            })
+            members.append(node)
         return node
 
     WorkspaceService._entry_to_file_node = _observed_entry_to_node

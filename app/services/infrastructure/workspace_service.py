@@ -252,11 +252,11 @@ class WorkspaceService:
         limit: int,
         cursor_key: tuple[bool, str, str] | None,
     ) -> tuple[list[WorkspaceFileNodeDTO], tuple[bool, str, str] | None, str]:
-        def entry_key(entry: WorkspaceFileNodeDTO) -> tuple[bool, str, str]:
+        def entry_key(entry: dict) -> tuple[bool, str, str]:
             return (
-                entry.kind != "directory",
-                entry.name.lower(),
-                entry.name,
+                entry["kind"] != "directory",
+                entry["name"].lower(),
+                entry["name"],
             )
 
         fingerprint = 0
@@ -269,15 +269,14 @@ class WorkspaceService:
                 if child in staging or is_private(child):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
-                fingerprint ^= int(digest({"name": node.name, "kind": node.kind, "size": node.size,
-                                          "modified_at": node.modified_at}), 16)
+                fingerprint ^= int(digest({field: node[field] for field in ("name", "kind", "size", "modified_at")}), 16)
                 count += 1
                 if cursor_key is None or entry_key(node) > cursor_key:
                     yield node
         with (file_access(display_path, "目录扫描"),
               self.file_paths.private_path_filter(root_uri=display_path) as is_private,
               os.scandir(native_io_path(target_path)) as directory_entries):
-            # 分页 revision 取决于全部公开成员，仍需消费整目录；这里只消除逐节点重复取根。
+            # 分页 revision 仍消费全部公开成员；响应模型只为当前页构造。
             entries = heapq.nsmallest(
                 limit + 1,
                 observed_entries(directory_entries),
@@ -290,7 +289,7 @@ class WorkspaceService:
             else None
         )
         return (
-            page,
+            [WorkspaceFileNodeDTO(**node) for node in page],
             next_cursor,
             digest({"count": count, "members": f"{fingerprint:064x}"}),
         )
@@ -312,10 +311,11 @@ class WorkspaceService:
         parent_path: str,
         *,
         scope: WorkspaceFileScope,
-    ) -> WorkspaceFileNodeDTO:
+    ) -> dict:
         is_directory = entry.is_dir(follow_symlinks=False)
         is_symlink = entry.is_symlink()
         stat_result = None if is_directory else entry.stat(follow_symlinks=False)
+        # 非当前页的非法文件名也必须立即报错。
         relative_path = file_uri_child(parent_path, entry.name)
 
         if is_symlink:
@@ -327,13 +327,13 @@ class WorkspaceService:
         else:
             kind = "other"
 
-        return WorkspaceFileNodeDTO(
-            name=entry.name,
-            path=relative_path,
-            kind=kind,
-            has_children=is_directory,
-            size=None if stat_result is None else stat_result.st_size,
-            modified_at=(
+        return {
+            "name": entry.name,
+            "path": relative_path,
+            "kind": kind,
+            "has_children": is_directory,
+            "size": None if stat_result is None else stat_result.st_size,
+            "modified_at": (
                 None
                 if stat_result is None
                 else datetime.fromtimestamp(
@@ -341,7 +341,7 @@ class WorkspaceService:
                     UTC,
                 ).isoformat()
             ),
-        )
+        }
 
     async def get_file_content(
         self,
