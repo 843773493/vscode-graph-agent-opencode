@@ -330,7 +330,6 @@ def _validate_payload(
     tool_result_evidence: ToolResultEvidence | None,
     extensions: Mapping[str, object],
 ) -> None:
-    _ensure_json_value(payload)
     if payload_kind == PayloadKind.TEXT and not isinstance(payload, str):
         raise ItemSchemaError("text payload 必须是字符串")
     if payload_kind == PayloadKind.STRUCTURED_CONTENT and not isinstance(
@@ -670,8 +669,9 @@ class CanonicalItemRecord:
         relation_keys = [canonical_json_bytes(entry.to_dict()) for entry in self.provenance_relations]
         if len(relation_keys) != len(set(relation_keys)):
             raise ItemSchemaError("provenance_relations 不得重复")
-        _validate_payload(semantic, payload_type, status, self.payload, self.tool_result_evidence, self.extensions)
+        # JCS 编码会完整校验 JSON 并计算摘要，不在语义检查前再递归扫描同一份正文。
         expected_hash = content_hash(payload_type, self.payload)
+        _validate_payload(semantic, payload_type, status, self.payload, self.tool_result_evidence, self.extensions)
         if self.content_hash != expected_hash:
             raise ItemSchemaError("content_hash 与 payload 不一致")
         _non_empty_string(self.content_hash, "content_hash")
