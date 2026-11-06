@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from langchain_core.messages import BaseMessage
+
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.refs import (
@@ -113,18 +115,18 @@ def _text_blocks(body: object, *, role: str) -> list[dict[str, object]]:
     return result
 
 
-def project_native_request(
+def project_native_context(
     plan: ContextRequestPlan,
     items: Mapping[tuple[str, str, str], CanonicalItemRecord],
     request_only_content: Mapping[str, object],
     *, seal_binding: ContextSealBinding | None = None,
     attachment_projector: Callable[[object], object] | None = None,
-) -> dict[str, object]:
-    """selection 顺序和来源留在诊断中，request 只携带原生协议字段。"""
+) -> tuple[list[BaseMessage] | None, dict[str, object]]:
+    """返回同次校验的封存消息与 Native 投影；request 只携带原生协议字段。"""
     if plan.plan_state != "sealed" or plan.assembly_id is None:
         raise ValueError("context plan 未 sealed，不能进入 projector")
-    if seal_binding is not None:
-        project_sealed_prefix(plan, seal_binding, items, request_only_content)
+    # Responses 的另一份消息视图直接消费此次校验结果，不再重放整段封存前缀。
+    messages = project_sealed_prefix(plan, seal_binding, items, request_only_content) if seal_binding is not None else None
     # stream sink 与 checkpoint sink 都保存了同一次模型调用的 canonical 事实，
     # 但 provider wire 只能发送一个 carrier；否则历史会出现两份工具调用/输出。
     # 同一规则必须和 LangChain/history 投影保持一致。
@@ -304,7 +306,7 @@ def project_native_request(
             }
             for index in range(start, len(inputs))
         )
-    return {
+    return messages, {
         "request": {"input": inputs, "tools": tools},
         "assembly_id": plan.assembly_id,
         "session_id": plan.session_id,
@@ -315,4 +317,4 @@ def project_native_request(
     }
 
 
-__all__ = ["project_native_request"]
+__all__ = ["project_native_context"]

@@ -272,7 +272,7 @@ class ContextOwnerMixin(
         )
         resources = (project_sealed_resource_refs(committed.resource_activation)
                      if committed.resource_activation is not None else ())
-        native = self._project_native_context(
+        _, native = self._project_native_context(
             session_id, thread_id, committed, items, content,
             resource_refs=resources,
         )
@@ -359,8 +359,16 @@ class ContextOwnerMixin(
         # 正文解析、LangChain/Native 投影共用本次已构造的 plan；不跨操作缓存。
         committed_snapshot = context.assembly
         committed_plan = context.plan
+        resources = (project_sealed_resource_refs(context.resource_activation)
+                     if context.resource_activation is not None else ())
+        native_messages, native = self._project_native_context(
+            session_id, thread_id, context, items, resolved_request_content,
+            resource_refs=resources,
+        ) if include_native else (None, None)
         losses: list[str] = []
-        if include_request_only:
+        if include_request_only and native_messages is not None:
+            messages = native_messages
+        elif include_request_only:
             messages = project_context_plan(
                 committed_plan,
                 items,
@@ -380,12 +388,6 @@ class ContextOwnerMixin(
                 capability_losses=losses if collect_capability_losses else None,
             )
         messages = self.project_message_attachment_refs(session_id, thread_id, messages)
-        resources = (project_sealed_resource_refs(context.resource_activation)
-                     if context.resource_activation is not None else ())
-        native = self._project_native_context(
-            session_id, thread_id, context, items, resolved_request_content,
-            resource_refs=resources,
-        ) if include_native else None
         tools: list[dict[str, object]] = []
         if target_format == "responses" and native is not None:
             # 同次 Responses 只编码一次工具；返回副本保持两份投影可独立编辑。

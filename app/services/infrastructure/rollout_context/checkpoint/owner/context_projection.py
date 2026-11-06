@@ -157,11 +157,12 @@ class ContextProjectionOwnerMixin:
             session_id, thread_id, plan,
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
         )
-        return self._project_native_context(
+        _, native = self._project_native_context(
             session_id, thread_id, snapshot, items, request_content,
             resource_refs=(project_sealed_resource_refs(snapshot.resource_activation)
                            if snapshot.resource_activation is not None else ()),
         )
+        return native
 
     def _read_committed_context_projection(
         self,
@@ -224,19 +225,19 @@ class ContextProjectionOwnerMixin:
         items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         request_content: Mapping[str, object],
         *, resource_refs: tuple[SessionContextResourceDTO, ...],
-    ) -> dict[str, object]:
+    ) -> tuple[list[BaseMessage] | None, dict[str, object]]:
         """只消费本次读取的材料，不自行重读或重新选择 context。"""
         from app.services.infrastructure.rollout_context.provider.native_request import (
-            project_native_request,
+            project_native_context,
         )
 
-        native = project_native_request(
+        messages, native = project_native_context(
             context.plan, items, request_content,
             seal_binding=context.assembly.seal_binding,
             attachment_projector=lambda payload: self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, payload),
         )
         native["resource_refs"] = [ref.model_dump(mode="json") for ref in resource_refs]
-        return native
+        return messages, native
 
     def read_context_assembly_history(
         self,
