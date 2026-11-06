@@ -9,7 +9,9 @@ from app.domain.itemized.enums import CommitKind
 from app.domain.itemized.epoch.prefix_epoch import RuntimeNoticeAcceptanceRef
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text,
     json_mapping,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -156,19 +158,30 @@ def freeze_runtime_notice_selection(
     ).fetchall()
     fields = ("notice_item_id", "execution_id", "admission_commit_id", "admission_payload_hash",
               "source_branch_id", "source_view_id", "notice_context_ordinal")
+    # 先按本批 execution 索引选输出，再查冻结 membership；不能逐个 notice 重扫整个 view。
+    execution_ids = tuple(dict.fromkeys(row[1] for row in rows))
+    output_rows = connection.execute(
+        "SELECT item.execution_id,item.item_id FROM json_each(?) selected "
+        "CROSS JOIN item_catalog item ON item.execution_id=selected.value "
+        "CROSS JOIN context_view_items member ON member.item_id=item.item_id "
+        "AND member.view_id=? "
+        "WHERE member.visible=1 AND member.context_selected=1 AND member.source_kind='display_only' "
+        "AND item.semantic_kind='assistant_output' AND item.commit_id<=? "
+        "AND item.item_sequence<=? ORDER BY member.context_ordinal",
+        (canonical_json_text(execution_ids), view_id, commit_cut, item_cut),
+    ).fetchall() if rows else []
+    # 同一写事务只批量读取一次正文，共用提交/owner 校验与 JSONL 流；没有输出时不打开正文。
+    by_id = {item.item_id: item for item in storage.read_items(
+        session_id, thread_id, checkpoint_ns=checkpoint_ns,
+        item_ids=(row[1] for row in output_rows), connection=connection,
+    )} if output_rows else {}
+    outputs_by_execution: dict[str, list[CanonicalItemRecord]] = {}
+    for output_execution_id, output_item_id in output_rows:
+        outputs_by_execution.setdefault(output_execution_id, []).append(by_id[output_item_id])
     notices = []
     for row in rows:
         notice = dict(zip(fields, row, strict=True))
-        output_rows = connection.execute(
-            "SELECT item.item_id FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
-            "WHERE member.view_id=? AND member.visible=1 AND member.context_selected=1 AND member.source_kind='display_only' "
-            "AND item.execution_id=? AND item.semantic_kind='assistant_output' AND item.commit_id<=? "
-            "AND item.item_sequence<=? ORDER BY member.context_ordinal",
-            (view_id, row[1], commit_cut, item_cut),
-        ).fetchall()
-        output_items = [storage._read_canonical_item_from_catalog(
-            connection, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns, item_id=item[0],
-        ) for item in output_rows]
+        output_items = outputs_by_execution.get(row[1], [])
         shadows = superseded_item_ids(output_items)
         notice["private_output_item_ids"] = [item.item_id for item in output_items if item.item_id not in shadows]
         notices.append(notice)
