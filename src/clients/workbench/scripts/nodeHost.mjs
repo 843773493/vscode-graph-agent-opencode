@@ -7,6 +7,56 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform } from './sourceTransform.mjs';
 
+/** 从固定 npm v3 锁中提取运行闭包，保留嵌套解析与制品来源，不重新选择版本。 */
+export function nodeHostDependencyLock(manifest, upstreamLock) {
+  if (upstreamLock.lockfileVersion !== 3) throw new Error('Node 宿主要求固定上游的 npm v3 依赖锁');
+  const packages = { '': { name: manifest.name, engines: manifest.engines, dependencies: manifest.dependencies } };
+  const parent = location => {
+    const boundary = location.lastIndexOf('/node_modules/');
+    return boundary < 0 ? '' : location.slice(0, boundary);
+  };
+  const locate = (owner, name, peer) => {
+    let location = peer ? parent(owner) : owner;
+    for (;;) {
+      const candidate = `${location ? location + '/' : ''}node_modules/${name}`;
+      if (upstreamLock.packages[candidate]) return candidate;
+      if (!location) return undefined;
+      location = parent(location);
+    }
+  };
+  const pending = Object.keys(manifest.dependencies).map(name => [`node_modules/${name}`, false]);
+  for (let index = 0; index < pending.length; index++) {
+    const [location, optional] = pending[index];
+    // 同一依赖可能先经 optional 分支到达，再被必需分支引用。
+    if (packages[location] && (!packages[location].optional || optional)) continue;
+    const entry = upstreamLock.packages[location];
+    if (!entry?.version || !entry.resolved || !entry.integrity || entry.link) {
+      throw new Error(`Node 宿主依赖没有锁定的可发布制品：${location}`);
+    }
+    const copy = { ...entry };
+    delete copy.dev;
+    delete copy.devOptional;
+    delete copy.optional;
+    packages[location] = { ...copy, ...(optional ? { optional: true } : {}) };
+    const edges = new Map([
+      ...Object.keys(entry.peerDependencies ?? {}).map(name => [name, { peer: true, optional: entry.peerDependenciesMeta?.[name]?.optional === true }]),
+      ...Object.keys(entry.dependencies ?? {}).map(name => [name, { peer: false, optional: false }]),
+      ...Object.keys(entry.optionalDependencies ?? {}).map(name => [name, { peer: false, optional: true }]),
+    ]);
+    for (const [name, edge] of edges) {
+      const dependency = locate(location, name, edge.peer);
+      if (!dependency) {
+        // optional peer 本身不要求安装；普通 optional 依赖仍须有固定制品，不能交安装器另选版本。
+        if (edge.peer && edge.optional) continue;
+        throw new Error(`Node 宿主依赖锁缺少 ${location} 所需的 ${name}`);
+      }
+      pending.push([dependency, optional || edge.optional]);
+    }
+  }
+  return { name: manifest.name, lockfileVersion: 3, requires: true,
+    packages: Object.fromEntries(Object.entries(packages).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) };
+}
+
 /** 构建目标侧原 Node Extension Host；依赖安装和目标进程归后端基础设施 owner。 */
 export async function buildNodeExtensionHost(root, output) {
   root = resolve(root);
@@ -51,12 +101,17 @@ globalThis._VSCODE_FILE_ROOT = import.meta.dirname;` },
     return [name, version];
   }));
   const metadata = { commit, version: pkg.version, nodeVersion };
-  // TODO: 目标安装切片须锁定完整依赖树、验证各平台原生模块，并发布匹配 Node 的不可变运行时。
+  const manifest = {
+    name: '@boxteam/node-extension-host', private: true, type: 'module',
+    engines: { node: nodeVersion }, dependencies: versions,
+    // 原生依赖必须针对目标 Node 显式构建，不能由 Bun 的默认信任名单偷偷执行安装脚本。
+    trustedDependencies: [],
+  };
+  const dependencyLock = nodeHostDependencyLock(manifest, lock);
+  // TODO: 目标安装切片须构建并验证各平台原生模块，发布匹配 Node 的不可变运行时。
   await Promise.all([
-    writeFile(join(output, 'package.json'), JSON.stringify({
-      name: '@boxteam/node-extension-host', private: true, type: 'module',
-      engines: { node: nodeVersion }, dependencies: versions,
-    }, null, 2) + '\n'),
+    writeFile(join(output, 'package.json'), JSON.stringify(manifest, null, 2) + '\n'),
+    writeFile(join(output, 'package-lock.json'), JSON.stringify(dependencyLock, null, 2) + '\n'),
     writeFile(join(output, 'version.json'), JSON.stringify(metadata, null, 2) + '\n'),
     writeFile(join(output, 'build-meta.json'), JSON.stringify(result.metafile)),
     ...['LICENSE.txt', 'ThirdPartyNotices.txt'].map(async name =>

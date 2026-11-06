@@ -1,13 +1,14 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fork } from 'node:child_process';
+import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { createRequire, isBuiltin } from 'node:module';
 import { createConnection, createServer } from 'node:net';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
-import { buildNodeExtensionHost } from '../../../../src/clients/workbench/scripts/nodeHost.mjs';
+import { buildNodeExtensionHost, nodeHostDependencyLock } from '../../../../src/clients/workbench/scripts/nodeHost.mjs';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/workspace_services/extension_host/test_node_host.py').prepare();
@@ -115,7 +116,7 @@ async function connect(label) {
   const description = { ...manifest, identifier, extensionLocation: m.URI.file(extension), isBuiltin: false,
     isUserBuiltin: false, isUnderDevelopment: false, targetPlatform: 'undefined', preRelease: false };
   const init = {
-    version: metadata.version, quality: 'stable', commit: metadata.commit, parentPid: 0,
+    version: metadata.version, quality: 'stable', commit: metadata.commit, parentPid: process.pid,
     environment: { isExtensionDevelopmentDebug: false, appName: 'Host probe', appHost: 'web', appLanguage: 'en',
       appUriScheme: 'boxteam', isExtensionTelemetryLoggingOnly: true,
       globalStorageHome: m.URI.file(join(folder, 'global')), workspaceStorageHome: m.URI.file(join(folder, 'storage')) },
@@ -183,6 +184,171 @@ async function connect(label) {
 test('构建原Node宿主时不引入renderer文件链，依赖跟随固定上游', () => {
   assert.equal(metadata.inputs.some(path => path.includes('/clients/web/') || path.includes('/workbench/src/')), false);
   assert.equal(metadata.dependencies['@vscode/proxy-agent'], '0.45.0');
+});
+
+test('依赖闭包保留嵌套版本、peer归属、optional平台条件及必需引用', () => {
+  const pkg = (version, extra = {}) => ({ version, resolved: `https://registry.example/package-${version}.tgz`, integrity: `sha512-${version}`, ...extra });
+  const manifest = { name: 'lock-probe', engines: { node: metadata.nodeVersion }, dependencies: { a: '1.0.0', z: '1.0.0' } };
+  const source = { lockfileVersion: 3, packages: {
+    '': { scripts: { install: '不得继承的上游脚本' }, devDependencies: { unused: '1.0.0' } },
+    'node_modules/a': pkg('1.0.0', { dependencies: { nested: '^2' }, optionalDependencies: { shared: '^1', platform: '^1' } }),
+    'node_modules/a/node_modules/nested': pkg('2.0.0', { peerDependencies: { peer: '^1', absent: '^1' }, peerDependenciesMeta: { absent: { optional: true } } }),
+    'node_modules/a/node_modules/peer': pkg('1.0.0'),
+    // peer 必须在其父级解析，不能借用被测包自己的 node_modules。
+    'node_modules/a/node_modules/nested/node_modules/peer': pkg('9.0.0'),
+    'node_modules/peer': pkg('3.0.0'),
+    'node_modules/nested': pkg('8.0.0'),
+    'node_modules/shared': pkg('1.0.0', { dev: true, optional: true, dependencies: { child: '^1' } }),
+    'node_modules/child': pkg('1.0.0', { devOptional: true, optional: true, dependencies: { shared: '^1' } }),
+    'node_modules/platform': pkg('1.0.0', { os: ['win32'], cpu: ['x64'], hasInstallScript: true }),
+    'node_modules/z': pkg('1.0.0', { dependencies: { shared: '^1' } }),
+    'node_modules/unused': pkg('1.0.0'),
+  } };
+  const original = structuredClone(source);
+  const result = nodeHostDependencyLock(manifest, source);
+  assert.deepEqual(source, original);
+  assert.deepEqual(result.packages[''], { name: manifest.name, engines: manifest.engines, dependencies: manifest.dependencies });
+  assert.equal(result.packages['node_modules/a/node_modules/nested'].version, '2.0.0');
+  assert.equal(result.packages['node_modules/a/node_modules/peer'].version, '1.0.0');
+  assert.deepEqual(result.packages['node_modules/platform'], { ...source.packages['node_modules/platform'], optional: true });
+  for (const key of ['node_modules/shared', 'node_modules/child']) {
+    assert.equal(result.packages[key].optional, undefined);
+    assert.equal(result.packages[key].dev, undefined);
+    assert.equal(result.packages[key].devOptional, undefined);
+  }
+  for (const key of ['node_modules/unused', 'node_modules/nested', 'node_modules/peer', 'node_modules/a/node_modules/nested/node_modules/peer']) {
+    assert.equal(result.packages[key], undefined);
+  }
+  delete source.packages['node_modules/shared'];
+  assert.throws(() => nodeHostDependencyLock(manifest, source), /依赖锁缺少.*shared/);
+  assert.throws(() => nodeHostDependencyLock(manifest, { ...original, lockfileVersion: 2 }), /npm v3/);
+  delete original.packages['node_modules/z'].integrity;
+  assert.throws(() => nodeHostDependencyLock(manifest, original), /没有锁定的可发布制品.*node_modules\/z/);
+});
+
+test('实际Bun冻结安装消费构建生成的完整锁，不重新解析传递版本或执行原生安装脚本', async () => {
+  const installation = join(runtime, 'locked-dependencies');
+  await mkdir(installation);
+  for (const name of ['package.json', 'package-lock.json']) {
+    await writeFile(join(installation, name), await readFile(join(hostDirectory, name)));
+  }
+  const source = JSON.parse(await readFile(join(workbench, 'upstream/package-lock.json'), 'utf8'));
+  const lockedText = await readFile(join(installation, 'package-lock.json'), 'utf8');
+  const lock = JSON.parse(lockedText);
+  assert.equal(lock.packages['node_modules/@vscode/spdlog/node_modules/node-addon-api'].version, '7.1.0');
+  assert.equal(source.packages['node_modules/node-addon-api'].version, '6.1.0');
+  const result = spawnSync('bun', ['install', '--frozen-lockfile', '--ignore-scripts'], {
+    cwd: installation, encoding: 'utf8', timeout: 30000,
+  });
+  await Promise.all([
+    writeFile(join(run.artifactsDir, 'frozen-install.stdout.raw'), result.stdout ?? ''),
+    writeFile(join(run.artifactsDir, 'frozen-install.stderr.raw'), result.stderr ?? ''),
+    writeFile(join(run.artifactsDir, 'frozen-install.json'), JSON.stringify({
+      command: ['bun', 'install', '--frozen-lockfile', '--ignore-scripts'], cwd: installation,
+      status: result.status, signal: result.signal, error: result.error?.message,
+    }, null, 2) + '\n'),
+  ]);
+  assert.equal(result.status, 0, `${result.error?.message ?? ''}\n${result.stdout}\n${result.stderr}`);
+  assert.equal(await readFile(join(installation, 'package-lock.json'), 'utf8'), lockedText);
+  assert.match(await readFile(join(installation, 'bun.lock'), 'utf8'), /lockfileVersion/);
+  const installed = new Set();
+  async function collect(directory) {
+    const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const location = join(directory, entry.name);
+      if (entry.name.startsWith('@')) { await collect(location); continue; }
+      const pkg = JSON.parse(await readFile(join(location, 'package.json'), 'utf8'));
+      installed.add(`${pkg.name}@${pkg.version}`);
+      await collect(join(location, 'node_modules'));
+    }
+  }
+  await collect(join(installation, 'node_modules'));
+  const expected = new Set();
+  for (const [location, entry] of Object.entries(lock.packages)) {
+    if (!location) continue;
+    const name = entry.name ?? location.split('node_modules/').at(-1);
+    const key = `${name}@${entry.version}`;
+    expected.add(key);
+    if (!entry.optional) assert.equal(installed.has(key), true, `缺少锁定的必需依赖 ${key}`);
+    const { optional, ...value } = entry;
+    const { dev, devOptional, optional: originalOptional, ...original } = source.packages[location];
+    assert.deepEqual(value, original, `制品或解析元数据改变：${location}`);
+  }
+  for (const key of installed) assert.equal(expected.has(key), true, `安装器引入未锁定版本：${key}`);
+  const fromSpdlog = createRequire(join(installation, 'node_modules/@vscode/spdlog/package.json'));
+  assert.equal(fromSpdlog('node-addon-api/package.json').version, '7.1.0');
+  const resolution = [];
+  const visited = new Set();
+  async function inspect(owner, actualOwner) {
+    const pair = JSON.stringify([owner, actualOwner]);
+    if (visited.has(pair)) return;
+    visited.add(pair);
+    const entry = lock.packages[owner];
+    const dependencies = { ...entry.peerDependencies, ...entry.dependencies, ...entry.optionalDependencies };
+    for (const name of Object.keys(dependencies)) {
+      const optional = name in (entry.optionalDependencies ?? {})
+        || !(name in (entry.dependencies ?? {})) && entry.peerDependenciesMeta?.[name]?.optional === true;
+      const peer = name in (entry.peerDependencies ?? {}) && !(name in (entry.dependencies ?? {}))
+        && !(name in (entry.optionalDependencies ?? {}));
+      // 按原锁的物理布局独立取得期望；安装器可提升目录，但每一条依赖解析必须保留原版本。
+      let ancestor = peer ? owner.slice(0, owner.lastIndexOf('node_modules/')).replace(/\/$/, '') : owner;
+      let expectedLocation;
+      for (;;) {
+        const candidate = posix.join(ancestor, 'node_modules', name);
+        if (lock.packages[candidate]) { expectedLocation = candidate; break; }
+        if (!ancestor) break;
+        ancestor = posix.dirname(ancestor);
+        if (ancestor === '.') ancestor = '';
+      }
+      if (!expectedLocation) { assert.equal(optional, true, `原锁缺少 ${owner} -> ${name}`); continue; }
+      const expectedEntry = lock.packages[expectedLocation];
+      // buffer 等 npm 包可与 Node 内置模块同名；锁中制品仍已检查，裸模块名的真实解析属于 Node。
+      if (isBuiltin(name)) { resolution.push({ owner, dependency: name, builtin: true }); continue; }
+      const applies = (values, current) => !values || !values.includes(`!${current}`)
+        && (values.includes(current) || values.every(value => value.startsWith('!')));
+      const supported = applies(expectedEntry.os, process.platform) && applies(expectedEntry.cpu, process.arch);
+      const require = createRequire(join(peer ? dirname(actualOwner) : actualOwner, 'package.json'));
+      let actual;
+      for (const directory of require.resolve.paths(name)) {
+        if (!directory.startsWith(installation + sep)) continue;
+        try {
+          const location = join(directory, name);
+          actual = { location, pkg: JSON.parse(await readFile(join(location, 'package.json'), 'utf8')) };
+          break;
+        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      if (!actual && optional && !supported) continue;
+      assert.ok(actual, `安装后缺少 ${owner} -> ${name}`);
+      assert.equal(actual.pkg.version, expectedEntry.version, `安装器改变 ${owner} -> ${name} 的解析`);
+      assert.equal(actual.pkg.name, expectedEntry.name ?? name);
+      resolution.push({ owner, dependency: name, expectedLocation, actual: actual.location, version: actual.pkg.version });
+      await inspect(expectedLocation, actual.location);
+    }
+  }
+  await inspect('', installation);
+  await writeFile(join(run.artifactsDir, 'frozen-install-resolution.json'), JSON.stringify(resolution, null, 2) + '\n');
+});
+
+test('指定Node实际载入native模块，原生日志写盘且ripgrep读取目标文件', async () => {
+  const require = createRequire(join(hostDirectory, 'package.json'));
+  assert.equal(typeof require('@vscode/native-watchdog').start, 'function');
+  assert.equal(typeof require('kerberos').initializeClient, 'function');
+  const spdlog = require('@vscode/spdlog');
+  const logfile = join(run.artifactsDir, 'native-log-probe.log');
+  const logger = await spdlog.createRotatingLogger('node-host-native-probe', logfile, 1024, 1);
+  try { logger.info('node-host-native-probe'); logger.flush(); }
+  finally { logger.drop(); }
+  assert.match(await readFile(logfile, 'utf8'), /node-host-native-probe/);
+  const { rgPath } = await import(pathToFileURL(require.resolve('@vscode/ripgrep-universal')).href);
+  const target = join(runtime, 'ripgrep-probe.txt');
+  await writeFile(target, '目标资产 node-host-native-probe\n');
+  const result = spawnSync(rgPath, ['--fixed-strings', 'node-host-native-probe', target], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.status, 0, `${result.error?.message ?? ''}\n${result.stderr}`);
+  assert.equal(result.stdout.trim(), '目标资产 node-host-native-probe');
 });
 
 test('构建拒绝覆盖已有输出或写入固定上游，不修改原文件', async () => {
