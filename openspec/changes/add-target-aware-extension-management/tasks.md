@@ -85,6 +85,9 @@
 - [ ] 5.5 迁齐相同扩展 command ID 的来源记录与目标分派，保留 manifest／ID、菜单条件与快捷键；有发起目标直接路由，无上下文且多候选时明确选择，切焦点不改投。
 - [ ] 5.6 实现宿主 generation、迟到 RPC fencing、惰性启动、有界断线回收与后端生命周期排空；真实崩溃／重启不重放未知副作用，宿主退出不删除安装或稳定存储。
 - [ ] 5.7 迁齐公开 extension ID 与内部安装／运行实例身份，extensions.all／getExtension／exports 和依赖只解析该 host 合法实例；验证 A/B 同 ID 不同版本真实激活，更新／停用 A 不改变 B；静态声明冲突明确诊断并要求合法版本／窗口选择，不忽略重复注册或更名公开 ID。
+  - 2026-11-06 描述发布前置切片：浏览器与 Node 沿同一源码转换修正描述比较和版本推进；完整快照／增量先验证唯一 ID 与宿主归属，保留等版本空初始化及原依赖环过滤。接收端沿原 Sequencer 串行准备描述、激活事件和路径索引，再同步发布两个原 registry、wire 版本及通知；失败不发布候选，替换为零事件不残留旧激活，索引失败可显式重试，首次更新不额外重建失效旧包的索引。没有新协议、hash、长存快照或第二扩展服务。
+  - 原 Manager 的乐观发送投影不作为远端确认；任一状态 RPC 失败由唯一 AbstractExtensionService owner 移除准确宿主代际，先撤销退出订阅再断连／释放，保留原错误与所有清理原因并报告。启动的 fire-and-forget 拒绝被明确观察；不复用失败代际、不自动重放，不持状态队列等待 eager 激活。显式重启仍由原 owner 从最新窗口快照重建，未新增自动恢复行为。
+  - 最终25项／146断言通过，覆盖真实 Manager／collection／receiver 的失败收口、peer 保留、eager 并发、非法候选及原安装回归；进程／RPC 传输在该组合装具中为明确替身。Linux 真实原 Node RPC 和正式 Gateway／Workbench 两项集成2 passed／103.88秒：A 的未激活同ID描述升级、增删／旧重复版本／非法候选拒绝、最终真实v2代码激活及B不变；原 Web 安装／升级／重启／卸载／主题和 profile 保护通过，pageErrors为空、模型零调用。63份实际转换源码类型检查及同源码正式构建79个Web扩展通过，独审无阻断；命令、前后指纹与原始回执见 `out/tests/temp/2026/11/06/node_host_state/artifacts/verification-v1.json`。本片未接窗口多目标实例、目标授权／generation、Windows或Electron，不把状态发布前置修复记为5.2／5.3／5.6／5.7完成。
 
 ## 6. 扩展 API 与状态的逐类验收
 

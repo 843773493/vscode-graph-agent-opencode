@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 import { readFile } from 'node:fs/promises';
 
 export function activate(context) {
+  const snapshot = () => vscode.extensions.all.map(extension => [extension.id, extension.packageJSON.version]);
+  const changes = [];
+  context.subscriptions.push(vscode.extensions.onDidChange(() => changes.push(snapshot())));
+  context.subscriptions.push(vscode.commands.registerCommand('host-probe.extension-state', () => ({ current: snapshot(), changes })));
   context.subscriptions.push(vscode.commands.registerCommand('host-probe.crash', () => process.kill(process.pid, 'SIGKILL')));
   context.subscriptions.push(vscode.commands.registerCommand('host-probe.inspect', async () => {
     const folders = vscode.workspace.workspaceFolders;

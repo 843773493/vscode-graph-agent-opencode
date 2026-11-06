@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
+import { extensionHostStateSourcePaths, transformExtensionHostState } from './extensionHostStateTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [
@@ -40,6 +41,7 @@ export const transformedSourcePaths = [
   ...searchEditorSourcePaths,
   ...outlineSourcePaths,
   ...mcpSourcePaths,
+  ...extensionHostStateSourcePaths,
 ];
 
 function replaceOnce(source, marker, replacement) {
@@ -64,7 +66,8 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
-    // Node 宿主复用原 API／RPC，不能带入只属于 renderer 的 FileService 和 UI 定制。
+    contents = transformExtensionHostState(root, path, contents, replaceOnce);
+    // Node 宿主复用共同状态合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
     if (path === join(upstream, 'src/vs/workbench/browser/layout.ts')) {
       // 自动恢复关闭面板时不得抢走 Quick Input 等外部控件的焦点；只交回原本属于面板的焦点。

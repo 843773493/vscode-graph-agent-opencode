@@ -104,6 +104,7 @@ async function connect(label) {
     logLevel: 0, loggers: [], logsLocation: m.URI.file(join(folder, 'logs')), autoStart: false,
     remote: { isRemote: false, connectionData: null }, consoleForward: { includeStack: false, logNative: false }, uiKind: 2,
   };
+  let extensionService;
   async function initialize(commit = metadata.commit) {
     const initialized = commit === metadata.commit ? next() : undefined;
     protocol.send(m.VSBuffer.fromString(JSON.stringify({ ...init, commit })));
@@ -143,8 +144,9 @@ async function connect(label) {
     });
     await rpc.getProxy(m.ExtHostContext.ExtHostWorkspace).$initializeWorkspace({ id: label, name: label,
       folders: [{ uri: m.URI.file(folder), name: label, index: 0 }] }, true);
-    await bounded(rpc.getProxy(m.ExtHostContext.ExtHostExtensionService).$startExtensionHost({
-      versionId: 2, toAdd: [], toRemove: [], addActivationEvents: {}, myToAdd: [], myToRemove: [],
+    extensionService = rpc.getProxy(m.ExtHostContext.ExtHostExtensionService);
+    await bounded(extensionService.$startExtensionHost({
+      versionId: label === 'A' ? 1 : 2, toAdd: [], toRemove: [], addActivationEvents: {}, myToAdd: [], myToRemove: [],
     }), 'startExtensionHost');
     assert.equal(await rpc.getProxy(m.ExtHostContext.ExtHostExtensionService).$activate(identifier,
       { startup: false, extensionId: identifier, activationEvent: '*' }), true);
@@ -157,7 +159,10 @@ async function connect(label) {
     nodeSocket.dispose();
     assert.deepEqual(result, [false]);
   }
-  return { initialize, stop, receipt, folder, manifest, disconnect: () => socket.destroy(), exit };
+  return { initialize, stop, receipt, folder, manifest, disconnect: () => socket.destroy(), exit,
+    delta: delta => extensionService.$deltaExtensions(delta),
+    start: delta => extensionService.$startExtensionHost(delta),
+    activate: identifier => extensionService.$activate(identifier, { startup: false, extensionId: identifier, activationEvent: 'api' }) };
 }
 
 test('构建原Node宿主时不引入renderer文件链，依赖跟随固定上游', () => {
@@ -358,6 +363,42 @@ test('真实双Node宿主各自激活同ID不同版本，原生与扩展fs访问
     assert.equal(host.receipt.calls.some(call => call.name === '$onDidActivateExtension'), true);
     assert.deepEqual(host.receipt.errors, []);
   }
+  const delta = (versionId, fields = {}) => ({ versionId, toAdd: [], toRemove: [], myToAdd: [], myToRemove: [], addActivationEvents: {}, ...fields });
+  const identifier = new protocolTypes.ExtensionIdentifier('host-probe.dynamic');
+  async function dynamic(version) {
+    const directory = join(a.folder, 'dynamic-' + version);
+    await mkdir(directory);
+    const manifest = { publisher: 'host-probe', name: 'dynamic', version, type: 'module', main: './extension.mjs',
+      engines: { vscode: `^${metadata.version}` }, extensionKind: ['workspace'], activationEvents: [] };
+    await writeFile(join(directory, 'package.json'), JSON.stringify(manifest));
+    await writeFile(join(directory, 'extension.mjs'), `import * as vscode from 'vscode';
+export function activate(context) {
+  context.subscriptions.push(vscode.commands.registerCommand('host-probe.dynamic', () => '${version}'));
+}`);
+    return { ...manifest, identifier, extensionLocation: protocolTypes.URI.file(directory),
+      isBuiltin: false, isUserBuiltin: false, isUnderDevelopment: false, preRelease: false, targetPlatform: 'undefined' };
+  }
+  const [v1, v2] = await Promise.all([dynamic('1.0.0'), dynamic('2.0.0')]);
+  await a.delta(delta(3, { toAdd: [v1], myToAdd: [identifier] }));
+  assert.deepEqual((await inspectA('host-probe.extension-state')).current, [['host-probe.dynamic', '1.0.0'], ['host-probe.node', '1.0.0']]);
+  await a.delta(delta(4, { toRemove: [identifier], toAdd: [v2] }));
+  const updated = await inspectA('host-probe.extension-state');
+  assert.deepEqual(updated.current, [['host-probe.dynamic', '2.0.0'], ['host-probe.node', '1.0.0']]);
+  await a.delta(delta(3, { toRemove: [identifier], myToRemove: [identifier] }));
+  await a.delta(delta(4, { toRemove: [identifier], myToRemove: [identifier] }));
+  await assert.rejects(a.delta(delta(5, { toAdd: [v1, v2] })), /Duplicate extension description/);
+  assert.deepEqual(await inspectA('host-probe.extension-state'), updated);
+  await a.delta(delta(5, { toRemove: [identifier], myToRemove: [identifier] }));
+  assert.deepEqual((await inspectA('host-probe.extension-state')).current, [['host-probe.node', '1.0.0']]);
+  await a.delta(delta(6, { toAdd: [v2], myToAdd: [identifier] }));
+  assert.equal(await a.activate(identifier), true);
+  assert.equal(await inspectA('host-probe.dynamic'), '2.0.0');
+  await assert.rejects(a.start(delta(7)), /already started/);
+  const final = await inspectA('host-probe.extension-state');
+  assert.equal(final.changes.length, 4);
+  assert.deepEqual(final.changes.at(-1), updated.current);
+  assert.deepEqual(await inspectB('host-probe.extension-state'), { current: [['host-probe.node', '2.0.0']], changes: [] });
+  a.receipt.extensionUpdates = final;
   await a.stop();
   assert.equal((await inspectB()).native, 'B');
   await b.stop();
