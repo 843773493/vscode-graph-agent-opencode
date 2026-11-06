@@ -512,6 +512,9 @@ def test_builder_rejects_invalid_unencoded_file_segments(filename: str, reason_c
             scope="workspace", scope_id="ws-1", kind="skills", tail_segments=("review", filename),
         )
     assert excinfo.value.reason_code == reason_code
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        file_uri_child("boxteam://workspace/ws-1/resources/files/root", filename)
+    assert excinfo.value.reason_code == reason_code
 
 
 def test_grammar_error_codes_remain_closed() -> None:
@@ -571,6 +574,7 @@ def test_attachment_child_canonicalization_preserves_root_and_target() -> None:
     assert parsed.tail_segments == ("att_" + "a" * 32, "derived", "中文 %2e.txt")
     assert file_uri_root(parsed.display_uri) == root.replace("gw-1/", "")
     assert parse_resource_uri(uri.replace("%E4", "%e4")).display_uri == uri
+    assert file_uri_child(uri.replace("%E4", "%e4"), "next %.txt") == uri + "/next%20%25.txt"
 
 
 @pytest.mark.parametrize("scope", ["user", "inline"])

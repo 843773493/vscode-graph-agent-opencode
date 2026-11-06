@@ -440,8 +440,10 @@ def file_uri_child(uri: str, *parts: str) -> str:
     )
     if parsed.kind not in {"files", "attachments"}:
         raise ValueError("文件 child 必须属于 files 或 attachments 资源")
-    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
-                                tail_segments=(*parsed.tail_segments, *parts), gateway_authority=parsed.gateway_authority)
+    if any("/" in part for part in parts):
+        raise ResourceUriGrammarError("invalid_character", "URI 构造的单个尾段不得包含分隔符")
+    # 父 URI 已规范化；只校验并编码新增文件段，不重复解析整条已知路径。
+    return "/".join((parsed.display_uri, *(_encode_file_segment(part) for part in parts)))
 
 
 def session_artifact_uri(
