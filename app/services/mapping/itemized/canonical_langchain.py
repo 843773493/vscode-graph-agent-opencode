@@ -10,7 +10,6 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     ToolMessage,
-    message_to_dict,
 )
 
 from app.domain.itemized.enums import SemanticKind
@@ -180,11 +179,13 @@ def validate_summary_source(
     for key in sidecar_keys:
         if canonical_json_bytes(message.additional_kwargs.get(key)) != canonical_json_bytes(expected.additional_kwargs.get(key)):
             raise ValueError(f"summary-source-mismatch: 候选包含非 canonical wire sidecar: {key}")
-    actual_data = message_to_dict(message)["data"]
+    # 来源校验只比较 wire 正文；不要序列化未参与比较的 metadata 和工具 artifact。
+    fields = ("content", "tool_calls", "invalid_tool_calls", "tool_call_id", "name")
+    actual_data = message.model_dump(include=set(fields))
     for candidate in (expected, *retry_variants):
-        expected_data = message_to_dict(candidate)["data"]
+        expected_data = candidate.model_dump(include=set(fields))
         if all(canonical_json_bytes(actual_data.get(key)) == canonical_json_bytes(expected_data.get(key))
-               for key in ("content", "tool_calls", "invalid_tool_calls", "tool_call_id", "name")):
+               for key in fields):
             return
     raise ValueError(f"summary-source-mismatch: 候选正文不属于 canonical 投影或重试变体: {message.id}")
 
