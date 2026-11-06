@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 
-from app.domain.itemized.hashing import canonical_json_bytes_and_hash
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    canonical_json_bytes_and_hash,
+)
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
@@ -39,7 +43,7 @@ def build_detail_payload(
     detail_kind: str,
     retention_class: str,
     visibility: str,
-    stored_detail: object,
+    stored_detail_bytes: bytes,
     source_revision: str,
     length: int,
     detail_content_hash: str,
@@ -57,7 +61,6 @@ def build_detail_payload(
         "detail_kind": detail_kind,
         "retention_class": retention_class,
         "visibility": visibility,
-        "detail": stored_detail,
         "source_revision": source_revision,
         "length": length,
         "detail_content_hash": detail_content_hash,
@@ -68,7 +71,11 @@ def build_detail_payload(
         "expires_at": expires_at,
         "checkpoint_ns": checkpoint_ns,
     }
-    raw, envelope_hash = canonical_json_bytes_and_hash(value)
+    # v3 固定字段按 JCS 排序，detail 紧邻 detail_content_hash 之前。
+    # 正文已在 prepare 冻结，用同一份字节组装 envelope，不再遍历和编码原始容器。
+    prefix, suffix = canonical_json_bytes(value).split(b',"detail_content_hash":', 1)
+    raw = b"".join((prefix, b',"detail":', stored_detail_bytes, b',"detail_content_hash":', suffix))
+    envelope_hash = "sha256:jcs:v1:" + sha256(raw).hexdigest()
     return raw, _record_from_payload(value, detail_ref, envelope_hash)
 
 

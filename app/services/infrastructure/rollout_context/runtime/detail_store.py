@@ -106,7 +106,7 @@ class ContextPlanDetailStore:
             detail_kind=detail_kind,
             retention_class=retention_class,
             visibility=visibility,
-            stored_detail=detail,
+            stored_detail_bytes=canonical_detail_bytes,
             source_revision=effective_revision,
             length=original_length,
             detail_content_hash=original_hash,
