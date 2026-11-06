@@ -14,7 +14,7 @@ from typing import BinaryIO, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
-from app.core.resource_uri import parse_resource_uri, resource_display_uri
+from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.schemas.gateway.extension_host import (
     ExtensionHostFolderDTO,
@@ -183,9 +183,9 @@ class NodeExtensionHostOwner:
         folders = []
         for workspace_id in identity.workspace_ids:
             mount = self._mounts.resolve(workspace_id)
+            paths = WorkspaceFilePaths(workspace=mount.workspace_root, workspace_id=workspace_id, bindings=None)
             folders.append(ExtensionHostFolderDTO(workspace_id=workspace_id,
-                resource_uri=resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
-                    tail_segments=("root",), gateway_authority=identity.gateway_id),
+                resource_uri=paths.workspace_uri,
                 native_uri=mount.workspace_root.as_uri(), name=mount.workspace_root.name or str(mount.workspace_root)))
         # 安装域、明确视图和有序根集合决定 workspaceState 身份；客户端和临时 generation 不参与。
         view = json.dumps([identity.gateway_id, identity.backend_id, identity.view_id, identity.workspace_ids], separators=(",", ":"))

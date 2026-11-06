@@ -74,6 +74,8 @@ class NodeExtensionManagement:
         if not entrypoint.is_file():
             raise FileNotFoundError(f"目标专用运行时缺少扩展管理组件: {entrypoint}")
         self._directory.mkdir(parents=True, exist_ok=True)
+        # TODO(4.4)：同一安装域的多个 Backend 进程组须共用原生 profile 管理 owner；
+        # 当前独占锁会明确拒绝第二进程，不能去锁或改用进程 ID 伪造安装目标。
         lease = portalocker.Lock(self._directory / "management.lock", mode="a", timeout=0)
         lease.acquire()
         self._lease = lease

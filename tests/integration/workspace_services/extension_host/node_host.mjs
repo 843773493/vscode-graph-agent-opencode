@@ -6,7 +6,7 @@ import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { createRequire, isBuiltin } from 'node:module';
 import { createConnection } from 'node:net';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from '../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
 import { buildNodeExtensionHost, nodeHostDependencyLock } from '../../../../src/clients/workbench/scripts/nodeHost.mjs';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
@@ -378,6 +378,23 @@ test('真实双Node宿主各自激活同ID不同版本，原生与扩展fs访问
     host.receipt.result = result;
     assert.deepEqual(result, { id: 'host-probe.node', version: host.manifest.version, native: label, api: label,
       ownVersion: host.manifest.version, all: ['host-probe.node'], folders: [protocolTypes.URI.file(host.folder).toString()] });
+    const storage = await inspect('host-probe.storage'), initialization = host.receipt.initialization;
+    host.receipt.storage = storage;
+    assert.equal(storage.syncError, '目标 Node 扩展暂不支持 setKeysForSync 跨设备状态同步');
+    assert.deepEqual(storage.secretErrors, Array(4).fill('目标 Node 扩展暂不支持 SecretStorage；不能访问工作台的秘密存储'));
+    assert.equal(storage.extensionUri, protocolTypes.URI.file(join(host.folder, 'extension')).toString());
+    const expected = {
+      globalStorageUri: protocolTypes.URI.joinPath(protocolTypes.URI.parse(initialization.environment.global_storage_home_uri), 'host-probe.node'),
+      storageUri: protocolTypes.URI.joinPath(protocolTypes.URI.parse(initialization.environment.workspace_storage_home_uri), initialization.workspace.id, 'host-probe.node'),
+      logUri: protocolTypes.URI.joinPath(protocolTypes.URI.parse(initialization.logs_location_uri), 'host-probe.node'),
+    };
+    for (const [name, uri] of Object.entries(expected)) {
+      const location = storage.locations[name];
+      assert.equal(location.uri, uri.toString());
+      assert.equal(location.value, label);
+      assert.equal(await readFile(fileURLToPath(location.file), 'utf8'), label);
+      assert.notEqual(location.uri, storage.extensionUri);
+    }
     assert.equal(host.receipt.calls.some(call => call.name === '$onDidActivateExtension'), true);
     assert.deepEqual(host.receipt.errors, []);
   }

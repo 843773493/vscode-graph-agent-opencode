@@ -326,6 +326,6 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         assert initialization.os == ("windows" if sys.platform == "win32" else "linux")
         assert [folder.model_dump() for folder in initialization.workspace.folders] == [{
             "workspace_id": workspace_ids[label], "native_uri": mounted.resolve(workspace_ids[label]).workspace_root.as_uri(),
-            "resource_uri": f"boxteam://{gateway_id}/workspace/{workspace_ids[label]}/resources/files/root", "name": label}]
+            "resource_uri": f"boxteam://workspace/{workspace_ids[label]}/resources/files/root", "name": label}]
         assert initialization.logs_location_uri == (home / "state/backend/extension-hosts" / identity.generation).as_uri()
         assert (home / "state/backend/extension-hosts" / identity.generation / "host.log").is_file()

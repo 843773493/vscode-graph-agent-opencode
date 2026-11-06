@@ -114,6 +114,8 @@ async def test_views_preserve_client_identity_and_independent_generations(case: 
         assert [folder.workspace_id for folder in first_view.workspace.folders] == list(case.workspace_ids)
         assert [folder.native_uri for folder in first_view.workspace.folders] == [
             case.owner._mounts.resolve(workspace_id).workspace_root.as_uri() for workspace_id in case.workspace_ids]
+        assert [folder.resource_uri for folder in first_view.workspace.folders] == [
+            f"boxteam://workspace/{workspace_id}/resources/files/root" for workspace_id in case.workspace_ids]
         async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="two", view_id="same", workspace_ids=case.workspace_ids[::-1]) as second:
             assert second.initialization.workspace.id != first_view.workspace.id

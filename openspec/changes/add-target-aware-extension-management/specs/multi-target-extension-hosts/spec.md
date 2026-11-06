@@ -104,6 +104,12 @@ MainThreadStorage／ExtensionStorageService 等原存储 owner SHALL 迁齐上�
 - **WHEN** 两个客户端在 B 激活同一版本扩展，关闭其中一个并重启另一个
 - **THEN** 关闭者的回调／工作区视图按租约回收，不撤销另一客户端贡献；稳定持久状态可恢复，A 的状态和秘密不被读取
 
+目标 Node 的跨设备 `setKeysForSync` 尚未支持时 SHALL 在原公开 API 明确拒绝；同 profile 客户端的存储变更通知及重启恢复不等同跨设备同步。Web 原同步能力保持，后续接入须迁齐原同步读写消费者，不得仅保存声明后报告成功。
+
+目标侧秘密 owner 尚未接通时，Node 的 SecretStorage 四类操作 SHALL 在秘密进入浏览器 RPC 前明确拒绝；主线程也不得读取、修改或向该宿主广播 Web profile 的秘密。此限制不表示目标秘密支持已完成，后续实现必须在实际消费侧保存秘密，Web 原有 API 保持。
+
+宿主初始化中的文件根 SHALL 复用原文件 owner 的规范 display 根，与 Workbench 文件模型使用同一身份；Gateway 归属由认证 binding 与 FileService URI 的 authority 承载，不得因重复编码 Gateway 而形成无法匹配的第二种根。
+
 #### Scenario: 存储路径与同身份客户端同步
 - **WHEN** 同 profile 的 A/B 扩展写各自 globalState 和真实 storageUri，B 的另一客户端读取并重启
 - **THEN** 目标文件真实可写，A/B 不串值；B 的已确认持久结果按原通知和恢复语义可见，临时 host ID 变化不丢失状态

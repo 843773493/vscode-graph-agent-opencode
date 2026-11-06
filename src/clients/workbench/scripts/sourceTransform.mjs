@@ -4,9 +4,17 @@ import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTr
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
 import { extensionHostStateSourcePaths, transformExtensionHostState } from './extensionHostStateTransform.mjs';
+import { extensionInstanceSourcePaths, transformExtensionInstances } from './extensions/extensionInstanceTransform.mjs';
+import { extensionRunningSourcePaths, transformExtensionRunning } from './extensions/extensionRunningTransform.mjs';
+import { extensionBrowserSourcePaths, transformExtensionBrowser } from './extensions/extensionBrowserTransform.mjs';
+import { extensionOwnerSourcePaths, transformExtensionOwner } from './extensions/extensionOwnerTransform.mjs';
+import { extensionStatusSourcePaths, transformExtensionStatus } from './extensions/extensionStatusTransform.mjs';
+import { extensionEnablementSourcePaths, transformExtensionEnablement } from './extensions/extensionEnablementTransform.mjs';
+import { extensionDocumentSourcePaths, transformExtensionDocuments } from './extensions/extensionDocumentTransform.mjs';
+import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
-export const transformedSourcePaths = [
+export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/browser/web.main.ts',
   'src/vs/workbench/browser/layout.ts',
   'src/vs/workbench/browser/quickaccess.ts',
@@ -34,6 +42,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/browser/parts/editor/editorPanes.ts',
   'src/vs/workbench/browser/parts/editor/editorWithViewState.ts',
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
+  'src/vs/platform/workspaces/common/workspaces.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   'src/vs/workbench/contrib/webview/common/webview.ts',
   'src/vs/workbench/api/common/extHostWebview.ts',
@@ -44,7 +53,15 @@ export const transformedSourcePaths = [
   ...outlineSourcePaths,
   ...mcpSourcePaths,
   ...extensionHostStateSourcePaths,
-];
+  ...extensionInstanceSourcePaths,
+  ...extensionRunningSourcePaths,
+  ...extensionBrowserSourcePaths,
+  ...extensionOwnerSourcePaths,
+  ...extensionStatusSourcePaths,
+  ...extensionEnablementSourcePaths,
+  ...extensionDocumentSourcePaths,
+  ...extensionStorageSourcePaths,
+])];
 
 function replaceOnce(source, marker, replacement) {
   if (source.split(marker).length !== 2) throw new Error(`上游转换锚点必须恰好一次：${marker}`);
@@ -68,7 +85,15 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    contents = transformExtensionInstances(root, path, contents, replaceOnce);
+    contents = transformExtensionRunning(root, path, contents, replaceOnce);
+    contents = transformExtensionBrowser(root, path, contents, replaceOnce);
     contents = transformExtensionHostState(root, path, contents, replaceOnce);
+    contents = transformExtensionOwner(root, path, contents, replaceOnce);
+    contents = transformExtensionStatus(root, path, contents, replaceOnce);
+    contents = transformExtensionEnablement(root, path, contents, replaceOnce);
+    contents = transformExtensionDocuments(root, path, contents, replaceOnce);
+    contents = transformExtensionStorage(root, path, contents, replaceOnce, runtime);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
       // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
       contents = replaceOnce(contents, '} catch (error) {\n\t\t\tconst getAllDepsAndPacks =',
@@ -85,6 +110,12 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     }
     // Node 宿主复用共同状态合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
+    if (path === join(upstream, 'src/vs/platform/workspaces/common/workspaces.ts')) {
+      // 不透明文件根已在 URI.path 内编码；原 skipEncoding 会让重读时的 URI.parse 折叠路径段。
+      contents = replaceOnce(contents, 'export function getStoredWorkspaceFolder(folderURI: URI, forceAbsolute: boolean, folderName: string | undefined, targetConfigFolderURI: URI, extUri: IExtUri): IStoredWorkspaceFolder {',
+        `export function getStoredWorkspaceFolder(folderURI: URI, forceAbsolute: boolean, folderName: string | undefined, targetConfigFolderURI: URI, extUri: IExtUri): IStoredWorkspaceFolder {
+      if (folderURI.scheme === 'boxteam-file') return { name: folderName, uri: folderURI.toString() };`);
+    }
     if (path === join(upstream, 'src/vs/workbench/browser/layout.ts')) {
       // 自动恢复关闭面板时不得抢走 Quick Input 等外部控件的焦点；只交回原本属于面板的焦点。
       const start = 'private setPanelHidden(hidden: boolean, skipLayout?: boolean): void {';

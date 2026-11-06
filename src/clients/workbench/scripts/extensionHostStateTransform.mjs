@@ -108,7 +108,7 @@ function extensionDescriptionsEqual(a: IExtensionDescription, b: IExtensionDescr
     const end = source.indexOf('\tpublic deltaExtensions(', start);
     return replaceOnce(source, source.slice(start, end), `
   public set(extensionDescriptions: IExtensionDescription[]): { versionId: number } {
-    const candidate = new ExtensionDescriptionRegistry(this._activationEventsReader, extensionDescriptions);
+    const candidate = new ExtensionDescriptionRegistry(this._activationEventsReader, extensionDescriptions, this._requireTarget);
     ExtensionDescriptionRegistry.replaceAll([{ target: this, source: candidate }]);
     candidate.dispose();
     return { versionId: this._versionId };

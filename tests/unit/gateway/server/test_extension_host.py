@@ -74,8 +74,30 @@ def host_initialization(tmp_path: Path) -> Callable[[ExtensionHostOpenRequest], 
             workspace=ExtensionHostWorkspaceDTO(id="explicit-view", name="View", folders=[
                 ExtensionHostFolderDTO(workspace_id=workspace_id, name="Workspace", native_uri=(tmp_path / workspace_id).as_uri(),
                     resource_uri=resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
-                        tail_segments=("root",), gateway_authority=payload.gateway_id)) for workspace_id in payload.workspace_ids]))
+                        tail_segments=("root",))) for workspace_id in payload.workspace_ids]))
     return build
+
+
+@pytest.mark.parametrize("wrong", [None, "qualified", "foreign_gateway", "foreign_workspace", "child"])
+def test_host_binding_uses_original_display_root_and_outer_gateway(
+    host_initialization: Callable[[ExtensionHostOpenRequest], ExtensionHostInitializationDTO], wrong: str | None,
+) -> None:
+    workspace_id = str(uuid4())
+    request = ExtensionHostOpenRequest(protocol_version=1, gateway_id=GATEWAY, backend_id=str(uuid4()),
+        view_id="default", workspace_ids=[workspace_id])
+    payload = dict(request.model_dump(), client_id="window", generation="generation", request_id="request",
+        initialization=host_initialization(request).model_dump())
+    if wrong is None:
+        result = ExtensionHostConnectionDTO.model_validate(payload)
+        assert result.gateway_id == GATEWAY
+        assert result.initialization.workspace.folders[0].resource_uri == f"boxteam://workspace/{workspace_id}/resources/files/root"
+        return
+    payload["initialization"]["workspace"]["folders"][0]["resource_uri"] = resource_display_uri(
+        scope="workspace", scope_id=str(uuid4()) if wrong == "foreign_workspace" else workspace_id, kind="files",
+        tail_segments=("root", "child") if wrong == "child" else ("root",),
+        gateway_authority=GATEWAY if wrong == "qualified" else PEER if wrong == "foreign_gateway" else None)
+    with pytest.raises(ValueError, match="工作区根"):
+        ExtensionHostConnectionDTO.model_validate(payload)
 
 
 @pytest.fixture

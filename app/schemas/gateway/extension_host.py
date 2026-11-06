@@ -91,7 +91,8 @@ class ExtensionHostConnectionDTO(ExtensionHostOpenRequest):
             raise ValueError("Node 宿主初始化目录与有序工作区视图不符")
         for folder in folders:
             resource = parse_resource_uri(folder.resource_uri)
-            if (resource.gateway_authority != self.gateway_id or resource.scope != "workspace"
+            # 原文件 owner 的 display 根不重复编码 Gateway；归属由外层认证 binding 承载。
+            if (resource.gateway_authority is not None or resource.scope != "workspace"
                 or resource.scope_id != folder.workspace_id or resource.kind != "files" or resource.tail_segments != ("root",)):
                 raise ValueError("Node 宿主目录映射不属于原 Gateway 的工作区根")
         return self

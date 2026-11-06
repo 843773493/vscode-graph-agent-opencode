@@ -19,7 +19,7 @@ export { MainThreadExtensionService } from '${upstream}workbench/api/browser/mai
 export { RemoteRunningLocation, LocalWebWorkerRunningLocation } from '${upstream}workbench/services/extensions/common/extensionRunningLocation.js';
 export { Emitter, Event } from '${upstream}base/common/event.js';
 export { DisposableStore } from '${upstream}base/common/lifecycle.js';
-export { ExtensionIdentifier, ExtensionIdentifierMap } from '${upstream}platform/extensions/common/extensions.js';
+export { ExtensionIdentifier, ExtensionIdentifierMap, extensionInstanceKey } from '${upstream}platform/extensions/common/extensions.js';
 export { URI } from '${upstream}base/common/uri.js';
 export { NullLogService } from '${upstream}platform/log/common/log.js';
 `, resolveDir: resolve('.') }, outfile: bundle, bundle: true, format: 'esm', platform: 'node', target: 'es2024',
@@ -33,9 +33,11 @@ export { NullLogService } from '${upstream}platform/log/common/log.js';
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 const m = await import(pathToFileURL(bundle).href);
 const id = value => new m.ExtensionIdentifier(value);
+const targetA = { kind: 'backend', gatewayId: 'gateway-a', backendId: '11111111-1111-4111-8111-111111111111' };
+const locationA = () => new m.RemoteRunningLocation(targetA, 'default', ['workspace-a']);
 const description = (name, overrides = {}) => ({ identifier: id(name), name, publisher: 'probe', version: '1.0.0',
   engines: { vscode: '*' }, main: './extension.js', extensionLocation: m.URI.file('/extensions/' + name),
-  isBuiltin: false, isUserBuiltin: false, isUnderDevelopment: false, preRelease: false, targetPlatform: 'undefined', ...overrides });
+  isBuiltin: false, isUserBuiltin: false, isUnderDevelopment: false, preRelease: false, targetPlatform: 'undefined', installationTarget: targetA, ...overrides });
 const delta = (versionId, fields = {}) => ({ versionId, toAdd: [], toRemove: [], myToAdd: [], myToRemove: [], addActivationEvents: {}, ...fields });
 const base = description('probe.base', { activationEvents: ['onBase'] });
 const receipt = { boundary: '编译真实发送端描述类、接收端构造器／RPC方法、原Registry、Sequencer与路径索引；主线程服务和eager activation为明确替身，仅在目标fsRealpath边界阻塞或失败。真实Node/RPC扩展另验。', checks: [] };
@@ -203,7 +205,7 @@ test('首次等版本空start合法，重复／冲突start不写状态，eager�
 
 // 真实owner、collection、Manager和receiver；仅进程启动／RPC传输与主线程服务为替身。
 function ownerFixture(f, { disconnectError, disposeError, sharedOwner, activate, disconnect,
-  all = [base], mine = all.map(extension => extension.identifier), location = new m.RemoteRunningLocation(), registered = true } = {}) {
+  all = [base], mine = all.map(extension => extension.identifier), location = locationA(), registered = true } = {}) {
   const notifications = [], notified = Promise.withResolvers(), lifecycle = [], exit = new m.Emitter(), telemetry = [];
   const owner = sharedOwner ?? new m.AbstractExtensionService({ hasLocalProcess: false, allowRemoteExtensionsInLocalWebWorker: false },
     {}, {}, {}, {}, { error(error) { notifications.push(error); notified.resolve(); } }, {}, { publicLog2(...args) { telemetry.push(args); } },
@@ -247,7 +249,9 @@ test('真实Manager更新被receiver拒绝后，原owner移除失败代际并保
     o.owner._extensionHostManagers.add(peer, new m.DisposableStore());
     const next = { ...base, extensionLocation: m.URI.file('/rejected'), version: '2.0.0' };
     const removed = new m.ExtensionIdentifierMap();
-    removed.set(base.identifier, new m.RemoteRunningLocation());
+    removed.set(base.identifier, locationA());
+    const lock = await o.owner._registry.acquireLock('publish replacement before host projection');
+    try { o.owner._registry.deltaExtensions(lock, [next], [base]); } finally { lock.dispose(); }
     await expect(o.owner._updateExtensionsOnExtHost(o.manager, 2, [next], [base.identifier], removed)).rejects.toThrow('目标索引拒绝');
     // mirror已推送的版本不能继续使用；由原collection销毁整个失败代际。
     expect(o.mirror.versionId).toBe(2); expect(f.read().version).toBe(1);
@@ -328,8 +332,8 @@ test('关闭原Manager在断连等待前撤销内部回调，不污染同位置�
       () => o.internal._onExtensionRuntimeError(base.identifier, new Error('旧运行错误')),
     ]) expect(callback).toThrow('generation is closed');
     await expect(o.internal._activateById(base.identifier, reason)).rejects.toThrow('generation is closed');
-    expect(o.owner.getExtensionsStatus()['probe.base'].runtimeErrors).toEqual([liveError]);
-    expect(o.owner.getExtensionsStatus()['probe.base'].activationTimes).toBeUndefined();
+    expect(o.owner.getExtensionsStatus()[m.extensionInstanceKey(base)].runtimeErrors).toEqual([liveError]);
+    expect(o.owner.getExtensionsStatus()[m.extensionInstanceKey(base)].activationTimes).toBeUndefined();
     expect(o.owner._extensionHostManagers.map(manager => manager)).toEqual([next.manager]);
     receipt.checks.push('原Manager关闭先撤销回调；同位置新代际保持状态和归属；旧激活及四类状态回调明确拒绝');
   } finally { o.close(); nextReceiver.close(); f.close(); }
@@ -380,7 +384,7 @@ test('旧代际已准入激活迟到完成明确失败，不转交或重放到�
 test('惰性Manager未创建实际进程时关闭也撤销原回调准入', async () => {
   const f = receiver(), o = ownerFixture(f);
   let disposed = 0;
-  const host = { startup: 3, runningLocation: new m.RemoteRunningLocation(), onExit: m.Event.None, dispose() { disposed++; } };
+  const host = { startup: 3, runningLocation: locationA(), onExit: m.Event.None, dispose() { disposed++; } };
   const internal = o.owner._acquireInternalAPI(host);
   const lazy = new m.LazyCreateExtensionHostManager(host, [], internal,
     { createInstance() { throw new Error('不应启动惰性宿主'); } }, new m.NullLogService());
@@ -524,7 +528,7 @@ test('api:none依赖沿原activator交唯一持有者，失败仍以原依赖及
     expect(calls).toEqual(['probe.dependency']);
     expect(await Promise.all(errorReports)).toEqual([null, null]);
     expect(a.telemetry.map(event => event[1].extensionId)).toEqual(['probe.dependency', 'probe.base']);
-    expect(a.owner.getExtensionsStatus()['probe.dependency']).toMatchObject({ activationStarted: false, runtimeErrors: [] });
+    expect(a.owner.getExtensionsStatus()[m.extensionInstanceKey(dependency)]).toMatchObject({ activationStarted: false, runtimeErrors: [] });
     expect(() => a.internal._onWillActivateExtension(dependency.identifier)).toThrow('does not belong');
     expect(() => a.internal._onExtensionRuntimeError(dependency.identifier, new Error('不属本host'))).toThrow('does not belong');
     receipt.checks.push('真实ExtHost activator→MainThread→owner→唯一Manager保留api:none失败归属；合法依赖错误可报告，不能写依赖运行状态');
@@ -556,6 +560,7 @@ test('新安装自动激活迁入唯一持有者，三类状态回调拒绝外�
   const f = receiver(); let calls = 0;
   const o = ownerFixture(f, { activate: async () => { calls++; return true; } });
   const peer = { containsExtension: () => false, disconnect: async () => {}, dispose() {},
+    extensionHost: { extensions: new m.ExtensionHostExtensions(1, [], []) },
     activate() { throw new Error('不应广播到peer'); } };
   try {
     await o.prepare(); o.owner._extensionHostManagers.add(peer, new m.DisposableStore());
