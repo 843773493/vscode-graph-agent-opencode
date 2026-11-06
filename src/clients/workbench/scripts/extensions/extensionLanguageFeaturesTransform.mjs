@@ -9,10 +9,43 @@ export const extensionLanguageFeaturesSourcePaths = [
   'src/vs/editor/common/languages.ts',
   'src/vs/editor/contrib/wordHighlighter/browser/textualHighlightProvider.ts',
   'src/vs/editor/contrib/codeAction/browser/codeAction.ts',
+  'src/vs/workbench/api/common/extHostLanguageFeatures.ts',
+  'src/vs/editor/contrib/codeAction/browser/codeActionController.ts',
 ];
 
-export function transformExtensionLanguageFeatures(root, path, source, replaceOnce) {
+export function transformExtensionLanguageFeatures(root, path, source, replaceOnce, runtime = 'browser') {
   const paths = extensionLanguageFeaturesSourcePaths.map(value => join(root, 'upstream', value));
+  if (path === paths[7]) {
+    let contents = `import { ResourceMap } from '../../../base/common/map.js';\n` + source;
+    contents = replaceOnce(contents, 'class CodeActionAdapter {', `class CodeActionAdapter {
+  private _captureVersions(): typeConvert.WorkspaceEdit.IVersionInformationProvider {
+    // 只冻结本次调用已同步的版本号，不能给等待期间产生的旧编辑贴上返回时的新版本。
+    const versions = new ResourceMap<number>();
+    for (const data of this._documents.getAllDocumentData()) versions.set(data.document.uri, data.version);
+    return {
+      getTextDocumentVersion: uri => versions.get(uri),
+      // TODO: Notebook 版本生产仍须接通原 Notebook 文档 owner。
+      getNotebookDocumentVersion: () => undefined,
+    };
+  }
+`);
+    contents = replaceOnce(contents, 'const commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);',
+      'const versions = this._captureVersions();\n\t\tconst commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);');
+    contents = replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(toConvert.edit, undefined)', 'typeConvert.WorkspaceEdit.from(toConvert.edit, versions)');
+    contents = replaceOnce(contents, 'const resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;',
+      'const versions = this._captureVersions();\n\t\tconst resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;');
+    return replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, undefined)', 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, versions)');
+  }
+  if (runtime === 'node') return source;
+  if (path === paths[8]) {
+    let contents = `import { INotificationService } from '../../../../platform/notification/common/notification.js';\n` + source;
+    contents = replaceOnce(contents, '@IKeybindingService private readonly _keybindingService: IKeybindingService,',
+      '@IKeybindingService private readonly _keybindingService: IKeybindingService,\n\t\t@INotificationService private readonly _notificationService: INotificationService,');
+    // 原 UI 应用 owner 统一呈现错误；通知保留原因并自行处理取消，不能触发全局启动失败。
+    return replaceOnce(contents,
+      'await this._instantiationService.invokeFunction(applyCodeAction, action, actionReason, { preview, editor: this._editor });\n\t\t} finally {',
+      'await this._instantiationService.invokeFunction(applyCodeAction, action, actionReason, { preview, editor: this._editor });\n\t\t} catch (error) {\n\t\t\tthis._notificationService.error(error);\n\t\t} finally {');
+  }
   if (path === paths[0]) {
     let contents = replaceOnce(source, 'readonly provider: T;', 'readonly provider: T;\n\treadonly selectorScore: typeof score;');
     contents = replaceOnce(contents, 'register(selector: LanguageSelector, provider: T): IDisposable {', 'register(selector: LanguageSelector, provider: T, selectorScore: typeof score = score): IDisposable {');

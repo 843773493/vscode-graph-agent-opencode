@@ -31,3 +31,5 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 直接 workspace.applyEdit 复用原 MainThreadBulkEdits／BulkEditService，不增加编辑应用链。整批端点校验先于 revive，错误保留原 warn／false，代际关闭通过同一原 token 取消；BulkEditService 按实际完成资源区分取消后的零写入与已完成结果，不用关闭标志抹去已经发生的副作用。 原 BulkEdit 在预览最终集合确定后、任一类型副作用前核已有文本／Notebook版本；已加载文本先由原 ModelService 拒绝已知冲突，所有带版本的资源沿原 resolver 本次去重并持有到整批结束，结算后释放，不新增版本账本。全部异步解析结束后统一核对，保留各类型临执行检查处理随后变化；未携带版本的文件／opaque／文本不合成版本，尚缺的宿主版本生产接线继续保留 TODO。
 
 Code action 的 provide／resolve 在原 MainThread 内先核整批 edit，非法后项不能发布合法前项。请求 token 同时响应调用取消和注册释放；迟到 provide 释放准确的新 cache，resolve 拒绝后不改原 action。已发布 list 继续持有原 cache，由其幂等 dispose 收尾，不增加 session registry。目标 Provider 将同一注册生命周期留在原 Provider，原 CodeActionItem／applyCodeAction 合并调用方取消，并将同一 token 交原 BulkEditService；撤代后不启动编辑或后继 command，已开始的副作用不回滚。普通 Web／内置 Provider 不附带目标生命周期；不把本闭包扩大为其它语言编辑入口。
+
+原 CodeActionAdapter 在 provide／resolve 各自扩展回调前，仅冻结本宿主已同步文档的 URI 与数值版本，交原 WorkspaceEdit.from；同一转换在 Node 分流前执行，不能只修 renderer 而漏掉真实宿主。快照只活到本次转换完成，不保存正文或建立版本账本；异步等待后的新版本不能认证旧编辑。未知资源及同批新建目标保持原无版本语义，Notebook 版本仍由其原文档 owner 后续接线。原 CodeActionController 的 UI 应用入口将拒绝交原通知服务显示，同一 finally 结清进度和原刷新；核心 apply 继续拒绝，不改全局错误处理或把版本冲突当启动失败。

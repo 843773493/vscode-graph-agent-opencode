@@ -18,7 +18,7 @@ import { INotebookEditorModelResolverService } from '../../notebook/common/noteb
     contents = replaceOnce(contents, 'import { IDisposable, toDisposable }', 'import { DisposableStore, IDisposable, toDisposable }');
     contents = replaceOnce(contents, 'if (this._edits.length === 0) {\n\t\t\treturn [];', 'if (this._edits.length === 0 || this._token.isCancellationRequested) {\n\t\t\treturn [];');
     // 最终预览集合先核现有模型版本；原各组临执行检查继续处理随后发生的变化。
-    // TODO: CodeAction／Notebook 宿主尚未提供的版本仍需沿原文档 owner 接线，此处不合成版本。
+    // TODO: Notebook 等宿主尚未提供的版本仍需沿原文档 owner 接线，此处不合成版本。
     contents = replaceOnce(contents, '\n\t\tconst ranges: number[] = [1];', `
     const references = new DisposableStore();
     try {

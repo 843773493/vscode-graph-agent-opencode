@@ -60,6 +60,8 @@ TabGroups SHALL 复用原编辑器组布局，仅投影属于当前宿主的完�
 
 Code action Provider SHALL 在发布返回列表前核验其中全部 WorkspaceEdit 的端点归属；resolve SHALL 在修改原 action 的 edit／command 前完成同一检查。调用取消、注册撤销或宿主关闭后 SHALL 取消原在途请求，不发布迟到列表或修改旧 action。未发布或拒绝的列表 SHALL 释放其准确缓存；已发布列表继续沿原 dispose 释放，不重复结算，也不因另一代际同号缓存而混用。普通 command 正文与无 binding 的 Web 资源范围保持原合同。
 
+Code action 的文本编辑 SHALL 沿原 WorkspaceEdit 转换及版本字段传递调用所基于的已同步文档版本。provide 与实际进入的 resolve 各自在调用扩展回调前冻结本宿主文档的数值版本，异步返回及后续应用不得把旧编辑改标为最新版本；已有初始 edit 的动作继续沿原流程直接应用，不为刷新版本另行 resolve。未知版本的资源及同批新建目标保持原转换语义，不合成版本或读取正文推断。此合同可能拒绝回调等待期间按新正文重新计算的编辑，用户可重新请求动作；它不承诺无版本资源的并发保护或已发生副作用回滚。
+
 #### Scenario: A 与 B 的未保存文档同时打开
 - **WHEN** A/B 文件均有不同 dirty 内容，两个扩展枚举文档／可见编辑器并监听变化，用户在二者间切焦点
 - **THEN** 每 host 只得到自己 view 的模型、内容和事件，非所属 view 焦点表现为无 active editor；错误目标编辑在产生副作用前被拒绝，迟到旧代际结果不发布
@@ -79,6 +81,10 @@ Code action Provider SHALL 在发布返回列表前核验其中全部 WorkspaceE
 #### Scenario: Code action 列表、resolve 与缓存生命周期
 - **WHEN** A 返回多个 action 且后项 edit 越出所属视图，或 resolve 返回非法编辑；在途 provide／resolve 遇到取消、注销或宿主关闭后仍返回结果
 - **THEN** 列表整批拒绝并释放准确的新缓存；resolve 保持原 action 的 edit／command，迟到结果不发布或修改旧对象；已发布 list 的原缓存仍由该 list 收尾，新代际与 B 的同号缓存不受影响
+
+#### Scenario: Code action 的异步返回和旧菜单保持原版本
+- **WHEN** provide 或 resolve 等待期间待编辑文档变版，或动作发布后用户修改其中一个目标再点击旧菜单
+- **THEN** 编辑仍携带相应回调调用前的文档版本，原整批版本校验在首个副作用前拒绝冲突，后继 command 不执行；原 UI 应用入口显示具体错误并结清进度，不触发全窗口启动失败，重新请求且版本匹配的动作可以正常应用，另一宿主不受影响
 
 #### Scenario: 工作区符号查询限定完整宿主视图
 - **WHEN** A 的符号 Provider 绑定 A1/A2，B 绑定 B1，用户明确选择工作区范围或 A 扩展在 B 获得焦点时发起公开符号查询

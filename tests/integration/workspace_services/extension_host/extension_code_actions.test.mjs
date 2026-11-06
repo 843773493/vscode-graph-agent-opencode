@@ -12,10 +12,17 @@ const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, '
 const upstream = './src/clients/workbench/upstream/src/vs/';
 const built = await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { MainThreadLanguageFeatures } from '${upstream}workbench/api/browser/mainThreadLanguageFeatures.js';
+export { ExtHostLanguageFeatures } from '${upstream}workbench/api/common/extHostLanguageFeatures.js';
+export { ExtHostDocumentsAndEditors } from '${upstream}workbench/api/common/extHostDocumentsAndEditors.js';
+export { ExtHostDocuments } from '${upstream}workbench/api/common/extHostDocuments.js';
+export { CommandsConverter } from '${upstream}workbench/api/common/extHostCommands.js';
+export { CodeAction, CodeActionKind, WorkspaceEdit, Range as ApiRange } from '${upstream}workbench/api/common/extHostTypes.js';
+export { NullLogService } from '${upstream}platform/log/common/log.js';
 export { LanguageFeaturesService } from '${upstream}editor/common/services/languageFeaturesService.js';
 export { ILanguageFeaturesService } from '${upstream}editor/common/services/languageFeatures.js';
 export { CodeActionItem } from '${upstream}editor/contrib/codeAction/common/types.js';
 export { applyCodeAction, ApplyCodeActionReason } from '${upstream}editor/contrib/codeAction/browser/codeAction.js';
+export { CodeActionController } from '${upstream}editor/contrib/codeAction/browser/codeActionController.js';
 export { IBulkEditService } from '${upstream}editor/browser/services/bulkEditService.js';
 export { ICommandService } from '${upstream}platform/commands/common/commands.js';
 export { ITelemetryService } from '${upstream}platform/telemetry/common/telemetry.js';
@@ -40,6 +47,10 @@ const sources = ['scripts/sourceTransform.mjs', 'scripts/extensions/extensionLan
   'upstream/src/vs/editor/common/languageFeatureRegistry.ts', 'upstream/src/vs/workbench/api/browser/mainThreadLanguageFeatures.ts',
   'upstream/src/vs/editor/common/languages.ts', 'upstream/src/vs/editor/contrib/codeAction/common/types.ts',
   'upstream/src/vs/editor/contrib/codeAction/browser/codeAction.ts',
+  'upstream/src/vs/editor/contrib/codeAction/browser/codeActionController.ts',
+  'upstream/src/vs/workbench/api/common/extHostLanguageFeatures.ts', 'upstream/src/vs/workbench/api/common/extHostTypeConverters.ts',
+  'upstream/src/vs/workbench/api/common/extHostDocuments.ts', 'upstream/src/vs/workbench/api/common/extHostDocumentsAndEditors.ts',
+  'upstream/src/vs/workbench/api/common/extHostDocumentData.ts',
   'upstream/src/vs/workbench/api/browser/mainThreadBulkEdits.ts', 'upstream/src/vs/workbench/services/extensions/common/rpcProtocol.ts'];
 const fingerprints = Object.fromEntries(await Promise.all(sources.map(async path => [path, createHash('sha256').update(await readFile(join(root, path))).digest('hex')])));
 const checks = [], observations = [], browserEvents = [];
@@ -58,7 +69,7 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中的原 MainThreadLanguageFeatures、LanguageFeaturesService/共享 registry、DI、RPCProtocol/TargetUriTransformer、WorkspaceEdit revive、CodeActionItem 与 applyCodeAction。认证 binding、内存字节输送、扩展 provide/resolve 回调及 cache 分配/释放接收端、模型 URI/语言/同步状态和 canonical URI 服务是具名装具；BulkEdit、命令、遥测、通知与无障碍服务为具名边界装具，预览只模拟 BulkEdit 内部取消检查，内存副作用不是真实磁盘编辑。注册、注销、主线程生命周期、结果准入、action 修改、应用取消检查与 release 派发执行转换后的原入口。未运行 Gateway、真实 Node、ExtHost CodeActionAdapter、真实 BulkEditService、命令处理器、UI 点击、Notebook 或 Windows；不扩展 list 已 dispose 后 resolve 的合同。',
+      boundary: '真实 Chromium 中的原 MainThreadLanguageFeatures、LanguageFeaturesService/共享 registry、DI、RPCProtocol/TargetUriTransformer、WorkspaceEdit revive、CodeActionItem 与 applyCodeAction。版本producer另经原ExtHostLanguageFeatures/CodeActionAdapter、WorkspaceEdit.from、CommandsConverter及ExtHostDocuments/AndEditors/DocumentData；输入delta/change、扩展callback、诊断空集与命令注册接收端是具名边界，版本不由装具写入DTO。Controller错误场景借用原applyCodeAction/_trigger方法，editor、progress、model.trigger与通知接收端为具名UI装具，不构造Controller模型或菜单。其余DTO准入场景的扩展callback/cache接收端、认证binding、内存字节输送、模型URI/语言/同步状态和canonical URI服务是具名装具；BulkEdit、命令、遥测、通知与无障碍服务为边界装具，预览只模拟BulkEdit内部取消检查，内存副作用不是真实磁盘编辑。未运行Gateway、真实Node、真实BulkEditService、命令处理器、UI点击、Notebook版本producer或Windows；不扩展list已dispose后resolve的合同。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
@@ -102,7 +113,7 @@ async function inBrowser(name, body, argument) {
         return [textEdit(raw), { newResource: raw }, { oldResource: raw, newResource: own }, { oldResource: own, newResource: raw },
           { oldResource: raw }, { ...textEdit(own), oldResource: raw, newResource: own }, textEdit(m.URI.file('/hosts/app/outside.ts'))];
       }
-      async function connect(host, label = host.binding?.backend_id ?? 'Web') {
+      async function connect(host, label = host.binding?.backend_id ?? 'Web', producer) {
         const toMain = new m.Emitter(), toHost = new m.Emitter(), provides = [], resolves = [], releases = [], caches = new Set();
         // 仅替换字节输送与扩展回调；原 RPC 处理 typed URI、取消和序列化。
         const mainRpc = new m.RPCProtocol({ onMessage: toMain.event, send: data => queueMicrotask(() => toHost.fire(data)), drain: async () => {} }, null, host.uriTransformer);
@@ -130,14 +141,51 @@ async function inBrowser(name, body, argument) {
         const di = new m.InstantiationService(new m.ServiceCollection([m.ILanguageFeaturesService, service]), true);
         const main = new m.MainThreadLanguageFeatures({ extensionHost: host, getProxy: mainRpc.getProxy.bind(mainRpc) }, undefined, undefined,
           service, { asCanonicalUri: uri => uri }, di, undefined);
-        mainRpc.set(m.MainContext.MainThreadLanguageFeatures, main); hostRpc.set(m.ExtHostContext.ExtHostLanguageFeatures, actor);
+        mainRpc.set(m.MainContext.MainThreadLanguageFeatures, main);
         const remote = hostRpc.getProxy(m.MainContext.MainThreadLanguageFeatures), before = new Set(service.codeActionProvider.allNoModel());
         const metadata = { providedKinds: ['quickfix', 'refactor'], documentation: [{ kind: 'quickfix', command: literalCommand('documentation') }] };
-        await remote.$registerCodeActionSupport(1, [{ $serialized: true, language: 'typescript' }], metadata, label, 'probe.code-actions', true);
+        let registration, extHost, documents, documentOwner;
+        if (producer) {
+          const context = { getProxy: hostRpc.getProxy.bind(hostRpc) }, log = new m.NullLogService();
+          documentOwner = new m.ExtHostDocumentsAndEditors(context, log); documents = new m.ExtHostDocuments(context, documentOwner);
+          const converter = new m.CommandsConverter({ registerCommand: () => ({ dispose() {} }) }, () => undefined, log);
+          extHost = new m.ExtHostLanguageFeatures(context, undefined, documents, { converter }, { getDiagnostics: () => [] }, log,
+            { report() { throw new Error('版本producer场景不应使用弃用API'); } }, { onExtensionError(_extension, error) { throw error; } });
+          // 只观察原 ExtHost actor 的调用和 cache 生命周期；准入、版本生产与缓存算法全部走原入口。
+          hostRpc.set(m.ExtHostContext.ExtHostLanguageFeatures, {
+            async $provideCodeActions(handle, resource, selection, context, token) {
+              provides.push({ handle, resource: m.URI.revive(resource), token });
+              const result = await extHost.$provideCodeActions(handle, resource, selection, context, token);
+              if (result) caches.add(result.cacheId); return result;
+            },
+            async $resolveCodeAction(handle, cacheId, token) { resolves.push({ handle, cacheId, token }); return extHost.$resolveCodeAction(handle, cacheId, token); },
+            $releaseCodeActions(handle, id) { releases.push({ handle, id, existed: caches.delete(id) }); extHost.$releaseCodeActions(handle, id); },
+          });
+          registration = extHost.registerCodeActionProvider({ identifier: { value: 'probe.code-actions' }, name: label, displayName: label, enabledApiProposals: [] },
+            ['typescript'], producer, { providedCodeActionKinds: [m.CodeActionKind.QuickFix] });
+          Object.assign(client, { documents, documentOwner,
+            addDocument(uri, version, text = 'old-source') {
+              documentOwner.acceptDocumentsAndEditorsDelta({ addedDocuments: [{ uri, versionId: version, lines: text.split('\n'), EOL: '\n', languageId: 'typescript', isDirty: false, encoding: 'utf8' }] });
+            },
+            changeDocument(uri, version, text) {
+              const document = documents.getDocument(uri), lastLine = document.lineCount, oldText = document.getText();
+              documents.$acceptModelChanged(uri, { versionId: version, eol: '\n', isUndoing: false, isRedoing: false, isFlush: false, isEolChange: false, detailedReason: undefined,
+                changes: [{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: lastLine, endColumn: document.lineAt(lastLine - 1).text.length + 1 }, rangeOffset: 0, rangeLength: oldText.length, text }] }, true);
+            },
+          });
+          await tick();
+        } else {
+          hostRpc.set(m.ExtHostContext.ExtHostLanguageFeatures, actor);
+          await remote.$registerCodeActionSupport(1, [{ $serialized: true, language: 'typescript' }], metadata, label, 'probe.code-actions', true);
+        }
         const added = service.codeActionProvider.allNoModel().filter(provider => !before.has(provider));
         if (added.length !== 1) throw new Error('原 code action 注册入口应生成唯一 Provider');
         Object.assign(client, { main, remote, provider: added[0], metadata });
-        lifetimes.push(() => { main.dispose(); di.dispose(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose(); });
+        lifetimes.push(async () => {
+          if (registration) { registration.dispose(); await tick(); }
+          if (documents) { documentOwner.acceptDocumentsAndEditorsDelta({ removedDocuments: documents.getAllDocumentData().map(data => data.document.uri) }); documents.dispose(); extHost.dispose(); }
+          main.dispose(); di.dispose(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose();
+        });
         return client;
       }
       const provide = (client, token = m.CancellationToken.None, index = 0) => client.provider.provideCodeActions(document(client.host, index), range, actionContext, token);
@@ -161,7 +209,7 @@ async function inBrowser(name, body, argument) {
           [m.IAccessibilitySignalService, { playSignal: signal => { state.signals.push(signal); } }],
         ), true);
         lifetimes.push(() => di.dispose());
-        return Object.assign(state, { commit,
+        return Object.assign(state, { commit, instantiationService: di,
           apply: (item, token = m.CancellationToken.None, options) => di.invokeFunction(m.applyCodeAction, item, m.ApplyCodeActionReason.FromCodeActions, options, token),
           snapshot: () => ({ bulk: state.bulk.map(({ edit, options }) => ({ resources: editUris({ edit }), versions: edit.edits.map(value => value.versionId),
             tokenPresent: options.token !== undefined, tokenCancelled: options.token?.isCancellationRequested === true, preview: options.showPreview === true,
@@ -170,7 +218,7 @@ async function inBrowser(name, body, argument) {
         });
       }
       globalThis.actionProbe = { m, target, connect, service, document, provide, textEdit, ownEdit, invalidEdits, nativeResources, logicalResources,
-        literalCommand, range, actionContext, editUris, disposeList, applyBoundary, tick, failure, lifetimes, dispose() { for (const dispose of lifetimes.reverse()) dispose(); } };
+        literalCommand, range, actionContext, editUris, disposeList, applyBoundary, tick, failure, lifetimes, async dispose() { for (const dispose of lifetimes.reverse()) await dispose(); } };
     });
     const result = await page.evaluate(body, argument); expect(errors).toEqual([]); observations.push({ name, result }); return result;
   } finally {
@@ -425,4 +473,128 @@ test('Web 和无 provider 的内置直接 action 仍经原 apply 成功，Web �
   expect(result.effects).toHaveLength(3); expect(result.commands).toHaveLength(4); expect(result.resolveIds).toEqual([[1, 1]]); expect(result.notifications).toEqual([]);
   expect(result.releases).toEqual([{ handle: 1, id: 1, existed: true }]); expect(result.caches).toEqual([]);
   checks.push('Web的原file/untitled直接应用与command-only、关闭后已发布直接action及无provider内置直接action成功，不增加Node归属限制');
+});
+
+test('原 CodeActionAdapter 在 provide 调用前冻结双根版本，等待及发布后的变更不重盖，A/B 同名原生 URI 独立', async () => {
+  const result = await inBrowser('provide原版本producer与双宿主隔离', async () => {
+    const p = globalThis.actionProbe, m = p.m, entered = Promise.withResolvers(), gate = Promise.withResolvers(); let a, callbackDocument, callbackVersions;
+    const actionFor = (client, title) => {
+      const action = new m.CodeAction(title, m.CodeActionKind.QuickFix), edit = new m.WorkspaceEdit();
+      for (const uri of p.nativeResources(client.host)) edit.replace(uri, new m.ApiRange(0, 0, 0, 3), 'replacement');
+      action.edit = edit; return action;
+    };
+    a = await p.connect(p.target('A'), 'producer-A', { async provideCodeActions(document) {
+      callbackDocument = { uri: document.uri.toString(), version: document.version }; callbackVersions = p.nativeResources(a.host).map(uri => a.documents.getDocument(uri).version);
+      const action = actionFor(a, 'provide A'); entered.resolve(); await gate.promise; return [action];
+    } });
+    const own = p.nativeResources(a.host); a.addDocument(own[0], 11); a.addDocument(own[1], 21);
+    const peerHost = p.target('B'); peerHost.binding.initialization.workspace.folders[0].native_uri = a.host.binding.initialization.workspace.folders[0].native_uri;
+    peerHost.uriTransformer = new m.TargetUriTransformer(peerHost.binding, () => []);
+    let b; b = await p.connect(peerHost, 'producer-B', { provideCodeActions() { return [actionFor(b, 'provide B')]; } });
+    b.addDocument(p.nativeResources(b.host)[0], 91);
+    const pending = p.provide(a); await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入原provide callback等待'); })]);
+    a.changeDocument(own[1], 22, 'changed-during-provide'); const duringVersions = own.map(uri => a.documents.getDocument(uri).version), peerList = await p.provide(b); gate.resolve();
+    const list = await pending, action = list.actions[0], frozen = action.edit.edits.map(edit => edit.versionId);
+    a.changeDocument(own[1], 23, 'changed-after-publication'); const boundary = p.applyBoundary(); await boundary.apply(new m.CodeActionItem(action, a.provider));
+    const state = { callbackDocument, callbackVersions, duringVersions, native: own[0].toString(), peerNative: p.nativeResources(b.host)[0].toString(), frozen,
+      after: action.edit.edits.map(edit => edit.versionId), current: own.map(uri => a.documents.getDocument(uri).version),
+      peerVersions: peerList.actions[0].edit.edits.map(edit => edit.versionId), resources: p.editUris(action), expected: p.logicalResources(a.host).map(uri => uri.toString()),
+      bulkVersions: boundary.snapshot().bulk[0].versions, resolves: a.resolves.length };
+    await p.disposeList(list); await p.disposeList(peerList);
+    return { ...state, releases: a.releases.map(({ id, existed }) => ({ id, existed })), peerReleases: b.releases.map(({ id, existed }) => ({ id, existed })), caches: [...a.caches, ...b.caches] };
+  });
+  expect(result.callbackDocument).toEqual({ uri: result.native, version: 11 }); expect(result.callbackVersions).toEqual([11, 21]); expect(result.duringVersions).toEqual([11, 22]);
+  expect(result.peerNative).toBe(result.native); expect(result.frozen).toEqual([11, 21]); expect(result.after).toEqual([11, 21]);
+  expect(result.current).toEqual([11, 23]); expect(result.peerVersions).toEqual([91]); expect(result.resources).toEqual(result.expected); expect(result.bulkVersions).toEqual([11, 21]); expect(result.resolves).toBe(0);
+  expect(result.releases).toEqual([{ id: 1, existed: true }]); expect(result.peerReleases).toEqual([{ id: 1, existed: true }]); expect(result.caches).toEqual([]);
+  checks.push('原ExtHost注册/CodeActionAdapter/WorkspaceEdit.from在provide调用前冻结双根版本，真实文档change与另一宿主同URI不重盖，原RPC/apply接收相同版本且cache单次释放');
+});
+
+test('无 edit action 经原 UI apply 触发 resolve，版本按 resolve 自身调用前冻结并保持原 action 身份', async () => {
+  const result = await inBrowser('resolve原版本producer及独立冻结时点', async () => {
+    const p = globalThis.actionProbe, m = p.m, entered = Promise.withResolvers(), gate = Promise.withResolvers(); let a, original, sameCandidate, callbackVersions;
+    a = await p.connect(p.target('A'), 'producer-resolve', {
+      provideCodeActions() { original = new m.CodeAction('lazy versioned', m.CodeActionKind.QuickFix); return [original]; },
+      async resolveCodeAction(candidate) {
+        sameCandidate = candidate === original; callbackVersions = p.nativeResources(a.host).map(uri => a.documents.getDocument(uri).version); const edit = new m.WorkspaceEdit();
+        for (const uri of p.nativeResources(a.host)) edit.replace(uri, new m.ApiRange(0, 0, 0, 3), 'resolved');
+        candidate.edit = edit; candidate.command = { title: 'resolved command', command: 'probe.producer-resolved' }; entered.resolve(); await gate.promise; return candidate;
+      },
+    });
+    const own = p.nativeResources(a.host); a.addDocument(own[0], 31); a.addDocument(own[1], 41);
+    const list = await p.provide(a), action = list.actions[0], absentBefore = action.edit === undefined;
+    a.changeDocument(own[0], 32, 'changed-before-resolve'); const item = new m.CodeActionItem(action, a.provider), boundary = p.applyBoundary();
+    const applying = boundary.apply(item); await Promise.race([entered.promise, applying.then(() => { throw new Error('未经过原CodeActionItem的resolve等待'); })]);
+    a.changeDocument(own[1], 42, 'changed-during-resolve'); const duringVersions = own.map(uri => a.documents.getDocument(uri).version); gate.resolve(); await applying;
+    const frozen = action.edit.edits.map(edit => edit.versionId); a.changeDocument(own[1], 43, 'changed-after-resolve');
+    const state = { absentBefore, sameCandidate, identity: item.action === action, callbackVersions, duringVersions, frozen, after: action.edit.edits.map(edit => edit.versionId),
+      current: own.map(uri => a.documents.getDocument(uri).version), bulkVersions: boundary.snapshot().bulk[0].versions, commands: boundary.commands,
+      resolveIds: a.resolves.map(request => request.cacheId), resources: p.editUris(action), expected: p.logicalResources(a.host).map(uri => uri.toString()) };
+    await p.disposeList(list); return { ...state, releases: a.releases.map(({ id, existed }) => ({ id, existed })), caches: [...a.caches] };
+  });
+  expect([result.absentBefore, result.sameCandidate, result.identity]).toEqual([true, true, true]); expect(result.callbackVersions).toEqual([32, 41]); expect(result.duringVersions).toEqual([32, 42]);
+  expect(result.frozen).toEqual([32, 41]); expect(result.after).toEqual([32, 41]);
+  expect(result.current).toEqual([32, 43]); expect(result.bulkVersions).toEqual([32, 41]); expect(result.commands).toEqual([{ id: 'probe.producer-resolved', args: [] }]); expect(result.resolveIds).toEqual([[1, 0]]);
+  expect(result.resources).toEqual(result.expected); expect(result.releases).toEqual([{ id: 1, existed: true }]); expect(result.caches).toEqual([]);
+  checks.push('原apply/CodeActionItem对无edit action resolve，独立读取该调用前版本而非provide旧版本或返回时新版本，原action/命令与cache生命周期保留');
+});
+
+test('原 producer 保留 command-only、同批 create 的版本抑制及调用时未同步资源的 undefined 版本', async () => {
+  const result = await inBrowser('producer无版本资源与原create规则', async () => {
+    const p = globalThis.actionProbe, m = p.m, entered = Promise.withResolvers(), gate = Promise.withResolvers(); let a, unknown;
+    a = await p.connect(p.target('A'), 'producer-boundaries', { async provideCodeActions() {
+      const own = p.nativeResources(a.host), edit = new m.WorkspaceEdit(), direct = new m.CodeAction('mixed versions', m.CodeActionKind.QuickFix);
+      edit.replace(own[0], new m.ApiRange(0, 0, 0, 3), 'known'); edit.createFile(own[1]); edit.replace(own[1], new m.ApiRange(0, 0, 0, 3), 'created');
+      edit.replace(unknown, new m.ApiRange(0, 0, 0, 3), 'unknown'); direct.edit = edit;
+      const commandOnly = new m.CodeAction('command only', m.CodeActionKind.QuickFix); commandOnly.command = { title: 'unchanged command', command: 'probe.producer-command' };
+      entered.resolve(); await gate.promise; return [direct, commandOnly];
+    } });
+    const own = p.nativeResources(a.host); unknown = m.URI.joinPath(a.host.uriTransformer.folders[0].native, 'unknown.ts'); a.addDocument(own[0], 5); a.addDocument(own[1], 6);
+    const pending = p.provide(a); await Promise.race([entered.promise, pending.then(() => { throw new Error('未进入producer边界callback'); })]);
+    a.addDocument(unknown, 80, 'synchronized-after-call'); gate.resolve(); const list = await pending;
+    const state = { edits: list.actions[0].edit.edits.map(edit => ({ type: edit.textEdit ? 'text' : 'file', resource: (edit.resource ?? edit.newResource).toString(), version: edit.versionId ?? null })),
+      expectedResources: [own[0], own[1], own[1], unknown].map(uri => m.URI.revive(a.host.uriTransformer.transformIncoming(uri)).toString()),
+      unknownCurrent: a.documents.getDocument(unknown).version, command: list.actions[1].command, commandHasEdit: list.actions[1].edit !== undefined,
+      ids: list.actions.map(action => action.cacheId), count: list.actions.length };
+    await p.disposeList(list); return { ...state, releases: a.releases.map(({ id, existed }) => ({ id, existed })), caches: [...a.caches] };
+  });
+  expect(result.count).toBe(2); expect(result.edits.map(edit => edit.type)).toEqual(['text', 'file', 'text', 'text']); expect(result.edits.map(edit => edit.resource)).toEqual(result.expectedResources);
+  expect(result.edits.map(edit => edit.version)).toEqual([5, null, null, null]); expect(result.unknownCurrent).toBe(80); expect(result.commandHasEdit).toBe(false);
+  expect(result.command).toMatchObject({ id: 'probe.producer-command', title: 'unchanged command' }); expect(result.ids).toEqual([[1, 0], [1, 1]]);
+  expect(result.releases).toEqual([{ id: 1, existed: true }]); expect(result.caches).toEqual([]);
+  checks.push('真实producer不造command-only编辑，WorkspaceEdit.from保持create+text版本抑制，调用后才同步资源仍无版本，整list cache准确释放');
+});
+
+test('原 Controller 将 BulkEdit 拒绝交给同一错误通知，等待结束后重新触发并结束进度，core 仍拒绝且不执行 command', async () => {
+  const result = await inBrowser('Controller原应用错误呈现与finally边界', async () => {
+    const p = globalThis.actionProbe, m = p.m, boundary = p.applyBoundary();
+    const cause = new Error('revision 21 != 22'), conflict = new Error('same.ts has changed in the meantime', { cause });
+    const item = new m.CodeActionItem({ title: 'version conflict', edit: { edits: [p.textEdit(m.URI.file('/ui/same.ts'))] },
+      command: { id: 'probe.must-not-run', title: '后继命令' } }, undefined);
+    boundary.onBulk = async () => { throw conflict; };
+    const coreRejection = await boundary.apply(item).then(() => ({ sameError: false }), error => ({ sameError: error === conflict, sameCause: error.cause === cause }));
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers(), order = [], progress = [], notifications = [], triggers = [], editor = {};
+    boundary.onBulk = async () => { order.push('bulk'); entered.resolve(); await gate.promise; throw conflict; };
+    // 只借用原 Controller 的应用和触发方法；模型、进度与通知是明确的 UI 接收端，不复制控制流程。
+    const controller = { _editor: editor, _instantiationService: boundary.instantiationService,
+      _progressService: { show(infinite, delay) { progress.push({ infinite, delay }); order.push('show'); return { done() { order.push('done'); } }; } },
+      _notificationService: { error(error) { notifications.push(error); order.push('notification'); } },
+      _model: { trigger(trigger) { triggers.push(trigger); order.push('trigger'); } }, _trigger: m.CodeActionController.prototype._trigger };
+    const applying = m.CodeActionController.prototype.applyCodeAction.call(controller, item, true, true, m.ApplyCodeActionReason.FromCodeActions);
+    await Promise.race([entered.promise, applying.then(() => { throw new Error('原 Controller 未等待 BulkEdit'); })]);
+    const waiting = { order: [...order], notifications: notifications.length, triggers: triggers.length, commands: [...boundary.commands] };
+    gate.resolve(); await applying;
+    return { coreRejection, waiting, order, progress, triggers, notificationCount: notifications.length,
+      sameError: notifications[0] === conflict, sameCause: notifications[0]?.cause === cause, message: notifications[0]?.message,
+      editorPassed: boundary.bulk[1].options.editor === editor, preview: boundary.bulk[1].options.showPreview,
+      commands: boundary.commands, effects: boundary.effects, coreNotifications: boundary.notifications, bulkCount: boundary.bulk.length };
+  });
+  expect(result.coreRejection).toEqual({ sameError: true, sameCause: true });
+  expect(result.waiting).toEqual({ order: ['show', 'bulk'], notifications: 0, triggers: 0, commands: [] });
+  expect(result.order).toEqual(['show', 'bulk', 'notification', 'trigger', 'done']); expect(result.progress).toEqual([{ infinite: true, delay: 500 }]);
+  expect(result.triggers).toEqual([{ type: 2, triggerAction: 'quick fix action', filter: {} }]);
+  expect(result.notificationCount).toBe(1); expect([result.sameError, result.sameCause, result.editorPassed, result.preview]).toEqual([true, true, true, true]);
+  expect(result.message).toBe('same.ts has changed in the meantime'); expect(result.bulkCount).toBe(2);
+  expect(result.commands).toEqual([]); expect(result.effects).toEqual([]); expect(result.coreNotifications).toEqual([]);
+  checks.push('原Controller/DI/core apply实际等待BulkEdit拒绝，原Error及cause只交UI通知一次，retrigger和progress.done按序完成，core继续拒绝且零command/副作用');
 });

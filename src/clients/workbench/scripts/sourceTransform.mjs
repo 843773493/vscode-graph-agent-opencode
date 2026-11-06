@@ -118,12 +118,12 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
       contents = replaceOnce(contents, 'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches());',
         'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches()).catch(onUnexpectedError);');
     }
-    // Node 宿主复用共同状态合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
+    contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce, runtime);
+    // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);
-    contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce);
     contents = transformExtensionWorkspaceSymbols(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/workspaces/common/workspaces.ts')) {
       // 不透明文件根已在 URI.path 内编码；原 skipEncoding 会让重读时的 URI.parse 折叠路径段。
