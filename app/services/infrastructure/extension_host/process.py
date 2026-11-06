@@ -37,40 +37,48 @@ class NodeExtensionHost:
         if self._started:
             raise RuntimeError("Node 宿主 generation 不能重复启动或重连")
         self._started = True
-        # TODO: Windows 接受私有 named pipe，macOS 验证短 IPC 路径后接入；不回退到公开 TCP。
-        if sys.platform != "linux":
-            raise NotImplementedError("Node 宿主私有 IPC 当前仅验证 Linux 目标")
+        # TODO: macOS 验证短 IPC 路径后接入；不回退到公开 TCP。
+        if sys.platform not in {"linux", "win32"}:
+            raise NotImplementedError("Node 宿主私有 IPC 当前仅支持 Linux 和 Windows 目标")
         self._directory.mkdir(parents=True, exist_ok=True)
         cleanup = AsyncExitStack()
         try:
-            # IPC 是短暂运行态，正文及输出仍由调用方的 Backend 基础设施目录持有。
-            temporary = cleanup.enter_context(tempfile.TemporaryDirectory(prefix="ipc-", dir=self._directory))
-            address = str(Path(temporary) / "host.sock")
-            if Path("/proc/self/fd").is_dir():
-                descriptor = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
-                cleanup.callback(os.close, descriptor)
-                # 正式测试和较长 BOXTEAM_HOME 也可使用原目录；不搬正文或创建第二存储根。
-                address = f"/proc/{os.getpid()}/fd/{descriptor}/host.sock"
             loop = asyncio.get_running_loop()
-            accepted: asyncio.Future[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = loop.create_future()
+            if sys.platform == "win32":
+                from app.runtime.windows_ipc import WindowsPipeServer
 
-            def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-                if accepted.done():
-                    writer.close()
-                else:
-                    accepted.set_result((reader, writer))
+                server = WindowsPipeServer()
+                address, accepted = server.address, server.connection
+            else:
+                # IPC 是短暂运行态，正文及输出仍由调用方的 Backend 基础设施目录持有。
+                temporary = cleanup.enter_context(tempfile.TemporaryDirectory(prefix="ipc-", dir=self._directory))
+                address = str(Path(temporary) / "host.sock")
+                if Path("/proc/self/fd").is_dir():
+                    descriptor = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
+                    cleanup.callback(os.close, descriptor)
+                    # 正式测试和较长 BOXTEAM_HOME 也可使用原目录；不搬正文或创建第二存储根。
+                    address = f"/proc/{os.getpid()}/fd/{descriptor}/host.sock"
+                accepted = loop.create_future()
 
-            server = await asyncio.start_unix_server(accept, path=address)
+                def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+                    if accepted.done():
+                        writer.close()
+                    else:
+                        accepted.set_result((reader, writer))
+
+                server = await asyncio.start_unix_server(accept, path=address)
 
             async def close_connection() -> None:
                 server.close()
-                if accepted.done() and not accepted.cancelled():
-                    _, writer = accepted.result()
-                    writer.close()
-                    await writer.wait_closed()
-                else:
-                    accepted.cancel()
-                await server.wait_closed()
+                try:
+                    if accepted.done() and not accepted.cancelled():
+                        _, writer = accepted.result()
+                        writer.close()
+                        await writer.wait_closed()
+                    else:
+                        accepted.cancel()
+                finally:
+                    await server.wait_closed()
 
             # 沿上游 writeExtHostConnection 的互斥语义，只提供一种实际 IPC 模式。
             environment = {key: value for key, value in self._environment.items() if key not in {

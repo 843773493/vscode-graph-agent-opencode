@@ -53,8 +53,8 @@ async def test_native_standard_streams_write_the_complete_tail_before_verified_e
 @pytest.fixture
 async def unconnected_host(node_host_runtime: tuple[str, str], process_context: TestRunContext,
                            request: pytest.FixtureRequest) -> AsyncIterator[tuple[NodeExtensionHost, Path, Path]]:
-    if sys.platform != "linux":
-        pytest.skip("UNMET_PREREQUISITE: 私有 IPC 当前仅验证 Linux")
+    if sys.platform not in {"linux", "win32"}:
+        pytest.skip("UNMET_PREREQUISITE: 私有 IPC 尚未接入此平台")
     runtime = process_context.runtime_root_for_node(request.node.nodeid)
     runtime.mkdir(parents=True, exist_ok=True)
     source, log = runtime / "no-ipc.mjs", process_context.artifacts_dir / "startup.raw"
@@ -69,6 +69,8 @@ async def unconnected_host(node_host_runtime: tuple[str, str], process_context: 
             yield host, source, log
         finally:
             await run_cleanup_shielded(host.child.close)
+            log.with_suffix(".process.json").write_text(
+                json.dumps(asdict(host.child.state), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.parametrize("mode", ["missing", "timeout", "cancel"])
@@ -97,8 +99,26 @@ async def test_ipc_start_failure_and_cancellation_settle_the_original_process(
         with pytest.raises(RuntimeError if mode == "missing" else TimeoutError):
             await connect()
     assert host.child.state.exit_verified
-    assert host.child.state.returncode == (1 if mode == "missing" else -15)
+    assert host.child.state.returncode == (1 if mode == "missing" or sys.platform == "win32" else -15)
     assert not list(source.with_name("host").glob("ipc-*"))
     assert (b'Cannot find module' if mode == "missing" else b'waiting-for-ipc') in log.read_bytes()
     with pytest.raises(RuntimeError, match="不能重复启动"):
         await connect()
+
+
+async def test_real_node_connects_private_ipc_and_settles_after_eof(
+    unconnected_host: tuple[NodeExtensionHost, Path, Path],
+) -> None:
+    host, source, log = unconnected_host
+    source.write_text("import { createConnection } from 'node:net';\n"
+                      "const socket = createConnection(process.env.VSCODE_EXTHOST_IPC_HOOK);\n"
+                      "socket.on('data', value => socket.write(value));\n"
+                      "socket.on('end', () => socket.end());\n"
+                      "socket.on('close', () => console.log('ipc-closed'));\n", encoding="utf-8")
+    async with host.connect() as (reader, writer):
+        content = bytes(range(256)) * 4096
+        writer.write(content)
+        await writer.drain()
+        assert await reader.readexactly(len(content)) == content
+    assert host.child.state.exit_verified and host.child.state.returncode == 0
+    assert log.read_bytes() == b"ipc-closed\n"

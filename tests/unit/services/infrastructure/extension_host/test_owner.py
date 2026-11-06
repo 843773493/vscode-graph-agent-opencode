@@ -207,7 +207,7 @@ def test_description_uses_the_same_admission_facts_without_creating_sessions(cas
     if unavailable == "runtime":
         case.owner.runtime = None
     elif unavailable == "platform":
-        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "platform", "darwin")
     elif unavailable == "draining":
         case.owner.close_admission()
     status = case.owner.describe(expected_backend_id=case.owner.backend_id, workspace_ids=case.workspace_ids[::-1])

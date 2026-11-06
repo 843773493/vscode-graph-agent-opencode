@@ -68,8 +68,10 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     monkeypatch.setenv("BOXTEAM_TEST_RUN_ID", f"node-host-{uuid4()}")
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     executable, modules = node_host_runtime
-    if sys.platform != "linux":
-        pytest.skip("UNMET_PREREQUISITE: 目标私有 named pipe 尚未实现")
+    if sys.platform not in {"linux", "win32"}:
+        pytest.skip("UNMET_PREREQUISITE: 目标私有 IPC 尚未接入此平台")
+    # TODO(5.3): Windows完整原宿主RPC仍须补验；实机原生依赖构建目前缺VS Spectre库。
+    # 私有管道及真实Node进程的通过不能代替本场景。
     handlers: list[asyncio.Task[None]] = []
     hosts: dict[str, NodeExtensionHost] = {}
     manifest = context.run_root / "runtime-manifest.json"
@@ -326,7 +328,8 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     assert set(states) == set(workspace_ids)
     assert all(state["exit_verified"] for state in states.values())
     assert {label: state["returncode"] for label, state in states.items()} == {
-        "A": 0, "B": 0, "wrong-commit": 55, "disconnect": 0, "crash": -9, "backend-shutdown": 0,
+        "A": 0, "B": 0, "wrong-commit": 55, "disconnect": 0,
+        "crash": 1 if sys.platform == "win32" else -9, "backend-shutdown": 0,
     }
     assert len({state["pid"] for state in states.values()}) == len(states)
     assert lifecycle.closed and application.state.workspace_container_registry is None

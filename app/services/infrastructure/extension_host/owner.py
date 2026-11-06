@@ -122,7 +122,7 @@ class NodeExtensionHostOwner:
         for workspace_id in workspace_ids:
             self._mounts.resolve(workspace_id)
         reason = ("backend_draining" if self._admission_closed else "runtime_missing" if self.runtime is None
-                  else "platform_unsupported" if sys.platform != "linux" else None)
+                  else "platform_unsupported" if sys.platform not in {"linux", "win32"} else None)
         return NodeHostStatus(self.backend_id, sys.platform, reason, self.runtime)
 
     async def _release(self, session: _HostSession) -> None:
@@ -140,9 +140,9 @@ class NodeExtensionHostOwner:
         workspace_ids = tuple(workspace_ids)
         if status.runtime is None:
             raise NotImplementedError("目标未提供专用 Node Extension Host 运行时")
-        # TODO: Windows named pipe / macOS 私有IPC验收后启用，不能落到其它目标。
+        # TODO: macOS 私有IPC验收后启用，不能落到其它目标。
         if status.reason == "platform_unsupported":
-            raise NotImplementedError("Node Extension Host 当前仅验证 Linux 目标")
+            raise NotImplementedError("Node Extension Host 当前仅支持 Linux 和 Windows 目标")
         if any((session.identity.gateway_id, session.identity.client_id, session.identity.view_id)
                == (gateway_id, client_id, view_id) for session in self._sessions.values()):
             raise ValueError("该客户端的 Node 宿主视图尚未关闭；不能覆盖原 generation")
