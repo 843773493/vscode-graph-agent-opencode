@@ -38,28 +38,28 @@ export function getMcpInstallationCapabilities(port: number, workspace: GatewayW
   return installationRequest<McpInstallationCapabilitiesResponseDTO>(port, workspace, "installation-capabilities", { signal });
 }
 
-export function inspectMcpInstallationCandidate(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidateInspectRequestDTO) {
+export function inspectMcpInstallationCandidate(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidateInspectRequestDTO, signal?: AbortSignal) {
   return installationRequest<McpCandidateInspectResponseDTO>(port, workspace, "candidate-manifests",
-    { method: "POST", body: JSON.stringify(candidate) }, candidate.target);
+    { method: "POST", body: JSON.stringify(candidate), signal }, candidate.target);
 }
 
-export function planMcpInstallation(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidatePlanRequestDTO) {
+export function planMcpInstallation(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidatePlanRequestDTO, signal?: AbortSignal) {
   return installationRequest<McpCandidatePlanResponseDTO>(port, workspace, "candidate-plans",
-    { method: "POST", body: JSON.stringify(candidate) }, candidate.target);
+    { method: "POST", body: JSON.stringify(candidate), signal }, candidate.target);
 }
 
-export function installMcpArtifact(port: number, workspace: GatewayWorkspaceRequestTarget, request: McpInstallationRequestDTO) {
+export function installMcpArtifact(port: number, workspace: GatewayWorkspaceRequestTarget, request: McpInstallationRequestDTO, signal?: AbortSignal) {
   return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, "installations",
-    { method: "POST", body: JSON.stringify(request) }, request.candidate!.target);
+    { method: "POST", body: JSON.stringify(request), signal }, request.candidate!.target);
 }
 
 export function getMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string, signal?: AbortSignal) {
   return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}`, { signal }, target);
 }
 
-export function cancelMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string) {
+export function cancelMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string, signal?: AbortSignal) {
   return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}/cancel`,
-    { method: "POST", body: JSON.stringify(target) }, target);
+    { method: "POST", body: JSON.stringify(target), signal }, target);
 }
 
 export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, signal?: AbortSignal) {
@@ -170,6 +170,7 @@ export async function saveMcpCandidateConfiguration(
 ) {
   const { gateway_id, workspace_id } = target;
   const sourceKey = payload.source_edit?.source_key;
+  const idempotencyKey = payload.source_edit?.idempotency_key;
   if (payload.target?.gateway_id !== gateway_id || payload.target.workspace_id !== workspace_id) {
     throw new Error("MCP 候选配置必须提交给原 Gateway／工作区");
   }
@@ -177,8 +178,8 @@ export async function saveMcpCandidateConfiguration(
     { method: "PUT", body: JSON.stringify(payload), signal });
   const document = unwrapApiData({ ...response, data: response.data ?? null });
   if (document.gateway_id !== gateway_id || document.workspace_id !== workspace_id
-      || document.source_key !== sourceKey) {
-    throw new Error("MCP 候选配置回执不属于原来源");
+      || document.source_key !== sourceKey || document.edit?.idempotency_key !== idempotencyKey) {
+    throw new Error("MCP 候选配置回执不属于原来源提交");
   }
   return document;
 }

@@ -23,9 +23,11 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import type { IWorkbencMcpServerInstallOptions } from '../../upstream/src/vs/workbench/services/mcp/common/mcpWorkbenchManagementService.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { WorkspaceMcpCatalog } from './catalog.js';
 import { galleryInstallationSource, publishMcpArtifact } from './installation.js';
+import { offerMcpArtifactConfiguration } from './configuration.js';
 import { WorkspaceMcpServer } from './server.js';
 
 export const unavailableWorkspaceMcpWrite = () => new Error('此目标的 MCP 工作区配置与凭据写入、Node host 尚未接入；已有动态命令不表示已安装制品');
@@ -156,6 +158,8 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     if (snapshot.error) throw new Error(snapshot.error);
     if (this.selectionError) throw this.selectionError;
     if (!this.selected) throw new Error('请先选择制品安装所属的目标工作区');
+    const registered = snapshot.workspaces.find(workspace => gatewayWorkspaceKey(workspace) === gatewayWorkspaceKey(this.selected!.target));
+    if (registered?.status !== 'ready') throw new Error('目标工作区尚未就绪，请先显式连接或启动 Backend');
     return { target: this.selected.target, label: this.selected.label };
   }
 
@@ -239,15 +243,36 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   async install(server: IWorkbenchMcpServer, options?: IWorkbencMcpServerInstallOptions): Promise<IWorkbenchMcpServer> {
     if (!server.gallery) throw new Error('请从原 MCP 目录选择待安装制品');
     if (options && Object.values(options).some(value => value !== undefined)) throw new Error('制品安装不消费工作区配置选项，请从明确目标的制品入口安装');
-    const { target, label } = this.owner.installationTarget();
+    const selected = this.owner.installationTarget();
+    const target = Object.freeze({ ...selected.target });
+    const label = selected.label;
+    const gatewayId = workspaceContext.getSnapshot().gatewayId;
+    const controller = new AbortController();
     const cancellation = new CancellationTokenSource();
-    let artifact: Awaited<ReturnType<typeof publishMcpArtifact>>;
+    const invalidate = () => { controller.abort(new Error('Gateway 或用户身份已改变，请重新选择 MCP 制品目标')); cancellation.cancel(); };
+    const release = onGatewayUserSessionInvalidated(0, invalidate);
+    const releaseContext = workspaceContext.subscribe(() => {
+      if (workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidate();
+    });
+    const assertAccess = () => {
+      if (workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidate();
+      controller.signal.throwIfAborted();
+      const original = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces,
+        { gatewayId: target.gateway_id, workspaceId: target.workspace_id });
+      if (original.status !== 'ready') throw new Error('原目标工作区尚未就绪，请先显式连接或启动 Backend');
+    };
+    const finish = () => { release(); releaseContext(); controller.abort(); };
+    let offered = false;
     try {
-      artifact = await this.progress.withProgress({ location: ProgressLocation.Notification, title: `安装 MCP 制品 · ${label}`, cancellable: true },
-        progress => publishMcpArtifact(server.gallery!, target, label, this.quickInput, progress, cancellation.token), () => cancellation.cancel());
-    } finally { cancellation.dispose(); }
-    this.notifications.info(`MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。工作区尚未配置或连接；generation ${artifact.binding!.generation}`);
-    return server;
+      assertAccess();
+      const published = await this.progress.withProgress({ location: ProgressLocation.Notification, title: `安装 MCP 制品 · ${label}`, cancellable: true },
+        progress => publishMcpArtifact(server.gallery!, target, label, this.quickInput, progress, cancellation.token, controller.signal), () => cancellation.cancel());
+      assertAccess();
+      offered = true;
+      void offerMcpArtifactConfiguration(published, target, label, this.quickInput, this.notifications, assertAccess, controller.signal)
+        .catch(error => this.notifications.error(error)).finally(finish);
+      return server;
+    } finally { cancellation.dispose(); if (!offered) finish(); }
   }
   async uninstall(): Promise<never> { throw unavailable(); }
   async resolveEditableMcpServerConfiguration(): Promise<never> { throw unavailable(); }

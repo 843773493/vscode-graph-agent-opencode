@@ -3,7 +3,7 @@ import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
-  writeMcpPrivateHeader, writeMcpPrivateEnv, draftMcpCandidateConfiguration,
+  writeMcpPrivateHeader, writeMcpPrivateEnv, draftMcpCandidateConfiguration, saveMcpCandidateConfiguration,
   getMcpArtifactReferences, uninstallMcpArtifact,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
@@ -218,6 +218,57 @@ test("卸载收到会话401触发原身份屏障后，真实HTTP恢复链不重�
     expect(sessions).toBe(2);
     expect(deletions).toBe(1);
   } finally { release(); }
+});
+
+test("候选保存收到会话401后，同一信号阻止身份恢复链重发旧配置确认", async () => {
+  const port = nextPort++;
+  const controller = new AbortController();
+  const release = onGatewayUserSessionInvalidated(port, () => controller.abort(new Error("原配置确认身份已失效")));
+  const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  const payload = { target: { kind: "workspace", ...target }, server_id: "configured", plan: { candidate: {
+    target: native, source: { kind: "manual", name: "original", version: "1", definition: { command: "/original" } },
+    manifest_digest: revision, variant: { kind: "manual", index: 0, digest: revision }, inputs: {}, server_id: "configured" }, plan_digest: revision },
+    source_edit: { ...target, source_key: "workspace_root_mutable_override", jsonc: "{}", idempotency_key: "original-source-commit",
+      base_file_digest: "base", base_layer_revision: 1, base_layer_digest: "layer", expected_active_revision: 1, expected_active_digest: "active" } };
+  let saves = 0, sessions = 0;
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args, path = new URL(String(input)).pathname;
+    if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "mcp-test-token" } });
+    if (path === "/api/gateway/users/current") {
+      ++sessions;
+      return Response.json({ data: { kind: "guest", user_id: null }, request_id: "recovered-config-identity" });
+    }
+    expect(path).toBe("/api/v1/mcp/candidate-configurations"); expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual(payload); ++saves;
+    return Response.json({ detail: "user_session_required" }, { status: 401, headers: { "X-Request-ID": "expired-config-identity" } });
+  }, { preconnect: originalFetch.preconnect });
+  try {
+    const failure = await saveMcpCandidateConfiguration(port, target, payload, controller.signal).catch((cause: unknown) => cause);
+    expect(failure).toBe(controller.signal.reason);
+    expect(controller.signal.aborted).toBe(true); expect(saves).toBe(1); expect(sessions).toBe(2);
+  } finally { release(); }
+});
+
+test("配置保存只消费原来源提交的完整回执，冻结原幂等键", async () => {
+  const source_edit = { ...target, source_key: "workspace_root_mutable_override", jsonc: "{}", idempotency_key: "original-source-commit",
+    base_file_digest: "base", base_layer_revision: 1, base_layer_digest: "layer", expected_active_revision: 1, expected_active_digest: "active" };
+  const payload = { target: { kind: "workspace", ...target }, server_id: "configured", plan: undefined, source_edit };
+  const document = { ...target, source_key: source_edit.source_key, layer: "workspace", writable: true, jsonc: "{}", file_presence: "present",
+    file_digest: "saved-file", layer_revision: 2, layer_digest: "saved-layer", source_generation: "generation", active_revision: 1,
+    active_digest: "active", json_schema: {}, effective: {}, source_effective: {}, layers: [], origins: [], status: undefined,
+    edit: { idempotency_key: source_edit.idempotency_key, candidate_id: "original-candidate", state: "pending", file_digest: "saved-file", source_saved: true, layer_imported: true } };
+  let actual = document;
+  const port = installFetch((url, init) => {
+    expect(url.pathname).toBe("/api/v1/mcp/candidate-configurations"); expect(init?.method).toBe("PUT");
+    return envelope(actual);
+  });
+  expect(await saveMcpCandidateConfiguration(port, target, payload)).toEqual(document);
+  actual = { ...document, edit: { ...document.edit, idempotency_key: "different-source-commit" } };
+  await expect(saveMcpCandidateConfiguration(port, target, payload)).rejects.toThrow("原来源提交");
+  actual = document;
+  const pending = saveMcpCandidateConfiguration(port, { ...target }, payload);
+  payload.source_edit.idempotency_key = "mutated-after-submit";
+  expect(await pending).toEqual(document);
 });
 
 test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操作对象", async () => {

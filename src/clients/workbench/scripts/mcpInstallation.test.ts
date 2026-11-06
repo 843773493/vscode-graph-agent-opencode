@@ -32,18 +32,23 @@ function prepare() {
 
 test('原安装工作流使用来源owner给出的精确URI和用户选择，返回发布回执不生成local配置', async () => {
   const { plan, install, quickInput } = prepare();
-  const receipt = await publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None);
-  expect(receipt).toEqual(artifact);
+  const signal = new AbortController().signal;
+  const receipt = await publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None, signal);
+  expect(receipt.artifact).toEqual(artifact);
+  expect(receipt.candidate).toEqual(plan.mock.calls[0]![2]);
+  expect(receipt.candidate).not.toHaveProperty('server_id');
   expect(plan.mock.calls[0]![2].variant?.index).toBe(1);
   expect(plan.mock.calls[0]![2].source?.entry_url).toBe(galleryInstallationSource(gallery).entry_url);
   expect(install.mock.calls[0]![2]).toMatchObject({ entrypoint: 'explicit-entry', candidate: { target, variant: { index: 1 } } });
+  expect(plan.mock.calls[0]![3]).toBe(signal);
+  expect(install.mock.calls[0]![3]).toBe(signal);
   expect(receipt).not.toHaveProperty('local');
 });
 
 test('安装结果未知时不重放原意图，也不生成虚假的已安装回执', async () => {
   const { install, quickInput } = prepare();
   install.mockRejectedValueOnce(new Error('socket disconnected'));
-  await expect(publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None)).rejects.toThrow('不能自动重放');
+  await expect(publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal)).rejects.toThrow('不能自动重放');
   expect(install).toHaveBeenCalledTimes(1);
 });
 
