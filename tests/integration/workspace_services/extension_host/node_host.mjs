@@ -118,7 +118,7 @@ async function connect(label) {
     workspace: { id: initialization.workspace.id, name: initialization.workspace.name },
     extensions: { versionId: 1, allExtensions: [description], activationEvents: { 'host-probe.node': ['*'] }, myExtensions: [identifier] },
     telemetryInfo: { sessionId: label, machineId: 'probe', sqmId: 'probe', devDeviceId: 'probe', firstSessionDate: '2026-11-06' },
-    logLevel: 0, loggers: [], logsLocation: m.URI.parse(initialization.logs_location_uri), autoStart: false,
+    logLevel: 3, loggers: [], logsLocation: m.URI.parse(initialization.logs_location_uri), autoStart: false,
     remote: { isRemote: false, connectionData: null }, consoleForward: { includeStack: false, logNative: false }, uiKind: 2,
   };
   let extensionService;

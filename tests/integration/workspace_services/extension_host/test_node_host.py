@@ -355,3 +355,12 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             "resource_uri": f"boxteam://workspace/{workspace_ids[label]}/resources/files/root", "name": label}]
         assert initialization.logs_location_uri == (home / "state/backend/extension-hosts" / identity.generation).as_uri()
         assert (home / "state/backend/extension-hosts" / identity.generation / "host.log").is_file()
+        if label != "wrong-commit":
+            # RPC 激活成功不能代替原生日志落盘；沿正式 generation 核真实 spdlog 输出。
+            logs = home / "state/backend/extension-hosts" / identity.generation
+            assert "host-probe.node" in (logs / "exthost.log").read_text(encoding="utf-8")
+            assert (logs / "extHostTelemetry.log").is_file()
+            assert not any(
+                call["actor"] == "MainThreadConsole" and "Failed opening file" in json.dumps(call)
+                for call in receipt_hosts[label]["calls"]
+            )

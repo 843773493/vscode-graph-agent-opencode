@@ -49,6 +49,9 @@
   - Windows 完整 RPC 与进程树性能切片：经授权补齐官方 MSVC Spectre 组件；定位并备份用户级安装器残留 temporaryCache 指针后安装成功，未清空系统包缓存。固定 Node 24.22.1 原 headers 构建并实际载入 watchdog 1.4.6／spdlog 0.15.8；依赖目录仅用短 junction 完成原生构建，不缩短产品／测试目录。真实 cProfile 证实原逐进程 ppid 触发593次整机枚举、耗时11.953秒；参考 VS Code 批量进程树实现，原 Python owner 先冻结 PID／创建时间，再一次读取父子关系，最终实机0.047秒、整机枚举1次。保留 PID复用、归属、根退出后后代和清理核验，不放宽任何期限；私有 psutil 接口留具名迁移 TODO。
   - Linux 最终生命周期／日志／管理定向173项、Ruff及Linux／Windows Pyright通过；Windows原IPC／Gateway／Relay完整RPC三参数3 passed／44.69秒，保留双版本激活、目标文件／存储、断连／崩溃和Backend关闭断言。扩大Windows批次134 passed／33 failed／16 skipped／8 errors：失败全部位于既有公共单元测试，涉及POSIX属性、硬编码原生路径／repr及裸sleep进程的taskkill关闭，不称整组通过；本片生命周期测试与所选产品入口无失败。当前正式Launcher收据核候选失败、成功换代、管理PID／Backend保持、最终退出0及管理进程退出。430份远端原件已逐项核SHA与字节；准确命令、源码指纹、失败归属及收集索引见 `out/tests/temp/2026/11/08/windows_rpc_native/artifacts/verification-v1.json`。原始宿主回执仍记录长目录下spdlog写盘失败，作为下一独立切片处理；RPC通过不代替日志、完整Workbench、真实SSH业务、发行或最终引用回收验收，1.8／1.9保持未勾选。
 
+  - Windows 原生日志长路径切片：真实 spdlog 对314字符中文路径的普通文件名失败、namespace文件名成功；只在共用 SpdLogLogger 调用 native addon 的边界使用 Node toNamespacedPath，日志 URI、generation目录及原错误处理保持。原 RPC 测试启用 Info 并核真实宿主日志，修复前Windows IPC明确失败（exthost.log缺失），修复后Windows三传输3 passed／42.50秒、Linux三传输3 passed／23.59秒，15个Windows宿主的日志实际落盘且无Failed opening file回执。
+  - Python Ruff／Pyright、Node语法及strict OpenSpec通过；170份实际Node转换源码类型检查保留与完整HEAD归档基线相同的2条IExtensionInfo诊断，新增0，不记全绿。164份Browser转换逐字节一致，复用未变浏览器构建；85份Windows原件逐项核SHA／字节，Windows CRLF与冻结Git对象／本机LF对应关系亦已核实。准确命令、源码指纹、先红后绿及原件索引见 `out/tests/temp/2026/11/08/windows_rpc_native/artifacts/native-logs-verification-v1.json`。本片不代替完整Workbench、真实SSH、发行及最终引用回收，1.8／1.9继续未勾选。
+
 ## 2. MCP 目录与目标安装
 
 - [x] 2.1 沿原 gallery 服务合同接入可配置 MCP 来源，验证实际协议、分页、取消及未配置／失败／无匹配；与 VSIX 来源分开，查询不下载、不启动或扩展来源范围。

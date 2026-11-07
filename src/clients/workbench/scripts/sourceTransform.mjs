@@ -88,7 +88,10 @@ export const transformedSourcePaths = [...new Set([
   ...settingsTreeScopeSourcePaths,
 ])];
 
-export const nodeTransformedSourcePaths = [...new Set([...transformedSourcePaths, ...nativeManagementSourcePaths])];
+export const nodeTransformedSourcePaths = [...new Set([
+  ...transformedSourcePaths, ...nativeManagementSourcePaths,
+  'src/vs/platform/log/node/spdlogLog.ts',
+])];
 
 function replaceOnce(source, marker, replacement) {
   if (source.split(marker).length !== 2) throw new Error(`上游转换锚点必须恰好一次：${marker}`);
@@ -148,6 +151,12 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
         .filter(([severity]) => severity === Severity.Error);
       if (errors.length) throw new ExtensionManagementError(errors.map(([, message]) => message).join('\\n'), ExtensionManagementErrorCode.Invalid);
       const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });`);
+    }
+    if (runtime === 'node' && path === join(upstream, 'src/vs/platform/log/node/spdlogLog.ts')) {
+      // 只在 native addon 边界使用 Windows 长路径；日志资源 URI 和目录归属保持原样。
+      contents = "import { toNamespacedPath } from 'node:path';\n" + contents;
+      contents = replaceOnce(contents, 'createAsyncRotatingLogger(name, logfilePath, filesize, filecount)',
+        'createAsyncRotatingLogger(name, toNamespacedPath(logfilePath), filesize, filecount)');
     }
     // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return transformNativeManagement(root, path, contents, replaceOnce);
