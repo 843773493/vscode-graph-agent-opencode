@@ -17,11 +17,11 @@ import { IRemoteAgentService } from '../../upstream/src/vs/workbench/services/re
 import { IUserDataProfileService } from '../../upstream/src/vs/workbench/services/userDataProfile/common/userDataProfile.js';
 import { registerTargetConfigurationFiles } from './configurationFiles.js';
 import { TargetWorkspaceResources } from './targetUris.js';
-import { targetProfileId, targetSettings, targetWorkspace, type TargetExtensionContext } from './targetContext.js';
+import { targetProfileId, targetSettings, targetWorkspace, type TargetConfigurationContext } from './targetContext.js';
 
 /** 原 WorkspaceService 同时持有配置与 context；所有 MainThread customer 从同一 child 取得它。 */
-export async function targetConfigurationServices(parent: IInstantiationService, context: TargetExtensionContext,
-  lifetime: DisposableStore): Promise<IInstantiationService> {
+export async function targetConfigurationServices(parent: IInstantiationService, context: TargetConfigurationContext,
+  lifetime: DisposableStore, services = new ServiceCollection()): Promise<IInstantiationService> {
   const workspace = targetWorkspace(context), settings = targetSettings(context), binding = context.connection;
   const resources = new TargetWorkspaceResources(context);
   const owner = parent.invokeFunction(accessor => {
@@ -34,7 +34,9 @@ export async function targetConfigurationServices(parent: IInstantiationService,
     }, environment, accessor.get(IUserDataProfileService), accessor.get(IUserDataProfilesService), files,
     accessor.get(IRemoteAgentService), accessor.get(IUriIdentityService), accessor.get(ILogService), accessor.get(IPolicyService)));
   });
-  const child = parent.createChild(new ServiceCollection([IConfigurationService, owner], [IWorkspaceContextService, owner]), lifetime);
+  services.set(IConfigurationService, owner);
+  services.set(IWorkspaceContextService, owner);
+  const child = parent.createChild(services, lifetime);
   owner.acquireInstantiationService(child);
   await owner.initialize(workspace.configuration ? { id: workspace.id, configPath: URI.parse(workspace.configuration.resource_uri) }
     : resources.folders.length ? { id: workspace.id, uri: resources.folders[0].uri } : { id: workspace.id });

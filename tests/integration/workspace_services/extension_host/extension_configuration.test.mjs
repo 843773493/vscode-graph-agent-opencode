@@ -348,6 +348,47 @@ test('目标扩展用户配置的读取与inspect不借用窗口profile，原窗
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
 
+test('原本支持本地与远端的内置设置可在目标读取，纯窗口APPLICATION设置仍归窗口', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, m = p.m;
+      await p.files.writeFile(p.settings, m.VSBuffer.fromString(JSON.stringify({
+        'http.proxy': 'http://window.invalid:8080', 'http.electronFetch': true,
+      })));
+      const a = await p.make('A'), b = await p.make('B');
+      const remote = m.URI.parse(a.remote.resource_uri);
+      await p.files.writeFile(remote, m.VSBuffer.fromString(JSON.stringify({
+        'http.proxy': 'http://target.invalid:8080', 'http.proxyStrictSSL': false, 'http.electronFetch': false,
+      })));
+      await a.owner.reloadConfiguration(m.ConfigurationTarget.USER_REMOTE);
+      const inspect = a.publicConfiguration.getConfiguration('http').inspect('proxy');
+      const initial = a.owner.getValue('http.proxy');
+      // 原registry事件会重解析现有正文，不能重新丢掉合法的远端APPLICATION值。
+      const registry = m.Registry.as(m.Extensions.Configuration);
+      registry.registerConfiguration({ id: 'reparseProbe', properties: {
+        'reparseProbe.value': { type: 'boolean', default: false, scope: m.ConfigurationScope.WINDOW },
+      } });
+      const afterReparse = a.owner.getValue('http.proxy');
+      const windowOnly = a.owner.inspect('http.electronFetch');
+      await p.files.writeFile(remote, m.VSBuffer.fromString('{}'));
+      await a.owner.reloadConfiguration(m.ConfigurationTarget.USER_REMOTE);
+      return { initial, afterReparse, inspect, windowOnly: {
+        value: windowOnly.value, userRemoteValue: windowOnly.userRemoteValue,
+      }, b: b.owner.getValue('http.proxy'), removed: a.owner.inspect('http.proxy').userRemoteValue,
+        fallback: a.owner.getValue('http.proxy') };
+    });
+    expect(result.initial).toBe('http://target.invalid:8080');
+    expect(result.afterReparse).toBe('http://target.invalid:8080');
+    expect(result.inspect.globalRemoteValue).toBe('http://target.invalid:8080');
+    expect(result.inspect.globalLocalValue).toBe('http://window.invalid:8080');
+    expect(result.windowOnly).toEqual({ value: true, userRemoteValue: undefined });
+    expect(result.b).toBe('http://window.invalid:8080');
+    expect(result.removed).toBeUndefined(); expect(result.fallback).toBe('http://window.invalid:8080');
+    checks.push('原HTTP schema的本地/远端特例经真实parser、get/inspect、registry重解析及删除覆盖保持一致；非特例APPLICATION不被目标接管');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
 test('schema动态注册和窗口profile切换重解析原正文，get/inspect/change均保持目标归属', async () => {
   const { context, page } = await open();
   try {

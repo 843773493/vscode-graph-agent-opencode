@@ -10,10 +10,10 @@ import { SSE_IDLE_TIMEOUT_MS } from '../../../web/src/sse/sseIdleTimeout.js';
 import { validateExtensionConfigurationEventDTO } from '../../../../shared/sseRuntimeValidators.js';
 import type { ExtensionConfigurationEventDTO, ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway, GatewayRequestError } from '../agentApi.js';
-import { targetConfigurationRequest, targetSettings, targetWorkspace, type TargetExtensionContext } from './targetContext.js';
+import { targetConfigurationRequest, targetSettings, targetWorkspace, type TargetConfigurationContext } from './targetContext.js';
 
 interface Route {
-  context: TargetExtensionContext;
+  context: TargetConfigurationContext;
   resources: readonly URI[];
   controller: AbortController;
   stream?: AbortController;
@@ -30,7 +30,7 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
   private readonly routes = new Set<Route>();
   private readonly watches = new Map<string, { resource: URI; count: number }>();
 
-  register(context: TargetExtensionContext): IDisposable {
+  register(context: TargetConfigurationContext): IDisposable {
     const resources = [targetSettings(context), targetWorkspace(context).configuration].filter(value => !!value)
       .map(value => URI.parse(value.resource_uri));
     if (resources.some(uri => uri.scheme !== 'boxteam' || uri.query || uri.fragment)) throw new Error('目标配置不是规范资源 URI');
@@ -141,7 +141,7 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
 }
 
 const providers = new WeakMap<IFileService, TargetConfigurationFiles>();
-export function registerTargetConfigurationFiles(files: IFileService, context: TargetExtensionContext): IDisposable {
+export function registerTargetConfigurationFiles(files: IFileService, context: TargetConfigurationContext): IDisposable {
   let provider = providers.get(files);
   if (!provider) {
     provider = new TargetConfigurationFiles();

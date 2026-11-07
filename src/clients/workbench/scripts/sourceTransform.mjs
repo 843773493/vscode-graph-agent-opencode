@@ -21,6 +21,9 @@ import { extensionStorageSourcePaths, transformExtensionStorage } from './extens
 import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
 import { nativeManagementSourcePaths, transformNativeManagement } from './nativeManagementTransform.mjs';
+import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './settingsEditorScopeTransform.mjs';
+import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEditorTransform.mjs';
+import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -78,6 +81,9 @@ export const transformedSourcePaths = [...new Set([
   ...extensionStorageSourcePaths,
   ...extensionConfigurationSourcePaths,
   ...extensionFileEventsSourcePaths,
+  ...settingsEditorScopeSourcePaths,
+  ...settingsEditorSourcePaths,
+  ...settingsTreeScopeSourcePaths,
 ])];
 
 export const nodeTransformedSourcePaths = [...new Set([...transformedSourcePaths, ...nativeManagementSourcePaths])];
@@ -146,6 +152,8 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
+    contents = transformSettingsEditor(root, path, contents, replaceOnce);
+    contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);
     contents = transformExtensionWorkspaceSymbols(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/workspaces/common/workspaces.ts')) {
@@ -254,6 +262,7 @@ try {
 ${entry}`);
       contents = "import { AbstractEditorWithViewState } from './editorWithViewState.js';\nimport { IExtUri } from '../../../../base/common/resources.js';\n" + contents;
     }
+    contents = transformSettingsEditorScope(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/workbench/browser/parts/editor/editorWithViewState.ts')) {
       const entry = 'protected moveEditorViewState(source: URI, target: URI, comparer: IExtUri): void {';
       contents = replaceOnce(contents, entry, `restoreEditorViewState(source: EditorInput, target: EditorInput, comparer: IExtUri): T | undefined {

@@ -100,7 +100,8 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
     private parseOptions(): ConfigurationParseOptions {
       return this.settingsResource ? {
         scopes: [...REMOTE_MACHINE_SCOPES, ConfigurationScope.APPLICATION],
-        propertyFilter: (_key, schema) => schema?.scope !== ConfigurationScope.APPLICATION
+        propertyFilter: (key, schema) => schema?.scope !== ConfigurationScope.APPLICATION
+          || USER_LOCAL_AND_REMOTE_SETTINGS.includes(key)
           || (typeof schema.source === 'object' && !!schema.source.id),
       } : { scopes: REMOTE_MACHINE_SCOPES };
     }
@@ -132,6 +133,8 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
       `} catch (e) {
       if (this.configurationResource.scheme === 'boxteam' && (<FileOperationError>e).fileOperationResult !== FileOperationResult.FILE_NOT_FOUND) throw e;
       return ConfigurationModel.createEmptyModel(this.logService);`));
+    result = replaceOnce(result, "import { URI } from '../../../../base/common/uri.js';",
+      "import { URI } from '../../../../base/common/uri.js';\nimport { USER_LOCAL_AND_REMOTE_SETTINGS } from '../../../../platform/request/common/request.js';");
     return replaceOnce(result, 'const exists = await this.fileService.exists(this._workspaceIdentifier.configPath);',
       `if (this._workspaceIdentifier.configPath.scheme === 'boxteam') throw error;
       const exists = await this.fileService.exists(this._workspaceIdentifier.configPath);`);

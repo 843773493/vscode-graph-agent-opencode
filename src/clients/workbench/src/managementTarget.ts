@@ -8,7 +8,7 @@ import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/commo
 import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
 import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
 import { listMcpInstallationTargets } from '../../web/src/api/mcpConnections.js';
-import type { ExtensionTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import type { ExtensionTargetListDTO, ExtensionConfigurationTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
 
@@ -135,7 +135,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
         : scope === 'mcp' ? { value: '选择 MCP 管理目标', original: 'Select MCP Management Target' }
           : { value: '选择设置管理目标', original: 'Select Settings Management Target' }, f1: true });
   }
-  async run(accessor: ServicesAccessor): Promise<void> {
+  async run(accessor: ServicesAccessor): Promise<ManagementTarget | undefined> {
     const quickInput = accessor.get(IQuickInputService);
     const current = managementGateway(scope), entry = workspaceContext.getSnapshot().gatewayId!;
     const controller = new AbortController(), cancellation = new CancellationTokenSource();
@@ -157,7 +157,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
         placeHolder: '本地指当前页面的原生 Gateway；选择不会启动工作区或扩展宿主' }, cancellation.token);
       controller.signal.throwIfAborted();
       if (!picked) return;
-      let target: ManagementTarget = { ...picked.target };
+      let target: ManagementTarget = { ...picked.target, gateway_connection_id: picked.target.gateway_connection_id ?? undefined };
       if (scope === 'extensions') {
         const domains = await extensionDomains(target, controller.signal);
         const domain = domains.length === 1 ? domains[0] : (await quickInput.pick(domains.map(domain => ({
@@ -174,10 +174,25 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
         controller.signal.throwIfAborted();
         if (!domain) return;
         target = { ...target, backend_id: domain.backend_id };
+      } else {
+        const directory = await gateway.request<ExtensionConfigurationTargetListDTO>('/api/gateway/extension-configurations/targets', {
+          method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
+            gateway_connection_id: target.gateway_connection_id }), signal: controller.signal,
+        });
+        controller.signal.throwIfAborted();
+        if (directory.protocol_version !== 1 || directory.gateway_id !== target.gateway_id) throw new Error('设置配置目录不属于所选 Gateway');
+        if (!directory.backend_ids.length) throw new Error('所选 Gateway 没有可用的配置目标，请显式启动 Backend 后重试');
+        const backendId = directory.backend_ids.length === 1 ? directory.backend_ids[0] : (await quickInput.pick(directory.backend_ids.map(id => ({
+          label: id, description: target.name,
+        })), { title: `选择设置配置域 · ${target.name}`, placeHolder: '后续设置输入固定到该 Backend 的 profile' }, cancellation.token))?.label;
+        controller.signal.throwIfAborted();
+        if (!backendId) return;
+        target = { ...target, backend_id: backendId };
       }
       selections.set(scope, { entryGatewayId: entry, target });
       if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
       if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }
+      return target;
     } finally {
       if (selecting.get(scope) === controller) selecting.delete(scope);
       releaseUser(); releaseContext(); cancellation.dispose(); controller.abort();
