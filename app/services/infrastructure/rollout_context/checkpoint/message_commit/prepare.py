@@ -65,6 +65,7 @@ def inherit_message_selection(
 ) -> MessageBatch:
     """继承冻结引用，只消费 catalog 归属和组成员，不重新还原旧正文。"""
     batch = MessageBatch(next_item_sequence, last_message_sequence, visible_sequences=list(sequences))
+    # stream items 可以共享模型调用的语义组；只有显式 projection_group 才声明完整消息组。
     rows = connection.execute(
         "SELECT message.message_sequence,message.message_id,message.turn_id,message.execution_id,"
         "anchor.projection_manifest_json,member.item_id,member.turn_id,member.execution_id,"
@@ -72,7 +73,8 @@ def inherit_message_selection(
         "FROM json_each(?) selected JOIN messages message ON message.message_sequence=selected.value "
         "LEFT JOIN item_catalog anchor ON anchor.jsonl_offset=message.jsonl_offset AND anchor.jsonl_length=message.jsonl_length "
         "LEFT JOIN item_catalog member ON member.item_id=anchor.item_id OR ("
-        "anchor.message_group_id IS NOT NULL AND member.message_group_id=anchor.message_group_id) "
+        "json_extract(anchor.projection_manifest_json,'$.projection_group') IS NOT NULL "
+        "AND anchor.message_group_id IS NOT NULL AND member.message_group_id=anchor.message_group_id) "
         "LEFT JOIN executions execution ON execution.execution_id=member.execution_id "
         "LEFT JOIN context_view_items history ON history.view_id=? AND history.item_id=member.item_id AND history.visible=1 "
         "ORDER BY selected.key,member.item_sequence",
