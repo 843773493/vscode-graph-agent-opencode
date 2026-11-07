@@ -175,7 +175,7 @@ async function inBrowser(name, body, contextOptions = {}, argument) {
           async registerRename(provider) {
             const context = { getProxy: hostRpc.getProxy.bind(hostRpc) }, log = new m.NullLogService();
             documentOwner = new m.ExtHostDocumentsAndEditors(context, log); documents = new m.ExtHostDocuments(context, documentOwner);
-            extHost = new m.ExtHostLanguageFeatures(context, undefined, documents, undefined, undefined, log, undefined,
+            extHost = new m.ExtHostLanguageFeatures(context, undefined, documents, { notebookDocuments: [] }, undefined, undefined, log, undefined,
               { onExtensionError(_extension, error) { throw error; } });
             const before = new Set(service.renameProvider.allNoModel());
             registration = extHost.registerRenameProvider({ identifier: { value: 'probe.rename' }, name: 'rename', enabledApiProposals: [] }, ['typescript'], provider);

@@ -129,6 +129,10 @@ export { ILanguageDetectionService } from '${upstream}workbench/services/languag
 export { Position as EditorPosition } from '${upstream}editor/common/core/position.js';
 export { Selection } from '${upstream}editor/common/core/selection.js';
 export { ExtHostBulkEdits } from '${upstream}workbench/api/common/extHostBulkEdits.js';
+export { ExtHostDocumentsAndEditors } from '${upstream}workbench/api/common/extHostDocumentsAndEditors.js';
+export { ExtHostDocuments } from '${upstream}workbench/api/common/extHostDocuments.js';
+export { ExtHostNotebookController } from '${upstream}workbench/api/common/extHostNotebook.js';
+export { NotebookEdit } from '${upstream}workbench/api/common/extHostTypes.js';
 export { WorkspaceEdit } from '${upstream}workbench/api/common/extHostTypes/workspaceEdit.js';
 export { Range } from '${upstream}workbench/api/common/extHostTypes/range.js';
 export { Position } from '${upstream}workbench/api/common/extHostTypes/position.js';
@@ -184,6 +188,7 @@ await writeFile(join(run.artifactsDir, 'bundle-meta.json'), JSON.stringify(built
 const sources = ['scripts/sourceTransform.mjs', 'scripts/extensions/extensionFileEventsTransform.mjs', 'scripts/extensions/extensionLanguageFeaturesTransform.mjs',
   'scripts/extensions/extensionOwnerTransform.mjs', 'src/extensions/targetUris.ts', 'src/extensions/commands.ts',
   'upstream/src/vs/workbench/api/common/extHost.api.impl.ts', 'upstream/src/vs/workbench/api/common/extHostBulkEdits.ts',
+  'upstream/src/vs/workbench/api/common/extHostNotebook.ts', 'upstream/src/vs/workbench/api/common/extHostNotebookDocument.ts',
   'upstream/src/vs/workbench/api/common/extHostTypeConverters.ts', 'upstream/src/vs/workbench/api/common/extHostTypes/workspaceEdit.ts',
   'upstream/src/vs/workbench/api/browser/mainThreadBulkEdits.ts', 'upstream/src/vs/workbench/contrib/bulkEdit/browser/bulkEditService.ts',
   'upstream/src/vs/workbench/api/browser/mainThreadLanguageFeatures.ts', 'upstream/src/vs/workbench/api/browser/mainThreadCommands.ts',
@@ -222,7 +227,7 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、RenameSkeleton/Controller.run、inline EditorState/RenameSymbolRunnable、preview handler/_previewEdit/PreviewSession/getBulkEditPane/Pane.setInput/_done/_openElementInMultiDiffEditor 和完整 BulkEditPreviewProvider 类；原 RenameSymbolProcessor 注册并执行真实 CommandsRegistry 命令，原 MainThreadLanguageFeatures/共享 registry/rawRename 的同一返回对象直接交原 BulkEditService。公开 Rename 命令经原 MainThreadCommands/真实 RPC 返回，核窗口不可枚举 lifecycleToken 不进入 DTO。另运行原 ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、扩展 Rename 回调/已冻结版本 DTO、文档版本镜像、常规文本 resolver 延迟/失败/按需创建原模型、编辑器/Widget/通知/进度、preview View/UX/输入创建和树UI、配置与纯文本TreeSitter库是具名装具；状态取消实际运行原EditorStateCancellationTokenSource，readonly编辑器使原BulkTextEdits选择原模型任务。常规编辑组resolver只观察请求/释放，不证明其引用计数及关模/重开保护；Provider窄组另运行原BulkFileOperations/ConflictDetector、TextModelResolverService/AsyncReferenceCollection/TextResourceEditorModel，源模型持原baseline引用，resolver包装仅注入回执延迟/失败并观察原引用，词法queueMicrotask仅收集并调度原callback，不改写Provider方法或伪造模型销毁。语言检测/辅助通知和Pane资源计算/openEditor为具名边界；Pane核两次await后的input/provider精确身份及fresh成功。目标文件和配置provider由原InMemoryFileSystemProvider替代。Notebook只经原版本DTO/RPC或直接ResourceEdit及具名resolver提供版本，不能证明真实Notebook编辑或版本producer。本片不重复原RenameAdapter版本producer，不验证inline推断/NES命令、真实Preview渲染/UX恢复、Chat分项移交后的owner、产品WorkspaceFiles rename/delete、真实配置保存、Gateway、真实Node、磁盘保存、Windows、无版本字段原子性或所有取消时点。',
+      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、RenameSkeleton/Controller.run、inline EditorState/RenameSymbolRunnable、preview handler/_previewEdit/PreviewSession/getBulkEditPane/Pane.setInput/_done/_openElementInMultiDiffEditor 和完整 BulkEditPreviewProvider 类；原 RenameSymbolProcessor 注册并执行真实 CommandsRegistry 命令，原 MainThreadLanguageFeatures/共享 registry/rawRename 的同一返回对象直接交原 BulkEditService。公开 Rename 命令经原 MainThreadCommands/真实 RPC 返回，核窗口不可枚举 lifecycleToken 不进入 DTO。另运行原 ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、扩展 Rename 回调/已冻结版本 DTO、文档版本镜像、常规文本 resolver 延迟/失败/按需创建原模型、编辑器/Widget/通知/进度、preview View/UX/输入创建和树UI、配置与纯文本TreeSitter库是具名装具；状态取消实际运行原EditorStateCancellationTokenSource，readonly编辑器使原BulkTextEdits选择原模型任务。常规编辑组resolver只观察请求/释放，不证明其引用计数及关模/重开保护；Provider窄组另运行原BulkFileOperations/ConflictDetector、TextModelResolverService/AsyncReferenceCollection/TextResourceEditorModel，源模型持原baseline引用，resolver包装仅注入回执延迟/失败并观察原引用，词法queueMicrotask仅收集并调度原callback，不改写Provider方法或伪造模型销毁。语言检测/辅助通知和Pane资源计算/openEditor为具名边界；Pane核两次await后的input/provider精确身份及fresh成功。目标文件和配置provider由原InMemoryFileSystemProvider替代。Notebook新增原Controller的delta版本生产，经公开applyEdit和RPC核整批冲突零写入；目标模型仍由具名resolver提供，不证明真实Notebook编辑或目标同步。本片不重复原RenameAdapter版本producer，不验证inline推断/NES命令、真实Preview渲染/UX恢复、Chat分项移交后的owner、产品WorkspaceFiles rename/delete、真实配置保存、Gateway、真实Node、磁盘保存、Windows、无版本字段原子性或所有取消时点。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
@@ -315,7 +320,11 @@ async function inBrowser(name, body, argument) {
         const observedBulk = { apply(edits, options) { calls.push({ edits: edits.edits, options }); return actualBulk.apply(edits, options); } };
         const main = new m.MainThreadBulkEdits({ extensionHost: host }, observedBulk, log, identity);
         mainRpc.set(m.MainContext.MainThreadBulkEdits, main);
-        const extHost = new m.ExtHostBulkEdits({ getProxy: hostRpc.getProxy.bind(hostRpc) }, { getDocument: uri => documents.get(uri.toString()) });
+        const hostContext = { getProxy: hostRpc.getProxy.bind(hostRpc) };
+        const documentOwner = new m.ExtHostDocumentsAndEditors(hostContext, log), textDocuments = new m.ExtHostDocuments(hostContext, documentOwner);
+        const hostNotebooks = new m.ExtHostNotebookController(hostContext, { registerArgumentProcessor() {}, registerApiCommand() {} },
+          documentOwner, textDocuments, undefined, undefined, log);
+        const extHost = new m.ExtHostBulkEdits(hostContext, { getDocument: uri => documents.get(uri.toString()) }, hostNotebooks);
         const workspace = m.originalWorkspaceApi(extHost, { identifier: { value: 'probe.workspace-edits' } });
         const mainLanguage = new m.MainThreadLanguageFeatures({ extensionHost: host, getProxy: mainRpc.getProxy.bind(mainRpc) }, undefined, undefined, features,
           { asCanonicalUri: uri => uri }, insta, undefined);
@@ -338,13 +347,20 @@ async function inBrowser(name, body, argument) {
         }, extensions);
         mainRpc.set(m.MainContext.MainThreadCommands, mainCommands);
         const client = { host, calls, documents, renameRequests, renameDtos, commandResults, main, mainLanguage, actualBulk, workspace,
+          syncNotebook(uri, versionId) {
+            hostNotebooks.$acceptDocumentAndEditorsDelta(new m.SerializableObjectWithBuffers({ addedDocuments: [{ uri, versionId,
+              viewType: 'probe', cells: [], metadata: {}, isDirty: false }] }));
+          },
           remote: hostRpc.getProxy(m.MainContext.MainThreadBulkEdits), remoteCommands: hostRpc.getProxy(m.MainContext.MainThreadCommands),
           onRename: unexpected('Rename 扩展回调未配置'),
           async registerRename(handle = 1) {
             await hostRpc.getProxy(m.MainContext.MainThreadLanguageFeatures).$registerRenameSupport(handle, [{ $serialized: true, language: 'plaintext' }], false);
           },
           logical: uri => host.uriTransformer ? m.URI.revive(host.uriTransformer.transformIncoming(uri)) : uri,
-          close() { main.dispose(); mainLanguage.dispose(); mainCommands.dispose(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose(); } };
+          close() {
+            hostNotebooks.$acceptDocumentAndEditorsDelta(new m.SerializableObjectWithBuffers({ removedDocuments: hostNotebooks.notebookDocuments.map(data => data.uri) }));
+            textDocuments.dispose(); main.dispose(); mainLanguage.dispose(); mainCommands.dispose(); mainRpc.dispose(); hostRpc.dispose(); toMain.dispose(); toHost.dispose();
+          } };
         clients.push(client);
         for (const folder of host.uriTransformer?.folders ?? []) await files.createFolder(folder.uri);
         return client;
@@ -799,12 +815,35 @@ test('入口已取消的版本编辑不请求 resolver，也不开始任何文�
   expect(result.operations).toEqual([]); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('原BulkEditService入口已取消时零版本解析、零file/text副作用且isApplied=false');
 });
 
+test('真实 Notebook owner 生产的版本经公开 applyEdit 和 RPC 在首 file 前阻止过期整批编辑', async () => {
+  const result = await inBrowser('Notebook版本生产到整批门禁', async () => {
+    const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A'));
+    const native = p.native(a, 0, 'producer.ipynb'), resource = a.logical(native), created = p.native(a, 1, 'must-not-create.ts');
+    a.syncNotebook(native, 3);
+    p.notebooks.onResolve = async () => p.notebookVersion(resource, 4);
+    const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new TextEncoder().encode('bad') });
+    edit.set(native, [m.NotebookEdit.updateNotebookMetadata({ changed: true })]);
+    const applied = await a.workspace.applyEdit(edit);
+    return { applied, exists: await p.files.exists(a.logical(created)), version: a.calls[0].edits[1].notebookVersionId,
+      resource: a.calls[0].edits[1].resource.toString(), expectedResource: resource.toString(),
+      notebookWrites: p.notebooks.writes, references: p.notebooks.references, requests: p.notebooks.requests,
+      operations: p.operations, warnings: p.warnings, failures: p.failures };
+  });
+  expect(result.version).toBe(3); expect(result.resource).toBe(result.expectedResource);
+  expect(result.applied).toBe(false); expect(result.exists).toBe(false); expect(result.notebookWrites).toBe(0); expect(result.operations).toEqual([]);
+  expect(result.requests).toEqual([result.expectedResource]); expect(result.references).toHaveLength(1);
+  expect(result.references[0].disposed).toBe(true); expect(result.references[0].disposeCount).toBe(1);
+  expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('Notebook'); expect(result.warnings[0]).toContain('has changed in the meantime');
+  expect(result.failures).toHaveLength(1);
+  checks.push('原NotebookController的delta生成版本，经原公开applyEdit/WorkspaceEdit.from/RPC/URI转换/BulkEdit在首file前拒绝；目标Notebook resolver仍为具名边界');
+});
+
 test('同资源的文本与 Notebook 版本分别核对，重复 Notebook 后项冲突在首 file 前拒绝', async () => {
   const result = await inBrowser('Notebook已有版本字段整批门禁与重复资源', async () => {
     const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'shared.ipynb'), resource = a.logical(native), created = p.native(a, 1, 'must-not-create.ts');
     const model = p.openText(a, native, 'old-text'), version = model.getVersionId(), notebook = p.notebookVersion(resource, version + 10);
     p.notebooks.onResolve = async () => notebook;
-    // 现有宿主未产出 Notebook 版本；显式 DTO 仅证明已有字段经原 RPC/MainThread/BulkEdit 的门禁。
+    // 此场景用显式 DTO 单独验证逐项多版本；真实版本生产经前一公开 API 场景验证。
     const applied = await a.remote.$tryApplyWorkspaceEdit(new m.SerializableObjectWithBuffers({ edits: [p.dtoCreate(created),
       { ...p.dtoText(native, 'BAD'), versionId: version },
       { resource: native, notebookVersionId: notebook.versionId, cellEdit: { editType: m.CellEditType.DocumentMetadata, metadata: { first: true } } },

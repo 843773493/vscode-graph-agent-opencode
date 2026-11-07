@@ -13,33 +13,85 @@ export const extensionLanguageFeaturesSourcePaths = [
   'src/vs/editor/contrib/codeAction/browser/codeActionController.ts',
   'src/vs/editor/contrib/rename/browser/rename.ts',
   'src/vs/editor/contrib/inlineCompletions/browser/model/renameSymbolProcessor.ts',
+  'src/vs/workbench/api/common/extHostTypeConverters.ts',
+  'src/vs/workbench/api/common/extHostBulkEdits.ts',
+  'src/vs/workbench/api/common/extHost.api.impl.ts',
+  'src/vs/workbench/api/common/extHostFileSystemEventService.ts',
+  'src/vs/workbench/api/common/extHostNotebookDocumentSaveParticipant.ts',
 ];
 
 export function transformExtensionLanguageFeatures(root, path, source, replaceOnce, runtime = 'browser') {
   const paths = extensionLanguageFeaturesSourcePaths.map(value => join(root, 'upstream', value));
-  if (path === paths[7]) {
-    let contents = `import { ResourceMap } from '../../../base/common/map.js';\n` + source;
-    contents = replaceOnce(contents, '// --- adapter', `function captureWorkspaceEditVersions(documents: ExtHostDocuments): typeConvert.WorkspaceEdit.IVersionInformationProvider {
-    // 只冻结本次调用已同步的版本号，不能给等待期间产生的旧编辑贴上返回时的新版本。
-    const versions = new ResourceMap<number>();
-    for (const data of documents.getAllDocumentData()) versions.set(data.document.uri, data.version);
+  if (path === paths[11]) {
+    return replaceOnce(source, 'export namespace WorkspaceEdit {', `export namespace WorkspaceEdit {
+  /** 只冻结已同步的数值版本；异步回调期间的新版本不能认证旧编辑。 */
+  export function captureVersions(textDocuments: Iterable<{ readonly document: { readonly uri: URI }; readonly version: number }>,
+    notebooks: Iterable<{ readonly uri: URI; readonly versionId: number }>): IVersionInformationProvider {
+    const textVersions = new ResourceMap<number>();
+    const notebookVersions = new ResourceMap<number>();
+    for (const data of textDocuments) textVersions.set(data.document.uri, data.version);
+    for (const data of notebooks) notebookVersions.set(data.uri, data.versionId);
     return {
-      getTextDocumentVersion: uri => versions.get(uri),
-      // TODO: Notebook 版本生产仍须接通原 Notebook 文档 owner。
-      getNotebookDocumentVersion: () => undefined,
+      getTextDocumentVersion: uri => textVersions.get(uri),
+      getNotebookDocumentVersion: uri => notebookVersions.get(uri),
     };
-}
-
-// --- adapter
+  }
 `);
+  }
+  if (path === paths[12]) {
+    let contents = `import type { ExtHostNotebookController } from './extHostNotebook.js';\n` + source;
+    contents = replaceOnce(contents, 'extHostDocumentsAndEditors: ExtHostDocumentsAndEditors,',
+      'extHostDocumentsAndEditors: ExtHostDocumentsAndEditors,\n    notebooks: ExtHostNotebookController,');
+    return replaceOnce(contents, 'getNotebookDocumentVersion: () => undefined',
+      'getNotebookDocumentVersion: uri => notebooks.getNotebookDocument(uri, true)?.versionId');
+  }
+  if (path === paths[13]) {
+    let contents = replaceOnce(source, 'new ExtHostLanguageFeatures(rpcProtocol, uriTransformer, extHostDocuments,',
+      'new ExtHostLanguageFeatures(rpcProtocol, uriTransformer, extHostDocuments, extHostNotebook,');
+    contents = replaceOnce(contents, 'new ExtHostBulkEdits(rpcProtocol, extHostDocumentsAndEditors)', 'new ExtHostBulkEdits(rpcProtocol, extHostDocumentsAndEditors, extHostNotebook)');
+    contents = replaceOnce(contents, 'new ExtHostFileSystemEventService(rpcProtocol, extHostLogService, extHostDocumentsAndEditors)',
+      'new ExtHostFileSystemEventService(rpcProtocol, extHostLogService, extHostDocumentsAndEditors, extHostNotebook)');
+    return replaceOnce(contents, 'new ExtHostNotebookDocumentSaveParticipant(extHostLogService, extHostNotebook, rpcProtocol.getProxy(MainContext.MainThreadBulkEdits))',
+      'new ExtHostNotebookDocumentSaveParticipant(extHostLogService, extHostNotebook, rpcProtocol.getProxy(MainContext.MainThreadBulkEdits), extHostDocumentsAndEditors)');
+  }
+  if (path === paths[14]) {
+    let contents = `import type { ExtHostNotebookController } from './extHostNotebook.js';\n` + source;
+    contents = replaceOnce(contents, 'private readonly _extHostDocumentsAndEditors: ExtHostDocumentsAndEditors\n',
+      'private readonly _extHostDocumentsAndEditors: ExtHostDocumentsAndEditors,\n    private readonly _notebooks: ExtHostNotebookController\n');
+    contents = replaceOnce(contents, 'const extensionNames = new Set<string>();',
+      'const versions = typeConverter.WorkspaceEdit.captureVersions(this._extHostDocumentsAndEditors.allDocuments(), this._notebooks.notebookDocuments);\n\t\tconst extensionNames = new Set<string>();');
+    return replaceOnce(contents, `typeConverter.WorkspaceEdit.from(edit, {
+\t\t\t\tgetTextDocumentVersion: uri => this._extHostDocumentsAndEditors.getDocument(uri)?.version,
+\t\t\t\tgetNotebookDocumentVersion: () => undefined,
+\t\t\t})`, 'typeConverter.WorkspaceEdit.from(edit, versions)');
+  }
+  if (path === paths[15]) {
+    let contents = `import type { ExtHostDocumentsAndEditors } from './extHostDocumentsAndEditors.js';\n` + source;
+    contents = replaceOnce(contents, 'private readonly _mainThreadBulkEdits: MainThreadBulkEditsShape,',
+      'private readonly _mainThreadBulkEdits: MainThreadBulkEditsShape,\n    private readonly _textDocuments: ExtHostDocumentsAndEditors,');
+    contents = replaceOnce(contents, 'const edits: WorkspaceEdit[] = [];',
+      'const versions = WorksapceEditConverter.captureVersions(this._textDocuments.allDocuments(), this._notebooksAndEditors.notebookDocuments);\n\t\tconst edits: WorkspaceEdit[] = [];');
+    return replaceOnce(contents, 'WorksapceEditConverter.from(edit)', 'WorksapceEditConverter.from(edit, versions)');
+  }
+  if (path === paths[7]) {
+    let contents = `import type { ExtHostNotebookController } from './extHostNotebook.js';\n` + source;
+    for (const name of ['CodeActionAdapter', 'RenameAdapter', 'ExtHostLanguageFeatures']) {
+      const start = contents.indexOf('class ' + name + ' '), constructor = contents.indexOf('constructor(', start);
+      const parameter = contents.indexOf('private readonly _documents: ExtHostDocuments,', constructor);
+      if (start < 0 || constructor < 0 || parameter < 0) throw new Error(name + ' 原文档 owner 构造入口已变化');
+      contents = contents.slice(0, parameter) + contents.slice(parameter).replace('private readonly _documents: ExtHostDocuments,',
+        'private readonly _documents: ExtHostDocuments,\n    private readonly _notebooks: ExtHostNotebookController,');
+    }
+    contents = replaceOnce(contents, 'new CodeActionAdapter(this._documents,', 'new CodeActionAdapter(this._documents, this._notebooks,');
+    contents = replaceOnce(contents, 'new RenameAdapter(this._documents,', 'new RenameAdapter(this._documents, this._notebooks,');
     contents = replaceOnce(contents, 'const commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);',
-      'const versions = captureWorkspaceEditVersions(this._documents);\n\t\tconst commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);');
+      'const versions = typeConvert.WorkspaceEdit.captureVersions(this._documents.getAllDocumentData(), this._notebooks.notebookDocuments);\n\t\tconst commandsOrActions = await this._provider.provideCodeActions(doc, ran, codeActionContext, token);');
     contents = replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(toConvert.edit, undefined)', 'typeConvert.WorkspaceEdit.from(toConvert.edit, versions)');
     contents = replaceOnce(contents, 'const resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;',
-      'const versions = captureWorkspaceEditVersions(this._documents);\n\t\tconst resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;');
+      'const versions = typeConvert.WorkspaceEdit.captureVersions(this._documents.getAllDocumentData(), this._notebooks.notebookDocuments);\n\t\tconst resolvedItem = (await this._provider.resolveCodeAction(item, token)) ?? item;');
     contents = replaceOnce(contents, 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, undefined)', 'typeConvert.WorkspaceEdit.from(resolvedItem.edit, versions)');
     contents = replaceOnce(contents, 'const value = await this._provider.provideRenameEdits(doc, pos, newName, token);',
-      'const versions = captureWorkspaceEditVersions(this._documents);\n\t\t\tconst value = await this._provider.provideRenameEdits(doc, pos, newName, token);');
+      'const versions = typeConvert.WorkspaceEdit.captureVersions(this._documents.getAllDocumentData(), this._notebooks.notebookDocuments);\n\t\t\tconst value = await this._provider.provideRenameEdits(doc, pos, newName, token);');
     return replaceOnce(contents, 'return typeConvert.WorkspaceEdit.from(value);', 'return typeConvert.WorkspaceEdit.from(value, versions);');
   }
   if (runtime === 'node') return source;

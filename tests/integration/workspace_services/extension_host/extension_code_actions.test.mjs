@@ -149,7 +149,7 @@ async function inBrowser(name, body, argument) {
           const context = { getProxy: hostRpc.getProxy.bind(hostRpc) }, log = new m.NullLogService();
           documentOwner = new m.ExtHostDocumentsAndEditors(context, log); documents = new m.ExtHostDocuments(context, documentOwner);
           const converter = new m.CommandsConverter({ registerCommand: () => ({ dispose() {} }) }, () => undefined, log);
-          extHost = new m.ExtHostLanguageFeatures(context, undefined, documents, { converter }, { getDiagnostics: () => [] }, log,
+          extHost = new m.ExtHostLanguageFeatures(context, undefined, documents, { notebookDocuments: [] }, { converter }, { getDiagnostics: () => [] }, log,
             { report() { throw new Error('版本producer场景不应使用弃用API'); } }, { onExtensionError(_extension, error) { throw error; } });
           // 只观察原 ExtHost actor 的调用和 cache 生命周期；准入、版本生产与缓存算法全部走原入口。
           hostRpc.set(m.ExtHostContext.ExtHostLanguageFeatures, {
