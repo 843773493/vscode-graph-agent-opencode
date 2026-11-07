@@ -88,6 +88,17 @@ def test_inventory_proto_preserves_original_description_and_invalid_entry() -> N
     assert restored.inventory.extensions[0].is_valid is False
 
 
+@pytest.mark.parametrize("reused", [False, True])
+def test_install_result_preserves_explicit_reuse_disposition(reused: bool) -> None:
+    original = VsixInstallResult(id="publisher.probe", version="1.0.0", profile_id="default-profile", reused=reused)
+    wire = json_format.ParseDict(original.model_dump(mode="json"), public_pb2.VsixInstallResult())
+    restored = VsixInstallResult.model_validate(json_format.MessageToDict(wire,
+        preserving_proto_field_name=True, always_print_fields_with_no_presence=True))
+    assert restored == original and restored.reused is reused
+    with pytest.raises(ValidationError, match="reused"):
+        VsixInstallResult.model_validate(original.model_dump(exclude={"reused"}))
+
+
 @pytest.mark.parametrize("invalid", ["missing-backend", "null-backend", "view", "duplicate", "boolean-version"])
 def test_inventory_request_requires_precise_backend_and_workspace_roles(invalid: str) -> None:
     payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32, "backend_id": str(uuid4()), "workspace_ids": [str(uuid4())]}

@@ -57,6 +57,7 @@ class VsixInstallResult(_InventoryValue):
     id: str = Field(min_length=1)
     version: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
+    reused: bool
 
 
 class ExtensionInstallationInstallDTO(ExtensionInstallationInventoryDTO):

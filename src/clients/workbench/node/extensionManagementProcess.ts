@@ -2,6 +2,7 @@ import { createInterface } from 'node:readline';
 import { isAbsolute, join } from 'node:path';
 import { once } from 'node:events';
 import { createExtensionManagement } from './extensionManagement.js';
+import { ExtensionManagementError } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
 import { FileOperationError, FileOperationResult, FileSystemProviderErrorCode, toFileSystemProviderErrorCode } from '../upstream/src/vs/platform/files/common/files.js';
 import type { NativeViewFolder } from './extensionConfiguration.js';
 
@@ -27,7 +28,8 @@ function errorMessage(error: unknown): string {
 }
 async function respondError(error: unknown): Promise<void> {
   console.error(error);
-  const code = error instanceof FileOperationError && error.fileOperationResult === FileOperationResult.FILE_NOT_FOUND
+  const code = error instanceof ExtensionManagementError ? error.code
+    : error instanceof FileOperationError && error.fileOperationResult === FileOperationResult.FILE_NOT_FOUND
     ? FileSystemProviderErrorCode.FileNotFound : toFileSystemProviderErrorCode(error instanceof Error ? error : null);
   await respond({ error: errorMessage(error), code });
 }

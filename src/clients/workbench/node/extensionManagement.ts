@@ -13,7 +13,7 @@ import { IExtensionGalleryManifestService } from '../upstream/src/vs/platform/ex
 import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifestService.js';
 import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
 import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
-import { ExtensionManagementService, INativeServerExtensionManagementService } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
+import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_VSIX_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
 import { ExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/node/extensionsProfileScannerService.js';
 import { ExtensionSignatureVerificationService, IExtensionSignatureVerificationService } from '../upstream/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.js';
 import { FileService } from '../upstream/src/vs/platform/files/common/fileService.js';
@@ -126,9 +126,11 @@ export async function createExtensionManagement(directory: string, builtinExtens
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。
           // TODO(4.4): 宿主引用闭包接通后，沿原卸载服务回收不再使用的版本。
-          const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource, keepExisting: true });
+          const context = { [NATIVE_VSIX_REUSED_CONTEXT]: false };
+          const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource, keepExisting: true, context });
           // 在同一串行控制请求内读取发布后的库存，避免并发安装把回执拼成另一版本。
-          return { installed: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id },
+          return { installed: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id,
+            reused: context[NATIVE_VSIX_REUSED_CONTEXT] },
             inventory: await this.inventory() };
         },
       };

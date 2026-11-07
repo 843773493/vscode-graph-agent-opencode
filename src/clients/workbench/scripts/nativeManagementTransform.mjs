@@ -68,6 +68,87 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
     source = replaceOnce(source, 'this._register(this.fileService.onDidFilesChange(e => this.onDidFilesChange(e)));',
       'this.nativeManagementListeners.add(this.fileService.onDidFilesChange(e => this.nativeManagementLifecycle.track(this.onDidFilesChange(e))));');
     source = replaceOnce(source, 'this.manifestCache.invalidate(profileLocation);', 'await this.manifestCache.invalidate(profileLocation);');
+    // 复用结果来自原提取分支，沿 InstallOptions.context 回到同一次 VSIX 请求。
+    source = replaceOnce(source, 'type ExtractExtensionResult = { readonly local: ILocalExtension;',
+      `export const NATIVE_VSIX_REUSED_CONTEXT = 'boxteam.vsixVersionReused';
+const NATIVE_VSIX_PREPARED_CONTEXT = 'boxteam.preparedVSIX';
+type NativeVSIXPreparation = { readonly profileLocation: URI; readonly installed: ILocalExtension[]; readonly local: ILocalExtension | undefined };
+
+type ExtractExtensionResult = { readonly local: ILocalExtension; readonly reused: boolean;`);
+    source = replaceOnce(source, 'const manifest = await getManifest(path.resolve(location.fsPath));',
+      'let manifest = await getManifest(path.resolve(location.fsPath));');
+    // 候选仍先经过完整预检；依赖规划与实际发布共用同一次原扫描结果。
+    source = replaceOnce(source, 'const results = await this.installExtensions([{ manifest, extension: location, options }]);',
+      `if (options.keepExisting === true) {
+\t\t\t\tconst profileLocation = options.profileLocation ?? this.userDataProfilesService.defaultProfile.extensionsResource;
+\t\t\t\tconst installed = await this.extensionsScanner.scanExtensions(ExtensionType.User, profileLocation, options.productVersion ?? { version: this.productService.version, date: this.productService.date });
+\t\t\t\tconst local = await this.extensionsScanner.scanReusableUserExtension(new ExtensionKey({ id: extensionId }, manifest.version), installed);
+\t\t\t\tconst prepared: NativeVSIXPreparation = { profileLocation, installed, local };
+\t\t\t\t(options.context ??= {})[NATIVE_VSIX_PREPARED_CONTEXT] = prepared;
+\t\t\t\tif (local) manifest = local.manifest;
+\t\t\t}
+
+\t\t\tconst results = await this.installExtensions([{ manifest, extension: location, options }]);`);
+    source = replaceOnce(source, '\t\t\tconst local = await this.extensionsScanner.extractUserExtension(',
+      '\t\t\tconst result = await this.extensionsScanner.extractUserExtension(');
+    source = replaceOnce(source, 'return { local, verificationStatus };', 'return { ...result, verificationStatus };');
+    source = replaceOnce(source, '\t\tconst local = await this.extensionsScanner.extractUserExtension(',
+      `\t\tconst prepared = options.context?.[NATIVE_VSIX_PREPARED_CONTEXT] as NativeVSIXPreparation | undefined;
+\t\tif (prepared?.local) return { local: prepared.local, reused: true };
+\t\treturn this.extensionsScanner.extractUserExtension(`);
+    source = replaceOnce(source, '\n\t\treturn { local };\n\t}\n\n\tprivate async collectFiles',
+      '\n\t}\n\n\tprivate async collectFiles');
+    source = replaceOnce(source, '\tasync extractUserExtension(extensionKey: ExtensionKey, zipPath: string, removeIfExists: boolean, token: CancellationToken): Promise<ILocalExtension> {',
+      `\tasync scanReusableUserExtension(extensionKey: ExtensionKey, installed: readonly ILocalExtension[] = []): Promise<ILocalExtension | undefined> {
+\t\tconst extensionLocation = URI.file(path.join(this.extensionsScannerService.userExtensionsLocation.fsPath, extensionKey.toString()));
+\t\tconst current = installed.find(extension => this.uriIdentityService.extUri.isEqual(extension.location, extensionLocation));
+\t\tif (!current && !(await this.fileService.exists(extensionLocation))) return undefined;
+\t\tconst local = current ?? await this.scanLocalExtension(extensionLocation, ExtensionType.User);
+\t\tif (!local.isValid) {
+\t\t\tthrow new ExtensionManagementError(local.validations.filter(([severity]) => severity === Severity.Error).map(([, message]) => message).join('\\n'), ExtensionManagementErrorCode.Invalid);
+\t\t}
+\t\tif (!extensionKey.equals(ExtensionKey.create(local))) {
+\t\t\tthrow new ExtensionManagementError(\`Cannot reuse extension '\${extensionKey.toString()}': the existing extension at '\${extensionLocation.fsPath}' has a different identifier, version or target platform.\`, ExtensionManagementErrorCode.Invalid);
+\t\t}
+\t\treturn local;
+\t}
+
+\tasync extractUserExtension(extensionKey: ExtensionKey, zipPath: string, removeIfExists: boolean, token: CancellationToken): Promise<ExtractExtensionResult> {`);
+    source = replaceOnce(source, `\t\tif (await this.fileService.exists(extensionLocation)) {
+\t\t\tif (!removeIfExists) {
+\t\t\t\ttry {
+\t\t\t\t\treturn await this.scanLocalExtension(extensionLocation, ExtensionType.User);
+\t\t\t\t} catch (error) {
+\t\t\t\t\tthis.logService.warn(\`Error while scanning the existing extension at \${extensionLocation.path}. Deleting the existing extension and extracting it.\`, getErrorMessage(error));
+\t\t\t\t}
+\t\t\t}`, `\t\tif (!removeIfExists) {
+\t\t\tconst local = await this.scanReusableUserExtension(extensionKey);
+\t\t\tif (local) return { local, reused: true };
+\t\t} else if (await this.fileService.exists(extensionLocation)) {`);
+    source = replaceOnce(source, '\t\treturn this.scanLocalExtension(extensionLocation, ExtensionType.User);',
+      '\t\treturn { local: await this.scanLocalExtension(extensionLocation, ExtensionType.User), reused: false };');
+    source = replaceOnce(source, '\t\tconst installed = await this.extensionsScanner.scanExtensions(ExtensionType.User, this.options.profileLocation, this.options.productVersion);',
+      `\t\tconst prepared = this.source instanceof URI && this.options.keepExisting === true
+\t\t\t? this.options.context?.[NATIVE_VSIX_PREPARED_CONTEXT] as NativeVSIXPreparation | undefined : undefined;
+\t\tconst installed = prepared && this.uriIdentityService.extUri.isEqual(prepared.profileLocation, this.options.profileLocation)
+\t\t\t? prepared.installed : await this.extensionsScanner.scanExtensions(ExtensionType.User, this.options.profileLocation, this.options.productVersion);`);
+    source = replaceOnce(source, '\t\t\tif (existingExtension) {\n\t\t\t\tif (this.extensionKey.equals(new ExtensionKey(existingExtension.identifier, existingExtension.manifest.version))) {',
+      '\t\t\tif (this.options.keepExisting !== true && existingExtension) {\n\t\t\t\tif (this.extensionKey.equals(new ExtensionKey(existingExtension.identifier, existingExtension.manifest.version))) {');
+    source = replaceOnce(source, '\t\t\t// Installing a VSIX extension shall replace the existing extension always.\n\t\t\tconst existingWithSameVersion = await this.unsetIfRemoved(this.extensionKey);',
+      '\t\t\t// 未指定保留时仍沿原 VSIX 替换语义。\n\t\t\tconst existingWithSameVersion = this.options.keepExisting === true ? undefined : await this.unsetIfRemoved(this.extensionKey);');
+    source = replaceOnce(source, '\t\t\tthis._verificationStatus = result.verificationStatus;',
+      `\t\t\tthis._verificationStatus = result.verificationStatus;
+\t\t\tif (this.source instanceof URI && this.options.context) {
+\t\t\t\tthis.options.context[NATIVE_VSIX_REUSED_CONTEXT] = result.reused;
+\t\t\t}`);
+    source = replaceOnce(source, '\t\ttry {\n\t\t\tawait this.extensionsProfileScannerService.addExtensionsToProfile([[local, metadata]], this.options.profileLocation, !local.isValid);',
+      `\t\t// 先完成原目录扫描；复用失败不能提前改写 .obsolete。
+\t\tif (this.source instanceof URI && this.options.keepExisting === true) {
+\t\t\tawait this.extensionsScanner.unsetExtensionsForRemoval(this.extensionKey);
+\t\t}
+
+\t\ttry {
+\t\t\tawait this.extensionsProfileScannerService.addExtensionsToProfile([[local, metadata]], this.options.profileLocation, !local.isValid);`);
     // 本地 VSIX 的原 metadata 更新同样可能继续写盘，不能在它完成前退出。
     source = replaceOnce(source, 'this.updateMetadata(local, token);', 'await this.updateMetadata(local, token);');
   } else if (matches('node/extensionsWatcher')) {

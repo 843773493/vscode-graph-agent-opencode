@@ -1201,6 +1201,8 @@ message VsixInstallResult {
   string id = 1;
   string version = 2;
   string profile_id = 3;
+  // 相同 ExtensionKey 的已有制品被复用，本次 VSIX 正文没有覆盖它。
+  bool reused = 4;
 }
 
 // 安装回执及完整 profile 库存，不声明现有宿主已经切换运行版本。

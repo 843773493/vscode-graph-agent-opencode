@@ -42,7 +42,7 @@ def _data(request: httpx.Request) -> dict[str, object]:
         }, "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}]}],
     }}
     if source is not None:
-        result["installed"] = {"id": "publisher.probe", "version": "1.0.0", "profile_id": "default-profile"}
+        result["installed"] = {"id": "publisher.probe", "version": "1.0.0", "profile_id": "default-profile", "reused": False}
     return result
 
 

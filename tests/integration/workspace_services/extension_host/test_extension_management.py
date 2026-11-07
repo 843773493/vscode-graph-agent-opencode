@@ -21,7 +21,7 @@ from zipfile import ZipFile
 import httpx
 import portalocker
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
 from app.api.extension_host import router as backend_host_router
@@ -140,6 +140,175 @@ def installation_snapshot() -> Callable[[Path], dict[str, str]]:
         return {path.relative_to(directory).as_posix(): sha256(path.read_bytes()).hexdigest() if path.is_file() else "directory"
                 for path in sorted(directory.rglob("*"))}
     return snapshot
+
+
+@pytest.mark.parametrize("retained", [False, True], ids=["current-version", "retained-version"])
+async def test_native_vsix_keep_existing_reuses_published_version(
+    management_backends, vsix_factory, installation_snapshot, retained: bool,
+) -> None:
+    context, workspace, backends = management_backends
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    published = await management.install(vsix_factory(workspace, "1.0.0", "published-v1",
+        manifest_overrides={"displayName": "已发布的 V1"}))
+    assert published.installed.reused is False
+    installation = management._directory / "extensions"
+    profile = installation / "extensions.json"
+    original = installation / json.loads(profile.read_text())[0]["relativeLocation"]
+    original_snapshot = installation_snapshot(original)
+    original_script = (original / "extension.js").read_bytes()
+    newer = None
+    newer_snapshot = None
+    if retained:
+        upgraded = await management.install(vsix_factory(workspace, "2.0.0", "published-v2"))
+        assert upgraded.installed.reused is False
+        newer = installation / json.loads(profile.read_text())[0]["relativeLocation"]
+        newer_snapshot = installation_snapshot(newer)
+        assert json.loads((installation / ".obsolete").read_text())[original.name] is True
+
+    # 同 key 的候选仍须先通过原 manifest 预检，不能因为可以复用就忽略无效输入。
+    before = installation_snapshot(installation)
+    profile_bytes = profile.read_bytes()
+    with pytest.raises(ExtensionManagementError, match="property `main` can be omitted"):
+        await management.install(vsix_factory(workspace, "1.0.0", "invalid-candidate", manifest_overrides={"main": 42}))
+    assert installation_snapshot(installation) == before
+    assert profile.read_bytes() == profile_bytes
+
+    candidate = vsix_factory(workspace, "1.0.0", "candidate-must-not-replace-published-v1",
+        manifest_overrides={"displayName": "候选的另一份 V1"})
+    with ZipFile(candidate) as archive:
+        candidate_script = archive.read("extension/extension.js")
+    assert candidate_script != original_script
+    reused = await management.install(candidate)
+    assert reused.installed == published.installed.model_copy(update={"reused": True})
+    assert len(reused.inventory.extensions) == 1
+    extension = reused.inventory.extensions[0]
+    assert extension.is_valid and extension.description["version"] == "1.0.0"
+    assert extension.description["displayName"] == "已发布的 V1"
+    assert extension.description["extensionLocation"] == published.inventory.extensions[0].description["extensionLocation"]
+    assert json.loads(profile.read_text())[0]["relativeLocation"] == original.name
+    assert installation_snapshot(original) == original_snapshot
+    assert (original / "extension.js").read_bytes() != candidate_script
+    if newer is not None:
+        assert installation_snapshot(newer) == newer_snapshot
+        obsolete = json.loads((installation / ".obsolete").read_text())
+        assert original.name not in obsolete and obsolete[newer.name] is True
+    assert await management.inventory() == reused.inventory
+    assert management.drained and registry.extension_hosts.active == ()
+    (context.artifacts_dir / f"vsix-reuse-{'retained' if retained else 'current'}.json").write_text(json.dumps({
+        "published": published.model_dump(), "result": reused.model_dump(),
+        "original_snapshot": original_snapshot, "after_snapshot": installation_snapshot(original),
+        "published_script_sha256": sha256(original_script).hexdigest(),
+        "candidate_script_sha256": sha256(candidate_script).hexdigest(),
+    }, ensure_ascii=False, indent=2))
+
+
+@pytest.mark.parametrize("retained", [False, True], ids=["current-version", "retained-version"])
+async def test_native_vsix_keep_existing_plans_dependencies_from_published_manifest(
+    management_backends, vsix_factory, installation_snapshot, serve_extension_application,
+    monkeypatch: pytest.MonkeyPatch, retained: bool,
+) -> None:
+    context, workspace, backends = management_backends
+    application = FastAPI()
+    requests: list[str] = []
+
+    @application.post("/gallery/extensionquery")
+    async def query(request: Request):
+        # 仅 Marketplace 是外部服务替身；原查询、依赖规划、安装和 profile 都真实运行。
+        requests.append((await request.body()).decode())
+        return {"results": [{"extensions": [], "resultMetadata": []}]}
+
+    url = await serve_extension_application(application)
+    product = json.loads((context.project_root / "src/clients/workbench/upstream/product.json").read_text())
+    metadata = json.loads((context.run_root / "runtime/version.json").read_text())
+    product.update({"version": metadata["version"], "commit": metadata["commit"], "quality": "stable",
+        "extensionsGallery": {"serviceUrl": f"{url}/gallery"}})
+    preload = context.artifacts_dir / "gallery-product.mjs"
+    preload.write_text("globalThis._VSCODE_PRODUCT_JSON = " + json.dumps(product) + ";\n"
+        + "globalThis._VSCODE_PACKAGE_JSON = " + json.dumps({"version": metadata["version"]}) + ";\n")
+    monkeypatch.setenv("NODE_OPTIONS", f"{os.getenv('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    published_dependency, published_pack = "boxteam-probe.published-dependency", "boxteam-probe.published-pack"
+    candidate_dependency, candidate_pack = "boxteam-probe.candidate-dependency", "boxteam-probe.candidate-pack"
+    published = await management.install(vsix_factory(workspace, "1.0.0", "published-v1", manifest_overrides={
+        "extensionDependencies": [published_dependency], "extensionPack": [published_pack]}))
+    assert any(json.dumps(published_dependency) in body and json.dumps(published_pack) in body for body in requests)
+    installation = management._directory / "extensions"
+    profile = installation / "extensions.json"
+    original = installation / json.loads(profile.read_text())[0]["relativeLocation"]
+    original_snapshot = installation_snapshot(original)
+    if retained:
+        await management.install(vsix_factory(workspace, "2.0.0", "current-v2"))
+    requests.clear()
+    reused = await management.install(vsix_factory(workspace, "1.0.0", "candidate-v1", manifest_overrides={
+        "extensionDependencies": [candidate_dependency], "extensionPack": [candidate_pack]}))
+    assert reused.installed.reused and reused.installed.version == "1.0.0"
+    assert any(json.dumps(published_dependency) in body for body in requests)
+    assert any(json.dumps(published_pack) in body for body in requests) is retained
+    assert all(json.dumps(candidate_dependency) not in body and json.dumps(candidate_pack) not in body for body in requests)
+    assert reused.inventory == published.inventory
+    assert installation_snapshot(original) == original_snapshot
+    assert await management.inventory() == reused.inventory
+    (context.artifacts_dir / "published-manifest-dependency-queries.json").write_text(json.dumps({
+        "retained": retained, "queries": requests, "result": reused.model_dump(),
+    }, ensure_ascii=False, indent=2))
+
+
+@pytest.mark.parametrize(("retained", "damage"), [
+    (retained, damage) for retained in (False, True)
+    for damage in ("invalid-manifest", "invalid-json", "missing-manifest", "not-directory")
+] + [pytest.param(False, "missing-directory", id="current-missing-directory")])
+async def test_native_vsix_keep_existing_rejects_damaged_original_without_writes(
+    management_backends, vsix_factory, installation_snapshot, retained: bool, damage: str,
+) -> None:
+    context, workspace, backends = management_backends
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    published = await management.install(vsix_factory(workspace, "1.0.0", "original"))
+    installation = management._directory / "extensions"
+    profile = installation / "extensions.json"
+    original = installation / json.loads(profile.read_text())[0]["relativeLocation"]
+    expected_inventory = published.inventory
+    if retained:
+        expected_inventory = (await management.install(vsix_factory(workspace, "2.0.0", "current-v2"))).inventory
+        assert json.loads((installation / ".obsolete").read_text())[original.name] is True
+    manifest = original / "package.json"
+    if damage == "invalid-manifest":
+        content = json.loads(manifest.read_text())
+        content["main"] = 42
+        manifest.write_text(json.dumps(content))
+    elif damage == "invalid-json":
+        manifest.write_text("{")
+    elif damage == "missing-manifest":
+        manifest.unlink()
+    else:
+        # 故障注入在原安装完成后进行；保留移出的原目录，不用候选重造安装事实。
+        original.rename(workspace / "preserved-original")
+        if damage == "not-directory":
+            original.write_text("existing-path-is-a-file")
+    before = installation_snapshot(installation)
+    profile_bytes = profile.read_bytes()
+    candidate = vsix_factory(workspace, "1.0.0", "candidate-must-not-replace-damaged-original")
+    with pytest.raises(ExtensionManagementError) as rejected:
+        await management.install(candidate)
+    after = installation_snapshot(installation)
+    assert after == before
+    assert profile.read_bytes() == profile_bytes
+    assert management.drained
+    if retained and damage != "invalid-manifest":
+        assert rejected.value.code == "ScanningExtension"
+        assert "Cannot read the extension from" in str(rejected.value)
+    else:
+        assert rejected.value.code == "Invalid"
+        diagnostic = "property `main`" if damage == "invalid-manifest" else "JSON" if damage == "invalid-json" else "package.json"
+        assert diagnostic in str(rejected.value)
+    if retained:
+        assert await management.inventory() == expected_inventory
+    (context.artifacts_dir / f"vsix-reuse-rejected-{'retained' if retained else 'current'}-{damage}.json").write_text(json.dumps({
+        "failure": str(rejected.value), "code": rejected.value.code,
+        "snapshot_before": before, "snapshot_after": after,
+    }, ensure_ascii=False, indent=2))
 
 
 @pytest.mark.parametrize("existing", [False, True], ids=["initial", "upgrade"])
@@ -547,7 +716,7 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
         assert installed.status_code == 200, installed.text
         result = installed.json()["data"]
         assert result["installed"] == {"id": "boxteam-probe.target-inventory", "version": version,
-            "profile_id": result["inventory"]["profile_id"]}
+            "profile_id": result["inventory"]["profile_id"], "reused": False}
         assert result["inventory"]["extensions"][0]["description"]["version"] == version
 
     # 库存正文来自原安装器生成的 profile，经过真实 HTTP／认证／Backend／Node，而非测试回执。

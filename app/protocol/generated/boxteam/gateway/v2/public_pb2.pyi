@@ -1979,14 +1979,16 @@ class ExtensionInstallationInstallRequest(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source_uri: _Optional[str] = ...) -> None: ...
 
 class VsixInstallResult(_message.Message):
-    __slots__ = ("id", "version", "profile_id")
+    __slots__ = ("id", "version", "profile_id", "reused")
     ID_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    REUSED_FIELD_NUMBER: _ClassVar[int]
     id: str
     version: str
     profile_id: str
-    def __init__(self, id: _Optional[str] = ..., version: _Optional[str] = ..., profile_id: _Optional[str] = ...) -> None: ...
+    reused: bool
+    def __init__(self, id: _Optional[str] = ..., version: _Optional[str] = ..., profile_id: _Optional[str] = ..., reused: _Optional[bool] = ...) -> None: ...
 
 class ExtensionInstallationInstallDTO(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "profile_scope", "inventory", "installed")

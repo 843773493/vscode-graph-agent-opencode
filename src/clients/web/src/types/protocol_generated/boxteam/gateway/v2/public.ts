@@ -1188,6 +1188,8 @@ export interface VsixInstallResult {
   id: string;
   version: string;
   profile_id: string;
+  /** 相同 ExtensionKey 的已有制品被复用，本次 VSIX 正文没有覆盖它。 */
+  reused: boolean;
 }
 
 /** 安装回执及完整 profile 库存，不声明现有宿主已经切换运行版本。 */
@@ -9093,7 +9095,7 @@ export const ExtensionInstallationInstallRequest: MessageFns<ExtensionInstallati
 };
 
 function createBaseVsixInstallResult(): VsixInstallResult {
-  return { id: "", version: "", profile_id: "" };
+  return { id: "", version: "", profile_id: "", reused: false };
 }
 
 export const VsixInstallResult: MessageFns<VsixInstallResult> = {
@@ -9102,6 +9104,7 @@ export const VsixInstallResult: MessageFns<VsixInstallResult> = {
       id: isSet(object.id) ? globalThis.String(object.id) : "",
       version: isSet(object.version) ? globalThis.String(object.version) : "",
       profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      reused: isSet(object.reused) ? globalThis.Boolean(object.reused) : false,
     };
   },
 
@@ -9116,6 +9119,9 @@ export const VsixInstallResult: MessageFns<VsixInstallResult> = {
     if (message.profile_id !== "") {
       obj.profile_id = message.profile_id;
     }
+    if (message.reused !== false) {
+      obj.reused = message.reused;
+    }
     return obj;
   },
 
@@ -9127,6 +9133,7 @@ export const VsixInstallResult: MessageFns<VsixInstallResult> = {
     message.id = object.id ?? "";
     message.version = object.version ?? "";
     message.profile_id = object.profile_id ?? "";
+    message.reused = object.reused ?? false;
     return message;
   },
 };

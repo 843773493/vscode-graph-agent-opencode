@@ -5117,6 +5117,13 @@ export declare type VsixInstallResult = Message<"boxteam.gateway.v2.VsixInstallR
    * @generated from field: string profile_id = 3;
    */
   profileId: string;
+
+  /**
+   * 相同 ExtensionKey 的已有制品被复用，本次 VSIX 正文没有覆盖它。
+   *
+   * @generated from field: bool reused = 4;
+   */
+  reused: boolean;
 };
 
 /**

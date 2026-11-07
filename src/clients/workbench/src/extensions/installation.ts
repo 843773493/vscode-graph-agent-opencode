@@ -126,17 +126,18 @@ export async function installTargetVsix(accessor: ServicesAccessor, input: Insta
           if (result.protocol_version !== 1 || result.gateway_id !== target.gateway_id || result.backend_id !== target.backend_id
             || JSON.stringify(result.workspace_ids) !== JSON.stringify(target.workspace_ids) || result.profile_scope !== 'default'
             || !result.installed?.id || !result.installed.version || !result.inventory?.profile_id
-            || result.installed.profile_id !== result.inventory.profile_id) {
+            || result.installed.profile_id !== result.inventory.profile_id || typeof result.installed.reused !== 'boolean') {
             throw new Error(`目标 ${label} 的安装回执不匹配，请先查询原目标库存，不要自动重试`);
           }
-          receipts.push(`${result.installed.id}@${result.installed.version} → ${label}（${result.installed.profile_id}）`);
+          const outcome = result.installed.reused ? '复用已有版本，VSIX 正文未覆盖' : '已安装新制品';
+          receipts.push(`${result.installed.id}@${result.installed.version} → ${label}（${result.installed.profile_id}；${outcome}）`);
           check();
         }
       });
     } finally {
       // 中途失败不回滚已完成安装；仅发布已核实回执，保留原错误和未执行后项。
       if (receipts.length && !identityInvalidated) notifications.prompt(Severity.Info,
-        `已安装：${receipts.join('；')}。重新加载后使用原宿主选择规则；当前运行版本尚未切换。`,
+        `安装结果：${receipts.join('；')}。重新加载后使用原宿主选择规则；当前运行版本尚未切换。`,
         [{ label: '重新加载窗口', run: () => host.reload() }]);
     }
   } finally {

@@ -83,21 +83,21 @@ await symlink(resolve(modules),join(output,'node_modules'),'junction');
 
 
 @pytest.fixture
-def native_vsix() -> Callable[[Path, str, str], Path]:
-    def create(directory: Path, name: str, version: str) -> Path:
+def native_vsix() -> Callable[[Path, str, str, str | None], Path]:
+    def create(directory: Path, name: str, version: str, content: str | None) -> Path:
         source = directory / f"{name}-{version}.vsix"
         with ZipFile(source, "w") as archive:
             archive.writestr("extension/package.json", json.dumps({"publisher": "boxteam-probe", "name": name,
                 "version": version, "engines": {"vscode": "^1.0.0"}, "main": "./extension.js",
                 "extensionKind": ["workspace"], "activationEvents": ["onCommand:boxteam.concurrent"],
                 "contributes": {"commands": [{"command": "boxteam.concurrent", "title": "并发测试"}]}}))
-            archive.writestr("extension/extension.js", f"exports.activate = () => '{name}-{version}';\n")
+            archive.writestr("extension/extension.js", f"exports.activate = () => '{content or f'{name}-{version}'}';\n")
         return source
     return create
 
 
 def test_two_backend_processes_share_native_profile_without_losing_publications(
-    native_management_case: NativeManagementCase, native_vsix: Callable[[Path, str, str], Path],
+    native_management_case: NativeManagementCase, native_vsix: Callable[[Path, str, str, str | None], Path],
 ) -> None:
     case = native_management_case
     evidence: list[dict[str, object]] = []
@@ -137,8 +137,9 @@ def test_two_backend_processes_share_native_profile_without_losing_publications(
         def inventory(index: int, label: str) -> dict:
             return exchange("POST", "/api/gateway/extension-installations/inventory", label, targets[index])["inventory"]
 
-        def install(index: int, name: str, version: str, gate: threading.Barrier | None = None) -> dict:
-            source = native_vsix(case.workspaces[index], name, version)
+        def install(index: int, name: str, version: str, gate: threading.Barrier | None = None,
+                    *, content: str | None = None) -> dict:
+            source = native_vsix(case.workspaces[index], name, version, content)
             target = targets[index]
             if gate is not None:
                 gate.wait(timeout=10)
@@ -158,6 +159,7 @@ def test_two_backend_processes_share_native_profile_without_losing_publications(
             for publication, (_, name, version) in zip(publications, operations, strict=True):
                 installed = publication["installed"]
                 assert installed["id"] == f"boxteam-probe.{name}" and installed["version"] == version
+                assert installed["reused"] is False
                 own = next(extension for extension in publication["inventory"]["extensions"]
                     if extension["description"]["identifier"]["value"] == installed["id"])
                 assert own["description"]["version"] == version and own["is_valid"]
@@ -171,6 +173,21 @@ def test_two_backend_processes_share_native_profile_without_losing_publications(
             directories = [path for path in installation.iterdir() if path.is_dir() and path.name.startswith(f"boxteam-probe.{name}-{version}")]
             assert len(directories) == 1
             assert (directories[0] / "extension.js").read_text() == f"exports.activate = () => '{name}-{version}';\n"
+        current = next(extension["description"]["version"] for extension in left["extensions"]
+                       if extension["description"]["identifier"]["value"] == "boxteam-probe.first")
+        # 从另一个 Backend 重装当前版本、切回旧版、再切回当前版，均只复用原 ExtensionKey。
+        # 不以另一份同版本 VSIX 的正文替换已发布代码；每次回执必须报告实际复用。
+        for version in (current, "1.0.0", current):
+            scripts = [path / "extension.js" for path in installation.iterdir()
+                       if path.is_dir() and path.name.startswith(f"boxteam-probe.first-{version}")]
+            assert len(scripts) == 1
+            script = scripts[0]
+            before = script.read_bytes(), script.stat().st_mtime_ns
+            reused = install(1, "first", version, content="must-not-replace-published-version")
+            assert reused["installed"]["reused"] is True and reused["installed"]["version"] == version
+            assert (script.read_bytes(), script.stat().st_mtime_ns) == before
+            assert inventory(0, f"native-reuse-first-{version}") == reused["inventory"]
+        left = reused["inventory"]
         # 回执结束时原管理 child 已退出；后续同端口 Backend 重启不改变安装身份及库存。
         for health in healths:
             assert not [process for process in psutil.Process(health["process_id"]).children(recursive=True)

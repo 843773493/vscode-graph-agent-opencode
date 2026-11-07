@@ -157,11 +157,12 @@ beforeAll(async () => {
     const profile = 'profile-' + body.gateway_id, version = body.gateway_id === 'gateway-a' ? '8.7.6' : '2.4.8';
     const result = { protocol_version: 1, gateway_id: body.gateway_id, backend_id: body.backend_id,
       workspace_ids: body.workspace_ids, profile_scope: 'default', inventory: { profile_id: profile, extensions: [] },
-      installed: { id: 'probe.from-receipt', version, profile_id: profile } };
+      installed: { id: 'probe.from-receipt', version, profile_id: profile, reused: state.policy.reused ?? false } };
     if (state.policy.badReceipt === 'target') result.backend_id = backends['gateway-b'];
     if (state.policy.badReceipt === 'view') result.workspace_ids = [...body.workspace_ids].reverse();
     if (state.policy.badReceipt === 'profile') result.installed.profile_id = 'another-profile';
     if (state.policy.badReceipt === 'version') result.installed.version = '';
+    if (state.policy.badReceipt === 'reused') delete result.installed.reused;
     return envelope(result, requestId);
   } });
   run.addCleanup('安装API HTTP边界', () => server.stop(true));
@@ -704,6 +705,17 @@ test('原直接URI入口保留单URI合同，跨目标列表按原顺序安装�
   expect(result.prompts[1].message).toContain('probe.from-receipt@8.7.6');
 }));
 
+test('复用回执明确说明原正文未覆盖且仍需重新加载，不再次请求安装', async () => inBrowser('reuse-version', {}, async (page, state) => {
+  const result = await invoke(page, 'direct', ['a1']);
+  expect(result.error).toBeNull(); expect(installs(state)).toHaveLength(1);
+  expect(result.prompts).toHaveLength(1);
+  expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
+  expect(result.prompts[0].message).toContain('复用已有版本，VSIX 正文未覆盖');
+  expect(result.prompts[0].message).toContain('当前运行版本尚未切换');
+  expect(result.prompts[0].message).not.toContain('已安装新制品');
+  expect(result.prompts[0].choices).toEqual(['重新加载窗口']);
+}, { reused: true }));
+
 for (const invalid of ['native', 'unknown', 'root', 'invalid']) test(`直接URI批次后项${invalid}非法时整批零安装`, async () => inBrowser('invalid-' + invalid, {}, async (page, state) => {
   const result = await invoke(page, 'direct', ['a1', invalid]);
   expect(result.error?.message).toBeTruthy(); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
@@ -787,7 +799,7 @@ for (const invalidation of ['a2', 'identity', 'gateway']) test(`首项已确认�
     if (invalidation === 'a2') expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
   }));
 
-for (const badReceipt of ['target', 'view', 'profile', 'version']) test(`安装${badReceipt}回执不匹配只提示未确认，不重放或伪造成功`, async () => inBrowser('bad-receipt-' + badReceipt, {}, async (page, state) => {
+for (const badReceipt of ['target', 'view', 'profile', 'version', 'reused']) test(`安装${badReceipt}回执不匹配只提示未确认，不重放或伪造成功`, async () => inBrowser('bad-receipt-' + badReceipt, {}, async (page, state) => {
   const result = await invoke(page);
   expect(result.error?.message).toContain('回执不匹配'); expect(result.error?.message).toContain('查询原目标库存');
   expect(installs(state)).toHaveLength(1); expect(result.prompts).toEqual([]);
