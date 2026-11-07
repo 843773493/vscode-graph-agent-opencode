@@ -37,6 +37,7 @@ from app.schemas.gateway.extension_installation import (
     ExtensionInstallationTarget,
     ExtensionInstallationUninstallDTO,
     ExtensionInstallationUninstallRequest,
+    NativeExtensionFileRequest,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
@@ -45,6 +46,8 @@ from app.services.infrastructure.extension_host.channel import (
 )
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
+    NativeFileRead,
+    NativeFileStat,
 )
 from app.services.infrastructure.extension_host.owner import NodeHostConnection
 
@@ -172,6 +175,54 @@ async def extension_installation_inventory(
     check_target()
     result = ExtensionInstallationInventoryDTO(**payload.model_dump(exclude={"backend_id", "gateway_connection_id"}),
         backend_id=owner.backend_id, inventory=inventory)
+    return APIResponse(data=result, request_id=request_id)
+
+
+def _check_extension_file_target(request: Request, payload: NativeExtensionFileRequest,
+                                 registry: WorkspaceContainerRegistry) -> None:
+    if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
+        raise HTTPException(400, "扩展包读取目标 Gateway 身份冲突")
+    try:
+        registry.extension_hosts.management_target(payload.backend_id, require_runtime=True)
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
+
+
+def _extension_file_error(error: ExtensionManagementError) -> HTTPException:
+    status = {"EntryNotFound": 404, "NoPermissions": 403, "Invalid": 409,
+              "InstalledExtensionNotFound": 409, "EntryTooLarge": 413}.get(error.code, 400)
+    return HTTPException(status, detail={"owner": "extension_package", "code": error.code, "message": str(error)})
+
+
+@router.post("/api/internal/extension-files/stat", response_model=APIResponse[NativeFileStat], include_in_schema=False)
+async def extension_file_stat(
+    payload: NativeExtensionFileRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[NativeFileStat]:
+    _check_extension_file_target(request, payload, registry)
+    try:
+        result = await registry.extension_hosts.management.extension_file_stat(profile_id=payload.profile_id,
+            extension_key=payload.extension_key, relative_segments=payload.relative_segments)
+    except ExtensionManagementError as error:
+        raise _extension_file_error(error) from error
+    _check_extension_file_target(request, payload, registry)
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/api/internal/extension-files/read", response_model=APIResponse[NativeFileRead], include_in_schema=False)
+async def extension_file_read(
+    payload: NativeExtensionFileRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[NativeFileRead]:
+    _check_extension_file_target(request, payload, registry)
+    try:
+        result = await registry.extension_hosts.management.extension_file_read(profile_id=payload.profile_id,
+            extension_key=payload.extension_key, relative_segments=payload.relative_segments)
+    except ExtensionManagementError as error:
+        raise _extension_file_error(error) from error
+    _check_extension_file_target(request, payload, registry)
     return APIResponse(data=result, request_id=request_id)
 
 

@@ -22,6 +22,9 @@ function isFolders(value: unknown): value is NativeViewFolder[] {
     typeof folder === 'object' && folder !== null && 'native_uri' in folder && typeof folder.native_uri === 'string'
     && 'name' in folder && typeof folder.name === 'string');
 }
+function isRelativeSegments(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((segment): segment is string => typeof segment === 'string');
+}
 function errorMessage(error: unknown): string {
   return error instanceof AggregateError ? [error.message, ...error.errors.map(errorMessage)].join('\n')
     : error instanceof Error ? error.message : String(error);
@@ -30,7 +33,9 @@ async function respondError(error: unknown): Promise<void> {
   console.error(error);
   const code = error instanceof ExtensionManagementError ? error.code
     : error instanceof FileOperationError && error.fileOperationResult === FileOperationResult.FILE_NOT_FOUND
-    ? FileSystemProviderErrorCode.FileNotFound : toFileSystemProviderErrorCode(error instanceof Error ? error : null);
+    ? FileSystemProviderErrorCode.FileNotFound
+    : error instanceof FileOperationError && error.fileOperationResult === FileOperationResult.FILE_TOO_LARGE
+    ? FileSystemProviderErrorCode.FileTooLarge : toFileSystemProviderErrorCode(error instanceof Error ? error : null);
   await respond({ error: errorMessage(error), code });
 }
 let ready = false;
@@ -45,6 +50,14 @@ try {
       let result: unknown;
       if (request.method === 'inventory') result = await management.inventory();
       else if (request.method === 'environment') result = await management.environment();
+      else if ((request.method === 'extension-file-stat' || request.method === 'extension-file-read')
+        && 'profile_id' in request && typeof request.profile_id === 'string'
+        && 'extension_key' in request && typeof request.extension_key === 'string'
+        && 'relative_segments' in request && isRelativeSegments(request.relative_segments)) {
+        result = request.method === 'extension-file-stat'
+          ? await management.extensionFileStat(request.profile_id, request.extension_key, request.relative_segments)
+          : await management.extensionFileRead(request.profile_id, request.extension_key, request.relative_segments);
+      }
       else if (request.method === 'install' && 'vsix_path' in request && typeof request.vsix_path === 'string' && isAbsolute(request.vsix_path)) {
         result = await management.install(request.vsix_path);
       } else if (request.method === 'uninstall' && 'profile_id' in request && typeof request.profile_id === 'string' && request.profile_id

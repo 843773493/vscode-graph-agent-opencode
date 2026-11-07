@@ -61,7 +61,7 @@ class NativeConfigurationLocation(BaseModel):
     native_uri: NativeFileURI
 
 
-class NativeConfigurationStat(BaseModel):
+class NativeFileStat(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     type: int
     ctime: float
@@ -70,7 +70,7 @@ class NativeConfigurationStat(BaseModel):
     permissions: int | None
 
 
-class NativeConfigurationRead(BaseModel):
+class NativeFileRead(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     content_base64: str
 
@@ -207,28 +207,40 @@ class NodeExtensionManagement:
     async def environment(self) -> NativeManagementEnvironment:
         return await self._request({"method": "environment"}, response_type=NativeManagementEnvironment)
 
+    async def extension_file_stat(self, *, profile_id: str, extension_key: str,
+                                  relative_segments: list[str]) -> NativeFileStat:
+        return await self._request({"method": "extension-file-stat", "profile_id": profile_id,
+                                   "extension_key": extension_key, "relative_segments": list(relative_segments)},
+                                   response_type=NativeFileStat)
+
+    async def extension_file_read(self, *, profile_id: str, extension_key: str,
+                                  relative_segments: list[str]) -> NativeFileRead:
+        return await self._request({"method": "extension-file-read", "profile_id": profile_id,
+                                   "extension_key": extension_key, "relative_segments": list(relative_segments)},
+                                   response_type=NativeFileRead)
+
     async def prepare_configuration_view(self, workspace_id: str, folders: list[dict[str, str]]) -> NativeConfigurationLocation:
         folder_values: list[JsonValue] = [{key: value for key, value in folder.items()} for folder in folders]
         return await self._request({"method": "configuration-view", "id": workspace_id, "folders": folder_values},
                                    response_type=NativeConfigurationLocation)
 
-    async def configuration_stat(self, native_uri: str, *, view: NativeConfigurationView | None) -> NativeConfigurationStat:
+    async def configuration_stat(self, native_uri: str, *, view: NativeConfigurationView | None) -> NativeFileStat:
         return await self._request({"method": "configuration-stat", "native_uri": native_uri,
                                    "view": view.model_dump(mode="json") if view else None},
-                                   response_type=NativeConfigurationStat)
+                                   response_type=NativeFileStat)
 
-    async def configuration_read(self, native_uri: str, *, view: NativeConfigurationView | None) -> NativeConfigurationRead:
+    async def configuration_read(self, native_uri: str, *, view: NativeConfigurationView | None) -> NativeFileRead:
         return await self._request({"method": "configuration-read", "native_uri": native_uri,
                                    "view": view.model_dump(mode="json") if view else None},
-                                   response_type=NativeConfigurationRead)
+                                   response_type=NativeFileRead)
 
     async def configuration_write(self, native_uri: str, content_base64: str,
                                   options: ExtensionConfigurationWriteOptions, *,
-                                  view: NativeConfigurationView | None) -> NativeConfigurationStat:
+                                  view: NativeConfigurationView | None) -> NativeFileStat:
         return await self._request({"method": "configuration-write", "native_uri": native_uri,
                                    "view": view.model_dump(mode="json") if view else None,
                                    "content_base64": content_base64, "options": options.model_dump(mode="json")},
-                                   response_type=NativeConfigurationStat)
+                                   response_type=NativeFileStat)
 
     async def install(self, vsix_path: Path) -> InstalledProfile:
         if not vsix_path.is_absolute():

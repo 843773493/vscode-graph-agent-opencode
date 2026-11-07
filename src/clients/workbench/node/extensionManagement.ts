@@ -2,12 +2,13 @@ import { format } from 'node:util';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 import { Schemas } from '../upstream/src/vs/base/common/network.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { basename, dirname, joinPath } from '../upstream/src/vs/base/common/resources.js';
 import { ConfigurationService } from '../upstream/src/vs/platform/configuration/common/configurationService.js';
 import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 import { DownloadService } from '../upstream/src/vs/platform/download/common/downloadService.js';
 import { IDownloadService } from '../upstream/src/vs/platform/download/common/download.js';
 import { ExtensionManagementError, ExtensionManagementErrorCode, IAllowedExtensionsService, IExtensionGalleryService } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
-import { areSameExtensions } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagementUtil.js';
+import { areSameExtensions, ExtensionKey } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagementUtil.js';
 import { AllowedExtensionsService } from '../upstream/src/vs/platform/extensionManagement/common/allowedExtensionsService.js';
 import { ExtensionGalleryServiceWithNoStorageService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryService.js';
 import { IExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifest.js';
@@ -15,6 +16,7 @@ import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/ext
 import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
 import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
 import { ExtensionType } from '../upstream/src/vs/platform/extensions/common/extensions.js';
+import { createFileSystemProviderError, FileOperationResult, FileSystemProviderErrorCode, FileType, TooLargeFileOperationError } from '../upstream/src/vs/platform/files/common/files.js';
 import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_VSIX_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
 import { ExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/node/extensionsProfileScannerService.js';
 import { ExtensionSignatureVerificationService, IExtensionSignatureVerificationService } from '../upstream/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.js';
@@ -88,6 +90,38 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const scanner = accessor.get(IExtensionsScannerService);
       const profileScanner = accessor.get(IExtensionsProfileScannerService);
       const profile = profiles.defaultProfile;
+      const maximumPublishedFileSize = 8 * 1024 * 1024;
+      async function publishedExtensionFile(profileId: string, extensionKeyText: string, relativeSegments: string[]) {
+        if (profileId !== profile.id) throw new ExtensionManagementError('扩展文件 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
+        if (!extensionKeyText || /[\\/\x00-\x1f\x7f]/.test(extensionKeyText)) {
+          throw new ExtensionManagementError('扩展文件身份不能定位到用户扩展目录的直接子目录', ExtensionManagementErrorCode.Invalid);
+        }
+        if (!Array.isArray(relativeSegments) || relativeSegments.some(segment =>
+          typeof segment !== 'string' || !segment || segment === '.' || segment === '..' || /[\\/\0]/.test(segment))) {
+          throw createFileSystemProviderError('扩展文件必须使用有效的包内相对路径段', FileSystemProviderErrorCode.NoPermissions);
+        }
+        const root = scanner.userExtensionsLocation;
+        const location = joinPath(root, extensionKeyText);
+        if (!identity.extUri.isEqual(dirname(location), root) || basename(location) !== extensionKeyText) {
+          throw new ExtensionManagementError('扩展包身份不能定位到用户扩展目录的直接子目录', ExtensionManagementErrorCode.Invalid);
+        }
+        const [realExtensionsRoot, realRoot] = await Promise.all([files.realpath(root), files.realpath(location)]);
+        if (!realExtensionsRoot || !realRoot || !identity.extUri.isEqual(dirname(realRoot), realExtensionsRoot)
+          || basename(realRoot) !== extensionKeyText) {
+          throw createFileSystemProviderError('扩展包目录符号链接越出用户扩展目录', FileSystemProviderErrorCode.NoPermissions);
+        }
+        const scanned = await scanner.scanExistingExtension(location, ExtensionType.User, { includeInvalid: true });
+        if (!scanned || !scanned.isValid || ExtensionKey.create(scanned).toString() !== extensionKeyText
+          || !identity.extUri.isEqual(scanned.location, location)) {
+          throw new ExtensionManagementError(`目标 profile 不包含有效的精确扩展包 ${extensionKeyText}`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        }
+        const file = joinPath(location, ...relativeSegments);
+        const realFile = await files.realpath(file);
+        if (!realFile || !identity.extUri.isEqualOrParent(realFile, realRoot)) {
+          throw createFileSystemProviderError('扩展文件符号链接越出已发布包', FileSystemProviderErrorCode.NoPermissions);
+        }
+        return file;
+      }
       const configurationFiles = new ExtensionConfiguration(files, disk, identity, environment, profile);
       return {
         ready: management.whenNativeManagementReady,
@@ -124,6 +158,22 @@ export async function createExtensionManagement(directory: string, builtinExtens
             source: 'profile' as const, description: toExtensionDescription(extension, false),
             is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
           })) };
+        },
+        async extensionFileStat(profileId: string, extensionKey: string, relativeSegments: string[]) {
+          const file = await publishedExtensionFile(profileId, extensionKey, relativeSegments);
+          const stat = await disk.stat(file);
+          return { type: stat.type, ctime: stat.ctime, mtime: stat.mtime, size: stat.size, permissions: stat.permissions ?? null };
+        },
+        async extensionFileRead(profileId: string, extensionKey: string, relativeSegments: string[]) {
+          const file = await publishedExtensionFile(profileId, extensionKey, relativeSegments);
+          const stat = await disk.stat(file);
+          if ((stat.type & FileType.File) === 0) throw createFileSystemProviderError('扩展包读取目标不是普通文件', FileSystemProviderErrorCode.FileIsADirectory);
+          if (stat.size > maximumPublishedFileSize) {
+            throw new TooLargeFileOperationError(`扩展包文件超过私有读取上限 ${maximumPublishedFileSize} 字节`, FileOperationResult.FILE_TOO_LARGE, stat.size);
+          }
+          // TODO(扩展资源流式读取接入后)：移除私有控制帧的 8 MiB 限制并复用原 FileService 流。
+          const content = await files.readFile(file, { limits: { size: maximumPublishedFileSize } });
+          return { content_base64: Buffer.from(content.value.buffer).toString('base64') };
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。

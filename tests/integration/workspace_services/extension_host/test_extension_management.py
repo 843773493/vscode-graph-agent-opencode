@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
-from base64 import b64encode
+from base64 import b64decode, b64encode
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
@@ -201,6 +202,141 @@ async def test_native_vsix_keep_existing_reuses_published_version(
         "original_snapshot": original_snapshot, "after_snapshot": installation_snapshot(original),
         "published_script_sha256": sha256(original_script).hexdigest(),
         "candidate_script_sha256": sha256(candidate_script).hexdigest(),
+    }, ensure_ascii=False, indent=2))
+
+
+async def test_native_published_extension_files_are_read_by_exact_retained_key(
+    management_backends, vsix_factory, network_scope: AsyncExitStack,
+    serve_extension_application: Callable[[FastAPI], Awaitable[str]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, workspace, backends = management_backends
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    original = await management.install(vsix_factory(workspace, "1.0.0", "published-v1"))
+    profile_id = original.installed.profile_id
+    key = "boxteam-probe.target-inventory-1.0.0"
+    root = management._directory / "extensions"
+    old_directory = root / key
+    script = b'exports.activate = () => "published-v1";\n'
+    assert (old_directory / "extension.js").read_bytes() == script
+
+    stat = await management.extension_file_stat(profile_id=profile_id, extension_key=key,
+                                                relative_segments=["extension.js"])
+    root_stat = await management.extension_file_stat(profile_id=profile_id, extension_key=key, relative_segments=[])
+    assert root_stat.type & 2  # FileType.Directory：包根作为原生目录可 stat。
+    read = await management.extension_file_read(profile_id=profile_id, extension_key=key,
+                                                relative_segments=["extension.js"])
+    assert stat.size == len(script)
+    assert b64decode(read.content_base64) == script
+    (old_directory / "inside-link").symlink_to(old_directory / "extension.js")
+    assert b64decode((await management.extension_file_read(profile_id=profile_id, extension_key=key,
+                                                           relative_segments=["inside-link"])).content_base64) == script
+
+    await management.install(vsix_factory(workspace, "1.1.0-beta.1", "published-prerelease"))
+    prerelease_key = "boxteam-probe.target-inventory-1.1.0-beta.1"
+    assert b64decode((await management.extension_file_read(profile_id=profile_id, extension_key=prerelease_key,
+                                                           relative_segments=["extension.js"])).content_base64) == b'exports.activate = () => "published-prerelease";\n'
+
+    # 升级并逻辑卸载当前版本后，仍可按原安装目录读取旧版本。
+    await management.install(vsix_factory(workspace, "2.0.0", "published-v2"))
+    await management.uninstall(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", version="2.0.0")
+    assert b64decode((await management.extension_file_read(profile_id=profile_id, extension_key=key,
+                                                           relative_segments=["extension.js"])).content_base64) == script
+
+    token = get_gateway_local_token()
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.exception_handler(HTTPException)(workspace_http_exception_handler)
+    application.include_router(backend_host_router)
+    application.state.workspace_container_registry = registry
+    url = await serve_extension_application(application)
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10))
+    gateway_id = "gateway_" + uuid4().hex
+    request_id = "retained-extension-read-" + uuid4().hex
+    backend_id = registry.extension_hosts.backend_id
+    response = await client.post(f"{url}/api/internal/extension-files/read",
+        headers={"X-Local-Token": token, "X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": request_id},
+        json={"protocol_version": 1, "gateway_id": gateway_id, "backend_id": backend_id,
+              "profile_id": profile_id, "extension_key": key, "relative_segments": ["extension.js"]})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+    assert b64decode(response.json()["data"]["content_base64"]) == script
+    invalid_path_id = "invalid-extension-path-" + uuid4().hex
+    rejected = await client.post(f"{url}/api/internal/extension-files/read",
+        headers={"X-Local-Token": token, "X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": invalid_path_id},
+        json={"protocol_version": 1, "gateway_id": gateway_id, "backend_id": backend_id,
+              "profile_id": profile_id, "extension_key": key, "relative_segments": ["..", "outside.txt"]})
+    assert rejected.status_code == 403, rejected.text
+    assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == invalid_path_id
+    assert rejected.json()["detail"]["code"] == "NoPermissions"
+
+    with pytest.raises(ExtensionManagementError) as wrong_profile:
+        await management.extension_file_read(profile_id="wrong-profile", extension_key=key,
+                                             relative_segments=["extension.js"])
+    assert wrong_profile.value.code == "Invalid"
+    with pytest.raises(ExtensionManagementError) as traversal:
+        await management.extension_file_read(profile_id=profile_id, extension_key=key,
+                                             relative_segments=["..", "outside.txt"])
+    assert traversal.value.code == "NoPermissions"
+    with pytest.raises(ExtensionManagementError) as missing_key:
+        await management.extension_file_read(profile_id=profile_id, extension_key=key.replace("1.0.0", "3.0.0"),
+                                             relative_segments=["extension.js"])
+    assert missing_key.value.code == "EntryNotFound"
+    with pytest.raises(ExtensionManagementError) as key_traversal:
+        await management.extension_file_stat(profile_id=profile_id, extension_key="../outside-1.0.0",
+                                             relative_segments=[])
+    assert key_traversal.value.code == "Invalid"
+
+    outside = workspace / "outside.txt"
+    outside.write_text("must not be exposed", encoding="utf-8")
+    try:
+        (old_directory / "outside-link").symlink_to(outside)
+    except (NotImplementedError, OSError) as error:
+        if os.name == "nt":
+            pytest.skip(f"当前 Windows 目标不允许创建测试 symlink: {error}")
+        raise
+    with pytest.raises(ExtensionManagementError) as symlink:
+        await management.extension_file_read(profile_id=profile_id, extension_key=key,
+                                             relative_segments=["outside-link"])
+    assert symlink.value.code == "NoPermissions"
+
+    external_package = workspace / "external-package"
+    shutil.copytree(old_directory, external_package, symlinks=True)
+    saved_package = root / (key + ".saved")
+    old_directory.rename(saved_package)
+    try:
+        old_directory.symlink_to(external_package, target_is_directory=True)
+    except (NotImplementedError, OSError) as error:
+        if os.name == "nt":
+            saved_package.rename(old_directory)
+            pytest.skip(f"当前 Windows 目标不允许创建目录 symlink: {error}")
+        raise
+    with pytest.raises(ExtensionManagementError) as package_symlink:
+        await management.extension_file_stat(profile_id=profile_id, extension_key=key, relative_segments=[])
+    assert package_symlink.value.code == "NoPermissions"
+    old_directory.unlink()
+    saved_package.rename(old_directory)
+
+    large_file = old_directory / "large.bin"
+    large_file.write_bytes(b"x" * (8 * 1024 * 1024 + 1))
+    large_id = "oversize-extension-file-" + uuid4().hex
+    oversized = await client.post(f"{url}/api/internal/extension-files/read",
+        headers={"X-Local-Token": token, "X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": large_id},
+        json={"protocol_version": 1, "gateway_id": gateway_id, "backend_id": backend_id,
+              "profile_id": profile_id, "extension_key": key, "relative_segments": ["large.bin"]})
+    assert oversized.status_code == 413, oversized.text
+    assert oversized.headers["X-Request-ID"] == oversized.json()["request_id"] == large_id
+    assert oversized.json()["detail"]["code"] == "EntryTooLarge"
+    (old_directory / "package.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ExtensionManagementError) as invalid_package:
+        await management.extension_file_read(profile_id=profile_id, extension_key=key,
+                                             relative_segments=["extension.js"])
+    assert invalid_package.value.code == "InstalledExtensionNotFound"
+    assert management.drained and registry.extension_hosts.active == ()
+    (context.artifacts_dir / "published-extension-read.json").write_text(json.dumps({
+        "profile_id": profile_id, "extension_key": key, "stat": stat.model_dump(),
+        "read_size": len(b64decode(read.content_base64)), "old_version_read_after_upgrade": True,
     }, ensure_ascii=False, indent=2))
 
 

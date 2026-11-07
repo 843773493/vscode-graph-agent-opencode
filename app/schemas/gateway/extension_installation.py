@@ -43,6 +43,14 @@ class ExtensionInstallationInventoryRequest(ExtensionInstallationTarget):
     gateway_connection_id: str | None = Field(default=None, min_length=1)
 
 
+class NativeExtensionFileRequest(ExtensionInstallationTarget):
+    """Gateway 到 Backend 的私有参数；包身份由原生 scanner 核验，不接受任意路径。"""
+
+    profile_id: str = Field(min_length=1)
+    extension_key: str = Field(min_length=1)
+    relative_segments: list[str]
+
+
 class ExtensionInstallationInventoryDTO(ExtensionInstallationTarget):
     profile_scope: Literal["default"] = "default"
     inventory: ProfileExtensionInventory

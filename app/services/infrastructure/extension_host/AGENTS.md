@@ -9,6 +9,7 @@
 - 专用运行时从 Launcher runtime manifest 的 extension_host 声明解析；缺失表示不可用，不借应用通用 Node 或 PATH。
 - `describe`与实际连接共用Backend／mount校验和准入事实；读取版本／平台／通道状态不创建session、不重新探测或扫描runtime。通道状态不代表完整扩展API已经接入。
 - `management.py`只监督同一专用runtime中的原生扩展管理组件；Code OSS安装／profile／scanner服务持有唯一安装事实，Python不扫描目录或保存清单。每条请求等待稳定Backend安装域的portalocker，创建新管理进程，等原初始化、业务、异步drain和正常退出后释放；多个Backend进程共用原profile，普通宿主发现不启动它。
+- 包只读控制沿同一管理组件，以默认 profile、原 ExtensionKey 和包内文件段定位保留版本；不依赖当前 profile 的最新成员，不接收任意原生路径或建立发布 token 账本。公开授权及浏览器资源传输须另行接通，私有读取能力不授予访问权限。
 - `configuration.py`只将`source_uri.py`正式登记的目标profile settings与多根view配置映射到原Node FileService；文件stat/read/write不建立第二配置writer或保存基线。配置观察复用共享`WorkspaceFileWatchService`，仅订阅两个已登记文件的直接父目录并精确过滤。
 
 # 不可修改内容
