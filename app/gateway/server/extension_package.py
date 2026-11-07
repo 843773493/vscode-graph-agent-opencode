@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import mimetypes
+from base64 import b64decode
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import ValidationError
 
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import extension_package_uri, parse_resource_uri
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.control.user_access import UserAccessContext
@@ -29,6 +31,8 @@ from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
 )
+from app.schemas.canonical_params import CanonicalGatewayId
+from app.schemas.gateway.extension_host import BackendId
 from app.schemas.gateway.extension_installation import NativeExtensionFileRequest
 from app.schemas.gateway.extension_package import (
     ExtensionPackageFileRequest,
@@ -43,6 +47,23 @@ from app.services.infrastructure.extension_host.management import (
 )
 
 router = APIRouter()
+_CONTENT_RESPONSES: dict[int | str, dict[str, object]] = {
+    200: {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+}
+
+
+def _content_access(request: Request, x_local_token: str | None = Header(default=None),
+                    x_boxteam_federation_token: str | None = Header(default=None),
+) -> tuple[GatewayAuthContext, UserAccessContext | None]:
+    if x_local_token is not None or x_boxteam_federation_token is not None:
+        auth = verify_gateway_access(x_local_token, x_boxteam_federation_token)
+    else:
+        # 脚本、样式和字体不能附加管理头；同源浏览器沿原 HttpOnly 用户租约，
+        # 随后仍须匹配该用户已经取得的实例代际。凭据不进入资源 URL。
+        if request.headers.get("sec-fetch-site") != "same-origin":
+            raise HTTPException(403, "扩展包资源只接受同源浏览器或 Gateway 访问凭据")
+        auth = GatewayAuthContext(kind="local")
+    return auth, verify_user_access_for_proxy(request, auth)
 
 
 async def _file_request(payload: ExtensionPackageFileRequest, request: Request,
@@ -138,3 +159,59 @@ async def extension_package_read(payload: ExtensionPackageFileRequest, request: 
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> APIResponse[ExtensionPackageStatDTO] | APIResponse[ExtensionPackageReadDTO] | Response:
     return await _file_request(payload, request, auth, access, operation="read")
+
+
+@router.get("/api/gateway/extension-packages/content/{gateway_id}/{backend_id}/{profile_id}/{view_id}/{generation}/{extension_key}/{extension_id}/{relative_path:path}",
+    response_class=Response, responses=_CONTENT_RESPONSES)
+async def extension_package_content(
+    gateway_id: CanonicalGatewayId, backend_id: BackendId, profile_id: str, view_id: str,
+    generation: str, extension_key: str, extension_id: str, relative_path: str, request: Request,
+    access: Annotated[tuple[GatewayAuthContext, UserAccessContext | None], Depends(_content_access)],
+) -> Response:
+    return await _package_content(gateway_id, backend_id, profile_id, view_id, generation, extension_key,
+        extension_id, relative_path, request, access, gateway_connection_id=None)
+
+
+@router.get("/api/gateway/extension-packages/via/{gateway_connection_id}/content/{gateway_id}/{backend_id}/{profile_id}/{view_id}/{generation}/{extension_key}/{extension_id}/{relative_path:path}",
+    response_class=Response, responses=_CONTENT_RESPONSES)
+async def remote_extension_package_content(
+    gateway_connection_id: str, gateway_id: CanonicalGatewayId, backend_id: BackendId,
+    profile_id: str, view_id: str, generation: str, extension_key: str, extension_id: str,
+    relative_path: str, request: Request,
+    access: Annotated[tuple[GatewayAuthContext, UserAccessContext | None], Depends(_content_access)],
+) -> Response:
+    return await _package_content(gateway_id, backend_id, profile_id, view_id, generation, extension_key,
+        extension_id, relative_path, request, access, gateway_connection_id=gateway_connection_id)
+
+
+async def _package_content(
+    gateway_id: str, backend_id: str, profile_id: str, view_id: str, generation: str,
+    extension_key: str, extension_id: str, relative_path: str, request: Request,
+    access: tuple[GatewayAuthContext, UserAccessContext | None], *, gateway_connection_id: str | None,
+) -> Response:
+    # 路径保留原实例与精确发布选择，让相对模块、样式和字体沿用同一资格。
+    # 这只是原资源 URI 的 HTTP 传输地址，不能独立授予运行或文件访问权限。
+    if "gateway_connection_id" in request.query_params:
+        raise HTTPException(422, "扩展包连接必须通过路径指定，确保相对资源沿用同一连接")
+    try:
+        payload = ExtensionPackageFileRequest(protocol_version=1, gateway_id=gateway_id, backend_id=backend_id,
+            resource_uri=extension_package_uri(gateway_id=gateway_id, backend_id=backend_id,
+                profile_id=profile_id, extension_id=extension_id, relative_segments=relative_path.split("/")),
+            view_id=view_id, generation=generation, extension_key=extension_key,
+            gateway_connection_id=gateway_connection_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    result = await _file_request(payload, request, *access, operation="read")
+    if isinstance(result, Response):
+        return result
+    if not isinstance(result.data, ExtensionPackageReadDTO):
+        raise HTTPException(502, "目标扩展包没有返回读取正文")
+    try:
+        content = b64decode(result.data.content_base64, validate=True)
+    except ValueError as error:
+        raise HTTPException(502, "目标扩展包正文编码无效") from error
+    media_type = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
+    return Response(content, media_type=media_type, headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        "Cross-Origin-Resource-Policy": "same-origin",
+    })

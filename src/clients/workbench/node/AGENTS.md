@@ -17,8 +17,8 @@
 - 与宿主共用固定上游、专用 Node 和冻结依赖。安装与库存必须消费同一组原版服务实例。
 - 管理组件直接提供loopback HTTP具名接口，沿原本机token认证且拒绝浏览器来源；自己持有原OS安装域独占锁。Gateway核验发现记录、运行身份及实际日志后接管，不抢锁或另起代理进程。标准输出和错误只进原日志体系，不保留stdio管理协议。
 - 制品下载只在原 RequestService 的五个 VSIX／签名 callSite 接缝改由目标 Python；原 Gallery、DownloadService、签名校验及安装计划保持原服务。具名 loopback 回调能力和原 request_id 只绑定本次排队安装的 AsyncLocalStorage，不持久化、不跨请求复用；真正下载缺少传输必须明确失败，本地文件安装仍可用。回调 POST 不重放、不重定向，原代理配置及 shell 环境优先级必须保留，本机认证与回调错误头不得送原站。制品请求沿原 `logUrl:false` 日志合同只写 host、状态及错误类别，不写签名 URL、请求／响应头或异常正文。
-- 服务内串行处理安装及精确发布读取，发布响应流持续持有准入直到Python实际I/O结清。错误返回原归属并允许后续合法请求；停止准入后排空原异步回调及缓存写入，释放消费者，沿原watch([])停止provider watcher并释放provider，返回drained后自然退出。Gateway换代只释放句柄，完整停机才调用shutdown并核实际进程；不得用process.exit或每请求dispose替代结算。
+- 服务内串行处理安装及精确发布。current-only 发布响应流持有准入到 Python 实际 I/O 结清；Web 准入在同次控制操作内复用原发布函数核精确集合并返回冻结描述，不能持队列等待整个 Web session。错误返回原归属并允许后续合法请求；停止准入后排空原异步回调及缓存写入，释放消费者，沿原watch([])停止provider watcher并释放provider，返回drained后自然退出。Gateway换代只释放句柄，完整停机才调用shutdown并核实际进程；不得用process.exit或每请求dispose替代结算。
 - 当前库存明确限于目标默认 profile 的用户安装项；不将它声称为系统扩展、开发扩展或完整窗口启用视图。
 - VSIX 安装结果与完整库存由同一次串行 Node 控制操作生成；Python 不在释放安装请求后另读库存拼回执。保留原安装器的现有版本复用，物理卸载和运行版本切换须沿各自生命周期完成。
 - `installed.reused`消费同次原安装器context的实际版本复用结果；不能以候选manifest声称已替换正文。私有进程回执保留原ExtensionManagementError.code，文件系统错误继续使用原Provider错误映射。
-- 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。旧运行实例的版本资格、包边界和读字节分别由原Backend运行记录与Gateway Python执行。
+- 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。Web 旧实例资格与描述由原 Backend session 保留，包边界和字节统一由 Python 的 publication_file 检查；current-only 仍即时核当前成员。TODO(4.4)：Node 真实运行集合与最终引用回收未接通，不能启用全局物理 cleanUp。

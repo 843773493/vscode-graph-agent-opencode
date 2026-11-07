@@ -11,6 +11,7 @@
 - 仅服务于 Gateway 入口装配的辅助函数
 - `extension_management.py`是常驻原生管理组件的具名本机控制入口，核原运行时凭据、loopback、安装域及已登记操作；不接受浏览器Origin、联邦凭据或任意method。目标级库存、卸载直接调用安装组件，包字节由Gateway Python在原串行准入内读取；VSIX来源与运行实例仍由Backend原owner核验。
 - 其下载回调须绑定尚未结清的原安装能力与request_id，终态撤销后拒绝旧回调；只允许原安装器具名制品callSite，不提供通用fetch、文件写入或独立服务。回执未知期间不能因普通健康检查拒绝原已受理安装结清下载。
+- `extension_package.py`的浏览器字节入口与原POST共用授权、目标路由和Python读取链；HTTP路径保留view／generation／精确包键及显式联邦连接，使相对资源仍属同一实例。同源浏览器可沿原HttpOnly用户租约读取属于该用户的已准入实例，不把管理凭据放入URL；显式凭据仍须校验，不回落cookie。每次披露重核运行权限，不因安装权限或浏览器缓存继续披露退役实例正文。
 
 # 不可修改内容
 

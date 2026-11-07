@@ -31,14 +31,15 @@ from app.schemas.runtime_logging import RuntimeLoggingStatus
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,
+    NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
     NativeManagementEnvironment,
     ProfileExtensionInventory,
     UninstalledProfile,
+    WebExtensionPublication,
 )
 from app.services.infrastructure.extension_host.package_files import (
-    NativeExtensionPublication,
     publication_file,
 )
 from app.services.infrastructure.extension_host.runtime import (
@@ -316,13 +317,14 @@ class GatewayExtensionManagement:
             except ExtensionManagementError as error:
                 return {"error": str(error), "code": error.code}
             return {"result": result.model_dump(mode="json")}
-        if operation not in {"inventory", "environment", "install", "uninstall"}:
+        if operation not in {"inventory", "environment", "install", "uninstall", "web-publication"}:
             raise ValueError("未登记的扩展安装管理操作")
         response_type = {
             "inventory": ProfileExtensionInventory,
             "environment": NativeManagementEnvironment,
             "install": InstalledProfile,
             "uninstall": UninstalledProfile,
+            "web-publication": WebExtensionPublication,
         }[operation]
         try:
             result = await self._request(command, response_type=response_type, download_base_url=download_base_url)

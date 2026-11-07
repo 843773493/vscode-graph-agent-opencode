@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from urllib.parse import urljoin
 from uuid import uuid4
 
 import httpx
@@ -115,6 +116,157 @@ def test_package_running_revocation_cannot_be_replaced_by_install_permission(pac
         headers={"X-BoxTeam-Federation-Token": h.federation_token, extension_host.CLIENT_HEADER: "original-client"})
     assert result.status_code == 403 and len(calls) == 1
     assert "content_base64" not in result.text
+
+
+@pytest.fixture
+def package_content(package_proxy):
+    h, calls, handlers, _ = package_proxy
+    root = (f"/api/gateway/extension-packages/content/{GATEWAY}/{h.request.backend_id}"
+        "/default-profile/window-a/frozen-generation/publisher.probe-1.0.0/publisher.probe/")
+    return h, calls, handlers, root
+
+
+def test_package_content_preserves_frozen_identity_for_relative_assets(package_content):
+    h, calls, _, root = package_content
+    headers = {"X-Local-Token": h.token, "X-Request-ID": "package-content"}
+    entry = root + "dist/main.js"
+    for path in (entry, urljoin(entry, "../assets/中文.svg"), urljoin(entry, "./chunk.mjs")):
+        result = h.client.get(path, headers=headers)
+        assert result.status_code == 200, result.text
+        assert result.content == b"old"
+        assert result.headers["Cache-Control"] == "no-store"
+        assert result.headers["X-Content-Type-Options"] == "nosniff"
+        assert result.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert result.headers["X-Request-ID"] == "package-content"
+        forwarded = json.loads(calls[-1].content)
+        assert forwarded["gateway_id"] == GATEWAY and forwarded["backend_id"] == h.request.backend_id
+        assert forwarded["profile_id"] == "default-profile" and forwarded["extension_key"] == "publisher.probe-1.0.0"
+        assert forwarded["view_id"] == "window-a" and forwarded["generation"] == "frozen-generation"
+        assert forwarded["extension_id"] == "publisher.probe" and forwarded["current_profile_member"] is False
+    assert [json.loads(call.content)["relative_segments"] for call in calls] == [
+        ["dist", "main.js"], ["assets", "中文.svg"], ["dist", "chunk.mjs"]]
+    assert result.headers["Content-Type"].split(";")[0] in {"text/javascript", "application/javascript"}
+
+
+def test_package_content_same_origin_browser_uses_original_http_only_user_lease(package_content):
+    h, calls, _, root = package_content
+    result = h.client.get(root + "assets/theme.css", headers={"Sec-Fetch-Site": "same-origin"})
+    assert result.status_code == 200 and result.content == b"old", result.text
+    assert result.headers["Content-Type"].startswith("text/css")
+    assert len(calls) == 1 and "cookie" not in calls[0].headers
+    h.client.cookies.clear()
+    missing = h.client.get(root + "assets/theme.css", headers={"Sec-Fetch-Site": "same-origin"})
+    assert missing.status_code == 401 and len(calls) == 1
+
+
+@pytest.mark.parametrize("site", [None, "same-site", "cross-site", "none"])
+def test_package_content_cannot_use_browser_cookie_from_another_origin(package_content, site):
+    h, calls, _, root = package_content
+    result = h.client.get(root + "dist/main.js", headers={} if site is None else {"Sec-Fetch-Site": site})
+    assert result.status_code == 403 and not calls
+
+
+def test_package_content_invalid_explicit_credential_does_not_fall_back_to_browser_cookie(package_content):
+    h, calls, _, root = package_content
+    result = h.client.get(root + "dist/main.js", headers={"Sec-Fetch-Site": "same-origin", "X-Local-Token": "invalid"})
+    assert result.status_code == 401 and not calls
+
+
+@pytest.mark.parametrize("capability", [None, "read", "extension_installation_manage", "extension_host_manage"])
+def test_package_content_requires_running_permission(package_content, capability):
+    h, calls, _, root = package_content
+    h.policy.publish({"rules": [] if capability is None else [{"capability": capability,
+        "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
+    result = h.client.get(root + "dist/main.js", headers={"X-BoxTeam-Federation-Token": h.federation_token,
+        extension_host.CLIENT_HEADER: "original-client"})
+    allowed = capability == "extension_host_manage"
+    assert result.status_code == (200 if allowed else 403), result.text
+    assert len(calls) == int(allowed)
+    if allowed:
+        assert calls[0].headers[extension_host.CLIENT_HEADER] == f"peer:{PEER}:original-client"
+    else:
+        assert result.content != b"old"
+
+
+def test_package_content_revocation_during_read_does_not_disclose_body(package_content):
+    h, calls, handlers, root = package_content
+    h.policy.publish({"rules": [{"capability": permission, "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}
+        for permission in ("extension_host_manage", "extension_installation_manage")]})
+    original = handlers[0]
+
+    def revoke(request: httpx.Request) -> httpx.Response:
+        h.policy.publish({"rules": [{"capability": "extension_installation_manage", "effect": "allow",
+                                    "principal_ref": principal_ref_for_gateway(PEER)}]})
+        return original(request)
+
+    handlers[0] = revoke
+    result = h.client.get(root + "dist/main.js", headers={"X-BoxTeam-Federation-Token": h.federation_token,
+        extension_host.CLIENT_HEADER: "original-client", "X-Request-ID": "content-revoked"})
+    assert result.status_code == 403 and len(calls) == 1
+    assert result.content != b"old" and "content_base64" not in result.text
+    assert result.headers["X-Request-ID"] == "content-revoked"
+
+
+@pytest.mark.parametrize("relative_path", ["dist/%2e%2e/%2e%2e/escape.js", "dist/%00.js"])
+def test_package_content_invalid_resource_is_rejected_before_target(package_content, relative_path):
+    h, calls, _, root = package_content
+    result = h.client.get(root + relative_path, headers={"X-Local-Token": h.token})
+    assert result.status_code == 422 and not calls
+
+
+@pytest.mark.parametrize("via", [False, True])
+def test_package_content_connection_cannot_be_selected_by_query(package_content, via):
+    h, calls, _, root = package_content
+    if via:
+        root = root.replace(f"/content/{GATEWAY}", f"/via/test-peer/content/{PEER}")
+    result = h.client.get(root + "dist/main.js?gateway_connection_id=other-route", headers={"X-Local-Token": h.token})
+    assert result.status_code == 422 and not calls
+
+
+def test_package_content_openapi_declares_connection_only_in_path(package_content):
+    h, _, _, _ = package_content
+    paths = {path: operations for path, operations in h.application.openapi()["paths"].items()
+        if "/extension-packages/" in path and "content/" in path}
+    assert len(paths) == 2
+    for path, operations in paths.items():
+        parameters = [item for item in operations["get"]["parameters"] if item["name"] == "gateway_connection_id"]
+        assert [(item["in"], item["required"]) for item in parameters] == ([("path", True)] if "/via/" in path else [])
+
+
+def test_package_content_corrupt_base64_is_an_explicit_upstream_failure(package_content):
+    h, _, handlers, root = package_content
+    handlers[0] = lambda request: httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]},
+        json={"request_id": request.headers["X-Request-ID"], "data": {"content_base64": "!invalid!"}})
+    result = h.client.get(root + "dist/main.js", headers={"X-Local-Token": h.token, "X-Request-ID": "invalid-content"})
+    assert result.status_code == 502 and "编码无效" in result.text
+    assert result.headers["X-Request-ID"] == "invalid-content"
+
+
+def test_package_content_relative_assets_preserve_explicit_remote_connection(package_content):
+    h, calls, handlers, root = package_content
+    for connection_id in ("test-peer", "other-route"):
+        h.registry.upsert_remote_gateway(RemoteGatewayConnection(connection_id=connection_id, name="same-name",
+            host="remote.test", port=22, username="unit", private_key_path=None, ssh_config_host=None,
+            remote_gateway_port=8014, remote_gateway_id=PEER, protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual"),
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": f"http://{connection_id}.test"}))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert "gateway_connection_id" not in payload
+        return httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]}, json={
+            "request_id": request.headers["X-Request-ID"], "data": {
+                "resource_uri": payload["resource_uri"], "extension_key": payload["extension_key"], "content_base64": "b2xk"}})
+
+    handlers[0] = respond
+    root = root.replace(f"/content/{GATEWAY}", f"/via/test-peer/content/{PEER}")
+    entry = root + "dist/main.js"
+    for path in (entry, urljoin(entry, "./chunk.js")):
+        result = h.client.get(path, headers={"X-Local-Token": h.token, "X-Request-ID": "remote-content"})
+        assert result.status_code == 200 and result.content == b"old", result.text
+        assert calls[-1].url == "http://test-peer.test/api/gateway/extension-packages/read"
+        assert calls[-1].headers["X-Request-ID"] == result.headers["X-Request-ID"] == "remote-content"
+    assert [json.loads(call.content)["generation"] for call in calls] == ["frozen-generation"] * 2
+    assert not h.registry._remote_gateway_reference_counts
 
 
 @pytest.mark.parametrize("invalidate", ["route", "user"])

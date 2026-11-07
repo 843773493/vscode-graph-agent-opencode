@@ -8,13 +8,15 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from base64 import b64decode, b64encode
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
-from urllib.parse import urlsplit
+from typing import Literal
+from urllib.parse import urljoin, urlsplit
 from urllib.request import url2pathname
 from uuid import uuid4
 from zipfile import ZipFile
@@ -25,6 +27,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import JsonValue
 from starlette.responses import Response, StreamingResponse
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 
 from app.api.extension_host import router as backend_host_router
 from app.container import WorkspaceContainerRegistry
@@ -49,9 +52,13 @@ from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationViewRequest,
     ExtensionConfigurationWriteOptions,
 )
+from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,
+    NativeExtensionPublication,
+    NativeFileRead,
+    NativeFileStat,
 )
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from tests.harness.python.run_context import TestRunContext
@@ -308,6 +315,160 @@ async def test_native_vsix_keep_existing_reuses_published_version(
         "published_script_sha256": sha256(original_script).hexdigest(),
         "candidate_script_sha256": sha256(candidate_script).hexdigest(),
     }, ensure_ascii=False, indent=2))
+
+
+async def test_web_publication_freezes_native_descriptors_and_reads_without_further_node_calls(
+    management_backends: ManagementBackends, vsix_factory,
+    network_scope: AsyncExitStack, serve_extension_application: Callable[[FastAPI], Awaitable[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = management_backends
+    registry = _backend(case.workspace / "web-publication", case)
+    domain = case.domains[0]
+    management = registry.extension_hosts.management
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.exception_handler(HTTPException)(workspace_http_exception_handler)
+    application.include_router(backend_host_router)
+    application.state.workspace_container_registry = registry
+    backend_url = await serve_extension_application(application)
+    [mount] = registry.mounted_workspaces.mounts
+    domain.registry.upsert(WorkspaceTarget(gateway_id=domain.gateway_id, workspace_id=mount.workspace_id,
+        name="冻结发布", root_path=str(mount.workspace_root), backend_url=backend_url,
+        connection_kind="local", backend_id=registry.extension_hosts.backend_id), activate=False)
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10, trust_env=False, headers=domain.headers))
+    node_calls: list[str] = []
+
+    async def observe_node(request: httpx.Request) -> None:
+        node_calls.append(request.url.path)
+
+    assert domain.owner._client is not None
+    domain.owner._client.event_hooks["request"].append(observe_node)
+
+    async def install(version: str):
+        source = vsix_factory(case.workspace, version, version, manifest_overrides={"browser": "./extension.js"})
+        with ZipFile(source, "a") as archive:
+            archive.writestr("extension/dist/helper.js", f"export const version = '{version}';")
+            archive.writestr("extension/style.css", 'body { background: url("./images/icon.svg") }')
+            archive.writestr("extension/images/icon.svg", f"<svg><title>{version}</title></svg>")
+        return await management.install(source)
+
+    installed = await install("1.0.0")
+    profile_id = installed.installed.profile_id
+    first_key = installed.inventory.extensions[0].extension_key
+    extension_id = installed.installed.id
+    ws_url = domain.url.replace("http://", "ws://") + "/api/gateway/extension-web-hosts/channel"
+
+    async def open_view(view: str, key: str):
+        channel = await connect(ws_url, additional_headers=domain.headers, compression=None)
+        await channel.send(json.dumps({"protocol_version": 1, "gateway_id": domain.gateway_id,
+            "backend_id": registry.extension_hosts.backend_id, "view_id": view, "workspace_ids": [],
+            "profile_id": profile_id, "extension_keys": [key]}))
+        return channel, json.loads(await channel.recv())
+
+    def content_url(binding: dict[str, object], key: str) -> str:
+        return (f"{domain.url}/api/gateway/extension-packages/content/{domain.gateway_id}/"
+            f"{registry.extension_hosts.backend_id}/{profile_id}/{binding['view_id']}/{binding['generation']}/"
+            f"{key}/{extension_id}/extension.js")
+
+    async def check_reads(binding: dict[str, object], key: str, version: str) -> None:
+        before = len(node_calls)
+        entry_url = content_url(binding, key)
+        for relative, content in (("extension.js", f'exports.activate = () => "{version}";\n'),
+                                  ("dist/helper.js", f"export const version = '{version}';"),
+                                  ("style.css", 'body { background: url("./images/icon.svg") }'),
+                                  ("images/icon.svg", f"<svg><title>{version}</title></svg>")):
+            url = urljoin(entry_url, relative)
+            if relative == "dist/helper.js":
+                response = await client.send(httpx.Request("GET", url, headers={"Cookie": domain.headers["Cookie"],
+                    "Sec-Fetch-Site": "same-origin", "X-Request-ID": f"web-frozen-{version}-{relative}"}))
+            else:
+                response = await client.get(url, headers={"X-Request-ID": f"web-frozen-{version}-{relative}"})
+            assert response.status_code == 200, response.text
+            assert response.content == content.encode() and response.headers["Cache-Control"] == "no-store"
+        resource = extension_package_uri(gateway_id=domain.gateway_id, backend_id=registry.extension_hosts.backend_id,
+            profile_id=profile_id, extension_id=extension_id, relative_segments=("extension.js",))
+        stat = await client.post(f"{domain.url}/api/gateway/extension-packages/stat", json={
+            "protocol_version": 1, "gateway_id": domain.gateway_id, "backend_id": registry.extension_hosts.backend_id,
+            "resource_uri": resource, "extension_key": key, "view_id": binding["view_id"], "generation": binding["generation"]})
+        assert stat.status_code == 200 and stat.json()["data"]["size"] == len(f'exports.activate = () => "{version}";\n')
+        assert len(node_calls) == before, "冻结 Web stat/read 不得再调用 Node 发布或库存接口"
+
+    async def rejected_open(key: str) -> None:
+        async with connect(ws_url, additional_headers=domain.headers, compression=None) as channel:
+            await channel.send(json.dumps({"protocol_version": 1, "gateway_id": domain.gateway_id,
+                "backend_id": registry.extension_hosts.backend_id, "view_id": "rejected-new-view", "workspace_ids": [],
+                "profile_id": profile_id, "extension_keys": [key]}))
+            with pytest.raises(ConnectionClosed):
+                await channel.recv()
+
+    async def settled(binding: dict[str, object]) -> None:
+        async with asyncio.timeout(5):
+            while binding["generation"] in registry.extension_hosts._sessions:
+                await asyncio.sleep(0.01)
+
+    first, binding_a = await open_view("web-publication-a", first_key)
+    try:
+        assert node_calls.count("/management") == 2  # 一次安装与一次真实 Web scanner 发布。
+        await check_reads(binding_a, first_key, "1.0.0")
+        upgraded = await install("2.0.0")
+        second_key = upgraded.inventory.extensions[0].extension_key
+        await rejected_open(first_key)
+        second, binding_b = await open_view("web-publication-b", second_key)
+        try:
+            assert binding_a["generation"] != binding_b["generation"]
+            await management.uninstall(profile_id=profile_id, extension_id=extension_id, version="2.0.0")
+            await rejected_open(second_key)
+            await check_reads(binding_a, first_key, "1.0.0")
+            await check_reads(binding_b, second_key, "2.0.0")
+            before = len(node_calls)
+            foreign_id = content_url(binding_a, first_key).replace(f"/{extension_id}/", "/publisher.other/")
+            assert (await client.get(foreign_id)).status_code == 409
+            foreign_key = content_url(binding_a, first_key).replace(f"/{first_key}/", f"/{second_key}/")
+            assert (await client.get(foreign_key)).status_code == 409
+            assert len(node_calls) == before
+        finally:
+            await second.close()
+        await settled(binding_b)
+        assert (await client.get(content_url(binding_b, second_key))).status_code == 409
+        await check_reads(binding_a, first_key, "1.0.0")
+
+        started, release = threading.Event(), threading.Event()
+        original_read = owner_module.publication_file
+
+        def blocked_read(publication: NativeExtensionPublication, *, extension_key: str, relative_segments: object,
+                         file_operation: Literal["stat", "read"]) -> NativeFileRead | NativeFileStat:
+            started.set()
+            assert release.wait(5), "测试必须释放已开始的 Python 文件读取"
+            return original_read(publication, extension_key=extension_key, relative_segments=relative_segments, file_operation=file_operation)
+
+        monkeypatch.setattr(owner_module, "publication_file", blocked_read)
+        reading = asyncio.create_task(client.get(content_url(binding_a, first_key)))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            users = domain.application.state.user_access_service
+            access = users.resolve_cookie(domain.headers["Cookie"].split("=", 1)[1])
+            assert access is not None
+            users.release(access)
+            session = registry.extension_hosts._sessions[binding_a["generation"]]
+            assert isinstance(session, owner_module._WebHostSession)
+            await asyncio.wait_for(session.stopping.wait(), 3)
+            assert session.pending_reads == 1 and not session.closed
+            release.set()
+            response = await reading
+            assert response.status_code == 403 and b"exports.activate" not in response.content
+            await settled(binding_a)
+            assert (await client.get(content_url(binding_a, first_key))).status_code == 401
+        finally:
+            release.set()
+            await asyncio.gather(reading, return_exceptions=True)
+        (case.context.artifacts_dir / "web-frozen-publication.json").write_text(json.dumps({
+            "binding_a": binding_a, "binding_b": binding_b, "node_calls": node_calls,
+            "frozen_reads_without_node": True, "update_uninstall_old_reads": True,
+            "new_admission_rejected": True, "relative_raw_resources": True,
+            "revoked_late_body_rejected": True}, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        await first.close()
 
 
 async def test_native_published_extension_files_are_read_by_exact_retained_key(
@@ -1436,8 +1597,8 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     published.clear()
     deliver.clear()
 
-    async def hold_uninstall_publication(command: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        publication = await native_request(command)
+    async def hold_uninstall_publication(command: dict[str, JsonValue], *, download_base_url: str | None = None) -> dict[str, JsonValue]:
+        publication = await native_request(command, download_base_url=download_base_url)
         if command["method"] == "uninstall":
             published.set()
             await deliver.wait()

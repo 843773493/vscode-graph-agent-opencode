@@ -104,7 +104,6 @@ export async function createExtensionManagement(directory: string, builtinExtens
         if (!identity.extUri.isEqual(dirname(location), root) || basename(location) !== extensionKeyText) {
           throw new ExtensionManagementError('扩展包身份不能定位到用户扩展目录的直接子目录', ExtensionManagementErrorCode.Invalid);
         }
-        // TODO(1.9)：迁齐原实例冻结的发布描述后复用它，移除逐资源的scanner/profile重核。
         const scanned = await scanner.scanExistingExtension(location, ExtensionType.User, { includeInvalid: true });
         // scanner 的空结果可能是缺失目录，也可能是无效 manifest；保留原安装错误归属。
         if (!scanned) await files.stat(location);
@@ -123,7 +122,8 @@ export async function createExtensionManagement(directory: string, builtinExtens
           }
         }
         // 安装身份与 profile 资格沿原 scanner；包内路径及字节读取交目标 Python。
-        return { native_uri: scanned.location.toString(), extensions_root_uri: root.toString() };
+        return { extension_id: scanned.identifier.id, extension_key: extensionKeyText,
+          native_uri: scanned.location.toString(), extensions_root_uri: root.toString() };
       }
       return {
         ready: management.whenNativeManagementReady,
@@ -163,6 +163,19 @@ export async function createExtensionManagement(directory: string, builtinExtens
         },
         async publication(profileId: string, extensionId: string, extensionKey: string, currentProfileMember: boolean) {
           return publishedExtension(profileId, extensionId, extensionKey, currentProfileMember);
+        },
+        async webPublication(profileId: string, extensionKeys: readonly string[]) {
+          const inventory = await this.inventory();
+          const members = new Map(inventory.extensions.map(extension => [extension.extension_key, extension]));
+          if (inventory.profile_id !== profileId || !extensionKeys.length || new Set(extensionKeys).size !== extensionKeys.length
+            || extensionKeys.some(key => !members.get(key)?.is_valid)) {
+            throw new ExtensionManagementError('Web 宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
+          }
+          const extensions = extensionKeys.map(key => members.get(key)!);
+          const publications = await Promise.all(extensions.map(extension => publishedExtension(profileId,
+            extension.description.identifier.value, extension.extension_key, true)));
+          // TODO(4.4)：Node 真实运行集合与最终引用回收尚未闭合，不能启用全局物理 cleanUp。
+          return { inventory: { profile_id: profileId, extensions }, publications };
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。

@@ -10,7 +10,7 @@ from typing import TypeVar
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.core.backend_identity import validate_backend_id
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -66,6 +66,20 @@ class NativeFileStat(BaseModel):
 class NativeFileRead(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     content_base64: str
+
+
+class NativeExtensionPublication(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    extension_id: str = Field(min_length=1)
+    extension_key: str = Field(min_length=1)
+    native_uri: NativeFileURI
+    extensions_root_uri: NativeFileURI
+
+
+class WebExtensionPublication(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    inventory: ProfileExtensionInventory
+    publications: list[NativeExtensionPublication]
 
 
 Result = TypeVar("Result", bound=BaseModel)
@@ -141,6 +155,10 @@ class ExtensionManagementClient:
 
     async def environment(self) -> NativeManagementEnvironment:
         return await self._request({"method": "environment"}, response_type=NativeManagementEnvironment)
+
+    async def web_publication(self, *, profile_id: str, extension_keys: list[str]) -> WebExtensionPublication:
+        return await self._request({"method": "web-publication", "profile_id": profile_id,
+                                   "extension_keys": list(extension_keys)}, response_type=WebExtensionPublication)
 
     async def extension_file_stat(self, *, profile_id: str, extension_key: str, extension_id: str,
                                   relative_segments: list[str], current_profile_member: bool) -> NativeFileStat:

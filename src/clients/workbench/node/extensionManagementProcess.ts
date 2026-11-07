@@ -115,6 +115,11 @@ try {
         if (pathname !== '/management') throw new TypeError('不支持的扩展管理操作');
         if (input.method === 'inventory') result = await management.inventory();
         else if (input.method === 'environment') result = await management.environment();
+        else if (input.method === 'web-publication' && 'profile_id' in input && typeof input.profile_id === 'string'
+          && 'extension_keys' in input && Array.isArray(input.extension_keys)
+          && input.extension_keys.every((key: unknown) => typeof key === 'string')) {
+          result = await management.webPublication(input.profile_id, input.extension_keys);
+        }
         else if (input.method === 'install' && 'vsix_path' in input && typeof input.vsix_path === 'string' && isAbsolute(input.vsix_path)) {
           const requestTransport = 'request_transport' in input ? input.request_transport : undefined;
           const vsixPath = input.vsix_path;

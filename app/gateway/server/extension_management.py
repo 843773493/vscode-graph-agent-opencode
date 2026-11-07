@@ -58,7 +58,7 @@ async def extension_management_request(backend_id: BackendId, command: dict[str,
 ) -> APIResponse[dict[str, JsonValue]]:
     _verify_local_control(request)
     if command.get("method") not in (
-        "inventory", "environment", "install", "uninstall", "extension-file-stat", "extension-file-read",
+        "inventory", "environment", "install", "uninstall", "extension-file-stat", "extension-file-read", "web-publication",
     ):
         raise HTTPException(422, "未登记的扩展安装管理操作")
     try:

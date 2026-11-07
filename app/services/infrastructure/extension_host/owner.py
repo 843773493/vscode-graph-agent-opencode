@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import BinaryIO, Literal, overload
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
@@ -40,7 +40,12 @@ from app.services.infrastructure.extension_host.configuration import (
 )
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    NativeExtensionPublication,
+    NativeFileRead,
+    NativeFileStat,
+    WebExtensionPublication,
 )
+from app.services.infrastructure.extension_host.package_files import publication_file
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -138,7 +143,10 @@ class _WebHostSession:
     def __init__(self, identity: NodeHostIdentity) -> None:
         self.identity = identity
         self.profile_id: str | None = None
-        self.extension_keys: frozenset[str] = frozenset()
+        self.publications: dict[str, NativeExtensionPublication] = {}
+        self.pending_reads = 0
+        self.reads_settled = asyncio.Event()
+        self.reads_settled.set()
         self.closed = False
         self.stopping = asyncio.Event()
         self.transport_settled = asyncio.Event()
@@ -147,6 +155,7 @@ class _WebHostSession:
     async def close(self) -> None:
         self.stopping.set()
         await self.transport_settled.wait()
+        await self.reads_settled.wait()
         self.closed = True
 
 
@@ -200,14 +209,42 @@ class NodeExtensionHostOwner:
             raise ValueError("配置请求不属于当前已认证的宿主代际和明确工作区视图")
         return session.configuration
 
-    def check_web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str) -> None:
+    def check_web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str) -> tuple[_WebHostSession, NativeExtensionPublication]:
         session = self._sessions.get(request.generation or "")
         if (self._admission_closed or not isinstance(session, _WebHostSession)
             or session.closed or session.stopping.is_set() or request.current_profile_member
             or session.identity != NodeHostIdentity(request.gateway_id, request.backend_id, client_id,
                 request.view_id or "", session.identity.workspace_ids, request.generation or "", "web")
-            or request.profile_id != session.profile_id or request.extension_key not in session.extension_keys):
+            or request.profile_id != session.profile_id):
             raise ValueError("扩展包请求不属于当前已认证的 Web 宿主代际和冻结版本")
+        publication = session.publications.get(request.extension_key)
+        if publication is None or request.extension_id.lower() != publication.extension_id.lower():
+            raise ValueError("扩展包请求不属于当前已认证的 Web 宿主代际和冻结版本")
+        return session, publication
+
+    @overload
+    async def web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str,
+                                 operation: Literal["stat"]) -> NativeFileStat: ...
+
+    @overload
+    async def web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str,
+                                 operation: Literal["read"]) -> NativeFileRead: ...
+
+    async def web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str,
+                                 operation: Literal["stat", "read"]) -> NativeFileStat | NativeFileRead:
+        session, publication = self.check_web_extension_file(request, client_id=client_id)
+        # 准入与占用登记之间没有 await；关闭先撤准入，再等待原同步 worker 真正结清。
+        session.pending_reads += 1
+        session.reads_settled.clear()
+        try:
+            result = await run_sync_shielded(publication_file, publication, extension_key=request.extension_key,
+                relative_segments=request.relative_segments, file_operation=operation)
+            self.check_web_extension_file(request, client_id=client_id)
+            return result
+        finally:
+            session.pending_reads -= 1
+            if not session.pending_reads:
+                session.reads_settled.set()
 
     def describe(self, *, expected_backend_id: str | None, workspace_ids: tuple[str, ...]) -> NodeHostStatus:
         if expected_backend_id is not None and expected_backend_id != self.backend_id:
@@ -342,23 +379,27 @@ class NodeExtensionHostOwner:
         profile_id, extension_keys = request.profile_id, tuple(request.extension_keys)
         snapshot: ProfileExtensionInventory | None = None
 
-        def freeze(inventory: ProfileExtensionInventory) -> None:
+        def freeze(publication: WebExtensionPublication) -> None:
             nonlocal snapshot
             if self._admission_closed or session.closed or session.stopping.is_set():
                 raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
+            inventory = publication.inventory
             members = {entry.extension_key: entry for entry in inventory.extensions}
+            publications = {entry.extension_key: entry for entry in publication.publications}
             if (inventory.profile_id != profile_id or len(members) != len(inventory.extensions)
+                or len(publications) != len(publication.publications) or set(publications) != set(extension_keys)
                 or any(key not in members or not members[key].is_valid for key in extension_keys)):
                 raise ValueError("Web 宿主请求不属于目标 profile 当前有效的精确安装版本")
             snapshot = ProfileExtensionInventory(profile_id=inventory.profile_id,
                 extensions=[members[key] for key in extension_keys])
-            # 冻结同次原库存回执；后续更新不改变该实例的版本集合，已发布旧包仍保留。
+            # 冻结同次原 scanner 发布描述；后续文件 I/O 不再逐文件调用 Gateway／Node。
+            # TODO(4.4)：Node 实际运行集合及最终引用回收未闭合，当前继续禁止全局物理 cleanUp。
             session.profile_id = inventory.profile_id
-            session.extension_keys = frozenset(extension_keys)
+            session.publications = publications
 
         try:
-            inventory = await self.management.inventory()
-            freeze(inventory)
+            publication = await self.management.web_publication(profile_id=profile_id, extension_keys=list(extension_keys))
+            freeze(publication)
             if self._admission_closed or session.closed or session.stopping.is_set():
                 raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
             if snapshot is None:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
+from base64 import b64decode
 from dataclasses import dataclass, field
+from typing import Literal
 from uuid import uuid4
 
 import pytest
@@ -15,8 +18,13 @@ from app.schemas.gateway.extension_installation import (
     ProfileExtensionInventory,
 )
 from app.schemas.gateway.extension_web import ExtensionWebHostOpenRequest
+from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    NativeExtensionPublication,
+    NativeFileRead,
+    NativeFileStat,
+    WebExtensionPublication,
 )
 from app.services.infrastructure.extension_host.owner import WebHostConnection
 from tests.unit.services.infrastructure.extension_host.test_owner import (
@@ -57,13 +65,23 @@ def web_case(case: Case, monkeypatch: pytest.MonkeyPatch) -> WebCase:
             _entry(KEY), _entry(OTHER_KEY), _entry(INVALID_KEY, valid=False)]))
     result.gate.set()
 
-    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
+    root = case.owner._home / "extensions"
+    for key in (KEY, NEXT_KEY, OTHER_KEY):
+        package = root / key / "dist"
+        package.mkdir(parents=True)
+        (package / "main.js").write_text(key)
+
+    async def publication(_management: ExtensionManagementClient, *, profile_id: str,
+                          extension_keys: list[str]) -> WebExtensionPublication:
         result.scans.append(len(case.owner.active))
         result.scanning.set()
         await result.gate.wait()
-        return result.inventory
+        return WebExtensionPublication(inventory=result.inventory, publications=[
+            NativeExtensionPublication(extension_id="publisher.other" if key == OTHER_KEY else "publisher.probe",
+                extension_key=key, native_uri=(root / key).as_uri(), extensions_root_uri=root.as_uri())
+            for key in extension_keys])
 
-    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
+    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
     return result
 
 
@@ -166,7 +184,7 @@ async def test_reopened_web_view_gets_new_generation_and_only_current_version(we
             owner.check_web_extension_file(original_file, client_id="client")
 
 
-@pytest.mark.parametrize("change", ["client", "gateway", "backend", "view", "generation", "profile", "current"])
+@pytest.mark.parametrize("change", ["client", "gateway", "backend", "view", "generation", "profile", "current", "extension-id"])
 async def test_web_resource_requires_complete_original_binding(web_case: WebCase, change: str) -> None:
     owner = web_case.node.owner
     async with owner.connect_web(web_case.request, client_id="client") as connection:
@@ -175,6 +193,7 @@ async def test_web_resource_requires_complete_original_binding(web_case: WebCase
             "gateway": {"gateway_id": "gateway_" + "b" * 32}, "backend": {"backend_id": str(uuid4())},
             "view": {"view_id": "other-window"}, "generation": {"generation": str(uuid4())},
             "profile": {"profile_id": "other-profile"}, "current": {"current_profile_member": True},
+            "extension-id": {"extension_id": "publisher.other"},
         }.get(change, {})
         with pytest.raises(ValueError, match="冻结版本"):
             owner.check_web_extension_file(request.model_copy(update=changes), client_id="other" if change == "client" else "client")
@@ -234,3 +253,58 @@ async def test_web_stop_revokes_reads_before_waiting_for_transport_settlement(we
             connection.transport_settled.set()
             await closing
         assert owner.active == ()
+
+
+async def test_web_frozen_reads_use_python_without_further_management_calls(web_case: WebCase) -> None:
+    owner = web_case.node.owner
+    async with owner.connect_web(web_case.request, client_id="client") as connection:
+        web_case.inventory = ProfileExtensionInventory(profile_id="test-profile", extensions=[])
+        request = _file(connection)
+        for _ in range(3):
+            stat = await owner.web_extension_file(request, client_id="client", operation="stat")
+            read = await owner.web_extension_file(request, client_id="client", operation="read")
+            assert stat.size == len(KEY)
+            assert b64decode(read.content_base64) == KEY.encode()
+        assert web_case.scans == [1]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_web_close_waits_for_actual_python_read_and_suppresses_late_result(
+    web_case: WebCase, monkeypatch: pytest.MonkeyPatch, cancel: bool,
+) -> None:
+    owner = web_case.node.owner
+    started, release, settled = threading.Event(), threading.Event(), threading.Event()
+    original = owner_module.publication_file
+
+    def read(publication: NativeExtensionPublication, *, extension_key: str, relative_segments: object,
+             file_operation: Literal["stat", "read"]) -> NativeFileRead | NativeFileStat:
+        started.set()
+        assert release.wait(5), "测试必须释放原同步读取"
+        try:
+            return original(publication, extension_key=extension_key, relative_segments=relative_segments, file_operation=file_operation)
+        finally:
+            settled.set()
+
+    monkeypatch.setattr(owner_module, "publication_file", read)
+    async with owner.connect_web(web_case.request, client_id="client") as connection:
+        request = _file(connection)
+        reading = asyncio.create_task(owner.web_extension_file(request, client_id="client", operation="read"))
+        closing: asyncio.Task[None] | None = None
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            if cancel:
+                reading.cancel("窗口取消读取")
+            closing = asyncio.create_task(owner.close())
+            await asyncio.wait_for(connection.stopping.wait(), 2)
+            await asyncio.sleep(0)
+            assert not reading.done() and not closing.done() and not settled.is_set()
+            with pytest.raises(ValueError, match="冻结版本"):
+                await owner.web_extension_file(request, client_id="client", operation="read")
+            release.set()
+            with pytest.raises(asyncio.CancelledError if cancel else ValueError):
+                await reading
+            await closing
+            assert settled.is_set() and owner.active == ()
+        finally:
+            release.set()
+            await asyncio.gather(reading, *([closing] if closing is not None else []), return_exceptions=True)

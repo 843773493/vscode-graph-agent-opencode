@@ -6,10 +6,7 @@ from base64 import b64encode
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, JsonValue
-
 from app.core.atomic_fs import native_io_path
-from app.schemas.gateway.extension_host import NativeFileURI
 from app.services.infrastructure.extension_host.configuration import (
     native_file_errors,
     native_path,
@@ -17,20 +14,17 @@ from app.services.infrastructure.extension_host.configuration import (
 )
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
+    NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
 )
 
 
-class NativeExtensionPublication(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    native_uri: NativeFileURI
-    extensions_root_uri: NativeFileURI
-
-
 def publication_file(publication: NativeExtensionPublication, *, extension_key: str,
-                     relative_segments: JsonValue, file_operation: Literal["stat", "read"]) -> NativeFileStat | NativeFileRead:
-    """调用方持有原安装串行准入；不扫描安装目录或维护另一份库存。"""
+                     relative_segments: object, file_operation: Literal["stat", "read"]) -> NativeFileStat | NativeFileRead:
+    """消费原发布描述；调用方持有本次管理准入或原 Web session 的读取占用。"""
+    if extension_key != publication.extension_key:
+        raise ExtensionManagementError("扩展文件身份与冻结发布描述不符", "InstalledExtensionNotFound")
     if not isinstance(relative_segments, list) or any(
         not isinstance(segment, str) or not segment or segment in {".", ".."}
         or Path(segment).anchor or any(char in segment for char in ("/", "\\", "\0")) for segment in relative_segments

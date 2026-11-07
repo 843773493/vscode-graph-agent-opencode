@@ -26,11 +26,9 @@ from app.gateway.runtime.extension_management import (
 from app.gateway.runtime.process_logs import ProcessLogFile, ProcessLogOwnership
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
+    NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
-)
-from app.services.infrastructure.extension_host.package_files import (
-    NativeExtensionPublication,
 )
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 
@@ -213,7 +211,8 @@ def publication(tmp_path: Path) -> NativeExtensionPublication:
     package = root / EXTENSION_KEY
     package.mkdir(parents=True)
     (package / "extension.js").write_bytes(b"target-python-content")
-    return NativeExtensionPublication(native_uri=package.as_uri(), extensions_root_uri=root.as_uri())
+    return NativeExtensionPublication(extension_id="publisher.probe", extension_key=package.name,
+        native_uri=package.as_uri(), extensions_root_uri=root.as_uri())
 
 
 @pytest.fixture

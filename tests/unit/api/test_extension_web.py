@@ -7,6 +7,8 @@ import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -19,17 +21,21 @@ from app.container import WorkspaceContainerRegistry
 from app.schemas.gateway.extension_host import ExtensionHostConnectionDTO
 from app.schemas.gateway.extension_installation import (
     InstalledExtension,
+    NativeExtensionFileRequest,
     ProfileExtensionInventory,
 )
 from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
     ExtensionWebHostOpenRequest,
 )
+from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
     NativeManagementEnvironment,
+    WebExtensionPublication,
 )
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
@@ -61,7 +67,7 @@ class WebCase:
 
 @pytest.fixture
 def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
-             monkeypatch: pytest.MonkeyPatch) -> Iterator[WebCase]:
+             monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[WebCase]:
     client, registry = private_host_client
     owner = registry.extension_hosts
     owner._management = ExtensionManagementClient(backend_id=owner.backend_id,
@@ -75,20 +81,29 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
          "X-BoxTeam-Extension-Client-Id": "authenticated-client", "X-Request-ID": "web-private"},
         ProfileExtensionInventory(profile_id="default-profile", extensions=[_entry(KEY), _entry(OTHER_KEY)]))
 
-    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
-        return result.inventory
+    root = tmp_path / "extensions"
+    for key in (KEY, NEXT_KEY, OTHER_KEY):
+        package = root / key / "dist"
+        package.mkdir(parents=True)
+        (package / "main.js").write_bytes(b"frozen-bytes")
 
-    async def read(_management: ExtensionManagementClient, **selection: object) -> NativeFileRead:
-        result.reads.append(selection)
-        return NativeFileRead(content_base64="ZnJvemVuLWJ5dGVz")
+    async def publication(_management: ExtensionManagementClient, *, profile_id: str,
+                          extension_keys: list[str]) -> WebExtensionPublication:
+        return WebExtensionPublication(inventory=result.inventory, publications=[
+            NativeExtensionPublication(extension_id="publisher.other" if key == OTHER_KEY else "publisher.probe",
+                extension_key=key, native_uri=(root / key).as_uri(), extensions_root_uri=root.as_uri())
+            for key in extension_keys])
 
-    async def stat(_management: ExtensionManagementClient, **selection: object) -> NativeFileStat:
-        result.reads.append(selection)
-        return NativeFileStat(type=1, ctime=0, mtime=123, size=12, permissions=None)
+    original = owner_module.publication_file
 
-    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
-    monkeypatch.setattr(ExtensionManagementClient, "extension_file_read", read)
-    monkeypatch.setattr(ExtensionManagementClient, "extension_file_stat", stat)
+    def file_read(publication: NativeExtensionPublication, *, extension_key: str,
+                  relative_segments: object, file_operation: Literal["stat", "read"]) -> NativeFileRead | NativeFileStat:
+        result.reads.append({"profile_id": "default-profile", "extension_key": extension_key,
+            "extension_id": publication.extension_id, "relative_segments": relative_segments, "current_profile_member": False})
+        return original(publication, extension_key=extension_key, relative_segments=relative_segments, file_operation=file_operation)
+
+    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
+    monkeypatch.setattr(owner_module, "publication_file", file_read)
     try:
         yield result
     finally:
@@ -120,7 +135,7 @@ def test_private_web_channel_returns_exact_frozen_subset_without_node_initializa
 def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(web_case: WebCase, monkeypatch: pytest.MonkeyPatch) -> None:
     scanning, cancelled = threading.Event(), threading.Event()
 
-    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
+    async def publication(_management: ExtensionManagementClient, **_selection: object) -> WebExtensionPublication:
         scanning.set()
         try:
             await asyncio.Event().wait()
@@ -128,7 +143,7 @@ def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(w
             cancelled.set()
         pytest.fail("已断开的准入不能返回库存")
 
-    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
+    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as websocket:
         websocket.send_json(web_case.payload)
         assert scanning.wait(2)
@@ -188,7 +203,7 @@ def test_retained_package_requires_open_web_binding_and_stops_after_close(web_ca
 
 
 @pytest.mark.parametrize("operation", ["stat", "read"])
-@pytest.mark.parametrize("change", ["key", "client", "missing-client", "backend", "profile", "view", "generation", "current", "missing-generation"])
+@pytest.mark.parametrize("change", ["key", "extension-id", "client", "missing-client", "backend", "profile", "view", "generation", "current", "missing-generation"])
 def test_retained_package_rejects_binding_mismatch_before_native_read(web_case: WebCase, operation: str, change: str) -> None:
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as websocket:
         websocket.send_json(web_case.payload)
@@ -196,6 +211,8 @@ def test_retained_package_rejects_binding_mismatch_before_native_read(web_case: 
         headers = dict(web_case.headers)
         if change == "key":
             payload["extension_key"] = OTHER_KEY
+        elif change == "extension-id":
+            payload["extension_id"] = "publisher.other"
         elif change == "client":
             headers["X-BoxTeam-Extension-Client-Id"] = "another-client"
         elif change == "missing-client":
@@ -218,17 +235,18 @@ def test_retained_package_rejects_binding_mismatch_before_native_read(web_case: 
 
 @pytest.mark.parametrize("operation", ["stat", "read"])
 def test_web_stop_during_native_read_prevents_late_disclosure(web_case: WebCase, monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
-    original = getattr(ExtensionManagementClient, f"extension_file_{operation}")
+    original = owner_module.NodeExtensionHostOwner.web_extension_file
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as websocket:
         websocket.send_json(web_case.payload)
         binding = websocket.receive_json()
 
-        async def stop_after_read(management: ExtensionManagementClient, **selection: object) -> NativeFileRead | NativeFileStat:
-            result = await original(management, **selection)
+        async def stop_after_read(owner: owner_module.NodeExtensionHostOwner, payload: NativeExtensionFileRequest,
+                                  *, client_id: str, operation: Literal["stat", "read"]) -> NativeFileRead | NativeFileStat:
+            result = await original(owner, payload, client_id=client_id, operation=operation)
             web_case.registry.extension_hosts._sessions[binding["generation"]].stopping.set()
             return result
 
-        monkeypatch.setattr(ExtensionManagementClient, f"extension_file_{operation}", stop_after_read)
+        monkeypatch.setattr(owner_module.NodeExtensionHostOwner, "web_extension_file", stop_after_read)
         response = web_case.client.post(f"/api/internal/extension-files/{operation}",
             json=_file(web_case, binding), headers=web_case.headers)
         assert response.status_code == 409 and len(web_case.reads) == 1

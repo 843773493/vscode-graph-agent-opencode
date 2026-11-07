@@ -20,11 +20,11 @@ import httpx
 import pytest
 
 from app.core.child_process import OwnedChildProcess
-from app.services.infrastructure.extension_host.management import NativeFileRead
-from app.services.infrastructure.extension_host.package_files import (
+from app.services.infrastructure.extension_host.management import (
     NativeExtensionPublication,
-    publication_file,
+    NativeFileRead,
 )
+from app.services.infrastructure.extension_host.package_files import publication_file
 from tests.harness.python.run_context import TestRunContext
 
 

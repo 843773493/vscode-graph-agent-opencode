@@ -152,11 +152,12 @@ async def extension_file_stat(
 ) -> APIResponse[NativeFileStat]:
     _check_extension_file_target(request, payload, registry)
     try:
-        result = await registry.extension_hosts.management.extension_file_stat(profile_id=payload.profile_id,
-            extension_key=payload.extension_key, extension_id=payload.extension_id, relative_segments=payload.relative_segments,
-            current_profile_member=payload.current_profile_member)
+        result = await registry.extension_hosts.web_extension_file(payload,
+            client_id=request.headers["x-boxteam-extension-client-id"], operation="stat")
     except ExtensionManagementError as error:
         raise _extension_file_error(error) from error
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
     _check_extension_file_target(request, payload, registry)
     return APIResponse(data=result, request_id=request_id)
 
@@ -169,11 +170,12 @@ async def extension_file_read(
 ) -> APIResponse[NativeFileRead]:
     _check_extension_file_target(request, payload, registry)
     try:
-        result = await registry.extension_hosts.management.extension_file_read(profile_id=payload.profile_id,
-            extension_key=payload.extension_key, extension_id=payload.extension_id, relative_segments=payload.relative_segments,
-            current_profile_member=payload.current_profile_member)
+        result = await registry.extension_hosts.web_extension_file(payload,
+            client_id=request.headers["x-boxteam-extension-client-id"], operation="read")
     except ExtensionManagementError as error:
         raise _extension_file_error(error) from error
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
     _check_extension_file_target(request, payload, registry)
     return APIResponse(data=result, request_id=request_id)
 
