@@ -4,6 +4,7 @@ export const extensionConfigurationSourcePaths = [
   'src/vs/workbench/services/configuration/browser/configurationService.ts',
   'src/vs/workbench/services/configuration/browser/configuration.ts',
   'src/vs/workbench/api/browser/mainThreadConfiguration.ts',
+  'src/vs/platform/configuration/common/configurationModels.ts',
 ];
 
 /** 每个目标视图使用原配置模型；原窗口及 Remote 入口继续使用各自已登记的来源。 */
@@ -26,6 +27,47 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
       this.resolveWorkspaceFolders = resolveWorkspaceFolders ?? ((folders, configuration) => toWorkspaceFolders(folders, configuration, this.uriIdentityService.extUri));`);
     contents = replaceOnce(contents, 'new RemoteUserConfiguration(remoteAuthority, configurationCache, fileService, uriIdentityService, remoteAgentService, logService)',
       'new RemoteUserConfiguration(remoteAuthority, configurationCache, fileService, uriIdentityService, remoteAgentService, logService, remoteSettingsResource)');
+    contents = replaceOnce(contents, 'ConfigurationModel, ConfigurationChangeEvent, mergeChanges',
+      'ConfigurationModel, ConfigurationChangeEvent, mergeChanges, ConfigurationParseOptions');
+    contents = replaceOnce(contents, '\n\tprivate createApplicationConfiguration(): void {', `
+    // 扩展键由原注册来源判定；窗口布局等内置设置继续使用当前 profile。
+    private localUserConfigurationOptions(scopes?: ConfigurationScope[]): ConfigurationParseOptions {
+      return { scopes, ...(this.remoteSettingsResource ? {
+        propertyFilter: (_key, schema) => typeof schema?.source !== 'object' || !schema.source.id,
+      } : {}) };
+    }
+\n\tprivate createApplicationConfiguration(): void {`);
+    for (const argument of ['userDataProfileService.currentProfile, !!remoteAuthority', 'e.profile, !!this.remoteUserConfiguration']) {
+      contents = replaceOnce(contents, `{ scopes: getLocalUserConfigurationScopes(${argument}) }`,
+        `this.localUserConfigurationOptions(getLocalUserConfigurationScopes(${argument}))`);
+    }
+    contents = replaceOnce(contents,
+      'new ApplicationConfiguration(this.userDataProfilesService, this.fileService, this.uriIdentityService, this.logService)',
+      'new ApplicationConfiguration(this.userDataProfilesService, this.fileService, this.uriIdentityService, this.logService, this.localUserConfigurationOptions().propertyFilter)');
+    contents = replaceOnce(contents, 'this.toEditableConfigurationTarget(target, key)', 'this.toEditableConfigurationTarget(target, key, value)');
+    contents = replaceOnce(contents, 'OVERRIDE_PROPERTY_PATTERN,', 'OVERRIDE_PROPERTY_PATTERN, OVERRIDE_PROPERTY_REGEX,');
+    contents = replaceOnce(contents, '\n\tprivate toEditableConfigurationTarget(target: ConfigurationTarget, key: string): EditableConfigurationTarget | null {', `
+    private toEditableConfigurationTarget(target: ConfigurationTarget, key: string, value: unknown): EditableConfigurationTarget | null {
+    if (this.remoteSettingsResource) {
+      const properties = this.configurationRegistry.getConfigurationProperties();
+      const domains = new Set<boolean>();
+      const visit = (name: string, entry: unknown): void => {
+        const schema = properties[name];
+        if (!schema && entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+          for (const [child, item] of Object.entries(entry)) visit(name ? name + '.' + child : child, item);
+        } else domains.add(typeof schema?.source === 'object' && !!schema.source.id);
+      };
+      if (OVERRIDE_PROPERTY_REGEX.test(key)) visit('', value ?? this.inspect(key).userValue ?? {});
+      else visit(key, value);
+      if ((target === ConfigurationTarget.USER || target === ConfigurationTarget.USER_LOCAL || target === ConfigurationTarget.USER_REMOTE || target === ConfigurationTarget.APPLICATION) && domains.size > 1) {
+        throw new Error('语言覆盖同时包含窗口与目标扩展设置，请分别更新各设置键：' + key);
+      }
+      if (domains.has(true)) {
+        if (target === ConfigurationTarget.USER_REMOTE || target === ConfigurationTarget.USER) return EditableConfigurationTarget.USER_REMOTE;
+        if (target === ConfigurationTarget.USER_LOCAL || target === ConfigurationTarget.APPLICATION) throw new Error('目标扩展设置不能写入当前窗口 profile：' + key);
+      }
+    }
+`);
     for (const [folders, configuration] of [
       ['newStoredFolders', 'workspaceConfigPath'],
       ['this.workspaceConfiguration.getFolders()', 'workspaceConfigPath'],
@@ -44,7 +86,7 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
     // 明确目标不等待窗口的 RemoteAgent，不读取另一目标的缓存。
     contents = replaceOnce(contents, '\n\t\tremoteAgentService.getEnvironment().then', `
     if (settingsResource) {
-      this._userConfiguration = this._register(new FileServiceBasedRemoteUserConfiguration(settingsResource, { scopes: REMOTE_MACHINE_SCOPES }, fileService, uriIdentityService, logService));
+      this._userConfiguration = this._register(new FileServiceBasedRemoteUserConfiguration(settingsResource, this.parseOptions(), fileService, uriIdentityService, logService));
       this._register(this._userConfiguration.onDidChangeConfiguration(model => this._onDidChangeConfiguration.fire(model)));
       return;
     }
@@ -52,7 +94,26 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
     contents = replaceOnce(contents, 'return this._userConfiguration.initialize();', `const model = await this._userConfiguration.initialize();
       if (this.settingsResource) this._onDidInitialize.fire(model);
       return model;`);
+    contents = replaceOnce(contents, 'return this._userConfiguration.reparse({ scopes: REMOTE_MACHINE_SCOPES });',
+      'return this._userConfiguration.reparse(this.parseOptions());');
+    contents = replaceOnce(contents, '\n\tgetRestrictedSettings(): string[] {', `
+    private parseOptions(): ConfigurationParseOptions {
+      return this.settingsResource ? {
+        scopes: [...REMOTE_MACHINE_SCOPES, ConfigurationScope.APPLICATION],
+        propertyFilter: (_key, schema) => schema?.scope !== ConfigurationScope.APPLICATION
+          || (typeof schema.source === 'object' && !!schema.source.id),
+      } : { scopes: REMOTE_MACHINE_SCOPES };
+    }
+\n\tgetRestrictedSettings(): string[] {`);
     let result = replaceOnce(source, source.slice(start, end), contents);
+    const applicationStart = result.indexOf('export class ApplicationConfiguration extends UserSettings {');
+    const applicationEnd = result.indexOf('\nexport class UserConfiguration', applicationStart);
+    let application = result.slice(applicationStart, applicationEnd);
+    application = replaceOnce(application, 'logService: ILogService,\n\t)',
+      "logService: ILogService,\n    propertyFilter?: ConfigurationParseOptions['propertyFilter'],\n\t)");
+    application = replaceOnce(application, '{ scopes: APPLICATION_SCOPES, skipUnregistered: true }',
+      '{ scopes: APPLICATION_SCOPES, skipUnregistered: true, propertyFilter }');
+    result = replaceOnce(result, result.slice(applicationStart, applicationEnd), application);
     // 默认值／信任变化只重解析已加载正文；磁盘变化仍由原 watcher 刷新持久缓存。
     result = replaceOnce(result, `const configurationModel = this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
 \t\tthis.updateCache();
@@ -77,6 +138,7 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
   }
   if (path === paths[2]) {
     let contents = replaceOnce(source, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
+    contents = replaceOnce(contents, 'ConfigurationScope, getScopes', 'ConfigurationScope, getScopes, OVERRIDE_PROPERTY_REGEX');
     contents = replaceOnce(contents, 'private readonly _configurationListener: IDisposable;', 'private readonly _configurationListener: IDisposable;\n  private disposed = false;');
     contents = replaceOnce(contents, 'this._configurationListener.dispose();', 'this.disposed = true;\n    this._configurationListener.dispose();');
     contents = replaceOnce(contents, 'proxy.$acceptConfigurationChanged(this._getConfigurationData(), e.change);',
@@ -87,7 +149,32 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
         return Promise.reject(new Error('配置资源不属于发起宿主的工作区视图：' + overrides.resource.toString()));
       }
       target = target !== null && target !== undefined ? target : this.deriveConfigurationTarget(key, overrides);`);
+    contents = replaceOnce(contents, 'const configurationValue = this.configurationService.inspect(key, overrides);', `
+      const source = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).getConfigurationProperties()[key]?.source;
+      if (this.extHostContext.extensionHost.targetContext && target === ConfigurationTarget.USER && !OVERRIDE_PROPERTY_REGEX.test(key) && typeof source === 'object' && source.id) {
+        target = ConfigurationTarget.USER_REMOTE;
+      }
+      const configurationValue = this.configurationService.inspect(key, overrides);`);
     return contents;
+  }
+  if (path === paths[3]) {
+    let contents = replaceOnce(source, 'export interface ConfigurationParseOptions {', `export interface ConfigurationParseOptions {
+      propertyFilter?: (key: string, schema: IRegisteredConfigurationPropertySchema | undefined) => boolean;`);
+    contents = replaceOnce(contents, '\n\t\tconst { contents, keys, overrides, restricted, hasExcludedProperties } = this.doParseRaw(raw, options);', `
+      // 归属过滤也约束 inspect 的 raw；scope／信任的原 raw 诊断语义不变。
+      if (options?.propertyFilter) {
+        const registry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
+        raw = this.filter(raw, registry.getConfigurationProperties(), registry.getExcludedConfigurationProperties(), true,
+          { propertyFilter: options.propertyFilter }).raw;
+        options = { ...options, propertyFilter: undefined };
+      }
+\n\t\tconst { contents, keys, overrides, restricted, hasExcludedProperties } = this.doParseRaw(raw, options);`);
+    contents = replaceOnce(contents, "!options?.exclude?.length)", "!options?.exclude?.length && !options?.propertyFilter)");
+    contents = replaceOnce(contents, 'json.setObjectProperty(raw, key, result.raw);',
+      'if (!options.propertyFilter || !result.hasExcludedProperties || Object.keys(result.raw).length) json.setObjectProperty(raw, key, result.raw);');
+    return replaceOnce(contents, '\n\t\tif (options.exclude?.includes(key)) {', `
+      if (options.propertyFilter && !options.propertyFilter(key, propertySchema ?? excludedPropertySchema)) return false;
+\n\t\tif (options.exclude?.includes(key)) {`);
   }
   return source;
 }

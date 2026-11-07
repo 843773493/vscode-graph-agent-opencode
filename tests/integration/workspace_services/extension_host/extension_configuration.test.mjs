@@ -14,6 +14,24 @@ await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { targetConfigurationServices } from './src/clients/workbench/src/extensions/configuration.js';
 export { TargetUriTransformer } from './src/clients/workbench/src/extensions/targetUris.js';
 export { MainThreadConfiguration } from '${upstream}workbench/api/browser/mainThreadConfiguration.js';
+export { ExtHostConfigProvider } from '${upstream}workbench/api/common/extHostConfiguration.js';
+export { ConfigurationTarget as ExtHostConfigurationTarget } from '${upstream}workbench/api/common/extHostTypes.js';
+export { ModelService } from '${upstream}editor/common/services/modelService.js';
+export { LanguageService } from '${upstream}editor/common/services/languageService.js';
+export { ILanguageService } from '${upstream}editor/common/languages/language.js';
+export { ITextResourcePropertiesService } from '${upstream}editor/common/services/textResourceConfiguration.js';
+export { LanguageConfigurationService } from '${upstream}editor/common/languages/languageConfigurationRegistry.js';
+export { ILanguageConfigurationService } from '${upstream}editor/common/languages/languageConfigurationRegistry.js';
+export { ITreeSitterLibraryService } from '${upstream}editor/common/services/treeSitter/treeSitterLibraryService.js';
+export { UndoRedoService } from '${upstream}platform/undoRedo/common/undoRedoService.js';
+export { IUndoRedoService } from '${upstream}platform/undoRedo/common/undoRedo.js';
+export { IDialogService } from '${upstream}platform/dialogs/common/dialogs.js';
+export { INotificationService } from '${upstream}platform/notification/common/notification.js';
+export { ITextModelService } from '${upstream}editor/common/services/resolverService.js';
+export { ITextFileService } from '${upstream}workbench/services/textfile/common/textfiles.js';
+export { IFilesConfigurationService } from '${upstream}workbench/services/filesConfiguration/common/filesConfigurationService.js';
+export { IPreferencesService } from '${upstream}workbench/services/preferences/common/preferences.js';
+export { IEditorService } from '${upstream}workbench/services/editor/common/editorService.js';
 export { MainThreadFileSystem } from '${upstream}workbench/api/browser/mainThreadFileSystem.js';
 export { FileService } from '${upstream}platform/files/common/fileService.js';
 export { InMemoryFileSystemProvider } from '${upstream}platform/files/common/inMemoryFilesystemProvider.js';
@@ -36,7 +54,7 @@ export { IRemoteAgentService } from '${upstream}workbench/services/remote/common
 export { URI } from '${upstream}base/common/uri.js';
 export { VSBuffer, encodeBase64, decodeBase64 } from '${upstream}base/common/buffer.js';
 export { DisposableStore } from '${upstream}base/common/lifecycle.js';
-export { Event } from '${upstream}base/common/event.js';
+export { Event, Emitter } from '${upstream}base/common/event.js';
 ` }, outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
   plugins: [{ name: 'explicit-configuration-transport-boundary', setup(builder) {
     builder.onLoad({ filter: /\/extensions\/configurationFiles\.ts$/ }, async args => {
@@ -62,7 +80,7 @@ beforeAll(async () => {
 afterAll(async () => {
   try { await run.close(); }
   finally { await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({
-    boundary: '真实Chromium中的原WorkspaceService、FileService、配置parser、child DI及MainThreadConfiguration；认证binding、配置HTTP/SSE与原生磁盘由具名内存装具替代，不代表Gateway、Node、真实编辑器保存或Windows原生验收。', checks,
+    boundary: '真实Chromium中的原WorkspaceService、FileService、配置parser、child DI、MainThread/ExtHostConfiguration及ConfigurationEditing/真实TextModel；认证binding、配置HTTP/SSE、原生磁盘、resolver与TextFile保存由具名装具替代，不代表Gateway、Node、完整设置界面或Windows原生验收。', checks,
   }, null, 2)); }
 });
 
@@ -114,12 +132,13 @@ async function open() {
       await provider.writeFile(resource, new TextEncoder().encode(JSON.stringify(value)), { create: true, overwrite: true, unlock: false, atomic: false });
     };
     const settings = m.URI.parse('vscode-userdata:/profile/settings.json');
-    await put(profile, settings, { 'probe.value': 'local', 'probe.machine': 'local-machine' });
     const currentProfile = { id: 'web-profile', isDefault: true, settingsResource: settings,
       tasksResource: m.URI.parse('vscode-userdata:/profile/tasks.json'), mcpResource: m.URI.parse('vscode-userdata:/profile/mcp.json') };
+    const profileChanged = lifetime.add(new m.Emitter());
+    const userProfile = { currentProfile, onDidChangeCurrentProfile: profileChanged.event };
     const services = new m.ServiceCollection([m.IFileService, files], [m.IUriIdentityService, identity], [m.ILogService, logs],
       [m.IBrowserWorkbenchEnvironmentService, { cacheHome: m.URI.parse('vscode-userdata:/cache'), options: {}, isBuilt: false }],
-      [m.IUserDataProfileService, { currentProfile, onDidChangeCurrentProfile: m.Event.None }],
+      [m.IUserDataProfileService, userProfile],
       [m.IUserDataProfilesService, { defaultProfile: currentProfile }], [m.IPolicyService, new m.NullPolicyService()],
       [m.IRemoteAgentService, { getEnvironment() { throw new Error('不应取得窗口RemoteAgent环境'); } }],
       [m.IWorkspaceTrustManagementService, { isWorkspaceTrusted: () => true, onDidChangeTrust: m.Event.None }]);
@@ -127,7 +146,17 @@ async function open() {
     m.Registry.as(m.Extensions.Configuration).registerConfiguration({ id: 'probe', properties: {
       'probe.value': { type: 'string', default: 'default', scope: m.ConfigurationScope.LANGUAGE_OVERRIDABLE },
       'probe.machine': { type: 'string', default: 'machine-default', scope: m.ConfigurationScope.MACHINE },
+      'targetProbe.presentation': { type: 'string', default: 'presentation-default', scope: m.ConfigurationScope.WINDOW },
     } });
+    m.Registry.as(m.Extensions.Configuration).registerConfiguration({ id: 'targetProbe', extensionInfo: { id: 'fixture.target-probe', displayName: '目标设置探针' }, properties: {
+      'targetProbe.first': { type: 'string', default: 'first-default', scope: m.ConfigurationScope.WINDOW },
+      'targetProbe.language': { type: 'string', default: 'language-default', scope: m.ConfigurationScope.LANGUAGE_OVERRIDABLE },
+      'targetProbe.application': { type: 'string', default: 'application-default', scope: m.ConfigurationScope.APPLICATION },
+    } });
+    await put(profile, settings, { 'probe.value': 'local', 'probe.machine': 'local-machine',
+      'targetProbe.first': 'stale-local', 'targetProbe.application': 'stale-application', 'targetProbe.presentation': 'window-profile',
+      'lateProbe.machine': 'stale-late',
+      '[typescript]': { 'targetProbe.language': 'stale-language' } });
     const hosts = new Map();
     const make = async (label, roots = [label + '1'], sharedProfile) => {
       const gatewayId = sharedProfile?.binding.gateway_id ?? 'gateway-' + label.toLowerCase(), backendId = sharedProfile?.binding.backend_id ?? 'backend-' + label;
@@ -152,13 +181,18 @@ async function open() {
       try { child = await m.targetConfigurationServices(parent, { kind: 'node', connection: binding }, store); }
       catch (error) { store.dispose(); throw error; }
       const owner = child.invokeFunction(accessor => accessor.get(m.IConfigurationService)), snapshots = [];
+      let publicConfiguration;
       const main = store.add(child.createInstance(m.MainThreadConfiguration, { extensionHost: { binding, targetContext: { kind: 'node', connection: binding } }, getProxy: () => ({
-        $initializeConfiguration: data => snapshots.push(data), $acceptConfigurationChanged: data => snapshots.push(data),
+        $initializeConfiguration: data => snapshots.push(data), $acceptConfigurationChanged: (data, change) => {
+          snapshots.push(data); publicConfiguration?.$acceptConfigurationChanged(data, change);
+        },
       }) }));
-      const host = { binding, transformer, child, owner, main, store, snapshots, config, remote };
+      publicConfiguration = new m.ExtHostConfigProvider(main, { workspace: owner.getWorkspace() }, snapshots[0], logs);
+      const host = { binding, transformer, child, owner, main, store, snapshots, config, remote, publicConfiguration };
       hosts.set(label, host); return host;
     };
-    globalThis.probe = { m, files, disk, profile, ordinary, put, parent, lifetime, hosts, make, transport };
+    globalThis.probe = { m, files, disk, profile, ordinary, put, parent, services, lifetime, hosts, make, transport, settings,
+      userProfile, profileChanged };
   });
   return { context, page };
 }
@@ -288,5 +322,154 @@ test('目标配置权限或代际失效不能初始化为空配置，监听越�
     expect(result.aValue).toBe('A-remote'); expect(result.bValue).toBe('B-remote');
     await page.waitForFunction(() => globalThis.probe.watchErrors.some(error => error.includes('未绑定资源')));
     checks.push('目标拒绝读取/已撤销代际初始化失败、监听跨资源事件沿原watch error公开且不改变配置');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('目标扩展用户配置的读取与inspect不借用窗口profile，原窗口设置仍沿profile', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, a = await p.make('A'), b = await p.make('B');
+      const first = a.publicConfiguration.getConfiguration('targetProbe').inspect('first');
+      const language = a.publicConfiguration.getConfiguration('targetProbe', { languageId: 'typescript' }).inspect('language');
+      return { value: a.owner.getValue('targetProbe.first'), first, language,
+        b: b.owner.getValue('targetProbe.first'), window: a.owner.getValue('probe.value'),
+        application: a.publicConfiguration.getConfiguration('targetProbe').get('application'),
+        local: a.owner.getConfigurationData().userLocal.contents };
+    });
+    expect(result.value).toBe('first-default'); expect(result.b).toBe('first-default');
+    expect(result.first.globalLocalValue).toBeUndefined(); expect(result.first.globalValue).toBeUndefined();
+    expect(result.language.globalLocalLanguageValue).toBeUndefined();
+    expect(result.application).toBe('application-default');
+    expect(result.local.targetProbe).toEqual({ presentation: 'window-profile' });
+    expect(result.local['[typescript]']).not.toHaveProperty('targetProbe');
+    expect(result.window).toBe('A1-folder');
+    checks.push('实际来源schema的目标扩展键不从窗口profile进入get/inspect或MainThread初始载荷；原窗口键保持');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('schema动态注册和窗口profile切换重解析原正文，get/inspect/change均保持目标归属', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, m = p.m, a = await p.make('A');
+      const registry = m.Registry.as(m.Extensions.Configuration);
+      const extension = { id: 'lateProbe', extensionInfo: { id: 'fixture.late-probe' }, properties: {
+        'lateProbe.machine': { type: 'string', default: 'late-default', scope: m.ConfigurationScope.MACHINE },
+      } };
+      registry.registerConfiguration(extension);
+      const inspect = key => { const value = a.owner.inspect(key); return {
+        value: value.value, userLocalValue: value.userLocalValue, applicationValue: value.applicationValue,
+      }; };
+      const dynamic = inspect('lateProbe.machine');
+      const next = { ...p.userProfile.currentProfile, id: 'second-profile', isDefault: false,
+        settingsResource: m.URI.parse('vscode-userdata:/second/settings.json'),
+        tasksResource: m.URI.parse('vscode-userdata:/second/tasks.json'), mcpResource: m.URI.parse('vscode-userdata:/second/mcp.json') };
+      await p.put(p.profile, next.settingsResource, { 'targetProbe.first': 'second-stale', 'targetProbe.application': 'second-app',
+        'targetProbe.presentation': 'second-window', '[typescript]': { 'targetProbe.language': 'second-language' } });
+      const previous = p.userProfile.currentProfile, joins = [];
+      p.userProfile.currentProfile = next; p.profileChanged.fire({ previous, profile: next, join: promise => joins.push(promise) });
+      await Promise.all(joins);
+      const after = inspect('targetProbe.first');
+      const language = a.publicConfiguration.getConfiguration('targetProbe', { languageId: 'typescript' }).inspect('language');
+      const before = a.snapshots.length;
+      await p.files.writeFile(next.settingsResource, m.VSBuffer.fromString(JSON.stringify({ 'targetProbe.first': 'new-stale', 'targetProbe.presentation': 'second-window' })));
+      await a.owner.reloadConfiguration(m.ConfigurationTarget.USER_LOCAL);
+      const afterReload = inspect('targetProbe.first');
+      return { dynamic, after, afterReload, language, local: a.owner.getConfigurationData().userLocal.contents,
+        application: inspect('targetProbe.application'), sameSnapshotCount: a.snapshots.length === before,
+        window: a.owner.getValue('targetProbe.presentation') };
+    });
+    expect(result.dynamic.userLocalValue).toBeUndefined(); expect(result.dynamic.value).toBe('late-default');
+    expect(result.after.userLocalValue).toBeUndefined(); expect(result.afterReload.userLocalValue).toBeUndefined();
+    expect(result.language.globalLocalLanguageValue).toBeUndefined(); expect(result.application.applicationValue).toBeUndefined();
+    expect(result.local.targetProbe).toEqual({ presentation: 'second-window' }); expect(result.window).toBe('second-window');
+    expect(result.sameSnapshotCount).toBe(true);
+    checks.push('原registry动态schema及profile reset/application层/重载不重新引入窗口扩展键；剔除字段变化不发目标change，内置同前缀键仍走profile');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('公开Global更新经原ConfigurationEditing写目标用户文件，保留语言覆盖、dirty拒绝与窗口设置归属', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, m = p.m, a = await p.make('A'), b = await p.make('B');
+      const unexpected = () => { throw new Error('本场景不应打开编辑器或通知'); };
+      const notification = { error: unexpected, warn: unexpected }, dialog = { confirm: unexpected };
+      p.services.set(m.IUndoRedoService, new m.UndoRedoService(dialog, notification));
+      p.services.set(m.ILanguageService, p.lifetime.add(new m.LanguageService()));
+      p.services.set(m.ITreeSitterLibraryService, { supportsLanguage: () => false });
+      p.services.set(m.ILanguageConfigurationService, p.lifetime.add(a.child.createInstance(m.LanguageConfigurationService)));
+      p.services.set(m.ITextResourcePropertiesService, { getEOL: () => '\n' });
+      const models = p.lifetime.add(a.child.createInstance(m.ModelService)), references = [], dirty = new Set();
+      // 仅编辑器持久层替身：原ConfigurationEditing修改真实TextModel，保存仍走原FileService/目标transport。
+      p.services.set(m.ITextModelService, { async createModelReference(resource) {
+        const model = models.getModel(resource) ?? models.createModel((await p.files.readFile(resource)).value.toString(), null, resource);
+        const reference = { resource: resource.toString(), disposed: false }; references.push(reference);
+        return { object: { textEditorModel: model }, dispose() { reference.disposed = true; } };
+      } });
+      p.services.set(m.ITextFileService, {
+        isDirty: resource => dirty.has(resource.toString()),
+        async write(resource, content) { return p.files.writeFile(resource, m.VSBuffer.fromString(content)); },
+        async save(resource) { await p.files.writeFile(resource, m.VSBuffer.fromString(models.getModel(resource).getValue())); return resource; },
+      });
+      p.services.set(m.IFilesConfigurationService, { enableAutoSaveAfterShortDelay: () => ({ dispose() {} }) });
+      p.services.set(m.INotificationService, notification); p.services.set(m.IPreferencesService, { open: unexpected });
+      p.services.set(m.IEditorService, { openEditor: unexpected });
+      const remote = m.URI.parse(a.remote.resource_uri);
+      await p.files.writeFile(remote, m.VSBuffer.fromString('{\n// 目标原注释\n"probe.machine":"A-remote",\n"targetProbe.language":"A-base",\n"[typescript]":{"targetProbe.language":"A-ts"}\n}'));
+      await a.owner.reloadConfiguration(m.ConfigurationTarget.USER_REMOTE);
+      const localBefore = (await p.files.readFile(p.settings)).value.toString(), beforeB = b.snapshots.length, events = [];
+      a.store.add(a.publicConfiguration.onDidChangeConfiguration(event => events.push({
+        first: event.affectsConfiguration('targetProbe.first'), language: event.affectsConfiguration('targetProbe.language'),
+      })));
+      const config = a.publicConfiguration.getConfiguration('targetProbe');
+      await config.update('first', 'A-first', m.ExtHostConfigurationTarget.Global);
+      const first = config.inspect('first');
+      await config.update('application', 'A-application', m.ExtHostConfigurationTarget.Global);
+      await a.publicConfiguration.getConfiguration('targetProbe', { languageId: 'typescript' }).update('language', 'A-ts-updated', m.ExtHostConfigurationTarget.Global);
+      await a.publicConfiguration.getConfiguration().update('[javascript]', { 'targetProbe.language': 'A-js' }, m.ExtHostConfigurationTarget.Global);
+      const edited = (await p.files.readFile(remote)).value.toString(), parsed = JSON.parse(edited.replace('// 目标原注释', ''));
+      await a.publicConfiguration.getConfiguration().update('[javascript]', {}, m.ExtHostConfigurationTarget.Global);
+      const emptyOverride = JSON.parse((await p.files.readFile(remote)).value.toString().replace('// 目标原注释', ''))['[javascript]'];
+      await a.publicConfiguration.getConfiguration().update('[javascript]', undefined, m.ExtHostConfigurationTarget.Global);
+      const removedOverride = JSON.parse((await p.files.readFile(remote)).value.toString().replace('// 目标原注释', ''))['[javascript]'];
+      const localAfterTargetWrites = (await p.files.readFile(p.settings)).value.toString();
+      await config.update('first', undefined, m.ExtHostConfigurationTarget.Global);
+      const removed = a.publicConfiguration.getConfiguration('targetProbe').inspect('first');
+      const failures = [], beforeFailures = p.transport.requests.filter(value => value.endpoint.endsWith('/write')).length;
+      for (const target of [m.ConfigurationTarget.USER_LOCAL, m.ConfigurationTarget.APPLICATION]) {
+        try { await a.owner.updateValue('targetProbe.first', 'wrong-profile', target); } catch (error) { failures.push(error.message); }
+      }
+      try { await a.publicConfiguration.getConfiguration().update('[typescript]', { 'targetProbe.language': 'bad', 'probe.value': 'wrong-domain' }, m.ExtHostConfigurationTarget.Global); }
+      catch (error) { failures.push(error.message); }
+      dirty.add(remote.toString());
+      try { await config.update('first', 'dirty-write', m.ExtHostConfigurationTarget.Global); } catch (error) { failures.push(error.message); }
+      dirty.clear();
+      const afterFailures = p.transport.requests.filter(value => value.endpoint.endsWith('/write')).length;
+      const bUnchanged = b.snapshots.length === beforeB;
+      await a.publicConfiguration.getConfiguration('probe').update('value', 'window-user', m.ExtHostConfigurationTarget.Global);
+      return { first, removed, parsed, edited, emptyOverride, removedOverride, events, localUnchanged: localBefore === localAfterTargetWrites,
+        bUnchanged, bValue: b.owner.getValue('targetProbe.first'),
+        failures, failureWrites: afterFailures - beforeFailures, references,
+        application: a.owner.getValue('targetProbe.application'),
+        windowUser: a.owner.inspect('probe.value').userLocalValue,
+        writes: p.transport.requests.filter(value => value.endpoint.endsWith('/write')).map(value => value.body.backend_id) };
+    });
+    expect(result.first.globalValue).toBe('A-first'); expect(result.first.globalRemoteValue).toBe('A-first');
+    expect(result.first.globalLocalValue).toBeUndefined(); expect(result.removed.globalValue).toBeUndefined();
+    expect(result.parsed['targetProbe.first']).toBe('A-first'); expect(result.parsed['targetProbe.language']).toBe('A-base');
+    expect(result.parsed['[typescript]']['targetProbe.language']).toBe('A-ts-updated');
+    expect(result.parsed['[javascript]']['targetProbe.language']).toBe('A-js');
+    expect(result.emptyOverride).toEqual({}); expect(result.removedOverride).toBeUndefined();
+    expect(result.edited).toContain('// 目标原注释'); expect(result.localUnchanged).toBe(true);
+    expect(result.bUnchanged).toBe(true); expect(result.bValue).toBe('first-default');
+    expect(result.failures).toHaveLength(4); expect(result.failures.slice(0, 2).every(value => value.includes('当前窗口 profile'))).toBe(true);
+    expect(result.failures[2]).toContain('同时包含窗口与目标'); expect(result.failures[3]).toContain('unsaved changes'); expect(result.failureWrites).toBe(0);
+    expect(result.references.every(value => value.disposed)).toBe(true);
+    expect(result.events.some(value => value.first)).toBe(true); expect(result.events.some(value => value.language)).toBe(true);
+    expect(result.writes.every(value => value === 'backend-A')).toBe(true);
+    expect(result.application).toBe('A-application'); expect(result.windowUser).toBe('window-user');
+    checks.push('原ExtHost公开Global/语言update→MainThread→WorkspaceService→ConfigurationEditing/JSONC/真实TextModel→原FileService，删除覆盖/事件、原dirty拒绝和引用释放；resolver与TextFile保存为具名边界');
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
