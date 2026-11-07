@@ -32,7 +32,8 @@ function target(label, workspaceIds = [label.toLowerCase()]) {
   const binding = { gateway_id: 'gateway-' + label, backend_id: 'backend-' + label, view_id: 'default',
     initialization: { os: 'linux', logs_location_uri: 'file:///hosts/' + label + '/logs',
       environment: { app_root_uri: 'file:///hosts/' + label + '/app', global_storage_home_uri: 'file:///hosts/' + label + '/global',
-        workspace_storage_home_uri: 'file:///hosts/' + label + '/workspace' },
+        workspace_storage_home_uri: 'file:///hosts/' + label + '/workspace', profile_id: 'profile-target',
+        remote_settings: { native_uri: 'file:///hosts/' + label + '/profile/settings.json', resource_uri: 'boxteam://gateway-' + label + '/gateway/gateway-' + label + '/resources/config/extension-host/backend-' + label + '/profiles/profile-target/settings' } },
       workspace: { id: 'view-' + label, folders: workspaceIds.map(workspace_id => ({ workspace_id, name: workspace_id,
         resource_uri: 'boxteam://workspace/' + workspace_id + '/resources/files/root', native_uri: 'file:///targets/' + label + '/' + workspace_id })) } } };
   const uriTransformer = new m.TargetUriTransformer(binding, () => []);

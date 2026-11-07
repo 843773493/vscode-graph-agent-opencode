@@ -65,6 +65,7 @@ async def list_gateway_resources(
     summary="查看 Gateway 与托管工作区日志诊断",
 )
 async def get_gateway_diagnostics(
+    request: Request,
     gateway_connection_id: str | None = Query(default=None),
     workspace_id: str | None = Query(default=None),
     log_id: str | None = Query(default=None),
@@ -93,6 +94,7 @@ async def get_gateway_diagnostics(
                 selected_workspace_id=workspace_id,
                 selected_log_id=log_id,
                 tail_lines=tail_lines,
+                extension_management=getattr(request.app.state, "extension_management", None),
             )
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

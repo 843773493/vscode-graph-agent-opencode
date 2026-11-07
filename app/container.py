@@ -115,6 +115,9 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
+from app.services.infrastructure.extension_host.management import (
+    ExtensionManagementClient,
+)
 from app.services.infrastructure.extension_host.owner import NodeExtensionHostOwner
 from app.services.infrastructure.extension_host.runtime import load_node_host_runtime
 from app.services.infrastructure.external_resource_leases import (
@@ -450,9 +453,10 @@ class WorkspaceContainerRegistry:
         self._clock_ports = clock_ports
         node_host_runtime = load_node_host_runtime() if backend_id is not None else None
         self._mcp_installations = McpInstallationOwner(home=get_boxteam_home(), backend_id=backend_id) if backend_id is not None else None
+        extension_management = ExtensionManagementClient.from_environment(backend_id) if backend_id is not None else None
         self._extension_hosts = NodeExtensionHostOwner(backend_id=backend_id, mounted_workspaces=mounted_workspaces,
             runtime=node_host_runtime, home=get_boxteam_home(), environment=os.environ,
-            startup_timeout=10) if backend_id is not None else None
+            startup_timeout=10, management=extension_management) if backend_id is not None else None
         self._containers: dict[str, AppContainer] = {}
         self._catalog_components: dict[str, SessionCatalogComponents] = {}
         self._pending_catalog_closes: set[str] = set()

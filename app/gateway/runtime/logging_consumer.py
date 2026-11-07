@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import httpx
 
@@ -25,6 +25,9 @@ from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
     RuntimeLoggingStatus,
 )
+
+if TYPE_CHECKING:
+    from app.gateway.runtime.extension_management import GatewayExtensionManagement
 
 ProgressRecorder = Callable[[dict[str, object]], None]
 
@@ -71,6 +74,7 @@ class RuntimeLoggingConsumer:
         self, *, registry: GatewayWorkspaceRegistry, candidate: GatewayConfig,
         generation: str, fencing_token_digest: str | None,
         fence_check: Callable[[], None] | None, record: ProgressRecorder,
+        extension_management: GatewayExtensionManagement | None = None,
     ) -> None:
         self._registry = registry
         self._candidate = candidate
@@ -78,6 +82,7 @@ class RuntimeLoggingConsumer:
         self._fencing_token_digest = fencing_token_digest
         self._fence_check = fence_check
         self._record = record
+        self._extension_management = extension_management
         self._targets: list[LoggingTarget] = []
         self._locked = False
         self._client: httpx.AsyncClient | None = None
@@ -105,7 +110,9 @@ class RuntimeLoggingConsumer:
         self._client = httpx.AsyncClient(trust_env=False)
         control = RuntimeLoggingProcessControl(client=self._client, token=get_gateway_local_token())
 
-        self._targets = [LoggingTarget(process) for process in runtime_logging_processes(self._registry, control)]
+        self._targets = [LoggingTarget(process) for process in runtime_logging_processes(
+            self._registry, control, self._extension_management,
+        )]
 
         identities: set[tuple[str, int, str]] = set()
         prepared: list[LoggingTarget] = []

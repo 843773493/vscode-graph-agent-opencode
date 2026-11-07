@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -17,7 +16,7 @@ from app.schemas.gateway.extension_installation import (
 )
 from app.schemas.gateway.extension_web import ExtensionWebHostOpenRequest
 from app.services.infrastructure.extension_host.management import (
-    NodeExtensionManagement,
+    ExtensionManagementClient,
 )
 from app.services.infrastructure.extension_host.owner import WebHostConnection
 from tests.unit.services.infrastructure.extension_host.test_owner import (
@@ -58,16 +57,13 @@ def web_case(case: Case, monkeypatch: pytest.MonkeyPatch) -> WebCase:
             _entry(KEY), _entry(OTHER_KEY), _entry(INVALID_KEY, valid=False)]))
     result.gate.set()
 
-    async def inventory(_management: NodeExtensionManagement, *,
-                         on_snapshot: Callable[[ProfileExtensionInventory], None] | None = None) -> ProfileExtensionInventory:
+    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
         result.scans.append(len(case.owner.active))
         result.scanning.set()
         await result.gate.wait()
-        if on_snapshot is not None:
-            on_snapshot(result.inventory)
         return result.inventory
 
-    monkeypatch.setattr(NodeExtensionManagement, "inventory", inventory)
+    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
     return result
 
 
@@ -92,7 +88,7 @@ async def test_web_freezes_only_requested_valid_exact_keys_without_workspace_or_
         for key in (OTHER_KEY, INVALID_KEY):
             with pytest.raises(ValueError, match="冻结版本"):
                 owner.check_web_extension_file(_file(connection, key=key), client_id="client")
-        assert web_case.node.hosts == [] and web_case.node.configuration_views == []
+        assert web_case.node.hosts == [] and not web_case.node.views.exists()
         assert not (owner._home / "state/backend/extension-hosts").exists()
     assert owner.active == ()
 

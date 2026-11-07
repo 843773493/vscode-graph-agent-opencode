@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -35,6 +36,9 @@ from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticWorkspaceDTO,
 )
 from app.schemas.gateway.workspaces import GatewayConnectionKind
+
+if TYPE_CHECKING:
+    from app.gateway.runtime.extension_management import GatewayExtensionManagement
 
 _MAX_READ_BYTES = 256 * 1024
 _MAX_GATEWAY_LOG_ENTRIES = 120
@@ -279,6 +283,7 @@ def _scope_log_candidates(
 
 async def _logging_process_diagnostics(
     registry: GatewayWorkspaceRegistry, selected_workspace_id: str | None, candidates: list[_LogCandidate],
+    extension_management: GatewayExtensionManagement | None = None,
 ) -> list[GatewayDiagnosticProcessDTO]:
     async def observe(process: RuntimeLoggingProcess) -> GatewayDiagnosticProcessDTO:
         try:
@@ -302,7 +307,7 @@ async def _logging_process_diagnostics(
 
     async with registry.backend_topology_lock, httpx.AsyncClient(trust_env=False) as client:
         control = RuntimeLoggingProcessControl(client=client, token=get_gateway_local_token())
-        processes = runtime_logging_processes(registry, control)
+        processes = runtime_logging_processes(registry, control, extension_management)
         return list(await asyncio.gather(*(
             observe(process) for process in processes
             if selected_workspace_id is None or not process.workspace_ids or selected_workspace_id in process.workspace_ids
@@ -319,6 +324,7 @@ async def collect_gateway_diagnostics(
     selected_workspace_id: str | None = None,
     selected_log_id: str | None = None,
     tail_lines: int = 300,
+    extension_management: GatewayExtensionManagement | None = None,
 ) -> GatewayDiagnosticsDTO:
     if not 20 <= tail_lines <= 1000:
         raise ValueError("tail_lines 必须在 20..1000 范围内")
@@ -414,7 +420,7 @@ async def collect_gateway_diagnostics(
             include_tail=is_selected,
         )
         log_results.append(log_dto)
-    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates)
+    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, extension_management)
     return GatewayDiagnosticsDTO(
         gateway_id=local_gateway_id,
         gateway_name=gateway_name,

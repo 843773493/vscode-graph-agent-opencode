@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -20,9 +21,8 @@ from app.schemas.gateway.extension_installation import (
 )
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.management import (
-    NativeConfigurationLocation,
+    ExtensionManagementClient,
     NativeManagementEnvironment,
-    NodeExtensionManagement,
 )
 from app.services.infrastructure.extension_host.owner import (
     NodeExtensionHostOwner,
@@ -37,11 +37,12 @@ from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 class Case:
     owner: NodeExtensionHostOwner
     workspace_ids: tuple[str, ...]
+    profile: Path
+    views: Path
     gate: asyncio.Event = field(default_factory=asyncio.Event)
     started: asyncio.Event = field(default_factory=asyncio.Event)
     hosts: list[NodeExtensionHost] = field(default_factory=list)
     close_failures: list[OSError] = field(default_factory=list)
-    configuration_views: list[tuple[str, list[dict[str, str]]]] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -51,9 +52,12 @@ async def case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
         root.mkdir()
     mounts = MountedWorkspaceRegistry([MountedWorkspace(str(uuid4()), root) for root in roots])
     runtime = NodeHostRuntime(Path(sys.executable), tmp_path / "host.mjs", "a" * 40, "fixture", "24.22.1")
-    owner = NodeExtensionHostOwner(backend_id=str(uuid4()), mounted_workspaces=mounts,
-        runtime=runtime, home=tmp_path / "home", environment={}, startup_timeout=2)
-    result = Case(owner, mounts.workspace_ids)
+    backend_id = str(uuid4())
+    management = ExtensionManagementClient(backend_id=backend_id, gateway_url="http://127.0.0.1:8014",
+        token="test-token", operation_timeout=2)
+    owner = NodeExtensionHostOwner(backend_id=backend_id, mounted_workspaces=mounts,
+        runtime=runtime, home=tmp_path / "home", environment={}, startup_timeout=2, management=management)
+    result = Case(owner, mounts.workspace_ids, tmp_path / "profile", tmp_path / "views")
     result.gate.set()
 
     @asynccontextmanager
@@ -75,19 +79,14 @@ async def case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
             await host.child.close()
 
     monkeypatch.setattr(NodeExtensionHost, "connect", connect)
-    async def environment(_management: NodeExtensionManagement) -> NativeManagementEnvironment:
+    async def environment(_management: ExtensionManagementClient) -> NativeManagementEnvironment:
         return NativeManagementEnvironment(app_root_uri=tmp_path.as_uri(),
             global_storage_home_uri=(tmp_path / "profile/globalStorage").as_uri(),
             workspace_storage_home_uri=(tmp_path / "profile/workspaceStorage").as_uri(), profile_id="test-profile",
+            untitled_workspaces_home_uri=result.views.as_uri(),
             settings_native_uri=(tmp_path / "profile/settings.json").as_uri())
 
-    async def prepare_configuration_view(_management: NodeExtensionManagement, workspace_id: str,
-                                         folders: list[dict[str, str]]) -> NativeConfigurationLocation:
-        result.configuration_views.append((workspace_id, folders))
-        return NativeConfigurationLocation(native_uri=(tmp_path / "views" / workspace_id / "workspace.code-workspace").as_uri())
-
-    monkeypatch.setattr(NodeExtensionManagement, "environment", environment)
-    monkeypatch.setattr(NodeExtensionManagement, "prepare_configuration_view", prepare_configuration_view)
+    monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
     # 测试的是owner的身份及生命周期；平台IPC由真实进程集成验证。
     monkeypatch.setattr(sys, "platform", "linux")
     try:
@@ -132,8 +131,10 @@ async def test_views_preserve_client_identity_and_independent_generations(case: 
         assert first_view.workspace.configuration is not None
         assert first_view.workspace.configuration.resource_uri == extension_configuration_uri(
             gateway_id="gateway_" + "a" * 32, backend_id=case.owner.backend_id, workspace_id=first_view.workspace.id)
-        assert case.configuration_views == [(first_view.workspace.id, [
-            {"native_uri": folder.native_uri, "name": folder.name} for folder in first_view.workspace.folders])]
+        config_path = case.views / first_view.workspace.id / "workspace.code-workspace"
+        assert first_view.workspace.configuration.native_uri == config_path.as_uri()
+        assert json.loads(config_path.read_bytes())["folders"] == [
+            {"uri": folder.native_uri, "name": folder.name} for folder in first_view.workspace.folders]
         async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="two", view_id="same", workspace_ids=case.workspace_ids[::-1]) as second:
             assert second.initialization.workspace.id != first_view.workspace.id
@@ -167,7 +168,8 @@ async def test_single_root_keeps_profile_without_materializing_workspace_configu
         assert connection.initialization.workspace.configuration is None
         assert connection.initialization.environment.remote_settings.resource_uri == extension_configuration_uri(
             gateway_id="gateway_" + "a" * 32, backend_id=case.owner.backend_id, profile_id="test-profile")
-        assert case.configuration_views == []
+        assert not case.views.exists()
+        assert case.profile.is_dir() and not (case.profile / "settings.json").exists()
 
 
 async def test_vsix_install_keeps_private_file_protection_before_management_start(case: Case) -> None:
@@ -178,7 +180,7 @@ async def test_vsix_install_keeps_private_file_protection_before_management_star
         source_uri=f"boxteam://{gateway}/workspace/{workspace_id}/resources/files/root/.boxteam/private.vsix")
     with pytest.raises(ForbiddenError, match="私有存储"):
         await case.owner.install(request)
-    assert case.owner._management is None and case.hosts == []
+    assert case.owner._management is not None and case.hosts == []
 
 
 async def test_shutdown_during_start_cannot_publish_or_abandon_the_reserved_host(case: Case) -> None:
@@ -222,6 +224,7 @@ async def test_cancelled_start_releases_the_original_generation_and_log(case: Ca
         with pytest.raises(asyncio.CancelledError, match="客户端断开"):
             await opening
         assert not case.owner.active and case.hosts[0].child.state.exit_verified
+        assert isinstance(session, _HostSession)
         assert session._output is not None and session._output.closed
     finally:
         case.gate.set()
@@ -251,7 +254,9 @@ async def test_cleanup_failure_preserves_original_error_generation_and_log_until
     with pytest.raises(BaseExceptionGroup) as caught:
         async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="client", view_id="view", workspace_ids=case.workspace_ids) as connection:
-            session = case.owner._sessions[connection.identity.generation]
+            candidate = case.owner._sessions[connection.identity.generation]
+            assert isinstance(candidate, _HostSession)
+            session = candidate
             case.close_failures.append(failure)
             raise original
     assert caught.value.exceptions == (original, failure)

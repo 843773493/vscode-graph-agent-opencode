@@ -1,4 +1,4 @@
-import { format } from 'node:util';
+import { createRuntimeLogger } from '../../../shared/serverRuntimeLogging.mjs';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 import { Schemas } from '../upstream/src/vs/base/common/network.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
@@ -16,7 +16,6 @@ import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/ext
 import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
 import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
 import { ExtensionType } from '../upstream/src/vs/platform/extensions/common/extensions.js';
-import { createFileSystemProviderError, FileOperationResult, FileSystemProviderErrorCode, FileType, TooLargeFileOperationError } from '../upstream/src/vs/platform/files/common/files.js';
 import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_VSIX_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
 import { ExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/node/extensionsProfileScannerService.js';
 import { ExtensionSignatureVerificationService, IExtensionSignatureVerificationService } from '../upstream/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.js';
@@ -41,7 +40,6 @@ import { IUserDataProfilesService } from '../upstream/src/vs/platform/userDataPr
 import { ServerUserDataProfilesService } from '../upstream/src/vs/platform/userDataProfile/node/userDataProfile.js';
 import { ExtensionsScannerService } from '../upstream/src/vs/server/node/extensionsScannerService.js';
 import { IServerEnvironmentService, ServerEnvironmentService, type ServerParsedArgs } from '../upstream/src/vs/server/node/serverEnvironmentService.js';
-import { ExtensionConfiguration } from './extensionConfiguration.js';
 
 /** 与官方 server 使用相同的安装／扫描 owner，只装配本组件需要的原生服务。 */
 export async function createExtensionManagement(directory: string, builtinExtensionsPath: string) {
@@ -58,7 +56,12 @@ export async function createExtensionManagement(directory: string, builtinExtens
     const environment = new ServerEnvironmentService(args, productService);
     services.set(IProductService, productService);
     services.set(IServerEnvironmentService, environment);
-    const logger = scope.add(new AdapterLogger({ log: (level, args) => process.stderr.write(`[${level}] ${format(...args)}\n`) }, LogLevel.Info));
+    const diagnostic = createRuntimeLogger('extension-management', 'extensions.native');
+    const logger = scope.add(new AdapterLogger({ log: (level, args) => {
+      const write = level < LogLevel.Info ? diagnostic.debug : level === LogLevel.Info ? diagnostic.info
+        : level === LogLevel.Warning ? diagnostic.warning : diagnostic.error;
+      write(...args);
+    } }, LogLevel.Trace));
     const log = scope.add(new LogService(logger));
     services.set(ILogService, log);
     const files = scope.add(new FileService(log));
@@ -90,28 +93,21 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const scanner = accessor.get(IExtensionsScannerService);
       const profileScanner = accessor.get(IExtensionsProfileScannerService);
       const profile = profiles.defaultProfile;
-      const maximumPublishedFileSize = 8 * 1024 * 1024;
-      async function publishedExtensionFile(profileId: string, extensionId: string, extensionKeyText: string,
-        relativeSegments: string[], currentProfileMember: boolean) {
+      async function publishedExtension(profileId: string, extensionId: string, extensionKeyText: string,
+        currentProfileMember: boolean) {
         if (profileId !== profile.id) throw new ExtensionManagementError('扩展文件 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
         if (!extensionKeyText || /[\\/\x00-\x1f\x7f]/.test(extensionKeyText)) {
           throw new ExtensionManagementError('扩展文件身份不能定位到用户扩展目录的直接子目录', ExtensionManagementErrorCode.Invalid);
-        }
-        if (!Array.isArray(relativeSegments) || relativeSegments.some(segment =>
-          typeof segment !== 'string' || !segment || segment === '.' || segment === '..' || /[\\/\0]/.test(segment))) {
-          throw createFileSystemProviderError('扩展文件必须使用有效的包内相对路径段', FileSystemProviderErrorCode.NoPermissions);
         }
         const root = scanner.userExtensionsLocation;
         const location = joinPath(root, extensionKeyText);
         if (!identity.extUri.isEqual(dirname(location), root) || basename(location) !== extensionKeyText) {
           throw new ExtensionManagementError('扩展包身份不能定位到用户扩展目录的直接子目录', ExtensionManagementErrorCode.Invalid);
         }
-        const [realExtensionsRoot, realRoot] = await Promise.all([files.realpath(root), files.realpath(location)]);
-        if (!realExtensionsRoot || !realRoot || !identity.extUri.isEqual(dirname(realRoot), realExtensionsRoot)
-          || basename(realRoot) !== extensionKeyText) {
-          throw createFileSystemProviderError('扩展包目录符号链接越出用户扩展目录', FileSystemProviderErrorCode.NoPermissions);
-        }
+        // TODO(1.9)：迁齐原实例冻结的发布描述后复用它，移除逐资源的scanner/profile重核。
         const scanned = await scanner.scanExistingExtension(location, ExtensionType.User, { includeInvalid: true });
+        // scanner 的空结果可能是缺失目录，也可能是无效 manifest；保留原安装错误归属。
+        if (!scanned) await files.stat(location);
         if (!scanned || !scanned.isValid || ExtensionKey.create(scanned).toString() !== extensionKeyText
           || !identity.extUri.isEqual(scanned.location, location)) {
           throw new ExtensionManagementError(`目标 profile 不包含有效的精确扩展包 ${extensionKeyText}`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
@@ -126,14 +122,9 @@ export async function createExtensionManagement(directory: string, builtinExtens
             throw new ExtensionManagementError(`扩展包 ${extensionKeyText} 不再是默认 profile 当前成员`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
           }
         }
-        const file = joinPath(location, ...relativeSegments);
-        const realFile = await files.realpath(file);
-        if (!realFile || !identity.extUri.isEqualOrParent(realFile, realRoot)) {
-          throw createFileSystemProviderError('扩展文件符号链接越出已发布包', FileSystemProviderErrorCode.NoPermissions);
-        }
-        return file;
+        // 安装身份与 profile 资格沿原 scanner；包内路径及字节读取交目标 Python。
+        return { native_uri: scanned.location.toString(), extensions_root_uri: root.toString() };
       }
-      const configurationFiles = new ExtensionConfiguration(files, disk, identity, environment, profile);
       return {
         ready: management.whenNativeManagementReady,
         async dispose() {
@@ -147,14 +138,13 @@ export async function createExtensionManagement(directory: string, builtinExtens
           if (failures.length) throw new AggregateError(failures, '原生扩展管理释放失败');
         },
         async environment() {
-          await configurationFiles.initialize();
           // bundle 的实际根就是发行组件目录；存储沿原环境/profile，不按客户端或进程代际重建。
           return { app_root_uri: URI.file(import.meta.dirname).toString(),
             global_storage_home_uri: profile.globalStorageHome.toString(),
             workspace_storage_home_uri: environment.workspaceStorageHome.toString(),
+            untitled_workspaces_home_uri: environment.untitledWorkspacesHome.toString(),
             profile_id: profile.id, settings_native_uri: profile.settingsResource.toString() };
         },
-        configurationFiles,
         async inventory() {
           // 不调用 scanAllExtensions 的跨来源 dedup；此库存只承诺同一默认 profile。
           const extensions = await scanner.scanUserExtensions({ profileLocation: profile.extensionsResource, includeInvalid: true });
@@ -171,21 +161,8 @@ export async function createExtensionManagement(directory: string, builtinExtens
             is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
           })) };
         },
-        async extensionFileStat(profileId: string, extensionId: string, extensionKey: string, relativeSegments: string[], currentProfileMember: boolean) {
-          const file = await publishedExtensionFile(profileId, extensionId, extensionKey, relativeSegments, currentProfileMember);
-          const stat = await disk.stat(file);
-          return { type: stat.type, ctime: stat.ctime, mtime: stat.mtime, size: stat.size, permissions: stat.permissions ?? null };
-        },
-        async extensionFileRead(profileId: string, extensionId: string, extensionKey: string, relativeSegments: string[], currentProfileMember: boolean) {
-          const file = await publishedExtensionFile(profileId, extensionId, extensionKey, relativeSegments, currentProfileMember);
-          const stat = await disk.stat(file);
-          if ((stat.type & FileType.File) === 0) throw createFileSystemProviderError('扩展包读取目标不是普通文件', FileSystemProviderErrorCode.FileIsADirectory);
-          if (stat.size > maximumPublishedFileSize) {
-            throw new TooLargeFileOperationError(`扩展包文件超过私有读取上限 ${maximumPublishedFileSize} 字节`, FileOperationResult.FILE_TOO_LARGE, stat.size);
-          }
-          // TODO(扩展资源流式读取接入后)：移除私有控制帧的 8 MiB 限制并复用原 FileService 流。
-          const content = await files.readFile(file, { limits: { size: maximumPublishedFileSize } });
-          return { content_base64: Buffer.from(content.value.buffer).toString('base64') };
+        async publication(profileId: string, extensionId: string, extensionKey: string, currentProfileMember: boolean) {
+          return publishedExtension(profileId, extensionId, extensionKey, currentProfileMember);
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。

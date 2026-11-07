@@ -11,6 +11,7 @@ runtime/
 ├── group_actions.py       完整 Backend 成员组的变更
 ├── local_workspace.py     本地工作区目标生命周期
 ├── managed_backend.py     Backend 组合同与唯一进程 owner
+├── extension_management.py 每安装域唯一常驻扩展管理组件、串行控制及退出核验
 ├── workspace.py           单工作区运行时句柄和服务地址
 ├── workspace_process.py   Workspace/辅助服务启动及身份 CLI 边界
 ├── process_lifecycle.py   POSIX/Windows 进程树关闭与句柄回收
@@ -48,6 +49,8 @@ runtime/
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
+- 扩展管理组件随原生Gateway服务组启动、核就绪与关闭，复用原安装目录和Code OSS服务；Backend与页面关闭不关闭它。请求取消须收完原回执再释放串行准入，传输失败拒绝继续发送和自动重放；实际子进程退出核验后才释放日志和安装域锁，未知写入结果不称成功排空。
+- 包读取在同一安装串行准入中先取Node精确发布描述，再由目标Python核包路径、符号链接及大小并读取；Node不收包内路径或返回正文，读取取消须等实际文件操作结清后才放行后续安装。
 - 向 Workspace 提交配置重启失败时传递原异常到 controller 的 HTTP 发送边界，复用配置失败事实出口；不得预拼原生异常正文进入业务记录，原异常留诊断。
 - 日志消费者从 prepare 到最终配置结算持有原 registry 的拓扑锁；共享 Backend 按实际实例确认，不按挂载工作区重复应用。逐进程发送前先登记副作用，超时后查询实际状态再补偿，不能把结果未知当作未生效。
 - 新受管进程通过 `BOXTEAM_RUNTIME_LOGGING` 接收已验证的 revision、level 与 pretty；该值在生命周期锁内从当前 Gateway 配置 owner 读取，不能缓存等待启动前的旧候选。它只交付启动设置，不构成第二个运行期配置来源。

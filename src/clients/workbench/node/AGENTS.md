@@ -1,11 +1,11 @@
 # 目录用途
 
-目标 Backend 持有的 Code OSS Node 基础设施组件，不属于浏览器 renderer 或 Electron main。
+目标 Gateway 托管的 Code OSS Node 扩展管理基础设施组件，不属于浏览器 renderer、Electron main 或 Backend 运行宿主。
 
 # 可修改内容
 
 - 原生扩展管理、profile 和扫描服务的装配与私有进程入口。
-- `extensionConfiguration.ts`复用管理组件已登记的原FileService／DiskFileSystemProvider，提供默认profile settings与稳定多根view文件；原生位置由原profile／environment服务取得，不推导路径或维护第二保存基线。
+- 只提供安装、库存及精确发布／profile位置描述；配置和包文件字节由目标Python处理，不能恢复通用Node文件操作或视图物化接口。
 
 # 不可修改内容
 
@@ -15,10 +15,9 @@
 # 规范
 
 - 与宿主共用固定上游、专用 Node 和冻结依赖。安装与库存必须消费同一组原版服务实例。
-- 管理控制只接受父进程的标准输入，标准输出只返回控制结果，日志写标准错误；进程由 Backend 原子进程 owner 回收。
-- 每个管理进程只接收一条业务请求；ready等待原watcher、目录事件和下载缓存初始化，drained等待原异步回调及缓存写入结束。消费者先释放，再沿原watch([])停止provider watcher，最后释放provider并自然退出；不得用process.exit或常驻内存profile替代结算。
+- 管理组件直接提供loopback HTTP具名接口，沿原本机token认证且拒绝浏览器来源；自己持有原OS安装域独占锁。Gateway核验发现记录、运行身份及实际日志后接管，不抢锁或另起代理进程。标准输出和错误只进原日志体系，不保留stdio管理协议。
+- 服务内串行处理安装及精确发布读取，发布响应流持续持有准入直到Python实际I/O结清。错误返回原归属并允许后续合法请求；停止准入后排空原异步回调及缓存写入，释放消费者，沿原watch([])停止provider watcher并释放provider，返回drained后自然退出。Gateway换代只释放句柄，完整停机才调用shutdown并核实际进程；不得用process.exit或每请求dispose替代结算。
 - 当前库存明确限于目标默认 profile 的用户安装项；不将它声称为系统扩展、开发扩展或完整窗口启用视图。
 - VSIX 安装结果与完整库存由同一次串行 Node 控制操作生成；Python 不在释放安装请求后另读库存拼回执。保留原安装器的现有版本复用，物理卸载和运行版本切换须沿各自生命周期完成。
 - `installed.reused`消费同次原安装器context的实际版本复用结果；不能以候选manifest声称已替换正文。私有进程回执保留原ExtensionManagementError.code，文件系统错误继续使用原Provider错误映射。
-- 配置控制仅接受已登记的两个文件及直接父级stat；多根view保留原生folders、settings与注释，单根不物化workspace文件。浏览器具名URI、认证generation／view和共享watcher由既有Python owner负责，不将本组件局部验证宣称为完整窗口隔离已验收。
-- 配置操作从原session冻结数据登记Map；registerView不读写磁盘，只有初始化的prepareView可以物化workspace文件。文件删除后stat/read保留原FileNotFound，不得隐式恢复。
+- 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。旧运行实例的版本资格、包边界和读字节分别由原Backend运行记录与Gateway Python执行。

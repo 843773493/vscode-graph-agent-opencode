@@ -319,6 +319,11 @@ def test_gateway_shutdown_preserves_old_generation_for_pending_handoff(
             target_generation="gateway-new",
             requested_by="test",
         )
+        state.record_gateway_runtime_generation(
+            generation_id="gateway-old", process_id=123, loaded_source="active", candidate_id=None,
+            active_revision=1, pending_revision=None, candidate_digest=None, effective_digest="old",
+            secret_binding_digest=None, fencing_token=None, listener_state="serving", state="active",
+        )
         reload_service = SimpleNamespace(
             status=lambda: SimpleNamespace(
                 candidate_ref="candidate-ref-handoff",
@@ -332,11 +337,16 @@ def test_gateway_shutdown_preserves_old_generation_for_pending_handoff(
             startup_candidate_ref=None,
             generation_id="gateway-old",
         )
-        assert not _should_preserve_gateway_generation_for_handoff(
+        # 候选 Gateway 在生成行落盘前失败；旧 Gateway 仍服务时需保留其进程给重试候选接管。
+        assert _should_preserve_gateway_generation_for_handoff(
             gateway_state=state,
             gateway_config_reload=reload_service,
             startup_candidate_ref="candidate-ref-handoff",
-            generation_id="gateway-old",
+            generation_id="gateway-new",
+        )
+        assert not _should_preserve_gateway_generation_for_handoff(
+            gateway_state=state, gateway_config_reload=reload_service,
+            startup_candidate_ref="candidate-ref-handoff", generation_id="gateway-old",
         )
         assert not _should_preserve_gateway_generation_for_handoff(
             gateway_state=state,

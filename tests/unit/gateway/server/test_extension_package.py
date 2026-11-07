@@ -25,10 +25,10 @@ from tests.unit.gateway.server.test_extension_installation import (
     host_initialization as host_initialization,  # noqa: PLC0414
 )
 from tests.unit.gateway.server.test_extension_installation import (
-    identity_requests as identity_requests,  # noqa: PLC0414
+    inventory_proxy as inventory_proxy,  # noqa: PLC0414
 )
 from tests.unit.gateway.server.test_extension_installation import (
-    inventory_proxy as inventory_proxy,  # noqa: PLC0414
+    native_control as native_control,  # noqa: PLC0414
 )
 
 
@@ -54,7 +54,7 @@ def package_proxy(inventory_proxy):
 @pytest.mark.parametrize("operation", ["read", "stat"])
 @pytest.mark.parametrize("capability", [None, "read", "extension_installation_manage", "extension_host_manage"])
 @pytest.mark.parametrize("running", [False, True])
-def test_package_permissions_follow_field_role_and_authenticated_client(package_proxy, operation, capability, running):
+def test_package_permissions_follow_field_role_and_authenticated_client(package_proxy, native_control, operation, capability, running):
     h, calls, _, payload = package_proxy
     if running:
         payload.update(view_id="window-a", generation="frozen-generation")
@@ -65,20 +65,24 @@ def test_package_permissions_follow_field_role_and_authenticated_client(package_
                  "X-Request-ID": "package-permission"})
     allowed = capability == "extension_host_manage" or not running and capability == "extension_installation_manage"
     assert response.status_code == (200 if allowed else 403), response.text
-    assert len(calls) == int(allowed)
+    assert len(calls) == int(allowed and running)
+    assert len(native_control.calls) == int(allowed and not running)
     if allowed:
-        forwarded = json.loads(calls[0].content)
-        assert calls[0].url.path == f"/api/internal/extension-files/{operation}"
-        assert calls[0].headers[extension_host.CLIENT_HEADER] == f"peer:{PEER}:original-client"
-        assert calls[0].headers["X-Request-ID"] == response.headers["X-Request-ID"] == "package-permission"
+        forwarded = json.loads(calls[0].content) if running else native_control.calls[0]
+        if running:
+            assert calls[0].url.path == f"/api/internal/extension-files/{operation}"
+            assert calls[0].headers[extension_host.CLIENT_HEADER] == f"peer:{PEER}:original-client"
+            assert calls[0].headers["X-Request-ID"] == response.headers["X-Request-ID"] == "package-permission"
+            assert "cookie" not in calls[0].headers
         assert forwarded["profile_id"] == "default-profile"
         assert forwarded["extension_id"] == "publisher.probe"
         assert forwarded["extension_key"] == payload["extension_key"]
         assert forwarded["relative_segments"] == ["dist", "中文.js"]
         assert forwarded["current_profile_member"] is not running
-        assert "resource_uri" not in forwarded and "cookie" not in calls[0].headers
+        assert "resource_uri" not in forwarded
         assert response.json()["data"]["resource_uri"] == payload["resource_uri"]
         assert response.json()["data"]["extension_key"] == payload["extension_key"]
+
 
 
 @pytest.mark.parametrize("wrong", ["uri-gateway", "uri-backend", "half-binding"])

@@ -28,6 +28,9 @@ from app.gateway.server.extension_configuration import (
     router as extension_configuration_router,
 )
 from app.gateway.server.extension_host import router as extension_host_router
+from app.gateway.server.extension_management import (
+    router as extension_management_router,
+)
 from app.gateway.server.extension_package import router as extension_package_router
 from app.gateway.server.port_forwarding import router as port_forwards_router
 from app.gateway.server.resource_navigation import router as resource_navigation_router
@@ -63,6 +66,7 @@ def register_gateway_routes(app: FastAPI) -> None:
     app.include_router(device_connections_router)
     app.include_router(port_forwards_router)
     app.include_router(extension_host_router)
+    app.include_router(extension_management_router)
     app.include_router(extension_package_router)
     app.include_router(extension_configuration_router)
     app.include_router(federation_router)

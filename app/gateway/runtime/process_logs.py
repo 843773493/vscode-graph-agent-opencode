@@ -291,7 +291,7 @@ class ProcessLogStore:
                 detail += f", winerror={winerror}"
             raise type(error)(error.errno, detail) from error
 
-    def adopt(self, role: str, instance: int, proof: dict[str, object]) -> ProcessLogOwnership:
+    def adopt(self, role: str, instance: str | int | None, proof: dict[str, object]) -> ProcessLogOwnership:
         sink = proof.get("log_sink")
         if not isinstance(sink, dict) or not isinstance(sink.get("owner_id"), str):
             raise TypeError("受管进程缺少已核实的日志去向")

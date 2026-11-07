@@ -15,13 +15,14 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from app.api.extension_host import router as backend_host_router
 from app.backend_lifecycle import BackendLifespan
 from app.container import WorkspaceContainerRegistry
+from app.core.backend_identity import load_or_create_backend_id
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import TraceMiddleware
@@ -32,11 +33,17 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.ports import principal_ref_for_gateway
+from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.extension_host import router as gateway_host_router
+from app.gateway.server.extension_management import router as gateway_management_router
 from app.schemas.gateway.extension_host import ExtensionHostInitializationDTO
-from app.services.infrastructure.extension_host.owner import NodeHostIdentity
+from app.services.infrastructure.extension_host.owner import (
+    NodeHostIdentity,
+    _HostSession,
+)
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from tests.harness.python.run_context import TestRunContext
 
@@ -90,12 +97,13 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         root.mkdir(parents=True)
         mounts.append(MountedWorkspace(workspace_id, root))
     mounted = MountedWorkspaceRegistry(mounts)
-    backend_id = str(uuid4())
+    backend_id = load_or_create_backend_id(home)
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(backend_host_router)
     lifecycle = BackendLifespan(None, application)
     registry: WorkspaceContainerRegistry | None = None
+    management: GatewayExtensionManagement | None = None
     identities: dict[str, NodeHostIdentity] = {}
     channel_bindings: dict[str, dict[str, object]] = {}
     network = network_scope
@@ -106,53 +114,56 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
     gateway_url = ""
     cookie = ""
-    if transport != "ipc":
-        backend_url = await serve_extension_application(application)
-        gateway = FastAPI()
-        gateway.add_middleware(TraceMiddleware)
-        gateway.include_router(gateway_host_router)
-        gateway_registry = GatewayWorkspaceRegistry(storage_path=home / "workspaces.json", gateway_id=gateway_id)
-        network.callback(gateway_registry.close)
+    backend_url = await serve_extension_application(application)
+    gateway = FastAPI()
+    gateway.add_middleware(TraceMiddleware)
+    gateway.include_router(gateway_host_router)
+    gateway.include_router(gateway_management_router)
+    gateway.exception_handler(HTTPException)(gateway_http_exception_handler)
+    gateway.state.extension_management = None
+    gateway_registry = GatewayWorkspaceRegistry(storage_path=home / "workspaces.json", gateway_id=gateway_id)
+    network.callback(gateway_registry.close)
+    for mount in mounts:
+        gateway_registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id,
+            name="same-name", root_path=str(mount.workspace_root), backend_url=backend_url, connection_kind="local"), activate=False)
+    state = GatewayStateStore(path=home / "gateway.sqlite")
+    network.callback(state.close)
+    users = UserAccessService(state=state)
+    users.create_user(display_name="Node host", user_id="node-host")
+    access = users.acquire_user(user_id="node-host", client_label="protocol-client")
+    cookie = f"{USER_ACCESS_COOKIE_NAME}={access.access_session_id}"
+    gateway.state.registry = gateway_registry
+    gateway.state.user_access_service = users
+    gateway.state.federation_policy_store = FederationPolicyStore()
+    gateway.state.http_client = http
+    gateway_url = (await serve_extension_application(gateway)).replace("http://", "ws://")
+    monkeypatch.setenv("BOXTEAM_GATEWAY_URL", gateway_url.replace("ws://", "http://"))
+    if transport == "relay":
+        relay_id = "gateway_" + "b" * 32
+        relay_registry = GatewayWorkspaceRegistry(storage_path=home / "relay-workspaces.json", gateway_id=relay_id)
+        network.callback(relay_registry.close)
+        credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+            connection_id="native-host", peer_gateway_id=relay_id)
+        relay_registry.upsert_remote_gateway(RemoteGatewayConnection(
+            connection_id=credential.connection_id, name="native", host="127.0.0.1", port=22,
+            username="fixture", private_key_path=None, ssh_config_host=None, remote_gateway_port=1,
+            remote_gateway_id=gateway_id, protocol_version=2, source_owner="manual"),
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": gateway_url.replace("ws://", "http://")}))
         for mount in mounts:
-            gateway_registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id,
-                name="same-name", root_path=str(mount.workspace_root), backend_url=backend_url, connection_kind="local"), activate=False)
-        state = GatewayStateStore(path=home / "gateway.sqlite")
-        network.callback(state.close)
-        users = UserAccessService(state=state)
-        users.create_user(display_name="Node host", user_id="node-host")
-        access = users.acquire_user(user_id="node-host", client_label="protocol-client")
-        cookie = f"{USER_ACCESS_COOKIE_NAME}={access.access_session_id}"
-        gateway.state.registry = gateway_registry
-        gateway.state.user_access_service = users
-        gateway.state.federation_policy_store = FederationPolicyStore()
-        gateway.state.http_client = http
-        gateway_url = (await serve_extension_application(gateway)).replace("http://", "ws://")
-        if transport == "relay":
-            relay_id = "gateway_" + "b" * 32
-            relay_registry = GatewayWorkspaceRegistry(storage_path=home / "relay-workspaces.json", gateway_id=relay_id)
-            network.callback(relay_registry.close)
-            credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
-                connection_id="native-host", peer_gateway_id=relay_id)
-            relay_registry.upsert_remote_gateway(RemoteGatewayConnection(
-                connection_id=credential.connection_id, name="native", host="127.0.0.1", port=22,
-                username="fixture", private_key_path=None, ssh_config_host=None, remote_gateway_port=1,
-                remote_gateway_id=gateway_id, protocol_version=2, source_owner="manual"),
-                runtime=WorkspaceRuntime(service_urls={"workspace_api": gateway_url.replace("ws://", "http://")}))
-            for mount in mounts:
-                relay_registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id,
-                    name="same-name", root_path=None, backend_url="", connection_kind="remote_gateway",
-                    owner="remote_projection", remote_gateway_connection_ids=(credential.connection_id,),
-                    remote_service_names=("workspace_api",)), activate=False)
-            gateway.state.federation_policy_store.publish({"rules": [{"capability": "extension_host_manage", "effect": "allow",
-                "principal_ref": principal_ref_for_gateway(relay_id)}]})
-            relay = FastAPI()
-            relay.add_middleware(TraceMiddleware)
-            relay.include_router(gateway_host_router)
-            relay.state.registry = relay_registry
-            relay.state.user_access_service = users
-            relay.state.federation_policy_store = FederationPolicyStore()
-            relay.state.http_client = http
-            gateway_url = (await serve_extension_application(relay)).replace("http://", "ws://")
+            relay_registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id,
+                name="same-name", root_path=None, backend_url="", connection_kind="remote_gateway",
+                owner="remote_projection", remote_gateway_connection_ids=(credential.connection_id,),
+                remote_service_names=("workspace_api",)), activate=False)
+        gateway.state.federation_policy_store.publish({"rules": [{"capability": "extension_host_manage", "effect": "allow",
+            "principal_ref": principal_ref_for_gateway(relay_id)}]})
+        relay = FastAPI()
+        relay.add_middleware(TraceMiddleware)
+        relay.include_router(gateway_host_router)
+        relay.state.registry = relay_registry
+        relay.state.user_access_service = users
+        relay.state.federation_policy_store = FederationPolicyStore()
+        relay.state.http_client = http
+        gateway_url = (await serve_extension_application(relay)).replace("http://", "ws://")
 
     async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         while data := await reader.read(65536):
@@ -160,7 +171,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             await writer.drain()
 
     async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        nonlocal registry
+        nonlocal registry, management
         try:
             # 测试控制头不进入宿主；后面的字节原样传递，不编造 PersistentProtocol 帧。
             label = (await reader.readline()).decode().strip()
@@ -172,6 +183,14 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
             assert label in workspace_ids
             assert label not in hosts
             if registry is None:
+                # Node before 已构建固定组件；Gateway只启动这一个原管理实例。
+                management = GatewayExtensionManagement.from_environment(home, logging_startup={
+                    "revision": "node-host-fixture", "level": "info", "pretty": False,
+                })
+                assert management is not None
+                await management.start()
+                gateway.state.extension_management = management
+                network.push_async_callback(management.close)
                 registry = WorkspaceContainerRegistry(mounted_workspaces=mounted, backend_id=backend_id)
                 lifecycle.registry = registry
                 application.state.workspace_container_registry = registry
@@ -200,6 +219,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
                     assert binding["backend_id"] == backend_id
                     assert binding["view_id"] == label and binding["workspace_ids"] == [workspace_ids[label]]
                     session = registry.extension_hosts._sessions[binding["generation"]]
+                    assert isinstance(session, _HostSession)
                     assert session.host is not None
                     hosts[label], identities[label] = session.host, session.identity
                     channel_bindings[label] = binding
@@ -278,7 +298,15 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
         outcomes = await asyncio.gather(*handlers, return_exceptions=True)
         await server.wait_closed()
         await lifecycle.close()
+        if management is not None:
+            management.assert_healthy()
         await network.aclose()
+        if management is not None:
+            assert management.drained
+            (context.artifacts_dir / "gateway-management-process.json").write_text(json.dumps({
+                "backend_id": management.backend_id, "instance": None if management.instance is None
+                else management.instance.model_dump(mode="json"), "drained": management.drained,
+            }))
         (context.artifacts_dir / "backend-host-processes.json").write_text(json.dumps(
             {label: asdict(host.child.state) for label, host in hosts.items()}, ensure_ascii=False, indent=2) + "\n")
         (context.artifacts_dir / "backend-host-bindings.json").write_text(json.dumps(

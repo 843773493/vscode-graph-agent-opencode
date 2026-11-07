@@ -15,10 +15,12 @@ runtime/
 │   ├── test_process_groups.py           进程组所有权
 │   ├── test_process_lifecycle.py       启停、退出确认与回收
 │   ├── test_process_logs.py             进程日志落盘与读取
+│   ├── test_log_query.py                原诊断行的有界查询与精确读取
 │   ├── test_process_ports.py            端口分配与监听检查
 │   └── test_ssh_process.py               SSH 进程生命周期
 ├── gateway runtime coordination
 │   ├── test_development_restart.py       开发服务重启
+│   ├── test_extension_management.py      常驻管理取消、未知回执和失败资源回收
 │   ├── test_gateway_runtime_lock_table.py 运行时互斥锁
 │   └── test_workspace_reconnect.py       重连、Backend owner 生命周期与接管
 ```

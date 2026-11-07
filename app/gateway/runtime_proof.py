@@ -9,8 +9,8 @@ import logging
 import os
 from collections.abc import Callable
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 from uuid import uuid4
 
@@ -188,6 +188,7 @@ def _gateway_runtime_consumer_stages(
             registry=registry, candidate=candidate, generation=generation,
             fencing_token_digest=fencing_token_digest, fence_check=fence_check,
             record=logging_progress_recorder(state_store, fencing_token),
+            extension_management=getattr(app.state, "extension_management", None),
         ).stage())
     catalog_search_service = getattr(
         app.state,
@@ -610,6 +611,20 @@ def _should_preserve_gateway_generation_for_handoff(
     generation = gateway_state.get_gateway_runtime_generation(
         generation_id=generation_id
     )
+    if startup_candidate_ref is not None:
+        intent = gateway_state.get_gateway_restart_intent(candidate_ref=startup_candidate_ref)
+        active_generation = gateway_state.active_gateway_runtime_generation()
+        if (
+            intent is not None
+            and intent.state in {"pending", "applying"}
+            and intent.target_generation == generation_id
+            and intent.old_generation is not None
+            and active_generation is not None
+            and active_generation.generation_id == intent.old_generation
+            and generation_id != intent.old_generation
+        ):
+            # 即使失败发生在候选 generation 登记前，也只 detach 其接管句柄。
+            return True
     if generation is not None and (
         startup_candidate_ref is not None
         and generation.state == "failed"
@@ -661,7 +676,7 @@ def _record_owned_gateway_startup_failure(
         return False
     if intent.state not in {"pending", "applying"}:
         return False
-    if intent.expires_at is None or intent.expires_at <= datetime.now(timezone.utc):
+    if intent.expires_at is None or intent.expires_at <= datetime.now(UTC):
         return False
     generation = os.environ.get("BOXTEAM_CONFIG_GENERATION")
     fencing_token = os.environ.get("BOXTEAM_CONFIG_FENCING_TOKEN")

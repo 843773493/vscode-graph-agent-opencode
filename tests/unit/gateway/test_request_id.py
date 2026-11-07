@@ -34,11 +34,13 @@ def gateway_client() -> Iterator[TestClient]:
     app.dependency_overrides[get_registry] = lambda: _GatewayRegistryStub()
     app.state.gateway_id = "gateway_test_id"
     app.state.federation_channel_owner = MagicMock(spec=FederationChannelOwner)
+    app.state.extension_management = None
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
         del app.state.federation_channel_owner
+        del app.state.extension_management
         del app.state.gateway_id
 
 

@@ -29,8 +29,6 @@ from app.schemas.gateway.extension_host import (
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
-    ExtensionInstallationUninstallDTO,
-    ExtensionInstallationUninstallRequest,
     NativeExtensionFileRequest,
     ProfileExtensionInventory,
 )
@@ -38,9 +36,10 @@ from app.schemas.gateway.extension_web import ExtensionWebHostOpenRequest
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.configuration import (
     ExtensionConfigurationFiles,
+    initialize_configuration_files,
 )
 from app.services.infrastructure.extension_host.management import (
-    NodeExtensionManagement,
+    ExtensionManagementClient,
 )
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
@@ -123,6 +122,8 @@ class _HostSession:
         async with self._lock:
             if self.closed:
                 return
+            if self.configuration is not None:
+                await self.configuration.close()
             # 先断开原IPC。失败时保留本记录和日志句柄；重试仍关闭原child，
             # 不能因为async context已经退栈就把未退出进程当作完成。
             await self._scope.aclose()
@@ -157,7 +158,7 @@ class NodeExtensionHostOwner:
 
     def __init__(self, *, backend_id: str, mounted_workspaces: MountedWorkspaceRegistry,
                  runtime: NodeHostRuntime | None, home: Path, environment: Mapping[str, str],
-                 startup_timeout: float) -> None:
+                 startup_timeout: float, management: ExtensionManagementClient | None) -> None:
         self.backend_id = backend_id
         self.runtime = runtime
         self._mounts = mounted_workspaces
@@ -166,7 +167,7 @@ class NodeExtensionHostOwner:
         self._startup_timeout = startup_timeout
         self._sessions: dict[str, _HostSession | _WebHostSession] = {}
         self._admission_closed = False
-        self._management: NodeExtensionManagement | None = None
+        self._management = management
         self._configuration_watch = WorkspaceFileWatchService(workspace_root=home / "state/backend/extension-management" / backend_id)
         self._configuration_closed = True
 
@@ -180,15 +181,11 @@ class NodeExtensionHostOwner:
             self._management.close_admission()
 
     @property
-    def management(self) -> NodeExtensionManagement:
+    def management(self) -> ExtensionManagementClient:
         if self._admission_closed:
             raise RuntimeError("Backend 正在关闭，拒绝扩展管理")
-        if self.runtime is None:
-            raise NotImplementedError("目标未提供专用 Node 扩展管理运行时")
         if self._management is None:
-            self._management = NodeExtensionManagement(runtime=self.runtime,
-                directory=self._home / "state/backend/extension-management" / self.backend_id,
-                environment=self._environment, startup_timeout=self._startup_timeout, operation_timeout=120)
+            raise NotImplementedError("Backend 未连接已配置的原生 Gateway 扩展管理服务")
         return self._management
 
     @property
@@ -223,34 +220,27 @@ class NodeExtensionHostOwner:
                   else "platform_unsupported" if sys.platform not in {"linux", "win32"} else None)
         return NodeHostStatus(self.backend_id, sys.platform, reason, self.runtime)
 
-    def management_target(self, expected_backend_id: str | None = None, *, require_runtime: bool = False) -> str:
+    def management_target(self, expected_backend_id: str | None = None, *, require_management: bool = False) -> str:
         if expected_backend_id is not None and expected_backend_id != self.backend_id:
             raise ValueError("扩展安装域 Backend 身份不匹配")
         if self._admission_closed:
             raise ValueError("Backend 正在关闭，拒绝扩展管理")
-        if require_runtime and self.runtime is None:
-            raise ValueError("目标未提供专用扩展管理运行时")
+        if require_management and self._management is None:
+            raise ValueError("Backend 未连接已配置的原生 Gateway 扩展管理服务")
         return self.backend_id
 
     async def install(self, request: ExtensionInstallationInstallRequest) -> ExtensionInstallationInstallDTO:
-        self.management_target(request.backend_id, require_runtime=True)
+        self.management_target(request.backend_id, require_management=True)
         for workspace_id in request.workspace_ids:
             self._mounts.resolve(workspace_id)
         source = parse_resource_uri(request.source_uri, local_gateway_id=request.gateway_id)
         mount = self._mounts.resolve(source.scope_id)
-        # 沿原文件 owner 解析及保护私有目录；不装配 Agent 容器或另建根绑定。
+        # 文件 owner 在 Backend 目标机解析并保护路径；Gateway 只用此原生参数调用同机安装域。
         paths = WorkspaceFilePaths(workspace=mount.workspace_root, workspace_id=mount.workspace_id, bindings=None)
-        path = await run_sync_shielded(lambda: paths.native(source.display_uri))
-        publication = await self.management.install(path)
+        vsix_path = await run_sync_shielded(lambda: paths.native(source.display_uri))
+        publication = await self.management.install(vsix_path)
         return ExtensionInstallationInstallDTO(**request.model_dump(exclude={"source_uri", "gateway_connection_id"}),
             installed=publication.installed, inventory=publication.inventory)
-
-    async def uninstall(self, request: ExtensionInstallationUninstallRequest) -> ExtensionInstallationUninstallDTO:
-        self.management_target(request.backend_id, require_runtime=True)
-        publication = await self.management.uninstall(profile_id=request.profile_id,
-            extension_id=request.extension_id, version=request.version)
-        return ExtensionInstallationUninstallDTO(**request.model_dump(exclude={"profile_id", "extension_id", "version", "gateway_connection_id"}),
-            uninstalled=publication.uninstalled, inventory=publication.inventory)
 
     async def _release(self, session: _HostSession | _WebHostSession) -> None:
         await session.close()
@@ -258,7 +248,7 @@ class NodeExtensionHostOwner:
 
     async def _initialization(self, identity: NodeHostIdentity, directory: Path) -> ExtensionHostInitializationDTO:
         native_environment = await self.management.environment()
-        environment = ExtensionHostEnvironmentDTO(**native_environment.model_dump(exclude={"settings_native_uri"}),
+        environment = ExtensionHostEnvironmentDTO(**native_environment.model_dump(exclude={"settings_native_uri", "untitled_workspaces_home_uri"}),
             remote_settings=ExtensionHostConfigurationResourceDTO(native_uri=native_environment.settings_native_uri,
                 resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id, backend_id=identity.backend_id,
                                                         profile_id=native_environment.profile_id)))
@@ -273,11 +263,11 @@ class NodeExtensionHostOwner:
         view = json.dumps([identity.gateway_id, identity.backend_id, identity.view_id, identity.workspace_ids], separators=(",", ":"))
         workspace = ExtensionHostWorkspaceDTO(id=str(uuid5(NAMESPACE_URL, view)),
             name=", ".join(folder.name for folder in folders), folders=folders)
-        if len(folders) > 1:
-            location = await self.management.prepare_configuration_view(workspace.id,
-                [{"native_uri": folder.native_uri, "name": folder.name} for folder in folders])
+        location = await run_sync_shielded(initialize_configuration_files, native_environment.settings_native_uri,
+            native_environment.untitled_workspaces_home_uri, workspace)
+        if location is not None:
             workspace = workspace.model_copy(update={"configuration": ExtensionHostConfigurationResourceDTO(
-                native_uri=location.native_uri, resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id,
+                native_uri=location, resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id,
                     backend_id=identity.backend_id, workspace_id=workspace.id))})
         return ExtensionHostInitializationDTO(os="windows" if sys.platform == "win32" else "linux",
             parent_pid=os.getpid(), environment=environment, logs_location_uri=directory.as_uri(), workspace=workspace)
@@ -293,6 +283,7 @@ class NodeExtensionHostOwner:
         workspace_ids = tuple(workspace_ids)
         if status.runtime is None:
             raise NotImplementedError("目标未提供专用 Node Extension Host 运行时")
+        _ = self.management
         # TODO: macOS 私有IPC验收后启用，不能落到其它目标。
         if status.reason == "platform_unsupported":
             raise NotImplementedError("Node Extension Host 当前仅支持 Linux 和 Windows 目标")
@@ -308,10 +299,16 @@ class NodeExtensionHostOwner:
         self._sessions[identity.generation] = session
         failure: BaseException | None = None
         try:
-            initialization = await self._initialization(identity, directory)
-            self._configuration_closed = False
-            session.configuration = ExtensionConfigurationFiles(initialization, self.management,
-                self._configuration_watch, session.stopping)
+            # 初始化文件 worker 与原 session 关闭共用准入锁，关闭不能越过未结算的首次发布。
+            async with session._lock:
+                if session.stopping.is_set():
+                    raise RuntimeError("Node 宿主初始化期间 Backend 已撤销准入")
+                initialization = await self._initialization(identity, directory)
+                self._configuration_closed = False
+                session.configuration = ExtensionConfigurationFiles(initialization,
+                    self._configuration_watch, session.stopping)
+            if self._admission_closed:
+                raise RuntimeError("Node 宿主初始化期间 Backend 已撤销准入")
             connection = await session.open(initialization)
             if self._admission_closed:
                 raise RuntimeError("Node 宿主启动期间 Backend 已撤销准入")
@@ -329,7 +326,7 @@ class NodeExtensionHostOwner:
 
     @asynccontextmanager
     async def connect_web(self, request: ExtensionWebHostOpenRequest, *, client_id: str) -> AsyncIterator[WebHostConnection]:
-        self.management_target(request.backend_id, require_runtime=True)
+        self.management_target(request.backend_id, require_management=True)
         if not client_id.strip():
             raise ValueError("Web 宿主必须绑定已认证客户端")
         workspace_ids = tuple(request.workspace_ids)
@@ -355,16 +352,17 @@ class NodeExtensionHostOwner:
                 raise ValueError("Web 宿主请求不属于目标 profile 当前有效的精确安装版本")
             snapshot = ProfileExtensionInventory(profile_id=inventory.profile_id,
                 extensions=[members[key] for key in extension_keys])
-            # 原安装锁释放前发布到同一运行记录；后续更新不改变该实例的版本集合。
+            # 冻结同次原库存回执；后续更新不改变该实例的版本集合，已发布旧包仍保留。
             session.profile_id = inventory.profile_id
             session.extension_keys = frozenset(extension_keys)
 
         try:
-            await self.management.inventory(on_snapshot=freeze)
+            inventory = await self.management.inventory()
+            freeze(inventory)
             if self._admission_closed or session.closed or session.stopping.is_set():
                 raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
             if snapshot is None:
-                raise RuntimeError("扩展库存未在原安装锁内发布 Web 宿主快照")
+                raise RuntimeError("原扩展库存回执未生成 Web 宿主快照")
             yield WebHostConnection(identity, snapshot, session.stopping, session.transport_settled)
         finally:
             session.stopping.set()

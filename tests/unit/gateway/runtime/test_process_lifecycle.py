@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import psutil
@@ -269,6 +270,28 @@ def test_adopted_process_windows_surfaces_process_query_errors(
         AdoptedManagedProcess(pid=4321)._is_alive()
 
     assert isinstance(raised.value.__cause__, psutil.AccessDenied)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc 进程组成员核实")
+def test_adopted_process_linux_treats_zombie_only_group_as_exited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.gateway.runtime import process_groups
+
+    monkeypatch.setattr(
+        process_groups,
+        "_read_linux_process_identity",
+        lambda pid: process_groups._ProcessIdentity("Z", 4321, 4321, 100)
+        if pid == 4321 else None,
+    )
+    monkeypatch.setattr(process_groups.os, "killpg", lambda *_: None)
+    monkeypatch.setattr(
+        process_groups.Path,
+        "iterdir",
+        lambda _path: [process_groups.Path("/proc/4321")],
+    )
+
+    assert AdoptedManagedProcess(pid=4321).is_alive() is False
 
 
 def test_windows_service_identity_is_frozen_and_drives_liveness(

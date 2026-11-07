@@ -96,7 +96,7 @@ def test_private_discovery_preserves_control_boundary(
     assert response.status_code == status and registry.extension_hosts.active == ()
 
 
-def test_private_target_resolve_returns_only_bound_identity_without_starting_management(
+def test_private_target_resolve_requires_configured_management_client(
     private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
 ) -> None:
     client, registry = private_host_client
@@ -105,9 +105,7 @@ def test_private_target_resolve_returns_only_bound_identity_without_starting_man
     headers = {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": payload["gateway_id"],
         "X-Request-ID": "target-identity"}
     response = client.post("/api/internal/extension-targets/resolve", json=payload, headers=headers)
-    assert response.status_code == 200
-    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "target-identity"
-    assert response.json()["data"] == {**payload, "backend_id": registry.extension_hosts.backend_id}
+    assert response.status_code == 409
     owner = registry.extension_hosts
     assert owner.active == () and owner._management is None
     assert not (owner._home / "state/backend/extension-management").exists()

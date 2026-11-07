@@ -476,13 +476,7 @@ class AdoptedManagedProcess:
                     {self.pid: self._windows_service_start_time}
                 )
             return _windows_process_is_alive(self.pid)
-        try:
-            os.kill(self.pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError as error:
-            raise PermissionError(f"无权检查已接管辅助服务 PID: {self.pid}") from error
-        return True
+        return self._close_target_is_alive()
 
     def _windows_root_is_alive(self) -> bool:
         if self._windows_root_start_time is not None:

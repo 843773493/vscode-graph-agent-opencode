@@ -1,4 +1,4 @@
-"""真实原生安装／profile 扫描及 Backend 进程回收；窗口管理 UI 尚不在本切片。"""
+"""真实 Gateway 常驻管理／Backend client／原生 profile；窗口管理 UI 尚不在本切片。"""
 
 from __future__ import annotations
 
@@ -10,24 +10,23 @@ import subprocess
 from base64 import b64decode, b64encode
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
-from dataclasses import asdict, replace
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
-from unittest.mock import Mock
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 from uuid import uuid4
 from zipfile import ZipFile
 
 import httpx
-import portalocker
 import pytest
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import JsonValue
 from websockets.asyncio.client import connect
 
 from app.api.extension_host import router as backend_host_router
 from app.container import WorkspaceContainerRegistry
+from app.core.backend_identity import load_or_create_backend_id
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.resource_uri import extension_package_uri, resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
@@ -38,7 +37,9 @@ from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME, UserAccessS
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.gateway.server.extension_host import router as gateway_host_router
+from app.gateway.server.extension_management import router as gateway_management_router
 from app.gateway.server.extension_package import router as gateway_package_router
 from app.main import workspace_http_exception_handler
 from app.schemas.gateway.extension_configuration import (
@@ -48,7 +49,6 @@ from app.schemas.gateway.extension_configuration import (
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,
-    UninstalledProfile,
 )
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from tests.harness.python.run_context import TestRunContext
@@ -78,11 +78,36 @@ await symlink(resolve(modules),join(output,'node_modules'),'junction');
         metadata["commit"], metadata["version"], metadata["nodeVersion"])
 
 
+@dataclass
+class ManagementDomain:
+    home: Path
+    owner: GatewayExtensionManagement
+    application: FastAPI
+    registry: GatewayWorkspaceRegistry
+    gateway_id: str
+    url: str
+    headers: dict[str, str]
+
+
+@dataclass
+class ManagementBackends:
+    context: TestRunContext
+    workspace: Path
+    runtime: NodeHostRuntime
+    manifest: Path
+    token: str
+    monkeypatch: pytest.MonkeyPatch
+    domains: list[ManagementDomain] = field(default_factory=list)
+    registries: list[WorkspaceContainerRegistry] = field(default_factory=list)
+    owners: list[GatewayExtensionManagement] = field(default_factory=list)
+
+
 @pytest.fixture
 async def management_backends(
     management_runtime: tuple[TestRunContext, Path, NodeHostRuntime], monkeypatch: pytest.MonkeyPatch,
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[tuple[TestRunContext, Path, list[WorkspaceContainerRegistry]]]:
+    request: pytest.FixtureRequest, network_scope: AsyncExitStack,
+    serve_extension_application: Callable[[FastAPI], Awaitable[str]],
+) -> AsyncIterator[ManagementBackends]:
     context, component, runtime = management_runtime
     context.artifacts_dir.mkdir(parents=True, exist_ok=True)
     home = context.boxteam_home_for_node(request.node.nodeid)
@@ -92,30 +117,103 @@ async def management_backends(
     manifest.write_text(json.dumps({"schema_version": 1, "extension_host": {
         "node_executable": str(runtime.executable), "component_root": str(component)}}))
     monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(manifest))
+    token = get_gateway_local_token()
+    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
     workspace = context.workspace_root / context.run_root.name / uuid4().hex
     workspace.mkdir(parents=True)
-    backends: list[WorkspaceContainerRegistry] = []
+    case = ManagementBackends(context, workspace, runtime, manifest, token, monkeypatch)
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10, trust_env=False))
     try:
-        yield context, workspace, backends
+        for name in ("a", "b"):
+            domain_home = home / name
+            backend_id = load_or_create_backend_id(domain_home)
+            owner = GatewayExtensionManagement(backend_id=backend_id, runtime=runtime,
+                directory=domain_home / "state/backend/extension-management" / backend_id,
+                environment={**os.environ, "BOXTEAM_PROJECT_ROOT": str(context.project_root)},
+                log_dir=domain_home / "state/logs",
+                logging_startup={"revision": "extension-management-fixture", "level": "info", "pretty": False})
+            case.owners.append(owner)
+            await owner.start()
+            gateway_id = "gateway_" + uuid4().hex
+            registry = GatewayWorkspaceRegistry(storage_path=domain_home / "workspaces.json", gateway_id=gateway_id)
+            network_scope.callback(registry.close)
+            state = GatewayStateStore(path=domain_home / "gateway.sqlite")
+            network_scope.callback(state.close)
+            users = UserAccessService(state=state)
+            users.create_user(display_name="扩展库存", user_id="inventory")
+            access = users.acquire_user(user_id="inventory", client_label="real-network")
+            application = FastAPI()
+            application.add_middleware(TraceMiddleware)
+            application.exception_handler(HTTPException)(gateway_http_exception_handler)
+            application.include_router(gateway_management_router)
+            application.include_router(gateway_host_router)
+            application.include_router(gateway_package_router)
+            application.state.extension_management = owner
+            application.state.registry = registry
+            application.state.user_access_service = users
+            application.state.federation_policy_store = FederationPolicyStore()
+            application.state.http_client = client
+            url = await serve_extension_application(application)
+            # 同进程装具共用原本机认证凭据；安装 Home、稳定身份和真实 child 各自独立。
+            case.domains.append(ManagementDomain(domain_home, owner, application, registry, gateway_id, url,
+                {"X-Local-Token": token, "Cookie": f"{USER_ACCESS_COOKIE_NAME}={access.access_session_id}"}))
+        yield case
     finally:
-        for registry in backends:
-            # 原 owner 负责同时停止宿主／管理进程；记录实际原句柄的退出收据。
-            owner = registry._extension_hosts
-            assert owner is not None
-            await registry.close_extension_hosts()
-            if owner._management is not None:
-                context.artifacts_dir.mkdir(parents=True, exist_ok=True)
-                (context.artifacts_dir / f"process-{owner.backend_id}-{uuid4()}.json").write_text(json.dumps(asdict(owner._management.child.state)))
-                assert owner._management.child.state.exit_verified
-            registry.close()
+        failures: list[BaseException] = []
+        for registry in case.registries:
+            try:
+                await registry.close_extension_hosts()
+                registry.close()
+            except BaseException as error:  # noqa: BLE001 - 继续关闭其他真实 Backend 和 Gateway。
+                failures.append(error)
+        for owner in case.owners:
+            instance = owner.instance
+            process = owner.process
+            try:
+                await owner.close()
+                assert owner.drained
+                if process is not None:
+                    assert not process.is_alive()
+            except BaseException as error:  # noqa: BLE001 - 每个原 child 均保留实际退出收据。
+                failures.append(error)
+            finally:
+                process_name = "unavailable" if instance is None else instance.runtime_instance_id.replace(":", "-")
+                (context.artifacts_dir / f"process-{owner.backend_id}-{process_name}.json").write_text(
+                    json.dumps({"backend_id": owner.backend_id,
+                        "instance": None if instance is None else instance.model_dump(mode="json"),
+                        "process_id": None if instance is None else instance.process_id,
+                        "exited": None if process is None else not process.is_alive()}))
+        if failures:
+            raise BaseExceptionGroup("真实扩展管理装具回收失败", failures)
 
 
-def _backend(workspace: Path, backends: list[WorkspaceContainerRegistry], *, backend_id: str | None = None) -> WorkspaceContainerRegistry:
+def _backend(workspace: Path, case: ManagementBackends, *, domain: int = 0,
+             roots: tuple[Path, ...] = ()) -> WorkspaceContainerRegistry:
     workspace.mkdir(exist_ok=True)
-    registry = WorkspaceContainerRegistry(backend_id=backend_id or str(uuid4()), mounted_workspaces=MountedWorkspaceRegistry([
-        MountedWorkspace(load_or_create_workspace_id(workspace), workspace)]))
-    backends.append(registry)
+    selected = case.domains[domain]
+    with case.monkeypatch.context() as environment:
+        environment.setenv("BOXTEAM_HOME", str(selected.home))
+        environment.setenv("BOXTEAM_GATEWAY_URL", selected.url)
+        environment.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", case.token)
+        environment.setenv("BOXTEAM_RUNTIME_MANIFEST", str(case.manifest))
+        registry = WorkspaceContainerRegistry(backend_id=load_or_create_backend_id(selected.home),
+            mounted_workspaces=MountedWorkspaceRegistry([
+                MountedWorkspace(load_or_create_workspace_id(root), root) for root in roots or (workspace,)]))
+    case.registries.append(registry)
     return registry
+
+
+async def _restart_gateway_management(case: ManagementBackends, *, domain: int = 0) -> None:
+    selected = case.domains[domain]
+    await selected.owner.close()
+    owner = GatewayExtensionManagement(backend_id=load_or_create_backend_id(selected.home), runtime=case.runtime,
+        directory=selected.owner.directory,
+        environment={**os.environ, "BOXTEAM_PROJECT_ROOT": str(case.context.project_root)}, log_dir=selected.home / "state/logs",
+        logging_startup={"revision": "extension-management-fixture", "level": "info", "pretty": False})
+    case.owners.append(owner)
+    await owner.start()
+    selected.owner = owner
+    selected.application.state.extension_management = owner
 
 
 @pytest.fixture
@@ -150,13 +248,14 @@ def installation_snapshot() -> Callable[[Path], dict[str, str]]:
 async def test_native_vsix_keep_existing_reuses_published_version(
     management_backends, vsix_factory, installation_snapshot, retained: bool,
 ) -> None:
-    context, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    context, workspace = case.context, case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     published = await management.install(vsix_factory(workspace, "1.0.0", "published-v1",
         manifest_overrides={"displayName": "已发布的 V1"}))
     assert published.installed.reused is False
-    installation = management._directory / "extensions"
+    installation = case.domains[0].owner.directory / "extensions"
     profile = installation / "extensions.json"
     original = installation / json.loads(profile.read_text())[0]["relativeLocation"]
     original_snapshot = installation_snapshot(original)
@@ -198,7 +297,8 @@ async def test_native_vsix_keep_existing_reuses_published_version(
         obsolete = json.loads((installation / ".obsolete").read_text())
         assert original.name not in obsolete and obsolete[newer.name] is True
     assert await management.inventory() == reused.inventory
-    assert management.drained and registry.extension_hosts.active == ()
+    case.domains[0].owner.assert_healthy()
+    assert registry.extension_hosts.active == ()
     (context.artifacts_dir / f"vsix-reuse-{'retained' if retained else 'current'}.json").write_text(json.dumps({
         "published": published.model_dump(), "result": reused.model_dump(),
         "original_snapshot": original_snapshot, "after_snapshot": installation_snapshot(original),
@@ -209,15 +309,15 @@ async def test_native_vsix_keep_existing_reuses_published_version(
 
 async def test_native_published_extension_files_are_read_by_exact_retained_key(
     management_backends, vsix_factory, network_scope: AsyncExitStack,
-    serve_extension_application: Callable[[FastAPI], Awaitable[str]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    context, workspace = case.context, case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     original = await management.install(vsix_factory(workspace, "1.0.0", "published-v1"))
     profile_id = original.installed.profile_id
     key = "boxteam-probe.target-inventory-1.0.0"
-    root = management._directory / "extensions"
+    root = case.domains[0].owner.directory / "extensions"
     old_directory = root / key
     script = b'exports.activate = () => "published-v1";\n'
     assert (old_directory / "extension.js").read_bytes() == script
@@ -253,26 +353,19 @@ async def test_native_published_extension_files_are_read_by_exact_retained_key(
         await management.extension_file_read(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", extension_key=key,
             relative_segments=["extension.js"], current_profile_member=True)
     assert stale_current_key.value.code == "InstalledExtensionNotFound"
-    token = get_gateway_local_token()
-    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
-    application = FastAPI()
-    application.add_middleware(TraceMiddleware)
-    application.exception_handler(HTTPException)(workspace_http_exception_handler)
-    application.include_router(backend_host_router)
-    application.state.workspace_container_registry = registry
-    url = await serve_extension_application(application)
-    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10))
-    gateway_id = "gateway_" + uuid4().hex
+    domain = case.domains[0]
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10, trust_env=False))
     request_id = "retained-extension-read-" + uuid4().hex
-    backend_id = registry.extension_hosts.backend_id
-    response = await client.post(f"{url}/api/internal/extension-files/read",
-        headers={"X-Local-Token": token, "X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": request_id},
-        json={"protocol_version": 1, "gateway_id": gateway_id, "backend_id": backend_id,
-              "profile_id": profile_id, "extension_id": "boxteam-probe.target-inventory",
-              "extension_key": current_v2_key, "relative_segments": ["extension.js"],
-              "current_profile_member": True})
+    resource = extension_package_uri(gateway_id=domain.gateway_id, backend_id=registry.extension_hosts.backend_id,
+        profile_id=profile_id, extension_id="boxteam-probe.target-inventory", relative_segments=("extension.js",))
+    response = await client.post(f"{domain.url}/api/gateway/extension-packages/read",
+        headers={**domain.headers, "X-Request-ID": request_id},
+        json={"protocol_version": 1, "gateway_id": domain.gateway_id, "backend_id": registry.extension_hosts.backend_id,
+              "resource_uri": resource, "extension_key": current_v2_key})
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+    assert response.json()["data"]["resource_uri"] == resource
+    assert response.json()["data"]["extension_key"] == current_v2_key
     assert b64decode(response.json()["data"]["content_base64"]) == b'exports.activate = () => "published-v2";\n'
 
     await management.uninstall(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", version="2.0.0")
@@ -291,6 +384,10 @@ async def test_native_published_extension_files_are_read_by_exact_retained_key(
         await management.extension_file_read(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", extension_key=key,
                                              relative_segments=["..", "outside.txt"], current_profile_member=False)
     assert traversal.value.code == "NoPermissions"
+    with pytest.raises(ExtensionManagementError) as not_directory:
+        await management.extension_file_read(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", extension_key=key,
+                                             relative_segments=["extension.js", "nested.js"], current_profile_member=False)
+    assert not_directory.value.code == "EntryNotADirectory"
     with pytest.raises(ExtensionManagementError) as missing_key:
         await management.extension_file_read(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", extension_key=key.replace("1.0.0", "3.0.0"),
                                              relative_segments=["extension.js"], current_profile_member=False)
@@ -346,10 +443,12 @@ async def test_native_published_extension_files_are_read_by_exact_retained_key(
         await management.extension_file_read(profile_id=profile_id, extension_id="boxteam-probe.target-inventory", extension_key=key,
                                              relative_segments=["extension.js"], current_profile_member=False)
     assert invalid_package.value.code == "InstalledExtensionNotFound"
-    assert management.drained and registry.extension_hosts.active == ()
+    case.domains[0].owner.assert_healthy()
+    assert registry.extension_hosts.active == ()
     (context.artifacts_dir / "published-extension-read.json").write_text(json.dumps({
         "profile_id": profile_id, "extension_key": key, "stat": stat.model_dump(),
         "read_size": len(b64decode(read.content_base64)), "old_version_read_after_upgrade": True,
+        "current_package_http_read_ms": response.elapsed.total_seconds() * 1000,
     }, ensure_ascii=False, indent=2))
 
 
@@ -358,7 +457,8 @@ async def test_native_vsix_keep_existing_plans_dependencies_from_published_manif
     management_backends, vsix_factory, installation_snapshot, serve_extension_application,
     monkeypatch: pytest.MonkeyPatch, retained: bool,
 ) -> None:
-    context, workspace, backends = management_backends
+    case = management_backends
+    context, workspace = case.context, case.workspace
     application = FastAPI()
     requests: list[str] = []
 
@@ -377,14 +477,15 @@ async def test_native_vsix_keep_existing_plans_dependencies_from_published_manif
     preload.write_text("globalThis._VSCODE_PRODUCT_JSON = " + json.dumps(product) + ";\n"
         + "globalThis._VSCODE_PACKAGE_JSON = " + json.dumps({"version": metadata["version"]}) + ";\n")
     monkeypatch.setenv("NODE_OPTIONS", f"{os.getenv('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
-    registry = _backend(workspace / "target", backends)
+    await _restart_gateway_management(case)
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     published_dependency, published_pack = "boxteam-probe.published-dependency", "boxteam-probe.published-pack"
     candidate_dependency, candidate_pack = "boxteam-probe.candidate-dependency", "boxteam-probe.candidate-pack"
     published = await management.install(vsix_factory(workspace, "1.0.0", "published-v1", manifest_overrides={
         "extensionDependencies": [published_dependency], "extensionPack": [published_pack]}))
     assert any(json.dumps(published_dependency) in body and json.dumps(published_pack) in body for body in requests)
-    installation = management._directory / "extensions"
+    installation = case.domains[0].owner.directory / "extensions"
     profile = installation / "extensions.json"
     original = installation / json.loads(profile.read_text())[0]["relativeLocation"]
     original_snapshot = installation_snapshot(original)
@@ -412,11 +513,12 @@ async def test_native_vsix_keep_existing_plans_dependencies_from_published_manif
 async def test_native_vsix_keep_existing_rejects_damaged_original_without_writes(
     management_backends, vsix_factory, installation_snapshot, retained: bool, damage: str,
 ) -> None:
-    context, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    context, workspace = case.context, case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     published = await management.install(vsix_factory(workspace, "1.0.0", "original"))
-    installation = management._directory / "extensions"
+    installation = case.domains[0].owner.directory / "extensions"
     profile = installation / "extensions.json"
     original = installation / json.loads(profile.read_text())[0]["relativeLocation"]
     expected_inventory = published.inventory
@@ -445,7 +547,7 @@ async def test_native_vsix_keep_existing_rejects_damaged_original_without_writes
     after = installation_snapshot(installation)
     assert after == before
     assert profile.read_bytes() == profile_bytes
-    assert management.drained
+    case.domains[0].owner.assert_healthy()
     if retained and damage != "invalid-manifest":
         assert rejected.value.code == "ScanningExtension"
         assert "Cannot read the extension from" in str(rejected.value)
@@ -462,7 +564,7 @@ async def test_native_vsix_keep_existing_rejects_damaged_original_without_writes
 
 
 @pytest.mark.parametrize("existing", [False, True], ids=["initial", "upgrade"])
-@pytest.mark.parametrize(("case", "overrides", "diagnostic"), [
+@pytest.mark.parametrize(("manifest_case", "overrides", "diagnostic"), [
     ("missing-engines", {"engines": None}, "property `engines` is mandatory"),
     ("invalid-version", {"version": "not-semver"}, "Extension version is not semver compatible"),
     ("invalid-main", {"main": 42}, "property `main` can be omitted or must be of type `string`"),
@@ -473,15 +575,16 @@ async def test_native_vsix_keep_existing_rejects_damaged_original_without_writes
 ])
 async def test_native_vsix_manifest_preflight_preserves_installation(
     management_backends, vsix_factory, installation_snapshot, existing: bool,
-    case: str, overrides: dict[str, object], diagnostic: str,
+    manifest_case: str, overrides: dict[str, object], diagnostic: str,
 ) -> None:
-    context, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    context, workspace = case.context, case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     if existing:
         await management.install(vsix_factory(workspace, "1.0.0", "original"))
     before = await management.inventory()
-    installation = management._directory / "extensions"
+    installation = case.domains[0].owner.directory / "extensions"
     snapshot = installation_snapshot(installation)
     # 首次安装也核 profile 的存在状态与原字节；拒绝不能先创建一个空安装记录。
     profile = installation / "extensions.json"
@@ -498,7 +601,7 @@ async def test_native_vsix_manifest_preflight_preserves_installation(
         after = await management.inventory()
     except ExtensionManagementError as error:
         inventory_error = str(error)
-    (context.artifacts_dir / f"manifest-preflight-{case}-{'upgrade' if existing else 'initial'}.json").write_text(json.dumps({
+    (context.artifacts_dir / f"manifest-preflight-{manifest_case}-{'upgrade' if existing else 'initial'}.json").write_text(json.dumps({
         "failure": failure, "inventory_error": inventory_error,
         "before": before.model_dump(), "after": after.model_dump() if after is not None else None,
         "snapshot_before": snapshot, "snapshot_after": after_snapshot,
@@ -513,11 +616,12 @@ async def test_native_vsix_manifest_preflight_preserves_installation(
 async def test_native_vsix_declarative_engine_rejection_keeps_original_diagnostic(
     management_backends, vsix_factory, installation_snapshot,
 ) -> None:
-    _, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    workspace = case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     before = await management.inventory()
-    installation = management._directory / "extensions"
+    installation = case.domains[0].owner.directory / "extensions"
     snapshot = installation_snapshot(installation)
     # 完整 validator 对纯声明式扩展跳过 engine 版本；原 VSIX install 的拒绝仍必须保留。
     with pytest.raises(ExtensionManagementError, match="not compatible"):
@@ -528,15 +632,16 @@ async def test_native_vsix_declarative_engine_rejection_keeps_original_diagnosti
 
 
 async def test_native_vsix_manifest_warning_and_valid_upgrade_remain_supported(management_backends, vsix_factory) -> None:
-    _, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    workspace = case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     # 原 validator 将入口越出包根诊断为非便携 Warning；本组只验安装，不激活该入口。
     warning = await management.install(vsix_factory(workspace, "1.0.0", "warning", manifest_overrides={"main": "../extension.js"}))
     extension = warning.inventory.extensions[0]
     assert warning.installed.version == "1.0.0" and extension.is_valid
     assert any(validation.severity == 2 and "Expected `main`" in validation.message for validation in extension.validations)
-    previous = management._directory / "extensions" / json.loads((management._directory / "extensions/extensions.json").read_text())[0]["relativeLocation"]
+    previous = case.domains[0].owner.directory / "extensions" / json.loads((case.domains[0].owner.directory / "extensions/extensions.json").read_text())[0]["relativeLocation"]
     previous_bytes = (previous / "package.json").read_bytes()
     upgraded = await management.install(vsix_factory(workspace, "2.0.0", "valid"))
     assert upgraded.installed.version == "2.0.0" and len(upgraded.inventory.extensions) == 1
@@ -546,16 +651,22 @@ async def test_native_vsix_manifest_warning_and_valid_upgrade_remain_supported(m
     assert registry.extension_hosts.active == ()
 
 
-async def test_native_vsix_profile_inventory_isolated_and_recovered(management_backends, vsix_factory) -> None:
-    context, workspace, backends = management_backends
-    a = _backend(workspace / "a", backends)
-    b = _backend(workspace / "b", backends)
+async def test_native_profile_isolated_between_gateways_and_shared_across_backend_restart(
+    management_backends, vsix_factory,
+) -> None:
+    case = management_backends
+    context, workspace = case.context, case.workspace
+    a = _backend(workspace / "a", case)
+    b = _backend(workspace / "b", case, domain=1)
     first, second = a.extension_hosts.management, b.extension_hosts.management
+    gateway = case.domains[0].owner
+    original_process = gateway.instance
+    assert original_process is not None
     assert (await first.inventory()).extensions == []
     a_environment, b_environment = await first.environment(), await second.environment()
     assert a_environment.app_root_uri == (context.run_root / "runtime").as_uri()
-    assert a_environment.global_storage_home_uri == (first._directory / "data/User/globalStorage").as_uri()
-    assert a_environment.workspace_storage_home_uri == (first._directory / "data/User/workspaceStorage").as_uri()
+    assert a_environment.global_storage_home_uri == (gateway.directory / "data/User/globalStorage").as_uri()
+    assert a_environment.workspace_storage_home_uri == (gateway.directory / "data/User/workspaceStorage").as_uri()
     assert b_environment.global_storage_home_uri != a_environment.global_storage_home_uri
     one = (await first.install(vsix_factory(workspace, "1.0.0", "A"))).installed
     two = (await second.install(vsix_factory(workspace, "2.0.0", "B"))).installed
@@ -573,39 +684,50 @@ async def test_native_vsix_profile_inventory_isolated_and_recovered(management_b
         assert extension.description["isUnderDevelopment"] is False
     assert a_inventory.extensions[0].description["extensionLocation"] != b_inventory.extensions[0].description["extensionLocation"]
     assert a.extension_hosts.active == b.extension_hosts.active == ()
-    assert a.extension_hosts.drained
-    duplicate = _backend(workspace / "a", backends, backend_id=a.extension_hosts.backend_id)
+    duplicate = _backend(workspace / "a-peer", case)
+    assert duplicate.extension_hosts.backend_id == a.extension_hosts.backend_id
+    assert duplicate.extension_hosts.management is not first
     assert await duplicate.extension_hosts.management.inventory() == a_inventory
-    assert duplicate.extension_hosts.management.drained
-    previous = first.child.state.instance_id
-    assert await first.inventory() == a_inventory
-    assert first.child.state.instance_id != previous and first.drained
+    # 两个 Backend 同时写同一原 profile；每份回执的库存包含自己的真实版本。
+    publications = await asyncio.gather(
+        first.install(vsix_factory(workspace, "3.0.0", "A3")),
+        duplicate.extension_hosts.management.install(vsix_factory(workspace, "4.0.0", "A4")))
+    for publication, version in zip(publications, ("3.0.0", "4.0.0"), strict=True):
+        assert publication.installed.version == publication.inventory.extensions[0].description["version"] == version
+    shared_inventory = await first.inventory()
+    assert shared_inventory == await duplicate.extension_hosts.management.inventory()
+    assert gateway.instance is original_process
+    assert gateway.process is not None and gateway.process.is_alive()
     await a.close_extension_hosts()
-    assert first.child.state.exit_verified and first.child.state.returncode == 0
     a.close()
-    assert a._extension_hosts is not None
-    recovered = _backend(workspace / "a", backends, backend_id=a._extension_hosts.backend_id)
-    assert await recovered.extension_hosts.management.inventory() == a_inventory
+    assert first.drained and not gateway.drained
+    assert gateway.instance is original_process and gateway.process is not None and gateway.process.is_alive()
+    recovered = _backend(workspace / "a", case)
+    assert await recovered.extension_hosts.management.inventory() == shared_inventory
     assert await recovered.extension_hosts.management.environment() == a_environment
     assert await second.inventory() == b_inventory
     with pytest.raises(ExtensionManagementError, match="not compatible"):
-        await recovered.extension_hosts.management.install(vsix_factory(workspace, "3.0.0", "invalid", engine="^999.0.0"))
-    assert await recovered.extension_hosts.management.inventory() == a_inventory
+        await recovered.extension_hosts.management.install(vsix_factory(workspace, "5.0.0", "invalid", engine="^999.0.0"))
+    assert await recovered.extension_hosts.management.inventory() == shared_inventory
+    gateway.assert_healthy()
+    assert gateway.instance is original_process
     (context.artifacts_dir / "inventories.json").write_text(json.dumps({"backend_a": recovered.extension_hosts.backend_id,
-        "backend_b": b.extension_hosts.backend_id, "a": a_inventory.model_dump(), "b": b_inventory.model_dump()}, ensure_ascii=False, indent=2))
+        "backend_b": b.extension_hosts.backend_id, "management_pid": original_process.pid,
+        "a": shared_inventory.model_dump(), "b": b_inventory.model_dump()}, ensure_ascii=False, indent=2))
 
 
 @pytest.mark.parametrize("root_count", [1, 2], ids=["single-root", "multi-root"])
-async def test_configuration_uses_original_session_view_across_fresh_management_processes(
+async def test_configuration_uses_original_session_view_with_persistent_management(
     management_backends, root_count: int,
 ) -> None:
-    context, workspace, backends = management_backends
+    case = management_backends
+    context, workspace = case.context, case.workspace
     roots = tuple(workspace / f"root-{index}" for index in range(root_count))
     for root in roots:
         root.mkdir()
-    registry = WorkspaceContainerRegistry(backend_id=str(uuid4()), mounted_workspaces=MountedWorkspaceRegistry([
-        MountedWorkspace(load_or_create_workspace_id(root), root) for root in roots]))
-    backends.append(registry)
+    registry = _backend(workspace, case, roots=roots)
+    management_process = case.domains[0].owner.process
+    assert management_process is not None
     owner = registry.extension_hosts
     async with owner.connect(gateway_id="gateway_" + uuid4().hex, expected_backend_id=owner.backend_id,
             client_id="configuration-test", view_id="configuration", workspace_ids=registry.mounted_workspaces.workspace_ids) as connection:
@@ -625,10 +747,36 @@ async def test_configuration_uses_original_session_view_across_fresh_management_
             encoded = b64encode((json.dumps(content) + "\n").encode()).decode()
             options = ExtensionConfigurationWriteOptions(create=True, overwrite=True, unlock=False, atomic=False, append=False)
             await files.write(resource.resource_uri, encoded, options)
-            previous = owner.management.child.state.instance_id
             assert (await files.read(resource.resource_uri)).content_base64 == encoded
-            assert owner.management.child.state.instance_id != previous
-            assert (await files.stat(resource.resource_uri)).size == native.stat().st_size
+            assert case.domains[0].owner.process is management_process
+            assert management_process.is_alive()
+            # 固定 .75 ms 保证能区分原 Node Date MathRound 与错误的毫秒截断。
+            os.utime(native, ns=(1_700_000_000_123_750_000, 1_700_000_000_123_750_000))
+            observed = await files.stat(resource.resource_uri)
+            command = [str(case.runtime.executable), "--input-type=module", "-e", """
+import {statSync} from 'node:fs';
+const stat = statSync(process.argv.at(-1));
+const permissions = ((stat.mode & 0o200) ? 0 : 2) | ((stat.mode & 0o111) ? 4 : 0);
+console.log(JSON.stringify({type: 1, ctime: stat.birthtime.getTime(), mtime: stat.mtime.getTime(),
+  size: stat.size, permissions: permissions || null}));
+""", str(native)]
+            compared = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=10, check=False)
+            assert compared.returncode == 0, compared.stderr
+            node_stat = json.loads(compared.stdout)
+            assert observed.model_dump(exclude={"resource_uri"}) == node_stat
+            if resource is resources[0]:
+                sibling = _backend(workspace / "shared-profile-backend", case, roots=roots[:1]).extension_hosts
+                assert sibling is not owner and sibling.backend_id == owner.backend_id
+                async with sibling.connect(gateway_id=identity.gateway_id, expected_backend_id=sibling.backend_id,
+                        client_id="shared-configuration", view_id="shared", workspace_ids=identity.workspace_ids[:1]) as other:
+                    shared = other.initialization.environment.remote_settings
+                    assert shared == resource
+                    other_identity = other.identity
+                    other_files = sibling.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
+                        gateway_id=other_identity.gateway_id, backend_id=other_identity.backend_id,
+                        workspace_ids=list(other_identity.workspace_ids), view_id=other_identity.view_id,
+                        generation=other_identity.generation), client_id=other_identity.client_id)
+                    assert (await other_files.read(shared.resource_uri)).content_base64 == encoded
             if resource is not resources[0]:
                 invalid = b64encode(json.dumps({"folders": [{"uri": root.as_uri()} for root in roots[::-1]]}).encode()).decode()
                 before = native.read_bytes()
@@ -641,20 +789,24 @@ async def test_configuration_uses_original_session_view_across_fresh_management_
                     await operation(resource.resource_uri)
                 assert missing.value.code == "EntryNotFound"
                 assert not native.exists()
-            receipts.append({"resource_uri": resource.resource_uri, "deleted_remains_missing": not native.exists()})
-        assert owner.management.drained
+            receipts.append({"resource_uri": resource.resource_uri, "deleted_remains_missing": not native.exists(),
+                "node_stat_command": command, "node_stat_exit_code": compared.returncode, "node_stat_stdout": compared.stdout,
+                "node_stat_stderr": compared.stderr, "python_stat": observed.model_dump()})
+        case.domains[0].owner.assert_healthy()
+        assert case.domains[0].owner.process is management_process
         (context.artifacts_dir / f"configuration-{root_count}.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2))
 
 
 @pytest.mark.parametrize("damage", ["duplicate", "missing_manifest", "invalid_json"])
 async def test_inventory_reports_damaged_install_facts_without_empty_success(management_backends, vsix_factory, damage: str) -> None:
-    _, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
+    case = management_backends
+    workspace = case.workspace
+    registry = _backend(workspace / "target", case)
     management = registry.extension_hosts.management
     await management.install(vsix_factory(workspace, "1.0.0", "original"))
     inventory = await management.inventory()
     assert len(inventory.extensions) == 1
-    profile = management._directory / "extensions/extensions.json"
+    profile = case.domains[0].owner.directory / "extensions/extensions.json"
     members = json.loads(profile.read_text())
     assert len(members) == 1
     original = profile.read_bytes()
@@ -665,7 +817,7 @@ async def test_inventory_reports_damaged_install_facts_without_empty_success(man
         profile.write_text("{")
         expected = "JSON"
     else:
-        (management._directory / "extensions" / members[0]["relativeLocation"] / "package.json").unlink()
+        (case.domains[0].owner.directory / "extensions" / members[0]["relativeLocation"] / "package.json").unlink()
         # 原扫描器保留 profile 中损坏安装的身份，以 invalid 和原验证原因报告，不能过滤成空成功。
         damaged = await management.inventory()
         assert len(damaged.extensions) == 1
@@ -679,192 +831,232 @@ async def test_inventory_reports_damaged_install_facts_without_empty_success(man
     with pytest.raises(ExtensionManagementError, match=expected):
         await management.inventory()
     assert profile.read_bytes() == original
+    if damage == "invalid_json":
+        gateway = case.domains[0].owner
+        gateway.assert_healthy()
+        assert gateway.instance is not None and gateway.process is not None and gateway.process.is_alive()
+        assert profile.read_bytes() == original
+        (case.context.artifacts_dir / "profile-damage-shutdown.json").write_text(json.dumps({
+            "outcome": "单次原生库存错误不影响共享管理服务", "process_id": gateway.instance.process_id,
+            "runtime_instance_id": gateway.instance.runtime_instance_id,
+        }, ensure_ascii=False, indent=2))
 
 
-@pytest.mark.parametrize("failure", ["cancelled", "malformed", "missing-code", "error-object", "error-null"])
-async def test_unknown_control_reply_reaps_original_process_and_never_replays_install(
-    management_backends, vsix_factory, monkeypatch: pytest.MonkeyPatch, failure: str,
+async def test_cancelled_backend_request_keeps_shared_process_and_settles_original_reply(
+    management_backends, vsix_factory, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
-    backend_id = registry.extension_hosts.backend_id
+    case = management_backends
+    registry = _backend(case.workspace / "target", case)
+    peer = _backend(case.workspace / "peer", case)
     management = registry.extension_hosts.management
-    assert (await management.inventory()).extensions == []
-    received = asyncio.Event()
-    original_receive = management._receive
+    gateway = case.domains[0].owner
+    original_instance = gateway.instance
+    assert original_instance is not None and gateway._client is not None
+    received, deliver = asyncio.Event(), asyncio.Event()
+    original_post = gateway._client.post
+    replies: list[dict[str, JsonValue]] = []
 
-    async def hold_delivery():
-        # 真实原安装已完成、回执到达后才暂停或损坏交付；不由测试手工写profile。
-        value = await original_receive()
-        if value in ({"ready": True}, {"drained": True}):
-            return value
-        assert "result" in value
-        received.set()
-        if failure == "malformed":
-            return {"result": {}}
-        if failure == "missing-code":
-            return {"error": "缺少错误码"}
-        if failure in {"error-object", "error-null"}:
-            return {"error": {} if failure == "error-object" else None, "code": "Unknown"}
-        await asyncio.Event().wait()
-        return value
+    async def hold_delivery(*args, **kwargs):
+        response = await original_post(*args, **kwargs)
+        if kwargs.get("json", {}).get("method") == "install" and not received.is_set():
+            replies.append(response.json())
+            received.set()
+            await deliver.wait()
+        return response
 
-    monkeypatch.setattr(management, "_receive", hold_delivery)
-    operation = asyncio.create_task(management.install(vsix_factory(workspace, "1.0.0", "published")))
-    async with asyncio.timeout(10):
-        await received.wait()
-        if failure == "cancelled":
+    monkeypatch.setattr(gateway._client, "post", hold_delivery)
+    operation = asyncio.create_task(management.install(vsix_factory(case.workspace, "1.0.0", "published")))
+    closing = None
+    try:
+        async with asyncio.timeout(10):
+            await received.wait()
             operation.cancel()
+            closing = asyncio.create_task(gateway.close(preserve=True))
+            await asyncio.sleep(0)
+            assert not operation.done() and not closing.done()
+            assert gateway.instance is original_instance and gateway.process is not None and gateway.process.is_alive()
+            deliver.set()
             with pytest.raises(asyncio.CancelledError):
                 await operation
-        elif failure == "malformed":
-            with pytest.raises(ValidationError, match="inventory"):
+            await closing
+        assert gateway.drained and not gateway.process
+        assert len(replies) == 1
+        await _restart_gateway_management(case)
+        inventory = await peer.extension_hosts.management.inventory()
+        assert [entry.description["version"] for entry in inventory.extensions] == ["1.0.0"]
+        assert case.domains[0].owner.instance is not None
+        assert case.domains[0].owner.instance.process_id == original_instance.process_id
+    finally:
+        deliver.set()
+        if not operation.done():
+            with pytest.raises(asyncio.CancelledError):
                 await operation
-        elif failure == "missing-code":
-            with pytest.raises(ValueError, match="控制回执不完整"):
-                await operation
-        else:
-            with pytest.raises(TypeError, match="错误回执不是字符串"):
-                await operation
-    original_pid = management.child.state.pid
-    assert management.child.state.exit_verified and original_pid is not None
-    with pytest.raises(RuntimeError, match="不能自动重启并重放"):
-        await management.install(vsix_factory(workspace, "2.0.0", "must-not-install"))
-    assert management.child.state.pid == original_pid
-    recovered = _backend(workspace / "target", backends, backend_id=backend_id)
-    inventory = await recovered.extension_hosts.management.inventory()
-    assert len(inventory.extensions) == 1 and inventory.extensions[0].description["version"] == "1.0.0"
+        if closing is not None and not closing.done():
+            await closing
 
 
-async def test_backend_remains_open_until_management_log_and_lock_are_released(
-    management_backends, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("failure", "expected_detail"),
+    [
+        ("malformed", "扩展管理控制回执不完整"),
+        ("missing-code", "扩展管理控制回执不完整"),
+        ("error-object", "扩展管理错误回执字段无效"),
+        ("error-null", "扩展管理错误回执字段无效"),
+    ],
+)
+async def test_unknown_control_reply_fails_gateway_without_replay_or_backend_takeover(
+    management_backends, vsix_factory, monkeypatch: pytest.MonkeyPatch,
+    failure: str, expected_detail: str,
 ) -> None:
-    _, workspace, backends = management_backends
-    registry = _backend(workspace / "target", backends)
-    owner = registry.extension_hosts
-    management = owner.management
-    failure = OSError("原日志关闭失败")
-    blocked = True
-    original_receive = management._receive
-    output = None
+    case = management_backends
+    registry = _backend(case.workspace / "target", case)
+    management = registry.extension_hosts.management
+    gateway = case.domains[0].owner
+    assert (await management.inventory()).extensions == []
+    original_instance = gateway.instance
+    assert original_instance is not None and gateway._client is not None
+    original_post = gateway._client.post
+    replies: list[dict[str, JsonValue]] = []
 
-    async def inject_log_failure():
-        nonlocal output
-        value = await original_receive()
-        if value == {"ready": True}:
-            output = management._output
-            assert output is not None
+    async def damage_delivery(*args, **kwargs):
+        response = await original_post(*args, **kwargs)
+        if kwargs.get("json", {}).get("method") != "install":
+            return response
+        value = response.json()
+        replies.append(value)
+        assert "result" in value
+        if failure == "malformed":
+            payload = {"result": value["result"], "unexpected": True}
+        elif failure == "missing-code":
+            payload = {"error": "缺少错误码"}
+        else:
+            payload = {"error": {} if failure == "error-object" else None, "code": "Unknown"}
+        return httpx.Response(response.status_code, headers=response.headers, json=payload, request=response.request)
 
-            def close() -> None:
-                if blocked:
-                    raise failure
-                assert output is not None
-                output.close()
-
-            failing_output = Mock(wraps=output)
-            failing_output.close.side_effect = close
-            monkeypatch.setattr(management, "_output", failing_output)
-        return value
-
-    monkeypatch.setattr(management, "_receive", inject_log_failure)
-    with pytest.raises(OSError) as request_error:
-        await management.inventory()
-    assert request_error.value is failure
-    with pytest.raises(BaseExceptionGroup) as caught:
-        await registry.close_extension_hosts()
-    assert caught.value.exceptions == (failure,)
-    assert output is not None
-    assert management.child.state.exit_verified and not output.closed
-    assert not owner.drained
-    with pytest.raises(portalocker.exceptions.LockException), portalocker.Lock(management._directory / "management.lock", mode="a", timeout=0):
-        pytest.fail("原日志关闭失败时不能释放管理锁")
-    with pytest.raises(RuntimeError, match="尚未回收"):
-        registry.close()
-    blocked = False
+    monkeypatch.setattr(gateway._client, "post", damage_delivery)
+    with pytest.raises(httpx.HTTPStatusError) as rejected:
+        await management.install(vsix_factory(case.workspace, "1.0.0", "published"))
+    assert rejected.value.response.status_code == 409
+    assert rejected.value.response.json()["detail"] == expected_detail
+    assert len(replies) == 1
+    with pytest.raises(RuntimeError, match="不自动重启或重放") as unhealthy:
+        gateway.assert_healthy()
+    original_failure = unhealthy.value.__cause__
+    assert isinstance(original_failure, ValueError) and str(original_failure) == expected_detail
+    assert gateway.instance is original_instance and gateway.process is not None and gateway.process.is_alive()
+    # 关闭、重建 Backend client 不能接管 Gateway owner，也不能把未知写入再发一次。
     await registry.close_extension_hosts()
-    assert owner.drained and output.closed
-    with portalocker.Lock(management._directory / "management.lock", mode="a", timeout=0):
-        pass
     registry.close()
+    recovered = _backend(case.workspace / "target", case)
+    with pytest.raises(httpx.HTTPStatusError) as still_failed:
+        await recovered.extension_hosts.management.install(vsix_factory(case.workspace, "2.0.0", "must-not-install"))
+    assert still_failed.value.response.status_code == 500
+    assert len(replies) == 1 and gateway.instance is original_instance
+    old_process = gateway.process
+    await gateway.close()
+    assert gateway.drained and old_process is not None and not old_process.is_alive()
+    # 显式重启真实 Gateway 管理 owner 才恢复读取，旧安装只执行一次且没有发布 V2。
+    await _restart_gateway_management(case)
+    inventory = await recovered.extension_hosts.management.inventory()
+    assert [entry.description["version"] for entry in inventory.extensions] == ["1.0.0"]
+    assert case.domains[0].owner.instance is not None
+    assert case.domains[0].owner.instance.runtime_instance_id != original_instance.runtime_instance_id
+    assert len(replies) == 1
+
+
+async def test_gateway_handoff_detaches_and_adopts_same_management_service(management_backends, vsix_factory) -> None:
+    case = management_backends
+    registry = _backend(case.workspace / "target", case)
+    gateway = case.domains[0].owner
+    original = gateway.instance
+    assert original is not None and gateway.process is not None and gateway.process.is_alive()
+    management = registry.extension_hosts.management
+    await management.install(vsix_factory(case.workspace, "1.0.0", "persisted-through-handoff"))
+    await gateway.close(preserve=True)
+    assert gateway.drained
+    assert gateway.process is None
+    await _restart_gateway_management(case)
+    adopted = case.domains[0].owner
+    assert adopted.instance is not None and adopted.process is not None and adopted.process.is_alive()
+    assert adopted.instance.runtime_instance_id == original.runtime_instance_id
+    assert adopted.instance.process_id == original.process_id
+    inventory = await management.inventory()
+    assert [item.description["version"] for item in inventory.extensions] == ["1.0.0"]
 
 
 async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reused_address(
     management_backends, vsix_factory, installation_snapshot, network_scope: AsyncExitStack,
     serve_extension_application: Callable[[FastAPI], Awaitable[str]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context, workspace, backends = management_backends
-    first = _backend(workspace / "a", backends)
-    second = _backend(workspace / "b", backends)
-    token = get_gateway_local_token()
-    monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
-    gateway_id = "gateway_" + uuid4().hex
-    registry = GatewayWorkspaceRegistry(storage_path=workspace / "workspaces.json", gateway_id=gateway_id)
-    network_scope.callback(registry.close)
-    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10))
+    case = management_backends
+    context, workspace = case.context, case.workspace
+    first = _backend(workspace / "a", case)
+    second = _backend(workspace / "b", case, domain=1)
+    token = case.token
+    primary = case.domains[0]
+    gateway_id, url, headers = primary.gateway_id, primary.url, primary.headers
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10, trust_env=False))
     apps: list[FastAPI] = []
     targets: list[WorkspaceTarget] = []
-    for backend in (first, second):
+    for backend, domain in zip((first, second), case.domains, strict=True):
         application = FastAPI()
         application.add_middleware(TraceMiddleware)
         application.exception_handler(HTTPException)(workspace_http_exception_handler)
         application.include_router(backend_host_router)
         application.state.workspace_container_registry = backend
-        url = await serve_extension_application(application)
+        backend_url = await serve_extension_application(application)
         apps.append(application)
         mount = backend.mounted_workspaces.resolve(backend.mounted_workspaces.workspace_ids[0])
-        target = WorkspaceTarget(gateway_id=gateway_id, workspace_id=mount.workspace_id, name="same-name",
-            root_path=str(mount.workspace_root), backend_url=url, connection_kind="local")
-        registry.upsert(target, activate=False)
+        target = WorkspaceTarget(gateway_id=domain.gateway_id, workspace_id=mount.workspace_id, name="same-name",
+            root_path=str(mount.workspace_root), backend_url=backend_url, connection_kind="local")
+        domain.registry.upsert(target, activate=False)
         targets.append(target)
-    state = GatewayStateStore(path=workspace / "gateway.sqlite")
-    network_scope.callback(state.close)
-    users = UserAccessService(state=state)
-    users.create_user(display_name="扩展库存", user_id="inventory")
-    access = users.acquire_user(user_id="inventory", client_label="real-network")
-    gateway = FastAPI()
-    gateway.add_middleware(TraceMiddleware)
-    gateway.exception_handler(HTTPException)(gateway_http_exception_handler)
-    gateway.include_router(gateway_host_router)
-    gateway.include_router(gateway_package_router)
-    gateway.state.registry = registry
-    gateway.state.user_access_service = users
-    gateway.state.federation_policy_store = FederationPolicyStore()
-    gateway.state.http_client = client
-    url = await serve_extension_application(gateway)
-    headers = {"X-Local-Token": token, "Cookie": f"{USER_ACCESS_COOKIE_NAME}={access.access_session_id}"}
+    backend_ids = tuple(backend.extension_hosts.backend_id for backend in (first, second))
+    processes = tuple(domain.owner.process for domain in case.domains)
     receipts: list[dict[str, object]] = []
 
-    # 显式目录从真实 Backend 入口确认安装域；不手工向 registry 写入身份投影。
-    discovered = await client.post(f"{url}/api/gateway/extension-targets", headers={**headers, "X-Request-ID": "domain-discovery"},
-        json={"protocol_version": 1, "gateway_id": gateway_id})
-    assert discovered.status_code == 200, discovered.text
-    assert discovered.headers["X-Request-ID"] == discovered.json()["request_id"] == "domain-discovery"
-    domains = discovered.json()["data"]["targets"]
-    assert {domain["backend_id"] for domain in domains} == {first.extension_hosts.backend_id, second.extension_hosts.backend_id}
-    assert all("workspace_ids" not in domain for domain in domains)
-    assert [target.backend_id for target in targets] == [first.extension_hosts.backend_id, second.extension_hosts.backend_id]
+    # 两个真实 Gateway 各返回自己的安装域；Backend 来源通过原认证 resolve 填原路由身份。
+    for index, (domain, target) in enumerate(zip(case.domains, targets, strict=True)):
+        request_id = f"domain-discovery-{index}"
+        discovered = await client.post(f"{domain.url}/api/gateway/extension-targets",
+            headers={**domain.headers, "X-Request-ID": request_id},
+            json={"protocol_version": 1, "gateway_id": domain.gateway_id})
+        assert discovered.status_code == 200, discovered.text
+        assert discovered.headers["X-Request-ID"] == discovered.json()["request_id"] == request_id
+        [installation_domain] = discovered.json()["data"]["targets"]
+        assert installation_domain["backend_id"] == backend_ids[index]
+        assert "workspace_ids" not in installation_domain
+        resolved = await client.post(f"{domain.url}/api/gateway/extension-targets/resolve",
+            headers={**domain.headers, "X-Request-ID": f"backend-discovery-{index}"},
+            json={"protocol_version": 1, "gateway_id": domain.gateway_id, "workspace_ids": [target.workspace_id],
+                "backend_id": backend_ids[index]})
+        assert resolved.status_code == 200, resolved.text
+        assert target.backend_id == backend_ids[index]
+        receipts.append({"request_id": request_id, "status": discovered.status_code, "body": discovered.json()})
     assert first.extension_hosts.active == second.extension_hosts.active == ()
-    assert first.extension_hosts._management is second.extension_hosts._management is None
-    receipts.append({"request_id": "domain-discovery", "status": discovered.status_code, "body": discovered.json()})
+    assert processes[0].pid != processes[1].pid
 
-    # 真实 B 来源不能替浏览器更换已选 A 安装域，拒绝发生在任何管理 child 启动前。
+    # 真实 B 来源不能替浏览器更换已选 A 安装域，拒绝前后两个原 profile 均为空。
     assert targets[1].root_path is not None
     wrong_source = vsix_factory(Path(targets[1].root_path), "9.0.0", "must-not-install")
     cross_domain = await client.post(f"{url}/api/gateway/extension-installations/install",
         headers={**headers, "X-Request-ID": "install-source-cannot-change-domain"}, json={
-            "protocol_version": 1, "gateway_id": gateway_id, "backend_id": first.extension_hosts.backend_id,
+            "protocol_version": 1, "gateway_id": gateway_id, "backend_id": backend_ids[0],
             "workspace_ids": [targets[1].workspace_id],
             "source_uri": resource_display_uri(scope="workspace", scope_id=targets[1].workspace_id, kind="files",
                 tail_segments=("root", wrong_source.name), gateway_authority=gateway_id)})
     assert cross_domain.status_code == 409, cross_domain.text
     assert cross_domain.headers["X-Request-ID"] == cross_domain.json()["request_id"] == "install-source-cannot-change-domain"
-    assert first.extension_hosts._management is second.extension_hosts._management is None
+    assert (await first.extension_hosts.management.inventory()).extensions == []
+    assert (await second.extension_hosts.management.inventory()).extensions == []
+    assert all(domain.owner.process is process for domain, process in zip(case.domains, processes, strict=True))
     receipts.append({"request_id": "install-source-cannot-change-domain", "status": cross_domain.status_code, "body": cross_domain.json()})
 
     async def inventory(index: int, backend_id: str, request_id: str) -> httpx.Response:
-        response = await client.post(f"{url}/api/gateway/extension-installations/inventory",
-            headers={**headers, "X-Request-ID": request_id}, json={"protocol_version": 1,
-                "gateway_id": gateway_id, "backend_id": backend_id})
+        domain = case.domains[index]
+        response = await client.post(f"{domain.url}/api/gateway/extension-installations/inventory",
+            headers={**domain.headers, "X-Request-ID": request_id}, json={"protocol_version": 1,
+                "gateway_id": domain.gateway_id, "backend_id": backend_id})
         body = response.json()
         assert response.headers["X-Request-ID"] == body["request_id"] == request_id
         receipts.append({"request_id": request_id, "status": response.status_code, "body": body})
@@ -872,23 +1064,22 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
 
     async def install(index: int, version: str, *, engine: str = "^1.0.0",
                       manifest_overrides: dict[str, object] | None = None) -> httpx.Response:
-        target = targets[index]
-        backend = (first, second)[index]
+        target, domain = targets[index], case.domains[index]
         assert target.root_path is not None
         source = vsix_factory(Path(target.root_path), version, version, engine=engine, manifest_overrides=manifest_overrides)
         request_id = f"install-{index}-{version}"
-        response = await client.post(f"{url}/api/gateway/extension-installations/install",
-            headers={**headers, "X-Request-ID": request_id}, json={"protocol_version": 1,
-                "gateway_id": gateway_id, "workspace_ids": [target.workspace_id],
-                "backend_id": backend.extension_hosts.backend_id,
+        response = await client.post(f"{domain.url}/api/gateway/extension-installations/install",
+            headers={**domain.headers, "X-Request-ID": request_id}, json={"protocol_version": 1,
+                "gateway_id": domain.gateway_id, "workspace_ids": [target.workspace_id],
+                "backend_id": backend_ids[index],
                 "source_uri": resource_display_uri(scope="workspace", scope_id=target.workspace_id, kind="files",
-                    tail_segments=("root", source.name), gateway_authority=gateway_id)})
+                    tail_segments=("root", source.name), gateway_authority=domain.gateway_id)})
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
         receipts.append({"request_id": request_id, "status": response.status_code, "body": response.json()})
         return response
 
     for index, version in ((0, "1.0.0"), (1, "2.0.0")):
-        empty = await inventory(index, (first, second)[index].extension_hosts.backend_id, f"empty-{index}")
+        empty = await inventory(index, backend_ids[index], f"empty-{index}")
         assert empty.json()["data"]["inventory"]["extensions"] == []
         installed = await install(index, version)
         assert installed.status_code == 200, installed.text
@@ -897,29 +1088,29 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
             "profile_id": result["inventory"]["profile_id"], "reused": False}
         assert result["inventory"]["extensions"][0]["description"]["version"] == version
 
-    # 库存正文来自原安装器生成的 profile，经过真实 HTTP／认证／Backend／Node，而非测试回执。
-    a, b = await asyncio.gather(inventory(0, first.extension_hosts.backend_id, "inventory-a"),
-                                inventory(1, second.extension_hosts.backend_id, "inventory-b"))
-    for response, backend, target, version in ((a, first, targets[0], "1.0.0"), (b, second, targets[1], "2.0.0")):
+    # 库存直接读取所属 Gateway 的原 profile，安装仍经真实 Backend 来源验证与私有 HTTP。
+    a, b = await asyncio.gather(inventory(0, backend_ids[0], "inventory-a"), inventory(1, backend_ids[1], "inventory-b"))
+    for index, (response, backend, version) in enumerate(((a, first, "1.0.0"), (b, second, "2.0.0"))):
         assert response.status_code == 200, response.text
         result = response.json()["data"]
-        assert result["backend_id"] == backend.extension_hosts.backend_id
-        assert result["gateway_id"] == gateway_id and "workspace_ids" not in result
+        assert result["backend_id"] == backend_ids[index]
+        assert result["gateway_id"] == case.domains[index].gateway_id and "workspace_ids" not in result
         assert result["profile_scope"] == "default"
         assert result["inventory"] == (await backend.extension_hosts.management.inventory()).model_dump()
         assert len(result["inventory"]["extensions"]) == 1
         extension = result["inventory"]["extensions"][0]
         assert extension["description"]["version"] == version and extension["is_valid"]
     previous = b.json()["data"]
-    # B 离线时，精确 A 的库存仍经原 Gateway／Backend／Node 读取，不重新发现 B。
-    registry.upsert(replace(targets[1], connection_error="B 已离线"), activate=False)
-    isolated = await inventory(0, first.extension_hosts.backend_id, "inventory-a-with-b-offline")
+    # Backend B 离线不阻塞任一 Gateway 已启动的管理服务。
+    case.domains[1].registry.upsert(replace(targets[1], connection_error="B 已离线"), activate=False)
+    isolated = await inventory(0, backend_ids[0], "inventory-a-with-b-offline")
     assert isolated.status_code == 200 and isolated.json()["data"] == a.json()["data"]
-    registry.upsert(targets[1], activate=False)
+    assert (await inventory(1, backend_ids[1], "inventory-b-with-own-backend-offline")).json()["data"] == previous
+    case.domains[1].registry.upsert(targets[1], activate=False)
     failed = await install(0, "3.0.0", engine="^999.0.0")
     assert failed.status_code == 400 and "not compatible" in failed.text
     assert (await inventory(0, first.extension_hosts.backend_id, "failed-install-kept")).json()["data"] == a.json()["data"]
-    directory = first.extension_hosts.management._directory / "extensions"
+    directory = case.domains[0].owner.directory / "extensions"
     snapshot = installation_snapshot(directory)
     profile_bytes = (directory / "extensions.json").read_bytes()
     malformed = await install(0, "3.1.0", manifest_overrides={"browser": 42})
@@ -965,18 +1156,20 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     backend_id = original_owner.backend_id
     await second.close_extension_hosts()
     second.close()
-    recovered = _backend(workspace / "b", backends, backend_id=backend_id)
+    recovered = _backend(workspace / "b", case, domain=1)
     apps[1].state.workspace_container_registry = recovered
     assert (await inventory(1, backend_id, "inventory-recovered")).json()["data"] == previous
     assert (await inventory(1, str(uuid4()), "inventory-wrong-backend")).status_code == 409
-    # 旧登记指向另一真实 Backend 时不读取对方同 ID 的扩展，也不修改原安装事实。
-    registry.upsert(replace(targets[1], backend_url=targets[0].backend_url), activate=False)
-    rejected = await inventory(1, backend_id, "inventory-reused-route")
-    assert rejected.status_code == 409 and "Backend" in rejected.json()["detail"]
+    assert case.domains[1].owner.process is processes[1] and processes[1].is_alive()
+    # 来源路由误指另一真实 Backend 时，原 Backend 核实稳定身份后拒绝，不能把安装写到 A。
+    case.domains[1].registry.upsert(replace(targets[1], backend_url=targets[0].backend_url), activate=False)
+    rejected = await install(1, "9.1.0")
+    assert rejected.status_code == 409, rejected.text
+    assert "Backend" in rejected.json()["detail"]
     assert (await first.extension_hosts.management.inventory()).extensions[0].description["version"] == "6.0.0"
     assert (await recovered.extension_hosts.management.inventory()).extensions[0].description["version"] == "2.0.0"
     assert first.extension_hosts.active == recovered.extension_hosts.active == original_owner.active == ()
-    registry.upsert(targets[1], activate=False)
+    case.domains[1].registry.upsert(targets[1], activate=False)
 
     selection = {"protocol_version": 1, "gateway_id": gateway_id, "backend_id": first.extension_hosts.backend_id,
         "profile_id": earlier.json()["data"]["inventory"]["profile_id"],
@@ -986,17 +1179,18 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     assert rejected.status_code == 409 and rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == "uninstall-stale-version"
     assert (await first.extension_hosts.management.inventory()).extensions[0].description["version"] == "6.0.0"
     retained = {path: installation_snapshot(path) for path in directory.iterdir() if path.is_dir()}
-    native_uninstall = first.extension_hosts.management.uninstall
+    native_request = primary.owner.request
     published.clear()
     deliver.clear()
 
-    async def hold_uninstall_publication(**member: str) -> UninstalledProfile:
-        publication = await native_uninstall(**member)
-        published.set()
-        await deliver.wait()
+    async def hold_uninstall_publication(command: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        publication = await native_request(command)
+        if command["method"] == "uninstall":
+            published.set()
+            await deliver.wait()
         return publication
 
-    monkeypatch.setattr(first.extension_hosts.management, "uninstall", hold_uninstall_publication)
+    monkeypatch.setattr(primary.owner, "request", hold_uninstall_publication)
     delayed_uninstall = asyncio.create_task(client.post(f"{url}/api/gateway/extension-installations/uninstall",
         headers={**headers, "X-Request-ID": "uninstall-original-publication"}, json=selection))
     try:
@@ -1039,31 +1233,17 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
         assert response.headers.get("X-Request-ID") == response.json().get("request_id") == request_id
         return response
 
-    async def native_package_read(request_id: str, relative_segments: list[str]) -> httpx.Response:
+    async def native_package_read(request_id: str, relative_segments: list[str], *, binding: dict[str, object]) -> httpx.Response:
+        generation, view_id, client_id = (binding[key] for key in ("generation", "view_id", "client_id"))
+        assert isinstance(generation, str) and isinstance(view_id, str) and isinstance(client_id, str)
         return await client.post(f"{targets[0].backend_url}/api/internal/extension-files/read",
-            headers={"X-Local-Token": token, "X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": request_id},
+            headers={"X-Local-Token": token, "X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": request_id,
+                "X-BoxTeam-Extension-Client-Id": client_id},
             json={"protocol_version": 1, "gateway_id": gateway_id,
                   "backend_id": first.extension_hosts.backend_id, "profile_id": profile_id,
                   "extension_id": extension_id, "extension_key": extension_key,
-                  "relative_segments": relative_segments, "current_profile_member": True})
-
-    package_root = first.extension_hosts.management._directory / "extensions" / extension_key
-    invalid_id = "invalid-extension-path-" + uuid4().hex
-    rejected_path = await native_package_read(invalid_id, ["..", "outside.txt"])
-    assert rejected_path.status_code == 403, rejected_path.text
-    assert rejected_path.headers["X-Request-ID"] == rejected_path.json()["request_id"] == invalid_id
-    assert rejected_path.json()["detail"]["code"] == "NoPermissions"
-
-    large_package_file = package_root / "large.bin"
-    large_package_file.write_bytes(b"x" * (8 * 1024 * 1024 + 1))
-    try:
-        oversized_id = "oversized-extension-file-" + uuid4().hex
-        oversized_package = await native_package_read(oversized_id, ["large.bin"])
-        assert oversized_package.status_code == 413, oversized_package.text
-        assert oversized_package.headers["X-Request-ID"] == oversized_package.json()["request_id"] == oversized_id
-        assert oversized_package.json()["detail"]["code"] == "EntryTooLarge"
-    finally:
-        large_package_file.unlink()
+                  "relative_segments": relative_segments, "current_profile_member": False,
+                  "generation": generation, "view_id": view_id})
 
     ws_url = url.replace("http://", "ws://") + "/api/gateway/extension-web-hosts/channel"
 
@@ -1084,6 +1264,24 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
         try:
             assert binding_a["client_id"] == binding_b["client_id"]
             assert binding_a["generation"] != binding_b["generation"]
+            package_root = case.domains[0].owner.directory / "extensions" / extension_key
+            invalid_id = "invalid-extension-path-" + uuid4().hex
+            rejected_path = await native_package_read(invalid_id, ["..", "outside.txt"], binding=binding_a)
+            assert rejected_path.status_code == 403, rejected_path.text
+            assert rejected_path.headers["X-Request-ID"] == rejected_path.json()["request_id"] == invalid_id
+            assert rejected_path.json()["detail"]["code"] == "NoPermissions"
+
+            large_package_file = package_root / "large.bin"
+            large_package_file.write_bytes(b"x" * (8 * 1024 * 1024 + 1))
+            try:
+                oversized_id = "oversized-extension-file-" + uuid4().hex
+                oversized_package = await native_package_read(oversized_id, ["large.bin"], binding=binding_a)
+                assert oversized_package.status_code == 413, oversized_package.text
+                assert oversized_package.headers["X-Request-ID"] == oversized_package.json()["request_id"] == oversized_id
+                assert oversized_package.json()["detail"]["code"] == "EntryTooLarge"
+            finally:
+                large_package_file.unlink()
+
             original_package = await package_read("package-current-a", generation=binding_a["generation"],
                 view_id=binding_a["view_id"])
             assert original_package.status_code == 200, original_package.text
@@ -1147,16 +1345,17 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
 async def test_native_profile_uninstall_keeps_all_versions_and_rejects_stale_selection(
     management_backends, vsix_factory, installation_snapshot,
 ) -> None:
-    _, workspace, backends = management_backends
-    first = _backend(workspace / "a", backends).extension_hosts.management
-    second = _backend(workspace / "b", backends).extension_hosts.management
+    case = management_backends
+    workspace = case.workspace
+    first = _backend(workspace / "a", case).extension_hosts.management
+    second = _backend(workspace / "b", case, domain=1).extension_hosts.management
     original = vsix_factory(workspace, "1.0.0", "v1-remains-readable")
     await first.install(original)
     current = await first.install(vsix_factory(workspace, "2.0.0", "v2-remains-readable"))
     await first.install(vsix_factory(workspace, "1.0.0", "unrelated", manifest_overrides={"name": "unrelated"}))
     peer = await second.install(vsix_factory(workspace, "9.0.0", "other-target"))
     profile_id, extension_id = current.installed.profile_id, current.installed.id
-    directory = first._directory / "extensions"
+    directory = case.domains[0].owner.directory / "extensions"
     profile = directory / "extensions.json"
     profile_bytes = profile.read_bytes()
     retained = {path: installation_snapshot(path) for path in directory.iterdir() if path.is_dir()}
@@ -1195,25 +1394,30 @@ async def test_native_profile_uninstall_keeps_all_versions_and_rejects_stale_sel
 async def test_native_profile_uninstall_retains_original_dependency_failure_and_other_target(
     management_backends, vsix_factory, installation_snapshot,
 ) -> None:
-    _, workspace, backends = management_backends
-    first = _backend(workspace / "a", backends).extension_hosts.management
-    second = _backend(workspace / "b", backends).extension_hosts.management
+    case = management_backends
+    workspace = case.workspace
+    first = _backend(workspace / "a", case).extension_hosts.management
+    second = _backend(workspace / "b", case, domain=1).extension_hosts.management
     base = await first.install(vsix_factory(workspace, "1.0.0", "dependency"))
     dependent = await first.install(vsix_factory(workspace, "1.0.0", "dependent", manifest_overrides={
         "name": "dependent", "extensionDependencies": [base.installed.id]}))
     peer = await second.install(vsix_factory(workspace, "2.0.0", "other-target"))
-    directory = first._directory / "extensions"
+    directory = case.domains[0].owner.directory / "extensions"
     before = installation_snapshot(directory)
     with pytest.raises(ExtensionManagementError, match="depends on this"):
         await first.uninstall(profile_id=base.installed.profile_id, extension_id=base.installed.id, version="1.0.0")
     assert installation_snapshot(directory) == before
     assert await first.inventory() == dependent.inventory
     assert await second.inventory() == peer.inventory
-    assert not first._failed and first.drained
+    gateway = case.domains[0].owner
+    process = gateway.instance
+    gateway.assert_healthy()
     removed_dependent = await first.uninstall(profile_id=dependent.installed.profile_id,
         extension_id=dependent.installed.id, version=dependent.installed.version)
     assert len(removed_dependent.inventory.extensions) == 1
     removed_base = await first.uninstall(profile_id=base.installed.profile_id,
         extension_id=base.installed.id, version=base.installed.version)
-    assert removed_base.inventory.extensions == [] and first.drained
+    assert removed_base.inventory.extensions == []
+    gateway.assert_healthy()
+    assert gateway.instance is process
     assert await second.inventory() == peer.inventory

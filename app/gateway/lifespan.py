@@ -67,6 +67,7 @@ from app.gateway.runtime.consumer_protocol import (
     runtime_fencing_token_digest,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.extension_management import extension_management_lifespan
 from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
@@ -194,6 +195,19 @@ async def lifespan(app: FastAPI):
             items=await registry.list_dtos(check_health=False),
         )
 
+    preserve_handoff: bool | None = None
+
+    def should_preserve_for_handoff() -> bool:
+        nonlocal preserve_handoff
+        if preserve_handoff is None:
+            preserve_handoff = _should_preserve_gateway_generation_for_handoff(
+                gateway_state=gateway_state,
+                gateway_config_reload=gateway_config_reload,
+                startup_candidate_ref=startup_candidate_ref,
+                generation_id=startup_generation,
+            )
+        return preserve_handoff
+
     # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
     async with (
         httpx.AsyncClient(timeout=None, trust_env=False) as http_client,
@@ -202,9 +216,16 @@ async def lifespan(app: FastAPI):
             update_policy=gateway_config.local_skill_updates,
             sources=gateway_config.skill_sources,
         ).lifespan() as skill_source_owner,
+        extension_management_lifespan(
+            get_boxteam_home(),
+            logging_startup={"revision": gateway_config.revision,
+                "level": cast(str, runtime_logging["level"]), "pretty": cast(bool, runtime_logging["pretty"])},
+            preserve_for_handoff=should_preserve_for_handoff,
+        ) as extension_management,
     ):
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
+        app.state.extension_management = extension_management
         app.state.workspace_navigation_store = WorkspaceNavigationStore(
             storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
         )
@@ -502,6 +523,7 @@ async def lifespan(app: FastAPI):
                         fencing_token_digest=runtime_fencing_token_digest(pending_apply_claim.fencing_token),
                         fence_check=assert_pending_apply_claim,
                         record=logging_progress_recorder(gateway_state, pending_apply_claim.fencing_token),
+                        extension_management=extension_management,
                     ).stage(), *_gateway_pending_runtime_consumer_stages(
                         app, generation=startup_generation,
                         fencing_token_digest=runtime_fencing_token_digest(pending_apply_claim.fencing_token) or "",
@@ -602,6 +624,7 @@ async def lifespan(app: FastAPI):
                 startup_logging_result = await GatewayRuntimeConsumerTransaction((RuntimeLoggingConsumer(
                     registry=registry, candidate=gateway_config, generation=startup_generation,
                     fencing_token_digest=None, fence_check=None, record=lambda detail: None,
+                    extension_management=extension_management,
                 ).stage(),)).apply()
                 await startup_logging_result.finalize()
                 runtime_generation_record = gateway_state.update_gateway_runtime_generation(
@@ -662,12 +685,7 @@ async def lifespan(app: FastAPI):
             ):
                 if (
                     runtime_generation_record.state == "active"
-                    and _should_preserve_gateway_generation_for_handoff(
-                        gateway_state=gateway_state,
-                        gateway_config_reload=gateway_config_reload,
-                        startup_candidate_ref=startup_candidate_ref,
-                        generation_id=startup_generation,
-                    )
+                    and should_preserve_for_handoff()
                 ):
                     runtime_generation_record = (
                         gateway_state.update_gateway_runtime_generation(
@@ -711,12 +729,7 @@ async def lifespan(app: FastAPI):
                 shutdown_errors.append(error)
                 logger.exception("Gateway 关闭 SSH 端口转发失败")
             logger.info("Gateway 正在关闭托管工作区运行时")
-            preserve_runtime_for_handoff = _should_preserve_gateway_generation_for_handoff(
-                gateway_state=gateway_state,
-                gateway_config_reload=gateway_config_reload,
-                startup_candidate_ref=startup_candidate_ref,
-                generation_id=startup_generation,
-            )
+            preserve_runtime_for_handoff = should_preserve_for_handoff()
             try:
                 registry.close(
                     preserve_browser_managers=preserve_runtime_for_handoff,

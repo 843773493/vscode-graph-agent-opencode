@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketDenialResponse
 from starlette.websockets import WebSocketDisconnect
@@ -32,6 +32,7 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.ports import principal_ref_for_gateway
+from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import extension_host
@@ -130,6 +131,7 @@ def host_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     access = users.acquire_user(user_id="host-test", client_label="window", takeover=False)
     policy = FederationPolicyStore()
     application = FastAPI()
+    application.exception_handler(HTTPException)(gateway_http_exception_handler)
     application.add_middleware(TraceMiddleware)
     application.state.registry = registry
     application.state.user_access_service = users

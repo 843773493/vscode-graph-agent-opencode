@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -160,3 +162,42 @@ async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: 
     assert all(transport.close_calls == 1 for transport in lifespan_case.transports)
     assert lifespan_case.events[-1] == "pool-close-0"
     assert {"catalog", "channel", "ssh", "registry", "config", "state"} <= set(lifespan_case.events)
+
+
+@pytest.mark.asyncio
+async def test_extension_management_handoff_uses_gateway_state_before_close(
+    lifespan_case: _LifespanCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preserve_checks: list[bool] = []
+    extension_cleanup: list[bool] = []
+
+    def preserve_for_handoff(**_: object) -> bool:
+        assert "state" not in lifespan_case.events
+        preserve_checks.append(True)
+        return True
+
+    @asynccontextmanager
+    async def extension_management_context(
+        *_: object, preserve_for_handoff: Callable[[], bool],
+        **__: object,
+    ):
+        yield None
+        extension_cleanup.append(preserve_for_handoff())
+
+    monkeypatch.setattr(
+        gateway_lifespan,
+        "_should_preserve_gateway_generation_for_handoff",
+        preserve_for_handoff,
+    )
+    monkeypatch.setattr(
+        gateway_lifespan,
+        "extension_management_lifespan",
+        extension_management_context,
+    )
+
+    async with gateway_lifespan.lifespan(lifespan_case.app):
+        pass
+
+    assert preserve_checks == [True]
+    assert extension_cleanup == [True]
+    assert lifespan_case.events.index("registry") < lifespan_case.events.index("state")

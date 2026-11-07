@@ -24,6 +24,7 @@ from app.gateway.server.extension_host import (
     _users,
     extension_client_identity,
 )
+from app.gateway.server.extension_management import management_owner
 from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
@@ -36,6 +37,7 @@ from app.schemas.gateway.extension_package import (
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.management import (
+    ExtensionManagementError,
     NativeFileRead,
     NativeFileStat,
 )
@@ -69,6 +71,17 @@ async def _file_request(payload: ExtensionPackageFileRequest, request: Request,
                 backend_id=backend_id, profile_id=profile_id, extension_id=f"{publisher}.{name}", extension_key=payload.extension_key,
                 relative_segments=segments, current_profile_member=payload.generation is None,
                 generation=payload.generation, view_id=payload.view_id)
+            if not route.remote and payload.generation is None:
+                result = await management_owner(request, payload.backend_id).call({"method": f"extension-file-{operation}",
+                    "profile_id": profile_id, "extension_id": native.extension_id, "extension_key": payload.extension_key,
+                    "relative_segments": list(segments), "current_profile_member": True},
+                    response_type=NativeFileStat if operation == "stat" else NativeFileRead)
+                check_access()
+                if isinstance(result, NativeFileStat):
+                    return APIResponse(data=ExtensionPackageStatDTO(resource_uri=payload.resource_uri,
+                        extension_key=payload.extension_key, **result.model_dump()), request_id=request_id)
+                return APIResponse(data=ExtensionPackageReadDTO(resource_uri=payload.resource_uri,
+                    extension_key=payload.extension_key, content_base64=result.content_base64), request_id=request_id)
             prefix = "api/gateway/extension-packages" if route.remote else "api/internal/extension-files"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{prefix}/{operation}",
                 headers={**route.headers, CLIENT_HEADER: client_id},
@@ -97,6 +110,10 @@ async def _file_request(payload: ExtensionPackageFileRequest, request: Request,
                 raise ValueError("目标没有返回扩展包正文")
             return APIResponse(data=ExtensionPackageReadDTO(resource_uri=payload.resource_uri,
                 extension_key=payload.extension_key, content_base64=read_result.data.content_base64), request_id=request_id)
+    except ExtensionManagementError as error:
+        status = {"EntryNotFound": 404, "NoPermissions": 403, "Invalid": 409,
+                  "InstalledExtensionNotFound": 409, "EntryTooLarge": 413}.get(error.code, 400)
+        raise HTTPException(status, detail={"owner": "extension_package", "code": error.code, "message": str(error)}) from error
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
     except ValidationError as error:

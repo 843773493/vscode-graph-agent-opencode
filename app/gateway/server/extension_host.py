@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Literal, TypeVar
@@ -49,6 +49,7 @@ from app.gateway.federation.policy import (
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
 from app.gateway.registry.routes import BackendManagementRoute
+from app.gateway.server.extension_management import management_owner
 from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
@@ -81,6 +82,11 @@ from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
     run_channel,
+)
+from app.services.infrastructure.extension_host.management import (
+    ExtensionManagementError,
+    ProfileExtensionInventory,
+    UninstalledProfile,
 )
 
 router = APIRouter()
@@ -249,41 +255,6 @@ def _management_gateway_route(request: HTTPConnection, payload: ExtensionTargetL
         registry.release_remote_gateway_reference(connection.connection_id)
 
 
-@asynccontextmanager
-async def _native_installation_routes(request: Request, *, protocol_version: int, gateway_id: str,
-                                      auth: GatewayAuthContext, access: UserAccessContext | None,
-                                      capabilities: tuple[bool, bool]) -> AsyncIterator[dict[str, BackendManagementRoute]]:
-    registry = request.app.state.registry
-    with registry.backend_management_routes() as routes:
-        by_backend: dict[str, list[BackendManagementRoute]] = {}
-        for route in routes:
-            _check_inventory_access(request, auth, access, list(route.leases), capabilities)
-            response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/api/internal/extension-targets",
-                headers={"X-Request-ID": get_request_id(request), "X-Local-Token": get_gateway_local_token(),
-                         "X-BoxTeam-Gateway-Id": gateway_id},
-                json={"protocol_version": protocol_version, "gateway_id": gateway_id}, timeout=10)
-            _check_inventory_access(request, auth, access, list(route.leases), capabilities)
-            _check_management_response(response, get_request_id(request))
-            response.raise_for_status()
-            envelope = APIResponse[ExtensionInstallationTarget].model_validate_json(response.content)
-            target = envelope.data
-            if (envelope.code != 0 or target is None or target.gateway_id != gateway_id
-                or target.protocol_version != protocol_version):
-                raise ValueError("Backend 返回了不同安装域或协议版本")
-            registry.confirm_backend_management_identity(route, target.backend_id)
-            by_backend.setdefault(target.backend_id, []).append(route)
-        selected: dict[str, BackendManagementRoute] = {}
-        for backend_id, candidates in by_backend.items():
-            preferred = [candidate for candidate in candidates if candidate.preferred]
-            if len(preferred) == 1:
-                selected[backend_id] = preferred[0]
-            elif len(candidates) == 1:
-                selected[backend_id] = candidates[0]
-            else:
-                raise ValueError("同一 Backend 安装域有多个管理路由且原 registry 未明确唯一管理入口")
-        yield selected
-
-
 def _check_management_response(response: httpx.Response, request_id: str) -> None:
     body = response.json()
     if (response.headers.get("X-Request-ID") != request_id or not isinstance(body, dict)
@@ -318,18 +289,17 @@ async def list_extension_targets(
                     raise ValueError("远端安装域目录不属于原 Gateway 或协议")
                 return result
             capabilities = _check_inventory_permission(request, auth)
-            async with _native_installation_routes(request, protocol_version=payload.protocol_version,
-                gateway_id=payload.gateway_id, auth=auth, access=access, capabilities=capabilities) as routes:
-                _check_inventory_access(request, auth, access, [lease for route in routes.values() for lease in route.leases], capabilities)
-                if access is not None:
-                    expires_at = _users(request).expires_at(access)
-                    if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
-                        raise PermissionError("扩展目标客户端租约已过期")
-                targets = [ExtensionTargetDTO(protocol_version=payload.protocol_version, gateway_id=payload.gateway_id,
-                    backend_id=backend_id, capabilities=ExtensionTargetCapabilitiesDTO(
-                        installation_manage=capabilities[0], host_manage=capabilities[1])) for backend_id in routes]
-                return APIResponse(data=ExtensionTargetListDTO(protocol_version=payload.protocol_version,
-                    gateway_id=payload.gateway_id, targets=targets), request_id=request_id)
+            owner = management_owner(request)
+            _check_inventory_access(request, auth, access, [], capabilities)
+            if access is not None:
+                expires_at = _users(request).expires_at(access)
+                if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
+                    raise PermissionError("扩展目标客户端租约已过期")
+            target = ExtensionTargetDTO(protocol_version=payload.protocol_version, gateway_id=payload.gateway_id,
+                backend_id=owner.backend_id, capabilities=ExtensionTargetCapabilitiesDTO(
+                    installation_manage=capabilities[0], host_manage=capabilities[1]))
+            return APIResponse(data=ExtensionTargetListDTO(protocol_version=payload.protocol_version,
+                gateway_id=payload.gateway_id, targets=[target]), request_id=request_id)
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
     except ValidationError as error:
@@ -500,6 +470,11 @@ def _installation_route(request: HTTPConnection, payload: ExtensionInstallationI
             yield remote
             return
         _check_inventory_permission(request, auth)
+        needs_backend = isinstance(payload, (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest)) or getattr(payload, "generation", None) is not None
+        if not needs_backend:
+            management_owner(request, payload.backend_id)
+            yield _HostRoute("", False, {}, [])
+            return
         workspace_ids = tuple(payload.workspace_ids) if isinstance(payload, (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest)) else ()
         with request.app.state.registry.backend_management_routes(backend_id=payload.backend_id, workspace_ids=workspace_ids, streaming=streaming) as routes:
             [selected] = routes
@@ -523,10 +498,23 @@ async def _installation_request(
             else:
                 expected_capabilities = None
                 _check(request, auth, access, route.leases, capability="extension_installation_manage")
-            prefix = "api/gateway" if route.remote else "api/internal"
-            path = f"{prefix}/extension-installations/{operation}"
-            response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
-                headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=120)
+            if not route.remote and operation != "install":
+                owner = management_owner(request, payload.backend_id)
+                if operation == "inventory":
+                    inventory = await owner.call({"method": "inventory"}, response_type=ProfileExtensionInventory)
+                    publication = ExtensionInstallationInventoryDTO(**payload.model_dump(exclude={"gateway_connection_id"}), inventory=inventory)
+                else:
+                    assert isinstance(payload, ExtensionInstallationUninstallRequest)
+                    removed = await owner.call({"method": "uninstall", "profile_id": payload.profile_id,
+                        "extension_id": payload.extension_id, "version": payload.version}, response_type=UninstalledProfile)
+                    publication = ExtensionInstallationUninstallDTO(**payload.model_dump(exclude={"gateway_connection_id", "profile_id", "extension_id", "version"}),
+                        uninstalled=removed.uninstalled, inventory=removed.inventory)
+                result = response_type.model_validate({"data": publication.model_dump(), "request_id": request_id})
+            else:
+                prefix = "api/gateway" if route.remote else "api/internal"
+                path = f"{prefix}/extension-installations/{operation}"
+                result = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
+                    headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=120)
             # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
             _check_management_route(request, route)
             if expected_capabilities is not None:
@@ -537,14 +525,11 @@ async def _installation_request(
                 expires_at = _users(request).expires_at(access)
                 if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
                     raise PermissionError(f"{label}客户端租约已过期")
-            if response.headers.get("X-Request-ID") != request_id:
-                raise ValueError(f"{label}返回了不同请求身份")
-            if not response.is_success:
-                failure = response.json()
-                if not isinstance(failure, dict) or failure.get("request_id") != request_id:
-                    raise ValueError(f"{label}错误回执不属于原请求")
-                return Response(response.content, status_code=response.status_code, media_type="application/json")
-            result = response_type.model_validate_json(response.content)
+            if isinstance(result, httpx.Response):
+                _check_management_response(result, request_id)
+                if not result.is_success:
+                    return Response(result.content, status_code=result.status_code, media_type="application/json")
+                result = response_type.model_validate_json(result.content)
             target = result.data
             if (result.code != 0 or result.request_id != request_id or target is None
                 or target.model_dump(include=set(ExtensionInstallationTarget.model_fields))
@@ -561,6 +546,8 @@ async def _installation_request(
             ):
                 raise ValueError("扩展卸载回执与原 profile 成员不匹配")
             return result
+    except ExtensionManagementError as error:
+        raise HTTPException(409 if error.code in {"Invalid", "InstalledExtensionNotFound"} else 400, str(error)) from error
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
     except LookupError as error:

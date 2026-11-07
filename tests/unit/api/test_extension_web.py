@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from unittest.mock import Mock
@@ -26,10 +26,10 @@ from app.schemas.gateway.extension_web import (
     ExtensionWebHostOpenRequest,
 )
 from app.services.infrastructure.extension_host.management import (
+    ExtensionManagementClient,
     NativeFileRead,
     NativeFileStat,
     NativeManagementEnvironment,
-    NodeExtensionManagement,
 )
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
@@ -64,6 +64,8 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
              monkeypatch: pytest.MonkeyPatch) -> Iterator[WebCase]:
     client, registry = private_host_client
     owner = registry.extension_hosts
+    owner._management = ExtensionManagementClient(backend_id=owner.backend_id,
+        gateway_url="http://127.0.0.1:8014", token="private-host-token", operation_timeout=2)
     owner.runtime = NodeHostRuntime(owner._home / "node", owner._home / "extensionHostProcess.mjs",
         "a" * 40, "1.145.0", "24.22.1")
     result = WebCase(client, registry, {"protocol_version": 1, "gateway_id": GATEWAY,
@@ -73,23 +75,20 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
          "X-BoxTeam-Extension-Client-Id": "authenticated-client", "X-Request-ID": "web-private"},
         ProfileExtensionInventory(profile_id="default-profile", extensions=[_entry(KEY), _entry(OTHER_KEY)]))
 
-    async def inventory(_management: NodeExtensionManagement, *,
-                         on_snapshot: Callable[[ProfileExtensionInventory], None] | None = None) -> ProfileExtensionInventory:
-        if on_snapshot is not None:
-            on_snapshot(result.inventory)
+    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
         return result.inventory
 
-    async def read(_management: NodeExtensionManagement, **selection: object) -> NativeFileRead:
+    async def read(_management: ExtensionManagementClient, **selection: object) -> NativeFileRead:
         result.reads.append(selection)
         return NativeFileRead(content_base64="ZnJvemVuLWJ5dGVz")
 
-    async def stat(_management: NodeExtensionManagement, **selection: object) -> NativeFileStat:
+    async def stat(_management: ExtensionManagementClient, **selection: object) -> NativeFileStat:
         result.reads.append(selection)
         return NativeFileStat(type=1, ctime=0, mtime=123, size=12, permissions=None)
 
-    monkeypatch.setattr(NodeExtensionManagement, "inventory", inventory)
-    monkeypatch.setattr(NodeExtensionManagement, "extension_file_read", read)
-    monkeypatch.setattr(NodeExtensionManagement, "extension_file_stat", stat)
+    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
+    monkeypatch.setattr(ExtensionManagementClient, "extension_file_read", read)
+    monkeypatch.setattr(ExtensionManagementClient, "extension_file_stat", stat)
     try:
         yield result
     finally:
@@ -121,8 +120,7 @@ def test_private_web_channel_returns_exact_frozen_subset_without_node_initializa
 def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(web_case: WebCase, monkeypatch: pytest.MonkeyPatch) -> None:
     scanning, cancelled = threading.Event(), threading.Event()
 
-    async def inventory(_management: NodeExtensionManagement, *,
-                         on_snapshot: Callable[[ProfileExtensionInventory], None] | None = None) -> ProfileExtensionInventory:
+    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
         scanning.set()
         try:
             await asyncio.Event().wait()
@@ -130,7 +128,7 @@ def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(w
             cancelled.set()
         pytest.fail("已断开的准入不能返回库存")
 
-    monkeypatch.setattr(NodeExtensionManagement, "inventory", inventory)
+    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as websocket:
         websocket.send_json(web_case.payload)
         assert scanning.wait(2)
@@ -220,17 +218,17 @@ def test_retained_package_rejects_binding_mismatch_before_native_read(web_case: 
 
 @pytest.mark.parametrize("operation", ["stat", "read"])
 def test_web_stop_during_native_read_prevents_late_disclosure(web_case: WebCase, monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
-    original = getattr(NodeExtensionManagement, f"extension_file_{operation}")
+    original = getattr(ExtensionManagementClient, f"extension_file_{operation}")
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as websocket:
         websocket.send_json(web_case.payload)
         binding = websocket.receive_json()
 
-        async def stop_after_read(management: NodeExtensionManagement, **selection: object) -> NativeFileRead | NativeFileStat:
+        async def stop_after_read(management: ExtensionManagementClient, **selection: object) -> NativeFileRead | NativeFileStat:
             result = await original(management, **selection)
             web_case.registry.extension_hosts._sessions[binding["generation"]].stopping.set()
             return result
 
-        monkeypatch.setattr(NodeExtensionManagement, f"extension_file_{operation}", stop_after_read)
+        monkeypatch.setattr(ExtensionManagementClient, f"extension_file_{operation}", stop_after_read)
         response = web_case.client.post(f"/api/internal/extension-files/{operation}",
             json=_file(web_case, binding), headers=web_case.headers)
         assert response.status_code == 409 and len(web_case.reads) == 1
@@ -259,17 +257,18 @@ def test_closing_one_window_keeps_other_window_frozen_version(web_case: WebCase)
 def test_node_binding_keeps_existing_wire_fields_after_shared_identity_gains_kind(web_case: WebCase, monkeypatch: pytest.MonkeyPatch) -> None:
     owner = web_case.registry.extension_hosts
 
-    async def environment(_management: NodeExtensionManagement) -> NativeManagementEnvironment:
+    async def environment(_management: ExtensionManagementClient) -> NativeManagementEnvironment:
         return NativeManagementEnvironment(app_root_uri=owner._home.as_uri(),
             global_storage_home_uri=(owner._home / "globalStorage").as_uri(),
             workspace_storage_home_uri=(owner._home / "workspaceStorage").as_uri(),
+            untitled_workspaces_home_uri=(owner._home / "Workspaces").as_uri(),
             profile_id="default-profile", settings_native_uri=(owner._home / "settings.json").as_uri())
 
     @asynccontextmanager
     async def connect(_host: NodeExtensionHost) -> AsyncIterator[tuple[asyncio.StreamReader, asyncio.StreamWriter]]:
         yield asyncio.StreamReader(), Mock(spec=asyncio.StreamWriter)
 
-    monkeypatch.setattr(NodeExtensionManagement, "environment", environment)
+    monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
     monkeypatch.setattr(NodeExtensionHost, "connect", connect)
     payload = {name: web_case.payload[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id")}
     payload["workspace_ids"] = list(web_case.registry.mounted_workspaces.workspace_ids)

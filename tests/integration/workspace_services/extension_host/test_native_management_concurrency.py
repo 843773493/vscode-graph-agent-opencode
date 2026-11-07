@@ -37,6 +37,7 @@ class NativeManagementCase:
     home: Path
     workspaces: tuple[Path, Path]
     client: httpx.Client
+    gateway_pid: int
 
 
 @pytest.fixture
@@ -77,9 +78,16 @@ await symlink(resolve(modules),join(output,'node_modules'),'junction');
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
                           timeout=30, trust_env=False) as client:
             client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
-            yield NativeManagementCase(context, home, (workspaces[0], workspaces[1]), client)
+            yield NativeManagementCase(context, home, (workspaces[0], workspaces[1]), client, gateway.process.pid)
     finally:
+        managers = [process for process in psutil.Process(gateway.process.pid).children(recursive=True)
+            if any("extensionManagement.mjs" in argument for argument in process.cmdline())]
         close_gateway_process(gateway)
+        exited, alive = psutil.wait_procs(managers, timeout=5)
+        (context.artifacts_dir / "management-exit.json").write_text(json.dumps({
+            "gateway_pid": gateway.process.pid, "exited": [process.pid for process in exited],
+            "alive": [process.pid for process in alive]}, indent=2), encoding="utf-8")
+        assert len(managers) == 1 and not alive
 
 
 @pytest.fixture
@@ -189,7 +197,14 @@ def test_two_backend_processes_share_native_profile_without_losing_publications(
             assert (script.read_bytes(), script.stat().st_mtime_ns) == before
             assert inventory(0, f"native-reuse-first-{version}") == reused["inventory"]
         left = reused["inventory"]
-        # 回执结束时原管理 child 已退出；后续同端口 Backend 重启不改变安装身份及库存。
+        # 常驻组件归 Gateway，Backend 请求、重启均不得关闭或重建它。
+        def management_processes() -> list[psutil.Process]:
+            return [process for process in psutil.Process(case.gateway_pid).children(recursive=True)
+                if any("extensionManagement.mjs" in argument for argument in process.cmdline())]
+
+        [manager] = management_processes()
+        identity = manager.pid, manager.create_time()
+        evidence.append({"management_pid": identity[0], "management_created_at": identity[1]})
         for health in healths:
             assert not [process for process in psutil.Process(health["process_id"]).children(recursive=True)
                 if any("extensionManagement.mjs" in argument for argument in process.cmdline())]
@@ -199,5 +214,7 @@ def test_two_backend_processes_share_native_profile_without_losing_publications(
         assert recovered.json()["process_id"] != healths[0]["process_id"]
         assert recovered.json()["backend_id"] == targets[0]["backend_id"]
         assert inventory(0, "native-recovered") == left == inventory(1, "native-peer-after-restart")
+        [manager] = management_processes()
+        assert (manager.pid, manager.create_time()) == identity
     finally:
         (case.context.artifacts_dir / "concurrency.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

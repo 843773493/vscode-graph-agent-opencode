@@ -16,11 +16,13 @@
 | 扩展宿主 | `services/extensions/common/extensionHostKind.ts`、`extensionRunningLocation.ts`、`extensionRunningLocationTracker.ts`、browser extension service | 原版 LocalWebWorker／LocalProcess／Remote 分派与管理器可复用，但 Remote running location 未区分多个后端目标 |
 | 快速入口 | `add-workbench-quick-access` | 原 Registry、命令、Opener 与两级搜索，不再造插件专用快速访问平台 |
 
-参考基线为当前固定上游 HEAD `fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca`。以上只是源码盘点；真实可用宿主、市场、扩展 API 和原界面需经任务验收，不能由类型存在推断完成。
+参考基线为当前固定上游 HEAD `fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca`。以上只是源码盘点；真实可用宿主、市场、扩展 API 和原界面需经任务验收，不能由类型存在推断完成。2026-11-07 统一目标修订改变了原 Web profile 安装归属；既有源码和历史验收不视为已经满足新规划。
+
+同日进程归属与职责修订：VSIX 管理由目标 Gateway 通过现有生命周期机制常驻托管，替换 Backend 按请求启动 Node 的实现。Node 仅复用固定上游的原安装／扫描／必要 profile 语义及其内部依赖，不承担 Python 的通用基础设施；下载、配置与包资源文件 I/O、监听和日志收集迁齐目标侧原 Python 服务。原安装器内部必需的 FileService／watcher 不要求重写，也不向 Python 开放为通用服务。不引入整套 VS Code Server、第二个进程管理器或安装账本；Node Extension Host 的运行归属和 MCP owner 不随之迁移。旧 Node 配置／包文件接口的历史验收不视为满足本次职责收口。
 
 ## Goals / Non-Goals
 
-**Goals:** 分离安装、配置和运行身份；复用原版交互及扩展 API；让本地／远端多工作区操作始终路由到精确 owner；维持单一 MCP、配置及安装事实源；在 Web 与 Electron 保持同一产品功能边界。
+**Goals:** 在原管理视图的标题工具栏选定目标，后续操作直接沿用，扩展、MCP 和设置复用同一控件与规则；全部用户安装由目标持有，browser／Node 只决定运行分派；复用原版交互及扩展 API；让本地／远端多工作区操作始终路由到精确 owner；维持单一 MCP、配置及安装事实源；在 Web 与 Electron 保持同一产品功能边界。
 
 **Non-Goals:** 自创插件 ABI、通用插件总线或权限平台；让 Python Backend 直接执行 VSIX JavaScript；增加 Electron main/preload 系统能力；隐式共享 MCP 逻辑会话；承诺微软发行版专属服务或任意 VSIX 全兼容；配置跨 Gateway 自动继承／同步；以项目私有磁盘扫描替代正式 API。
 
@@ -32,35 +34,68 @@
 
 采用独立 change，而不把插件宿主、包安装和设置状态机塞入[快速访问设计](../add-workbench-quick-access/design.md)。快速访问只消费正式命令和对象；这三个 capability 不要求全部串行落地。只有共享合同／依赖必须先迁齐相应生产消费者，未实现能力在 UI 明确不可用。
 
-### D2. 固定三个不同的归属维度
+### D2. 在管理视图标题工具栏选目标，默认本地；后续操作直接沿用
+
+在原 Extensions 视图容器的标题工具栏增加目标按钮／下拉，与 Refresh、More Actions 等原动作共处；保留原侧边栏入口、列表、搜索、详情及安装交互，通过原标题动作贡献接入，不复制面板或操作 DOM。初次打开默认“本地”：它指当前页面入口的原生 Gateway 管理环境，不指浏览器所在电脑；直接访问 B 的页面时，本地即 B。只有用户点击目标动作时才打开原 Quick Input 选择目标，不能在每个插件点击 Install 时重复询问。
+
+管理视图保存自己的当前目标，列表、库存、市场搜索的目标能力判断及新打开的详情都使用该选择；原 Install／Update／Uninstall 等动作直接沿用相应视图或详情绑定的目标。切换目标时刷新该目标的数据，取消或丢弃旧目标的迟到查询，不混显安装状态。由视图打开的详情携带明确目标；已有详情和已开始操作保持原目标并持续显示归属，不因之后切换列表目标而改投。命令面板的安装入口复用原扩展管理视图当前目标，尚未选择时默认本地；文件或 VSIX 来源不隐式改变安装目标。
+
+MCP 管理视图标题工具栏、设置编辑器顶部在需要目标切换时复用相同控件、目标选项与交互规则，各自保留当前选择；共享控件不等于共享一个随焦点变化的全局目标。打开带有明确目标的既有管理对象时，展示并保留该对象目标，不重写其它管理视图的选择；普通编辑器、会话或工作区焦点变化不改变管理目标。选择沿原 registry／导航／Quick Input，不新增目标登记或选择平台。
+
+远端目标由其原生 Gateway 判权并交所管理的 Backend／配置 owner 执行；当前 Gateway 只转送。SSH 是既有连接方式，不形成另一安装路径。每个 Gateway 可以提供自己的工作台页面；直接打开 B，或在 A 的页面选择 B，看到的 B 安装、版本与配置来自同一 owner。跨端搜索和消息传递沿既有索引、资源归属与路由，不触发插件复制或隐式跨目标启用。
+
+只有配置／启用确实属于工作区或来源层时才补选范围，已有明确上下文则带入。稳定 Backend、profile、view 和 generation 继续用于内部路由及生命周期，不逐项暴露为用户必须重复选择的“目标”。一个 Gateway 下若有多个合法安装域且上下文不足以唯一确定，在视图选择目标时明确补选该域，后续安装沿用，不逐个插件重选或任选首项。
 
 | 维度 | 身份与规则 |
 |---|---|
-| 安装位置 | 当前 Workbench profile 的 Web 扩展，或原生 Gateway 管理的稳定 Backend target；主机名、端口、当前 route 和显示名不作身份 |
-| 配置／启用范围 | Workbench profile、指定 Gateway、该目标环境的 Workspace 用户来源层、或精确 workspace；只能选功能已公布的合法范围 |
-| 运行实例 | Web Extension Host，或带目标／客户端会话／工作区视图及 generation 的 Node host；MCP 沿精确 workspace／server／connection generation |
+| 安装位置 | 所选原生 Gateway 管理的稳定 Backend 安装域，Web／Node VSIX 共用原安装与版本事实；主机名、端口、当前 route 和显示名不作身份 |
+| 配置／启用范围 | 已选目标内合法的用户来源层、profile 或精确 workspace／view；纯窗口展示态仍归当前 Workbench，不作为另一插件安装域 |
+| 运行实例 | browser 入口在当前浏览器的原 Web Extension Host，Node 入口在所选目标的 Node host；均保留安装目标来源及所需客户端／view／generation，MCP 沿精确 workspace／server／connection generation |
 
 物理机器相同不自动合并不同 BOXTEAM_HOME、目标安装域或授权身份；同一明确安装域内可复用精确版本包。A/B 使用同一个包时，MCP 连接与 credentials 仍各自创建；不因包相同复用原逻辑 session。已有的跨 execution MCP 资源使用延期设计仍保持 TODO，不借安装功能引入持有／释放工具。
 
-安装操作在发起时冻结目标、来源及版本；配置操作另冻结来源层和 CAS 基线；运行选择消费后端已确认绑定。切换 Tab、导航项或 Gateway 不改投在途请求。目标失效明确失败，不按同名目标、localhost 或当前活动工作区回退。
+安装操作在发起时冻结目标、来源及版本；配置操作另冻结来源层和 CAS 基线；运行选择消费后端已确认绑定。切换管理视图目标只影响后续读取和新操作，不重新绑定已有详情、未提交设置或在途请求，也不停止、迁移或重建其它目标正在运行的扩展宿主。切换 Tab、导航项或 Gateway 不改投在途请求。目标失效明确失败，不按同名目标、localhost 或当前活动工作区回退。
 
-### D3. Gateway 负责管理路由，目标服务持有安装与运行事实
+### D3. Gateway 统一托管常驻扩展管理服务，运行宿主保持独立
 
 ```text
 同一 Web／Electron Workbench
-├─ 原扩展／MCP／设置界面 + 原 Quick Access
-├─ Web Extension Host（当前 Workbench profile）
+├─ 原扩展／MCP／设置界面 + 各视图目标控件（默认本地，共用交互）+ 原 Quick Access
+├─ 原 Web Extension Host（执行所选目标提供的 browser 入口）
 └─ 当前 Gateway：登记、授权入口、管理路由、目标生命周期
+   ├─ 本地 Node 扩展管理服务：每安装域一个，随服务组启动并持续复用
+   │  └─ 原 VSIX 安装／更新／卸载／库存／必要 profile 与 scanner
+   ├─ 目标 Python 基础设施：原 HTTP 下载、文件 I/O、异步监听、日志收集
    ├─ 本地 Backend target
-   │  ├─ 目标侧安装／Node host 基础设施
+   │  ├─ 原 MCP 安装 owner + 独立 Node Extension Host
    │  └─ workspace A／B：各自配置、MCP owner、业务数据
-   └─ 远端 Gateway：原生目标的最终管理授权与路由
-      └─ 远端 Backend target
-         ├─ 目标侧安装／Node host 基础设施
-         └─ workspace C／D：各自配置、MCP owner、业务数据
+   └─ 远端 Gateway：原生目标的最终授权、路由及组件托管
+      ├─ 远端 Node 扩展管理服务：同一目标安装域的唯一服务
+      └─ 远端 Backend target：原 MCP owner、Node Extension Host、workspace C／D
 ```
 
-安装器与 Node host 是目标后端侧的受管基础设施进程；不运行在 Gateway 请求进程、Python Agent 或 Electron main 中。管理发现／状态使用现有 Gateway 控制面；目标操作与 workspace 业务分别路由到精确服务，不建立绕过 Gateway 的浏览器直连后端链。宿主 RPC 使用独立认证通道，沿现有连接／联邦机制协商，不把任意客户端 URL 当作目标。
+目标原生 Gateway 复用管理 Backend／Browser／Terminal 的现有组件生命周期，连接、检查就绪、接管日志并在完整停机时停止独立 Node 扩展管理服务。现有 Node 组件直接提供仅限 loopback、沿原本机凭据认证的 HTTP 服务，不新增代理进程，也不移交 Launcher supervisor。Gateway 启动先核验已有服务的安装域、实际进程、运行实例、组件版本及日志归属并接管，确认没有实例后才启动；不能因发现记录存在就信任任意地址或进程。未配置运行时时明确报告扩展管理能力不可用，不由普通读取隐式下载或补启动；已配置组件启动失败或异常退出沿原进程管理机制明确报错，不能假报就绪。
+
+每个稳定安装域只有一个管理服务实例，独占锁由管理服务自己持有，Gateway 连接和接管不抢锁；安装域身份仍消费原生 Gateway／稳定 Backend 安装域登记，不以进程 PID、workspace 或客户端区分。多个 Backend、客户端及换代中短暂并存的新旧 Gateway 沿已有受权内部通信机制调用同一实例，具名操作由该服务串行准入。复用原 `ExtensionManagementService`、安装／profile／scanner 及适用的具名管理通道，按原变更通知语义更新安装状态，不靠每请求退出消除过时内存。服务发现记录只保存运行时接管所需信息，不是安装账本。迁齐全部消费者后删除 Backend 自行启动管理 child、逐请求初始化／排空／退出及临时 stdio 管理入口，不保留两套实现，不增 broker、目标 registry 或独立进程管理框架。
+
+Python 与 Node 按职责隔离，不按“哪个进程已有某个库”决定调用方向：
+
+| 职责 | 唯一承担方与边界 |
+|---|---|
+| VSIX 安装／更新／卸载、库存与 profile 成员 | 原 Node 安装服务；Python 消费权威结果及必要的精确发布／profile 描述，不扫描目录或另存成员清单 |
+| VSIX 与依赖制品下载 | 目标 Python 既有 HTTP／下载能力；通过原 `IDownloadService`／`IRequestService` 的适用接缝提供传输，原市场及依赖规划不重写成另一套业务实现 |
+| 配置模型、scope、语言覆盖与 JSONC 编辑 | 原 Code OSS 配置服务；目标文件 I/O 交 Python，不重写为项目业务 candidate 或另建有效配置 |
+| 配置文件和已授权包资源的 stat／read／write | 目标侧原 Python 文件基础设施，按原 Gateway 基础设施与工作区 owner 的归属处理；包资源仅只读，安装成员和版本选择仍以原安装器为准 |
+| 文件变化通知 | 复用 Python `WorkspaceFileWatchService`／`ConfigFileWatcher` 的适用能力；它们是所属进程内的异步服务，不新增独立 watcher 守护进程或借 Node 另开通用监听 |
+| 日志与环境 | 各组件产生自身日志，由原 Python 进程管理／日志体系收集；目标环境沿原运行时 owner，Node 只提供本组件和安装域必需的信息 |
+
+管理通道只开放上述具名安装操作及必要描述，不能透传任意 method、脚本、shell、文件或监听命令；原生 VSIX 路径只作为已准入安装来源参数。原安装器内部必需的 FileService、配置依赖与 watcher 继续随该组件运行，但不得向 Python 提供通用 API。Python 缺少某项通用能力时，先在原 Python 服务补齐，不扩大该 Node 进程的职责。进程分离和受权接口不是 OS 沙箱，本轮不新增沙箱或权限平台。
+
+包资源由原安装 owner 确认精确发布身份和合法版本，再由 Python 读取字节；沿原安装锁／运行引用保护读取与回收，不在交接间引入版本切换或目录回收竞态，不按文件请求重扫整包或另建发布账本。配置及包文件消费者迁齐后，删除 Node 对外的配置 stat／read／write、视图配置文件创建和包文件 stat／read 链路；必要 profile 定位描述不因此成为任意文件访问入口。
+
+工作区切换、页面关闭及单个 Backend 停止／重启不终止共享管理服务。Gateway 换代时旧版释放自身管理句柄和日志描述符，服务继续运行；候选 Gateway 初始化失败只释放其接管句柄，不能停止旧版仍在使用的实例。完整停机才停止新准入、结清已接受工作及包资源读取、释放原安装消费者，并由原生命周期机制核实实际进程退出后结清日志归属。取消某次管理请求不等于关闭共享服务；包资源描述与 Python 字节 I/O 共用 Node 服务的串行准入，读取结清后才允许后续安装或回收。写入结果未知时保留原结果查询与错误归属，不因组件恢复自动重放安装。不由任一 Backend 私自接管或终止共享进程。
+
+实际执行扩展代码的 Node Extension Host 仍由目标 Backend 按客户端／明确 view 管理，Web 入口仍在浏览器 Worker 运行；MCP 安装和连接继续使用原 owner。Gateway 请求进程负责路由、授权和基础设施托管，不执行插件或 Agent 业务，也不直接读写工作区 `.boxteam/`。管理 Node 只处理原 Code OSS 安装与必要 profile 语义；工作区文件来源仍交原文件 owner 核验解析，目标基础设施文件交相应 Python owner。宿主 RPC 使用独立认证通道，沿现有连接／联邦机制协商，不把任意客户端 URL 当作目标。
 
 复用目标原生 Gateway 的现有本地管理认证与联邦 policy；发现／读取权限不推出安装、进程执行或配置写入权限。新增管理动作须在原 policy 合同中明确登记并同步 schema／消费者；不复用一个语义不符的权限名称冒充授权。Relay 透传原请求与错误，由原生 owner 最终判权；单次管理请求保持同一 request_id，operation 与 host generation 是不同标识。初始请求后的独立状态读取使用自己的 request_id。
 
@@ -68,13 +103,16 @@
 
 MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_installation_manage`。该能力默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin 和配置读写均不代授，安装管理也不授予配置写入、Backend 重启或宿主管理。两种 workspace API mount 的候选原件读取、计划生成和消费前重验均在下游请求前及实际披露前核现行能力；Relay 沿原目标路由透传，原生 Gateway 最终判权，无权限时不访问 Backend 或目录来源。
 
-目标扩展管理新增两个互不代授的原生 policy capability：`extension_installation_manage` 只覆盖明确目标上的 VSIX 制品安装、更新、移除及其安装状态；`extension_host_manage` 只覆盖明确目标 Node Extension Host 的启动、通道管理、运行状态和停止。两者均沿原 `ADMINISTRATIVE_CAPABILITIES` 注册并默认拒绝，仅精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置能力及另一个扩展能力均不得代授。制品管理权限不授予进程控制，宿主管理权限也不授予安装或替换制品。Relay 透传目标和原操作，由目标原生 Gateway 最终判权；没有授权时不得触达目标 Backend、文件或宿主进程。
+目标扩展管理使用两个互不代授的原生 policy capability：`extension_installation_manage` 覆盖明确目标上的 VSIX 制品安装、更新、移除及其安装状态；`extension_host_manage` 统一覆盖该目标 Web／Node 扩展的运行准入、激活、运行状态与停止，以及各自适用的宿主生命周期／通道管理。Web 代码仍在当前浏览器执行，运行授权由安装目标的原生 Gateway 判定，不以浏览器位置或 Node 宿主可用性代替。两者均沿原 `ADMINISTRATIVE_CAPABILITIES` 注册并默认拒绝，仅精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置能力及另一个扩展能力均不得代授。制品管理权限不授予 Web／Node 扩展运行，宿主管理权限也不授予安装或替换制品。Relay 透传目标和原操作，由目标原生 Gateway 最终判权；没有对应授权时不得触达目标 Backend、包资源或宿主。
+
+只读安装描述与包资源可由上述任一能力读取，供安装详情、资源展示或宿主初始化复用；读取包字节不代表获准在产品宿主执行。资源 owner 同时限制实际目标、安装域、扩展及版本：当前安装版本可按上述读取权限访问，更新或逻辑卸载后仅为仍有效的原运行实例保留其冻结旧版本，不能凭任意版本 URL 读取其它保留包。旧实例资格须仍有运行授权；仅安装权限不能新建旧版本实例或延续已撤销的运行绑定。资源准入及实际披露沿原生 Gateway 的现行策略，浏览器缓存与 Relay 不构成另一授权来源，不新增第三项权限或独立资源授权账本。
 
 | 操作 | 权限与执行边界 |
 |---|---|
 | MCP 候选原件读取、确切 variant 计划、消费前重验及后续制品安装管理 | `mcp_installation_manage`，原生 Gateway 按精确认证主体校验；配置提交、重启与宿主管理分别核其能力 |
-| VSIX 制品安装、更新、移除及安装状态 | `extension_installation_manage`，目标原生 Gateway 按精确认证主体校验；不授予 Node 宿主进程控制 |
-| 目标 Node Extension Host 启动、通道管理、状态读取与停止 | `extension_host_manage`，目标原生 Gateway 按精确认证主体校验；不授予 VSIX 制品变更 |
+| VSIX 制品安装、更新、移除及安装状态 | `extension_installation_manage`，目标原生 Gateway 按精确认证主体校验；不授予 Web／Node 扩展运行 |
+| 目标 Web／Node 扩展运行准入、激活、运行状态、停止及适用的宿主生命周期／通道管理 | `extension_host_manage`，目标原生 Gateway 按精确认证主体校验；不授予 VSIX 制品变更，Web 不要求 Node 宿主可用 |
+| 只读安装描述、入口脚本、静态贡献及相对包资源 | `extension_installation_manage` 或 `extension_host_manage` 任一；限当前安装版本或合法运行实例冻结的版本，旧实例继续核运行授权，不授予执行或制品写入 |
 | source／effective／pending／操作状态读取和事件 | `configuration_read`，按目标和实际披露内容校验 |
 | 预检、创建／提交、删除覆盖、pending retry／discard／resolve／失败记录 | `configuration_write`；返回配置投影另核 read，保留原 CAS／证明／fencing 校验。retry 状态不等于执行重启，resolve 不接受客户端伪造健康证明 |
 | 实际重启受管 Backend | 原 `managed_backend_restart` 是操作名，仍核 `managed_workspace_admin` 管理能力；若消费配置 candidate，再核 `configuration_write`，不以 retry 按钮绕过 |
@@ -90,17 +128,17 @@ Backend 私有通道只接受 loopback、无浏览器来源头及已配置运行
 
 宿主实时发现使用 `POST /api/gateway/extension-hosts/resolve`，输入明确 Gateway、有序 workspace 集合及可选的已知 Backend 身份；已知身份不得因当前地址可达而改写。该入口与通道共用原路由解析和逐 workspace 引用，沿同一原生 `extension_host_manage` 授权读取 Backend 唯一 owner。响应标注 `source=live`，返回实际稳定 Backend、平台、已绑定组件版本及独立 `channel_state`；缺少专用 runtime、平台未支持和 Backend 排空分别具名说明。通道可用不代表完整扩展 API、激活或业务执行已通过；离线、路由换代或撤权直接失败，不以登记镜像替代实时结果，也不为发现启动 Backend、宿主或下载运行时。
 
-共同目标发现使用 `POST /api/gateway/extension-targets/resolve`，只返回原 owner 的稳定身份及原生 Gateway 对当前主体判定的两项管理能力，不披露宿主运行态、不启动宿主或管理进程。至少一项管理能力获准才访问 Backend；原生 Gateway 在准入及披露时重核，Relay 不以自己的权限扩大结果。原窗口只查询明确挂接的根，按稳定 Backend 分组；多根组再核完整有序集合并使用该次完整组的权限，单根复用原回执，不合并各根的权限。视图仍由原 running-location owner 持有，安装权限与宿主权限分别消费同一投影，不增目标 registry。
+共同目标发现使用 `POST /api/gateway/extension-targets/resolve`，从原生 Gateway 的原安装域登记及组件管理事实返回稳定身份和当前主体的两项能力，不披露宿主运行态、不启动 Backend、宿主或管理进程。至少一项管理能力获准才访问目标管理服务；目标级发现不以 Backend 活跃或工作区已挂接为前提。原生 Gateway 在准入及披露时重核，Relay 不以自己的权限扩大结果。原窗口的运行视图仍从明确挂接的根按稳定 Backend 分组；目标级安装管理独立消费原 registry，不能只列出已运行或已挂根的宿主；多根组再核完整有序集合并使用该次完整组的权限，单根复用原回执，不合并各根的权限。运行视图仍由原 running-location owner 持有，安装权限与宿主权限分别消费同一目标投影，不增目标 registry。
 
-目标安装库存使用 `POST /api/gateway/extension-installations/inventory`，必须提交稳定 Backend 身份和明确 workspace 集合。此只读清单可由 `extension_installation_manage` 用于安装管理，也可由 `extension_host_manage` 用于原宿主初始化；后者不授予安装、更新或移除能力。原生 Backend 通过同一专用运行时中的惰性管理进程读取 Code OSS 默认 profile，安装、profile 成员与 scanner 共用原服务实例，Python 不扫描安装目录或持有第二份清单。响应绑定原 Gateway／Backend／workspace 和 `profile_scope=default`，保留原描述及 invalid 诊断，不声称已覆盖系统扩展、开发扩展或窗口启用集。Relay 保留目标和 request_id，读取前及披露前核现行权限与路由；身份不符、离线及损坏明确报错。管理进程正常关闭保留 profile；取消或控制结果未知后回收原进程，不自动重启并重放安装。Backend 排空还须等管理日志和跨进程锁实际释放，关闭失败保留原 owner 供重试。
+目标安装库存沿 `POST /api/gateway/extension-installations/inventory` 读取，绑定所选 Gateway 和稳定安装域。目标级发现／库存不要求用户先挂接工作区、启动 Backend 或扩展运行宿主；现有以非空 workspace 集合定位 Backend 的入口须迁齐原 registry 的目标解析，只有工作区来源／启用操作才携带相应集合，不编造 workspace。此只读清单可由 `extension_installation_manage` 用于安装管理，也可由 `extension_host_manage` 用于原宿主初始化；后者不授予安装、更新或移除能力。原生 Gateway 转交其常驻 Node 管理服务读取 Code OSS 默认 profile，安装、profile 成员与 scanner 共用原实例；Python 按原发布描述提供包资源字节，不扫描安装目录或持有第二份清单。响应绑定原 Gateway／稳定安装域、实际需要的 workspace 及 `profile_scope=default`，保留原描述及 invalid 诊断，不声称已覆盖系统扩展、开发扩展或窗口启用集。Relay 保留目标和 request_id，读取前及披露前核现行权限与路由；身份不符、离线、组件不可用及损坏明确报错。管理服务关闭保留 profile；写入取消或控制结果未知不自动重放，单个 Backend 排空不关闭该共享服务，Gateway 服务组关闭按前述唯一 owner 结清日志和进程资源。
 
-用户明确选择的目标侧 VSIX 通过 `POST /api/gateway/extension-installations/install` 进入同一原生管理 owner；请求冻结稳定目标、有序工作区集合及 `source_uri`，当前支持该目标已挂接工作区的普通文件来源，由原文件 owner 保护私有目录并解析目标路径。安装回执返回原安装器的 ID／版本／profile 与完整库存，不表示已有宿主切换版本。原安装器保留已存在版本的目录；同版本沿其复用规则处理，新版本发布不自动卸载旧版。传输失败不重放安装，客户端应先查询原目标库存；物理卸载与在用版本回收仍须另行闭合原引用规则。Gateway 只沿原安装管理权限及同一短请求路由转送，不能按当前导航替换目标或把中继机器的路径当作来源。
+用户明确选择的目标侧 VSIX 通过 `POST /api/gateway/extension-installations/install` 进入目标 Gateway 托管的同一原生管理服务；请求冻结稳定目标、有序工作区集合及 `source_uri`，当前支持该目标已挂接工作区的普通文件来源，由工作区原文件 owner 保护私有目录并解析目标路径，再移交同机管理服务；Gateway 不自行解释或读取工作区私有数据。安装回执返回原安装器的 ID／版本／profile 与完整库存，不表示已有宿主切换版本。原安装器保留已存在版本的目录；同版本沿其复用规则处理，新版本发布不自动卸载旧版。传输失败不重放安装，客户端应先查询原目标库存；物理卸载与在用版本回收仍须另行闭合原引用规则。Gateway 沿原安装管理权限及管理路由转交本机唯一服务，Relay 转交远端原生 Gateway，不能按当前导航替换目标或把中继机器的路径当作来源。
 
 原生 VSIX 的 manifest 预检在原 `ExtensionManagementService.install` 创建安装任务前完成，沿用官方 `validateExtensionManifest` 及原安装包根语义，仅将 Error 诊断作为拒绝原因；Warning 继续允许安装。保留原 engines 前置兼容判断及错误，包括完整 validator 对纯声明式扩展跳过版本校验的场景。首次安装或升级被拒绝时，原 profile 的存在状态、字节和已有制品均保持；不能发布无效候选后再由库存检查报错。Python、窗口及 Relay 不复制字段校验器或补建安装清单。该预检只阻止原 scanner 本就会标为 invalid 的 manifest，不代替目标平台、宿主能力、依赖及激活验收。Node 与浏览器类型检查共用源码投影，按各自运行面的实际转换结果检查，不以未转换的上游源码替代产品输入。
 
-原 `Install from VSIX` 命令与扩展视图菜单先用原 Quick Input 明确来源工作区及其 Backend 默认 profile，再打开原文件选择器；资源上下文菜单与既有拖放调用保留同一公开命令 ID 和 `URI | URI[]` 形式。当前入口从原扩展服务的运行位置 owner 读取已有目标视图，在打开文件选择器前冻结 Backend 与有序工作区集合，安装期间切标签或活动工作区不改投；文件选择器只限定文件系统及初始目录，返回来源仍须整批核验属于所选已挂接根。工作区文件 Provider 的 `readdir` 复用现有目录 API 及游标，取得完整目录后交原 FileService；不另建目录树、缓存或路径事实，读取失败不能伪装为空目录。直接资源批次先核全部来源及对应目标，再依次安装，后项失败不回滚前项；已核实回执合并通知，真实版本与当前运行版本分别表达，重新加载交原 HostService。没有成功回执的错误保留原原因并要求先查库存，不按 HTTP 状态推断是否已经发布，也不重放安装。
+原 `Install from VSIX` 命令与扩展视图菜单直接使用扩展管理视图当前目标，不先弹目标 Quick Input；尚未选择时默认本地，带有明确目标的既有详情动作使用详情绑定。Backend 安装域在视图选择目标时沿既有登记解析，来源需要时再选择工作区并打开原文件选择器；文件选择器只选择来源，不能反向决定安装目标。安装目标发现不依赖已运行的 Web／Node 宿主；资源上下文菜单与既有拖放调用保留同一公开命令 ID 和 `URI | URI[]` 形式，URI 表示来源，不取代管理视图已选安装目标。入口在打开文件选择器前冻结 Backend 与所需来源范围，安装期间切标签、活动工作区或视图目标不改投；文件选择器只限定文件系统及初始目录，返回来源仍须整批核验属于所选已挂接根，不支持的跨目标来源明确拒绝并保留用户选择。工作区文件 Provider 的 `readdir` 复用现有目录 API 及游标，取得完整目录后交原 FileService；不另建目录树、缓存或路径事实，读取失败不能伪装为空目录。直接资源批次先核全部来源及冻结目标，再依次安装，后项失败不回滚前项；已核实回执合并通知，真实版本与当前运行版本分别表达，重新加载交原 HostService。没有成功回执的错误保留原原因并要求先查库存，不按 HTTP 状态推断是否已经发布，也不重放安装。
 
-原窗口初始化按共同目标发现的能力分别推进：只有安装权限时保留安装视图，不读取宿主状态或库存，也不创建 Node running location；有宿主管理权限时才核通道状态并读取原库存。原 VSIX action 从同一视图检查安装能力；未获准的根显示明确原因，选择后在打开文件对话框前拒绝，不妨碍同屏另一个获准目标。实际安装仍由原生 Gateway 按请求时现行策略判权，旧窗口投影不成为授权凭据。浏览器或中继机器的原生 `file:` 来源当前不能直接用作目标安装来源，原拖放的错误通知明确指引先把 VSIX 放入目标工作区；本片不新增上传链。完整安装详情、市场及物理卸载继续由后续任务验收。
+原窗口初始化按共同目标发现的能力分别推进：安装管理按原安装读取权限查询目标库存及只读包资源，不读取宿主运行态或创建 Web／Node 运行实例；运行初始化另核 `extension_host_manage`，按实际入口加载 browser 扩展或建立 Node 通道。已获准的合法 browser 入口不要求启动或具备 Node 宿主，只有安装权限时不得借资源读取自动激活扩展。原 VSIX action 从同一视图检查安装能力；未获准的目标显示明确原因，在打开文件对话框前拒绝，不妨碍同屏另一个获准目标。实际安装仍由原生 Gateway 按请求时现行策略判权，旧窗口投影不成为授权凭据。浏览器或中继机器的原生 `file:` 来源当前不能直接用作目标安装来源，原拖放的错误通知明确指引先把 VSIX 放入目标工作区；本片不新增上传链。完整安装详情、市场及物理卸载继续由后续任务验收。
 
 工作区目录失败沿原 Provider、FileService 和 SimpleFileDialog 传递，不以空 children 或空列表替代错误，也不增加预探测请求。原选择器标识目录的单个尾分隔符由唯一文件反投影入口消费，不把空尾段送进资源 URI；内部空段及不透明根保持原校验。真实 stat 缺失仍保留原文件名候选／保存新文件语义；stat 成功后的目录 404、权限不足及离线须保留原原因和请求归属，不能再次解释为合法候选。原选择 Promise 统一结算并释放该次 QuickPick 和上下文，初始加载、导航、输入、隐藏文件重载及自动补全共用同一错误收尾；取消的旧更新和关闭后的迟到结果不覆盖新更新或结束后续操作。失败由原命令呈现，用户重新执行命令重试，不自动重放安装或改投目标；其它文件系统保留原 Code OSS 行为。
 
@@ -130,7 +168,7 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 上游 MCP “安装”主要写 manifest／launch configuration，并以 npx／uvx／docker／dnx 运行时解析包；它不是本设计要求的已验证制品发布。新增的目标安装服务沿原 install seam 工作，但必须准备锁定依赖的隔离环境／精确可执行制品，容器使用不可变镜像 digest；项目连接的实际 launch 绑定安装 generation／digest，不能配置看似 pinned、实际仍运行动态 latest。生态无法提供该链时，条目标明不支持制品安装。用户已有的显式动态命令仍按原合同运行，不能追认成受管安装或在升级界面时擅自改写。
 
-目标安装服务唯一持有安装记录、制品、锁定版本及有引用的保留信息。制品和安装元数据位于目标环境 `${BOXTEAM_HOME:-~/.boxteams}/` 的基础设施区域；workspace 配置、连接与调用记录继续位于各工作区 `.boxteam/`。Gateway 仅提供可标记 stale 的状态投影，不写第二份安装账本。Web 扩展资源沿 Workbench 现有 profile／浏览器资源机制保存，不能要求浏览器写服务器路径。
+目标安装服务唯一持有安装记录、制品、锁定版本及有引用的保留信息。制品和安装元数据位于目标环境 `${BOXTEAM_HOME:-~/.boxteams}/` 的基础设施区域；workspace 配置、连接与调用记录继续位于各工作区 `.boxteam/`。Web／Node VSIX 均复用目标原 Code OSS 安装／profile／scanner 服务，不拆成前端安装器和后端安装器；MCP 继续使用其原生态安装 owner，不为统一入口重造通用账本。Gateway 提供已授权的查询与资源传输，不写第二份安装账本。浏览器可沿原资源机制缓存已发布版本的字节和展示镜像，但不持有可独立安装／更新／卸载的权威记录；直接访问目标页面与经 Relay 加载使用同一版本来源。
 
 包安装复用各生态标准工具与隔离环境，仓库 JS／Python 依赖仍遵守 bun／uv；不自动全局安装缺失的 Node、Python 或容器环境。目录要求的能力不具备时给出目标侧具体原因，不转换成另一种执行方式冒充原计划。
 
@@ -152,6 +190,10 @@ npm 制品沿同一安装 owner、SQLite reserve／producer、取消、发布及
 
 移除某 workspace 的使用配置不删除其它 workspace 配置或共享制品。物理卸载列出并检查实际引用；有引用时拒绝并说明来源，不暗中批量禁用。停用 VSIX 贡献沿原宿主卸载／reload 规则处理，不伪造动态卸载支持。恢复对账只报告已观察事实，不自动重放未知安装脚本、OAuth 交换或外部工具调用。
 
+Web 实例在原运行 owner 准入时冻结安装目标、扩展及确切包版本，入口、后续动态 import、静态贡献和相对资源均沿该绑定读取，不经可变的“当前版本”指针。更新或逻辑卸载只改变后续实例的安装可见性：既有合法实例仍可读取旧包，不能在一次运行中混入新版；新实例只从准入时当前安装版本创建，已逻辑卸载则拒绝新建，不以浏览器缓存或磁盘残留恢复旧版。与安装变更并发时由原安装／运行引用发布顺序确定版本，不新增历史安装副本。
+
+实例关闭或运行授权撤销即失去旧版本资源资格，并沿原生命周期撤销该实例贡献、结清引用；运行授权撤销后，即使仍有安装权限也不能延续该实例。其它客户端或目标的合法实例不受牵连。物理回收等所有实际运行及其它合法引用结清后再沿原制品 owner 执行；实例资格由原运行绑定及既有客户端租约管理，不另建资源租约账本。已下载字节不能作为后续激活或资源访问的授权凭据。
+
 ### D6. 原版 MCP 管理界面直接消费唯一项目 owner
 
 在原 MCP 管理服务 seam 实现项目目标感知的查询／修改／运行投影，替换该运行面同义后端，保留原列表、详情和命令。配置计划提交现有 Workspace 配置 API；目录、ready、授权和工具调用继续交 `McpCatalogOwner`、connection service 与原 supervision。原 VS Code 自带执行路径不得同时为同一项目 server 创建连接；原 React “MCP 连接”管理调用迁齐后复用同一权威对象，不维护另一套 enabled/status。
@@ -168,7 +210,11 @@ MCP 配置使用当前 schema 的 stdio／Streamable HTTP 字段。原目录的 
 
 ### D7. 多目标 Extension Host 复用原协议，扩展运行位置语义
 
-UI／声明式贡献及符合 manifest／宿主条件的 browser 扩展复用原 Web Extension Host。需要 Node 的扩展使用匹配固定上游版本的目标侧 Node Extension Host、原 activation 和 MainThread／ExtHost RPC；不新增项目插件 SDK。Electron 与浏览器均通过相同目标通道使用它，本地 Node host 同样属于本地后端目标。
+UI／声明式贡献及符合 manifest／宿主条件的 browser 扩展，与 Node 扩展安装到同一所选目标并从同一原安装记录加载。原 Web Extension Host 在当前浏览器执行 browser 入口，匹配固定上游版本的目标侧 Node Extension Host 执行 Node 入口，复用原 activation 和 MainThread／ExtHost RPC；不新增项目插件 SDK。包含 browser／main 的包沿原 manifest 和能力选择合法入口，不因有两类入口安装两份。Electron 与浏览器共用该规则，本地 Node host 同样属于本地后端目标。
+
+Web 资源由目标原生 Gateway 经现有认证资源链提供，Relay 只转送；入口、静态贡献及相对资源必须绑定同一目标和发布版本，复用原扩展资源加载、Worker 与 CSP 机制，不将远端原生 file 路径交给浏览器解释。目标身份、来源授权、版本变化和撤销沿原 owner 处理，浏览器缓存不成为离线安装权威。内置扩展仍随发行提供，不要求用户重新安装。
+
+多个前端可以共享同一目标安装包与版本，不能共享可变运行实例。每个浏览器窗口独立激活和释放 Web 实例；其注册、配置、资源请求及消息保留目标来源，跨目标同 ID 不能在单个无归属 registry 中互相覆盖。沿原 Web Host／Registry／分派闭包处理需要并存的目标实例，窗口级声明冲突仍按 D8 解决。关闭一个窗口不卸载目标制品，也不撤销另一窗口实例。
 
 原 manifest 的 extensionKind、browser／main、engines、依赖、workspace trust 与 proposed API 条件继续参与选择。不能只按“有 main 就放到任意远端”判断；要求本机 UI Node 环境而当前运行面不具备该语义的扩展明确不可用，不伪装成 workspace 扩展。
 
@@ -190,9 +236,9 @@ VSIX 的启用／禁用范围沿原 profile／workspace view 语义，多根视�
 
 扩展自己发起的 `executeCommand` 继承调用 host／view，不借用此刻窗口焦点；资源参数的归属须与所选服务一致。未激活命令按选定来源触发 activation，不向全部目标广播同名 `onCommand`。同 ID 静态贡献按选定 manifest 版本登记一次，保留来源对应关系；运行态 TreeView／WebviewView resolver、菜单上下文及 `setContext` 按所属 host／view 投影，切焦点只改变展示绑定，dispose 只撤销原注册者。主题、快捷键、schema 等窗口级贡献不能靠重复注册覆盖；同扩展不同版本的声明冲突须在启用前给出明确诊断并要求选择可共存版本或不同窗口，不篡改公开 ID 掩盖冲突。
 
-工作区符号 Provider 继续登记在原窗口注册表，条目携带发起宿主；明确工作区查询在调用前选定完整 host view，结果及 resolve 复用原 Provider／cacheId／RPC。原公开 Provider 没有目录参数，因此只选 A1 而宿主绑定 A1/A2 时明确提示需要完整视图，不先查询 A2 后过滤。目标扩展的公开符号查询继承原宿主代际，Web 及原无 scope 的窗口查询保持原窗口级范围；默认列表的符号聚合仍待迁齐同次查询发布，不以 `#` 闭包宣称完成所有符号入口。
+工作区符号 Provider 继续登记在原窗口注册表，条目携带发起宿主；明确工作区查询在调用前选定完整 host view，结果及 resolve 复用原 Provider／cacheId／RPC。原公开 Provider 没有目录参数，因此只选 A1 而宿主绑定 A1/A2 时明确提示需要完整视图，不先查询 A2 后过滤。目标扩展的公开符号查询继承原宿主代际，内置 Web 及原无 scope 的窗口查询保持原窗口级范围，目标安装的 Web Provider 则保留其明确来源和业务视图；默认列表的符号聚合仍待迁齐同次查询发布，不以 `#` 闭包宣称完成所有符号入口。
 
-Node host 的文档和编辑器同步同样按明确 view 投影，不能只过滤 workspaceFolders：初始模型、dirty buffer、打开／关闭／变更、visible／active editor、语言诊断和 watcher 事件只到合法资源订阅者；焦点在其它 view 时，该 host 的 active editor 为 undefined，不泄露另一个目标模型。文档版本、RPC generation 与取消贯穿注册、请求和迟到结果回收。跨资源 WorkspaceEdit 在副作用前核验全部目标、映射和版本；不把其它目标 URI 降为本机同名路径，失败沿原编辑合同报告，不声称额外跨目标原子事务。Web UI host 保持原窗口级能力，以上投影不是 Node 文件进程的系统沙箱。
+Node host 的文档和编辑器同步同样按明确 view 投影，不能只过滤 workspaceFolders：初始模型、dirty buffer、打开／关闭／变更、visible／active editor、语言诊断和 watcher 事件只到合法资源订阅者；焦点在其它 view 时，该 host 的 active editor 为 undefined，不泄露另一个目标模型。文档版本、RPC generation 与取消贯穿注册、请求和迟到结果回收。跨资源 WorkspaceEdit 在副作用前核验全部目标、映射和版本；不把其它目标 URI 降为本机同名路径，失败沿原编辑合同报告，不声称额外跨目标原子事务。内置 Web UI host 保持原窗口级能力；目标安装的 Web 扩展对业务资源和配置的访问仍保留该目标归属，不能借窗口级 UI 能力改投其它 Gateway。以上投影不是 Node 文件进程的系统沙箱。
 
 直接 workspace.applyEdit 沿原 MainThreadBulkEdits 在 DTO 恢复前共用整批端点归属检查，再交原 BulkEditService；原 warn／false、undoRedoGroupId 与 refactoring 自动保存选项保持。每个 MainThread 实例以原 cancellation token 绑定宿主代际，取消后的结果由原 bulk owner 实际完成资源决定：零完成为 false，已完成的真实结果不被外层关闭覆盖。文件操作参与者复用相同端点检查，不另建文件 writer。预览最终集合已有的文本／Notebook版本由原 BulkEdit 在首个类型副作用前统一核对，并沿原 resolver 持有本次引用；尚缺的 Notebook 版本生产和其它语言 Provider 编辑仍是未完成边界。当前产品 WorkspaceFiles 只支持原有创建／保存，不支持的重命名／删除明确拒绝，不能用 Node fs 绕过原 owner。
 
@@ -220,11 +266,12 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 
 ### D9. 设置只有一个编辑入口，各域仍持有自己的权威
 
-复用原 Settings Editor、JSON schema／JSONC editor 与命令。在入口捕获发起目标，页面顶部持续展示目标、来源层及实际可写能力；切 Tab 不改变正在编辑的目标。未知／不可访问／不允许的设置范围在保存前明确拒绝。内置默认值只读，可在合法覆盖层建立覆盖，不直接改发行包。
+复用原 Settings Editor、JSON schema／JSONC editor 与命令，在编辑器顶部使用 D2 的目标控件，默认本地；从明确配置对象打开时保留对象目标，再按实际需要选择来源层。设置编辑器持有自己的选择，修改多个设置时不逐项重选；扩展或 MCP 视图切换目标不改写已打开的设置。页面顶部持续展示目标、来源层及实际可写能力；用户主动切换设置目标时沿原 dirty 编辑处理保留或结清草稿，不能把旧目标未提交内容用于新目标；切 Tab 不改变正在编辑的目标。未知／不可访问／不允许的设置范围在保存前明确拒绝。内置默认值只读，可在合法覆盖层建立覆盖，不直接改发行包。
 
 | 编辑对象 | 写入 owner 与来源 | 不允许的替代 |
 |---|---|---|
-| Workbench 主题／布局／快捷键／Web 扩展 | 原 profile／Workbench storage，Web 与 Electron 原固定 profile 各自生效 | 改 Workspace／Gateway 业务配置冒充本地设置 |
+| Workbench 主题选择／布局／快捷键等纯窗口展示态 | 原 profile／Workbench storage，Web 与 Electron 原固定 profile 各自生效；主题制品仍从所选目标加载 | 把窗口展示态当成另一 Web 插件安装域，或写入 Workspace／Gateway 业务配置 |
+| Web／Node 扩展安装与目标扩展设置 | 同一目标的原安装／profile 与 Code OSS 配置 owner，按合法用户／view／folder／语言 scope 处理 | browser 入口另存一份权威安装或因在浏览器执行就把目标设置写入当前机器 |
 | Gateway 配置 | 该原生 Gateway 配置 API／层 revision，含合法用户 source 与 local 覆盖 | 让 Backend 或本地 Relay 修改远端配置文件 |
 | 目标环境 Workspace 用户默认 | 该环境原 source writer，写 JSONC 后走原 fanout_id／逐 workspace CAS | 假装是跨 Gateway 全局默认或原子批量事务 |
 | 精确 workspace 来源层／runtime override | 该 workspace 原配置 API，按真实来源层修改及物化 | 表单自行重写整份 JSONC、合并掉 user_local 或覆盖其它层 |
@@ -234,13 +281,13 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 
 **Code OSS 配置与项目业务配置是不同的权威域。** VSIX 的 `contributes.configuration` 继续进入原 configuration registry，遵守 APPLICATION／MACHINE／WINDOW／RESOURCE／LANGUAGE_OVERRIDABLE 等 scope、原 policy、信任限制、默认值和语言覆盖；`python.*` 等扩展键不得塞入严格校验的 Gateway／Workspace 业务 JSONC。统一 Settings Editor 按域导航，分别提交原 owner，不能把扩展配置 API 全部转成 Python runtime candidate。
 
-`workspace.getConfiguration` 的 get／inspect／update 及变更事件使用该 host 的配置模型：Global 沿原 USER 及 setting scope 选择 profile 本地或该目标 remote user；Workspace 指向该稳定 host view；WorkspaceFolder 指向显式 resource 所属的挂接 folder，语言覆盖保留原 overrideIdentifier。省略 target／resource 时沿原推导规则，无法唯一确定或资源不属该 view 时明确拒绝，不改投导航当前工作区。`MainThreadConfiguration` 的初始化、inspect 与 change payload 都须投影，不能向每个 host 广播完整窗口／其它目标配置。API inspect 与 Settings UI 对同一键、resource、语言必须一致；项目业务来源层的诊断字段不能冒充原 ConfigurationInspect 的 user／workspace／folder 语义。
+`workspace.getConfiguration` 的 get／inspect／update 及变更事件使用该 host 的配置模型：Global 沿原 USER 及 setting scope 选择已选目标的用户配置；纯窗口展示设置仍使用当前 profile，不能仅因 browser 入口在当前页面执行而将目标扩展配置改写成本地值；Workspace 指向该稳定 host view；WorkspaceFolder 指向显式 resource 所属的挂接 folder，语言覆盖保留原 overrideIdentifier。省略 target／resource 时沿原推导规则，无法唯一确定或资源不属该 view 时明确拒绝，不改投导航当前工作区。`MainThreadConfiguration` 的初始化、inspect 与 change payload 都须投影，不能向每个 host 广播完整窗口／其它目标配置。API inspect 与 Settings UI 对同一键、resource、语言必须一致；项目业务来源层的诊断字段不能冒充原 ConfigurationInspect 的 user／workspace／folder 语义。
 
 视图配置 owner 不能留空：挂接的业务 workspace 根只作为原 Code OSS WorkspaceFolder；folder 扩展设置使用该根原 `.vscode/settings.json`，不写 `.boxteam/workspace.jsonc`。单根视图沿原 folder 模型；multi-root view 由原 workspace/configuration 服务持有稳定 `.code-workspace` 资源及其 settings，未由用户选择现有资源时在目标基础设施 profile 区物化该视图的资源。资源沿原文件／configuration editing 服务读写，view ID 与根集合经原工作区模型绑定，不建立第二业务 mount registry；增减根不以临时客户端 ID 重置配置。用户 remote 设置同样沿原目标用户配置资源。若资源尚未建立或不可写，相关 update 明确拒绝，不把 Workspace 写分摊到 A1/A2 的业务配置，也不退到 profile。该原 Code OSS 配置链遵守自己的 JSONC 编辑语义；项目业务配置仍走前述 candidate／CAS，不将二者包装成同一提交事务。
 
 原 `IConfigurationService`／`IWorkspaceContextService` 是单窗口上下文，不能轮换它们的全局 active workspace 代替多视图。须在原配置服务边界按 host／view 构造或路由相应 WorkspaceConfiguration／配置模型，复用同一 registry、scope 合并与 JSON editing；目标 `.code-workspace` 和 folder 资源经已登记目标 FileService 读写，renderer 不猜服务器本地路径。
 
-目标 settings 与多根 workspace 文件使用本 change 的 `virtual-resource-addressing` delta 登记的两个具名 `config` URI，由原配置 URI owner 构造；原生 settings 地址只取原 `profiles.defaultProfile.settingsResource`。目标管理 Node 复用已登记的 FileService／DiskFileSystemProvider，renderer 的原 FileService 只准入两个精确文件和可 stat／watch 的直接父级，不开放 readdir 或任意 BOXTEAM_HOME 文件。变化复用原 WorkspaceFileWatchService 的两个精确父目录、非递归订阅和稳定 filter 对象，只投影具名文件事件，不增设轮询或 OS watcher。私有请求核 Gateway、Backend、认证 client、generation、view 和有序根，Gateway 由原用户租约派生 client，不能信请求正文身份。重连／overflow 只 invalidate 原模型；保存沿原 mtime／etag、dirty 和队列，不新增 hash／CAS／保存基线或跨客户端原子事务。
+目标 settings 与多根 workspace 文件使用本 change 的 `virtual-resource-addressing` delta 登记的两个具名 `config` URI，由原配置 URI owner 构造；原生 settings 地址只取原 `profiles.defaultProfile.settingsResource`。原 Code OSS 配置模型、scope、JSON editing 和 renderer FileService 保留，目标配置文件的 stat／read／write 及稳定 view 文件物化统一交目标侧 Python 文件基础设施，不再通过管理 Node 的配置／文件接口。只准入两个精确文件和可 stat／watch 的直接父级，不开放 readdir 或任意 BOXTEAM_HOME 文件。变化复用原 WorkspaceFileWatchService 的两个精确父目录、非递归订阅和稳定 filter 对象，只投影具名文件事件；既有 watcher 在所属 Python 进程内异步运行，不新增监听进程或 Node 通用 watcher。配置访问绑定原生 Gateway、Backend、已授权 profile／明确 view，客户端身份仍由原用户租约派生，不能信请求正文身份；Node 宿主发起的请求继续额外核原 host generation 和有序根。目标安装的 Web 扩展与设置编辑器沿同一目标 Python 文件 owner 和既有认证入口访问，不以启动 Node host 作为读取目标设置的前置条件，不为此新建通用 session 或配置账本。重连／overflow 只 invalidate 原模型；保存沿原 mtime／etag、dirty 和队列，不新增 hash／CAS／保存基线或跨客户端原子事务。原安装器自身配置依赖的内部文件读取／监听可保留，但不代替 Python 对外文件服务。
 
 现有 `/api/v1/config` PATCH 只允许 Workspace-owned `runtime_override` 的有限字段；sources 诊断不能代替来源正文读取、schema 发现与 source writer。实施须在原配置 owner 增补目标来源的可编辑能力、正文／脱敏投影、revision／digest、预检和 CAS 写入合同，并同步正式 delta／生成协议及消费者，不能把既有 PATCH 放宽成任意路径或任意 JSON 写入。Gateway 与 Workspace 来源分别核实真实可写层；没有 writer 的层只读并明确缺口，不用通用文件 API 补旁路。
 
@@ -262,7 +309,7 @@ Gateway 来源编辑的预检和保存要求连接具有稳定身份。缺少 `c
 
 ### D10. 界面入口及快速访问的分工
 
-扩展视图保留 VS Code 名称和交互，以“此工作台”“Gateway／Backend 目标”分组；MCP 条目附带启用 workspace，不按相同服务名合并。安装按钮明确“安装到…”，配置操作明确“为工作区…启用”。详情集中显示安装版本、配置来源、生效状态、运行与日志；停止、断开、失败、授权等待、未安装及仅有离线镜像分别表达。
+扩展视图保留 VS Code 名称和交互，目标控件放在原 Extensions 视图容器的标题工具栏，默认本地；各插件保留原安装／更新／卸载按钮，直接消费已选目标，不增加逐插件目标菜单或安装前目标弹窗。标题及详情持续显示目标，MCP／设置在各自标题工具栏或编辑器顶部复用同一控件与规则；切换其中一个视图不强制联动其它视图。Web／Node 是能力与运行位置说明，不再作为并列安装目标分组。目标内需要时显示安装域／workspace；MCP 条目附带启用 workspace，不按相同服务名合并，配置操作明确“为工作区…启用”。详情集中显示安装版本、配置来源、生效状态、运行与日志；停止、断开、失败、授权等待、未安装及仅有离线镜像分别表达。
 
 主窗口左侧侧边栏承载 Gateway／目标导航及全局扩展管理入口；底部“自动化”“MCP 连接”等继续表达当前工作区资源。原扩展视图可管理多个目标，但不改变底部面板状态的工作区归属，也不把工作区管理塞入会话右侧资源栏。旧入口经同一 owner 打开对应详情或工作区连接，不维护独立安装／状态卡片。
 
@@ -277,8 +324,13 @@ Web 与 Electron 共用 Workbench 源码和贡献；Electron 静态资源、Web 
 | 闭包 | 真实入口及关键断言 |
 |---|---|
 | 目录与安装 | 原视图搜目录、选 B 安装，记录 B 的真实安装日志与精确版本；A 无下载／执行；HTTP 条目不虚报下载；手动来源复用同链 |
+| Gateway 托管管理服务 | 目标服务组启动时每安装域仅一个安装管理 Node；多个 Backend／页面查询库存及执行安装复用同一组件，切工作区、关页面或重启单个 Backend 不重建它；真实并发安装不丢 profile 成员，远端安装只使用 B 的服务。Gateway 服务组关闭核实实际子进程退出，组件失败明确报错，未知写入不重放；管理服务存活不等于 Node／Web 扩展已运行 |
+| Python／Node 职责隔离 | 目标 B 的 VSIX 及依赖下载、配置文件读写、包资源读取和外部文件变化通知经过 B 的原 Python 服务；Node 只提供原安装事实及必要描述，不接收通用文件／监听／脚本命令。配置语义、精确版本、授权及在用旧包读取保持；订阅释放沿原异步 watcher 清理，无新增监听进程，不以 Node 内部必需 watcher 的存在判失败 |
 | MCP Agent | 安装并为 A1 启用，从真实 Thread 调用测试 MCP 工具，仅 A1 目录／连接／调用改变；A2/B1 同名 server 不混入；OAuth、热替换、旧调用／结果未知沿原监督 |
 | 包与生命周期 | A1/A2 引用共享版本、并发安装同意图、更新失败、取消／断流、重启对账、有引用卸载；未知脚本不重放，未结算旧版本不删除 |
+| 标题工具栏目标 | 扩展视图初次默认当前页面的本地 Gateway，标题工具栏选 B 后列表／搜索及新详情归 B；连续安装两个扩展不再弹目标选择，切回 A 只影响后续新操作，B 在途安装和已打开设置保持归属；MCP／设置使用相同控件与规则，各视图不被焦点或其它视图选择改写，VSIX 来源不改变安装目标 |
+| 共享 Web 安装 | 在 A 页面选 B 安装 Web VSIX，直接打开 B 页面和另一客户端看到同一库存／版本，浏览器实际执行 B 的 browser 入口；仅有 browser 的包不要求 Node host 可用，刷新／缓存清理不丢安装，B 离线不改投 A |
+| Web 运行与包资源 | 仅安装权限可读详情及包资源但不能激活；仅运行权限可读并运行当前已安装包但不能安装／更新／卸载；两项均无时不披露资源。v1 实例在更新 v2／逻辑卸载后继续动态读取 v1，新实例只取 v2 或在卸载后拒绝；原实例关闭、运行撤权后其旧资源资格失效，即使安装权限尚在，另一合法实例仍可读，最后引用结清后才可物理回收 |
 | 扩展 host | 一个真实 Web 扩展和 A/B 各一个 Node 测试扩展；同一 command ID 读目标独有文件／配置，语言 Provider、终端及状态各归正确目标；切焦点、两客户端、迟到 RPC 不串扰 |
 | API 能力 | 按 D8 每类验证实际支持／拒绝；不能用 mock command 或 host 进程启动证明真实 extension API 与文件／终端链可用 |
 | 配置 | 同字段不同来源与同名远端；表单／JSONC CAS、删除覆盖、invalid、pending／restart、用户 source fan-out 部分冲突及停止工作区追赶；本地无远端有效配置副本 |
@@ -313,8 +365,10 @@ Web 与 Electron 共用 Workbench 源码和贡献；Electron 静态资源、Web 
 1. 清点原 MCP／扩展／设置入口、协议、间接调用及测试，定义每条链唯一 owner 和删除清单；保留他人的实施证据，不重置既有任务。
 2. 每次只迁一条完整纵向链，声明／权威写入／查询／恢复／消费者及测试一并迁齐；编号不要求三个 capability 全局串行实现。
 3. 安装及设置新记录只写稳定目标格式；已有配置经原 owner 正常读取，需要改写时走原官方预览／备份／版本迁移。不能靠清空 profile、凭据或工作区状态完成迁移。
-4. 入口迁齐后物理移除同义管理实现、重复 MCP client、临时默认目标与死命令。保留标准扩展 API 与原业务非管理接口的合法用途。
-5. 按源码／产物版本撤回未发布实现；已经提交的远端配置或安装操作按原记录查询／显式新操作处理，回退 UI 不反向执行外部副作用。不认识新记录的旧版本明确拒绝，不双写或静默回退。
+4. Web 用户安装从浏览器权威 profile 迁至目标原安装 owner；先清点调用和可核验 release 基线，必要迁移走显式目标选择及原安装服务，不静默复制到所有 Gateway。迁齐扫描／安装／升级／卸载／加载及测试后删除旧权威写入链；浏览器仅保留派生缓存和原窗口展示态，历史 Web 验收不作为新归属已实现的证据。
+5. 将原 VSIX 管理组件接入 Gateway 现有服务组，保持稳定安装域、原 profile 路径、已发布包及配置资源；迁齐 Backend、Gateway、设置、资源和宿主初始化消费者后，删除 Backend 按请求启动管理 child 的旧链。进程归属移交本身不搬安装数据、不另建账本，也不单独提升 schema 版本；实际数据结构变化仍按 release 基线判断。
+6. 入口迁齐后物理移除同义管理实现、重复 MCP client、临时默认目标与死命令。保留标准扩展 API 与原业务非管理接口的合法用途。
+7. 按源码／产物版本撤回未发布实现；已经提交的远端配置或安装操作按原记录查询／显式新操作处理，回退 UI 不反向执行外部副作用。不认识新记录的旧版本明确拒绝，不双写或静默回退。
 
 ## Open Questions
 

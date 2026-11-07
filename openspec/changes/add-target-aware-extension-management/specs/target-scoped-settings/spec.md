@@ -6,11 +6,27 @@
 
 ### Requirement: 设置编辑必须持续展示并冻结明确目标
 
-设置入口 SHALL 使用原设置编辑器及目标选择，区分 Workbench profile、原生 Gateway、目标环境的 Workspace 用户来源层、精确 workspace 及可用 runtime override。页面须持续展示目标、来源层和可写能力；切换编辑器或导航不改投未提交内容。默认值只读，只能在合法覆盖层修改；未知、不可访问或不合法的目标须拒绝。
+设置入口 SHALL 使用原设置编辑器，在编辑器顶部复用扩展／MCP 的 Gateway 目标控件与交互规则；编辑器持有自己的当前目标，初次默认当前页面入口的本地 Gateway，从已有配置对象打开时保持对象目标。后续设置读取与保存 SHALL 沿用该目标，不逐设置项重选，也不被其它管理视图的目标选择或活动编辑器焦点改写。选定目标后，仅在需要时确定目标用户来源层、精确 workspace 或 runtime override，已有上下文直接带入，不将安装位置、运行宿主、配置范围做成三套必选目标。页面须持续展示目标、来源层和可写能力；切换编辑器或导航不改投未提交内容，用户主动切换设置目标时 SHALL 沿原 dirty 编辑处理保留或结清草稿，不能把旧草稿应用到新目标。默认值只读，只能在合法覆盖层修改；未知、不可访问或不合法的目标须拒绝。
+
+Web 与 Node 扩展的目标配置 SHALL 使用同一所选目标及合法 Code OSS scope，MUST NOT 因 browser 入口在客户端运行就把 B 的配置保存到 A 的 profile。纯窗口布局、主题选择等展示态继续由原 Workbench profile 维护，不构成另一个插件安装域。直接访问 B 页面与经 Relay 编辑 B SHALL 由同一目标 owner 提供对应配置。
+
+目标 Code OSS profile／view 配置 SHALL 保留原 Code OSS 配置模型、scope、语言覆盖和 JSONC 编辑语义，目标文件的 stat／read／write、稳定 view 文件物化及变化通知 SHALL 复用目标侧原 Python 文件与异步监听服务。多个 Backend 与客户端共享相同资源；必要 profile 定位仍取原安装 owner，不将配置读写交给常驻 Node 管理进程或新增配置副本。普通设置读取或保存不得启动 Node host 或另建监听进程。Workspace／Gateway 业务配置继续由各自原 source writer 提交，不移入 Code OSS profile，也不把扩展设置转换为业务 candidate。
+
+#### Scenario: 远端 Web 扩展设置由目标保存
+- **WHEN** 用户在 A 页面选择 B，为安装在 B 的 browser 扩展修改一个目标用户范围设置，再直接打开 B 页面读取
+- **THEN** 保存和读取均来自 B 的原配置 owner，切换为 Node 入口不会产生另一份同义配置；A 的业务配置及纯窗口展示态不被改写，目标不同的扩展不会按同名 key 借用值
+
+#### Scenario: 目标设置文件与外部修改复用 Python 服务
+- **WHEN** 用户保存目标 profile 或稳定多根 view 的设置，随后由目标机器上的外部编辑器修改该文件
+- **THEN** 保存经目标 Python 文件服务，变化经原进程内异步 watcher 更新同一 Code OSS 配置模型；原 scope、语言覆盖、注释、mtime／etag、dirty 和队列语义保持，不通过 Node 配置文件接口读写或新增有效配置事实
 
 #### Scenario: 编辑远端设置期间切换会话
 - **WHEN** 用户在 B1 的 workspace 来源层编辑 MCP 参数，随后切到 A1 会话并保存
 - **THEN** 保存仍指向 B1 原来源层，界面持续显示 B1；B1 失效时明确失败，不写 A1 或用户默认层
+
+#### Scenario: 其它管理视图切换目标不改写设置草稿
+- **WHEN** B 的设置编辑器已有未提交修改，用户将 Extensions 视图标题工具栏切为 A，再返回原设置编辑器保存
+- **THEN** 设置编辑器仍显示并保存 B 的原来源层，不重新询问每个设置项的目标；用户主动在设置编辑器切换目标时沿原 dirty 编辑处理保留或结清 B 草稿，不把它写入 A
 
 ### Requirement: 设置归属必须复用原 owner 而非统一成新配置域
 
@@ -22,7 +38,7 @@ Workbench 展示设置、Gateway runtime 配置、Workspace 配置、会话设�
 
 ### Requirement: 扩展设置必须保留原 Code OSS 配置域及视图语义
 
-VSIX 贡献设置 SHALL 进入原 configuration registry，保留 setting scope、默认值、policy、信任限制和语言覆盖，不写入 Gateway／Workspace 业务 JSONC。原 get／inspect／update／change 事件 SHALL 使用 host view 配置模型；Global 依原 USER 与 scope 定位 profile local 或目标 remote user，Workspace 定位稳定 Code OSS view 配置，WorkspaceFolder 按显式 resource 定位挂接根的 `.vscode/settings.json`。单根沿原 folder 模型，multi-root 须有原服务持有的稳定 `.code-workspace` 配置资源；默认资源可物化在目标基础设施 profile 区，不能把 Workspace 写分摊成多个业务配置提交。
+VSIX 贡献设置 SHALL 进入原 configuration registry，保留 setting scope、默认值、policy、信任限制和语言覆盖，不写入 Gateway／Workspace 业务 JSONC。原 get／inspect／update／change 事件 SHALL 使用 host view 配置模型；Global 依原 USER 与 scope 定位所选目标的用户配置，纯窗口展示设置仍归当前 profile；browser／Node 入口不改变同一目标扩展配置的归属，Workspace 定位稳定 Code OSS view 配置，WorkspaceFolder 按显式 resource 定位挂接根的 `.vscode/settings.json`。单根沿原 folder 模型，multi-root 须有原服务持有的稳定 `.code-workspace` 配置资源；默认资源可物化在目标基础设施 profile 区，不能把 Workspace 写分摊成多个业务配置提交。
 
 原配置初始化及事件 SHALL 投影到所属目标／view，inspect 与设置 UI 对相同 resource／language 一致。省略参数沿原推导规则；无唯一 owner、资源不属 view 或不可写时明确拒绝，不跟随窗口焦点改投。窗口级 schema 的版本冲突须在启用阶段明确处理。
 

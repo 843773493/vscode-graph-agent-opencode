@@ -20,8 +20,9 @@
 - 内部回调代际验证使用原owner生成的API及原eager／lazy Manager关闭入口；覆盖断连等待／失败、直接dispose、迟到激活和同位置替换，不能用测试自行设置active变量代替产品准入。
 - 查询／激活验证运行原MainThread、owner、Manager和ExtHost activator；仅窗口TimerService的DI模块为具名替身，不能据此宣称验证窗口性能服务或完整视图投影。保留`api:none`依赖成功／失败与原错误归属，核非所属状态回调拒绝、唯一持有者派发和歧义零调用；不能只检查改写后的源码文本。
 - `node_host.mjs` 通过真实原 RPC 增删、替换同 ID 的未激活扩展，并在合法版本激活真实代码；回调观察真实 `extensions.onDidChange`，核旧／重复版本与非法候选拒绝及另一宿主不变，不据描述替换宣称支持已激活扩展动态卸载。
-- `test_extension_management.py`经Backend原owner启动真实Node组件，再由原生安装器生成profile；覆盖双Backend同ID不同版本、重启恢复、共享安装域串行操作、安装失败及损坏记录。故障注入只能在真实安装后修改原件；缺失manifest沿原scanner报告invalid和原因，不能弱化为空列表，也不能把基础设施验证表述为窗口安装UI／实例registry已完成。
-- `test_native_management_concurrency.py`通过真实Gateway及两个Backend OS进程共享同一Home／稳定安装域，核不同ID并发安装不丢profile成员、同ID并发版本的回执库存、旧制品保留、管理child退出和Backend重启恢复；VSIX为测试扩展，不证明旧宿主引用保护、卸载、窗口UI、SSH或Windows验收。复用公共进程装具及集成闸门，固定Node和依赖由环境显式提供，不接管测试设施实现。
+- `test_extension_management.py`由真实Gateway常驻owner持有Node管理组件，Backend只经具名本机HTTP客户端调用原安装器；双域使用独立Home和稳定安装ID，同域多个Backend共享一个管理进程。核重启、取消、未知回执不重放及实际退出；故障注入只能在真实安装后修改原件，缺失manifest沿原scanner报告invalid和原因，不能弱化为空列表，也不能把基础设施验证表述为窗口安装UI／实例registry已完成。同进程双域装具共用本机认证凭据，不声称验证跨进程认证隔离。
+- `test_native_management_concurrency.py`通过真实Gateway及两个Backend OS进程共享同一Home／稳定安装域，核不同ID并发安装不丢profile成员、同ID并发版本的回执库存、旧制品保留及Backend重启前后同一Gateway管理PID／创建时间；VSIX为测试扩展，不证明旧宿主引用保护、卸载、窗口UI、SSH或Windows验收。复用公共进程装具及集成闸门，固定Node和依赖由环境显式提供，不接管测试设施实现。
+- `test_management_gateway_lifecycle.py`通过真实Launcher控制通道执行候选失败、重试换代及完整停机；由配置watcher生成交接意图，核实际Gateway、Backend与管理进程身份及退出。故障只注入隔离Home的端口转发配置，不预置generation；不代表Windows、远端或窗口验收。
 - 原生 VSIX manifest 预检通过真实 Node 安装入口核首次／升级候选在发布前拒绝，安装域目录、profile 原字节、库存及旧版制品保持；原 engine 文案、纯声明式 engine 拒绝、合法 Warning 和成功升级不变。原 HTTP 场景另核 Gateway／Backend／Node 的无效升级 400、同一 request_id 与另一目标不变；不据此声称依赖、平台、信任或完整扩展 API 兼容已完成。
 - 本目录真实HTTP统一由`conftest.py`持有已绑定socket与Uvicorn任务并等待关闭；库存网络场景经过原Gateway认证、Backend私有入口及真实Node/profile，核双Backend版本、稳定身份、恢复和route误指，不装配完整工作区业务图，不代表窗口registry、真实SSH或VSIX安装界面验收。
 
@@ -29,6 +30,8 @@
 - 同一存储回归运行原 MainThreadSecretState／ExtHostSecretState，并编译 Node 专用入口，核四类秘密操作在 RPC 前拒绝、主线程零秘密读写／广播及 Web 原 API；秘密服务为具名装具。原生 probe 另经真实 Node 的公开 SecretStorage 验证四类拒绝，不能据此宣称目标侧秘密 owner 已实现。
 
 - `extension_diagnostics.test.mjs` 运行原 MainThreadDiagnostics／MarkerService／ExtHostDiagnostics／DiagnosticCollection 及 RPCProtocol，验证同名集合、重叠视图、代际清理、整批准入、事件与关联位置投影、目标原生帮助链接及 Web 原合同。认证 binding、字节传输及文档版本服务为具名装具，不代替 Gateway、真实 Node 进程或浏览器页面验收；沿 `integration-extension-host-state` 的外部超时与内存保护运行。
+
+- `extension_configuration.test.mjs` 在真实 Chromium 中运行原 WorkspaceService、FileService、配置 parser、MainThreadConfiguration／MainThreadFileSystem 与 child DI，验证配置层合并、inspect、有序根、共享 profile watch 引用和跨 host 文件拒绝。认证 binding、HTTP／SSE 传输及目标磁盘是具名内存装具，不能代替真实 Gateway／Node、原 ConfigurationEditing 保存、Windows 或完整设置界面验收。
 
 - `extension_language_features.test.mjs` 在真实 Chromium 中运行原 MainThreadLanguageFeatures、共享 LanguageFeatureRegistry、wordHighlighter 多文档入口及 RPCProtocol／TargetUriTransformer，保留全部文档 selector、目标原生 glob／RelativePattern、exclusive／候选缓存、secondary 归属和 RPC 回调／取消／关闭场景。Rename 版本与 prepare 合同另经原 ExtHostLanguageFeatures／RenameAdapter、WorkspaceEdit.from、ExtHostDocuments／AndEditors／DocumentData 和 rename／rawRename／prepareRename；核调用前版本冻结、A/B 同原生 URI 隔离、create／未同步资源无版本、Range／placeholder／word fallback、rejectReason／undefined 和 Web 原范围。DTO 后项与不合作迟到回包由具名扩展 actor 提供，核全部资源端点在原 canonical revive 前整批拒绝，以及保留 RPC 时取消／注销／MainThread dispose 后不发布、旧引用零派发和新代际隔离。认证 binding、字节输送、文档 delta／change、扩展 callback、canonical URI 接收端及模型 URI／语言／同步状态／word fallback 为具名边界；没有 BulkEdit 或磁盘写入，不证明已返回 edit 后的 UI／inline 应用生命周期、完整 RenameController、Gateway、真实 Node、Notebook cell／版本 producer。Windows 仅评分逻辑，不代替 Windows 实机验收。
 

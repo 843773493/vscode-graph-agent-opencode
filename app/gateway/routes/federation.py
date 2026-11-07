@@ -168,6 +168,7 @@ async def federation_workspaces(
     response_model=APIResponse[GatewayDiagnosticsDTO],
 )
 async def federation_diagnostics(
+    request: Request,
     workspace_id: str | None = Query(default=None),
     log_id: str | None = Query(default=None),
     tail_lines: int = Query(default=300, ge=20, le=1000),
@@ -181,6 +182,7 @@ async def federation_diagnostics(
             selected_workspace_id=workspace_id,
             selected_log_id=log_id,
             tail_lines=tail_lines,
+            extension_management=getattr(request.app.state, "extension_management", None),
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

@@ -8,6 +8,7 @@
     "backend": ["backend", "local-backend-{instance}.log"],
     "terminal": ["terminal", "local-terminal-{instance}.log"],
     "browser": ["browser", "local-browser-{instance}.log"],
+    "extension-management": ["extension-management", "extension-management.log"],
     "ssh-tunnel": ["ssh", "ssh-tunnel-{instance}.log"],
     "ssh-port-forward": ["ssh", "ssh-port-forward-{instance}.log"]
   },
