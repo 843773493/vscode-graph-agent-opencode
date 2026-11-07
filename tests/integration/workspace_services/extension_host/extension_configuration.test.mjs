@@ -12,6 +12,7 @@ const upstream = './src/clients/workbench/upstream/src/vs/';
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
 await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { targetConfigurationServices } from './src/clients/workbench/src/extensions/configuration.js';
+export { registerTargetConfigurationFiles } from './src/clients/workbench/src/extensions/configurationFiles.js';
 export { TargetUriTransformer } from './src/clients/workbench/src/extensions/targetUris.js';
 export { MainThreadConfiguration } from '${upstream}workbench/api/browser/mainThreadConfiguration.js';
 export { ExtHostConfigProvider } from '${upstream}workbench/api/common/extHostConfiguration.js';
@@ -192,6 +193,7 @@ async function open() {
       hosts.set(label, host); return host;
     };
     globalThis.probe = { m, files, disk, profile, ordinary, put, parent, services, lifetime, hosts, make, transport, settings,
+      registerTargetConfigurationFiles: m.registerTargetConfigurationFiles,
       userProfile, profileChanged };
   });
   return { context, page };
@@ -219,6 +221,56 @@ test('原目标配置初始化、scope合并和typed多根仅消费本视图，�
     expect(result.bFolders).toHaveLength(1); expect(result.bFolders[0]).toStartWith('boxteam-file://gateway-b/');
     expect(result.ownerIsContext).toBe(true); expect(result.bConfig).toBeNull(); expect(result.viewNative).toBe('file:///hosts/A/view/workspace.code-workspace');
     checks.push('原child DI、profile/remote/view/folder/language合并、inspect、初始MainThread数据及单根/多根资源身份');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('相同配置传输引用共享SSE并按最后引用释放，不合并不同代际或route', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, a = await p.make('A'), resource = p.m.URI.parse(a.remote.resource_uri);
+      const same = { kind: 'node', connection: a.binding };
+      const first = p.registerTargetConfigurationFiles(p.files, same);
+      const second = p.registerTargetConfigurationFiles(p.files, same);
+      const watch = p.files.watch(resource);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const subscriptions = () => p.transport.subscribers.filter(item => item.body.backend_id === a.binding.backend_id);
+      const sameCount = subscriptions().length;
+      const nextGeneration = p.registerTargetConfigurationFiles(p.files, {
+        kind: 'node', connection: { ...a.binding, generation: 'generation-A-next' },
+      });
+      const nextRoute = p.registerTargetConfigurationFiles(p.files, {
+        kind: 'node', connection: a.binding, gatewayConnectionId: 'alternate-route',
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const independent = subscriptions().map(item => ({ generation: item.body.generation, route: item.body.gateway_connection_id }));
+      a.store.dispose();
+      first.dispose();
+      let changes = 0;
+      const listener = p.files.onDidFilesChange(() => changes++);
+      const afterOneRelease = subscriptions().filter(item => item.body.generation === a.binding.generation && item.body.gateway_connection_id === undefined).length;
+      await p.files.writeFile(resource, p.m.VSBuffer.fromString(JSON.stringify({ 'probe.machine': 'shared-ref-write' })));
+      subscriptions().find(item => item.body.generation === a.binding.generation && item.body.gateway_connection_id === undefined)
+        .send('changes', { changes: [{ resource_uri: resource.toString(), kind: 'edit' }], overflow: false });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      nextGeneration.dispose(); nextRoute.dispose();
+      second.dispose();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const afterLastRelease = subscriptions().some(item => item.body.generation === a.binding.generation && item.body.gateway_connection_id === undefined);
+      const readFailure = await p.files.readFile(resource).then(() => undefined, error => error.message);
+      listener.dispose(); watch.dispose();
+      return { sameCount, independent, afterOneRelease, changes, afterLastRelease, readFailure,
+        written: JSON.parse(new TextDecoder().decode(await p.disk.readFile(p.m.URI.parse(a.remote.native_uri))))['probe.machine'] };
+    });
+    expect(result.sameCount).toBe(1);
+    expect(result.independent).toEqual([
+      { generation: 'generation-A', route: undefined },
+      { generation: 'generation-A-next', route: undefined },
+      { generation: 'generation-A', route: 'alternate-route' },
+    ]);
+    expect(result.afterOneRelease).toBe(1); expect(result.changes).toBeGreaterThan(0);
+    expect(result.afterLastRelease).toBe(false); expect(result.readFailure).toContain('未绑定'); expect(result.written).toBe('shared-ref-write');
+    checks.push('同一kind/完整请求/资源集合注册复用一条SSE，单引用释放不撤销读写通知，最后引用释放后请求拒绝；generation/route仍独立');
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
 

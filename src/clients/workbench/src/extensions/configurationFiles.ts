@@ -15,6 +15,7 @@ import { targetConfigurationRequest, targetSettings, targetWorkspace, type Targe
 interface Route {
   context: TargetConfigurationContext;
   resources: readonly URI[];
+  references: number;
   controller: AbortController;
   stream?: AbortController;
 }
@@ -27,22 +28,34 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
   readonly onDidChangeFile = this.changes.event;
   private readonly errors = this._register(new Emitter<string>());
   readonly onDidWatchError = this.errors.event;
-  private readonly routes = new Set<Route>();
+  private readonly routes = new Map<string, Route>();
   private readonly watches = new Map<string, { resource: URI; count: number }>();
 
   register(context: TargetConfigurationContext): IDisposable {
     const resources = [targetSettings(context), targetWorkspace(context).configuration].filter(value => !!value)
       .map(value => URI.parse(value.resource_uri));
     if (resources.some(uri => uri.scheme !== 'boxteam' || uri.query || uri.fragment)) throw new Error('目标配置不是规范资源 URI');
-    const route: Route = { context, resources, controller: new AbortController() };
-    this.routes.add(route);
+    const key = JSON.stringify([context.kind, targetConfigurationRequest(context), resources.map(resource => resource.toString()).sort()]);
+    let route = this.routes.get(key);
+    if (!route) {
+      route = { context, resources, references: 0, controller: new AbortController() };
+      this.routes.set(key, route);
+    }
+    const sharedRoute = route;
+    sharedRoute.references++;
     this.updateWatches();
-    return toDisposable(() => { this.routes.delete(route); route.controller.abort(); route.stream?.abort(); this.updateWatches(); });
+    return toDisposable(() => {
+      if (--sharedRoute.references !== 0) return;
+      this.routes.delete(key);
+      sharedRoute.controller.abort();
+      sharedRoute.stream?.abort();
+      this.updateWatches();
+    });
   }
 
   private route(resource: URI, directory = false): Route {
     // 同一 profile 可被多个 view 使用；这里只合并同一规范文件的已认证传输引用，不选择其它资源。
-    const route = [...this.routes].find(route => route.resources.some(uri => extUri.isEqual(uri, resource) || directory && extUri.isEqual(dirname(uri), resource)));
+    const route = [...this.routes.values()].find(route => route.resources.some(uri => extUri.isEqual(uri, resource) || directory && extUri.isEqual(dirname(uri), resource)));
     if (!route) throw createFileSystemProviderError('配置资源未绑定可用的目标宿主：' + resource.toString(), FileSystemProviderErrorCode.Unavailable);
     return route;
   }
@@ -90,7 +103,7 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
     return toDisposable(() => { if (--watch.count === 0) this.watches.delete(key); this.updateWatches(); });
   }
   private updateWatches(): void {
-    for (const route of this.routes) {
+    for (const route of this.routes.values()) {
       const needed = [...this.watches.values()].some(watch => route.resources.some(uri => extUri.isEqual(uri, watch.resource) || extUri.isEqual(dirname(uri), watch.resource)));
       if (!needed) { route.stream?.abort(); route.stream = undefined; }
       else if (!route.stream) {
