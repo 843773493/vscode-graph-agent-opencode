@@ -31,7 +31,10 @@ from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallRequest,
     ExtensionInstallationUninstallDTO,
     ExtensionInstallationUninstallRequest,
+    NativeExtensionFileRequest,
+    ProfileExtensionInventory,
 )
+from app.schemas.gateway.extension_web import ExtensionWebHostOpenRequest
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.configuration import (
     ExtensionConfigurationFiles,
@@ -55,6 +58,7 @@ class NodeHostIdentity:
     view_id: str
     workspace_ids: tuple[str, ...]
     generation: str
+    host_kind: Literal["node", "web"] = "node"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +68,14 @@ class NodeHostConnection:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     host: NodeExtensionHost
+    stopping: asyncio.Event
+    transport_settled: asyncio.Event
+
+
+@dataclass(frozen=True, slots=True)
+class WebHostConnection:
+    identity: NodeHostIdentity
+    inventory: ProfileExtensionInventory
     stopping: asyncio.Event
     transport_settled: asyncio.Event
 
@@ -121,6 +133,22 @@ class _HostSession:
             self.closed = True
 
 
+class _WebHostSession:
+    def __init__(self, identity: NodeHostIdentity) -> None:
+        self.identity = identity
+        self.profile_id: str | None = None
+        self.extension_keys: frozenset[str] = frozenset()
+        self.closed = False
+        self.stopping = asyncio.Event()
+        self.transport_settled = asyncio.Event()
+        self.transport_settled.set()
+
+    async def close(self) -> None:
+        self.stopping.set()
+        await self.transport_settled.wait()
+        self.closed = True
+
+
 class NodeExtensionHostOwner:
     """一个 Backend 的惰性宿主集合；内部准入只接受入口已认证的客户端身份。"""
 
@@ -136,7 +164,7 @@ class NodeExtensionHostOwner:
         self._home = home
         self._environment = dict(environment)
         self._startup_timeout = startup_timeout
-        self._sessions: dict[str, _HostSession] = {}
+        self._sessions: dict[str, _HostSession | _WebHostSession] = {}
         self._admission_closed = False
         self._management: NodeExtensionManagement | None = None
         self._configuration_watch = WorkspaceFileWatchService(workspace_root=home / "state/backend/extension-management" / backend_id)
@@ -169,11 +197,20 @@ class NodeExtensionHostOwner:
 
     def configuration_files(self, request: ExtensionConfigurationViewRequest, *, client_id: str) -> ExtensionConfigurationFiles:
         session = self._sessions.get(request.generation)
-        if (self._admission_closed or session is None or session.closed or session.stopping.is_set()
+        if (self._admission_closed or not isinstance(session, _HostSession) or session.closed or session.stopping.is_set()
             or session.identity != NodeHostIdentity(request.gateway_id, request.backend_id, client_id,
                 request.view_id, tuple(request.workspace_ids), request.generation) or session.configuration is None):
             raise ValueError("配置请求不属于当前已认证的宿主代际和明确工作区视图")
         return session.configuration
+
+    def check_web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str) -> None:
+        session = self._sessions.get(request.generation or "")
+        if (self._admission_closed or not isinstance(session, _WebHostSession)
+            or session.closed or session.stopping.is_set() or request.current_profile_member
+            or session.identity != NodeHostIdentity(request.gateway_id, request.backend_id, client_id,
+                request.view_id or "", session.identity.workspace_ids, request.generation or "", "web")
+            or request.profile_id != session.profile_id or request.extension_key not in session.extension_keys):
+            raise ValueError("扩展包请求不属于当前已认证的 Web 宿主代际和冻结版本")
 
     def describe(self, *, expected_backend_id: str | None, workspace_ids: tuple[str, ...]) -> NodeHostStatus:
         if expected_backend_id is not None and expected_backend_id != self.backend_id:
@@ -215,7 +252,7 @@ class NodeExtensionHostOwner:
         return ExtensionInstallationUninstallDTO(**request.model_dump(exclude={"profile_id", "extension_id", "version", "gateway_connection_id"}),
             uninstalled=publication.uninstalled, inventory=publication.inventory)
 
-    async def _release(self, session: _HostSession) -> None:
+    async def _release(self, session: _HostSession | _WebHostSession) -> None:
         await session.close()
         self._sessions.pop(session.identity.generation, None)
 
@@ -259,8 +296,8 @@ class NodeExtensionHostOwner:
         # TODO: macOS 私有IPC验收后启用，不能落到其它目标。
         if status.reason == "platform_unsupported":
             raise NotImplementedError("Node Extension Host 当前仅支持 Linux 和 Windows 目标")
-        if any((session.identity.gateway_id, session.identity.client_id, session.identity.view_id)
-               == (gateway_id, client_id, view_id) for session in self._sessions.values()):
+        if any((session.identity.host_kind, session.identity.gateway_id, session.identity.client_id, session.identity.view_id)
+               == ("node", gateway_id, client_id, view_id) for session in self._sessions.values()):
             raise ValueError("该客户端的 Node 宿主视图尚未关闭；不能覆盖原 generation")
         identity = NodeHostIdentity(gateway_id, self.backend_id, client_id, view_id, workspace_ids, str(uuid4()))
         directory = self._home / "state/backend/extension-hosts" / identity.generation
@@ -289,6 +326,49 @@ class NodeExtensionHostOwner:
                 if failure is not None:
                     raise BaseExceptionGroup("Node 宿主连接及原进程回收均失败", [failure, close_error]) from None
                 raise
+
+    @asynccontextmanager
+    async def connect_web(self, request: ExtensionWebHostOpenRequest, *, client_id: str) -> AsyncIterator[WebHostConnection]:
+        self.management_target(request.backend_id, require_runtime=True)
+        if not client_id.strip():
+            raise ValueError("Web 宿主必须绑定已认证客户端")
+        workspace_ids = tuple(request.workspace_ids)
+        for workspace_id in workspace_ids:
+            self._mounts.resolve(workspace_id)
+        if any((session.identity.host_kind, session.identity.gateway_id, session.identity.client_id, session.identity.view_id)
+               == ("web", request.gateway_id, client_id, request.view_id) for session in self._sessions.values()):
+            raise ValueError("该客户端的 Web 宿主视图尚未关闭；不能覆盖原 generation")
+        identity = NodeHostIdentity(request.gateway_id, self.backend_id, client_id, request.view_id,
+            workspace_ids, str(uuid4()), "web")
+        session = _WebHostSession(identity)
+        self._sessions[identity.generation] = session
+        profile_id, extension_keys = request.profile_id, tuple(request.extension_keys)
+        snapshot: ProfileExtensionInventory | None = None
+
+        def freeze(inventory: ProfileExtensionInventory) -> None:
+            nonlocal snapshot
+            if self._admission_closed or session.closed or session.stopping.is_set():
+                raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
+            members = {entry.extension_key: entry for entry in inventory.extensions}
+            if (inventory.profile_id != profile_id or len(members) != len(inventory.extensions)
+                or any(key not in members or not members[key].is_valid for key in extension_keys)):
+                raise ValueError("Web 宿主请求不属于目标 profile 当前有效的精确安装版本")
+            snapshot = ProfileExtensionInventory(profile_id=inventory.profile_id,
+                extensions=[members[key] for key in extension_keys])
+            # 原安装锁释放前发布到同一运行记录；后续更新不改变该实例的版本集合。
+            session.profile_id = inventory.profile_id
+            session.extension_keys = frozenset(extension_keys)
+
+        try:
+            await self.management.inventory(on_snapshot=freeze)
+            if self._admission_closed or session.closed or session.stopping.is_set():
+                raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
+            if snapshot is None:
+                raise RuntimeError("扩展库存未在原安装锁内发布 Web 宿主快照")
+            yield WebHostConnection(identity, snapshot, session.stopping, session.transport_settled)
+        finally:
+            session.stopping.set()
+            await run_cleanup_shielded(lambda: self._release(session))
 
     async def close(self) -> None:
         self.close_admission()

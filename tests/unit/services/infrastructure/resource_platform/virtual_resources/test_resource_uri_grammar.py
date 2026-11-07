@@ -6,6 +6,7 @@ import pytest
 
 from app.core.resource_uri import (
     ResourceUriGrammarError,
+    extension_package_uri,
     file_uri_child,
     file_uri_root,
     parse_attachment_uri,
@@ -51,6 +52,32 @@ def test_parse_workspace_agent_spec() -> None:
     assert parsed.scope_id == "ws-1"
     assert parsed.kind == "agent-spec"
     assert parsed.logical_name == "root/AGENTS.md"
+
+
+def test_extension_package_uri_keeps_publication_outside_logical_address() -> None:
+    gateway = "gateway_" + "a" * 32
+    uri = extension_package_uri(gateway_id=gateway, backend_id="backend-id", profile_id="default",
+                                extension_id="publisher.probe", relative_segments=("dist", "中文 #.js"))
+    parsed = parse_resource_uri(uri)
+    assert parsed.gateway_authority == parsed.scope_id == gateway
+    assert parsed.kind == "extensions"
+    assert parsed.tail_segments == ("backend-id", "default", "publisher", "probe", "dist", "中文 #.js")
+    assert uri.endswith("/dist/%E4%B8%AD%E6%96%87%20%23.js")
+    assert parse_resource_uri(uri, local_gateway_id=gateway).gateway_authority is None
+    with pytest.raises(ValueError):
+        file_uri_child(uri, "write.txt")
+
+
+@pytest.mark.parametrize(("suffix", "reason"), [
+    ("/backend/default/publisher", "malformed_path"),
+    ("/backend/default/publisher/probe/..", "dot_segment"),
+    ("/backend/default/publisher/probe/%2fetc", "invalid_character"),
+    ("/backend/default/publisher%2ename/probe", "invalid_percent_encoding"),
+])
+def test_extension_package_root_rejects_ambiguous_identity_and_child(suffix: str, reason: str) -> None:
+    with pytest.raises(ResourceUriGrammarError) as rejected:
+        parse_resource_uri("boxteam://gateway/gateway_" + "a" * 32 + "/resources/extensions" + suffix)
+    assert rejected.value.reason_code == reason
 
 
 def test_parse_skill_three_scopes() -> None:

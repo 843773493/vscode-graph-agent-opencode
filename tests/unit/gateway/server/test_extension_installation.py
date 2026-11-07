@@ -45,7 +45,7 @@ def _data(request: httpx.Request) -> dict[str, object]:
     if request.url.path.endswith("/uninstall"):
         uninstalled = {"id": payload.pop("extension_id"), "version": payload.pop("version"), "profile_id": payload.pop("profile_id")}
     result = {**payload, "profile_scope": "default", "inventory": {
-        "profile_id": "default-profile", "extensions": [{"source": "profile", "description": {
+        "profile_id": "default-profile", "extensions": [{"source": "profile", "extension_key": "publisher.probe-1.0.0", "description": {
             "identifier": {"value": "publisher.probe"}, "version": "1.0.0",
             "extensionLocation": {"scheme": "file", "path": "/target/extensions/probe"},
             "contributes": {"commands": [{"command": "probe.run", "title": "原始贡献"}]},

@@ -1202,11 +1202,66 @@ message InstalledExtension {
   google.protobuf.Struct description = 2;
   bool is_valid = 3;
   repeated ExtensionValidation validations = 4;
+  string extension_key = 5;
 }
 
 message ProfileExtensionInventory {
   string profile_id = 1;
   repeated InstalledExtension extensions = 2;
+}
+
+// Web 实例只冻结本次选择的当前有效包；连接选择不是运行身份。
+message ExtensionWebHostOpenRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string profile_id = 6;
+  repeated string extension_keys = 7;
+  optional string gateway_connection_id = 8;
+}
+
+message ExtensionWebHostConnectionDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string profile_id = 6;
+  repeated string extension_keys = 7;
+  string client_id = 8;
+  string generation = 9;
+  string request_id = 10;
+  ProfileExtensionInventory inventory = 11;
+}
+
+// 包逻辑地址不含版本；exact key 与旧版运行资格是独立字段。
+message ExtensionPackageFileRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  optional string gateway_connection_id = 4;
+  string resource_uri = 5;
+  string extension_key = 6;
+  optional string generation = 7;
+  optional string view_id = 8;
+}
+
+message ExtensionPackageStatDTO {
+  string resource_uri = 1;
+  string extension_key = 2;
+  int32 type = 3;
+  double ctime = 4;
+  double mtime = 5;
+  int64 size = 6;
+  optional int32 permissions = 7;
+}
+
+message ExtensionPackageReadDTO {
+  string resource_uri = 1;
+  string extension_key = 2;
+  string content_base64 = 3;
 }
 
 // 只读查询必须绑定已知 Backend；不启动 Backend，也不切换默认目标。

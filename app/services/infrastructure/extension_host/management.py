@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, TextIO, TypeVar
 from uuid import uuid4
@@ -158,7 +158,8 @@ class NodeExtensionManagement:
                 return reply
             raise ValueError("扩展管理组件启动握手无效")
 
-    async def _request(self, command: Mapping[str, JsonValue], *, response_type: type[Result]) -> Result:
+    async def _request(self, command: Mapping[str, JsonValue], *, response_type: type[Result],
+                       on_snapshot: Callable[[Result], None] | None = None) -> Result:
         async with asyncio.timeout(self._operation_timeout), self._lock:
             if self._closing or self._failed:
                 raise RuntimeError("扩展管理组件已关闭或控制结果未知，不能自动重启并重放")
@@ -190,33 +191,40 @@ class NodeExtensionManagement:
                     raise BaseExceptionGroup("扩展管理操作及原进程回收均失败", [error, close_error]) from None
                 raise
             try:
-                await run_cleanup_shielded(self._close_process)
-            except BaseException:
-                # 回收失败保留原 child／日志／锁，由原 close 重试，不重复清理或启动新进程。
-                self._failed = True
-                raise
+                if result is not None and on_snapshot is not None:
+                    # 原进程已正常结算，安装锁尚未释放；同步冻结原扫描快照，避免准入跨过发布。
+                    on_snapshot(result)
+            finally:
+                try:
+                    await run_cleanup_shielded(self._close_process)
+                except BaseException:
+                    # 回收失败保留原 child／日志／锁，由原 close 重试，不重复清理或启动新进程。
+                    self._failed = True
+                    raise
             if "result" in reply:
                 assert result is not None
                 return result
             assert isinstance(reply["error"], str) and isinstance(reply["code"], str)
             raise ExtensionManagementError(reply["error"], reply["code"])
 
-    async def inventory(self) -> ProfileExtensionInventory:
-        return await self._request({"method": "inventory"}, response_type=ProfileExtensionInventory)
+    async def inventory(self, *, on_snapshot: Callable[[ProfileExtensionInventory], None] | None = None) -> ProfileExtensionInventory:
+        return await self._request({"method": "inventory"}, response_type=ProfileExtensionInventory, on_snapshot=on_snapshot)
 
     async def environment(self) -> NativeManagementEnvironment:
         return await self._request({"method": "environment"}, response_type=NativeManagementEnvironment)
 
-    async def extension_file_stat(self, *, profile_id: str, extension_key: str,
-                                  relative_segments: list[str]) -> NativeFileStat:
+    async def extension_file_stat(self, *, profile_id: str, extension_key: str, extension_id: str,
+                                  relative_segments: list[str], current_profile_member: bool) -> NativeFileStat:
         return await self._request({"method": "extension-file-stat", "profile_id": profile_id,
-                                   "extension_key": extension_key, "relative_segments": list(relative_segments)},
+                                   "extension_key": extension_key, "extension_id": extension_id, "relative_segments": list(relative_segments),
+                                   "current_profile_member": current_profile_member},
                                    response_type=NativeFileStat)
 
-    async def extension_file_read(self, *, profile_id: str, extension_key: str,
-                                  relative_segments: list[str]) -> NativeFileRead:
+    async def extension_file_read(self, *, profile_id: str, extension_key: str, extension_id: str,
+                                  relative_segments: list[str], current_profile_member: bool) -> NativeFileRead:
         return await self._request({"method": "extension-file-read", "profile_id": profile_id,
-                                   "extension_key": extension_key, "relative_segments": list(relative_segments)},
+                                   "extension_key": extension_key, "extension_id": extension_id, "relative_segments": list(relative_segments),
+                                   "current_profile_member": current_profile_member},
                                    response_type=NativeFileRead)
 
     async def prepare_configuration_view(self, workspace_id: str, folders: list[dict[str, str]]) -> NativeConfigurationLocation:

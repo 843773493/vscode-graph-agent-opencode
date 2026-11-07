@@ -1187,11 +1187,66 @@ export interface InstalledExtension {
   description: { [key: string]: any } | undefined;
   is_valid: boolean;
   validations: ExtensionValidation[];
+  extension_key: string;
 }
 
 export interface ProfileExtensionInventory {
   profile_id: string;
   extensions: InstalledExtension[];
+}
+
+/** Web 实例只冻结本次选择的当前有效包；连接选择不是运行身份。 */
+export interface ExtensionWebHostOpenRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  profile_id: string;
+  extension_keys: string[];
+  gateway_connection_id?: string | undefined;
+}
+
+export interface ExtensionWebHostConnectionDTO {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  profile_id: string;
+  extension_keys: string[];
+  client_id: string;
+  generation: string;
+  request_id: string;
+  inventory: ProfileExtensionInventory | undefined;
+}
+
+/** 包逻辑地址不含版本；exact key 与旧版运行资格是独立字段。 */
+export interface ExtensionPackageFileRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  gateway_connection_id?: string | undefined;
+  resource_uri: string;
+  extension_key: string;
+  generation?: string | undefined;
+  view_id?: string | undefined;
+}
+
+export interface ExtensionPackageStatDTO {
+  resource_uri: string;
+  extension_key: string;
+  type: number;
+  ctime: number;
+  mtime: number;
+  size: number;
+  permissions?: number | undefined;
+}
+
+export interface ExtensionPackageReadDTO {
+  resource_uri: string;
+  extension_key: string;
+  content_base64: string;
 }
 
 /** 只读查询必须绑定已知 Backend；不启动 Backend，也不切换默认目标。 */
@@ -9151,7 +9206,7 @@ export const ExtensionValidation: MessageFns<ExtensionValidation> = {
 };
 
 function createBaseInstalledExtension(): InstalledExtension {
-  return { source: "", description: undefined, is_valid: false, validations: [] };
+  return { source: "", description: undefined, is_valid: false, validations: [], extension_key: "" };
 }
 
 export const InstalledExtension: MessageFns<InstalledExtension> = {
@@ -9163,6 +9218,7 @@ export const InstalledExtension: MessageFns<InstalledExtension> = {
       validations: globalThis.Array.isArray(object?.validations)
         ? object.validations.map((e: any) => ExtensionValidation.fromJSON(e))
         : [],
+      extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
     };
   },
 
@@ -9180,6 +9236,9 @@ export const InstalledExtension: MessageFns<InstalledExtension> = {
     if (message.validations?.length) {
       obj.validations = message.validations.map((e) => ExtensionValidation.toJSON(e));
     }
+    if (message.extension_key !== "") {
+      obj.extension_key = message.extension_key;
+    }
     return obj;
   },
 
@@ -9192,6 +9251,7 @@ export const InstalledExtension: MessageFns<InstalledExtension> = {
     message.description = object.description ?? undefined;
     message.is_valid = object.is_valid ?? false;
     message.validations = object.validations?.map((e) => ExtensionValidation.fromPartial(e)) || [];
+    message.extension_key = object.extension_key ?? "";
     return message;
   },
 };
@@ -9228,6 +9288,357 @@ export const ProfileExtensionInventory: MessageFns<ProfileExtensionInventory> = 
     const message = createBaseProfileExtensionInventory();
     message.profile_id = object.profile_id ?? "";
     message.extensions = object.extensions?.map((e) => InstalledExtension.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseExtensionWebHostOpenRequest(): ExtensionWebHostOpenRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    profile_id: "",
+    extension_keys: [],
+    gateway_connection_id: undefined,
+  };
+}
+
+export const ExtensionWebHostOpenRequest: MessageFns<ExtensionWebHostOpenRequest> = {
+  fromJSON(object: any): ExtensionWebHostOpenRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      extension_keys: globalThis.Array.isArray(object?.extension_keys)
+        ? object.extension_keys.map((e: any) => globalThis.String(e))
+        : [],
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionWebHostOpenRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.extension_keys?.length) {
+      obj.extension_keys = message.extension_keys;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionWebHostOpenRequest>, I>>(base?: I): ExtensionWebHostOpenRequest {
+    return ExtensionWebHostOpenRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionWebHostOpenRequest>, I>>(object: I): ExtensionWebHostOpenRequest {
+    const message = createBaseExtensionWebHostOpenRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.profile_id = object.profile_id ?? "";
+    message.extension_keys = object.extension_keys?.map((e) => e) || [];
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionWebHostConnectionDTO(): ExtensionWebHostConnectionDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    profile_id: "",
+    extension_keys: [],
+    client_id: "",
+    generation: "",
+    request_id: "",
+    inventory: undefined,
+  };
+}
+
+export const ExtensionWebHostConnectionDTO: MessageFns<ExtensionWebHostConnectionDTO> = {
+  fromJSON(object: any): ExtensionWebHostConnectionDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      extension_keys: globalThis.Array.isArray(object?.extension_keys)
+        ? object.extension_keys.map((e: any) => globalThis.String(e))
+        : [],
+      client_id: isSet(object.client_id) ? globalThis.String(object.client_id) : "",
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      inventory: isSet(object.inventory) ? ProfileExtensionInventory.fromJSON(object.inventory) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionWebHostConnectionDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.extension_keys?.length) {
+      obj.extension_keys = message.extension_keys;
+    }
+    if (message.client_id !== "") {
+      obj.client_id = message.client_id;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.inventory !== undefined) {
+      obj.inventory = ProfileExtensionInventory.toJSON(message.inventory);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionWebHostConnectionDTO>, I>>(base?: I): ExtensionWebHostConnectionDTO {
+    return ExtensionWebHostConnectionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionWebHostConnectionDTO>, I>>(
+    object: I,
+  ): ExtensionWebHostConnectionDTO {
+    const message = createBaseExtensionWebHostConnectionDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.profile_id = object.profile_id ?? "";
+    message.extension_keys = object.extension_keys?.map((e) => e) || [];
+    message.client_id = object.client_id ?? "";
+    message.generation = object.generation ?? "";
+    message.request_id = object.request_id ?? "";
+    message.inventory = (object.inventory !== undefined && object.inventory !== null)
+      ? ProfileExtensionInventory.fromPartial(object.inventory)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionPackageFileRequest(): ExtensionPackageFileRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    gateway_connection_id: undefined,
+    resource_uri: "",
+    extension_key: "",
+    generation: undefined,
+    view_id: undefined,
+  };
+}
+
+export const ExtensionPackageFileRequest: MessageFns<ExtensionPackageFileRequest> = {
+  fromJSON(object: any): ExtensionPackageFileRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : undefined,
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionPackageFileRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.extension_key !== "") {
+      obj.extension_key = message.extension_key;
+    }
+    if (message.generation !== undefined) {
+      obj.generation = message.generation;
+    }
+    if (message.view_id !== undefined) {
+      obj.view_id = message.view_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionPackageFileRequest>, I>>(base?: I): ExtensionPackageFileRequest {
+    return ExtensionPackageFileRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionPackageFileRequest>, I>>(object: I): ExtensionPackageFileRequest {
+    const message = createBaseExtensionPackageFileRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.resource_uri = object.resource_uri ?? "";
+    message.extension_key = object.extension_key ?? "";
+    message.generation = object.generation ?? undefined;
+    message.view_id = object.view_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionPackageStatDTO(): ExtensionPackageStatDTO {
+  return { resource_uri: "", extension_key: "", type: 0, ctime: 0, mtime: 0, size: 0, permissions: undefined };
+}
+
+export const ExtensionPackageStatDTO: MessageFns<ExtensionPackageStatDTO> = {
+  fromJSON(object: any): ExtensionPackageStatDTO {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
+      type: isSet(object.type) ? globalThis.Number(object.type) : 0,
+      ctime: isSet(object.ctime) ? globalThis.Number(object.ctime) : 0,
+      mtime: isSet(object.mtime) ? globalThis.Number(object.mtime) : 0,
+      size: isSet(object.size) ? globalThis.Number(object.size) : 0,
+      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionPackageStatDTO): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.extension_key !== "") {
+      obj.extension_key = message.extension_key;
+    }
+    if (message.type !== 0) {
+      obj.type = Math.round(message.type);
+    }
+    if (message.ctime !== 0) {
+      obj.ctime = message.ctime;
+    }
+    if (message.mtime !== 0) {
+      obj.mtime = message.mtime;
+    }
+    if (message.size !== 0) {
+      obj.size = Math.round(message.size);
+    }
+    if (message.permissions !== undefined) {
+      obj.permissions = Math.round(message.permissions);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionPackageStatDTO>, I>>(base?: I): ExtensionPackageStatDTO {
+    return ExtensionPackageStatDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionPackageStatDTO>, I>>(object: I): ExtensionPackageStatDTO {
+    const message = createBaseExtensionPackageStatDTO();
+    message.resource_uri = object.resource_uri ?? "";
+    message.extension_key = object.extension_key ?? "";
+    message.type = object.type ?? 0;
+    message.ctime = object.ctime ?? 0;
+    message.mtime = object.mtime ?? 0;
+    message.size = object.size ?? 0;
+    message.permissions = object.permissions ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionPackageReadDTO(): ExtensionPackageReadDTO {
+  return { resource_uri: "", extension_key: "", content_base64: "" };
+}
+
+export const ExtensionPackageReadDTO: MessageFns<ExtensionPackageReadDTO> = {
+  fromJSON(object: any): ExtensionPackageReadDTO {
+    return {
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
+      content_base64: isSet(object.content_base64) ? globalThis.String(object.content_base64) : "",
+    };
+  },
+
+  toJSON(message: ExtensionPackageReadDTO): unknown {
+    const obj: any = {};
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.extension_key !== "") {
+      obj.extension_key = message.extension_key;
+    }
+    if (message.content_base64 !== "") {
+      obj.content_base64 = message.content_base64;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionPackageReadDTO>, I>>(base?: I): ExtensionPackageReadDTO {
+    return ExtensionPackageReadDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionPackageReadDTO>, I>>(object: I): ExtensionPackageReadDTO {
+    const message = createBaseExtensionPackageReadDTO();
+    message.resource_uri = object.resource_uri ?? "";
+    message.extension_key = object.extension_key ?? "";
+    message.content_base64 = object.content_base64 ?? "";
     return message;
   },
 };

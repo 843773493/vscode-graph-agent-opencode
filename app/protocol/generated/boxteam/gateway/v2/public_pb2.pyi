@@ -1977,16 +1977,18 @@ class ExtensionValidation(_message.Message):
     def __init__(self, severity: _Optional[int] = ..., message: _Optional[str] = ...) -> None: ...
 
 class InstalledExtension(_message.Message):
-    __slots__ = ("source", "description", "is_valid", "validations")
+    __slots__ = ("source", "description", "is_valid", "validations", "extension_key")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     IS_VALID_FIELD_NUMBER: _ClassVar[int]
     VALIDATIONS_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEY_FIELD_NUMBER: _ClassVar[int]
     source: str
     description: _struct_pb2.Struct
     is_valid: bool
     validations: _containers.RepeatedCompositeFieldContainer[ExtensionValidation]
-    def __init__(self, source: _Optional[str] = ..., description: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., is_valid: _Optional[bool] = ..., validations: _Optional[_Iterable[_Union[ExtensionValidation, _Mapping]]] = ...) -> None: ...
+    extension_key: str
+    def __init__(self, source: _Optional[str] = ..., description: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., is_valid: _Optional[bool] = ..., validations: _Optional[_Iterable[_Union[ExtensionValidation, _Mapping]]] = ..., extension_key: _Optional[str] = ...) -> None: ...
 
 class ProfileExtensionInventory(_message.Message):
     __slots__ = ("profile_id", "extensions")
@@ -1995,6 +1997,100 @@ class ProfileExtensionInventory(_message.Message):
     profile_id: str
     extensions: _containers.RepeatedCompositeFieldContainer[InstalledExtension]
     def __init__(self, profile_id: _Optional[str] = ..., extensions: _Optional[_Iterable[_Union[InstalledExtension, _Mapping]]] = ...) -> None: ...
+
+class ExtensionWebHostOpenRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "extension_keys", "gateway_connection_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEYS_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    profile_id: str
+    extension_keys: _containers.RepeatedScalarFieldContainer[str]
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., extension_keys: _Optional[_Iterable[str]] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionWebHostConnectionDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "extension_keys", "client_id", "generation", "request_id", "inventory")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEYS_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    INVENTORY_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    view_id: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    profile_id: str
+    extension_keys: _containers.RepeatedScalarFieldContainer[str]
+    client_id: str
+    generation: str
+    request_id: str
+    inventory: ProfileExtensionInventory
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., extension_keys: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ...) -> None: ...
+
+class ExtensionPackageFileRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "gateway_connection_id", "resource_uri", "extension_key", "generation", "view_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEY_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    gateway_connection_id: str
+    resource_uri: str
+    extension_key: str
+    generation: str
+    view_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., resource_uri: _Optional[str] = ..., extension_key: _Optional[str] = ..., generation: _Optional[str] = ..., view_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionPackageStatDTO(_message.Message):
+    __slots__ = ("resource_uri", "extension_key", "type", "ctime", "mtime", "size", "permissions")
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEY_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    CTIME_FIELD_NUMBER: _ClassVar[int]
+    MTIME_FIELD_NUMBER: _ClassVar[int]
+    SIZE_FIELD_NUMBER: _ClassVar[int]
+    PERMISSIONS_FIELD_NUMBER: _ClassVar[int]
+    resource_uri: str
+    extension_key: str
+    type: int
+    ctime: float
+    mtime: float
+    size: int
+    permissions: int
+    def __init__(self, resource_uri: _Optional[str] = ..., extension_key: _Optional[str] = ..., type: _Optional[int] = ..., ctime: _Optional[float] = ..., mtime: _Optional[float] = ..., size: _Optional[int] = ..., permissions: _Optional[int] = ...) -> None: ...
+
+class ExtensionPackageReadDTO(_message.Message):
+    __slots__ = ("resource_uri", "extension_key", "content_base64")
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEY_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_BASE64_FIELD_NUMBER: _ClassVar[int]
+    resource_uri: str
+    extension_key: str
+    content_base64: str
+    def __init__(self, resource_uri: _Optional[str] = ..., extension_key: _Optional[str] = ..., content_base64: _Optional[str] = ...) -> None: ...
 
 class ExtensionInstallationInventoryRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "gateway_connection_id")

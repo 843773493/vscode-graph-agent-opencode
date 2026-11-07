@@ -44,7 +44,7 @@ class RegistryRoutesMixin:
 
     @contextmanager
     def backend_management_routes(self, *, backend_id: str | None = None,
-                                  workspace_ids: tuple[str, ...] = ()) -> Iterator[tuple[BackendManagementRoute, ...]]:
+                                  workspace_ids: tuple[str, ...] = (), streaming: bool = False) -> Iterator[tuple[BackendManagementRoute, ...]]:
         """从原 owner 合同取得管理入口，不借用活动工作区或按 URL 合并身份。"""
         registry = cast("GatewayWorkspaceRegistry", self)
         owners = registry.backend_owners()
@@ -84,8 +84,8 @@ class RegistryRoutesMixin:
                     raise LookupError("所选 Backend 管理路由不可用")
                 leases = []
                 for member in members:
-                    leases.append(registry.acquire_route_reference(member.key, streaming=False))
-                    references.callback(registry.release_route_reference, member.key, streaming=False)
+                    leases.append(registry.acquire_route_reference(member.key, streaming=streaming))
+                    references.callback(registry.release_route_reference, member.key, streaming=streaming)
                 routes.append(BackendManagementRoute(base_url, any(member.system_default for member in members),
                     tuple(leases), confirmed_id, owner, None if owner is not None else members[0]))
             yield tuple(routes)

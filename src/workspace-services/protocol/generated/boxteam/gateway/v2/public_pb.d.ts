@@ -5115,6 +5115,11 @@ export declare type InstalledExtension = Message<"boxteam.gateway.v2.InstalledEx
    * @generated from field: repeated boxteam.gateway.v2.ExtensionValidation validations = 4;
    */
   validations: ExtensionValidation[];
+
+  /**
+   * @generated from field: string extension_key = 5;
+   */
+  extensionKey: string;
 };
 
 /**
@@ -5143,6 +5148,250 @@ export declare type ProfileExtensionInventory = Message<"boxteam.gateway.v2.Prof
  * Use `create(ProfileExtensionInventorySchema)` to create a new message.
  */
 export declare const ProfileExtensionInventorySchema: GenMessage<ProfileExtensionInventory>;
+
+/**
+ * Web 实例只冻结本次选择的当前有效包；连接选择不是运行身份。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionWebHostOpenRequest
+ */
+export declare type ExtensionWebHostOpenRequest = Message<"boxteam.gateway.v2.ExtensionWebHostOpenRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string profile_id = 6;
+   */
+  profileId: string;
+
+  /**
+   * @generated from field: repeated string extension_keys = 7;
+   */
+  extensionKeys: string[];
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 8;
+   */
+  gatewayConnectionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionWebHostOpenRequest.
+ * Use `create(ExtensionWebHostOpenRequestSchema)` to create a new message.
+ */
+export declare const ExtensionWebHostOpenRequestSchema: GenMessage<ExtensionWebHostOpenRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionWebHostConnectionDTO
+ */
+export declare type ExtensionWebHostConnectionDTO = Message<"boxteam.gateway.v2.ExtensionWebHostConnectionDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string profile_id = 6;
+   */
+  profileId: string;
+
+  /**
+   * @generated from field: repeated string extension_keys = 7;
+   */
+  extensionKeys: string[];
+
+  /**
+   * @generated from field: string client_id = 8;
+   */
+  clientId: string;
+
+  /**
+   * @generated from field: string generation = 9;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: string request_id = 10;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ProfileExtensionInventory inventory = 11;
+   */
+  inventory?: ProfileExtensionInventory | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionWebHostConnectionDTO.
+ * Use `create(ExtensionWebHostConnectionDTOSchema)` to create a new message.
+ */
+export declare const ExtensionWebHostConnectionDTOSchema: GenMessage<ExtensionWebHostConnectionDTO>;
+
+/**
+ * 包逻辑地址不含版本；exact key 与旧版运行资格是独立字段。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionPackageFileRequest
+ */
+export declare type ExtensionPackageFileRequest = Message<"boxteam.gateway.v2.ExtensionPackageFileRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 4;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string resource_uri = 5;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string extension_key = 6;
+   */
+  extensionKey: string;
+
+  /**
+   * @generated from field: optional string generation = 7;
+   */
+  generation?: string | undefined;
+
+  /**
+   * @generated from field: optional string view_id = 8;
+   */
+  viewId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionPackageFileRequest.
+ * Use `create(ExtensionPackageFileRequestSchema)` to create a new message.
+ */
+export declare const ExtensionPackageFileRequestSchema: GenMessage<ExtensionPackageFileRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionPackageStatDTO
+ */
+export declare type ExtensionPackageStatDTO = Message<"boxteam.gateway.v2.ExtensionPackageStatDTO"> & {
+  /**
+   * @generated from field: string resource_uri = 1;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string extension_key = 2;
+   */
+  extensionKey: string;
+
+  /**
+   * @generated from field: int32 type = 3;
+   */
+  type: number;
+
+  /**
+   * @generated from field: double ctime = 4;
+   */
+  ctime: number;
+
+  /**
+   * @generated from field: double mtime = 5;
+   */
+  mtime: number;
+
+  /**
+   * @generated from field: int64 size = 6;
+   */
+  size: bigint;
+
+  /**
+   * @generated from field: optional int32 permissions = 7;
+   */
+  permissions?: number | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionPackageStatDTO.
+ * Use `create(ExtensionPackageStatDTOSchema)` to create a new message.
+ */
+export declare const ExtensionPackageStatDTOSchema: GenMessage<ExtensionPackageStatDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionPackageReadDTO
+ */
+export declare type ExtensionPackageReadDTO = Message<"boxteam.gateway.v2.ExtensionPackageReadDTO"> & {
+  /**
+   * @generated from field: string resource_uri = 1;
+   */
+  resourceUri: string;
+
+  /**
+   * @generated from field: string extension_key = 2;
+   */
+  extensionKey: string;
+
+  /**
+   * @generated from field: string content_base64 = 3;
+   */
+  contentBase64: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionPackageReadDTO.
+ * Use `create(ExtensionPackageReadDTOSchema)` to create a new message.
+ */
+export declare const ExtensionPackageReadDTOSchema: GenMessage<ExtensionPackageReadDTO>;
 
 /**
  * 只读查询必须绑定已知 Backend；不启动 Backend，也不切换默认目标。

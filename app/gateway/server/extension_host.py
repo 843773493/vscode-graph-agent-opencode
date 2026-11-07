@@ -73,6 +73,10 @@ from app.schemas.gateway.extension_installation import (
     ExtensionInstallationUninstallDTO,
     ExtensionInstallationUninstallRequest,
 )
+from app.schemas.gateway.extension_web import (
+    ExtensionWebHostConnectionDTO,
+    ExtensionWebHostOpenRequest,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
@@ -214,7 +218,7 @@ def _check_management_route(request: HTTPConnection, route: _HostRoute) -> None:
 
 
 @contextmanager
-def _management_gateway_route(request: HTTPConnection, payload: ExtensionTargetListRequest | ExtensionInstallationInventoryRequest,
+def _management_gateway_route(request: HTTPConnection, payload: ExtensionTargetListRequest | ExtensionInstallationInventoryRequest | ExtensionWebHostOpenRequest,
                               auth: GatewayAuthContext) -> Iterator[_HostRoute | None]:
     registry = request.app.state.registry
     if not isinstance(registry, GatewayWorkspaceRegistry):
@@ -489,15 +493,15 @@ InstallationResult = TypeVar("InstallationResult", bound=ExtensionInstallationIn
 
 
 @contextmanager
-def _installation_route(request: Request, payload: ExtensionInstallationInventoryRequest,
-                        auth: GatewayAuthContext) -> Iterator[_HostRoute]:
+def _installation_route(request: HTTPConnection, payload: ExtensionInstallationInventoryRequest | ExtensionWebHostOpenRequest,
+                        auth: GatewayAuthContext, *, streaming: bool = False) -> Iterator[_HostRoute]:
     with _management_gateway_route(request, payload, auth) as remote:
         if remote is not None:
             yield remote
             return
         _check_inventory_permission(request, auth)
-        workspace_ids = tuple(payload.workspace_ids) if isinstance(payload, ExtensionInstallationInstallRequest) else ()
-        with request.app.state.registry.backend_management_routes(backend_id=payload.backend_id, workspace_ids=workspace_ids) as routes:
+        workspace_ids = tuple(payload.workspace_ids) if isinstance(payload, (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest)) else ()
+        with request.app.state.registry.backend_management_routes(backend_id=payload.backend_id, workspace_ids=workspace_ids, streaming=streaming) as routes:
             [selected] = routes
             yield _HostRoute(selected.base_url, False, {"X-Request-ID": get_request_id(request),
                 "X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": payload.gateway_id}, list(selected.leases))
@@ -629,19 +633,21 @@ async def _relay(websocket: WebSocket, upstream: ClientConnection, *, outbound: 
             await websocket.send_bytes(data)
 
 
-async def _upstream(websocket: WebSocket, *, url: str, headers: dict[str, str], payload: ExtensionHostOpenRequest,
+async def _upstream(websocket: WebSocket, *, url: str, headers: dict[str, str], payload: ExtensionHostOpenRequest | ExtensionWebHostOpenRequest,
                     auth: GatewayAuthContext, access: UserAccessContext | None,
                     leases: list[WorkspaceRouteLease], expected_client_id: str) -> None:
     async with connect(url, additional_headers=headers, compression=None,
                        open_timeout=10, close_timeout=10) as upstream:
         _check(websocket, auth, access, leases, capability="extension_host_manage")
-        await upstream.send(payload.model_dump_json())
+        await upstream.send(payload.model_dump_json(exclude={"gateway_connection_id"}))
         async with asyncio.timeout(15):
             raw = await upstream.recv()
         if not isinstance(raw, str):
             raise TypeError("Node 宿主缺少通道身份握手")
-        binding = ExtensionHostConnectionDTO.model_validate_json(raw)
-        if (binding.model_dump(include=set(ExtensionHostOpenRequest.model_fields)) != payload.model_dump()
+        binding_type = ExtensionWebHostConnectionDTO if isinstance(payload, ExtensionWebHostOpenRequest) else ExtensionHostConnectionDTO
+        binding = binding_type.model_validate_json(raw)
+        fields = set(type(payload).model_fields) - {"gateway_connection_id"}
+        if (binding.model_dump(include=fields) != payload.model_dump(include=fields)
             or binding.request_id != get_request_id(websocket) or binding.client_id != expected_client_id):
             raise ValueError("Node 宿主返回了不同目标、视图或请求身份")
         _check(websocket, auth, access, leases, capability="extension_host_manage")
@@ -649,6 +655,57 @@ async def _upstream(websocket: WebSocket, *, url: str, headers: dict[str, str], 
         await run_channel(
             _relay(websocket, upstream, outbound=True, auth=auth, access=access, leases=leases),
             _relay(websocket, upstream, outbound=False, auth=auth, access=access, leases=leases))
+
+
+async def _watch_management_route(websocket: WebSocket, route: _HostRoute) -> None:
+    registry = websocket.app.state.registry
+    changed = asyncio.Event()
+    registry.add_commit_observer(changed.set)
+    try:
+        while True:
+            changed.clear()
+            _check_management_route(websocket, route)
+            await changed.wait()
+    finally:
+        registry.remove_commit_observer(changed.set)
+
+
+@router.websocket("/api/gateway/extension-web-hosts/channel")
+async def extension_web_host_channel(websocket: WebSocket) -> None:
+    request_id = get_request_id(websocket)
+    try:
+        auth, access, client_id = _access(websocket)
+    except HTTPException as error:
+        await websocket.send_denial_response(JSONResponse(status_code=error.status_code,
+            content={"detail": error.detail, "request_id": request_id}, headers={"X-Request-ID": request_id}))
+        return
+    await websocket.accept()
+    try:
+        async with asyncio.timeout(10):
+            payload = ExtensionWebHostOpenRequest.model_validate_json(await websocket.receive_text())
+        with _installation_route(websocket, payload, auth, streaming=True) as route:
+            _check(websocket, auth, access, route.leases, capability="extension_host_manage")
+            headers = {**route.headers, CLIENT_HEADER: client_id}
+            expected_client_id = f"peer:{websocket.app.state.registry.gateway_id}:{client_id}" if route.remote else client_id
+            path = "api/gateway/extension-web-hosts/channel" if route.remote else "api/internal/extension-web-hosts/channel"
+            operations = [
+                _upstream(websocket, url=_websocket_target(route.base_url, path), headers=headers, payload=payload,
+                    auth=auth, access=access, leases=route.leases, expected_client_id=expected_client_id),
+                _watch_policy(websocket, auth), _watch_management_route(websocket, route),
+                *(_watch_route(lease) for lease in route.leases),
+            ]
+            if access is not None:
+                operations.append(_watch_user(websocket, access))
+            await run_channel(*operations)
+        await close_channel(websocket)
+    except WebSocketDisconnect:
+        return
+    except ConnectionClosed as error:
+        await close_channel(websocket, code=1000 if error.rcvd is not None and error.rcvd.code == 1000 else 1011,
+                            reason="extension_web_host_upstream_closed")
+    except Exception:
+        logger.exception("Gateway Web 宿主通道失败: request_id=%s", request_id)
+        await close_channel(websocket, code=1011, reason="extension_web_host_channel_failed")
 
 
 @router.websocket("/api/gateway/extension-hosts/channel")

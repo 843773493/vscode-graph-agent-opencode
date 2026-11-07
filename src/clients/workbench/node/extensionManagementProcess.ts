@@ -52,11 +52,13 @@ try {
       else if (request.method === 'environment') result = await management.environment();
       else if ((request.method === 'extension-file-stat' || request.method === 'extension-file-read')
         && 'profile_id' in request && typeof request.profile_id === 'string'
+        && 'extension_id' in request && typeof request.extension_id === 'string'
         && 'extension_key' in request && typeof request.extension_key === 'string'
+        && 'current_profile_member' in request && typeof request.current_profile_member === 'boolean'
         && 'relative_segments' in request && isRelativeSegments(request.relative_segments)) {
         result = request.method === 'extension-file-stat'
-          ? await management.extensionFileStat(request.profile_id, request.extension_key, request.relative_segments)
-          : await management.extensionFileRead(request.profile_id, request.extension_key, request.relative_segments);
+          ? await management.extensionFileStat(request.profile_id, request.extension_id, request.extension_key, request.relative_segments, request.current_profile_member)
+          : await management.extensionFileRead(request.profile_id, request.extension_id, request.extension_key, request.relative_segments, request.current_profile_member);
       }
       else if (request.method === 'install' && 'vsix_path' in request && typeof request.vsix_path === 'string' && isAbsolute(request.vsix_path)) {
         result = await management.install(request.vsix_path);

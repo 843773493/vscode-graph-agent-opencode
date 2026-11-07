@@ -39,6 +39,10 @@ from app.schemas.gateway.extension_installation import (
     ExtensionInstallationUninstallRequest,
     NativeExtensionFileRequest,
 )
+from app.schemas.gateway.extension_web import (
+    ExtensionWebHostConnectionDTO,
+    ExtensionWebHostOpenRequest,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
@@ -49,7 +53,10 @@ from app.services.infrastructure.extension_host.management import (
     NativeFileRead,
     NativeFileStat,
 )
-from app.services.infrastructure.extension_host.owner import NodeHostConnection
+from app.services.infrastructure.extension_host.owner import (
+    NodeHostConnection,
+    WebHostConnection,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -183,7 +190,16 @@ def _check_extension_file_target(request: Request, payload: NativeExtensionFileR
     if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
         raise HTTPException(400, "扩展包读取目标 Gateway 身份冲突")
     try:
-        registry.extension_hosts.management_target(payload.backend_id, require_runtime=True)
+        owner = registry.extension_hosts
+        owner.management_target(payload.backend_id, require_runtime=True)
+        if payload.generation is None:
+            if not payload.current_profile_member or payload.view_id is not None:
+                raise ValueError("无运行代际的扩展包请求必须核验当前 profile 成员")
+        else:
+            client_id = request.headers.get("x-boxteam-extension-client-id")
+            if not client_id or not payload.view_id or payload.current_profile_member:
+                raise ValueError("冻结扩展包请求必须绑定认证客户端、Web 视图及运行代际")
+            owner.check_web_extension_file(payload, client_id=client_id)
     except (ValueError, KeyError) as error:
         raise HTTPException(409, str(error)) from error
 
@@ -203,7 +219,8 @@ async def extension_file_stat(
     _check_extension_file_target(request, payload, registry)
     try:
         result = await registry.extension_hosts.management.extension_file_stat(profile_id=payload.profile_id,
-            extension_key=payload.extension_key, relative_segments=payload.relative_segments)
+            extension_key=payload.extension_key, extension_id=payload.extension_id, relative_segments=payload.relative_segments,
+            current_profile_member=payload.current_profile_member)
     except ExtensionManagementError as error:
         raise _extension_file_error(error) from error
     _check_extension_file_target(request, payload, registry)
@@ -219,7 +236,8 @@ async def extension_file_read(
     _check_extension_file_target(request, payload, registry)
     try:
         result = await registry.extension_hosts.management.extension_file_read(profile_id=payload.profile_id,
-            extension_key=payload.extension_key, relative_segments=payload.relative_segments)
+            extension_key=payload.extension_key, extension_id=payload.extension_id, relative_segments=payload.relative_segments,
+            current_profile_member=payload.current_profile_member)
     except ExtensionManagementError as error:
         raise _extension_file_error(error) from error
     _check_extension_file_target(request, payload, registry)
@@ -246,7 +264,7 @@ async def _send(websocket: WebSocket, connection: NodeHostConnection, binding: E
         await websocket.send_bytes(data)
 
 
-async def _stopped(connection: NodeHostConnection) -> None:
+async def _stopped(connection: NodeHostConnection | WebHostConnection) -> None:
     await connection.stopping.wait()
 
 
@@ -268,6 +286,7 @@ async def extension_host_channel(websocket: WebSocket, registry: Annotated[Works
         async with registry.extension_hosts.connect(gateway_id=gateway_id, expected_backend_id=payload.backend_id,
                 client_id=client_id, view_id=payload.view_id, workspace_ids=tuple(payload.workspace_ids)) as connection:
             identity = asdict(connection.identity)
+            identity.pop("host_kind")
             identity["workspace_ids"] = list(connection.identity.workspace_ids)
             result = ExtensionHostConnectionDTO(protocol_version=1, request_id=request_id,
                 initialization=connection.initialization, **identity)
@@ -283,4 +302,53 @@ async def extension_host_channel(websocket: WebSocket, registry: Annotated[Works
     except Exception:
         logger.exception("Backend Node 宿主通道失败: request_id=%s", request_id)
         await close_channel(websocket, code=1011, reason="extension_host_channel_failed")
+        raise
+
+
+async def _web_closed(websocket: WebSocket) -> None:
+    message = await websocket.receive()
+    if message["type"] != "websocket.disconnect":
+        raise ValueError("Web 宿主资格通道只接受关闭，不承载扩展 RPC 或租约心跳")
+
+
+async def _web_open(websocket: WebSocket, registry: WorkspaceContainerRegistry,
+                    payload: ExtensionWebHostOpenRequest, *, client_id: str, request_id: str) -> None:
+    async with registry.extension_hosts.connect_web(payload, client_id=client_id) as connection:
+        result = ExtensionWebHostConnectionDTO(**payload.model_dump(exclude={"gateway_connection_id"}), client_id=connection.identity.client_id,
+            generation=connection.identity.generation, request_id=request_id, inventory=connection.inventory)
+        # 原 owner 等此传输真正结算；关闭监视在库存准入期间已经运行。
+        connection.transport_settled.clear()
+        try:
+            if not connection.stopping.is_set():
+                await websocket.send_text(result.model_dump_json())
+                await _stopped(connection)
+        finally:
+            connection.stopping.set()
+            connection.transport_settled.set()
+
+
+@router.websocket("/api/internal/extension-web-hosts/channel")
+async def extension_web_host_channel(websocket: WebSocket,
+                                     registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)]) -> None:
+    request_id = get_request_id(websocket)
+    gateway_id = websocket.headers.get("x-boxteam-gateway-id")
+    client_id = websocket.headers.get("x-boxteam-extension-client-id")
+    if not gateway_id or not client_id:
+        await websocket.send_denial_response(JSONResponse(status_code=400, content={
+            "detail": "Web 宿主缺少 Gateway 认证身份", "request_id": request_id}))
+        return
+    await websocket.accept()
+    try:
+        async with asyncio.timeout(10):
+            payload = ExtensionWebHostOpenRequest.model_validate_json(await websocket.receive_text())
+        if payload.gateway_id != gateway_id:
+            raise ValueError("Web 宿主目标 Gateway 身份冲突")
+        await run_channel(_web_open(websocket, registry, payload, client_id=client_id, request_id=request_id),
+            _web_closed(websocket))
+        await close_channel(websocket)
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        logger.exception("Backend Web 宿主通道失败: request_id=%s", request_id)
+        await close_channel(websocket, code=1011, reason="extension_web_host_channel_failed")
         raise

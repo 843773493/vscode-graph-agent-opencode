@@ -380,7 +380,7 @@ function targetReply(payload, capabilities = fullCapabilities) {
 }
 function hostReply(payload) { return { ...payload, source: 'live', channel_state: 'available', runtime: { commit: pinnedUpstreamCommit } }; }
 function inventoryReply(payload) {
-  return { ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', extensions: [{ source: 'profile', is_valid: false,
+  return { ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', extensions: [{ source: 'profile', extension_key: 'publisher.probe-1.0.0', is_valid: false,
     validations: [{ severity: 3, message: 'manifest invalid' }], description: JSON.parse(JSON.stringify(extension(targetB))) }] } };
 }
 const scannedRequests = () => requests.map(([path, options]) => ({ path, method: options.method, body: JSON.parse(options.body) }));

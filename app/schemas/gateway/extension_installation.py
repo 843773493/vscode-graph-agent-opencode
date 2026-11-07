@@ -23,6 +23,7 @@ class ExtensionValidation(_InventoryValue):
 
 class InstalledExtension(_InventoryValue):
     source: Literal["profile"]
+    extension_key: str = Field(min_length=1)
     description: dict[str, JsonValue]
     is_valid: bool
     validations: list[ExtensionValidation]
@@ -49,6 +50,10 @@ class NativeExtensionFileRequest(ExtensionInstallationTarget):
     profile_id: str = Field(min_length=1)
     extension_key: str = Field(min_length=1)
     relative_segments: list[str]
+    extension_id: str = Field(min_length=1)
+    current_profile_member: bool
+    generation: str | None = Field(default=None, min_length=1)
+    view_id: str | None = Field(default=None, min_length=1)
 
 
 class ExtensionInstallationInventoryDTO(ExtensionInstallationTarget):

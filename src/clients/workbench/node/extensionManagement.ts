@@ -91,7 +91,8 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const profileScanner = accessor.get(IExtensionsProfileScannerService);
       const profile = profiles.defaultProfile;
       const maximumPublishedFileSize = 8 * 1024 * 1024;
-      async function publishedExtensionFile(profileId: string, extensionKeyText: string, relativeSegments: string[]) {
+      async function publishedExtensionFile(profileId: string, extensionId: string, extensionKeyText: string,
+        relativeSegments: string[], currentProfileMember: boolean) {
         if (profileId !== profile.id) throw new ExtensionManagementError('扩展文件 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
         if (!extensionKeyText || /[\\/\x00-\x1f\x7f]/.test(extensionKeyText)) {
           throw new ExtensionManagementError('扩展文件身份不能定位到用户扩展目录的直接子目录', ExtensionManagementErrorCode.Invalid);
@@ -114,6 +115,16 @@ export async function createExtensionManagement(directory: string, builtinExtens
         if (!scanned || !scanned.isValid || ExtensionKey.create(scanned).toString() !== extensionKeyText
           || !identity.extUri.isEqual(scanned.location, location)) {
           throw new ExtensionManagementError(`目标 profile 不包含有效的精确扩展包 ${extensionKeyText}`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        }
+        if (!extensionId || !areSameExtensions(scanned.identifier, { id: extensionId })) {
+          throw new ExtensionManagementError(`扩展包 ${extensionKeyText} 与请求的逻辑扩展 ID 不匹配`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        }
+        if (currentProfileMember) {
+          const members = await profileScanner.scanProfileExtensions(profile.extensionsResource);
+          if (!members.some(member => areSameExtensions(member.identifier, scanned.identifier)
+            && member.version === scanned.manifest.version && identity.extUri.isEqual(member.location, scanned.location))) {
+            throw new ExtensionManagementError(`扩展包 ${extensionKeyText} 不再是默认 profile 当前成员`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+          }
         }
         const file = joinPath(location, ...relativeSegments);
         const realFile = await files.realpath(file);
@@ -156,16 +167,17 @@ export async function createExtensionManagement(directory: string, builtinExtens
           })) throw new Error('目标 profile 包含无法解析的已安装扩展');
           return { profile_id: profile.id, extensions: extensions.map(extension => ({
             source: 'profile' as const, description: toExtensionDescription(extension, false),
+            extension_key: ExtensionKey.create(extension).toString(),
             is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
           })) };
         },
-        async extensionFileStat(profileId: string, extensionKey: string, relativeSegments: string[]) {
-          const file = await publishedExtensionFile(profileId, extensionKey, relativeSegments);
+        async extensionFileStat(profileId: string, extensionId: string, extensionKey: string, relativeSegments: string[], currentProfileMember: boolean) {
+          const file = await publishedExtensionFile(profileId, extensionId, extensionKey, relativeSegments, currentProfileMember);
           const stat = await disk.stat(file);
           return { type: stat.type, ctime: stat.ctime, mtime: stat.mtime, size: stat.size, permissions: stat.permissions ?? null };
         },
-        async extensionFileRead(profileId: string, extensionKey: string, relativeSegments: string[]) {
-          const file = await publishedExtensionFile(profileId, extensionKey, relativeSegments);
+        async extensionFileRead(profileId: string, extensionId: string, extensionKey: string, relativeSegments: string[], currentProfileMember: boolean) {
+          const file = await publishedExtensionFile(profileId, extensionId, extensionKey, relativeSegments, currentProfileMember);
           const stat = await disk.stat(file);
           if ((stat.type & FileType.File) === 0) throw createFileSystemProviderError('扩展包读取目标不是普通文件', FileSystemProviderErrorCode.FileIsADirectory);
           if (stat.size > maximumPublishedFileSize) {

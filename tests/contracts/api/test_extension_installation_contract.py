@@ -151,7 +151,7 @@ def test_inventory_proto_preserves_original_description_and_invalid_entry() -> N
     request = ExtensionInstallationInventoryRequest(protocol_version=1, gateway_id="gateway_" + "a" * 32,
         backend_id=str(uuid4()))
     original = ExtensionInstallationInventoryDTO(**request.model_dump(exclude={"gateway_connection_id"}), inventory=ProfileExtensionInventory(
-        profile_id="default-profile", extensions=[InstalledExtension(source="profile", is_valid=False,
+        profile_id="default-profile", extensions=[InstalledExtension(source="profile", extension_key="publisher.probe-1.0.0", is_valid=False,
             description={"identifier": {"value": "publisher.probe"}, "version": "1.0.0", "isBuiltin": False,
                 "extensionLocation": {"$mid": 1, "scheme": "file", "path": "/backend/extensions/probe"},
                 "custom": {"rootPath": "C:\\backend\\probe", "values": [None, True, 42, {"file": "arbitrary.json"}]}},

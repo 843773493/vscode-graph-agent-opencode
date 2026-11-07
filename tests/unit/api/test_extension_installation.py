@@ -44,7 +44,7 @@ def private_inventory(
     async def inventory(_management: NodeExtensionManagement) -> ProfileExtensionInventory:
         calls.append(owner.backend_id)
         return ProfileExtensionInventory(profile_id="default-profile", extensions=[InstalledExtension.model_validate({
-            "source": "profile", "description": {"identifier": {"value": "publisher.probe"}, "extensionLocation": {
+            "source": "profile", "extension_key": "publisher.probe-1.0.0", "description": {"identifier": {"value": "publisher.probe"}, "extensionLocation": {
                 "scheme": "file", "path": "/target/extensions/probe"}, "version": "1.0.0"},
             "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}],
         })])
@@ -191,7 +191,7 @@ def private_package(private_inventory, monkeypatch: pytest.MonkeyPatch):
     client, registry, target, headers, _ = private_inventory
     calls: list[dict[str, object]] = []
     payload = {**target, "profile_id": "default-profile", "extension_key": "publisher.probe-1.0.0",
-               "relative_segments": ["dist", "浏览器.js"]}
+               "extension_id": "publisher.probe", "relative_segments": ["dist", "浏览器.js"], "current_profile_member": True}
 
     async def stat(_management: NodeExtensionManagement, **selection: object) -> NativeFileStat:
         calls.append(selection)
@@ -214,8 +214,22 @@ def test_private_package_forwards_exact_publication_without_workspace_or_host(pr
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "inventory-private"
     expected = {"content_base64": "YWJj"} if operation == "read" else {"type": 1, "ctime": 0, "mtime": 123, "size": 3, "permissions": 1}
     assert response.json()["data"] == expected
-    assert calls == [{name: payload[name] for name in ("profile_id", "extension_key", "relative_segments")}]
+    assert calls == [{name: payload[name] for name in (
+        "profile_id", "extension_key", "extension_id", "relative_segments", "current_profile_member")}]
     assert registry.extension_hosts.active == ()
+
+
+@pytest.mark.parametrize("operation", ["stat", "read"])
+@pytest.mark.parametrize("flag", ["missing", "retained"])
+def test_private_package_requires_current_membership_without_runtime_binding(private_package, operation: str, flag: str) -> None:
+    client, registry, payload, headers, calls = private_package
+    if flag == "missing":
+        del payload["current_profile_member"]
+    else:
+        payload["current_profile_member"] = False
+    response = client.post(f"/api/internal/extension-files/{operation}", json=payload, headers=headers)
+    assert response.status_code == (422 if flag == "missing" else 409)
+    assert calls == [] and registry.extension_hosts._management is None
 
 
 @pytest.mark.parametrize("operation", ["stat", "read"])

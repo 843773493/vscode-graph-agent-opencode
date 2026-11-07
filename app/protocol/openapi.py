@@ -23,6 +23,10 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostConnectionDTO,
     ExtensionHostOpenRequest,
 )
+from app.schemas.gateway.extension_web import (
+    ExtensionWebHostConnectionDTO,
+    ExtensionWebHostOpenRequest,
+)
 
 # HTTP 根登记完整消息名，在发布时从本次 descriptor 解析；新增消息不依赖旧生成绑定。
 # 信封合并及中断别名仍在原具名投影中核对。
@@ -149,6 +153,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "ExtensionConfigurationViewRequest", "ExtensionConfigurationFileRequest",
         "ExtensionConfigurationWriteRequest", "ExtensionConfigurationStatDTO", "ExtensionConfigurationReadDTO",
         "ExtensionConfigurationEventDTO",
+        "ExtensionPackageFileRequest", "ExtensionPackageStatDTO", "ExtensionPackageReadDTO",
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
@@ -202,7 +207,7 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
     _assert_http_schemas(document, GATEWAY_HTTP_JSON_DESCRIPTORS, pool)
     # 独立 WS 的首帧不进入 HTTP OpenAPI，但与生成产物一同核对唯一 proto。
     descriptor_pool = pool if pool is not None else Default()
-    for model in (ExtensionHostOpenRequest, ExtensionHostConnectionDTO):
+    for model in (ExtensionHostOpenRequest, ExtensionHostConnectionDTO, ExtensionWebHostOpenRequest, ExtensionWebHostConnectionDTO):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)
     name = "GatewayRuntimeGroupRequest"
