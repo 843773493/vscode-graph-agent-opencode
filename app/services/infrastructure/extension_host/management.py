@@ -68,11 +68,24 @@ class NativeConfigurationRead(BaseModel):
     content_base64: str
 
 
+class NativeConfigurationFolder(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    native_uri: NativeFileURI
+    name: str
+
+
+class NativeConfigurationView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    id: str
+    native_uri: NativeFileURI
+    folders: tuple[NativeConfigurationFolder, ...]
+
+
 Result = TypeVar("Result", bound=BaseModel)
 
 
 class NodeExtensionManagement:
-    """一个 Backend 的惰性管理进程；串行消费原服务，不维护另一份安装清单。"""
+    """每次请求独占稳定安装域并排空原服务；不维护另一份安装清单。"""
 
     def __init__(self, *, runtime: NodeHostRuntime, directory: Path,
                  environment: Mapping[str, str], startup_timeout: float,
@@ -104,16 +117,25 @@ class NodeExtensionManagement:
             raise TypeError("扩展管理组件没有返回控制对象")
         return value
 
-    async def _start(self) -> None:
+    async def _start(self) -> dict[str, JsonValue] | None:
         entrypoint = self._runtime.entrypoint.with_name("extensionManagement.mjs")
         if not entrypoint.is_file():
             raise FileNotFoundError(f"目标专用运行时缺少扩展管理组件: {entrypoint}")
         self._directory.mkdir(parents=True, exist_ok=True)
-        # TODO(4.4)：同一安装域的多个 Backend 进程组须共用原生 profile 管理 owner；
-        # 当前独占锁会明确拒绝第二进程，不能去锁或改用进程 ID 伪造安装目标。
         lease = portalocker.Lock(self._directory / "management.lock", mode="a", timeout=0)
-        lease.acquire()
+        while True:
+            if self._closing:
+                raise RuntimeError("扩展管理组件已关闭，不能启动新请求")
+            try:
+                lease.acquire()
+                break
+            except portalocker.exceptions.AlreadyLocked:
+                # 非阻塞获取只重试真实争用；权限等错误保留原异常。
+                await asyncio.sleep(0.02)
         self._lease = lease
+        if self._closing:
+            raise RuntimeError("扩展管理组件已关闭，不能启动新请求")
+        self.child = OwnedChildProcess(f"extension-management:{uuid4()}")
         logs = self._directory / "logs"
         logs.mkdir(exist_ok=True)
         self._output = (logs / f"{uuid4()}.log").open("x", encoding="utf-8")
@@ -122,26 +144,35 @@ class NodeExtensionManagement:
         assert self.child.process is not None and self.child.process.stdout is not None
         self._reader = BufferedByteReceiveStream(self.child.process.stdout)
         async with asyncio.timeout(self._startup_timeout):
-            if await self._receive() != {"ready": True}:
-                raise ValueError("扩展管理组件启动握手无效")
+            reply = await self._receive()
+            if reply == {"ready": True}:
+                return None
+            if set(reply) == {"error", "code"}:
+                return reply
+            raise ValueError("扩展管理组件启动握手无效")
 
     async def _request(self, command: Mapping[str, JsonValue], *, response_type: type[Result]) -> Result:
-        async with self._lock:
+        async with asyncio.timeout(self._operation_timeout), self._lock:
             if self._closing or self._failed:
                 raise RuntimeError("扩展管理组件已关闭或控制结果未知，不能自动重启并重放")
+            result: Result | None = None
             try:
-                if self._reader is None:
-                    await self._start()
+                reply = await self._start()
                 assert self.child.process is not None and self.child.process.stdin is not None
-                async with asyncio.timeout(self._operation_timeout):
+                if reply is None:
                     await self.child.process.stdin.send((json.dumps(command) + "\n").encode())
                     reply = await self._receive()
                 if set(reply) not in ({"result"}, {"error", "code"}):
                     raise ValueError("扩展管理控制回执不完整")
                 if "result" in reply:
-                    return response_type.model_validate(reply["result"])
-                if not isinstance(reply["error"], str) or not isinstance(reply["code"], str):
+                    result = response_type.model_validate(reply["result"])
+                elif not isinstance(reply["error"], str) or not isinstance(reply["code"], str):
                     raise TypeError("扩展管理错误回执不是字符串")
+                if await self._receive() != {"drained": True}:
+                    raise ValueError("扩展管理组件未确认原异步任务已排空")
+                returncode = await self.child.process.wait()
+                if returncode != 0:
+                    raise RuntimeError(f"扩展管理组件未正常退出: {returncode}")
             except BaseException as error:
                 # 取消／断流／损坏回执后必须回收原进程；安装是否已发布只能在新 Backend 中读取原 profile，
                 # 不能因为没有回执就自动重放写入。
@@ -151,6 +182,16 @@ class NodeExtensionManagement:
                 except BaseException as close_error:  # noqa: BLE001 - 取消及回收失败必须同时保留。
                     raise BaseExceptionGroup("扩展管理操作及原进程回收均失败", [error, close_error]) from None
                 raise
+            try:
+                await run_cleanup_shielded(self._close_process)
+            except BaseException:
+                # 回收失败保留原 child／日志／锁，由原 close 重试，不重复清理或启动新进程。
+                self._failed = True
+                raise
+            if "result" in reply:
+                assert result is not None
+                return result
+            assert isinstance(reply["error"], str) and isinstance(reply["code"], str)
             raise ExtensionManagementError(reply["error"], reply["code"])
 
     async def inventory(self) -> ProfileExtensionInventory:
@@ -164,17 +205,21 @@ class NodeExtensionManagement:
         return await self._request({"method": "configuration-view", "id": workspace_id, "folders": folder_values},
                                    response_type=NativeConfigurationLocation)
 
-    async def configuration_stat(self, native_uri: str) -> NativeConfigurationStat:
-        return await self._request({"method": "configuration-stat", "native_uri": native_uri},
+    async def configuration_stat(self, native_uri: str, *, view: NativeConfigurationView | None) -> NativeConfigurationStat:
+        return await self._request({"method": "configuration-stat", "native_uri": native_uri,
+                                   "view": view.model_dump(mode="json") if view else None},
                                    response_type=NativeConfigurationStat)
 
-    async def configuration_read(self, native_uri: str) -> NativeConfigurationRead:
-        return await self._request({"method": "configuration-read", "native_uri": native_uri},
+    async def configuration_read(self, native_uri: str, *, view: NativeConfigurationView | None) -> NativeConfigurationRead:
+        return await self._request({"method": "configuration-read", "native_uri": native_uri,
+                                   "view": view.model_dump(mode="json") if view else None},
                                    response_type=NativeConfigurationRead)
 
     async def configuration_write(self, native_uri: str, content_base64: str,
-                                  options: ExtensionConfigurationWriteOptions) -> NativeConfigurationStat:
+                                  options: ExtensionConfigurationWriteOptions, *,
+                                  view: NativeConfigurationView | None) -> NativeConfigurationStat:
         return await self._request({"method": "configuration-write", "native_uri": native_uri,
+                                   "view": view.model_dump(mode="json") if view else None,
                                    "content_base64": content_base64, "options": options.model_dump(mode="json")},
                                    response_type=NativeConfigurationStat)
 
@@ -185,6 +230,7 @@ class NodeExtensionManagement:
 
     async def _close_process(self) -> None:
         await self.child.close()
+        self._reader = None
         if self._output is not None:
             self._output.close()
             self._output = None

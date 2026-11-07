@@ -20,6 +20,8 @@ from app.schemas.gateway.extension_configuration import (
 )
 from app.schemas.gateway.extension_host import ExtensionHostInitializationDTO
 from app.services.infrastructure.extension_host.management import (
+    NativeConfigurationFolder,
+    NativeConfigurationView,
     NodeExtensionManagement,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -42,6 +44,10 @@ class ExtensionConfigurationFiles:
         resources = [initialization.environment.remote_settings]
         if initialization.workspace.configuration is not None:
             resources.append(initialization.workspace.configuration)
+        self._view = None if initialization.workspace.configuration is None else NativeConfigurationView(
+            id=initialization.workspace.id, native_uri=initialization.workspace.configuration.native_uri,
+            folders=tuple(NativeConfigurationFolder(native_uri=folder.native_uri, name=folder.name)
+                          for folder in initialization.workspace.folders))
         self._files = {resource.resource_uri: resource.native_uri for resource in resources}
         self._parents: dict[str, str] = {}
         self._changes: dict[str, str] = {}
@@ -75,16 +81,16 @@ class ExtensionConfigurationFiles:
         return native
 
     async def stat(self, resource_uri: str) -> ExtensionConfigurationStatDTO:
-        result = await self._management.configuration_stat(self._native(resource_uri, parent=True))
+        result = await self._management.configuration_stat(self._native(resource_uri, parent=True), view=self._view)
         return ExtensionConfigurationStatDTO(resource_uri=resource_uri, **result.model_dump())
 
     async def read(self, resource_uri: str) -> ExtensionConfigurationReadDTO:
-        result = await self._management.configuration_read(self._native(resource_uri))
+        result = await self._management.configuration_read(self._native(resource_uri), view=self._view)
         return ExtensionConfigurationReadDTO(resource_uri=resource_uri, **result.model_dump())
 
     async def write(self, resource_uri: str, content_base64: str,
                     options: ExtensionConfigurationWriteOptions) -> ExtensionConfigurationStatDTO:
-        result = await self._management.configuration_write(self._native(resource_uri), content_base64, options)
+        result = await self._management.configuration_write(self._native(resource_uri), content_base64, options, view=self._view)
         return ExtensionConfigurationStatDTO(resource_uri=resource_uri, **result.model_dump())
 
     async def events(self) -> AsyncIterator[ExtensionConfigurationEventDTO]:

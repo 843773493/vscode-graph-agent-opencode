@@ -10,6 +10,7 @@ import { isStoredWorkspaceFolder, toWorkspaceFolders } from '../upstream/src/vs/
 import { IServerEnvironmentService } from '../upstream/src/vs/server/node/serverEnvironmentService.js';
 
 export interface NativeViewFolder { native_uri: string; name: string }
+export interface NativeConfigurationView { id: string; native_uri: string; folders: readonly NativeViewFolder[] }
 
 /** 只登记原 profile settings 与明确多根 view；磁盘实现始终复用已安装的原 provider。 */
 export class ExtensionConfiguration {
@@ -51,8 +52,8 @@ export class ExtensionConfiguration {
   }
 
   async prepareView(id: string, folders: readonly NativeViewFolder[]): Promise<{ native_uri: string }> {
-    if (folders.length < 2) throw new Error('只有多根视图需要原生 workspace 配置文件');
-    const resource = this.viewResource(id), roots = folders.map(folder => this.native(folder.native_uri));
+    const resource = this.viewResource(id);
+    const roots = this.registerView({ id, native_uri: resource.toString(), folders });
     await this.files.createFolder(dirname(resource));
     if (await this.files.exists(resource)) {
       this.validateView(resource, (await this.files.readFile(resource, { atomic: true })).value.buffer, roots);
@@ -61,8 +62,16 @@ export class ExtensionConfiguration {
         uri: roots[index].toString(), name: folder.name,
       })) }, null, '\t') + '\n'), { overwrite: false });
     }
-    this.views.set(this.identity.extUri.getComparisonKey(resource), { resource, roots });
     return { native_uri: resource.toString() };
+  }
+
+  registerView(view: NativeConfigurationView): readonly URI[] {
+    if (view.folders.length < 2) throw new Error('只有多根视图需要原生 workspace 配置文件');
+    const resource = this.viewResource(view.id), roots = view.folders.map(folder => this.native(folder.native_uri));
+    if (!this.identity.extUri.isEqual(resource, this.native(view.native_uri))) throw new Error('配置位置与原会话的稳定视图身份不符');
+    // 登记只恢复当前进程的原会话准入，不读取或创建文件；缺失配置仍由原 provider 报错。
+    this.views.set(this.identity.extUri.getComparisonKey(resource), { resource, roots });
+    return roots;
   }
 
   private resource(value: string, parent = false): URI {

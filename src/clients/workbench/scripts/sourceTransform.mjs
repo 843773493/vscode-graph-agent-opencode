@@ -18,6 +18,7 @@ import { extensionWorkspaceSymbolsSourcePaths, transformExtensionWorkspaceSymbol
 import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
 import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
+import { nativeManagementSourcePaths, transformNativeManagement } from './nativeManagementTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -75,9 +76,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionFileEventsSourcePaths,
 ])];
 
-export const nodeTransformedSourcePaths = [...transformedSourcePaths,
-  'src/vs/platform/extensionManagement/node/extensionManagementService.ts',
-];
+export const nodeTransformedSourcePaths = [...new Set([...transformedSourcePaths, ...nativeManagementSourcePaths])];
 
 function replaceOnce(source, marker, replacement) {
   if (source.split(marker).length !== 2) throw new Error(`上游转换锚点必须恰好一次：${marker}`);
@@ -137,7 +136,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
       const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });`);
     }
     // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
-    if (runtime === 'node') return contents;
+    if (runtime === 'node') return transformNativeManagement(root, path, contents, replaceOnce);
     contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);

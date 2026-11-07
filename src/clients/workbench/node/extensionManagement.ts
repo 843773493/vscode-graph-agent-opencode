@@ -42,6 +42,7 @@ import { ExtensionConfiguration } from './extensionConfiguration.js';
 /** 与官方 server 使用相同的安装／扫描 owner，只装配本组件需要的原生服务。 */
 export async function createExtensionManagement(directory: string, builtinExtensionsPath: string) {
   const scope = new DisposableStore();
+  const consumers = scope.add(new DisposableStore());
   try {
     const services = new ServiceCollection();
     const args: ServerParsedArgs = {
@@ -64,9 +65,9 @@ export async function createExtensionManagement(directory: string, builtinExtens
     await files.createFolder(URI.file(environment.extensionsPath));
     const identity = scope.add(new UriIdentityService(files));
     services.set(IUriIdentityService, identity);
-    const profiles = scope.add(new ServerUserDataProfilesService(identity, environment, files, log));
+    const profiles = consumers.add(new ServerUserDataProfilesService(identity, environment, files, log));
     services.set(IUserDataProfilesService, profiles);
-    const configuration = scope.add(new ConfigurationService(profiles.defaultProfile.settingsResource, files, new NullPolicyService(), log));
+    const configuration = consumers.add(new ConfigurationService(profiles.defaultProfile.settingsResource, files, new NullPolicyService(), log));
     services.set(IConfigurationService, configuration);
     await Promise.all([profiles.init(), configuration.initialize()]);
     services.set(IRequestService, new SyncDescriptor(RequestService, ['remote']));
@@ -79,7 +80,7 @@ export async function createExtensionManagement(directory: string, builtinExtens
     services.set(IExtensionsProfileScannerService, new SyncDescriptor(ExtensionsProfileScannerService));
     services.set(IExtensionsScannerService, new SyncDescriptor(ExtensionsScannerService));
     services.set(INativeServerExtensionManagementService, new SyncDescriptor(ExtensionManagementService));
-    const instantiation = scope.add(new InstantiationService(services, true));
+    const instantiation = consumers.add(new InstantiationService(services, true));
     return instantiation.invokeFunction(accessor => {
       const management = accessor.get(INativeServerExtensionManagementService);
       const scanner = accessor.get(IExtensionsScannerService);
@@ -87,7 +88,17 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const profile = profiles.defaultProfile;
       const configurationFiles = new ExtensionConfiguration(files, disk, identity, environment, profile);
       return {
-        dispose: () => scope.dispose(),
+        ready: management.whenNativeManagementReady,
+        async dispose() {
+          const failures: unknown[] = [];
+          // 先排空写入及消费者，再沿原 watcher 停止 API 关句柄，最后释放 provider。
+          for (const close of [() => management.drainNativeManagement(), () => consumers.dispose(),
+            () => disk.stopNativeManagementWatchers(), () => scope.dispose()]) {
+            try { await close(); } catch (error) { failures.push(error); }
+          }
+          if (failures.length === 1) throw failures[0];
+          if (failures.length) throw new AggregateError(failures, '原生扩展管理释放失败');
+        },
         async environment() {
           await configurationFiles.initialize();
           // bundle 的实际根就是发行组件目录；存储沿原环境/profile，不按客户端或进程代际重建。

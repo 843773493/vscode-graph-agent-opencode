@@ -6,12 +6,15 @@ import asyncio
 import json
 import os
 import subprocess
+from base64 import b64encode
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import Mock
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -35,6 +38,10 @@ from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.server.extension_host import router as gateway_host_router
 from app.main import workspace_http_exception_handler
+from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationViewRequest,
+    ExtensionConfigurationWriteOptions,
+)
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,
@@ -247,14 +254,13 @@ async def test_native_vsix_profile_inventory_isolated_and_recovered(management_b
         assert extension.description["isUnderDevelopment"] is False
     assert a_inventory.extensions[0].description["extensionLocation"] != b_inventory.extensions[0].description["extensionLocation"]
     assert a.extension_hosts.active == b.extension_hosts.active == ()
-    assert not a.extension_hosts.drained
+    assert a.extension_hosts.drained
     duplicate = _backend(workspace / "a", backends, backend_id=a.extension_hosts.backend_id)
-    with pytest.raises(portalocker.exceptions.LockException):
-        await duplicate.extension_hosts.management.inventory()
-    assert duplicate.extension_hosts.management.child.state.phase == "not_started"
+    assert await duplicate.extension_hosts.management.inventory() == a_inventory
+    assert duplicate.extension_hosts.management.drained
+    previous = first.child.state.instance_id
     assert await first.inventory() == a_inventory
-    with pytest.raises(RuntimeError, match="尚未回收"):
-        a.close()
+    assert first.child.state.instance_id != previous and first.drained
     await a.close_extension_hosts()
     assert first.child.state.exit_verified and first.child.state.returncode == 0
     a.close()
@@ -268,6 +274,57 @@ async def test_native_vsix_profile_inventory_isolated_and_recovered(management_b
     assert await recovered.extension_hosts.management.inventory() == a_inventory
     (context.artifacts_dir / "inventories.json").write_text(json.dumps({"backend_a": recovered.extension_hosts.backend_id,
         "backend_b": b.extension_hosts.backend_id, "a": a_inventory.model_dump(), "b": b_inventory.model_dump()}, ensure_ascii=False, indent=2))
+
+
+@pytest.mark.parametrize("root_count", [1, 2], ids=["single-root", "multi-root"])
+async def test_configuration_uses_original_session_view_across_fresh_management_processes(
+    management_backends, root_count: int,
+) -> None:
+    context, workspace, backends = management_backends
+    roots = tuple(workspace / f"root-{index}" for index in range(root_count))
+    for root in roots:
+        root.mkdir()
+    registry = WorkspaceContainerRegistry(backend_id=str(uuid4()), mounted_workspaces=MountedWorkspaceRegistry([
+        MountedWorkspace(load_or_create_workspace_id(root), root) for root in roots]))
+    backends.append(registry)
+    owner = registry.extension_hosts
+    async with owner.connect(gateway_id="gateway_" + uuid4().hex, expected_backend_id=owner.backend_id,
+            client_id="configuration-test", view_id="configuration", workspace_ids=registry.mounted_workspaces.workspace_ids) as connection:
+        identity = connection.identity
+        files = owner.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
+            gateway_id=identity.gateway_id, backend_id=identity.backend_id, workspace_ids=list(identity.workspace_ids),
+            view_id=identity.view_id, generation=identity.generation), client_id=identity.client_id)
+        initialization = connection.initialization
+        resources = [initialization.environment.remote_settings]
+        if initialization.workspace.configuration is not None:
+            resources.append(initialization.workspace.configuration)
+        receipts = []
+        for resource in resources:
+            native = Path(url2pathname(urlsplit(resource.native_uri).path))
+            content = {"editor.fontSize": 17} if resource is resources[0] else {
+                "folders": [{"uri": root.as_uri(), "name": root.name} for root in roots], "settings": {"editor.fontSize": 18}}
+            encoded = b64encode((json.dumps(content) + "\n").encode()).decode()
+            options = ExtensionConfigurationWriteOptions(create=True, overwrite=True, unlock=False, atomic=False, append=False)
+            await files.write(resource.resource_uri, encoded, options)
+            previous = owner.management.child.state.instance_id
+            assert (await files.read(resource.resource_uri)).content_base64 == encoded
+            assert owner.management.child.state.instance_id != previous
+            assert (await files.stat(resource.resource_uri)).size == native.stat().st_size
+            if resource is not resources[0]:
+                invalid = b64encode(json.dumps({"folders": [{"uri": root.as_uri()} for root in roots[::-1]]}).encode()).decode()
+                before = native.read_bytes()
+                with pytest.raises(ExtensionManagementError, match="有序工作区根"):
+                    await files.write(resource.resource_uri, invalid, options)
+                assert native.read_bytes() == before
+            native.unlink()
+            for operation in (files.read, files.stat):
+                with pytest.raises(ExtensionManagementError) as missing:
+                    await operation(resource.resource_uri)
+                assert missing.value.code == "EntryNotFound"
+                assert not native.exists()
+            receipts.append({"resource_uri": resource.resource_uri, "deleted_remains_missing": not native.exists()})
+        assert owner.management.drained
+        (context.artifacts_dir / f"configuration-{root_count}.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2))
 
 
 @pytest.mark.parametrize("damage", ["duplicate", "missing_manifest", "invalid_json"])
@@ -320,6 +377,8 @@ async def test_unknown_control_reply_reaps_original_process_and_never_replays_in
     async def hold_delivery():
         # 真实原安装已完成、回执到达后才暂停或损坏交付；不由测试手工写profile。
         value = await original_receive()
+        if value in ({"ready": True}, {"drained": True}):
+            return value
         assert "result" in value
         received.set()
         if failure == "malformed":
@@ -365,29 +424,44 @@ async def test_backend_remains_open_until_management_log_and_lock_are_released(
     registry = _backend(workspace / "target", backends)
     owner = registry.extension_hosts
     management = owner.management
-    await management.inventory()
-    output = management._output
-    assert output is not None
     failure = OSError("原日志关闭失败")
-    pending = [failure]
+    blocked = True
+    original_receive = management._receive
+    output = None
 
-    def close() -> None:
-        if pending:
-            raise pending.pop()
-        output.close()
+    async def inject_log_failure():
+        nonlocal output
+        value = await original_receive()
+        if value == {"ready": True}:
+            output = management._output
+            assert output is not None
 
-    failing_output = Mock(wraps=output)
-    failing_output.close.side_effect = close
-    monkeypatch.setattr(management, "_output", failing_output)
+            def close() -> None:
+                if blocked:
+                    raise failure
+                assert output is not None
+                output.close()
+
+            failing_output = Mock(wraps=output)
+            failing_output.close.side_effect = close
+            monkeypatch.setattr(management, "_output", failing_output)
+        return value
+
+    monkeypatch.setattr(management, "_receive", inject_log_failure)
+    with pytest.raises(OSError) as request_error:
+        await management.inventory()
+    assert request_error.value is failure
     with pytest.raises(BaseExceptionGroup) as caught:
         await registry.close_extension_hosts()
     assert caught.value.exceptions == (failure,)
+    assert output is not None
     assert management.child.state.exit_verified and not output.closed
     assert not owner.drained
     with pytest.raises(portalocker.exceptions.LockException), portalocker.Lock(management._directory / "management.lock", mode="a", timeout=0):
         pytest.fail("原日志关闭失败时不能释放管理锁")
     with pytest.raises(RuntimeError, match="尚未回收"):
         registry.close()
+    blocked = False
     await registry.close_extension_hosts()
     assert owner.drained and output.closed
     with portalocker.Lock(management._directory / "management.lock", mode="a", timeout=0):
