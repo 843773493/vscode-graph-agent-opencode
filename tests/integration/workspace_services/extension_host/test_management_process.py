@@ -11,8 +11,6 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlsplit
-from urllib.request import url2pathname
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -20,6 +18,7 @@ import httpx
 import pytest
 
 from app.core.child_process import OwnedChildProcess
+from app.services.infrastructure.extension_host.configuration import native_path
 from app.services.infrastructure.extension_host.management import (
     NativeExtensionPublication,
     NativeFileRead,
@@ -100,7 +99,7 @@ async def management_process(
                     assert child.process.returncode is None, "Node 管理组件在发布发现记录前退出"
                     await asyncio.sleep(0.02)
             service = json.loads((directory / "service.json").read_text(encoding="utf-8"))
-            async with httpx.AsyncClient(base_url=service["base_url"], headers={"X-Local-Token": token}, timeout=10) as client:
+            async with httpx.AsyncClient(base_url=service["base_url"], headers={"X-Local-Token": token}, timeout=10, trust_env=False) as client:
                 assert (await client.get("/health")).json() == {**service, "status": "ok"}
                 assert service["backend_id"] == backend_id and service["process_id"] == child.process.pid
                 process = ManagementProcess(context, directory, child, client, service, frames)
@@ -201,11 +200,11 @@ async def test_node_rejects_removed_configuration_operations_without_touching_fi
     environment = await process.result({"method": "environment"})
     folders = [{"native_uri": (process.context.workspace_root / name).as_uri(), "name": name} for name in ("A", "B")]
     view_id = str(uuid4())
-    settings = Path(url2pathname(urlsplit(str(environment["settings_native_uri"])).path))
+    settings = native_path(str(environment["settings_native_uri"]))
     settings.parent.mkdir(parents=True, exist_ok=True)
     original = b'{"probe.original": true}\n'
     settings.write_bytes(original)
-    workspace_home = Path(url2pathname(urlsplit(str(environment["untitled_workspaces_home_uri"])).path))
+    workspace_home = native_path(str(environment["untitled_workspaces_home_uri"]))
     options = {"create": True, "overwrite": True, "unlock": False, "atomic": False, "append": False}
     for request in ({"method": "configuration-view", "id": view_id, "folders": folders},
         *({"method": method, "native_uri": settings.as_uri(), "view": None,

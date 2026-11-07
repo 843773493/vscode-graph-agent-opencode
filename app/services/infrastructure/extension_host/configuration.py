@@ -6,6 +6,7 @@ import asyncio
 import errno
 import json
 import os
+import re
 import stat
 import tempfile
 from base64 import b64decode, b64encode
@@ -48,7 +49,11 @@ from app.services.infrastructure.workspace_files.runtime import rename_entry_exc
 
 def native_path(uri: str) -> Path:
     parsed = urlsplit(uri)
-    path = Path(url2pathname((f"//{parsed.netloc}" if parsed.netloc else "") + parsed.path))
+    native = (f"//{parsed.netloc}" if parsed.netloc else "") + parsed.path
+    if os.name == "nt":
+        # TODO: 最低 Python 升至 3.13 后使用 Path.from_uri；旧标准库在解码前识别盘符。
+        native = re.sub(r"^/([A-Za-z])%3[Aa](?=/|$)", r"/\1:", native)
+    path = Path(url2pathname(native))
     if parsed.scheme != "file" or not path.is_absolute() or parsed.query or parsed.fragment:
         raise ValueError("资源不是当前目标机器的原生绝对 file URI")
     return path

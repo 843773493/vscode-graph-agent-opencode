@@ -16,8 +16,7 @@ from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urljoin, urlsplit
-from urllib.request import url2pathname
+from urllib.parse import urljoin
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -58,6 +57,7 @@ from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationWriteOptions,
 )
 from app.services.infrastructure.extension_host import owner as owner_module
+from app.services.infrastructure.extension_host.configuration import native_path
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,
@@ -562,7 +562,7 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
             read = await client.post(domain.url + "/api/gateway/extension-configurations/read",
                 json={**request, "resource_uri": resource["resource_uri"]})
             assert read.status_code == 200 and read.json()["data"]["content_base64"] == encoded
-            native = Path(url2pathname(urlsplit(resource["native_uri"]).path))
+            native = native_path(resource["native_uri"])
             assert native.read_bytes() == content
             receipts.append(saved.json())
         ready = asyncio.Event()
@@ -579,7 +579,7 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
             watching = asyncio.create_task(read_sse_events_until(response, changed, timeout_seconds=5))
             try:
                 await asyncio.wait_for(ready.wait(), 3)
-                native_settings = Path(url2pathname(urlsplit(context["remote_settings"]["native_uri"]).path))
+                native_settings = native_path(context["remote_settings"]["native_uri"])
                 native_settings.write_text('/* external */\n{"probe.setting": 23}\n')
                 events = await watching
                 assert any(event.get("changes") for event in events)
@@ -1205,9 +1205,9 @@ async def test_native_profile_isolated_between_gateways_and_shared_across_backen
     assert original_process is not None
     assert (await first.inventory()).extensions == []
     a_environment, b_environment = await first.environment(), await second.environment()
-    assert a_environment.app_root_uri == (context.run_root / "runtime").as_uri()
-    assert a_environment.global_storage_home_uri == (gateway.directory / "data/User/globalStorage").as_uri()
-    assert a_environment.workspace_storage_home_uri == (gateway.directory / "data/User/workspaceStorage").as_uri()
+    assert native_path(a_environment.app_root_uri) == context.run_root / "runtime"
+    assert native_path(a_environment.global_storage_home_uri) == gateway.directory / "data/User/globalStorage"
+    assert native_path(a_environment.workspace_storage_home_uri) == gateway.directory / "data/User/workspaceStorage"
     assert b_environment.global_storage_home_uri != a_environment.global_storage_home_uri
     one = (await first.install(vsix_factory(workspace, "1.0.0", "A"))).installed
     two = (await second.install(vsix_factory(workspace, "2.0.0", "B"))).installed
@@ -1253,7 +1253,7 @@ async def test_native_profile_isolated_between_gateways_and_shared_across_backen
     gateway.assert_healthy()
     assert gateway.instance is original_process
     (context.artifacts_dir / "inventories.json").write_text(json.dumps({"backend_a": recovered.extension_hosts.backend_id,
-        "backend_b": b.extension_hosts.backend_id, "management_pid": original_process.pid,
+        "backend_b": b.extension_hosts.backend_id, "management_pid": original_process.process_id,
         "a": shared_inventory.model_dump(), "b": b_inventory.model_dump()}, ensure_ascii=False, indent=2))
 
 
@@ -1282,7 +1282,7 @@ async def test_configuration_uses_original_session_view_with_persistent_manageme
             resources.append(initialization.workspace.configuration)
         receipts = []
         for resource in resources:
-            native = Path(url2pathname(urlsplit(resource.native_uri).path))
+            native = native_path(resource.native_uri)
             content = {"editor.fontSize": 17} if resource is resources[0] else {
                 "folders": [{"uri": root.as_uri(), "name": root.name} for root in roots], "settings": {"editor.fontSize": 18}}
             encoded = b64encode((json.dumps(content) + "\n").encode()).decode()

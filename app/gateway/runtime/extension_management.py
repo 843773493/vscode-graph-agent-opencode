@@ -189,7 +189,8 @@ class GatewayExtensionManagement:
             entrypoint = self.runtime.entrypoint.with_name("extensionManagement.mjs")
             command = [str(self.runtime.executable), str(entrypoint), str(self.directory), self.backend_id]
             log_file = self._log_store.open("extension-management")
-            process = _spawn_logged_process(command, log_file=log_file, cwd=self.directory, env=env, detached=True)
+            # 安装域已由绝对参数指定；不把可任意嵌套的数据目录作为 Windows 进程工作目录。
+            process = _spawn_logged_process(command, log_file=log_file, cwd=entrypoint.parent, env=env, detached=True)
             self.process = ManagedProcess(process=process, log_file=log_file)
             await self._wait_for_instance(log_file)
         except BaseException as error:

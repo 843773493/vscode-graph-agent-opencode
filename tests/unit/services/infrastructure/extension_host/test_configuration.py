@@ -49,6 +49,26 @@ from tests.unit.services.infrastructure.extension_host.test_owner import (
 GATEWAY = "gateway_" + "a" * 32
 
 
+@pytest.mark.parametrize("name", ["plain.txt", "中文 # %.txt", "literal%20%3A.txt"])
+def test_native_file_uri_decodes_filename_once(tmp_path: Path, name: str) -> None:
+    target = tmp_path / name
+    target.write_bytes(b"native-file")
+    actual = native_path(target.as_uri())
+    assert actual == target and actual.read_bytes() == b"native-file"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="盘符与 UNC 按目标 Windows 标准库解释")
+@pytest.mark.parametrize(("uri", "path"), [
+    ("file:///c%3A/Users/probe/literal%253A%20%23.txt", "C:/Users/probe/literal%3A #.txt"),
+    ("file:///d%3a/", "D:/"),
+    ("file:///C:/Users/probe/literal%2520.txt", "C:/Users/probe/literal%20.txt"),
+    ("file://server/share/literal%2520.txt", "//server/share/literal%20.txt"),
+])
+def test_windows_native_file_uri_preserves_drive_unc_and_literal_percent(uri: str, path: str) -> None:
+    actual = native_path(uri)
+    assert actual.is_absolute() and actual == Path(path)
+
+
 @pytest.fixture(autouse=True)
 def configuration_inventory(monkeypatch: pytest.MonkeyPatch) -> ProfileExtensionInventory:
     inventory = ProfileExtensionInventory(profile_id="test-profile", target_platform="linux-x64", extensions=[])

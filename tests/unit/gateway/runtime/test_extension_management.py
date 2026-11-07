@@ -652,6 +652,8 @@ async def test_startup_health_retries_reuse_one_http_client(
     monkeypatch.setattr(c.client, "get", transient_get)
     await c.owner.start()
     assert failures == 2 and c.owner.instance == c.instance
+    assert c.spawn.call_args.kwargs["cwd"] == c.owner.runtime.entrypoint.parent
+    assert c.owner.directory.is_dir()
     c.client_factory.assert_called_once_with(trust_env=False, timeout=0.1)
     assert not c.client.is_closed
     c.owner.assert_healthy()

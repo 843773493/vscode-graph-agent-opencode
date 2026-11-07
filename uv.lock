@@ -253,6 +253,7 @@ dependencies = [
     { name = "httpx-sse" },
     { name = "jsonpointer" },
     { name = "jsonschema" },
+    { name = "jsonyx" },
     { name = "langchain" },
     { name = "langchain-community" },
     { name = "langchain-core" },
@@ -307,6 +308,7 @@ requires-dist = [
     { name = "httpx-sse", specifier = ">=0.4.3,<1" },
     { name = "jsonpointer", specifier = ">=3.1.1,<4" },
     { name = "jsonschema", specifier = ">=4.21.0" },
+    { name = "jsonyx", specifier = ">=2.5,<3" },
     { name = "langchain", specifier = ">=1.3.1" },
     { name = "langchain-community", specifier = ">=0.4.2" },
     { name = "langchain-core", specifier = ">=1.0.0" },
@@ -1428,6 +1430,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/74/a633ee74eb36c44aa6d1095e7cc5569bebf04342ee146178e2d36600708b/jsonschema_specifications-2025.9.1.tar.gz", hash = "sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d", size = 32855, upload-time = "2025-09-08T01:34:59.186Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/45/1a4ed80516f02155c51f51e8cedb3c1902296743db0bbc66608a0db2814f/jsonschema_specifications-2025.9.1-py3-none-any.whl", hash = "sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe", size = 18437, upload-time = "2025-09-08T01:34:57.871Z" },
+]
+
+[[package]]
+name = "jsonyx"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9e/0e/14a1e01fe3491b931e05af2c4db485c1f5b61fa049ec8740bb3e89a68b2a/jsonyx-2.5.0.tar.gz", hash = "sha256:0dd6f042a1f0e195abb89709e9953088004be526211ca42d4df903f8e51d39e2", size = 60466, upload-time = "2026-10-28T11:02:31.578Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/ac/c1bb9ab511f743a5834532cd7dfcf5408b837b1a5b635380bfee1e33e407/jsonyx-2.5.0-cp313-cp313-win_amd64.whl", hash = "sha256:d40ddd1829fff262bc98b1f0639af988c6e399301de3dd7314fe32c4c4514b5a", size = 73932, upload-time = "2026-10-28T11:02:30.484Z" },
 ]
 
 [[package]]
