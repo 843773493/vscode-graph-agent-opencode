@@ -9,6 +9,7 @@ import pytest
 from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
     ManagedProcess,
+    _capture_windows_process_tree,
 )
 
 
@@ -18,6 +19,28 @@ class _LogFile:
 
     def close(self) -> None:
         self.closed = True
+
+
+@pytest.mark.parametrize("root_alive", [True, False])
+def test_windows_process_tree_uses_one_parent_snapshot(
+    windows_process_tree_stub, root_alive: bool,
+) -> None:
+    tree = windows_process_tree_stub
+    root = tree.add_process(4321, parent_pid=5002, starttime=1.0)
+    root.alive = root_alive
+    tree.add_process(5001, parent_pid=4321, starttime=2.0)
+    tree.add_process(5002, parent_pid=5001, starttime=3.0)
+    tree.add_process(6001, parent_pid=None, starttime=4.0)
+    tree.add_process(6002, parent_pid=6001, starttime=5.0)
+
+    root_start_time, descendants = _capture_windows_process_tree(
+        4321, expected_root_start_time=1.0,
+    )
+
+    assert root_start_time == (1.0 if root_alive else None)
+    assert descendants == {5001: 2.0, 5002: 3.0}
+    assert tree.parent_map_reads == 1
+    assert tree.process_iter_attrs == [["pid", "create_time"]]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX 进程组信号仅在 POSIX 上可用")
@@ -313,6 +336,28 @@ def test_windows_service_identity_is_frozen_and_drives_liveness(
     assert managed.pid == 5001
     with pytest.raises(RuntimeError, match="已确认.*身份已变化"):
         managed.confirm_service_identity(5001)
+
+
+def test_windows_service_identity_rejects_pid_reuse_between_snapshots(
+    monkeypatch, managed_process_stub_factory, windows_process_tree_stub,
+) -> None:
+    tree = windows_process_tree_stub
+    tree.add_process(4321, parent_pid=None, starttime=1.0)
+    tree.add_process(5001, parent_pid=4321, starttime=2.0)
+    monkeypatch.setattr(os, "name", "nt")
+    managed = ManagedProcess(managed_process_stub_factory(timeout_once=False), _LogFile())
+
+    def replace_worker_after_parent_snapshot() -> dict[int, int]:
+        parents = tree.parent_pid_map()
+        tree.add_process(5001, parent_pid=None, starttime=9.0)
+        return parents
+
+    monkeypatch.setattr(psutil, "_ppid_map", replace_worker_after_parent_snapshot)
+
+    with pytest.raises(RuntimeError, match="服务进程身份在确认期间已变化"):
+        managed.confirm_service_identity(5001)
+
+    assert managed.pid == 4321
 
 
 @pytest.mark.parametrize("fault", ["foreign", "root-recycled", "root-exited", "worker-recycled", "access-denied"])

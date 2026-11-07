@@ -45,7 +45,7 @@ class WindowsProcessStub:
 
     @property
     def info(self) -> dict[str, int | float | None]:
-        return {"pid": self.pid, "ppid": self.parent_pid, "create_time": self.starttime}
+        return {"pid": self.pid, "create_time": self.starttime}
 
     def create_time(self) -> float:
         if not self.alive:
@@ -69,6 +69,8 @@ class WindowsProcessStub:
 
 class WindowsProcessTreeStub:
     def __init__(self) -> None:
+        self.parent_map_reads = 0
+        self.process_iter_attrs: list[list[str]] = []
         self.processes: dict[int, WindowsProcessStub] = {
             os.getpid(): WindowsProcessStub(os.getpid(), None, psutil.Process().create_time()),
         }
@@ -91,7 +93,17 @@ class WindowsProcessTreeStub:
         return process
 
     def process_iter(self, *, attrs: list[str]) -> list[WindowsProcessStub]:
+        assert "ppid" not in attrs, "父子关系应批量读取，不能逐进程枚举整机"
+        self.process_iter_attrs.append(attrs)
         return [process for process in self.processes.values() if process.alive]
+
+    def parent_pid_map(self) -> dict[int, int]:
+        self.parent_map_reads += 1
+        return {
+            process.pid: process.parent_pid
+            for process in self.processes.values()
+            if process.alive and process.parent_pid is not None
+        }
 
     def get_process(self, pid: int | None = None) -> WindowsProcessStub:
         pid = os.getpid() if pid is None else pid
@@ -108,4 +120,5 @@ def windows_process_tree_stub(
     tree = WindowsProcessTreeStub()
     monkeypatch.setattr(psutil, "Process", tree.get_process)
     monkeypatch.setattr(psutil, "process_iter", tree.process_iter)
+    monkeypatch.setattr(psutil, "_ppid_map", tree.parent_pid_map)
     return tree

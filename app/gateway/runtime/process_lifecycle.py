@@ -57,10 +57,17 @@ def _capture_windows_process_tree(
     children_by_parent: dict[int, list[tuple[int, float | None]]] = defaultdict(list)
     root_start_time: float | None = None
     try:
-        for process in psutil.process_iter(attrs=["pid", "ppid", "create_time"]):
-            info = process.info
+        # 先冻结创建时间，避免旧父子快照配上随后复用 PID 的新进程身份。
+        process_infos = [
+            process.info
+            for process in psutil.process_iter(attrs=["pid", "create_time"])
+        ]
+        # TODO: psutil 提供公开批量父子关系接口后迁移；当前复用 children() 的快照，
+        # 避免 Windows 每读取一个 ppid 都重新枚举整机进程。
+        parent_pids = psutil._ppid_map()  # pyright: ignore[reportAttributeAccessIssue]
+        for info in process_infos:
             process_pid = info["pid"]
-            parent_pid = info["ppid"]
+            parent_pid = parent_pids.get(process_pid)
             process_start_time = info["create_time"]
             if process_pid == pid:
                 if process_start_time is None:

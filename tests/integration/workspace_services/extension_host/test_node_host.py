@@ -71,8 +71,6 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
     executable, modules = node_host_runtime
     if sys.platform not in {"linux", "win32"}:
         pytest.skip("UNMET_PREREQUISITE: 目标私有 IPC 尚未接入此平台")
-    # TODO(5.3): Windows 完整 RPC 仍缺 watchdog/spdlog 原生构建，现有 VS 安装不完整。
-    # 私有管道、配置和真实 Node 进程的通过不能代替本场景；Spectre 补装已获用户授权。
     handlers: list[asyncio.Task[None]] = []
     hosts: dict[str, NodeExtensionHost] = {}
     manifest = context.run_root / "runtime-manifest.json"
