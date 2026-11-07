@@ -224,13 +224,14 @@ export function spawnGateway({
       endpoint.host,
       "--port",
       String(listenPort),
+      "--shutdown-on-stdin-eof",
       "--timeout-graceful-shutdown",
       String(GATEWAY_CONNECTION_DRAIN_TIMEOUT_SECONDS),
     ],
     {
       cwd: runtime.applicationRoot,
       env: gatewayEnvironment(runtime, environment),
-      stdio: ["inherit", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       // POSIX 终端会把 Ctrl+C 发给整个前台进程组。让 Gateway 进入独立
       // 进程组后，由 Launcher 成为唯一信号所有者并只转发一次。
       detached: platform !== "win32",
@@ -251,29 +252,41 @@ async function allocateGatewayChildPort(host) {
   return port;
 }
 
-async function stopGatewayChild(childState) {
-  if (
-    childState.child.exitCode === null &&
-    childState.child.signalCode === null
-  ) {
-    childState.child.kill("SIGTERM");
-  }
-  const closed = await Promise.race([
-    childState.closeResult.then(() => true),
-    new Promise((resolve) => {
-      const timer = setTimeout(
-        () => resolve(false),
-        GATEWAY_SHUTDOWN_TIMEOUT_MS,
-      );
-      timer.unref?.();
-    }),
-  ]);
-  if (!closed) {
-    childState.child.kill("SIGKILL");
-    await childState.closeResult;
-  }
-  childState.removeOutputForwarding();
-  childState.removeSignalHandlers();
+function requestGatewayShutdown(child, signal = "SIGTERM", platform = process.platform) {
+  if (platform === "win32") {
+    // Windows 的 child.kill(SIGTERM) 是硬终止；EOF 由正式 runner 转入同一关闭流程。
+    if (!child.stdin.writableEnded) child.stdin.end();
+  } else child.kill(signal);
+}
+
+async function waitForChildClose(childState, timeoutMs) {
+  const controller = new AbortController();
+  try {
+    return await Promise.race([
+      childState.closeResult.then(() => true),
+      sleep(timeoutMs, false, { signal: controller.signal }),
+    ]);
+  } finally { controller.abort(); }
+}
+
+export function stopGatewayChild(childState, signal = "SIGTERM", { timeoutMs = GATEWAY_SHUTDOWN_TIMEOUT_MS, forceTimeoutMs = 5_000 } = {}) {
+  // 候选取消、显式停止及 finally 共用同一次关闭，不重复发送 POSIX 信号。
+  childState.stopResult ??= (async () => {
+    try {
+      if (childState.child.exitCode === null && childState.child.signalCode === null) {
+        requestGatewayShutdown(childState.child, signal);
+      }
+      if (!await waitForChildClose(childState, timeoutMs)) {
+        childState.logger.warning(`Gateway 未在 ${timeoutMs}ms 内退出，发送 SIGKILL`);
+        childState.child.kill("SIGKILL");
+        if (!await waitForChildClose(childState, forceTimeoutMs)) {
+          throw new Error(`Gateway 强制终止后仍未核实退出: pid=${childState.child.pid}`);
+        }
+      }
+      childState.removeOutputForwarding();
+    } finally { childState.removeSignalHandlers(); }
+  })();
+  return childState.stopResult;
 }
 
 export function requestGatewayHandoff({
@@ -322,43 +335,20 @@ export function forwardGatewayOutput(child, stdout, stderr) {
   };
 }
 
-export function installSignalForwarding(
-  child,
-  processObject = process,
-  platform = process.platform,
-  {
-    shutdownTimeoutMs = GATEWAY_SHUTDOWN_TIMEOUT_MS,
-    setTimeoutImpl = setTimeout,
-    clearTimeoutImpl = clearTimeout,
-    logger,
-  } = {},
-) {
+export function installSignalForwarding(onStop, processObject = process, platform = process.platform) {
   const listeners = new Map();
   let forwarded = false;
-  let forceTimer = null;
   for (const signal of forwardedSignals(platform)) {
     const listener = () => {
-      if (!forwarded && child.exitCode === null && child.signalCode === null) {
-        forwarded = true;
-        child.kill(signal === "SIGBREAK" ? "SIGTERM" : signal);
-        forceTimer = setTimeoutImpl(() => {
-          if (child.exitCode !== null || child.signalCode !== null) return;
-          logger.warning(
-            `Gateway 未在 ${shutdownTimeoutMs}ms 内退出，发送 SIGKILL`,
-          );
-          child.kill("SIGKILL");
-        }, shutdownTimeoutMs);
-        forceTimer?.unref?.();
-      }
+      if (forwarded) return;
+      forwarded = true;
+      onStop(signal);
     };
     processObject.on(signal, listener);
     listeners.set(signal, listener);
   }
   return () => {
-    if (forceTimer !== null) clearTimeoutImpl(forceTimer);
-    for (const [signal, listener] of listeners) {
-      processObject.off(signal, listener);
-    }
+    for (const [signal, listener] of listeners) processObject.off(signal, listener);
   };
 }
 
@@ -399,6 +389,7 @@ export async function superviseGateway({
   gatewayStdout = process.stdout,
   gatewayStderr = process.stderr,
   onRuntimeLogging,
+  authorizeStop,
   processObject = process,
 }) {
   const endpoint = gatewayEndpoint(runtime.distribution, environment);
@@ -424,16 +415,37 @@ export async function superviseGateway({
   const activeEnvironment = activeGatewayEnvironment(environment);
   const controlAddress = gatewaySupervisorControlAddress(environment.BOXTEAM_HOME);
   let currentChild = null;
+  let startingChild = null;
   let handoffChain = Promise.resolve();
   let control = null;
+  let stopping = false;
+  let notifyStopFailure;
+  const stopFailure = new Promise(resolve => { notifyStopFailure = resolve; });
+
+  const stopChildren = (signal = "SIGTERM") => {
+    if (!stopping) {
+      stopping = true;
+      startingChild?.readinessController.abort(new Error("Gateway 正在停止，取消候选就绪等待"));
+      const children = [...new Set([currentChild, startingChild].filter(child => child !== null))];
+      handoffChain = Promise.allSettled([handoffChain, ...children.map(child => stopGatewayChild(child, signal))]).then(results => {
+        const failures = [...new Set(results.filter(result => result.status === "rejected").map(result => result.reason))];
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) throw new AggregateError(failures, "Gateway 交接及停止失败", { cause: failures[0] });
+      });
+      void handoffChain.catch(notifyStopFailure);
+    }
+    return handoffChain;
+  };
 
   const startChild = async (
     childEnvironment,
     { installSignalHandlers = true } = {},
   ) => {
+    if (stopping) throw new Error("Gateway supervisor 正在停止，不再启动候选");
     const childPort = gatewayOwnsPublicPort
       ? endpoint.port
       : await allocateGatewayChildPort(endpoint.host);
+    if (stopping) throw new Error("Gateway supervisor 正在停止，不再启动候选");
     const managedEnvironment = { ...childEnvironment };
     delete managedEnvironment.BOXTEAM_LAUNCHER_CONTROL;
     if (controlAddress !== null) {
@@ -449,13 +461,13 @@ export async function superviseGateway({
     });
     const removeOutputForwarding = forwardGatewayOutput(child, gatewayStdout, gatewayStderr);
     const removeSignalHandlers = installSignalHandlers
-      ? installSignalForwarding(child, processObject, process.platform, {
-          logger,
-        })
+      ? installSignalForwarding(signal => { stopChildren(signal); }, processObject)
       : () => {};
     const exitResult = once(child, "exit");
     const closeResult = once(child, "close");
     const readinessController = new AbortController();
+    const childState = { child, childPort, closeResult, removeOutputForwarding, removeSignalHandlers, readinessController, logger };
+    startingChild = childState;
     try {
       await Promise.race([
         waitForGateway({
@@ -470,21 +482,13 @@ export async function superviseGateway({
         }),
       ]).finally(() => readinessController.abort());
       logger.info(`Gateway 已就绪: ${endpoint.url}`);
-      return {
-        child,
-        childPort,
-        closeResult,
-        removeOutputForwarding,
-        removeSignalHandlers,
-      };
+      return childState;
     } catch (error) {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
-      }
-      await closeResult;
-      removeOutputForwarding();
-      removeSignalHandlers();
+      try { await stopGatewayChild(childState); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Gateway 启动及关闭均失败", { cause: error }); }
       throw error;
+    } finally {
+      if (startingChild === childState) startingChild = null;
     }
   };
 
@@ -514,10 +518,8 @@ export async function superviseGateway({
       const previous = currentChild;
       previous.removeSignalHandlers();
       replacement.removeSignalHandlers = installSignalForwarding(
-        replacement.child,
+        signal => { stopChildren(signal); },
         processObject,
-        process.platform,
-        { logger },
       );
       publicListener.setTarget({
         host: endpoint.host,
@@ -537,7 +539,15 @@ export async function superviseGateway({
         : createGatewaySupervisorControl({
             address: controlAddress,
             onRuntimeLogging,
+            onStop(payload) {
+              if (typeof authorizeStop !== "function") throw new Error("Launcher 未提供停止授权入口");
+              authorizeStop(payload);
+              // 同时关闭在途候选和 active，不等待候选180秒就绪期限；初始启动也可锁定停止意图。
+              stopChildren();
+              return { accepted: true, pid: process.pid };
+            },
             onHandoff(payload) {
+              if (stopping) throw new Error("Gateway supervisor 正在停止，不再接受交接");
               handoffChain = handoffChain.then(
                 () => handleHandoff(payload),
                 () => handleHandoff(payload),
@@ -552,6 +562,7 @@ export async function superviseGateway({
     try {
       initialChild = await startChild(environment);
     } catch (error) {
+      if (stopping) return 0;
       if (startup.loadedSource !== "pending") throw error;
       logger.warning(
         `Gateway pending generation 未就绪，回退 active snapshot: ${String(error)}`,
@@ -578,18 +589,23 @@ export async function superviseGateway({
       if (observedChild === null) {
         throw new Error("Gateway supervisor active generation 丢失");
       }
-      const [code, signal] = await observedChild.closeResult;
+      const [code, signal] = await Promise.race([observedChild.closeResult, stopFailure.then(error => { throw error; })]);
       observedChild.removeOutputForwarding();
       observedChild.removeSignalHandlers();
       if (currentChild !== observedChild) continue;
       return signal ? 128 : typeof code === "number" ? code : 1;
     }
   } finally {
-    if (currentChild !== null) {
-      await stopGatewayChild(currentChild);
-      currentChild = null;
+    const failures = [];
+    for (const cleanup of [
+      () => stopChildren(),
+      () => control?.close(),
+      () => publicListener?.close(),
+    ]) {
+      try { await cleanup(); }
+      catch (error) { if (!failures.includes(error)) failures.push(error); }
     }
-    if (control !== null) await control.close();
-    if (publicListener !== null) await publicListener.close();
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Gateway 停止及资源释放失败", { cause: failures[0] });
   }
 }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+import threading
 from typing import cast
 from uuid import uuid4
 
@@ -106,3 +108,27 @@ class WindowsPipeServer:
             if self.connection.done() and self._pipe is not None:
                 self._pipe.close()
                 self._pipe = None
+
+
+def wait_for_pipe_eof(descriptor: int, stopped: threading.Event) -> None:
+    """观察匿名管道 EOF，不阻塞共享文件对象，保持后续子进程可继承 stdin。"""
+    if sys.platform != "win32":
+        raise OSError("Windows 匿名管道入口只能在 Windows 调用")
+    import msvcrt
+
+    import pywintypes
+    import win32pipe
+    import winerror
+
+    handle = msvcrt.get_osfhandle(descriptor)
+    while not stopped.is_set():
+        try:
+            _data, available, _remaining = win32pipe.PeekNamedPipe(handle, 0)
+        except pywintypes.error as error:
+            if error.winerror == winerror.ERROR_BROKEN_PIPE:
+                return
+            raise OSError(error.winerror, error.strerror, None, error.winerror) from error
+        if available:
+            os.read(descriptor, min(available, 4096))
+        else:
+            stopped.wait(0.05)

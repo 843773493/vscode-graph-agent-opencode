@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  GATEWAY_SHUTDOWN_TIMEOUT_MS,
   forwardGatewayOutput,
   buildGatewayPendingEnvironment,
   gatewayEndpoint,
@@ -13,6 +12,7 @@ import {
   gatewayStartupContract,
   installSignalForwarding,
   spawnGateway,
+  stopGatewayChild,
   superviseGateway,
 } from "./supervisor.mjs";
 
@@ -146,6 +146,7 @@ describe("gateway supervisor", () => {
       "127.0.0.1",
       "--port",
       "8014",
+      "--shutdown-on-stdin-eof",
       "--timeout-graceful-shutdown",
       "2",
     ]);
@@ -153,6 +154,7 @@ describe("gateway supervisor", () => {
       "http://127.0.0.1:8014",
     );
     expect(calls[0].options.env.BOXTEAM_DEFAULT_BACKEND_PORT).toBe("8010");
+    expect(calls[0].options.stdio).toEqual(["pipe", "pipe", "pipe"]);
     expect(calls[0].options.detached).toBe(process.platform !== "win32");
   });
 
@@ -173,74 +175,64 @@ describe("gateway supervisor", () => {
     expect(detachedValues).toEqual([true, true, false]);
   });
 
-  test("只转发一次关闭信号并清理监听器", () => {
-    const child = fakeChild();
+  test("信号只交同一停止入口一次并清理监听器", () => {
     const processObject = new EventEmitter();
-    const remove = installSignalForwarding(child, processObject, "linux", { logger: createRuntimeLogger("launcher", "test", { write() {} }) });
-
-    processObject.emit("SIGINT");
-    processObject.emit("SIGINT");
-    processObject.emit("SIGTERM");
-    expect(child.killedWith).toEqual(["SIGINT"]);
-    remove();
-    processObject.emit("SIGHUP");
-    expect(child.killedWith).toEqual(["SIGINT"]);
+    const signals = [];
+    const remove = installSignalForwarding(signal => signals.push(signal), processObject, "linux");
+    processObject.emit("SIGINT"); processObject.emit("SIGTERM");
+    expect(signals).toEqual(["SIGINT"]);
+    remove(); processObject.emit("SIGHUP");
+    expect(signals).toEqual(["SIGINT"]);
   });
 
-  test("Windows SIGBREAK 转换为 Gateway 可处理的 SIGTERM", () => {
-    const child = fakeChild();
+  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) test(`Windows ${signal} 交同一停止入口`, () => {
     const processObject = new EventEmitter();
-    installSignalForwarding(child, processObject, "win32", { logger: createRuntimeLogger("launcher", "test", { write() {} }) });
-
-    processObject.emit("SIGBREAK");
-
-    expect(child.killedWith).toEqual(["SIGTERM"]);
+    const signals = [];
+    const remove = installSignalForwarding(value => signals.push(value), processObject, "win32");
+    processObject.emit(signal); processObject.emit("SIGTERM");
+    expect(signals).toEqual([signal]);
+    remove();
   });
 
-  test("Gateway 优雅关闭超时后强制退出", () => {
+  function childLifetime(closeOnStop) {
     const child = fakeChild();
-    const processObject = new EventEmitter();
-    const callbacks = [];
-    const errors = [];
-    const remove = installSignalForwarding(child, processObject, "linux", {
-      shutdownTimeoutMs: 10,
-      setTimeoutImpl(callback) {
-        callbacks.push(callback);
-        return { unref() {} };
-      },
-      clearTimeoutImpl() {},
-      logger: createRuntimeLogger("launcher", "test", { write: (value) => errors.push(String(value)) }),
-    });
+    let closed;
+    const closeResult = new Promise(resolve => { closed = resolve; });
+    const finish = () => { child.exitCode = 0; closed([0, null]); };
+    let ends = 0, removed = 0;
+    const warnings = [];
+    child.stdin = { writableEnded: false, end() { this.writableEnded = true; ends++; if (closeOnStop) finish(); } };
+    child.kill = signal => { child.killedWith.push(signal); if (closeOnStop || signal === "SIGKILL") finish(); };
+    const state = { child, closeResult, removeOutputForwarding() { removed++; }, removeSignalHandlers() {},
+      logger: createRuntimeLogger("launcher", "test", { write(value) { warnings.push(String(value)); } }) };
+    return { state, child, warnings, ends: () => ends, removed: () => removed };
+  }
 
-    processObject.emit("SIGTERM");
-    callbacks[0]();
-    remove();
-
-    expect(child.killedWith).toEqual(["SIGTERM", "SIGKILL"]);
-    expect(errors.join("")).toContain("Gateway 未在 10ms 内退出");
+  test("实际 child owner 正常关闭只发一次请求，不强杀", async () => {
+    const c = childLifetime(true);
+    const result = stopGatewayChild(c.state, "SIGTERM", {timeoutMs:10,forceTimeoutMs:10});
+    expect(stopGatewayChild(c.state)).toBe(result);
+    await result;
+    expect(c.child.killedWith).toEqual(process.platform === "win32" ? [] : ["SIGTERM"]);
+    expect(c.ends()).toBe(process.platform === "win32" ? 1 : 0);
+    expect(c.removed()).toBe(1);
   });
 
-  test("默认关闭给原管理结清及普通释放保留150秒", () => {
-    const child = fakeChild();
-    const processObject = new EventEmitter();
-    const timers = [];
-    const remove = installSignalForwarding(child, processObject, "linux", {
-      setTimeoutImpl(callback, milliseconds) {
-        timers.push({ callback, milliseconds });
-        return { unref() {} };
-      },
-      clearTimeoutImpl() {},
-      logger: createRuntimeLogger("launcher", "test", { write() {} }),
-    });
+  test("实际 child owner 耗尽期限后才强杀并核实close", async () => {
+    const c = childLifetime(false);
+    const result = stopGatewayChild(c.state, "SIGTERM", {timeoutMs:10,forceTimeoutMs:10});
+    expect(c.child.killedWith).not.toContain("SIGKILL");
+    await result;
+    expect(c.child.killedWith).toEqual(process.platform === "win32" ? ["SIGKILL"] : ["SIGTERM", "SIGKILL"]);
+    expect(c.warnings.join("")).toContain("Gateway 未在 10ms 内退出");
+    expect(c.removed()).toBe(1);
+  });
 
-    processObject.emit("SIGTERM");
-    expect(child.killedWith).toEqual(["SIGTERM"]);
-    expect(timers).toHaveLength(1);
-    expect(timers[0].milliseconds).toBe(150_000);
-    expect(timers[0].milliseconds).toBe(GATEWAY_SHUTDOWN_TIMEOUT_MS);
-    timers[0].callback();
-    expect(child.killedWith).toEqual(["SIGTERM", "SIGKILL"]);
-    remove();
+  test("强杀后无close证据明确失败，不结清输出归属", async () => {
+    const c = childLifetime(false);
+    c.child.kill = signal => c.child.killedWith.push(signal);
+    await expect(stopGatewayChild(c.state, "SIGTERM", {timeoutMs:5,forceTimeoutMs:5})).rejects.toThrow("强制终止后仍未核实退出");
+    expect(c.removed()).toBe(0);
   });
 
   test("将 Gateway 输出转发到 Launcher 输出流", () => {

@@ -19,6 +19,7 @@ function stoppingFixture() {
   };
   const options = {
     boxteamHome: fixtureHome,
+    platform: "linux",
     readLockImpl: () => state.lock,
     removeLockImpl: (_home, token) => {
       state.removed.push(token);
@@ -37,6 +38,42 @@ function stoppingFixture() {
 }
 
 describe("Launcher 停止", () => {
+  test("Windows 停止先交认证控制请求，仍等待原 PID 退出", async () => {
+    const { state, options } = stoppingFixture();
+    options.platform = "win32";
+    const requests = [];
+    options.requestStopImpl = async (request) => { requests.push(request); };
+    options.sleepImpl = async (milliseconds) => { state.waits.push(milliseconds); state.alive = false; };
+    expect(await stopLauncher(options)).toEqual({ status: "stopped", pid: 1234 });
+    expect(requests).toEqual([{ boxteamHome: fixtureHome, targetLock: activeLock() }]);
+    expect(state.signals).toEqual([]);
+    expect(state.waits).toEqual([25]);
+    expect(state.removed).toEqual(["lock-token"]);
+  });
+
+  test("Windows 控制拒绝或未知回执保留活动实例，不回退硬杀", async () => {
+    const { state, options } = stoppingFixture();
+    const failure = new Error("invalid runtime control token");
+    options.platform = "win32";
+    options.requestStopImpl = async () => { throw failure; };
+    expect(await stopLauncher(options).catch(error => error)).toBe(failure);
+    expect(state.signals).toEqual([]);
+    expect(state.waits).toEqual([]);
+    expect(state.removed).toEqual([]);
+    expect(state.lock).toEqual(activeLock());
+  });
+
+  test("Windows 已接受不等于已退出，耗尽原期限才进入强制阶段", async () => {
+    const { state, options } = stoppingFixture();
+    options.platform = "win32";
+    options.requestStopImpl = async () => {};
+    let forcedAt;
+    options.killImpl = (_pid, signal) => { forcedAt = state.monotonicMs; state.signals.push(signal); state.alive = false; };
+    expect(await stopLauncher(options)).toEqual({ status: "force-stopped", pid: 1234 });
+    expect(forcedAt).toBe(25);
+    expect(state.signals).toEqual(["SIGKILL"]);
+  });
+
   test("默认在Gateway关闭预算外再留10秒后才强杀", async () => {
     const { state, options } = stoppingFixture();
     delete options.timeoutMs;
@@ -59,6 +96,7 @@ describe("Launcher 停止", () => {
     const signals = [];
     const result = await stopLauncher({
       boxteamHome: fixtureHome,
+    platform: "linux",
       readLockImpl: () => null,
       killImpl: (...args) => signals.push(args),
     });
@@ -75,6 +113,7 @@ describe("Launcher 停止", () => {
     let now = 0;
     const result = await stopLauncher({
       boxteamHome: fixtureHome,
+    platform: "linux",
       readLockImpl: () => lock,
       removeLockImpl: (home, token) => {
         removed.push({ home, token });
@@ -102,6 +141,7 @@ describe("Launcher 停止", () => {
     let removed = false;
     const result = await stopLauncher({
       boxteamHome: fixtureHome,
+    platform: "linux",
       readLockImpl: () => activeLock(),
       removeLockImpl: () => {
         removed = true;

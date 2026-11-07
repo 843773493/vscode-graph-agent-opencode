@@ -34,6 +34,25 @@ class LauncherCase:
     process: subprocess.Popen[str]
     environment: dict[str, str]
 
+    def stop(self) -> dict[str, object]:
+        # 真实产品入口；本测试是 Launcher 父进程，必须并行 reap 避免 POSIX 僵尸阻塞 stop。
+        stopped = subprocess.Popen([self.environment["BOXTEAM_TEST_NODE_HOST_EXECUTABLE"],
+            "packages/launcher/bin/boxteam.mjs", "stop"], env=self.environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        try:
+            launcher_code = self.process.wait(timeout=160)
+            stdout, stderr = stopped.communicate(timeout=10)
+            receipt = {"exit_code": stopped.returncode, "stdout": stdout, "stderr": stderr,
+                "launcher_exit_code": launcher_code}
+            (self.context.artifacts_dir / "stop.json").write_text(json.dumps(receipt,
+                ensure_ascii=False, indent=2), encoding="utf-8")
+            assert stopped.returncode == 0, stderr
+            assert "status=stopped" in stdout
+            assert launcher_code == (0 if sys.platform == "win32" else 128)
+            return receipt
+        finally:
+            terminate_process(stopped, timeout_seconds=10)
+
 
 @pytest.fixture
 def launcher_case(request: pytest.FixtureRequest) -> Iterator[LauncherCase]:
@@ -51,7 +70,7 @@ const [output,modules]=process.argv.slice(-2);
 await buildNodeExtensionHost(resolve('src/clients/workbench'),output);
 await symlink(resolve(modules),join(output,'node_modules'),'junction');
 """, str(component), modules]
-    build = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    build = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=60, check=False)
     (context.artifacts_dir / "build.json").write_text(json.dumps({"command": command,
         "exit_code": build.returncode, "stdout": build.stdout, "stderr": build.stderr}, indent=2), encoding="utf-8")
     assert build.returncode == 0, build.stderr
@@ -138,6 +157,24 @@ def test_launcher_reuses_service_after_failed_candidate_and_successful_handoff_t
             return payload["data"]
 
         original_inventory = inventory()
+        rejected_stop = subprocess.run(["bun", "--eval", """
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {gatewaySupervisorControlAddress,requestGatewaySupervisorControl} from './packages/launcher/src/gateway/control-channel.mjs';
+const home=process.env.BOXTEAM_HOME;
+const lock=JSON.parse(readFileSync(join(home,'state/launcher.lock'),'utf8'));
+for(const [token,launcher_token] of [['invalid-token',lock.token],['management-lifecycle-token','invalid-instance']]) {
+  await assert.rejects(requestGatewaySupervisorControl({address:gatewaySupervisorControlAddress(home),timeoutMs:5000,
+    payload:{operation:'stop',token,launcher_token,pid:lock.pid}}),/invalid runtime control token|实例已变化/);
+}
+console.log(JSON.stringify({rejected:2}));
+"""], env=case.environment, capture_output=True, text=True, encoding="utf-8", timeout=15, check=False)
+        evidence["rejected_stop"] = {"exit_code": rejected_stop.returncode,
+            "stdout": rejected_stop.stdout, "stderr": rejected_stop.stderr}
+        assert rejected_stop.returncode == 0, rejected_stop.stderr
+        assert json.loads(rejected_stop.stdout) == {"rejected": 2}
+        assert case.process.poll() is None and inventory() == original_inventory
         config_path = case.home / "config/gateway.jsonc"
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
         config["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] += 0.25
@@ -163,7 +200,7 @@ def test_launcher_reuses_service_after_failed_candidate_and_successful_handoff_t
 import {requestGatewayHandoff} from './packages/launcher/src/gateway/supervisor.mjs';
 console.log(JSON.stringify(await requestGatewayHandoff({boxteamHome:process.env.BOXTEAM_HOME})));
 """]
-            result = subprocess.run(command, env=pending_environment, capture_output=True, text=True,
+            result = subprocess.run(command, env=pending_environment, capture_output=True, text=True, encoding="utf-8",
                 timeout=120, check=False)
             evidence[label] = {"command": command, "exit_code": result.returncode,
                 "stdout": result.stdout, "stderr": result.stderr}
@@ -198,7 +235,8 @@ console.log(JSON.stringify(await requestGatewayHandoff({boxteamHome:process.env.
         recovered = case.client.get(f"/api/v1/workspaces/{workspace['workspace_id']}/health").raise_for_status().json()
         assert recovered["process_id"] == backend["process_id"]
         evidence["retained"] = {"gateway": changed, "backend": recovered, "service": service}
-        terminate_process(case.process, timeout_seconds=160)
+        # TODO: Windows 换代接管 Backend 的原8秒关闭仍会强制回收；保留完整验收和失败断言。
+        evidence["stop_command"] = case.stop()
         assert psutil.wait_procs([manager], timeout=10)[1] == []
         assert not service_file.exists()
         evidence["shutdown"] = {"launcher_exit_code": case.process.returncode, "manager_exited": True}

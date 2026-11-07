@@ -62,6 +62,10 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   const processObject = new EventEmitter();
   const children = [];
   const readinessControls = [];
+  let releasePending;
+  const pendingReady = new Promise(resolve => { releasePending = resolve; });
+  let notifyPending;
+  const pendingStarted = new Promise(resolve => { notifyPending = resolve; });
   const runtime = {
     distribution: "source-development", version: "test-version",
     manifestPath: "/runtime/runtime-manifest.json", pythonExecutable: "/runtime/python",
@@ -71,6 +75,7 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   const running = superviseGateway({
     runtime, environment: { BOXTEAM_HOME: boxteamHome, BOXTEAM_GATEWAY_PORT: String(publicPort) },
     openBrowser: false, logger, processObject,
+    authorizeStop(payload) { assert.equal(payload.token, "fixture-token"); },
     onRuntimeLogging(payload) {
       return runtimeLoggingControl(payload, { service: "launcher", token: "fixture-token", contract, logger });
     },
@@ -80,7 +85,9 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
       child.signalCode = null;
       child.killedWith = [];
       const isPending = options.env.BOXTEAM_CONFIG_CANDIDATE_REF !== undefined;
+      if (["stop-during-initial-startup", "stop-initial-failure"].includes(scenario)) notifyPending();
       if (isPending) {
+        notifyPending();
         assert.equal(children[0].child.exitCode, null);
         assert.deepEqual(children[0].child.killedWith, []);
       }
@@ -88,6 +95,10 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
       assert.equal(management.pid, process.pid);
       const server = createServer(async (request, response) => {
         if (request.url === "/api/gateway/health") {
+          if ((["stop-during-handoff", "active-exit-during-handoff", "signal-during-handoff"].includes(scenario) && isPending) || ["stop-during-initial-startup", "stop-initial-failure"].includes(scenario)) {
+            await pendingReady;
+            if (child.exitCode !== null) return response.destroy();
+          }
           const result = await requestGatewaySupervisorControl({
             address: management.address, timeoutMs: 500,
             payload: { operation: "runtime_logging", action: "status", token: "fixture-token" },
@@ -114,11 +125,12 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
           child.emit("close", code, null);
         });
       }
+      child.stdin = { writableEnded: false, end() { this.writableEnded = true; exitChild(0); } };
       child.kill = (signal) => {
         child.killedWith.push(signal);
         exitChild(signal === "SIGKILL" ? 137 : 0);
       };
-      children.push({ child, args, environment: options.env, server });
+      children.push({ child, args, environment: options.env, server, exitChild });
       const privatePort = Number(args[args.indexOf("--port") + 1]);
       server.once("error", (error) => child.emit("error", error));
       server.listen(privatePort, "127.0.0.1");
@@ -151,11 +163,77 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   }
   try {
     await within(waitForControl(), "控制监听就绪");
+    if (["stop-during-initial-startup", "stop-initial-failure"].includes(scenario)) {
+      await within(pendingStarted, "初始Gateway已启动但未就绪");
+      const child = children[0].child;
+      const kill = child.kill, end = child.stdin.end;
+      const failure = new Error("original-initial-stop-failure");
+      if (scenario === "stop-initial-failure") {
+        child.kill = () => { throw failure; };
+        child.stdin.end = () => { throw failure; };
+      }
+      const result = await requestGatewaySupervisorControl({ address: controlAddress, timeoutMs: 500,
+        payload: { operation: "stop", token: "fixture-token" } });
+      assert.equal(result.data.accepted, true);
+      const stopped = await within(running, "停止初始Gateway");
+      if (scenario === "stop-initial-failure") {
+        assert.equal(stopped.error, failure);
+        // 跨过一轮事件循环：没有主循环消费者时也不得出现未处理的拒绝。
+        await new Promise(resolve => setImmediate(resolve));
+        child.kill = kill; child.stdin.end = end;
+        child.kill("SIGTERM");
+      } else assert.deepEqual(stopped, {value:0});
+      assert.equal(children.length, 1);
+      assert.equal(children[0].child.exitCode, 0);
+      return;
+    }
     await within(waitForGateway({
       url: "http://127.0.0.1:" + publicPort + "/api/gateway/health", timeoutMs: 800, intervalMs: 5,
     }), "公开入口就绪");
     assert.equal(await readGeneration(), "active");
-    const handoff = await within(requestGatewayHandoff({ boxteamHome, environment, timeoutMs: 500 }), "generation切换");
+    if (scenario === "stop-failure") {
+      const child = children[0].child;
+      const kill = child.kill, end = child.stdin.end;
+      const failure = new Error("original-owned-child-stop-failure");
+      child.kill = () => { throw failure; };
+      child.stdin.end = () => { throw failure; };
+      const result = await requestGatewaySupervisorControl({ address: controlAddress, timeoutMs: 500,
+        payload: { operation: "stop", token: "fixture-token" } });
+      assert.equal(result.data.accepted, true);
+      assert.equal((await within(running, "停止失败仍清理控制端点")).error, failure);
+      assert.deepEqual(await requestGatewaySupervisorControl({ address: controlAddress, timeoutMs: 500,
+        payload: { operation: "stop", token: "fixture-token" } }), { handled: false });
+      await assert.rejects(fetch("http://127.0.0.1:" + publicPort, {signal:AbortSignal.timeout(500)}));
+      child.kill = kill; child.stdin.end = end;
+      child.kill("SIGTERM");
+      return;
+    }
+    const handoffRequest = requestGatewayHandoff({ boxteamHome, environment, timeoutMs: 500 });
+    if (["active-exit-during-handoff", "signal-during-handoff"].includes(scenario)) {
+      await within(pendingStarted, "候选已开始");
+      if (scenario === "active-exit-during-handoff") children[0].exitChild(7);
+      else processObject.emit("SIGTERM");
+      const handoff = await within(handoffRequest, "退出时取消未就绪候选");
+      assert.equal(handoff.data.accepted, false);
+      assert.deepEqual(await within(running, "两代退出"), {value:scenario === "active-exit-during-handoff" ? 7 : 0});
+      assert(children.every(({child}) => child.exitCode !== null));
+      return;
+    }
+    if (scenario === "stop-during-handoff") {
+      await within(pendingStarted, "候选已开始");
+      const result = await requestGatewaySupervisorControl({ address: controlAddress, timeoutMs: 500,
+        payload: { operation: "stop", token: "fixture-token" } });
+      assert.equal(result.data.accepted, true);
+      // 不释放候选健康响应；停止必须取消等待并关闭两代，不能等180秒就绪期限。
+      const handoff = await within(handoffRequest, "候选就绪等待被停止取消");
+      assert.equal(handoff.data.accepted, false);
+      assert.match(handoff.data.error, /正在停止/);
+      assert.deepEqual(await within(running, "active及未就绪候选退出"), {value:0});
+      assert(children.every(({child}) => child.exitCode === 0));
+      releasePending();
+      return;
+    }
+    const handoff = await within(handoffRequest, "generation切换");
     assert(readinessControls.includes("active"));
     assert(readinessControls.includes("pending"));
     if (scenario === "failed-handoff") {
@@ -168,7 +246,8 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
         handled: true, data: { accepted: true, target_generation: "generation-2" },
       });
       assert.equal(children.length, 2);
-      assert.deepEqual(children[0].child.killedWith, ["SIGTERM"]);
+      assert.deepEqual(children[0].child.killedWith, process.platform === "win32" ? [] : ["SIGTERM"]);
+      if (process.platform === "win32") assert.equal(children[0].child.stdin.writableEnded, true);
       assert.equal(children[1].environment.BOXTEAM_CONFIG_CANDIDATE_REF, "candidate-ref");
       const portIndex = children[1].args.indexOf("--port");
       assert(portIndex > -1);
@@ -178,6 +257,7 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
     processObject.emit("SIGTERM");
     assert.deepEqual(await within(running, "supervisor退出"), { value: 0 });
   } finally {
+    releasePending();
     processObject.emit("SIGTERM");
     for (const { child } of children) if (child.exitCode === null) child.kill("SIGTERM");
     await within(running, "supervisor清理");
@@ -209,6 +289,12 @@ function runHandoff(scenario) {
 }
 
 describe("Gateway真实控制通道与generation切换", () => {
+  test("active异常退出时取消未就绪候选，保留原退出码", () => runHandoff("active-exit-during-handoff"));
+  test("OS信号与交接重叠时取消未就绪候选", () => runHandoff("signal-during-handoff"));
+  test("初始启动停止失败保留原错，不产生未处理拒绝", () => runHandoff("stop-initial-failure"));
+  test("初始Gateway未就绪时停止不等待健康期限，也不重启fallback", () => runHandoff("stop-during-initial-startup"));
+  test("停止失败仍关闭控制端点及公开监听并保留原错", () => runHandoff("stop-failure"));
+  test("停止先ACK并取消未就绪候选，同时关闭两代", () => runHandoff("stop-during-handoff"));
   test("Gateway supervisor control socket 返回 handoff 结果", () => runHandoff("control-result"));
   test("pending listener handoff 失败时保留旧 public generation", () => runHandoff("failed-handoff"));
   test("supervisor 在旧 generation 仍运行时完成 pending listener handoff", () => runHandoff("accepted-handoff"));

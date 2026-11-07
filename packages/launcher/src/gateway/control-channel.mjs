@@ -29,7 +29,7 @@ export function gatewaySupervisorControlAddress(
   return temporarySocketPath;
 }
 
-export function createGatewaySupervisorControl({ address, onHandoff, onRuntimeLogging }) {
+export function createGatewaySupervisorControl({ address, onHandoff, onRuntimeLogging, onStop }) {
   if (typeof address !== "string" || address.length === 0) {
     throw new TypeError("Gateway supervisor control socket 路径无效");
   }
@@ -73,6 +73,11 @@ export function createGatewaySupervisorControl({ address, onHandoff, onRuntimeLo
             if (typeof onRuntimeLogging !== "function") throw new Error("Launcher 未提供日志管理入口");
             return onRuntimeLogging(payload);
           }
+          if (payload?.operation === "stop") {
+            if (typeof onStop !== "function") throw new Error("Launcher 未提供停止入口");
+            return onStop(payload);
+          }
+          if (payload?.operation !== undefined) throw new Error("未知 Launcher 控制操作");
           return onHandoff(payload);
         })
         .then((data) => {

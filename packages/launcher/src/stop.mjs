@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { gatewaySupervisorControlAddress, requestGatewaySupervisorControl } from "./gateway/control-channel.mjs";
 import {
   processIsAlive,
   readLauncherLock,
@@ -54,12 +57,26 @@ async function waitForLauncherStop({
   }
 }
 
+export async function requestLauncherStop({ boxteamHome, targetLock }) {
+  const token = readFileSync(path.join(boxteamHome, "state", "gateway", "credentials", "local-token"), "utf8").trim();
+  const response = await requestGatewaySupervisorControl({
+    address: gatewaySupervisorControlAddress(boxteamHome),
+    timeoutMs: 5_000,
+    payload: { operation: "stop", token, pid: targetLock.value.pid, launcher_token: targetLock.value.token },
+  });
+  if (!response.handled || response.data?.accepted !== true || response.data?.pid !== targetLock.value.pid) {
+    throw new Error("Launcher 未确认停止请求；保留原实例锁，请检查控制通道");
+  }
+}
+
 export async function stopLauncher({
   boxteamHome,
   readLockImpl = readLauncherLock,
   removeLockImpl = removeLauncherLock,
   isAliveImpl = processIsAlive,
   killImpl = process.kill,
+  platform = process.platform,
+  requestStopImpl = requestLauncherStop,
   sleepImpl = delay,
   nowImpl = performance.now.bind(performance),
   timeoutMs = DEFAULT_STOP_TIMEOUT_MS,
@@ -75,9 +92,10 @@ export async function stopLauncher({
   }
 
   try {
-    killImpl(pid, "SIGTERM");
+    if (platform === "win32") await requestStopImpl({ boxteamHome, targetLock });
+    else killImpl(pid, "SIGTERM");
   } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
+    if (platform === "win32" || error?.code !== "ESRCH") throw error;
     removeLockImpl(boxteamHome, targetLock.value.token);
     return Object.freeze({ status: "stopped", pid });
   }
