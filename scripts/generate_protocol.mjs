@@ -2,6 +2,7 @@
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 const projectRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
@@ -22,12 +23,8 @@ const stagingRoot = path.resolve(
     ? scriptArguments[stagingRootIndex + 1]
     : path.join("out", "protocol-generation"),
 );
-const bufExecutable = path.join(
-  projectRoot,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "buf.exe" : "buf",
-);
+const bufExecutable = createRequire(path.join(projectRoot, "package.json"))
+  .resolve("@bufbuild/buf/bin/buf");
 const pythonOutputRoot = path.join(projectRoot, "app", "protocol", "generated");
 const generatedRoots = [
   {
@@ -115,24 +112,23 @@ async function main() {
   await requirePathExists(path.join(projectRoot, "buf.yaml"));
   await requirePathExists(path.join(projectRoot, "buf.gen.yaml"));
   await requirePathExists(path.join(projectRoot, "proto"));
-  await requirePathExists(bufExecutable);
-
-  await run(bufExecutable, ["lint"]);
+  // Buf 的包入口负责选择平台二进制，无需猜测包管理器的 .bin shim。
+  await run(process.execPath, [bufExecutable, "lint"]);
   if (breakingAgainst) {
-    await run(bufExecutable, ["breaking", "--against", breakingAgainst]);
+    await run(process.execPath, [bufExecutable, "breaking", "--against", breakingAgainst]);
   }
 
   await mkdir(stagingRoot, { recursive: true });
   const stagingDirectory = await mkdtemp(path.join(stagingRoot, "protocol-"));
   try {
     const descriptorSet = path.join(stagingDirectory, "protocol.binpb");
-    await run(bufExecutable, ["build", "--as-file-descriptor-set", "--output", descriptorSet]);
+    await run(process.execPath, [bufExecutable, "build", "--as-file-descriptor-set", "--output", descriptorSet]);
     const pythonExecutable = path.join(projectRoot, ".venv",
       process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
     await run(pythonExecutable, ["-m", "scripts.export_openapi_snapshot", "--validate-only",
       "--descriptor-set", descriptorSet]);
     // 原 Buf 模板和插件版本不变；远端生成全部成功前，不移除现有绑定。
-    await run(bufExecutable, ["generate", "--output", stagingDirectory]);
+    await run(process.execPath, [bufExecutable, "generate", "--output", stagingDirectory]);
     await addPythonPackageMarkers(
       path.join(stagingDirectory, path.relative(projectRoot, pythonOutputRoot)),
     );

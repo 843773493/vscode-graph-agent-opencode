@@ -28,13 +28,16 @@ _RUNTIME = (
 @pytest.fixture
 def generator_workspace(tmp_path: Path) -> Path:
     """外部工具输出受控，生产生成入口和文件发布逻辑保持真实。"""
+    tmp_path = tmp_path / "项目 with spaces $&"
+    tmp_path.mkdir()
     for name in ("buf.yaml", "buf.gen.yaml"):
         (tmp_path / name).touch()
     (tmp_path / "proto").mkdir()
-    executable = tmp_path / "node_modules/.bin/buf"
+    executable = tmp_path / "node_modules/@bufbuild/buf/bin/buf"
     executable.parent.mkdir(parents=True)
+    (executable.parent.parent / "package.json").write_text('{"type":"module"}\n')
     executable.write_text(
-        '#!/usr/bin/env bun\nimport {mkdir,writeFile} from "node:fs/promises";\n'
+        'import {mkdir,writeFile} from "node:fs/promises";\n'
         'import path from "node:path";\nconst args=process.argv.slice(2);\n'
         'if(args[0]==="build")await writeFile(args[args.indexOf("--output")+1],"descriptor");\n'
         'if(args[0]==="generate"){\n'
@@ -46,7 +49,8 @@ def generator_workspace(tmp_path: Path) -> Path:
         'const file=path.join(output,name);await mkdir(path.dirname(file),{recursive:true});\n'
         'await writeFile(file,"generated binding\\n");}}\n',
     )
-    executable.chmod(0o755)
+    # CLI 作为脚本交给当前运行时，不依赖可执行位、shebang 或 .bin shim。
+    executable.chmod(0o600)
     python = tmp_path / ".venv/bin/python"
     python.parent.mkdir(parents=True)
     python.write_text(
