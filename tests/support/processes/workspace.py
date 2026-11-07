@@ -41,45 +41,79 @@ class BackendProcess:
     workspace_id: str
 
 
-def terminate_process(process: subprocess.Popen[str], *, force: bool = False, timeout_seconds: float = 10) -> None:
-    if process.poll() is not None:
+def terminate_process(
+    process: subprocess.Popen[str], *, force: bool = False,
+    timeout_seconds: float = 10, stdin_eof: bool = False,
+    owned_children: list[psutil.Process] | None = None,
+) -> None:
+    if stdin_eof and process.stdin is None:
+        raise ValueError("stdin EOF 停机要求启动时持有 stdin 管道")
+    deadline = time.monotonic() + timeout_seconds
+    already_exited = process.poll() is not None
+    if already_exited and not owned_children:
+        if stdin_eof and process.stdin is not None:
+            process.stdin.close()
+        if stdin_eof and not force and process.returncode != 0:
+            raise RuntimeError(f"stdin EOF 停机失败: pid={process.pid}, returncode={process.returncode}")
         return
 
-    children: list[psutil.Process] = []
-    if sys.platform == "win32":
+    children: list[psutil.Process] = owned_children if owned_children is not None else []
+    if sys.platform == "win32" and not already_exited:
         try:
             # venv 启动器可能先于实际服务器退出；停止前冻结归属，不能等父进程消失后再查。
-            children = psutil.Process(process.pid).children(recursive=True)
+            owner = psutil.Process(process.pid)
+            children.extend(child for child in owner.children(recursive=True) if child not in children)
         except psutil.NoSuchProcess:
-            process.wait(timeout=timeout_seconds)
-            return
-        if force:
-            # 崩溃恢复测试必须同时硬退出实际服务器，不能只杀启动器。
-            for child in reversed(children):
-                try:
-                    child.kill()
-                except psutil.NoSuchProcess:
-                    continue
-    try:
-        (process.kill if force else process.terminate)()
+            if not stdin_eof:
+                process.wait(timeout=timeout_seconds)
+                return
+    if force and sys.platform == "win32":
+        # 崩溃恢复测试必须同时硬退出实际服务器，不能只杀启动器。
+        for child in reversed(children):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                continue
+    if stdin_eof and not force:
+        assert process.stdin is not None
+        process.stdin.close()
         try:
-            process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
-    except ProcessLookupError:
-        pass
-    except Exception as error:
-        raise RuntimeError(
-            f"无法终止进程: pid={process.pid}, returncode={process.poll()}"
-        ) from error
+            process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError(
+                f"stdin EOF 正常停机尚未完成: pid={process.pid}, timeout_seconds={timeout_seconds}"
+            ) from error
+    else:
+        try:
+            (process.kill if force else process.terminate)()
+            try:
+                process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        except ProcessLookupError:
+            pass
+        except Exception as error:
+            raise RuntimeError(
+                f"无法终止进程: pid={process.pid}, returncode={process.poll()}"
+            ) from error
+        finally:
+            if stdin_eof and process.stdin is not None:
+                process.stdin.close()
     if children:
-        _, alive = psutil.wait_procs(children, timeout=timeout_seconds)
+        _, alive = psutil.wait_procs(
+            children,
+            timeout=max(0, deadline - time.monotonic()) if stdin_eof and not force else timeout_seconds,
+        )
         if alive:
             raise RuntimeError(
                 f"测试服务器子进程尚未退出: launcher_pid={process.pid}, "
                 f"child_pids={[child.pid for child in alive]}"
             )
+    if stdin_eof and not force and process.returncode != 0:
+        raise RuntimeError(f"stdin EOF 停机失败: pid={process.pid}, returncode={process.returncode}")
+    if owned_children is not None:
+        owned_children.clear()
 
 
 def ensure_local_port_available(

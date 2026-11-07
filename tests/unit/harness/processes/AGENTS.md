@@ -51,3 +51,5 @@ processes/
 - 产物镜像当前测试路径写入 `out/tests/unit/harness/processes/<测试名>/`；历史结果保留在原路径，不混作新运行证据。
 
 - 日志生命周期接线分别核Gateway显式150秒和Workspace默认10秒；Windows归属等待测试同时核覆盖期限传到原launcher与已捕获server子进程，不以替身冒充原生验收。
+
+- `test_process_stdin_eof.py`验证显式stdin EOF合同、单次总期限、非零退出、超时保留在运行进程和显式force，不把替身当作真实服务已退出的证据。

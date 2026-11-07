@@ -5,12 +5,13 @@ import os
 import shutil
 import subprocess
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
 import commentjson
 import httpx
+import psutil
 
 from configs.installer import install_user_configuration
 from tests.support.processes.scope import register_test_process, unregister_test_process
@@ -54,6 +55,7 @@ class GatewayProcess:
     stdout_file: IO[str]
     stderr_file: IO[str]
     port: int
+    shutdown_children: list[psutil.Process] = field(default_factory=list)
 
 
 async def acquire_gateway_guest(client: httpx.AsyncClient) -> None:
@@ -135,6 +137,7 @@ def start_gateway_process(
         "127.0.0.1",
         "--port",
         str(port),
+        "--shutdown-on-stdin-eof",
         "--timeout-graceful-shutdown",
         "2",
         "--log-level",
@@ -154,6 +157,8 @@ def start_gateway_process(
             cmd,
             cwd=project_root,
             env=env,
+            stdin=subprocess.PIPE,
+            text=True,
             stdout=stdout_file,
             stderr=stderr_file,
         )
@@ -186,7 +191,9 @@ def close_gateway_process(handle: GatewayProcess) -> None:
     errors: list[BaseException] = []
     for cleanup in (
         # 管理停机总期限120秒，另留普通HTTP连接drain余量；非慢浏览器整组回收上界。
-        lambda: terminate_process(handle.process, timeout_seconds=150),
+        lambda: terminate_process(
+            handle.process, timeout_seconds=150, stdin_eof=True, owned_children=handle.shutdown_children,
+        ),
         handle.stdout_file.close,
         handle.stderr_file.close,
     ):

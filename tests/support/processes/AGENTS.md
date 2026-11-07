@@ -36,3 +36,7 @@ processes/
 - Backend 显式传入 `boxteam_home` 时，配置安装与子进程环境使用同一绝对目录；联邦装具与 Gateway 共用该 owner 的 HOME，不能只改环境或只迁移 Gateway 控制面。
 
 - Gateway fixture统一启动`app.runtime.http_server`，关闭时显式传150秒，为管理停机总期限120秒及普通HTTP连接drain留余量；慢浏览器与多工作区回收仍沿原独立期限，不承诺整组停机总上界。通用工作区terminate默认仍为10秒，覆盖参数须传到启动器和已捕获子进程等待。
+
+- Gateway 装具启动时显式持有 stdin PIPE 并启用正式 runner 的 EOF 停机，关闭沿原管理排空及 lifespan 等待真实退出；启动器和已捕获后代共用一次150秒期限。EOF 超时或非零退出明确报错，不冒充已完成清理；崩溃实验仍用显式 force 硬终止。独立 Backend／debugpy 尚未接入 EOF，不能仅凭通用 helper 支持就宣称其优雅停机已验证。
+
+- GatewayProcess持有本次关闭捕获的psutil子进程对象；超时保留，重试即使启动器已退出也继续等待或显式force同一批子进程，全部结清后才释放引用，不重查可能复用的启动器PID。

@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TextIO
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 
@@ -26,7 +26,7 @@ class ProcessStartup:
     spawn: Mock
     ready: Mock
     terminate: Mock
-    termination_kwargs: dict[str, int]
+    termination_kwargs: dict[str, object]
 
 
 @pytest.fixture(params=["workspace", "gateway"])
@@ -45,7 +45,7 @@ def startup(
     spawn = Mock(return_value=process)
     ready = Mock()
     terminate = Mock()
-    monkeypatch.setattr(module, "subprocess", SimpleNamespace(Popen=spawn))
+    monkeypatch.setattr(module, "subprocess", SimpleNamespace(Popen=spawn, PIPE=subprocess.PIPE))
     monkeypatch.setattr(module, "ensure_local_port_available", Mock())
     monkeypatch.setattr(module, "resolve_workspace_python_executable", lambda _root: tmp_path / "python")
     monkeypatch.setattr(module, "terminate_process", terminate)
@@ -69,7 +69,7 @@ def startup(
         close = gateway_processes.close_gateway_process
     return ProcessStartup(
         module, start, close, spawn, ready, terminate,
-        {} if request.param == "workspace" else {"timeout_seconds": 150},
+        {} if request.param == "workspace" else {"timeout_seconds": 150, "stdin_eof": True, "owned_children": ANY},
     )
 
 
@@ -205,3 +205,13 @@ def test_log_close_failure_still_closes_other_log_and_preserves_all_errors(
     finally:
         handle.stdout_file.close()
         handle.stderr_file.close()
+
+
+@pytest.mark.parametrize("startup", ["gateway"], indirect=True)
+def test_gateway_stdin_is_owned_and_runner_eof_is_enabled(startup: ProcessStartup) -> None:
+    handle = startup.start()
+    try:
+        assert startup.spawn.call_args.kwargs["stdin"] == subprocess.PIPE
+        assert "--shutdown-on-stdin-eof" in startup.spawn.call_args.args[0]
+    finally:
+        startup.close(handle)

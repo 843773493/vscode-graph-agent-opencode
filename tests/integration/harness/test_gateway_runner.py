@@ -20,6 +20,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     ensure_local_port_available,
+    terminate_process,
     wait_for_http_ok,
 )
 
@@ -244,3 +245,40 @@ def test_authenticated_shutdown_uses_original_runner_and_keeps_callback_until_qu
         (runner.artifacts / "release").touch()
     assert runner.process.wait(timeout=5) == 0
     assert runner.events() == ["startup", "quiesce-enter", "callback", "quiesce-finish", "lifespan-exit"]
+
+
+@pytest.mark.parametrize("runner_process", [("normal", "eof")], indirect=True)
+@pytest.mark.parametrize("timeout_before_release", [False, True])
+def test_fixture_eof_close_waits_for_original_owner_and_releases_port(
+    runner_process: RunnerProcess, timeout_before_release: bool,
+) -> None:
+    runner = runner_process
+    wait_for_http_ok(runner.url + "/health", runner.process, timeout_seconds=5)
+    if timeout_before_release:
+        with pytest.raises(TimeoutError, match="stdin EOF 正常停机尚未完成"):
+            terminate_process(runner.process, stdin_eof=True, timeout_seconds=0.3)
+        assert runner.process.poll() is None
+        runner.wait_for_event("quiesce-enter")
+        with httpx.Client(trust_env=False, timeout=1) as client:
+            assert client.post(runner.url + "/callback").raise_for_status().json() == {"original_owner": True}
+    (runner.artifacts / "release").touch()
+    terminate_process(runner.process, stdin_eof=True, timeout_seconds=5)
+    assert runner.process.returncode == 0
+    assert runner.process.stdin is not None and runner.process.stdin.closed
+    assert runner.events() == [
+        "startup", "quiesce-enter", *(["callback"] if timeout_before_release else []),
+        "quiesce-finish", "lifespan-exit",
+    ]
+    port = urlsplit(runner.url).port
+    assert port is not None
+    ensure_local_port_available(port, service_name="EOF 关闭后的 Gateway runner")
+
+
+@pytest.mark.parametrize("runner_process", [("quiesce_error", "eof")], indirect=True)
+def test_fixture_eof_close_reports_original_runner_failure(runner_process: RunnerProcess) -> None:
+    runner = runner_process
+    wait_for_http_ok(runner.url + "/health", runner.process, timeout_seconds=5)
+    with pytest.raises(RuntimeError, match="stdin EOF 停机失败"):
+        terminate_process(runner.process, stdin_eof=True, timeout_seconds=5)
+    assert runner.process.returncode == 1
+    assert "original-quiesce-failure" in runner.stderr()
