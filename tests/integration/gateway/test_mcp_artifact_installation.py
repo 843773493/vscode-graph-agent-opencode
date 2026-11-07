@@ -259,6 +259,32 @@ def test_real_installation_publishes_locked_generation_and_original_thread_uses_
     exchange("PUT", source_path, "artifact-configure", edit)
     servers = exchange("GET", base + "/mcp/servers", "artifact-connected")["data"]
     assert len(servers) == 1 and servers[0]["status"] == "ready"
+    original_connection = servers[0]["connection_ref"]
+    source_bytes = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
+    for action in ("disconnect", "connect"):
+        operation_id = f"artifact-{action}"
+        connection = exchange("POST", base + "/mcp/connection-operations", operation_id, {
+            "operation_id": operation_id, "server_id": "installed", "action": action,
+        })["data"]
+        deadline = time.monotonic() + 20
+        while connection["status"] not in {"succeeded", "failed", "expired", "cancelled"}:
+            assert time.monotonic() < deadline, connection
+            time.sleep(0.05)
+            connection = exchange("GET", base + "/mcp/connection-operations/" + operation_id, operation_id + "-observe")["data"]
+        assert connection["status"] == "succeeded", connection
+        current, = exchange("GET", base + "/mcp/servers", operation_id + "-server")["data"]
+        if action == "connect":
+            assert current["status"] == "ready"
+        else:
+            assert current["status"] != "ready" and current["tools"] == []
+        assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == source_bytes
+    assert current["connection_ref"] and current["connection_ref"] != original_connection
+    ledger = ExternalResourceLeaseLedger(state_path=case.workspace / ".boxteam/resources.json")
+    original_record, current_record = ledger.get(original_connection), ledger.get(current["connection_ref"])
+    assert original_record is not None and original_record.status == "stopped"
+    assert original_record.process is not None and original_record.process.exit_verified
+    assert current_record is not None and current_record.status == "running"
+    assert current_record.managed_launch is not None and current_record.managed_launch.model_dump() == artifact["binding"]
     _wheel(artifact_index.root, "locked-leaf", "2.0.0", b"VALUE = 'changed-index-two'\n")
     session = exchange("POST", base + "/sessions", "artifact-session", {"title": "锁定 MCP 制品真实调用"})["data"]
     replies = [{"tool_calls": [{"index": 0, "id": "artifact-probe", "type": "function", "function": {

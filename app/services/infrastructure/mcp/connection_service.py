@@ -198,11 +198,14 @@ class McpConnectionService:
                 self._admit(identity)
                 if operation.action == "connect":
                     server = self._owner.server_configuration(operation.server_id)
-                    provider = None if server.oauth is None else McpOAuthProvider(
-                        server=server, workspace_root=self._workspace_root,
-                        redirect_handler=partial(self._redirect, identity), callback_handler=partial(self._callback, identity),
-                    )
-                    factory = partial(production_mcp_session_factory, workspace_root=self._workspace_root, oauth_provider=provider)
+                    # 普通重连复用原 owner 已绑定的安装及凭据依赖；只有 OAuth 需要本次交互回调。
+                    factory = None
+                    if server.oauth is not None:
+                        provider = McpOAuthProvider(
+                            server=server, workspace_root=self._workspace_root,
+                            redirect_handler=partial(self._redirect, identity), callback_handler=partial(self._callback, identity),
+                        )
+                        factory = partial(production_mcp_session_factory, workspace_root=self._workspace_root, oauth_provider=provider)
                     self._advance(identity, status="verifying", stage="initialize")
                     def catalog_ready() -> None:
                         self._advance(identity, status="verifying", stage="catalog")
