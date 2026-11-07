@@ -18,7 +18,10 @@ import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.gateway.test_mcp_artifact_installation import _wheel
+from tests.integration.gateway.test_mcp_artifact_installation import (
+    _wheel,
+    installation_route,
+)
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -94,6 +97,7 @@ def recovery_case(request: pytest.FixtureRequest) -> Iterator[RecoveryCase]:
 
 def test_original_operation_survives_concurrent_retry_and_backend_exit(recovery_case: RecoveryCase) -> None:
     case = recovery_case
+    _, installation_base = installation_route(case.client)
     evidence: list[dict[str, object]] = []
     children: list[psutil.Process] = []
 
@@ -109,25 +113,25 @@ def test_original_operation_survives_concurrent_retry_and_backend_exit(recovery_
     workspace_id = listing["items"][0]["workspace_id"]
     base = f"/api/v1/workspaces/{workspace_id}"
     exchange("GET", base + "/workspace", "recovery-workspace")
-    target = exchange("GET", base + "/mcp/installation-capabilities", "recovery-capabilities")["target"]
+    target = exchange("GET", installation_base + "/installation-capabilities", "recovery-capabilities")["target"]
     original_config = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
 
     def intent(version: str, operation_id: str) -> dict[str, object]:
         source = {"kind": "manual", "name": "org.example/recovery", "version": version, "definition": {"packages": [
             {"registryType": "pypi", "identifier": "recovery-server", "version": version, "registryBaseUrl": case.index,
              "transport": {"type": "stdio"}}]}}
-        inspected = exchange("POST", base + "/mcp/candidate-manifests", operation_id + "-inspect", {"target": target, "source": source})["data"]
+        inspected = exchange("POST", installation_base + "/candidate-manifests", operation_id + "-inspect", {"target": target, "source": source})["data"]
         candidate = {"target": target, "source": source, "manifest_digest": inspected["manifest_digest"], "variant": inspected["variants"][0]["ref"]}
-        plan = exchange("POST", base + "/mcp/candidate-plans", operation_id + "-plan", candidate)["data"]
+        plan = exchange("POST", installation_base + "/candidate-plans", operation_id + "-plan", candidate)["data"]
         return {"candidate": candidate, "plan_digest": plan["plan_digest"], "operation_id": operation_id, "entrypoint": "recovery-server"}
 
     def observe(operation_id: str) -> dict:
-        return exchange("GET", base + "/mcp/installation-operations/" + operation_id, operation_id + "-observe")["data"]
+        return exchange("GET", installation_base + "/installation-operations/" + operation_id, operation_id + "-observe")["data"]
 
     try:
         first_intent = intent("1.0.0", "stable-installation")
         with ThreadPoolExecutor(max_workers=4) as executor:
-            receipts = list(executor.map(lambda index: exchange("POST", base + "/mcp/installations", f"concurrent-{index}", first_intent)["data"], range(4)))
+            receipts = list(executor.map(lambda index: exchange("POST", installation_base + "/installations", f"concurrent-{index}", first_intent)["data"], range(4)))
         assert {item["operation_id"] for item in receipts} == {"stable-installation"}
         assert len({item["intent_digest"] for item in receipts}) == 1
         deadline = time.monotonic() + 40
@@ -140,12 +144,12 @@ def test_original_operation_survives_concurrent_retry_and_backend_exit(recovery_
         artifact = published["artifact"]
         assert artifact["version"] == "1.0.0" and Path(artifact["command"]).is_file()
         downloads_after_publish = list(case.downloads)
-        assert exchange("POST", base + "/mcp/installations", "repeat-published", first_intent)["data"] == published
-        exchange("POST", base + "/mcp/installations", "conflicting-entrypoint", {**first_intent, "entrypoint": "another-server"}, status=409)
+        assert exchange("POST", installation_base + "/installations", "repeat-published", first_intent)["data"] == published
+        exchange("POST", installation_base + "/installations", "conflicting-entrypoint", {**first_intent, "entrypoint": "another-server"}, status=409)
         assert case.downloads == downloads_after_publish
 
         interrupted_intent = intent("2.0.0", "interrupted-installation")
-        exchange("POST", base + "/mcp/installations", "start-interrupted", interrupted_intent)
+        exchange("POST", installation_base + "/installations", "start-interrupted", interrupted_intent)
         assert case.blocked.wait(10), "真实 uv 没有请求被阻塞的 wheel"
         before_exit = observe("interrupted-installation")
         assert before_exit["status"] == "running" and before_exit["stage"] in {"lock", "install"}
@@ -168,16 +172,16 @@ def test_original_operation_survives_concurrent_retry_and_backend_exit(recovery_
         assert after_exit["stage"] == before_exit["stage"] and after_exit["created_at"] == before_exit["created_at"]
         assert after_exit["intent_digest"] == before_exit["intent_digest"]
         assert "原安装进程已退出" in after_exit["error"]
-        after_restart = exchange("GET", base + "/mcp/installation-capabilities", "recovered-capabilities")
+        after_restart = exchange("GET", installation_base + "/installation-capabilities", "recovered-capabilities")
         assert after_restart["target"] == target
         _, alive_children = psutil.wait_procs(children, timeout=10)
         assert not alive_children, [item.pid for item in alive_children]
         requests_after_exit = list(case.downloads)
-        assert exchange("POST", base + "/mcp/installations", "repeat-interrupted", interrupted_intent)["data"] == after_exit
+        assert exchange("POST", installation_base + "/installations", "repeat-interrupted", interrupted_intent)["data"] == after_exit
         assert observe("interrupted-installation") == after_exit
         assert case.downloads == requests_after_exit
         assert observe("stable-installation") == published
-        assert exchange("GET", base + "/mcp/installations", "retained-original-artifact")["data"] == [artifact]
+        assert exchange("GET", installation_base + "/installations", "retained-original-artifact")["data"] == [artifact]
         assert exchange("GET", base + "/mcp/servers", "still-unconfigured")["data"] == []
         assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original_config
     finally:

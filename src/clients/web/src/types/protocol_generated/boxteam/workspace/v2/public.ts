@@ -748,6 +748,22 @@ export interface McpInstallationTargetDTO {
   backend_id: string;
 }
 
+export interface McpInstallationTargetListRequestDTO {
+  protocol_version: number;
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+}
+
+export interface McpInstallationTargetListResponseDTO {
+  code?: number | undefined;
+  message?: string | undefined;
+  data: McpInstallationTargetDTO[];
+  request_id: string;
+  protocol_version: number;
+  gateway_id: string;
+  source: string;
+}
+
 /** definition 仅供明确手动来源；目录来源由目标读取原始 manifest，不消费展示 DTO。 */
 export interface McpCandidateSourceDTO {
   kind: string;
@@ -8637,6 +8653,124 @@ export const McpInstallationTargetDTO: MessageFns<McpInstallationTargetDTO> = {
     message.kind = object.kind ?? "";
     message.gateway_id = object.gateway_id ?? "";
     message.backend_id = object.backend_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpInstallationTargetListRequestDTO(): McpInstallationTargetListRequestDTO {
+  return { protocol_version: 0, gateway_id: "", gateway_connection_id: undefined };
+}
+
+export const McpInstallationTargetListRequestDTO: MessageFns<McpInstallationTargetListRequestDTO> = {
+  fromJSON(object: any): McpInstallationTargetListRequestDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: McpInstallationTargetListRequestDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpInstallationTargetListRequestDTO>, I>>(
+    base?: I,
+  ): McpInstallationTargetListRequestDTO {
+    return McpInstallationTargetListRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpInstallationTargetListRequestDTO>, I>>(
+    object: I,
+  ): McpInstallationTargetListRequestDTO {
+    const message = createBaseMcpInstallationTargetListRequestDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpInstallationTargetListResponseDTO(): McpInstallationTargetListResponseDTO {
+  return {
+    code: undefined,
+    message: undefined,
+    data: [],
+    request_id: "",
+    protocol_version: 0,
+    gateway_id: "",
+    source: "",
+  };
+}
+
+export const McpInstallationTargetListResponseDTO: MessageFns<McpInstallationTargetListResponseDTO> = {
+  fromJSON(object: any): McpInstallationTargetListResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
+      data: globalThis.Array.isArray(object?.data)
+        ? object.data.map((e: any) => McpInstallationTargetDTO.fromJSON(e))
+        : [],
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+    };
+  },
+
+  toJSON(message: McpInstallationTargetListResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== undefined) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== undefined) {
+      obj.message = message.message;
+    }
+    if (message.data?.length) {
+      obj.data = message.data.map((e) => McpInstallationTargetDTO.toJSON(e));
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpInstallationTargetListResponseDTO>, I>>(
+    base?: I,
+  ): McpInstallationTargetListResponseDTO {
+    return McpInstallationTargetListResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpInstallationTargetListResponseDTO>, I>>(
+    object: I,
+  ): McpInstallationTargetListResponseDTO {
+    const message = createBaseMcpInstallationTargetListResponseDTO();
+    message.code = object.code ?? undefined;
+    message.message = object.message ?? undefined;
+    message.data = object.data?.map((e) => McpInstallationTargetDTO.fromPartial(e)) || [];
+    message.request_id = object.request_id ?? "";
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.source = object.source ?? "";
     return message;
   },
 };

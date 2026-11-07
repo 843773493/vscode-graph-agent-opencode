@@ -1,10 +1,10 @@
 # 目录用途
 
-将项目 Workspace MCP owner 的完整管理合同接入原 Workbench MCP 服务、对象及命令。
+将 Backend 制品安装 owner 与 Workspace MCP owner 的完整管理合同接入原 Workbench MCP 服务、对象及命令。
 
 # 可修改内容
 
-- 后端目录与操作镜像、精确工作区请求、原列表／详情对象和 OAuth 窗口桥接。
+- 后端目录与操作镜像、独立 Gateway／Backend 安装域选择、精确工作区请求、原列表／详情对象和 OAuth 窗口桥接。
 
 # 不可修改内容
 
@@ -13,7 +13,8 @@
 
 # 规范
 
-- 所有请求冻结 Gateway／workspace；目录完整替换，失败重新读取，迟到结果不能覆盖新操作。
+- MCP 管理视图独立选择 Gateway，初始为页面原生 Gateway；普通工作区焦点不改变该选择。安装只访问精确 Backend，发布后明确配置时才补选已确认属于该 Backend 的工作区。
+- 所有请求冻结原 Gateway／Backend／connection；工作区运行和配置继续携精确 workspace，目录完整替换，失败重新读取，迟到结果不能覆盖新操作。授权深链只打开原工作区对象，不重写管理视图选择。
 - 原 Workbench 服务仅消费同一组对象；未公布的安装、配置写入及宿主能力明确拒绝。
 - code/state 只由原同源回调窗口交给精确操作，不写入 URL、存储或模型上下文。
 - 制品管理沿原 Action／Quick Input 明确选择已就绪目标；列表、实际引用及卸载只消费原安装 owner。确认后才提交唯一卸载意图，结果未知仅查询原 operation，不自动重放或修改工作区配置。

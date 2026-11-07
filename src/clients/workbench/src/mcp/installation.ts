@@ -4,10 +4,10 @@ import type { CancellationToken } from '../../upstream/src/vs/base/common/cancel
 import type { IGalleryMcpServer } from '../../upstream/src/vs/platform/mcp/common/mcpManagement.js';
 import type { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import type { IProgress } from '../../upstream/src/vs/platform/progress/common/progress.js';
-import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import {
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation,
   installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
+  type McpInstallationRequestTarget,
 } from '../../../web/src/api/mcpConnections.js';
 import type {
   McpCandidateSourceDTO, McpCandidatePlanRequestDTO, McpInstalledArtifactDTO,
@@ -29,15 +29,15 @@ export interface PublishedMcpArtifact {
 }
 
 /** 原 install seam 的制品步骤；返回原生 owner 完整回执，不写配置或创建另一 MCP client。 */
-export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: GatewayWorkspaceRequestTarget, label: string,
+export async function publishMcpArtifact(gallery: IGalleryMcpServer, route: McpInstallationRequestTarget, label: string,
   quickInput: IQuickInputService, progress: IProgress<{ message?: string }>, token: CancellationToken, signal: AbortSignal): Promise<PublishedMcpArtifact> {
-  workspace = Object.freeze({ ...workspace });
+  route = Object.freeze({ ...route });
   const source = galleryInstallationSource(gallery);
   signal.throwIfAborted();
-  const capabilities = await getMcpInstallationCapabilities(0, workspace, signal);
+  const capabilities = await getMcpInstallationCapabilities(0, route, signal);
   if (!capabilities.data) throw new Error('目标未返回制品安装能力');
   const target = Object.freeze({ ...capabilities.target! });
-  const inspected = await inspectMcpInstallationCandidate(0, workspace, { target, source }, signal);
+  const inspected = await inspectMcpInstallationCandidate(0, route, { target, source }, signal);
   if (!inspected.data) throw new Error('目标未返回候选原件');
   const selected = await quickInput.pick(inspected.data.variants.map(variant => ({
     label: `${variant.registry_type ?? variant.transport}: ${variant.identifier ?? source.name} ${variant.version ?? source.version}`,
@@ -56,7 +56,7 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
   }
   const candidate: McpCandidatePlanRequestDTO = { target, source, manifest_digest: inspected.data.manifest_digest,
     variant: selected.variant.ref, inputs: {} };
-  const planned = await planMcpInstallation(0, workspace, candidate, signal);
+  const planned = await planMcpInstallation(0, route, candidate, signal);
   if (!planned.data || planned.data.disposition !== 'requires_artifact') throw new Error('目标计划没有可安装制品');
   const entrypoint = await quickInput.input({ title: `验证 ${selected.variant.identifier} 的入口`,
     prompt: `输入${npm ? '根 package 的 bin 名称' : '根 distribution 的 console entry point'}；制品安装后不会自动创建工作区配置`,
@@ -67,7 +67,7 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
   const operationId = crypto.randomUUID();
   let receipt;
   try {
-    receipt = await installMcpArtifact(0, workspace, { candidate, plan_digest: planned.data.plan_digest, operation_id: operationId, entrypoint }, signal);
+    receipt = await installMcpArtifact(0, route, { candidate, plan_digest: planned.data.plan_digest, operation_id: operationId, entrypoint }, signal);
   } catch (cause) {
     throw new Error(`安装请求未确认，不能自动重放。请查询原操作 ${operationId}`, { cause });
   }
@@ -75,14 +75,14 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
   while (receipt.data?.status === 'running') {
     signal.throwIfAborted();
     if (token.isCancellationRequested && !cancellationSent) {
-      try { receipt = await cancelMcpInstallationOperation(0, workspace, target, operationId, signal); }
+      try { receipt = await cancelMcpInstallationOperation(0, route, operationId, signal); }
       catch (cause) { throw new Error(`取消请求未确认，请查询原安装操作 ${operationId}`, { cause }); }
       cancellationSent = true;
       if (receipt.data?.status !== 'running') break;
     }
     progress.report({ message: `${label} · ${receipt.data.cancellation_requested ? '取消待核实退出' : receipt.data.stage} · 操作 ${operationId}` });
     await timeout(500);
-    try { receipt = await getMcpInstallationOperation(0, workspace, target, operationId, signal); }
+    try { receipt = await getMcpInstallationOperation(0, route, operationId, signal); }
     catch (cause) { throw new Error(`安装状态读取中断，原操作可能仍在运行。请查询 ${operationId}`, { cause }); }
   }
   if (receipt.data?.status === 'cancelled') throw new CancellationError();

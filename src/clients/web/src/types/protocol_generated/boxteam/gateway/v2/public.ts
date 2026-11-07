@@ -134,6 +134,7 @@ export interface FederationWorkspaceDTO {
   services: string[];
   backend_generation?: string | undefined;
   affected_workspace_ids: string[];
+  backend_id?: string | undefined;
 }
 
 export interface FederationWorkspaceListDTO {
@@ -790,6 +791,7 @@ export interface GatewayWorkspaceDTO {
   gateway_id: string;
   parent_workspace: GatewaySearchWorkspaceOwnerDTO | undefined;
   remote_gateways: GatewayRemoteConnectionSummaryDTO[];
+  backend_id?: string | undefined;
 }
 
 export interface GatewayWorkspaceListDTO {
@@ -2171,6 +2173,7 @@ function createBaseFederationWorkspaceDTO(): FederationWorkspaceDTO {
     services: [],
     backend_generation: undefined,
     affected_workspace_ids: [],
+    backend_id: undefined,
   };
 }
 
@@ -2188,6 +2191,7 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
       affected_workspace_ids: globalThis.Array.isArray(object?.affected_workspace_ids)
         ? object.affected_workspace_ids.map((e: any) => globalThis.String(e))
         : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : undefined,
     };
   },
 
@@ -2214,6 +2218,9 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     if (message.affected_workspace_ids?.length) {
       obj.affected_workspace_ids = message.affected_workspace_ids;
     }
+    if (message.backend_id !== undefined) {
+      obj.backend_id = message.backend_id;
+    }
     return obj;
   },
 
@@ -2229,6 +2236,7 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     message.services = object.services?.map((e) => e) || [];
     message.backend_generation = object.backend_generation ?? undefined;
     message.affected_workspace_ids = object.affected_workspace_ids?.map((e) => e) || [];
+    message.backend_id = object.backend_id ?? undefined;
     return message;
   },
 };
@@ -6433,6 +6441,7 @@ function createBaseGatewayWorkspaceDTO(): GatewayWorkspaceDTO {
     gateway_id: "",
     parent_workspace: undefined,
     remote_gateways: [],
+    backend_id: undefined,
   };
 }
 
@@ -6466,6 +6475,7 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
       remote_gateways: globalThis.Array.isArray(object?.remote_gateways)
         ? object.remote_gateways.map((e: any) => GatewayRemoteConnectionSummaryDTO.fromJSON(e))
         : [],
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : undefined,
     };
   },
 
@@ -6528,6 +6538,9 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     if (message.remote_gateways?.length) {
       obj.remote_gateways = message.remote_gateways.map((e) => GatewayRemoteConnectionSummaryDTO.toJSON(e));
     }
+    if (message.backend_id !== undefined) {
+      obj.backend_id = message.backend_id;
+    }
     return obj;
   },
 
@@ -6560,6 +6573,7 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
       : undefined;
     message.remote_gateways = object.remote_gateways?.map((e) => GatewayRemoteConnectionSummaryDTO.fromPartial(e)) ||
       [];
+    message.backend_id = object.backend_id ?? undefined;
     return message;
   },
 };

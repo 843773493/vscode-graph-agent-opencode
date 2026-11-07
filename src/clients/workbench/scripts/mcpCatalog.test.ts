@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import * as api from '../../web/src/api/mcpConnections.js';
 import * as authorization from '../src/mcp/authorizationWindow.js';
-import { WorkspaceMcpCatalog } from '../src/mcp/catalog.js';
+import { WorkspaceMcpCatalog, type McpWorkspaceRequestTarget } from '../src/mcp/catalog.js';
 import { WorkspaceMcpServer } from '../src/mcp/server.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import type { GatewayWorkspaceRequestTarget } from '../../web/src/api/workspaceIdentity.js';
@@ -31,7 +31,7 @@ function installMocks() {
 }
 let mocks: ReturnType<typeof installMocks>;
 const catalogs: WorkspaceMcpCatalog[] = [];
-function create(owner: GatewayWorkspaceRequestTarget = target, changed: () => void = () => {}) {
+function create(owner: McpWorkspaceRequestTarget = target, changed: () => void = () => {}) {
   const catalog = new WorkspaceMcpCatalog(owner, owner.gateway_id, changed);
   catalogs.push(catalog);
   return catalog;
@@ -58,6 +58,18 @@ test('完整目录封套与精确 owner 保留，同名服务共享原对象但�
   expect(b.snapshot.operations).toEqual([]);
   expect(ma.local).toBeUndefined();
   expect(ma.tools.get()).toEqual([]);
+});
+
+test('相同Gateway与工作区经不同Backend或连接读取的旧对象保留原身份', async () => {
+  const original = { ...target, backend_id: 'original-backend', gateway_connection_id: 'original-connection' };
+  const a = create(original), b = create({ ...original, gateway_connection_id: 'other-connection' }),
+    c = create({ ...original, backend_id: 'other-backend' });
+  await Promise.all([a.refresh(), b.refresh(), c.refresh()]);
+  const servers = [a, b, c].map(catalog => model(catalog));
+  expect(new Set(servers.map(server => server.id)).size).toBe(3);
+  original.gateway_connection_id = 'current-connection'; original.backend_id = 'current-backend';
+  await servers[0]!.start();
+  expect(mocks.submit.mock.calls[0]![1]).toEqual({ ...target, backend_id: 'original-backend', gateway_connection_id: 'original-connection' });
 });
 
 test('被动读取在途时显式刷新随后真实执行，多次主动刷新仍归并到同一请求', async () => {

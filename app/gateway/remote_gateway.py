@@ -84,6 +84,10 @@ def _projected_workspace_targets(
     for remote in remote_workspaces:
         if "root_path" in remote:
             raise ValueError("远端 workspace projection 不得包含物理 root")
+        backend_id = remote.get("backend_id")
+        if backend_id is not None:
+            from app.core.backend_identity import validate_backend_id
+            backend_id = validate_backend_id(backend_id)
         generation = remote.get("backend_generation")
         affected = remote.get("affected_workspace_ids", [])
         if generation is not None and (
@@ -118,6 +122,7 @@ def _projected_workspace_targets(
                 owner="remote_projection",
                 managed=bool(remote.get("managed", False)),
                 remote_gateway_connection_ids=(connection.connection_id,),
+                backend_id=backend_id,
                 remote_backend_generation=generation,
                 remote_affected_workspace_ids=tuple(
                     str(member_id) for member_id in affected

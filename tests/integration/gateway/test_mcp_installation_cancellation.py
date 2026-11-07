@@ -13,6 +13,7 @@ from pathlib import Path
 
 import psutil
 
+from tests.integration.gateway.test_mcp_artifact_installation import installation_route
 from tests.integration.gateway.test_mcp_installation_recovery import (  # noqa: F401 - 显式复用 pytest fixture，避免复制装具。
     recovery_case,
 )
@@ -24,10 +25,11 @@ from tests.support.workspaces import (
 
 def test_shared_installation_cancellation_through_native_gateway(recovery_case):
     case = recovery_case
+    target, base = installation_route(case.client)
     evidence = []
 
     def exchange(method, path, key, body=None, *, status=200):
-        response = case.client.request(method, path, json=body, headers={"X-Request-ID": key})
+        response = case.client.request(method, path, json=body, headers={"X-Request-ID": key, "X-BoxTeam-Gateway-Id": target["gateway_id"]})
         payload = response.json()
         evidence.append({"method": method, "path": path, "status": response.status_code, "body": payload})
         assert response.headers["X-Request-ID"] == payload["request_id"] == key
@@ -36,7 +38,6 @@ def test_shared_installation_cancellation_through_native_gateway(recovery_case):
 
     listing = exchange("GET", "/api/gateway/workspaces", "cancel-workspaces")["data"]
     workspace_id = listing["items"][0]["workspace_id"]
-    base = f"/api/v1/workspaces/{workspace_id}/mcp"
     target = exchange("GET", base + "/installation-capabilities", "cancel-capabilities")["target"]
     secondary = prepare_test_workspace(workspace_root=case.context.workspace_root / "second-backend",
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
@@ -47,7 +48,8 @@ def test_shared_installation_cancellation_through_native_gateway(recovery_case):
     second_id = next(item["workspace_id"] for item in registered["items"] if item["workspace_id"] != workspace_id)
     second_workspace = f"/api/v1/workspaces/{second_id}"
     exchange("GET", second_workspace + "/workspace", "cancel-secondary-workspace")
-    second_base = second_workspace + "/mcp"
+    second_backend = next(item for item in exchange("GET", "/api/gateway/workspaces", "cancel-backend-routes")["data"]["items"] if item["workspace_id"] == second_id)
+    second_base = second_backend["backend_url"].rstrip("/") + "/api/v1/mcp"
     assert exchange("GET", second_base + "/installation-capabilities", "cancel-secondary-target")["target"] == target
     first_health = case.client.get(f"/api/v1/workspaces/{workspace_id}/health").json()
     second_health = case.client.get(second_workspace + "/health").json()
@@ -106,9 +108,7 @@ def test_shared_installation_cancellation_through_native_gateway(recovery_case):
 
 def test_last_cancellation_waits_for_real_uv_exit(recovery_case):
     case = recovery_case
-    listing = case.client.get("/api/gateway/workspaces").json()["data"]
-    workspace_id = listing["items"][0]["workspace_id"]
-    base = f"/api/v1/workspaces/{workspace_id}/mcp"
+    target, base = installation_route(case.client)
     target = case.client.get(base + "/installation-capabilities").json()["target"]
     source = {"kind": "manual", "name": "org.example/recovery", "version": "2.0.0", "definition": {"packages": [
         {"registryType": "pypi", "identifier": "recovery-server", "version": "2.0.0", "registryBaseUrl": case.index,

@@ -212,7 +212,7 @@ def _proxy_headers(
         if target.connection_kind == "remote_gateway":
             headers[TARGET_GATEWAY_ID_HEADER] = target.gateway_id
         if include_credentials:
-            headers.update(_registry(request).target_request_headers(target))
+            headers.update(_registry(request).target_request_headers(target, gateway_connection_id=request.headers.get("X-BoxTeam-Gateway-Connection-Id")))
     elif include_credentials:
         headers["X-Local-Token"] = LOCAL_TOKEN
     return headers
@@ -397,14 +397,20 @@ async def _proxy_workspace_request(
             status_code=400,
             detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
         )
+    connection_id = request.headers.get("X-BoxTeam-Gateway-Connection-Id")
+    if connection_id is not None and (not connection_id or target.connection_kind != "remote_gateway" or auth is None or auth.kind == "federation"):
+        raise HTTPException(400, "明确 Gateway 连接只允许当前页面选择已关联的远端工作区")
     segments = _workspace_path_segments(path)
     private_input_request = len(segments) >= 2 and segments[0] == "mcp" and (
         segments[1] in {"private-headers", "private-env", "candidate-configurations"}
         or segments[1:] == ["candidate-plans", "private-env"])
     configuration_request = (bool(segments) and segments[0] == "config") or private_input_request
-    installation_request = len(segments) >= 2 and segments[0] == "mcp" and segments[1] in {
-        "candidate-manifests", "candidate-plans", "candidate-configurations", "installations", "installation-operations", "installation-capabilities",
-    }
+    if len(segments) >= 2 and segments[0] == "mcp" and (segments[1] in {
+        "candidate-manifests", "installations", "installation-operations", "installation-capabilities",
+    } or segments[1] == "candidate-plans" and segments[2:] != ["private-env"]):
+        raise HTTPException(410, "MCP 制品管理已移至明确 Gateway／Backend 的管理入口")
+    installation_request = len(segments) >= 2 and segments[0] == "mcp" and (
+        segments[1] == "candidate-configurations" or segments[1:] == ["candidate-plans", "private-env"])
     if configuration_request:
         if auth is None:
             raise RuntimeError("配置代理请求缺少已认证 Gateway 主体")
@@ -459,7 +465,7 @@ async def _proxy_workspace_request(
     route_workspace_id = target.key
     route_lease = registry.acquire_route_reference(
         route_workspace_id,
-        streaming=False,
+        streaming=False, gateway_connection_id=connection_id,
     )
 
     def release_route_reference() -> None:
@@ -481,7 +487,7 @@ async def _proxy_workspace_request(
                 release_route_reference()
                 route_lease = registry.acquire_route_reference(
                     route_workspace_id,
-                    streaming=False,
+                    streaming=False, gateway_connection_id=connection_id,
                 )
                 reference_streaming = False
                 route_reference_released = False
@@ -491,7 +497,7 @@ async def _proxy_workspace_request(
                 try:
                     target_url = build_upstream_url(
                         registry.remote_gateway_url(
-                            registry.remote_connection_for_target(target).connection_id
+                            registry.remote_connection_for_target(target, connection_id=connection_id).connection_id
                         ),
                         ("api", "v1"),
                         path,

@@ -478,6 +478,13 @@ class WorkspaceContainerRegistry:
             raise RuntimeError("Backend 尚未绑定稳定身份，不能管理 Node 宿主")
         return self._extension_hosts
 
+    @property
+    def mcp_installations(self) -> McpInstallationOwner:
+        self._require_open()
+        if self._mcp_installations is None:
+            raise RuntimeError("Backend 尚未绑定稳定身份，不能管理 MCP 制品")
+        return self._mcp_installations
+
     def _require_open(self) -> None:
         if self._closed:
             raise RuntimeError("WorkspaceContainerRegistry 已关闭，禁止重新装配")

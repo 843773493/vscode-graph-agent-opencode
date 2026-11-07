@@ -28,7 +28,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
-    if (!path.startsWith('/api/v1/')) return;
+    if (!path.startsWith('/api/v1/') && !path.startsWith('/api/gateway/mcp/')) return;
     const body = request.postData() ? request.postDataJSON() : undefined;
     const headers = Object.fromEntries(Object.entries(request.headers()).filter(([key]) =>
       ['x-boxteam-target-gateway-id', 'x-boxteam-workspace-id', 'x-request-id'].includes(key)));
@@ -43,7 +43,7 @@ try {
   });
   page.on('response', response => {
     const path = new URL(response.url()).pathname;
-    if (!/\/mcp\/(installation|candidate)/.test(path) && !path.startsWith(sourcePath)) return;
+    if (!/\/mcp\/(?:[^/]+\/[^/]+\/)?(installation|candidate)/.test(path) && !path.startsWith(sourcePath)) return;
     pending.push((async () => {
       const body = await response.json();
       assert.equal(body.request_id, response.headers()['x-request-id']);
@@ -98,18 +98,20 @@ try {
   const pick = async text => quick.locator('.monaco-list-row').filter({ has: page.getByText(text, { exact: true }) }).click();
   const publish = async () => {
     await expect(install).toBeEnabled(); await install.click();
-    await expect(quick.locator('.quick-input-title')).toHaveText(`安装 MCP 制品至 ${label}`);
+    await expect(quick.locator('.quick-input-title')).toHaveText('安装 MCP 制品至 本地');
     await pick('pypi: artifact-server 1.0.0');
     await expect(quick).toContainText('输入根 distribution 的 console entry point');
     await quick.locator('input').fill('artifact-server'); await page.keyboard.press('Enter');
-    await expect(page.locator('.notifications-toasts')).toContainText('工作区尚未配置或连接', { timeout: 40_000 });
+    await expect(page.locator('.notifications-toasts')).toContainText('尚未配置或连接工作区', { timeout: 40_000 });
     await Promise.all(pending);
     const completed = result.responses.filter(item => item.body.data?.status === 'succeeded').at(-1);
     assert(completed?.body.data.artifact, '安装必须由原操作确认发布');
     return completed.body.data.artifact;
   };
   const configure = async enabled => {
-    await page.locator('.notifications-toasts').getByRole('button', { name: '配置此工作区', exact: true }).click();
+    await page.locator('.notifications-toasts').getByRole('button', { name: '选择工作区配置', exact: true }).click();
+    await expect(quick.locator('.quick-input-title')).toHaveText('选择 MCP 配置工作区');
+    await pick(label);
     await expect(quick.locator('.quick-input-title')).toHaveText('配置已发布 MCP 制品');
     await quick.locator('input').fill('configured-server'); await page.keyboard.press('Enter');
     await expect(quick.locator('.quick-input-title')).toHaveText('选择 configured-server 的启用状态');
@@ -166,8 +168,12 @@ try {
   await Promise.all(pending);
   assert.equal(result.saves.length, 1); assert.equal(result.drafts.length, 2);
   const intent = result.saves[0].body, proposal = result.drafts[1].body;
-  const installs = result.requests.filter(item => item.path === '/api/v1/mcp/installations' && item.method === 'POST');
+  const installs = result.requests.filter(item => /^\/api\/gateway\/mcp\/[^/]+\/[^/]+\/installations$/.test(item.path) && item.method === 'POST');
   assert.equal(installs.length, 2);
+  for (const item of installs) assert.equal(item.headers['x-boxteam-workspace-id'], undefined);
+  const plans = result.requests.filter(item => item.path === '/api/v1/mcp/candidate-configurations/plans');
+  assert.equal(plans.length, 2);
+  for (const item of plans) assert.equal(item.headers['x-boxteam-workspace-id'], owner.workspace_id);
   const original = installs[1].body.candidate;
   assert.deepEqual(proposal.plan.candidate, { ...original, server_id: 'configured-server' });
   assert.equal(proposal.enabled, fixture.enabled); assert.deepEqual(intent.plan, proposal.plan);

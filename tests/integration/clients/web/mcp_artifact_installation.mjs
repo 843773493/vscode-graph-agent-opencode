@@ -32,7 +32,7 @@ try {
     if (new URL(request.url()).pathname.startsWith('/api/')) result.requests.push({ method: request.method(), url: request.url() });
   });
   page.on('response', response => {
-    if (/\/mcp\/(installation|candidate)/.test(new URL(response.url()).pathname)) pending.push((async () => {
+    if (/\/api\/gateway\/mcp\/[^/]+\/[^/]+\/(installation|candidate)/.test(new URL(response.url()).pathname)) pending.push((async () => {
       const body = await response.json();
       assert.equal(body.request_id, response.headers()['x-request-id']);
       assert.equal(response.status(), 200, JSON.stringify(body));
@@ -116,10 +116,10 @@ try {
     assert.equal(result.operation.artifact, null);
     const cancellations = result.responses.filter(item => item.method === 'POST' && new URL(item.url).pathname.endsWith('/cancel'));
     assert.equal(cancellations.length, 1);
-    assert.equal(cancellations[0].body.target.backend_id, result.responses.find(item => item.url.endsWith('/mcp/installations')).body.target.backend_id);
+    assert.equal(cancellations[0].body.target.backend_id, result.responses.find(item => new URL(item.url).pathname.endsWith('/installations')).body.target.backend_id);
   } else {
     result.phase = 'published';
-    await expect(page.locator('.notifications-toasts')).toContainText('工作区尚未配置或连接', { timeout: 40_000 });
+    await expect(page.locator('.notifications-toasts')).toContainText('尚未配置或连接工作区', { timeout: 40_000 });
     await Promise.all(pending);
     const complete = result.responses.find(item => item.body.data?.status === 'succeeded');
     assert(complete?.body.data.artifact, '原安装操作必须真实确认发布');
@@ -132,10 +132,11 @@ try {
       assert(result.operation.artifact.runtime_version);
     }
   }
-  const submitted = result.responses.filter(item => item.method === 'POST' && new URL(item.url).pathname.endsWith('/mcp/installations'));
+  const submitted = result.responses.filter(item => item.method === 'POST' && new URL(item.url).pathname.endsWith('/installations'));
   assert.equal(submitted.length, 1, '原安装意图只能提交一次');
-  assert(result.responses.some(item => item.url.endsWith('/mcp/candidate-manifests')));
-  assert(result.responses.some(item => item.url.endsWith('/mcp/candidate-plans')));
+  assert(result.responses.some(item => new URL(item.url).pathname.endsWith('/candidate-manifests')));
+  assert(result.responses.some(item => new URL(item.url).pathname.endsWith('/candidate-plans')));
+  for (const item of submitted) assert.match(new URL(item.url).pathname, /^\/api\/gateway\/mcp\/[^/]+\/[^/]+\/installations$/);
   assert(!result.requests.some(item => item.method !== 'GET' && /\/config\/sources|\/mcp\/connection-operations/.test(item.url)), '发布不能暗写工作区配置或启动连接');
   await expect(install).toBeEnabled();
   await expect(detail.getByRole('button', { name: /^(Start Server|Stop Server|Authorize)$/ })).toHaveCount(0);

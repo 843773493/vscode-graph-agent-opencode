@@ -7,6 +7,7 @@ import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.j
 
 const workspace = Object.freeze({ gateway_id: 'gateway_00000000000040008000000000000001', workspace_id: '00000000-0000-4000-8000-000000000001' });
 const target = { kind: 'backend', gateway_id: workspace.gateway_id, backend_id: '00000000-0000-4000-8000-000000000011' };
+const route = Object.freeze({ ...target, gateway_connection_id: 'original-connection' });
 const digest = 'sha256:jcs:v1:' + 'a'.repeat(64);
 const gallery = { name: 'org.example/same', version: 'release-1',
   installationSource: { endpoint: 'https://source.test', protocol: 'v0.1', entryUrl: 'https://source.test/v0.1/servers/org.example%2Fsame/versions/release-1' },
@@ -35,9 +36,9 @@ function prepare(registry: 'pypi' | 'npm' = 'pypi') {
 }
 
 test('原安装工作流使用来源owner给出的精确URI和用户选择，返回发布回执不生成local配置', async () => {
-  const { plan, install, quickInput } = prepare();
+  const { capabilities, inspect, plan, install, quickInput } = prepare();
   const signal = new AbortController().signal;
-  const receipt = await publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None, signal);
+  const receipt = await publishMcpArtifact(gallery, route, '目标 A', quickInput, { report() {} }, CancellationToken.None, signal);
   expect(receipt.artifact).toEqual(artifact);
   expect(receipt.candidate).toEqual(plan.mock.calls[0]![2]);
   expect(receipt.candidate).not.toHaveProperty('server_id');
@@ -47,18 +48,21 @@ test('原安装工作流使用来源owner给出的精确URI和用户选择，返
   expect(plan.mock.calls[0]![3]).toBe(signal);
   expect(install.mock.calls[0]![3]).toBe(signal);
   expect(receipt).not.toHaveProperty('local');
+  for (const call of [capabilities.mock.calls[0]!, inspect.mock.calls[0]!, plan.mock.calls[0]!, install.mock.calls[0]!]) {
+    expect(call[1]).toEqual(route); expect(call[1]).not.toHaveProperty('workspace_id');
+  }
 });
 
 test('安装结果未知时不重放原意图，也不生成虚假的已安装回执', async () => {
   const { install, quickInput } = prepare();
   install.mockRejectedValueOnce(new Error('socket disconnected'));
-  await expect(publishMcpArtifact(gallery, workspace, '目标 A', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal)).rejects.toThrow('不能自动重放');
+  await expect(publishMcpArtifact(gallery, route, '目标 A', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal)).rejects.toThrow('不能自动重放');
   expect(install).toHaveBeenCalledTimes(1);
 });
 
 test('npm目标不依赖PyPI能力，保留明确bin和发布时绑定的Node', async () => {
   const { install, input, quickInput, published } = prepare('npm');
-  const receipt = await publishMcpArtifact(gallery, workspace, '目标 B', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal);
+  const receipt = await publishMcpArtifact(gallery, route, '目标 B', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal);
   expect(receipt.artifact).toEqual(published);
   expect(input.mock.calls[0]![0].prompt).toContain('根 package 的 bin 名称');
   expect(install.mock.calls[0]![2]).toMatchObject({ entrypoint: 'explicit-entry', candidate: { target, variant: { index: 1 } } });
@@ -68,7 +72,7 @@ test.each(['pypi', 'npm'] as const)('选定%s生态不可用时保留目标原�
   const { capabilities, inspect, plan, install, quickInput } = prepare(registry);
   capabilities.mockResolvedValue(envelope({ platform: {}, pypi_wheel_available: registry !== 'pypi', npm_available: registry !== 'npm',
     unavailable_reason: '目标 uv 不可用', npm_unavailable_reason: '目标 Node/npm 不可用', unsupported_registry_types: [], limitations: [] }));
-  await expect(publishMcpArtifact(gallery, workspace, '目标 B', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal))
+  await expect(publishMcpArtifact(gallery, route, '目标 B', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal))
     .rejects.toThrow(registry === 'npm' ? '目标 Node/npm 不可用' : '目标 uv 不可用');
   expect(inspect).toHaveBeenCalledTimes(1);
   expect(plan).not.toHaveBeenCalled();

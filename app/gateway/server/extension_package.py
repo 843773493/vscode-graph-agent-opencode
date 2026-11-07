@@ -21,12 +21,14 @@ from app.gateway.server.extension_host import (
     _check_access,
     _check_inventory_permission,
     _check_management_response,
-    _check_management_route,
     _installation_route,
     _users,
     extension_client_identity,
 )
 from app.gateway.server.extension_management import management_owner
+from app.gateway.server.management_routes import (
+    check_management_route,
+)
 from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
@@ -75,7 +77,7 @@ async def _file_request(payload: ExtensionPackageFileRequest, request: Request,
         with _installation_route(request, payload, auth) as route:
             def check_access() -> None:
                 _check_access(access, route.leases)
-                _check_management_route(request, route)
+                check_management_route(request, route)
                 if payload.generation is None:
                     _check_inventory_permission(request, auth)
                 else:

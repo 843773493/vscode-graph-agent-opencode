@@ -154,6 +154,20 @@ class InstallationCase:
     replay: ModelStreamReplay
 
 
+def installation_route(client: httpx.Client) -> tuple[dict[str, str], str]:
+    """从产品入口发现安装域；不借活动工作区定位管理操作。"""
+    health = client.get("/api/gateway/health")
+    health.raise_for_status()
+    gateway_id = health.json()["data"]["gateway_id"]
+    response = client.post("/api/gateway/mcp-installation-targets", json={"gateway_id": gateway_id})
+    response.raise_for_status()
+    result = response.json()
+    assert result["request_id"] == response.headers["X-Request-ID"]
+    target, = result["data"]
+    assert result["gateway_id"] == target["gateway_id"] == gateway_id
+    return target, f"/api/gateway/mcp/{gateway_id}/{target['backend_id']}"
+
+
 @pytest.fixture
 def installation_case(request: pytest.FixtureRequest, web_workbench_assets: Path) -> Iterator[InstallationCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -176,9 +190,14 @@ def installation_case(request: pytest.FixtureRequest, web_workbench_assets: Path
     home = context.boxteam_home_for_node(request.node.nodeid)
     port = integration_port_block_for_file(Path(request.node.path)).port(0)
     with model_stream_replay(context.artifacts_dir, runtime_root=runtime, business_assertion=request.node.nodeid) as replay:
+        extra_env = {**replay.environment, "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}
+        # 根装具冻结最小 manifest；完整工作台可显式注入已准备的原生管理组件。
+        management_manifest = os.getenv("BOXTEAM_TEST_MCP_RUNTIME_MANIFEST")
+        if management_manifest is not None:
+            extra_env["BOXTEAM_RUNTIME_MANIFEST"] = management_manifest
         gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=port,
             boxteam_home=home, artifacts_dir=context.artifacts_dir, asgi_app="tests.support.e2e_control.gateway_app:app",
-            extra_env={**replay.environment, "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
+            extra_env=extra_env)
         try:
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS, timeout=30, trust_env=False) as client:
                 client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
@@ -189,6 +208,7 @@ def installation_case(request: pytest.FixtureRequest, web_workbench_assets: Path
 
 def test_real_installation_publishes_locked_generation_and_original_thread_uses_it(installation_case: InstallationCase, artifact_index: ArtifactIndex) -> None:
     case = installation_case
+    _, installation_base = installation_route(case.client)
     evidence: list[dict[str, object]] = []
 
     def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None) -> dict:
@@ -203,19 +223,19 @@ def test_real_installation_publishes_locked_generation_and_original_thread_uses_
     workspace_id = workspaces["items"][0]["workspace_id"]
     base = f"/api/v1/workspaces/{workspace_id}"
     original = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
-    capabilities = exchange("GET", base + "/mcp/installation-capabilities", "artifact-capabilities")
+    capabilities = exchange("GET", installation_base + "/installation-capabilities", "artifact-capabilities")
     target = capabilities["target"]
     assert capabilities["data"]["pypi_wheel_available"] is True
-    inspected = exchange("POST", base + "/mcp/candidate-manifests", "artifact-inspect", {"target": target, "source": artifact_index.source()})["data"]
+    inspected = exchange("POST", installation_base + "/candidate-manifests", "artifact-inspect", {"target": target, "source": artifact_index.source()})["data"]
     candidate = {"target": target, "source": artifact_index.source(), "manifest_digest": inspected["manifest_digest"], "variant": inspected["variants"][0]["ref"]}
-    plan = exchange("POST", base + "/mcp/candidate-plans", "artifact-plan", candidate)["data"]
+    plan = exchange("POST", installation_base + "/candidate-plans", "artifact-plan", candidate)["data"]
     intent = {"candidate": candidate, "plan_digest": plan["plan_digest"], "operation_id": "real-artifact", "entrypoint": "artifact-server"}
-    operation = exchange("POST", base + "/mcp/installations", "artifact-install", intent)["data"]
+    operation = exchange("POST", installation_base + "/installations", "artifact-install", intent)["data"]
     deadline = time.monotonic() + 40
     while operation["status"] == "running":
         assert time.monotonic() < deadline, operation
         time.sleep(0.1)
-        operation = exchange("GET", base + "/mcp/installation-operations/real-artifact", "artifact-observe")["data"]
+        operation = exchange("GET", installation_base + "/installation-operations/real-artifact", "artifact-observe")["data"]
     assert operation["status"] == "succeeded", operation
     artifact = operation["artifact"]
     command = Path(artifact["command"])
@@ -227,7 +247,7 @@ def test_real_installation_publishes_locked_generation_and_original_thread_uses_
     assert artifact["lock_digest"] == "sha256:" + hashlib.sha256(lock.read_bytes()).hexdigest()
     assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original
     assert exchange("GET", base + "/mcp/servers", "artifact-not-configured")["data"] == []
-    assert exchange("POST", base + "/mcp/installations", "artifact-repeat", intent)["data"] == operation
+    assert exchange("POST", installation_base + "/installations", "artifact-repeat", intent)["data"] == operation
     source_path = base + "/config/sources/workspace_root_mutable_override"
     document = exchange("GET", source_path, "artifact-source")["data"]
     configuration = commentjson.loads(document["jsonc"])
@@ -276,8 +296,8 @@ def test_real_installation_publishes_locked_generation_and_original_thread_uses_
     registered = exchange("POST", "/api/gateway/managed-workspaces", "artifact-second-backend", {"root_path": str(secondary), "name": "共享制品 B"})["data"]
     second_id = next(item["workspace_id"] for item in registered["items"] if item["workspace_id"] != workspace_id)
     second_base = f"/api/v1/workspaces/{second_id}"
-    assert exchange("GET", second_base + "/mcp/installation-capabilities", "artifact-second-capabilities")["target"] == target
-    assert exchange("GET", second_base + "/mcp/installations", "artifact-second-shared")["data"] == [artifact]
+    assert exchange("GET", installation_base + "/installation-capabilities", "artifact-second-capabilities")["target"] == target
+    assert exchange("GET", installation_base + "/installations", "artifact-second-shared")["data"] == [artifact]
     assert exchange("GET", second_base + "/mcp/servers", "artifact-second-independent")["data"] == []
     original_servers = exchange("GET", base + "/mcp/servers", "artifact-original-still-ready")["data"]
     assert len(original_servers) == 1 and original_servers[0]["status"] == "ready"
@@ -289,6 +309,7 @@ def test_original_api_retains_shared_generation_until_both_workspaces_release_it
     installation_case: InstallationCase, artifact_index: ArtifactIndex,
 ) -> None:
     case = installation_case
+    _, installation_base = installation_route(case.client)
     evidence: list[dict[str, object]] = []
 
     def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None, *, status: int = 200) -> dict:
@@ -305,17 +326,17 @@ def test_original_api_retains_shared_generation_until_both_workspaces_release_it
 
     workspace_id = exchange("GET", "/api/gateway/workspaces", "retention-workspaces")["data"]["items"][0]["workspace_id"]
     base = f"/api/v1/workspaces/{workspace_id}"
-    target = exchange("GET", base + "/mcp/installation-capabilities", "retention-capabilities")["target"]
-    inspected = exchange("POST", base + "/mcp/candidate-manifests", "retention-inspect", {"target": target, "source": artifact_index.source()})["data"]
+    target = exchange("GET", installation_base + "/installation-capabilities", "retention-capabilities")["target"]
+    inspected = exchange("POST", installation_base + "/candidate-manifests", "retention-inspect", {"target": target, "source": artifact_index.source()})["data"]
     candidate = {"target": target, "source": artifact_index.source(), "manifest_digest": inspected["manifest_digest"], "variant": inspected["variants"][0]["ref"]}
-    plan = exchange("POST", base + "/mcp/candidate-plans", "retention-plan", candidate)["data"]
-    operation = exchange("POST", base + "/mcp/installations", "retention-install", {
+    plan = exchange("POST", installation_base + "/candidate-plans", "retention-plan", candidate)["data"]
+    operation = exchange("POST", installation_base + "/installations", "retention-install", {
         "candidate": candidate, "plan_digest": plan["plan_digest"], "operation_id": "shared-install", "entrypoint": "artifact-server"})["data"]
     deadline = time.monotonic() + 40
     while operation["status"] == "running":
         assert time.monotonic() < deadline, operation
         time.sleep(.1)
-        operation = exchange("GET", base + "/mcp/installation-operations/shared-install", "retention-install-observe")["data"]
+        operation = exchange("GET", installation_base + "/installation-operations/shared-install", "retention-install-observe")["data"]
     assert operation["status"] == "succeeded", operation
     artifact = operation["artifact"]
     command = Path(artifact["command"])
@@ -328,7 +349,7 @@ def test_original_api_retains_shared_generation_until_both_workspaces_release_it
     registered = exchange("POST", "/api/gateway/managed-workspaces", "retention-register-A2", {"root_path": str(second), "name": "共享制品 A2"})["data"]
     second_id = next(item["workspace_id"] for item in registered["items"] if item["workspace_id"] != workspace_id)
     second_base = f"/api/v1/workspaces/{second_id}"
-    assert exchange("GET", second_base + "/mcp/installation-capabilities", "retention-A2-target")["target"] == target
+    assert exchange("GET", installation_base + "/installation-capabilities", "retention-A2-target")["target"] == target
 
     def configure(prefix: str, server: dict[str, object] | None, key: str) -> None:
         path = prefix + "/config/sources/workspace_root_mutable_override"
@@ -350,7 +371,7 @@ def test_original_api_retains_shared_generation_until_both_workspaces_release_it
     assert first_server["status"] == second_server["status"] == "ready" and first_ref != second_ref
     second_config = (second / ".boxteam/workspace.jsonc").read_bytes()
     second_resources = (second / ".boxteam/resources.json").read_bytes()
-    uninstall_path = base + "/mcp/installations/" + artifact["binding"]["installation_id"]
+    uninstall_path = installation_base + "/installations/" + artifact["binding"]["installation_id"]
     intent = {"target": target, "binding": artifact["binding"], "operation_id": "shared-uninstall"}
     retained = exchange("GET", uninstall_path + "/references", "retention-both-references")["data"]["references"]
     assert {reference["workspace_id"] for reference in retained} == {workspace_id, second_id}
@@ -383,11 +404,11 @@ def test_original_api_retains_shared_generation_until_both_workspaces_release_it
     while removing["status"] == "running":
         assert time.monotonic() < deadline, removing
         time.sleep(.05)
-        removing = exchange("GET", base + "/mcp/installation-operations/shared-uninstall", "retention-uninstall-observe")["data"]
+        removing = exchange("GET", installation_base + "/installation-operations/shared-uninstall", "retention-uninstall-observe")["data"]
     assert removing["status"] == "succeeded" and removing["artifact"]["state"] == "removed", removing
     assert not command.parent.parent.parent.exists()
     assert exchange("DELETE", uninstall_path, "retention-repeat", intent)["data"] == removing
-    assert exchange("GET", second_base + "/mcp/installations", "retention-removed-in-A2")["data"] == []
+    assert exchange("GET", installation_base + "/installations", "retention-removed-in-A2")["data"] == []
     (case.context.artifacts_dir / "retention-evidence.json").write_text(json.dumps({"http": evidence,
         "connections": [first_ref, second_ref], "artifact": artifact}, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -396,6 +417,7 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
     installation_case: InstallationCase, artifact_index: ArtifactIndex,
 ) -> None:
     case = installation_case
+    _, installation_base = installation_route(case.client)
     evidence: list[dict[str, object]] = []
 
     def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None) -> dict:
@@ -408,26 +430,26 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
 
     workspace_id = exchange("GET", "/api/gateway/workspaces", "update-workspaces")["items"][0]["workspace_id"]
     base = f"/api/v1/workspaces/{workspace_id}"
-    capabilities = case.client.get(base + "/mcp/installation-capabilities")
+    capabilities = case.client.get(installation_base + "/installation-capabilities")
     capabilities.raise_for_status()
     target = capabilities.json()["target"]
     source_path = base + "/config/sources/workspace_root_mutable_override"
 
     def candidate_plan(version: str) -> dict:
         source = artifact_index.source(version)
-        inspected = exchange("POST", base + "/mcp/candidate-manifests", "update-inspect-" + version, {"target": target, "source": source})
+        inspected = exchange("POST", installation_base + "/candidate-manifests", "update-inspect-" + version, {"target": target, "source": source})
         candidate = {"target": target, "source": source, "manifest_digest": inspected["manifest_digest"],
             "variant": inspected["variants"][0]["ref"], "server_id": "updatable"}
-        plan = exchange("POST", base + "/mcp/candidate-plans", "update-plan-" + version, candidate)
+        plan = exchange("POST", installation_base + "/candidate-plans", "update-plan-" + version, candidate)
         return {"candidate": candidate, "plan_digest": plan["plan_digest"]}
 
     def install(plan: dict, key: str) -> dict:
-        operation = exchange("POST", base + "/mcp/installations", key, {**plan, "operation_id": key, "entrypoint": "artifact-server"})
+        operation = exchange("POST", installation_base + "/installations", key, {**plan, "operation_id": key, "entrypoint": "artifact-server"})
         deadline = time.monotonic() + 40
         while operation["status"] == "running":
             assert time.monotonic() < deadline, operation
             time.sleep(.1)
-            operation = exchange("GET", base + "/mcp/installation-operations/" + key, key + "-observe")
+            operation = exchange("GET", installation_base + "/installation-operations/" + key, key + "-observe")
         return operation
 
     def configuration_request(plan: dict, artifact: dict, key: str) -> dict:
@@ -525,7 +547,7 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
     failed = install(second_plan, "update-install-missing-two")
     assert failed["status"] == "failed" and failed["stage"] == "lock" and failed["artifact"] is None, failed
     assert failed["error"] and "artifact-server==2.0.0" in failed["log"]
-    assert exchange("GET", base + "/mcp/installations", "update-failed-unpublished") == [first]
+    assert exchange("GET", installation_base + "/installations", "update-failed-unpublished") == [first]
     require_original("update-after-failure")
     invoke("after-failure", first, "locked-one")
 
@@ -581,7 +603,7 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
     assert current is not None and current.status == "running" and current.managed_launch is not None
     assert current.managed_launch.model_dump() == second["binding"]
     assert ledger.leases_for_resource(second_server["connection_ref"]) == []
-    artifacts = exchange("GET", base + "/mcp/installations", "update-both-published")
+    artifacts = exchange("GET", installation_base + "/installations", "update-both-published")
     assert {artifact["binding"]["generation"] for artifact in artifacts} == {first["binding"]["generation"], second["binding"]["generation"]}
     assert Path(first["command"]).is_file() and all(artifact["state"] == "published" for artifact in artifacts)
     (case.context.artifacts_dir / "update-evidence.json").write_text(json.dumps({"http": evidence,
@@ -591,6 +613,7 @@ def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_
 
 def test_original_workbench_install_action_publishes_without_configuring(installation_case: InstallationCase, artifact_index: ArtifactIndex) -> None:
     case = installation_case
+    _, installation_base = installation_route(case.client)
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "MCP 制品安装产品验收需要真实 Chromium"
     original = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
@@ -612,5 +635,5 @@ def test_original_workbench_install_action_publishes_without_configuring(install
     assert artifact["installed_distributions"] == {"artifact-server": "1.0.0", "locked-leaf": "1.0.0"}
     assert Path(artifact["command"]).is_file()
     assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original
-    assert case.client.get("/api/v1/mcp/installations").json()["data"] == [artifact]
+    assert case.client.get(installation_base + "/installations").json()["data"] == [artifact]
     assert case.client.get("/api/v1/mcp/servers").json()["data"] == []

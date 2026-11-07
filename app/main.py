@@ -21,6 +21,7 @@ from app.api.extension_configuration import router as extension_configuration_ro
 from app.api.extension_host import router as extension_host_router
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
+from app.api.mcp_installation import router as mcp_installation_router
 from app.api.message_stream import router as message_stream_router
 from app.api.messages import router as messages_router
 from app.api.node_debug import router as node_debug_router
@@ -209,6 +210,7 @@ async def workspace_http_exception_handler(
 app.add_exception_handler(RequestValidationError, request_validation_error_response)
 
 
+app.include_router(mcp_installation_router, prefix="/api/v1")
 app.include_router(extension_host_router)
 app.include_router(extension_configuration_router)
 app.include_router(runtime_logging_router(

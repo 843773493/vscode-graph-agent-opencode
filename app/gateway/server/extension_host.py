@@ -7,7 +7,6 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Literal, TypeVar
 
@@ -27,7 +26,6 @@ from starlette.responses import JSONResponse
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -40,7 +38,6 @@ from app.gateway.control.user_access import (
     UserAccessContext,
     UserAccessService,
 )
-from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.policy import (
     Capability,
     FederationPolicyStore,
@@ -50,6 +47,11 @@ from app.gateway.federation.policy import (
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
 from app.gateway.registry.routes import BackendManagementRoute
 from app.gateway.server.extension_management import _download_base_url, management_owner
+from app.gateway.server.management_routes import (
+    GatewayManagementRoute,
+    check_management_route,
+    management_gateway_route,
+)
 from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
@@ -168,20 +170,9 @@ def _check_inventory_access(connection: HTTPConnection, auth: GatewayAuthContext
         raise PermissionError("扩展库存读取权限在操作期间发生变化，请重新查询")
 
 
-@dataclass(frozen=True, slots=True)
-class _HostRoute:
-    base_url: str
-    remote: bool
-    headers: dict[str, str]
-    leases: list[WorkspaceRouteLease]
-    connection_id: str | None = None
-    connection_identity: tuple[object, object] | None = None
-    management_routes: tuple[BackendManagementRoute, ...] = ()
-
-
 @contextmanager
 def _target_route(connection: HTTPConnection, *, gateway_id: str, workspace_ids: list[str],
-                  auth: GatewayAuthContext, streaming: bool, gateway_connection_id: str | None = None) -> Iterator[_HostRoute]:
+                  auth: GatewayAuthContext, streaming: bool, gateway_connection_id: str | None = None) -> Iterator[GatewayManagementRoute]:
     registry = getattr(connection.app.state, "registry", None)
     if not isinstance(registry, GatewayWorkspaceRegistry):
         raise TypeError("Gateway 工作区注册表尚未初始化")
@@ -218,48 +209,7 @@ def _target_route(connection: HTTPConnection, *, gateway_id: str, workspace_ids:
                 registry.backend_owner(target.key), target if registry.backend_owner(target.key) is None else None)
             for target in targets
         )
-        yield _HostRoute(base_url, remote, headers, leases, management_routes=management_routes)
-
-
-def _check_management_route(request: HTTPConnection, route: _HostRoute) -> None:
-    if route.connection_id is not None:
-        registry = request.app.state.registry
-        current = registry.remote_gateway_route_identity(route.connection_id)
-        if route.connection_identity is None or any(before is not after for before, after in zip(route.connection_identity, current, strict=True)):
-            raise LookupError("远端 Gateway 管理路由已换代，请重新发现原目标")
-    _check_access(None, route.leases)
-
-
-@contextmanager
-def _management_gateway_route(request: HTTPConnection, payload: ExtensionTargetListRequest | ExtensionInstallationInventoryRequest | ExtensionWebHostOpenRequest | ExtensionConfigurationViewRequest,
-                              auth: GatewayAuthContext) -> Iterator[_HostRoute | None]:
-    registry = request.app.state.registry
-    if not isinstance(registry, GatewayWorkspaceRegistry):
-        raise TypeError("Gateway 原 registry 尚未初始化")
-    if payload.gateway_id == registry.gateway_id:
-        if payload.gateway_connection_id is not None:
-            raise ValueError("原生 Gateway 不能指定远端连接")
-        yield None
-        return
-    if auth.kind == "federation":
-        raise PermissionError("联邦入站请求禁止再次 Relay 到其它 Gateway")
-    connections = [connection for connection in registry.remote_gateway_connections()
-                   if connection.remote_gateway_id == payload.gateway_id
-                   and (payload.gateway_connection_id is None or connection.connection_id == payload.gateway_connection_id)]
-    if len(connections) != 1:
-        raise LookupError("目标 Gateway 管理连接不能唯一确定，请明确 gateway_connection_id")
-    connection = connections[0]
-    credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").get(connection.connection_id)
-    identity = registry.remote_gateway_route_identity(connection.connection_id)
-    url = registry.acquire_remote_gateway_reference(connection.connection_id)
-    try:
-        route = _HostRoute(url, True, {"X-Request-ID": get_request_id(request),
-            "X-BoxTeam-Federation-Token": credential.token, "X-BoxTeam-Target-Gateway-Id": payload.gateway_id,
-            "X-BoxTeam-Gateway-Id": registry.gateway_id}, [], connection.connection_id, identity)
-        _check_management_route(request, route)
-        yield route
-    finally:
-        registry.release_remote_gateway_reference(connection.connection_id)
+        yield GatewayManagementRoute(base_url, remote, headers, leases, management_routes=management_routes)
 
 
 def _check_management_response(response: httpx.Response, request_id: str) -> None:
@@ -277,12 +227,12 @@ async def list_extension_targets(
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[ExtensionTargetListDTO] | Response:
     try:
-        with _management_gateway_route(request, payload, auth) as remote:
+        with management_gateway_route(request, gateway_id=payload.gateway_id, gateway_connection_id=payload.gateway_connection_id, auth=auth) as remote:
             if remote is not None:
                 _check_access(access, [])
                 response = await _http_client(request).post(f"{remote.base_url.rstrip('/')}/api/gateway/extension-targets",
                     headers=remote.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=10)
-                _check_management_route(request, remote)
+                check_management_route(request, remote)
                 _check_access(access, [])
                 if access is not None:
                     expires_at = _users(request).expires_at(access)
@@ -515,8 +465,8 @@ async def _native_installation(payload: ExtensionInstallationInventoryRequest, r
 
 @contextmanager
 def _installation_route(request: HTTPConnection, payload: ExtensionInstallationInventoryRequest | ExtensionWebHostOpenRequest | ExtensionConfigurationViewRequest,
-                        auth: GatewayAuthContext, *, streaming: bool = False) -> Iterator[_HostRoute]:
-    with _management_gateway_route(request, payload, auth) as remote:
+                        auth: GatewayAuthContext, *, streaming: bool = False) -> Iterator[GatewayManagementRoute]:
+    with management_gateway_route(request, gateway_id=payload.gateway_id, gateway_connection_id=payload.gateway_connection_id, auth=auth) as remote:
         if remote is not None:
             yield remote
             return
@@ -530,13 +480,13 @@ def _installation_route(request: HTTPConnection, payload: ExtensionInstallationI
         needs_backend = isinstance(payload, (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest)) or getattr(payload, "generation", None) is not None
         if not needs_backend:
             management_owner(request, payload.backend_id)
-            yield _HostRoute("", False, {}, [])
+            yield GatewayManagementRoute("", False, {}, [])
             return
         workspace_ids = tuple(payload.workspace_ids) if isinstance(payload,
             (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest, ExtensionConfigurationViewRequest)) else ()
         with request.app.state.registry.backend_management_routes(backend_id=payload.backend_id, workspace_ids=workspace_ids, streaming=streaming) as routes:
             [selected] = routes
-            yield _HostRoute(selected.base_url, False, {"X-Request-ID": get_request_id(request),
+            yield GatewayManagementRoute(selected.base_url, False, {"X-Request-ID": get_request_id(request),
                 "X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": payload.gateway_id}, list(selected.leases))
 
 
@@ -566,7 +516,7 @@ async def _installation_request(
                 result = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
                     headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}, exclude_none=True), timeout=120)
             # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
-            _check_management_route(request, route)
+            check_management_route(request, route)
             if expected_capabilities is not None:
                 _check_inventory_access(request, auth, access, route.leases, expected_capabilities)
             else:
@@ -701,14 +651,14 @@ async def _upstream(websocket: WebSocket, *, url: str, headers: dict[str, str], 
             _relay(websocket, upstream, outbound=False, auth=auth, access=access, leases=leases))
 
 
-async def _watch_management_route(websocket: WebSocket, route: _HostRoute) -> None:
+async def _watch_management_route(websocket: WebSocket, route: GatewayManagementRoute) -> None:
     registry = websocket.app.state.registry
     changed = asyncio.Event()
     registry.add_commit_observer(changed.set)
     try:
         while True:
             changed.clear()
-            _check_management_route(websocket, route)
+            check_management_route(websocket, route)
             await changed.wait()
     finally:
         registry.remove_commit_observer(changed.set)

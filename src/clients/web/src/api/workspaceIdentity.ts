@@ -1,6 +1,6 @@
 import type { GatewayWorkspace } from "../types/backend";
 
-export type GatewayWorkspaceRequestTarget = Pick<GatewayWorkspace, "gateway_id" | "workspace_id">;
+export type GatewayWorkspaceRequestTarget = Pick<GatewayWorkspace, "gateway_id" | "workspace_id"> & { gateway_connection_id?: string };
 
 export interface WorkspaceOwner {
   gatewayId: string;

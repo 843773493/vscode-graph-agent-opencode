@@ -3,8 +3,12 @@ import {
   type McpConnectionOperationDTO, type McpServerDTO,
 } from '../../../web/src/api/mcpConnections.js';
 import type { McpServerListResponseDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import { gatewayWorkspaceKey, type GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { authorizeMcpInWindow } from './authorizationWindow.js';
+
+export type McpWorkspaceRequestTarget = GatewayWorkspaceRequestTarget & { backend_id?: string };
+export const mcpCatalogKey = (target: McpWorkspaceRequestTarget) =>
+  JSON.stringify([target.gateway_id, target.workspace_id, target.backend_id ?? null, target.gateway_connection_id ?? null]);
 
 export interface McpCatalogSnapshot {
   catalog?: McpServerListResponseDTO;
@@ -18,7 +22,7 @@ export const pendingMcpOperation = (operation: McpConnectionOperationDTO | undef
 
 /** 只保存原 owner 的完整回执；不维护第二份配置、连接或目录事实。 */
 export class WorkspaceMcpCatalog {
-  readonly target: GatewayWorkspaceRequestTarget;
+  readonly target: McpWorkspaceRequestTarget;
   readonly key: string;
   snapshot: McpCatalogSnapshot = { operations: [] };
   private generation = 0;
@@ -26,9 +30,9 @@ export class WorkspaceMcpCatalog {
   private reading?: { promise: Promise<void>; refresh: boolean };
   private readonly controller = new AbortController();
 
-  constructor(target: GatewayWorkspaceRequestTarget, readonly label: string, private readonly changed: () => void) {
-    this.target = Object.freeze({ gateway_id: target.gateway_id, workspace_id: target.workspace_id });
-    this.key = gatewayWorkspaceKey(this.target);
+  constructor(target: McpWorkspaceRequestTarget, readonly label: string, private readonly changed: () => void) {
+    this.target = Object.freeze({ ...target });
+    this.key = mcpCatalogKey(this.target);
   }
 
   server(serverId: string): McpServerDTO | undefined { return this.snapshot.catalog?.data.find(server => server.server_id === serverId); }
@@ -106,5 +110,9 @@ export class WorkspaceMcpCatalog {
     if (failure !== undefined) throw failure;
   }
 
-  dispose(): void { ++this.generation; this.controller.abort(); }
+  dispose(): void {
+    if (this.controller.signal.aborted) return;
+    ++this.generation; this.controller.abort();
+    this.snapshot = { ...this.snapshot, error: 'MCP 工作区目标已移除' }; this.changed();
+  }
 }

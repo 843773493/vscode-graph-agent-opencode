@@ -3245,6 +3245,78 @@ export declare type McpInstallationTargetDTO = Message<"boxteam.workspace.v2.Mcp
 export declare const McpInstallationTargetDTOSchema: GenMessage<McpInstallationTargetDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.McpInstallationTargetListRequestDTO
+ */
+export declare type McpInstallationTargetListRequestDTO = Message<"boxteam.workspace.v2.McpInstallationTargetListRequestDTO"> & {
+  /**
+   * @generated from field: int32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 3;
+   */
+  gatewayConnectionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationTargetListRequestDTO.
+ * Use `create(McpInstallationTargetListRequestDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationTargetListRequestDTOSchema: GenMessage<McpInstallationTargetListRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstallationTargetListResponseDTO
+ */
+export declare type McpInstallationTargetListResponseDTO = Message<"boxteam.workspace.v2.McpInstallationTargetListResponseDTO"> & {
+  /**
+   * @generated from field: optional int64 code = 1;
+   */
+  code?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string message = 2;
+   */
+  message?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpInstallationTargetDTO data = 3;
+   */
+  data: McpInstallationTargetDTO[];
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: int32 protocol_version = 5;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 6;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string source = 7;
+   */
+  source: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationTargetListResponseDTO.
+ * Use `create(McpInstallationTargetListResponseDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationTargetListResponseDTOSchema: GenMessage<McpInstallationTargetListResponseDTO>;
+
+/**
  * definition 仅供明确手动来源；目录来源由目标读取原始 manifest，不消费展示 DTO。
  *
  * @generated from message boxteam.workspace.v2.McpCandidateSourceDTO

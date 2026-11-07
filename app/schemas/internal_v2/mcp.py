@@ -212,6 +212,22 @@ class McpInstallationTargetDTO(_McpCandidateModel):
     backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
+class McpInstallationTargetListRequestDTO(_McpCandidateModel):
+    protocol_version: Literal[1] = 1
+    gateway_id: CanonicalGatewayId
+    gateway_connection_id: str | None = Field(default=None, min_length=1)
+
+
+class McpInstallationTargetListResponseDTO(_McpCandidateModel):
+    code: int = 0
+    message: str = "ok"
+    data: list[McpInstallationTargetDTO]
+    request_id: str
+    protocol_version: Literal[1] = 1
+    gateway_id: CanonicalGatewayId
+    source: Literal["live"] = "live"
+
+
 class McpCandidateSourceDTO(_McpCandidateModel):
     kind: Literal["gallery", "manual"]
     name: str = Field(min_length=1, max_length=512)

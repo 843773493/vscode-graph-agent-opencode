@@ -53,7 +53,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
 
   constructor(readonly catalog: WorkspaceMcpCatalog, readonly name: string,
     private readonly openDetails: (server: WorkspaceMcpServer) => Promise<void>, private readonly watch: () => IDisposable) {
-    this.definition = { id: JSON.stringify([catalog.target.gateway_id, catalog.target.workspace_id, name]), label: name };
+    this.definition = { id: JSON.stringify([catalog.key, name]), label: name };
     this.collection = { id: catalog.key, label: `${catalog.label} · ${catalog.target.gateway_id}`, order: 0 };
   }
 
@@ -99,7 +99,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   showOutput(): Promise<void> { return this.openDetails(this); }
   async *resources(): AsyncIterable<IMcpResource[]> { throw new Error('Workbench MCP 资源浏览尚未接入项目 owner'); }
   async resourceTemplates(): Promise<IMcpResourceTemplate[]> { throw new Error('Workbench MCP 资源模板尚未接入项目 owner'); }
-  async getManifest(): Promise<never> { throw new Error('目标制品安装与 manifest 管理尚未实现'); }
+  async getManifest(): Promise<never> { throw new Error('此工作区连接对象未提供制品 manifest，请使用目标制品管理入口'); }
   async getReadme(token: CancellationToken): Promise<string> {
     if (token.isCancellationRequested) throw new CancellationError();
     const document = new MarkdownString();
@@ -108,6 +108,8 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     line('服务', this.name);
     line('Gateway', this.catalog.target.gateway_id);
     line('工作区', this.catalog.target.workspace_id);
+    if (this.catalog.target.backend_id) line('Backend', this.catalog.target.backend_id);
+    if (this.catalog.target.gateway_connection_id) line('Gateway 连接', this.catalog.target.gateway_connection_id);
     line('状态', this.statusLabel);
     line('传输', this.data?.transport ?? '服务已移除');
     const snapshot = this.catalog.snapshot;
@@ -122,7 +124,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     }
     document.appendMarkdown('### 目标工具摘要\n\n');
     for (const tool of this.data?.tools ?? []) line(tool.remote_name, tool.description);
-    document.appendText('工具执行仍使用当前工作区的 Agent MCP owner；新工具在允许的上下文边界生效。制品安装与 Node host 尚不可用，已有动态命令不表示已安装制品。');
+    document.appendText('工具执行仍使用此工作区的 Agent MCP owner；新工具在允许的上下文边界生效。制品按安装域独立管理，已有动态命令不表示已安装制品。');
     return document.value;
   }
   dispose(): void { /* 对象只是后端镜像；关闭详情不关闭目标连接。 */ }

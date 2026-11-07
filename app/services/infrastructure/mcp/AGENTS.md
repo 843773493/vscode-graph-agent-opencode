@@ -5,6 +5,7 @@
 # 可修改内容
 
 - MCP stdio 与 Streamable HTTP Client 配置解析。
+- `candidate_plans.py` 是安装与工作区配置共用的候选读取、variant 选择和解析实现。安装候选由原 `McpInstallationOwner` 消费，只解析制品字段；配置由 `McpCatalogOwner` 按精确工作区解析运行输入与私有引用，不反向代理安装、不复制解析或安装账本。
 - `oauth.py` 通过官方 OAuthClientProvider 完成 discovery、PKCE、state、交换与刷新；只将已确认的授权需求交给 Owner。OAuth 专属 SDK 日志及异常不可携带 token、state 或响应正文；未知401与混合清理异常仍明确失败。
 - `oauth_credentials.py` 实现官方 TokenStorage，凭据按工作区／Server／endpoint／回调隔离，使用既有跨平台私有权限和原子文件原语；冷启动恢复原绝对过期时间与 discovery endpoint，不写入会话正文或普通状态表。
 - MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。

@@ -23,7 +23,7 @@ try {
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('response', response => {
-    if (!new URL(response.url()).pathname.includes('/mcp/installations')) return;
+    if (!/^\/api\/gateway\/mcp\/[^/]+\/[^/]+\/installations/.test(new URL(response.url()).pathname)) return;
     pending.push((async () => {
       const body = await response.json();
       assert.equal(body.request_id, response.headers()['x-request-id']);
@@ -38,7 +38,7 @@ try {
   const api = async (path, method = 'GET', payload) => page.evaluate(async ({ path, method, payload, owner }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'X-Local-Token': credential.data.token,
-      ...(owner ? { 'X-BoxTeam-Target-Gateway-Id': owner.gateway_id, 'X-BoxTeam-Workspace-Id': owner.workspace_id } : {}) },
+      ...(owner && path.startsWith('/api/v1/') ? { 'X-BoxTeam-Target-Gateway-Id': owner.gateway_id, 'X-BoxTeam-Workspace-Id': owner.workspace_id } : {}) },
       ...(payload ? { body: JSON.stringify(payload) } : {}) });
     const body = await response.json();
     if (!response.ok || body.code !== 0 || body.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify({ path, body }));
@@ -53,7 +53,8 @@ try {
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
   const quick = page.locator('.quick-input-widget');
-  const label = listing.items.find(item => item.workspace_id === owner.workspace_id).name;
+  const label = '本地';
+  const installationPath = `/api/gateway/mcp/${fixture.target.gateway_id}/${fixture.target.backend_id}`;
   const waitList = async (hasArtifact = true) => {
     // 引用页标题也含包名；必须等原列表重新打开，不能拿旧标题判断返回已完成。
     await expect(quick.locator('.quick-input-title')).toHaveText(`MCP 制品 · ${label}`);
@@ -65,8 +66,6 @@ try {
   const open = async () => {
     await page.keyboard.press('F1'); await quick.locator('input').fill('>MCP: 管理目标制品');
     await page.keyboard.press('Enter');
-    await expect(quick).toContainText('选择 MCP 制品目标');
-    await pick(label);
     await waitList();
   };
   const artifact = async action => { await pick('artifact-server 1.0.0'); await pick(action); };
@@ -122,7 +121,7 @@ try {
   await pick('查询已有安装／卸载操作');
   await expect(quick).toContainText('查询原 MCP 操作');
   await quick.locator('input').fill(operationId);
-  const queried = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/mcp/installation-operations/${operationId}`);
+  const queried = page.waitForResponse(response => new URL(response.url()).pathname === `${installationPath}/installation-operations/${operationId}`);
   await page.keyboard.press('Enter');
   const receipt = await queried, operation = await receipt.json();
   assert.equal(receipt.status(), 200); assert.equal(operation.request_id, receipt.headers()['x-request-id']);
@@ -138,7 +137,7 @@ try {
     assert.deepEqual(item.requestBody.target, fixture.target);
     assert.deepEqual(item.requestBody.binding, fixture.artifact.binding);
   }
-  assert.deepEqual(await api('/api/v1/mcp/installations'), []);
+  assert.deepEqual(await api(`${installationPath}/installations`), []);
   assert.deepEqual(await api('/api/v1/mcp/servers'), []); assert.deepEqual(result.pageErrors, []);
   await page.screenshot({ path: join(fixture.artifacts, 'artifact-management-complete.png'), fullPage: true });
   await phase('complete');

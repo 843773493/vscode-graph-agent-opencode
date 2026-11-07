@@ -9,6 +9,7 @@
 - 独立Node宿主通道与实时目标发现的现有认证、原生管理授权、路由引用和失效检查；共用同一路由解析，只传原协议字节，不启动插件进程。发现不启动Backend、不以离线镜像代替实时状态。
 - `extension_configuration.py`透明转发正式具名配置资源的stat/read/write/events；client从原用户租约派生，保留generation／view／有序工作区身份，披露与原心跳重新核对host及configuration读写权限。配置文件与共享watcher仍归目标Backend，不在Gateway建立配置副本或保存基线。Node／Web共用原安装域路由，空工作区视图仍明确绑定Backend与generation；连接选择只在本跳消费，远端回执披露前重核原连接身份。
 - 仅服务于 Gateway 入口装配的辅助函数
+- `management_routes.py` 是扩展与 MCP 共用的目标路由解析；沿原登记和路由引用冻结 Gateway／Backend／显式连接，联邦入站不得再次 Relay。`mcp_installation.py` 透明代理目标级安装域发现、候选、制品与操作，准入及披露前核原管理权限，不借活动工作区、不重放结果未知的写入；工作区配置与私有输入仍走原代理。
 - `extension_management.py`是常驻原生管理组件的具名本机控制入口，核原运行时凭据、loopback、安装域及已登记操作；不接受浏览器Origin、联邦凭据或任意method。目标级库存、卸载直接调用安装组件，包字节由Gateway Python在原串行准入内读取；VSIX来源与运行实例仍由Backend原owner核验。
 - 市场安装与 metadata 写入同库存沿唯一目标安装域路由，不要求工作区或运行宿主；写入核安装管理权限，Relay 消费并剥离本跳连接选择，回执披露前重核目标与原 profile。市场下载沿原安装请求能力，不引入第二安装入口或浏览器权威。
 - 其下载回调须绑定尚未结清的原安装能力与request_id，终态撤销后拒绝旧回调；只允许原安装器具名制品callSite，不提供通用fetch、文件写入或独立服务。回执未知期间不能因普通健康检查拒绝原已受理安装结清下载。

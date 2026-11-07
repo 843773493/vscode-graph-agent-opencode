@@ -136,6 +136,7 @@ message FederationWorkspaceDTO {
   repeated string services = 6;
   optional string backend_generation = 8;
   repeated string affected_workspace_ids = 9;
+  optional string backend_id = 10;
 }
 
 message FederationWorkspaceListDTO {
@@ -791,6 +792,7 @@ message GatewayWorkspaceDTO {
   string gateway_id = 21;
   GatewaySearchWorkspaceOwnerDTO parent_workspace = 22;
   repeated GatewayRemoteConnectionSummaryDTO remote_gateways = 23;
+  optional string backend_id = 24;
 }
 
 message GatewayWorkspaceListDTO {

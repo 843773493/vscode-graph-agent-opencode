@@ -20,7 +20,7 @@ export async function listConfigSources(port: number, target: GatewayWorkspaceRe
 /** 正文与 CAS 只消费原来源 owner；查询提交沿用原幂等键。 */
 export async function getConfigSourceDocument(port: number, target: GatewayWorkspaceRequestTarget, sourceKey: string,
   { idempotencyKey, signal }: { idempotencyKey?: string; signal?: AbortSignal } = {}): Promise<ConfigSourceDocumentDTO> {
-  const route = { gateway_id: target.gateway_id, workspace_id: target.workspace_id };
+  const route = { ...target };
   const query = idempotencyKey === undefined ? "" : `?${new URLSearchParams({ idempotency_key: idempotencyKey })}`;
   const document = unwrapApiData(await requestJson<APIResponse<ConfigSourceDocumentDTO>>(port,
     `/api/v1/config/sources/${encodeURIComponent(sourceKey)}${query}`, {
@@ -33,7 +33,7 @@ export async function getConfigSourceDocument(port: number, target: GatewayWorks
 /** 同一意图原样预检和保存；不在客户端合并来源或更新 active。 */
 export async function preflightConfigSource(port: number, target: GatewayWorkspaceRequestTarget, intent: ConfigSourceEditRequest,
   signal?: AbortSignal): Promise<ConfigSourcePreflightDTO> {
-  const route = { gateway_id: target.gateway_id, workspace_id: target.workspace_id };
+  const route = { ...target };
   if (intent.gateway_id !== route.gateway_id || intent.workspace_id !== route.workspace_id) throw new Error("配置编辑意图不属于原 Gateway／工作区");
   const { source_key: sourceKey } = intent;
   const result = unwrapApiData(await requestJson<APIResponse<ConfigSourcePreflightDTO>>(port,
@@ -47,7 +47,7 @@ export async function preflightConfigSource(port: number, target: GatewayWorkspa
 
 export async function saveConfigSource(port: number, target: GatewayWorkspaceRequestTarget, intent: ConfigSourceEditRequest,
   signal?: AbortSignal): Promise<ConfigSourceDocumentDTO> {
-  const route = { gateway_id: target.gateway_id, workspace_id: target.workspace_id };
+  const route = { ...target };
   if (intent.gateway_id !== route.gateway_id || intent.workspace_id !== route.workspace_id) throw new Error("配置编辑意图不属于原 Gateway／工作区");
   const { source_key: sourceKey, idempotency_key: key } = intent;
   const document = unwrapApiData(await requestJson<APIResponse<ConfigSourceDocumentDTO>>(port,

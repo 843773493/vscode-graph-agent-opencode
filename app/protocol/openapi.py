@@ -159,6 +159,18 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
+# MCP 制品属于Backend协议；Gateway只公布并校验同一组原请求和回执。
+GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
+    name: f"{public_pb2.DESCRIPTOR.package}.{name}" for name in (
+        "McpInstallationTargetListRequestDTO", "McpInstallationTargetListResponseDTO",
+        "McpCandidateInspectRequestDTO", "McpCandidateInspectResponseDTO",
+        "McpCandidatePlanRequestDTO", "McpCandidatePlanResponseDTO", "McpCandidatePlanValidationRequestDTO",
+        "McpInstallationCapabilitiesResponseDTO", "McpInstallationOperationResponseDTO",
+        "McpInstallationRequestDTO", "McpInstalledArtifactListResponseDTO",
+        "McpArtifactReferencesResponseDTO", "McpUninstallationRequestDTO",
+    )
+}
+
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "ExtensionConfigurationEventDTO": gateway_public_pb2.DESCRIPTOR.message_types_by_name["ExtensionConfigurationEventDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],

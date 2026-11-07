@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -18,16 +17,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
-from app.api import mcp
-from app.api.deps import get_mcp_catalog_owner, verify_local_token
+from app.api import mcp_installation as mcp
+from app.api.deps import get_mcp_installation_owner, verify_local_token
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.mcp import McpTargetPlatformDTO
-from app.services.infrastructure.events.event_channel_service import EventChannelService
-from app.services.infrastructure.external_resource_leases import (
-    ExternalResourceLeaseLedger,
-)
-from app.services.infrastructure.mcp import McpCatalogOwner, candidate_source
+from app.services.infrastructure.mcp import candidate_source
+from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from tests.harness.python.run_context import TestRunContext
+from tests.support.http_server import running_http_server
 
 GATEWAY_ID = "gateway_00000000000040008000000000000001"
 BACKEND_ID = "00000000-0000-4000-8000-000000000011"
@@ -63,15 +60,14 @@ class CandidateApi:
 
 
 @pytest.fixture
-def candidate_api(empty_workspace_scope: tuple[str, Path], monkeypatch: pytest.MonkeyPatch) -> Iterator[CandidateApi]:
+def candidate_api(empty_workspace_scope: tuple[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[CandidateApi]:
     from app.main import app as workspace_app
 
     _, root = empty_workspace_scope
     package = {"registryType": "npm", "identifier": "@example/first", "version": "1.2.3", "transport": {"type": "stdio"}}
     raw: dict[str, object] = {"server": {"name": "org.example/same", "version": "release-1", "description": "test",
                                       "packages": [package, {**package, "identifier": "@example/second"}]}, "_meta": {}}
-    owner = McpCatalogOwner(raw_config={"servers": {}}, workspace_root=root,
-                            event_service=EventChannelService(), leases=ExternalResourceLeaseLedger())
+    owner = McpInstallationOwner(home=tmp_path / "installer-control", backend_id=BACKEND_ID)
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(mcp.router, prefix="/api/v1")
@@ -79,7 +75,7 @@ def candidate_api(empty_workspace_scope: tuple[str, Path], monkeypatch: pytest.M
     for error_type in (HTTPException, RequestValidationError):
         application.add_exception_handler(error_type, workspace_app.exception_handlers[error_type])
     application.dependency_overrides[verify_local_token] = lambda: "local"
-    application.dependency_overrides[get_mcp_catalog_owner] = lambda: owner
+    application.dependency_overrides[get_mcp_installation_owner] = lambda: owner
     real_client = httpx.AsyncClient
     with TestClient(application, headers={"X-BoxTeam-Gateway-Id": GATEWAY_ID, "X-Request-ID": "candidate-api"}) as client:
         case = CandidateApi(client, root, raw, real_client)
@@ -97,7 +93,7 @@ def candidate_api(empty_workspace_scope: tuple[str, Path], monkeypatch: pytest.M
         yield case
         after = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
         assert before == after
-        assert not owner.started and owner._session_scope is None
+        assert not owner._tasks
 
 
 @pytest.fixture
@@ -124,16 +120,10 @@ def candidate_http_registry(
 
     # 真实 socket 读取沿原 HTTPX reader，恢复 fixture 原客户端，不能仍命中 MockTransport。
     monkeypatch.setattr(candidate_source.httpx, "AsyncClient", candidate_api.http_client)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
-    thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", paths
+        with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as server:
+            yield f"http://127.0.0.1:{server.server_port}", paths
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-        assert not thread.is_alive(), "候选原件 HTTP 线程未退出"
         (context.artifacts_dir / "registry-requests-real-socket.json").write_text(
             json.dumps({"paths": paths, "served": served}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
         )
@@ -177,6 +167,23 @@ def test_exact_second_package_is_planned_without_download_start_or_config_write(
     assert all(request.method == "GET" and request.url.host == "registry.test" for request in candidate_api.requests)
     validated = candidate_api.client.post(BASE + "/candidate-plans/validate", json={"candidate": request, "plan_digest": plan["plan_digest"]})
     assert validated.status_code == 200 and validated.json()["data"] == plan
+
+
+def test_package_installation_does_not_require_workspace_runtime_inputs(candidate_api: CandidateApi) -> None:
+    source = {"kind": "manual", "name": "workspace-inputs", "version": "1", "definition": {"packages": [{
+        "registryType": "pypi", "identifier": "artifact-server", "version": "1.0.0", "transport": {"type": "stdio"},
+        "packageArguments": [{"type": "positional", "valueHint": "workspace", "isRequired": True}],
+        "environmentVariables": [{"name": "TOKEN", "isSecret": True, "isRequired": True}],
+    }]}}
+    request = candidate_api.request(source)
+    response = candidate_api.client.post(BASE + "/candidate-plans", json=request)
+    assert response.status_code == 200, response.text
+    plan = response.json()["data"]
+    assert plan["disposition"] == "requires_artifact"
+    assert plan["parameters"]["arguments"] == [] and plan["parameters"]["env"] == {}
+    rejected = candidate_api.client.post(BASE + "/candidate-plans", json={**request, "inputs": {"TOKEN": "private-input"}})
+    assert rejected.status_code == 422 and "配置计划" in rejected.text and "private-input" not in rejected.text
+    assert not candidate_api.requests
 
 
 def test_same_name_same_manifest_different_source_is_distinct(candidate_api: CandidateApi) -> None:
@@ -325,7 +332,7 @@ def test_changed_native_environment_invalidates_original_plan(candidate_api: Can
 
 @pytest.mark.parametrize("change", ["input", "platform"])
 def test_changed_inputs_or_native_platform_invalidate_original_plan(candidate_api: CandidateApi, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
-    from app.services.infrastructure.mcp import catalog_owner
+    from app.services.infrastructure.mcp import candidate_plans
 
     source = {"kind": "manual", "name": "remote", "version": "1", "definition": {"remotes": [{
         "type": "streamable-http", "url": "https://service.test/{path}", "variables": {"path": {"isRequired": True}}}]}}
@@ -336,7 +343,7 @@ def test_changed_inputs_or_native_platform_invalidate_original_plan(candidate_ap
     if change == "input":
         request["inputs"] = {"path": "second"}
     else:
-        monkeypatch.setattr(catalog_owner, "native_mcp_platform", lambda: McpTargetPlatformDTO(operating_system="different", architecture="different"))
+        monkeypatch.setattr(candidate_plans, "native_mcp_platform", lambda: McpTargetPlatformDTO(operating_system="different", architecture="different"))
     rejected = candidate_api.client.post(BASE + "/candidate-plans/validate", json={"candidate": request, "plan_digest": plan["plan_digest"]})
     assert rejected.status_code == 409 and not candidate_api.requests
 

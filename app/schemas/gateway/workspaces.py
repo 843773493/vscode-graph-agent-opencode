@@ -51,6 +51,7 @@ class GatewayRemoteConnectionSummaryDTO(BaseModel):
 
 
 class GatewayWorkspaceDTO(BaseModel):
+    backend_id: str | None = None
     gateway_id: str
     workspace_id: str
     backend_generation: str | None = None

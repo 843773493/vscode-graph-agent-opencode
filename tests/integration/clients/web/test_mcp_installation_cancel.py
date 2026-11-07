@@ -17,6 +17,7 @@ import pytest
 from tests.integration.gateway.test_mcp_artifact_installation import (  # noqa: F401 - 显式复用 pytest fixture，避免复制装具。
     artifact_index,
     installation_case,
+    installation_route,
 )
 from tests.support.paths import chromium_temporary_environment
 
@@ -32,6 +33,7 @@ def artifact_download_gate() -> Iterator[tuple[threading.Event, threading.Event]
 
 def test_original_install_notification_cancels_real_download(installation_case, artifact_index, artifact_download_gate):
     case = installation_case
+    _, installation_base = installation_route(case.client)
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "MCP 安装取消需要真实 Chromium"
     original = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
@@ -50,5 +52,5 @@ def test_original_install_notification_cancels_real_download(installation_case, 
     assert observed["operation"]["status"] == "cancelled" and observed["operation"]["artifact"] is None
     assert artifact_download_gate[0].is_set()
     assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original
-    assert case.client.get("/api/v1/mcp/installations").json()["data"] == []
+    assert case.client.get(installation_base + "/installations").json()["data"] == []
     assert case.client.get("/api/v1/mcp/servers").json()["data"] == []

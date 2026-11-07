@@ -37,12 +37,8 @@ from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
-from app.domain.itemized.hashing import sha256_jcs
 from app.domain.mcp_candidates import (
     McpCandidateConflict,
-    McpCandidateManifest,
-    candidate_parameters,
-    parse_candidate_manifest,
     secret_env_input_keys,
 )
 from app.schemas.internal_v2.config import ConfigSourceDocumentDTO, McpCleanupDTO
@@ -50,14 +46,8 @@ from app.schemas.internal_v2.mcp import (
     McpCandidateConfigurationDraftDTO,
     McpCandidateConfigurationDraftRequestDTO,
     McpCandidateConfigurationRequestDTO,
-    McpCandidateInspectDTO,
-    McpCandidateInspectRequestDTO,
     McpCandidatePlanDTO,
     McpCandidatePlanRequestDTO,
-    McpCandidatePlanValidationRequestDTO,
-    McpCandidateProvenanceDTO,
-    McpInstallationOperationDTO,
-    McpInstallationRequestDTO,
     McpInstallationTargetDTO,
     McpPrivateEnvRefDTO,
     McpPrivateEnvWriteRequestDTO,
@@ -71,7 +61,6 @@ from app.services.infrastructure.config.contracts import (
 )
 from app.services.infrastructure.config.source_document import (
     parse_source_text,
-    redact_source_payload,
     redact_source_text,
     restore_source_text,
     set_source_value,
@@ -84,9 +73,9 @@ from app.services.infrastructure.events.event_channel_service import EventChanne
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.mcp.candidate_source import (
-    native_mcp_platform,
-    read_candidate_source,
+from app.services.infrastructure.mcp.candidate_plans import (
+    read_installation_candidate,
+    resolve_candidate,
 )
 from app.services.infrastructure.mcp.config import (
     McpServerConfig,
@@ -586,22 +575,6 @@ class McpCatalogOwner:
                 return f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
             return None
 
-    async def _installation_candidate(
-        self, request: McpCandidateInspectRequestDTO, actual_target: McpInstallationTargetDTO,
-    ) -> tuple[McpCandidateManifest, McpCandidateProvenanceDTO]:
-        if request.target != actual_target:
-            raise McpCandidateConflict("MCP 安装目标不属于当前原生 Gateway／Backend，不能改投当前工作区")
-        source = request.source
-        raw = await read_candidate_source(source)
-        manifest = parse_candidate_manifest(raw, kind=source.kind, protocol=source.protocol,
-            name=source.name, version=source.version, entry_id=source.entry_id)
-        provenance = McpCandidateProvenanceDTO(
-            kind=source.kind, name=source.name, version=source.version,
-            endpoint=source.endpoint.rstrip("/") if source.endpoint is not None else None,
-            protocol=source.protocol, entry_url=source.entry_url, entry_id=manifest.entry_id,
-        )
-        return manifest, provenance
-
     async def write_private_header(
         self, request: McpPrivateHeaderWriteRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
     ) -> McpPrivateHeaderRefDTO:
@@ -613,16 +586,6 @@ class McpCatalogOwner:
             server_id=request.server_id, header_name=request.header_name,
             endpoint=request.endpoint, value=request.value,
         )
-
-    async def inspect_installation_candidate(
-        self, request: McpCandidateInspectRequestDTO, *, actual_target: McpInstallationTargetDTO,
-    ) -> McpCandidateInspectDTO:
-        """只列出原件中的全部 variant；选择、安装、配置和连接分别发生。"""
-        manifest, provenance = await self._installation_candidate(request, actual_target)
-        return McpCandidateInspectDTO.model_validate({
-            "source": provenance, "manifest_digest": manifest.digest, "platform": native_mcp_platform(),
-            "variants": [variant.describe() for variant in manifest.variants],
-        })
 
     async def write_private_env(
         self, request: McpPrivateEnvWriteRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
@@ -637,7 +600,7 @@ class McpCatalogOwner:
                 raise ValueError("目录私有 env 路由必须使用原 gallery 来源；手动命令使用 stdio launch")
             if installation_target is None or request.candidate.server_id != request.server_id:
                 raise McpCandidateConflict("MCP 私有 env 候选缺少原 Backend 或精确 Server")
-            manifest, source = await self._installation_candidate(request.candidate, installation_target)
+            manifest, source = await read_installation_candidate(request.candidate, installation_target)
             selected = request.candidate.variant
             variant = manifest.select(request.candidate.manifest_digest, selected.kind, selected.index, selected.digest)
             if request.input_key not in secret_env_input_keys(variant):
@@ -652,79 +615,18 @@ class McpCatalogOwner:
         return await asyncio.to_thread(McpPrivateInputStore(workspace_root=self._workspace_root).write_env,
             server_id=request.server_id, input_key=request.input_key, definition_digest=definition, value=request.value)
 
-    async def prepare_installation_candidate(
-        self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
-    ) -> McpCandidatePlanDTO:
-        plan, _ = await self._resolved_installation_candidate(request, actual_target=actual_target)
-        return plan
-
-    async def _resolved_installation_candidate(
-        self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
-    ) -> tuple[McpCandidatePlanDTO, dict[str, object]]:
-        manifest, provenance = await self._installation_candidate(request, actual_target)
-        selected = request.variant
-        variant = manifest.select(request.manifest_digest, selected.kind, selected.index, selected.digest)
-        disposition, parameters = candidate_parameters(variant, request.inputs)
-        server_id = request.server_id or "candidate"
-        if disposition == "requires_artifact":
-            definition = candidate_env_definition(provenance, manifest.digest, selected)
-            store = McpPrivateInputStore(workspace_root=self._workspace_root)
-            for key, value in cast(dict[str, object], parameters.get("env", {})).items():
-                if not isinstance(value, str):
-                    if request.server_id is None:
-                        raise ValueError("MCP 私有 env 候选必须指定精确 server_id")
-                    store.require_env_binding(McpPrivateEnvRefDTO.model_validate(value), server_id=server_id,
-                        input_key=key, definition_digest=definition)
-        normalized = parameters
-        if disposition != "requires_artifact":
-            server, = parse_mcp_server_configs({"servers": {server_id: parameters}}, workspace_root=self._workspace_root,
-                installation_resolver=self._installation_resolver)
-            # 沿原配置 parser 在目标侧解析环境引用，不向浏览器泄露 env/headers 值。
-            normalized = dict(server.connection)
-            if server.managed_launch is not None:
-                normalized["managed_launch"] = server.managed_launch.model_dump(mode="json")
-                normalized.pop("command")
-            if server.private_env:
-                normalized["env"] = {**cast(dict[str, object], normalized.get("env", {})),
-                    **{reference.input_key: reference.model_dump(mode="json") for reference in server.private_env}}
-            if server.private_headers:
-                normalized["headers"] = {**cast(dict[str, object], normalized.get("headers", {})),
-                    **{reference.header_name: reference.model_dump(mode="json") for reference in server.private_headers}}
-            if server.oauth is not None:
-                normalized["oauth"] = {"redirect_uri": server.oauth.redirect_uri}
-        platform = native_mcp_platform()
-        fingerprint = {"target": actual_target.model_dump(), "source": provenance.model_dump(),
-                       "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform.model_dump(),
-                       "disposition": disposition, "parameters": normalized}
-        if request.server_id is not None:
-            fingerprint["server_id"] = request.server_id
-        redacted = redact_source_payload(normalized, ("mcp", "servers", "candidate"))
-        return McpCandidatePlanDTO.model_validate({
-            "source": provenance, "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform,
-            "plan_digest": sha256_jcs(fingerprint), "disposition": disposition,
-            "download_required": disposition == "requires_artifact", "parameters": redacted,
-        }), parameters
-
-    async def validate_installation_candidate(
-        self, request: McpCandidatePlanValidationRequestDTO, *, actual_target: McpInstallationTargetDTO,
-    ) -> McpCandidatePlanDTO:
-        """消费前重读原来源；无计划账本、预览 token 或首项回退。"""
-        plan = await self.prepare_installation_candidate(request.candidate, actual_target=actual_target)
-        if plan.plan_digest != request.plan_digest:
-            raise McpCandidateConflict("MCP 候选的目标平台或参数已改变，必须重新生成计划")
-        return plan
-
     @property
     def installations(self) -> McpInstallationOwner:
         if self._installation_owner is None:
             raise InstallationUnavailable("当前 Backend 未装配目标制品安装 owner，不能把动态命令视为安装")
         return self._installation_owner
 
-    async def install_artifact(self, request: McpInstallationRequestDTO, *, actual_target: McpInstallationTargetDTO) -> McpInstallationOperationDTO:
-        plan, parameters = await self._resolved_installation_candidate(request.candidate, actual_target=actual_target)
-        if plan.plan_digest != request.plan_digest:
-            raise McpCandidateConflict("MCP 安装候选的目标、平台或参数已改变，请重新生成计划")
-        return await self.installations.install(request, plan=plan, parameters=parameters)
+    async def prepare_candidate_configuration(
+        self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
+    ) -> McpCandidatePlanDTO:
+        plan, _ = await resolve_candidate(request, actual_target=actual_target,
+            workspace_root=self._workspace_root, installation_resolver=self._installation_resolver)
+        return plan
 
     async def _candidate_configuration_parameters(
         self, request: McpCandidateConfigurationRequestDTO | McpCandidateConfigurationDraftRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
@@ -737,7 +639,8 @@ class McpCatalogOwner:
             raise ValueError("MCP 候选配置保存必须显式指定原 Gateway")
         if request.plan.candidate.server_id != request.server_id:
             raise McpCandidateConflict("MCP 配置候选必须绑定同一精确 Server")
-        plan, parameters = await self._resolved_installation_candidate(request.plan.candidate, actual_target=installation_target)
+        plan, parameters = await resolve_candidate(request.plan.candidate, actual_target=installation_target,
+            workspace_root=self._workspace_root, installation_resolver=self._installation_resolver)
         if plan.plan_digest != request.plan.plan_digest:
             raise McpCandidateConflict("MCP 配置候选的来源、平台或输入已改变，必须重新生成计划")
         if plan.disposition == "requires_artifact":

@@ -62,11 +62,14 @@ class RegistryRemoteMixin:
             remote_gateway_connection_ids=(connection.connection_id,),
         )
 
-    def remote_connection_for_target(self, target: WorkspaceTarget) -> RemoteGatewayConnection:
+    def remote_connection_for_target(self, target: WorkspaceTarget, *, connection_id: str | None = None) -> RemoteGatewayConnection:
         """连接关系不是资源身份；多条关系不能隐式选第一条或故障切换。"""
-        if target.connection_kind != "remote_gateway" or len(target.remote_gateway_connection_ids) != 1:
-            raise LookupError(f"工作区远端连接不能唯一确定: owner={target.key}, connections={target.remote_gateway_connection_ids}")
-        connection = self.remote_gateway_connection(target.remote_gateway_connection_ids[0])
+        identities = target.remote_gateway_connection_ids
+        if target.connection_kind != "remote_gateway" or (connection_id is None and len(identities) != 1):
+            raise LookupError(f"工作区远端连接不能唯一确定: owner={target.key}, connections={identities}")
+        if connection_id is not None and connection_id not in identities:
+            raise LookupError("明确 Gateway 连接不属于所选工作区")
+        connection = self.remote_gateway_connection(connection_id if connection_id is not None else identities[0])
         if connection.remote_gateway_id != target.gateway_id:
             raise RuntimeError(f"工作区连接归属不匹配: owner={target.key}, connection={connection.connection_id}")
         return connection

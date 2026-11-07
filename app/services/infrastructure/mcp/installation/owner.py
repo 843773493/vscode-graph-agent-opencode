@@ -17,7 +17,11 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
     McpArtifactReferencesDTO,
+    McpCandidateInspectDTO,
+    McpCandidateInspectRequestDTO,
     McpCandidatePlanDTO,
+    McpCandidatePlanRequestDTO,
+    McpCandidatePlanValidationRequestDTO,
     McpInstallationCapabilitiesDTO,
     McpInstallationOperationDTO,
     McpInstallationRequestDTO,
@@ -28,6 +32,10 @@ from app.schemas.internal_v2.mcp import (
 )
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.mcp.candidate_plans import (
+    inspect_candidate,
+    resolve_candidate,
 )
 from app.services.infrastructure.mcp.candidate_source import native_mcp_platform
 from app.services.infrastructure.mcp.installation.npm import (
@@ -82,6 +90,25 @@ class McpInstallationOwner:
         return McpInstallationCapabilitiesDTO(platform=native_mcp_platform(),
             pypi_wheel_available=reason is None, unavailable_reason=reason,
             npm_available=npm_reason is None, npm_unavailable_reason=npm_reason)
+
+    async def inspect_candidate(self, request: McpCandidateInspectRequestDTO, *, actual_target: McpInstallationTargetDTO) -> McpCandidateInspectDTO:
+        return await inspect_candidate(request, actual_target=actual_target)
+
+    async def plan_candidate(self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO) -> McpCandidatePlanDTO:
+        plan, _ = await resolve_candidate(request, actual_target=actual_target, installation_resolver=self.artifact)
+        return plan
+
+    async def validate_candidate(self, request: McpCandidatePlanValidationRequestDTO, *, actual_target: McpInstallationTargetDTO) -> McpCandidatePlanDTO:
+        plan = await self.plan_candidate(request.candidate, actual_target=actual_target)
+        if plan.plan_digest != request.plan_digest:
+            raise McpCandidateConflict("MCP 候选的目标平台或参数已改变，必须重新生成计划")
+        return plan
+
+    async def install_candidate(self, request: McpInstallationRequestDTO, *, actual_target: McpInstallationTargetDTO) -> McpInstallationOperationDTO:
+        plan, parameters = await resolve_candidate(request.candidate, actual_target=actual_target, installation_resolver=self.artifact)
+        if plan.plan_digest != request.plan_digest:
+            raise McpCandidateConflict("MCP 安装候选的目标、平台或参数已改变，请重新生成计划")
+        return await self.install(request, plan=plan, parameters=parameters)
 
     async def install(self, request: McpInstallationRequestDTO, *, plan: McpCandidatePlanDTO,
         parameters: dict[str, object]) -> McpInstallationOperationDTO:

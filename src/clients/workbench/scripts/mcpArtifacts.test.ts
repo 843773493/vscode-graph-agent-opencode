@@ -9,6 +9,7 @@ import type { McpInstalledArtifactDTO, McpInstallationOperationDTO } from '../..
 
 const workspace = { gateway_id: 'gateway_00000000000040008000000000000001', workspace_id: '00000000-0000-4000-8000-000000000001' };
 const target = { kind: 'backend', gateway_id: workspace.gateway_id, backend_id: '00000000-0000-4000-8000-000000000011' };
+const originalRoute = { ...target, gateway_connection_id: 'original-connection' };
 const binding = { backend_id: target.backend_id, installation_id: 'b'.repeat(32), generation: 'c'.repeat(32), artifact_digest: 'sha256:jcs:v1:' + 'a'.repeat(64) };
 const artifact: McpInstalledArtifactDTO = { binding, source: { kind: 'manual', name: 'test', version: '1' },
   manifest_digest: binding.artifact_digest, variant: { kind: 'package', index: 0, digest: binding.artifact_digest },
@@ -23,13 +24,11 @@ const mocks: { mockRestore(): void }[] = [];
 afterEach(() => { mocks.splice(0).forEach(mock => mock.mockRestore()); });
 
 function prepare(steps: ((items: QuickPickInput<IQuickPickItem>[]) => IQuickPickItem | undefined | Promise<IQuickPickItem | undefined>)[]) {
-  const capabilities = spyOn(api, 'getMcpInstallationCapabilities').mockResolvedValue(envelope({ platform: artifact.platform,
-    pypi_wheel_available: false, npm_available: false, unsupported_registry_types: [], limitations: [] }));
   const listing = spyOn(api, 'listMcpInstalledArtifacts').mockResolvedValue(envelope([artifact]));
   const references = spyOn(api, 'getMcpArtifactReferences').mockResolvedValue(envelope({ binding, references: [] }));
   const uninstall = spyOn(api, 'uninstallMcpArtifact').mockImplementation(async (_port, _workspace, intent) => envelope(operation(intent.operation_id)));
   const query = spyOn(api, 'getMcpInstallationOperation').mockResolvedValue(envelope(operation('original-operation')));
-  mocks.push(capabilities, listing, references, uninstall, query);
+  mocks.push(listing, references, uninstall, query);
   const notifications: string[] = [];
   const input = { pick: async (items: QuickPickInput<IQuickPickItem>[]) => {
     const step = steps.shift();
@@ -39,8 +38,8 @@ function prepare(steps: ((items: QuickPickInput<IQuickPickItem>[]) => IQuickPick
   const progress = { withProgress: async (_options: unknown, task: (report: { report(): void }) => Promise<void>) => task({ report() {} }) } as unknown as IProgressService;
   const notify = { info: (message: string) => { notifications.push(message); } } as unknown as INotificationService;
   const controller = new AbortController();
-  const run = (route = workspace, assertAccess = () => {}) => manageMcpArtifacts(route, '目标 A', input, progress, notify, assertAccess, controller.signal);
-  return { run, capabilities, listing, references, uninstall, query, notifications, controller };
+  const run = (route = originalRoute, assertAccess = () => {}) => manageMcpArtifacts(route, '目标 A', input, progress, notify, assertAccess, controller.signal);
+  return { run, listing, references, uninstall, query, notifications, controller };
 }
 const choose = (label: string) => (items: QuickPickInput<IQuickPickItem>[]) => {
   const item = items.find(item => item.type !== 'separator' && item.label === label);
@@ -69,15 +68,16 @@ test('有引用时列出真实工作区和原因，不进入确认或提交卸�
 });
 
 test('显式确认只提交一次并冻结路由，完成后重新读取原列表', async () => {
-  const route = { ...workspace };
+  const route = { ...originalRoute };
   const fixture = prepare([choose('chosen 1.0.0'), choose('物理卸载此制品'), items => {
-    route.workspace_id = 'different-focus';
+    route.backend_id = 'different-backend'; route.gateway_connection_id = 'different-connection';
     return choose('确认物理卸载')(items);
   }, () => undefined]);
   await fixture.run(route);
   expect(fixture.uninstall).toHaveBeenCalledTimes(1);
   const call = fixture.uninstall.mock.calls[0]!;
-  expect(call[1]).toEqual(workspace);
+  expect(call[1]).toEqual(originalRoute);
+  expect(call[1]).not.toHaveProperty('workspace_id');
   expect(call[2]).toMatchObject({ target, binding });
   expect(call[3]).toBe(fixture.controller.signal);
   expect(fixture.listing).toHaveBeenCalledTimes(2);
@@ -124,7 +124,7 @@ test('卸载409后引用回读失败仍保留原卸载错误及request_id', asyn
 test('查询原操作不提交新的删除', async () => {
   const queryOnly = prepare([choose('查询已有安装／卸载操作'), () => undefined]);
   await queryOnly.run();
-  expect(queryOnly.query.mock.calls[0]![3]).toBe('original-operation');
+  expect(queryOnly.query.mock.calls[0]![2]).toBe('original-operation');
   expect(queryOnly.uninstall).not.toHaveBeenCalled();
 });
 
@@ -133,7 +133,7 @@ test('确认前身份失效拒绝卸载', async () => {
   const fixture = prepare([choose('chosen 1.0.0'), choose('物理卸载此制品'), items => {
     revoked = true; return choose('确认物理卸载')(items);
   }]);
-  await expect(fixture.run(workspace, () => { if (revoked) throw new Error('identity changed'); })).rejects.toThrow('identity changed');
+  await expect(fixture.run(originalRoute, () => { if (revoked) throw new Error('identity changed'); })).rejects.toThrow('identity changed');
   expect(fixture.uninstall).not.toHaveBeenCalled();
 });
 

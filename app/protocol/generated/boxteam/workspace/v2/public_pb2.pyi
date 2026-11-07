@@ -1262,6 +1262,34 @@ class McpInstallationTargetDTO(_message.Message):
     backend_id: str
     def __init__(self, kind: _Optional[str] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ...) -> None: ...
 
+class McpInstallationTargetListRequestDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "gateway_connection_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
+
+class McpInstallationTargetListResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "protocol_version", "gateway_id", "source")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: _containers.RepeatedCompositeFieldContainer[McpInstallationTargetDTO]
+    request_id: str
+    protocol_version: int
+    gateway_id: str
+    source: str
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Iterable[_Union[McpInstallationTargetDTO, _Mapping]]] = ..., request_id: _Optional[str] = ..., protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., source: _Optional[str] = ...) -> None: ...
+
 class McpCandidateSourceDTO(_message.Message):
     __slots__ = ("kind", "name", "version", "endpoint", "protocol", "entry_url", "entry_id", "definition")
     KIND_FIELD_NUMBER: _ClassVar[int]

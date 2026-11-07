@@ -27,16 +27,18 @@ test("来源读取保留原正文与全部CAS，查询原提交携带同一幂�
     layers: [], origins: [], status: undefined, layer_revision: 3, layer_digest: "layer", active_revision: 2, active_digest: "active" };
   const seen: URL[] = [];
   const controller = new AbortController();
+  const route = { ...target, gateway_connection_id: 'original-connection' };
   const current = respond(document, (url, init) => {
     seen.push(url);
     expect(init?.cache).toBe("no-store");
     expect(new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
     expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+    expect(new Headers(init?.headers).get('X-BoxTeam-Gateway-Connection-Id')).toBe(route.gateway_connection_id);
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
-  expect(await getConfigSourceDocument(current, target, sourceKey, { signal: controller.signal })).toEqual(document);
+  expect(await getConfigSourceDocument(current, route, sourceKey, { signal: controller.signal })).toEqual(document);
   const key = "original+/=提交";
-  expect(await getConfigSourceDocument(current, target, sourceKey, { idempotencyKey: key, signal: controller.signal })).toEqual(document);
+  expect(await getConfigSourceDocument(current, route, sourceKey, { idempotencyKey: key, signal: controller.signal })).toEqual(document);
   expect(seen.map(url => url.pathname)).toEqual([`/api/v1/config/sources/${sourceKey}`, `/api/v1/config/sources/${sourceKey}`]);
   expect(seen[0]!.search).toBe("");
   expect(seen[1]!.searchParams.get("idempotency_key")).toBe(key);

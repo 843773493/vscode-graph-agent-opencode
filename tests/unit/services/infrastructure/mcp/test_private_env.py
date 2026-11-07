@@ -137,10 +137,10 @@ def test_candidate_secret_env_maps_only_reference_and_rejects_plain_args_or_temp
                "environmentVariables": [{"name": "API_KEY", "isSecret": True, "isRequired": True}]}
     variant, = parse_candidate_manifest({"name": "server", "version": "1", "packages": [package]},
         kind="manual", protocol=None, name="server", version="1", entry_id=None).variants
-    disposition, parameters = candidate_parameters(variant, {"API_KEY": ref.model_dump()})
+    disposition, parameters = candidate_parameters(variant, {"API_KEY": ref.model_dump()}, purpose="configuration")
     assert disposition == "requires_artifact" and parameters["env"] == {"API_KEY": ref.model_dump()}
     with pytest.raises(ValueError):
-        candidate_parameters(variant, {"API_KEY": SECRET})
+        candidate_parameters(variant, {"API_KEY": SECRET}, purpose="configuration")
     for change in (
         {"packageArguments": [{"type": "positional", "valueHint": "password", "isSecret": True}]},
         {"environmentVariables": [{"name": "API_KEY", "isSecret": True, "value": "prefix-{x}", "variables": {"x": {}}}]},
@@ -148,7 +148,7 @@ def test_candidate_secret_env_maps_only_reference_and_rejects_plain_args_or_temp
         altered, = parse_candidate_manifest({"name": "server", "version": "1", "packages": [{**package, **change}]},
             kind="manual", protocol=None, name="server", version="1", entry_id=None).variants
         with pytest.raises(ValueError, match="secret"):
-            candidate_parameters(altered, {"API_KEY": ref.model_dump()})
+            candidate_parameters(altered, {"API_KEY": ref.model_dump()}, purpose="configuration")
 
 
 def test_managed_private_env_binds_source_not_generation(private_env):

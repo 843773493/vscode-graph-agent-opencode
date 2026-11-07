@@ -19,6 +19,7 @@
 - 导航 scope 下游装具在启动成功前由 `ExitStack` 管理日志，成功后由返回句柄接管；就绪失败或中断仍释放进程和全部日志，清理失败独立汇总并保留启动异常。诊断引用原始日志路径，不全量读取追加日志。
 - 正式产物写入 `out/tests/integration/gateway/`。
 - `test_mcp_artifact_management.py` 复用原安装装具，先经真实候选和 uv 发布制品，再从正式 Workbench 命令面板管理。引用由原 source／CAS 建立与移除；确认期间新增引用必须触发真实409，取消与查看不发DELETE，结清后显式重提才物理卸载，不预写安装或连接事实。
+- MCP 安装装具可通过 `BOXTEAM_TEST_MCP_RUNTIME_MANIFEST` 显式提供已准备的原生管理组件，传给真实 Gateway；不修改根 session 的最小 manifest、不借开发服务。完整 Workbench 场景须具备该组件和匹配的固定 Node／依赖，仅有 Web 静态构建不能代替这项运行前置。
 - `test_mcp_npm_artifact_installation.py` 复用原 `installation_case` 和正式 Workbench 构建，以本地标准 npm registry／tgz 为显式外部替身。候选、私有 env、真实 lock／ci 发布、source CAS 和同一 Thread 的工具调用均走产品入口；核精确嵌套依赖、复用、取消和原引用。第二场景复用原浏览器驱动核 npm 根 package bin 提示与实际发布，安装操作不写工作区配置或启动连接。
 - `test_search_provider_lifecycle.py` 通过独立 Gateway 与 A/B Backend 验证原 Provider 的注销、服务关闭和同类别版本交接。`search_lifecycle_app.py` 仅在测试组合中观察原 canonical 查询的准入 worker，以原 Session OS 锁探针核安全结算；关键历史由产品消息入口及统一 model_stream 生成，不新增生产控制接口或替代查询实现。
 - `test_federated_search.py` 的六个服务在本文件端口块内复用既有可用端口租约，首选占用时有界选择；所有消费者读取同一组实际端口，逐项登记释放并保存探测，不终止未知进程或改变原搜索断言。

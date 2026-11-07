@@ -111,8 +111,19 @@ try {
   const thread = page.locator(`section.boxteam-thread[data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
   await expect(thread).toBeVisible();
   await expect(thread).toHaveAttribute("data-workspace-id", fixture.workspaceId);
+  let targetSelected = false;
   async function mcpPanel() {
     stage = "open-main-mcp-panel";
+    if (!targetSelected && initialization.owner.gateway_id !== initialization.relayGatewayId) {
+      await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('boxteam.mcp.selectTarget'); });
+      const quick = page.locator('.quick-input-widget');
+      await expect(quick).toBeVisible();
+      const target = quick.locator('.monaco-list-row').filter({ hasText: initialization.owner.gateway_id });
+      await expect(target).toHaveCount(1);
+      await target.click();
+      await expect(quick).not.toBeVisible();
+      targetSelected = true;
+    }
     // 原 Focus 命令在已聚焦时会关闭面板；此处只确保原面板展开。
     await page.evaluate(() => globalThis.workbench.commands.executeCommand("boxteam.mcp.focus", { preserveFocus: true }));
     const panel = page.locator(".part.panel .mcp-servers-list").filter({ visible: true });
@@ -223,17 +234,20 @@ try {
     await expect(management.locator("#workbench .monaco-workbench")).toBeVisible({ timeout: 30000 });
     assert.deepEqual(JSON.parse(new URL(management.url()).searchParams.get("mcp_workspace")), [initialization.owner.gateway_id, initialization.owner.workspace_id]);
     stage = "initial-catalog-error-visible";
-    await expect(management.locator(".part.panel .message-container").filter({ visible: true })).toContainText(initialCatalogError);
+    await expect(management.locator('.notifications-toasts')).toContainText(initialCatalogError);
     initialCatalogUnavailable = false;
     stage = "initial-catalog-recovery";
-    // 授权链接自身负责展开完整 Workbench 的原面板，恢复时不额外发打开命令。
-    const managementPanel = management.locator(".part.panel .mcp-servers-list").filter({ visible: true });
-    await expect(managementPanel).toBeVisible();
-    await expect(serverRow(managementPanel, "secure")).toContainText("等待用户授权", { timeout: 30000 });
+    // 深链只打开原workspace对象；普通管理列表继续保持本地Gateway选择。
+    const secure = management.locator('.mcp-server-editor').filter({ has: management.getByRole('heading', { name: 'secure', exact: true }) }).filter({ visible: true });
+    await expect(secure).toBeVisible({ timeout: 30000 });
+    await expect(detailsBody(management)).toContainText('等待用户授权');
+    await expect(detailsBody(management)).toContainText(initialization.owner.workspace_id);
+    await expect(detailsBody(management)).toContainText(initialization.owner.gateway_id);
     assert(initialCatalogFailures >= 1);
-    await expect(management.locator(".part.panel .message-container").filter({ visible: true })).toHaveCount(0);
-    await expect(serverRow(managementPanel, "schema")).toContainText("连接可用");
-    const secure = await openDetails(management, managementPanel, "secure");
+    if (initialization.owner.gateway_id !== initialization.relayGatewayId) {
+      const panel = management.locator('.part.panel .mcp-servers-list').filter({ visible: true });
+      await expect(serverRow(panel, 'secure')).toHaveCount(0);
+    }
     stage = "authorize-from-original-details";
     const details = detailsBody(management);
     await secure.getByRole("button", { name: "Authorize", exact: true }).waitFor({ timeout: 30000 });
@@ -286,6 +300,12 @@ try {
     const headers = await callbackPosts[0].allHeaders();
     assert.equal(headers["x-boxteam-target-gateway-id"], initialization.owner.gateway_id);
     assert.equal(headers["x-boxteam-workspace-id"], initialization.owner.workspace_id);
+    if (initialization.owner.gateway_id !== initialization.relayGatewayId) {
+      const original = requests.find(request => request.url.pathname === '/api/v1/mcp/servers'
+        && request.headers['x-boxteam-target-gateway-id'] === initialization.owner.gateway_id);
+      assert(original?.headers['x-boxteam-gateway-connection-id']);
+      assert.equal(headers['x-boxteam-gateway-connection-id'], original.headers['x-boxteam-gateway-connection-id']);
+    }
     const secrets = [payload.code, payload.state];
     for (const request of requests) {
       assert(secrets.every((secret) => !request.headers.referer?.includes(secret)), "Referer 含私有回调参数");

@@ -133,19 +133,21 @@ async def federation_workspaces(
             services.append(public_name)
         return services
 
-    direct = [
-        FederationWorkspaceDTO(
+    direct = []
+    for target in registry.targets():
+        if target.connection_kind != "local":
+            continue
+        backend = registry.backend_owner(target.workspace_id)
+        direct.append(FederationWorkspaceDTO(
             workspace_id=target.workspace_id,
-            backend_generation=registry.backend_owner(target.workspace_id).contract.generation if registry.backend_owner(target.workspace_id) is not None else None,
-            affected_workspace_ids=list(registry.backend_owner(target.workspace_id).contract.workspace_ids) if registry.backend_owner(target.workspace_id) is not None else [target.workspace_id],
+            backend_id=backend.backend_id if backend is not None else target.backend_id,
+            backend_generation=backend.contract.generation if backend is not None else None,
+            affected_workspace_ids=list(backend.contract.workspace_ids) if backend is not None else [target.workspace_id],
             name=target.name,
             managed=target.managed,
             connection_kind="local",
             services=services_for(target.workspace_id),
-        )
-        for target in registry.targets()
-        if target.connection_kind == "local"
-    ]
+        ))
     excluded = [
         (f"{target.workspace_id}: bounded federation 不导出从其他 Gateway 导入的工作区")
         for target in registry.targets()

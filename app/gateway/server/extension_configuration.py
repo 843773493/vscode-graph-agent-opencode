@@ -25,11 +25,13 @@ from app.gateway.proxy_upstream import (
 from app.gateway.server.extension_host import (
     CLIENT_HEADER,
     _check,
-    _check_management_route,
-    _HostRoute,
     _installation_route,
     _users,
     extension_client_identity,
+)
+from app.gateway.server.management_routes import (
+    GatewayManagementRoute,
+    check_management_route,
 )
 from app.gateway.server.workspace_proxy import (
     _http_client,
@@ -51,8 +53,8 @@ ConfigurationResult = TypeVar("ConfigurationResult", ExtensionConfigurationReadD
 
 
 def _require_access(request: Request, auth: GatewayAuthContext, access: UserAccessContext | None,
-                    route: _HostRoute, *, write: bool = False) -> None:
-    _check_management_route(request, route)
+                    route: GatewayManagementRoute, *, write: bool = False) -> None:
+    check_management_route(request, route)
     _check(request, auth, access, route.leases, capability="extension_host_manage")
     require_federation_capability(request, auth, "configuration_read")
     if write:
@@ -121,7 +123,7 @@ async def configuration_write(payload: ExtensionConfigurationWriteRequest, reque
 
 class _ConfigurationStreamResponse(StreamingResponse):
     def __init__(self, body: UpstreamResponseBody, request: Request, auth: GatewayAuthContext,
-                 access: UserAccessContext | None, route: _HostRoute) -> None:
+                 access: UserAccessContext | None, route: GatewayManagementRoute) -> None:
         self._body = body
 
         async def generate():

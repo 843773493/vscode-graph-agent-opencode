@@ -3,11 +3,10 @@ import type { IQuickInputService, IQuickPickItem, QuickPickInput } from '../../u
 import type { IProgressService } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import type { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
-import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import {
-  getMcpInstallationCapabilities, listMcpInstalledArtifacts, getMcpArtifactReferences,
-  uninstallMcpArtifact, getMcpInstallationOperation,
+  listMcpInstalledArtifacts, getMcpArtifactReferences, uninstallMcpArtifact, getMcpInstallationOperation,
+  type McpInstallationRequestTarget,
 } from '../../../web/src/api/mcpConnections.js';
 import type {
   McpInstalledArtifactDTO, McpInstallationOperationDTO,
@@ -18,12 +17,11 @@ const states: Record<McpInstalledArtifactDTO['state'], string> = {
 };
 
 /** 原 Quick Input 只消费安装 owner 的完整回执；引用和物理卸载不改工作区配置。 */
-export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarget, label: string,
+export async function manageMcpArtifacts(owner: McpInstallationRequestTarget, label: string,
   quickInput: IQuickInputService, progress: IProgressService, notifications: INotificationService,
   assertAccess: () => void, signal: AbortSignal): Promise<void> {
-  const route = Object.freeze({ ...workspace });
-  const capabilities = await getMcpInstallationCapabilities(0, route, signal);
-  const target = Object.freeze({ ...capabilities.target! });
+  const route = Object.freeze({ ...owner });
+  const target = Object.freeze({ kind: route.kind, gateway_id: route.gateway_id, backend_id: route.backend_id });
   const title = `MCP 制品 · ${label}`;
   const placeHolder = `${target.gateway_id} · Backend ${target.backend_id} · 制品由同安装域共享，工作区配置各自独立`;
 
@@ -34,7 +32,7 @@ export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarge
         report.report({ message: operation.stage });
         await timeout(500);
         assertAccess();
-        const receipt = await getMcpInstallationOperation(0, route, target, expectedId, signal);
+        const receipt = await getMcpInstallationOperation(0, route, expectedId, signal);
         operation = receipt.data!;
         if (operation.operation_id !== expectedId) throw new Error('目标未返回原 MCP 操作，不能确认结果');
       }
@@ -45,7 +43,7 @@ export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarge
 
   async function references(artifact: McpInstalledArtifactDTO): Promise<boolean> {
     assertAccess();
-    const receipt = await getMcpArtifactReferences(0, route, target, artifact.binding!, signal);
+    const receipt = await getMcpArtifactReferences(0, route, artifact.binding!, signal);
     const retained = receipt.data!.references;
     if (!retained.length) return false;
     await quickInput.pick(retained.map(reference => ({
@@ -57,7 +55,7 @@ export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarge
 
   for (;;) {
     assertAccess();
-    const listing = await listMcpInstalledArtifacts(0, route, target, signal);
+    const listing = await listMcpInstalledArtifacts(0, route, signal);
     type Choice = IQuickPickItem & { artifact?: McpInstalledArtifactDTO; query?: boolean };
     const items: QuickPickInput<Choice>[] = listing.data.map(artifact => ({
       label: `${artifact.identifier} ${artifact.version}`, description: `${artifact.registry_type} · ${states[artifact.state]}`,
@@ -73,7 +71,7 @@ export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarge
         validateInput: async value => value.trim() ? undefined : '请输入原 operation ID' });
       if (id === undefined) continue;
       assertAccess();
-      const receipt = await getMcpInstallationOperation(0, route, target, id, signal);
+      const receipt = await getMcpInstallationOperation(0, route, id, signal);
       await settle(receipt.data!, id);
       continue;
     }
@@ -87,7 +85,7 @@ export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarge
     if (!action) continue;
     if (action.action === 'operation') {
       assertAccess();
-      const receipt = await getMcpInstallationOperation(0, route, target, artifact.removal_operation_id!, signal);
+      const receipt = await getMcpInstallationOperation(0, route, artifact.removal_operation_id!, signal);
       await settle(receipt.data!, artifact.removal_operation_id!);
       continue;
     }
@@ -108,7 +106,7 @@ export async function manageMcpArtifacts(workspace: GatewayWorkspaceRequestTarge
       await settle(receipt.data!, operationId);
     } catch (cause) {
       // 无论失败还是结果未知都回读唯一 owner；不自动重发 DELETE 或分配新操作。
-      try { await listMcpInstalledArtifacts(0, route, target, signal); }
+      try { await listMcpInstalledArtifacts(0, route, signal); }
       catch (readError) { throw new AggregateError([cause, readError], `卸载及状态回读均未确认，请查询原操作 ${operationId}`); }
       if (cause instanceof HttpRequestError && cause.status >= 400 && cause.status < 500) {
         if (cause.status === 409) {

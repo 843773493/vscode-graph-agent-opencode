@@ -542,6 +542,11 @@ export declare type FederationWorkspaceDTO = Message<"boxteam.gateway.v2.Federat
    * @generated from field: repeated string affected_workspace_ids = 9;
    */
   affectedWorkspaceIds: string[];
+
+  /**
+   * @generated from field: optional string backend_id = 10;
+   */
+  backendId?: string | undefined;
 };
 
 /**
@@ -3376,6 +3381,11 @@ export declare type GatewayWorkspaceDTO = Message<"boxteam.gateway.v2.GatewayWor
    * @generated from field: repeated boxteam.gateway.v2.GatewayRemoteConnectionSummaryDTO remote_gateways = 23;
    */
   remoteGateways: GatewayRemoteConnectionSummaryDTO[];
+
+  /**
+   * @generated from field: optional string backend_id = 24;
+   */
+  backendId?: string | undefined;
 };
 
 /**

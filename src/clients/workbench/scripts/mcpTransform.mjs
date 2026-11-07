@@ -224,6 +224,11 @@ this._register(this.mcpWorkbenchService.onChange(() => {
     });
   }
 }));
+this._register(this.mcpWorkbenchService.onReset(() => {
+  if (this.currentQuery === '' && this.isBodyVisible()) void this.show('').catch(error => {
+    if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
+  });
+}));
 \t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {`);
     contents = replaceOnce(contents, '\t\t\t\tupdateEnablement();', '\t\t\t\tdata.description.textContent = mcpServer.description;\n\t\t\t\tupdateEnablement();');
     contents = replaceOnce(contents, 'if (newMcpServers.every(r => r.id !== oldMcpServer.id) && newMcpServers.some(r => r.name === oldMcpServer.name)) {', 'if (newMcpServers.every(r => r.id !== oldMcpServer.id)) {');

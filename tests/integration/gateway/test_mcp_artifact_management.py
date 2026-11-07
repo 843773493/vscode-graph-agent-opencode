@@ -16,6 +16,7 @@ from tests.harness.python.web_workbench import (
 from tests.integration.gateway.test_mcp_artifact_installation import (
     ArtifactIndex,
     InstallationCase,
+    installation_route,
 )
 from tests.integration.gateway.test_mcp_artifact_installation import (
     artifact_download_gate as artifact_download_gate,  # noqa: PLC0414
@@ -36,12 +37,13 @@ def test_workbench_artifact_references_confirmation_race_and_physical_uninstall(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "MCP 制品管理验收需要真实 Chromium"
     client = case.client
+    _, installation_base = installation_route(client)
     listing = client.get("/api/gateway/workspaces").json()["data"]
     workspace = listing["active_workspace"]
     headers = {"X-BoxTeam-Target-Gateway-Id": workspace["gateway_id"], "X-BoxTeam-Workspace-Id": workspace["workspace_id"]}
 
     def api(method: str, path: str, body: dict | None = None) -> dict:
-        response = client.request(method, "/api/v1/mcp/" + path, json=body, headers=headers)
+        response = client.request(method, (f"/api/v1/workspaces/{workspace['workspace_id']}/mcp/" if path == "servers" else installation_base + "/") + path, json=body, headers=headers)
         assert response.status_code == 200, response.text
         envelope = response.json()
         assert envelope["request_id"] == response.headers["X-Request-ID"]

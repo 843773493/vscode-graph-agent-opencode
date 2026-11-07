@@ -52,6 +52,17 @@ test("只接纳同源且来自指定弹窗的回调，私有 POST 固定原工�
   expect(popup.closed).toBe(true);
 });
 
+test('授权等待中Gateway选择改变仍将回调交给原工作区、连接和operation', async () => {
+  const route = { ...target, gateway_connection_id: 'original-connection' }, original = { ...operation };
+  const pending = authorizeMcpInWindow(8014, route, original, new AbortController().signal);
+  await Promise.resolve();
+  route.gateway_connection_id = 'changed-connection'; route.workspace_id = 'changed-workspace'; original.operation_id = 'changed-operation';
+  message(popup);
+  await pending;
+  expect(api.completeMcpAuthorization).toHaveBeenCalledWith(8014, { ...target, gateway_connection_id: 'original-connection' },
+    operation.operation_id, { code: 'private-code', state: 'private-state' }, expect.any(AbortSignal));
+});
+
 test.each(["close", "abort", "deadline"])("%s 结束等待并释放监听器，不能把关闭弹窗当就绪", async (reason) => {
   const controller = new AbortController();
   const result = authorizeMcpInWindow(8014, target, operation, controller.signal);

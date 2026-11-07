@@ -6,10 +6,12 @@ export const MCP_OAUTH_MESSAGE = "boxteam-mcp-oauth-callback:v1";
 
 /** 凭据仅由指定同源回调窗口交给原目标；实际 state/PKCE 校验仍归 SDK。 */
 export async function authorizeMcpInWindow(port: number, target: GatewayWorkspaceRequestTarget, operation: McpConnectionOperationDTO, signal: AbortSignal) {
+  target = Object.freeze({ ...target });
+  const operationId = operation.operation_id, deadline = operation.deadline;
   const popup = window.open("about:blank", "_blank", "popup,width=720,height=800");
   if (!popup) throw new Error("浏览器阻止了授权窗口，请允许弹出窗口后重试。");
   try {
-    const { authorization_url: authorizationUrl } = await getMcpAuthorization(port, target, operation.operation_id, signal);
+    const { authorization_url: authorizationUrl } = await getMcpAuthorization(port, target, operationId, signal);
     const url = new URL(authorizationUrl);
     const redirectUri = url.searchParams.get("redirect_uri");
     const redirect = redirectUri ? new URL(redirectUri) : null;
@@ -40,13 +42,13 @@ export async function authorizeMcpInWindow(port: number, target: GatewayWorkspac
           finish(new Error("授权已拒绝或回调缺少 code/state；连接尚未就绪。"));
           return;
         }
-        void completeMcpAuthorization(port, target, operation.operation_id, { code: data.code, state: data.state }, signal)
+        void completeMcpAuthorization(port, target, operationId, { code: data.code, state: data.state }, signal)
           .then((value) => finish(undefined, value), (error: unknown) => finish(error));
       };
       const closed = window.setInterval(() => {
         if (popup.closed && !received) finish(new Error("授权窗口已关闭，连接状态尚未确认；可以重试授权或查看实际状态。"));
       }, 500);
-      const expiry = window.setTimeout(() => finish(new Error("原授权操作已到期限，请刷新实际状态。")), Math.max(0, operation.deadline * 1000 - Date.now()));
+      const expiry = window.setTimeout(() => finish(new Error("原授权操作已到期限，请刷新实际状态。")), Math.max(0, deadline * 1000 - Date.now()));
       window.addEventListener("message", receive);
       signal.addEventListener("abort", abort, { once: true });
       popup.location.href = authorizationUrl;

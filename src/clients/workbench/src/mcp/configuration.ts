@@ -4,9 +4,11 @@ import { Severity, type INotificationHandle, type INotificationService } from '.
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import { getConfigSourceDocument } from '../../../web/src/api/configSources.js';
-import { draftMcpCandidateConfiguration, planMcpInstallation, saveMcpCandidateConfiguration } from '../../../web/src/api/mcpConnections.js';
+import { draftMcpCandidateConfiguration, planMcpCandidateConfiguration, saveMcpCandidateConfiguration,
+  type McpInstallationRequestTarget } from '../../../web/src/api/mcpConnections.js';
 import type { ConfigSourceDocumentDTO, McpCandidateConfigurationRequestDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { PublishedMcpArtifact } from './installation.js';
+import { workspaceContext } from '../workspaceContext.js';
 
 const sourceKey = 'workspace_root_mutable_override';
 const message = (cause: unknown) => cause instanceof HttpRequestError
@@ -34,12 +36,11 @@ function sourceStatus(document: ConfigSourceDocumentDTO, key: string): string {
 }
 
 /** 制品发布后的可选纵向配置；正文由原候选 owner 生成，不消费脱敏 plan.parameters。 */
-export async function offerMcpArtifactConfiguration(published: PublishedMcpArtifact, workspace: GatewayWorkspaceRequestTarget, label: string,
+export async function offerMcpArtifactConfiguration(published: PublishedMcpArtifact, installation: McpInstallationRequestTarget, label: string,
   quickInput: IQuickInputService, notifications: INotificationService, assertAccess: () => void, signal: AbortSignal): Promise<void> {
-  const route = Object.freeze({ ...workspace });
+  const installationTarget = Object.freeze({ ...installation });
   const { artifact, candidate: original } = structuredClone(published);
   const binding = artifact.binding!;
-  const owner = `${label} · ${route.gateway_id} · 工作区 ${route.workspace_id} · Backend ${binding.backend_id}`;
   const check = () => { assertAccess(); signal.throwIfAborted(); };
   const cancellation = new CancellationTokenSource();
   const abortInput = () => cancellation.cancel();
@@ -47,68 +48,90 @@ export async function offerMcpArtifactConfiguration(published: PublishedMcpArtif
   try {
     check();
     if (!await notificationAction(notifications, Severity.Info,
-      `MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。工作区尚未配置或连接；generation ${binding.generation}`,
-      '配置此工作区', signal)) return;
+      `MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。尚未配置或连接工作区；generation ${binding.generation}`,
+      '选择工作区配置', signal)) return;
     check();
+    await workspaceContext.refresh();
+    check();
+    const snapshot = workspaceContext.getSnapshot();
+    if (snapshot.error) throw new Error(snapshot.error);
+    const workspaces = snapshot.workspaces.filter(workspace => workspace.gateway_id === installationTarget.gateway_id
+      && workspace.backend_id === installationTarget.backend_id);
+    if (!workspaces.length) throw new Error('原安装域没有已确认归属的工作区，请先明确登记并刷新目标；制品已经发布');
+    const workspace = await quickInput.pick(workspaces.map(workspace => ({
+      label: workspace.name, description: workspace.status, detail: workspace.workspace_id, workspace,
+    })), { title: '选择 MCP 配置工作区', placeHolder: `${label} · Backend ${installationTarget.backend_id} · 仅列出原安装域的工作区` }, cancellation.token);
+    check();
+    if (!workspace) return;
+    const route: GatewayWorkspaceRequestTarget = Object.freeze({ gateway_id: workspace.workspace.gateway_id,
+      workspace_id: workspace.workspace.workspace_id, gateway_connection_id: installationTarget.gateway_connection_id });
+    const owner = `${workspace.label} · ${route.gateway_id} · 工作区 ${route.workspace_id} · Backend ${binding.backend_id}`;
+    const checkWorkspace = () => {
+      check();
+      const registered = workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === route.gateway_id
+        && item.workspace_id === route.workspace_id && item.backend_id === installationTarget.backend_id);
+      if (registered?.status !== 'ready') throw new Error('原目标工作区尚未就绪或已不属于原安装域，请显式连接并重新选择配置目标');
+    };
+    checkWorkspace();
     const serverId = await quickInput.input({ title: '配置已发布 MCP 制品', prompt: owner,
       placeHolder: '输入精确 Server ID', validateInput: async value => /^[a-zA-Z][a-zA-Z0-9._-]{1,63}$/.test(value)
         ? undefined : 'Server ID 须以字母开头，长度 2–64，仅含字母、数字、点、下划线或连字符' }, cancellation.token);
-    check();
+    checkWorkspace();
     if (serverId === undefined) return;
     const selected = await quickInput.pick([
       { label: '暂不启用此 Server', enabled: false }, { label: '启用此 Server', enabled: true },
     ], { title: `选择 ${serverId} 的启用状态`, placeHolder: owner }, cancellation.token);
-    check();
+    checkWorkspace();
     if (!selected) return;
     const document = await getConfigSourceDocument(0, route, sourceKey, { signal });
-    check();
+    checkWorkspace();
     if (!document.writable) throw new Error('原工作区配置来源不可写');
     const candidate = { ...original, server_id: serverId };
-    const planned = await planMcpInstallation(0, route, candidate, signal);
-    check();
+    const planned = await planMcpCandidateConfiguration(0, route, candidate, signal);
+    checkWorkspace();
     if (!planned.data || planned.data.disposition !== 'requires_artifact') throw new Error('原候选不再对应已发布制品，必须重新选择');
     const plan = { candidate, plan_digest: planned.data.plan_digest };
-    const target = { kind: 'workspace', ...route };
+    const target = { kind: 'workspace', gateway_id: route.gateway_id, workspace_id: route.workspace_id };
     const idempotencyKey = crypto.randomUUID();
     const draft = await draftMcpCandidateConfiguration(0, route, { target, server_id: serverId, plan, managed_launch: binding,
-      enabled: selected.enabled, source_edit: { ...route, source_key: sourceKey, jsonc: document.jsonc,
+      enabled: selected.enabled, source_edit: { gateway_id: route.gateway_id, workspace_id: route.workspace_id, source_key: sourceKey, jsonc: document.jsonc,
         base_file_digest: document.file_digest, base_layer_revision: document.layer_revision, base_layer_digest: document.layer_digest,
         expected_active_revision: document.active_revision, expected_active_digest: document.active_digest, idempotency_key: idempotencyKey } }, signal);
-    check();
+    checkWorkspace();
     if (!draft.source_edit || !draft.preflight) throw new Error('原目标没有返回完整配置提案');
     const confirmed = await quickInput.pick([
       { label: '取消', save: false }, { label: '确认保存工作区配置', description: `${serverId} · ${selected.enabled ? '启用' : '暂不启用'}`,
         detail: sourceKey, save: true },
     ], { title: '确认 MCP 工作区配置提案', placeHolder: '选择确认保存工作区配置，或取消',
       prompt: `${owner} · ${artifact.identifier} ${artifact.version} · generation ${binding.generation} · 来源 ${sourceKey} · 变更：${draft.preflight.changed_paths.join('、')}` }, cancellation.token);
-    check();
+    checkWorkspace();
     if (!confirmed?.save) return;
     const intent: McpCandidateConfigurationRequestDTO = { target, server_id: serverId, plan, managed_launch: binding, source_edit: draft.source_edit };
     let saved: ConfigSourceDocumentDTO;
     try { saved = await saveMcpCandidateConfiguration(0, route, intent, signal); }
     catch (cause) {
-      check();
+      checkWorkspace();
       // 失败只回读原 source；未知结果始终保留本次幂等键，不重放 PUT。
       let observation: string;
       try { observation = sourceStatus(await getConfigSourceDocument(0, route, sourceKey, { idempotencyKey, signal }), idempotencyKey); }
       catch (readError) { observation = `原来源回读失败：${message(readError)}`; }
-      check();
+      checkWorkspace();
       if (cause instanceof HttpRequestError && cause.status >= 400 && cause.status < 500) {
         throw new Error(`配置保存被拒绝：${message(cause)}；${sourceKey} · 提交 ${idempotencyKey}；${observation}`, { cause });
       }
       for (;;) {
         if (!await notificationAction(notifications, Severity.Warning,
           `保存结果未确认，不会自动重发。${sourceKey} · 提交 ${idempotencyKey} · ${owner} · ${message(cause)}；${observation}`, '查询原来源提交', signal)) return;
-        check();
+        checkWorkspace();
         try {
           const queried = await getConfigSourceDocument(0, route, sourceKey, { idempotencyKey, signal });
-          check();
+          checkWorkspace();
           observation = sourceStatus(queried, idempotencyKey);
           if (queried.edit) { notifications.info(`${observation} · ${owner}`); return; }
-        } catch (readError) { check(); observation = `原来源提交 ${idempotencyKey} 查询失败：${message(readError)}`; }
+        } catch (readError) { checkWorkspace(); observation = `原来源提交 ${idempotencyKey} 查询失败：${message(readError)}`; }
       }
     }
-    check();
+    checkWorkspace();
     notifications.info(`${sourceStatus(saved, idempotencyKey)} · ${owner}`);
   } finally { signal.removeEventListener('abort', abortInput); cancellation.dispose(); }
 }

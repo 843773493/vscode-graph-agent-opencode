@@ -33,6 +33,7 @@ from tests.harness.python.web_workbench import (
 )
 from tests.integration.gateway.test_mcp_artifact_installation import (
     InstallationCase,
+    installation_route,
 )
 from tests.integration.gateway.test_mcp_artifact_installation import (
     installation_case as installation_case,  # noqa: PLC0414 - 复用真实 Gateway／Backend 与统一模型回放
@@ -183,6 +184,7 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
     installation_case: InstallationCase, npm_index: NpmIndex,
 ) -> None:
     case = installation_case
+    _, installation_base = installation_route(case.client)
     evidence: list[dict[str, object]] = []
 
     def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None, *, status: int = 200) -> dict:
@@ -195,7 +197,7 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
 
     workspace_id = exchange("GET", "/api/gateway/workspaces", "npm-workspaces")["data"]["items"][0]["workspace_id"]
     base = f"/api/v1/workspaces/{workspace_id}"
-    capabilities = exchange("GET", base + "/mcp/installation-capabilities", "npm-capabilities")
+    capabilities = exchange("GET", installation_base + "/installation-capabilities", "npm-capabilities")
     target = capabilities["target"]
     assert capabilities["data"]["npm_available"] is True
     assert "npm" not in capabilities["data"]["unsupported_registry_types"]
@@ -204,19 +206,15 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
 
     def candidate_for(release: str = "release-1", version: str = "1.0.0") -> tuple[dict, dict]:
         source = npm_index.source(release, version)
-        inspected = exchange("POST", base + "/mcp/candidate-manifests", "npm-inspect-" + release, {"target": target, "source": source})["data"]
+        inspected = exchange("POST", installation_base + "/candidate-manifests", "npm-inspect-" + release, {"target": target, "source": source})["data"]
         candidate = {"target": target, "source": source, "manifest_digest": inspected["manifest_digest"],
             "variant": inspected["variants"][0]["ref"], "server_id": "installed"}
-        if release == "release-1":
-            reference = exchange("POST", base + "/mcp/candidate-plans/private-env", "npm-private-input", {
-                "target": workspace_target, "server_id": "installed", "input_key": "PROBE_SECRET", "candidate": candidate, "value": secret})["data"]
-            candidate["inputs"] = {"PROBE_SECRET": reference}
-        plan = exchange("POST", base + "/mcp/candidate-plans", "npm-plan-" + release, candidate)["data"]
+        plan = exchange("POST", installation_base + "/candidate-plans", "npm-plan-" + release, candidate)["data"]
         assert plan["disposition"] == "requires_artifact" and plan["parameters"]["registry_type"] == "npm"
         return candidate, plan
 
     def start(candidate: dict, plan: dict, operation_id: str) -> dict:
-        return exchange("POST", base + "/mcp/installations", "npm-start-" + operation_id, {"candidate": candidate,
+        return exchange("POST", installation_base + "/installations", "npm-start-" + operation_id, {"candidate": candidate,
             "plan_digest": plan["plan_digest"], "operation_id": operation_id, "entrypoint": "npm-probe"})["data"]
 
     def settle(operation: dict) -> dict:
@@ -224,7 +222,7 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
         while operation["status"] == "running":
             assert time.monotonic() < deadline, operation
             time.sleep(.1)
-            operation = exchange("GET", base + "/mcp/installation-operations/" + operation["operation_id"], "npm-observe-" + operation["operation_id"])["data"]
+            operation = exchange("GET", installation_base + "/installation-operations/" + operation["operation_id"], "npm-observe-" + operation["operation_id"])["data"]
         return operation
 
     original_config = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
@@ -245,11 +243,15 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
     assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original_config
     assert exchange("GET", base + "/mcp/servers", "npm-unconfigured")["data"] == []
 
+    reference = exchange("POST", base + "/mcp/candidate-plans/private-env", "npm-private-input", {
+        "target": workspace_target, "server_id": "installed", "input_key": "PROBE_SECRET", "candidate": candidate, "value": secret})["data"]
+    configuration_plan = exchange("POST", base + "/mcp/candidate-configurations/plans", "npm-configuration-plan",
+        {**candidate, "inputs": {"PROBE_SECRET": reference}})["data"]
     source_path = base + "/config/sources/workspace_root_mutable_override"
     document = exchange("GET", source_path, "npm-source")["data"]
     configuration = commentjson.loads(document["jsonc"])
     configuration["mcp"] = {"servers": {"installed": {"enabled": True, "transport": "stdio", "managed_launch": artifact["binding"],
-        "env": plan["parameters"]["env"]}}}
+        "env": configuration_plan["parameters"]["env"]}}}
     edit = {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"], "source_key": document["source_key"],
         "jsonc": json.dumps(configuration), "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
         "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
@@ -313,17 +315,17 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
     first = start(cancel_candidate, cancel_plan, "npm-cancel-one")
     second = start(cancel_candidate, cancel_plan, "npm-cancel-two")
     assert npm_index.downloading.wait(20), "未观察到真实 npm tarball 下载"
-    exchange("POST", base + "/mcp/installation-operations/npm-cancel-one/cancel", "npm-cancel-first", target)
+    exchange("POST", installation_base + "/installation-operations/npm-cancel-one/cancel", "npm-cancel-first", target)
     first = settle(first)
     assert first["status"] == "cancelled" and first["artifact"] is None
-    assert exchange("GET", base + "/mcp/installation-operations/npm-cancel-two", "npm-shared-still-running")["data"]["status"] == "running"
-    exchange("POST", base + "/mcp/installation-operations/npm-cancel-two/cancel", "npm-cancel-last", target)
+    assert exchange("GET", installation_base + "/installation-operations/npm-cancel-two", "npm-shared-still-running")["data"]["status"] == "running"
+    exchange("POST", installation_base + "/installation-operations/npm-cancel-two/cancel", "npm-cancel-last", target)
     second = settle(second)
     assert second["status"] == "cancelled" and second["artifact"] is None
     npm_index.download_cancelled.set()
     npm_index.release.set()
 
-    assert exchange("GET", base + "/mcp/installations", "npm-only-original")["data"] == [artifact]
+    assert exchange("GET", installation_base + "/installations", "npm-only-original")["data"] == [artifact]
     assert exchange("GET", base + "/mcp/servers", "npm-original-connection")["data"] == [server]
     current = exchange("GET", source_path, "npm-original-source")["data"]
     for field_name in ("file_digest", "layer_revision", "layer_digest", "active_revision", "active_digest", "effective"):
@@ -332,9 +334,9 @@ def test_locked_npm_generation_uses_original_node_and_thread_after_failed_or_can
     assert resource is not None and resource.process == original_resource.process and resource.status == "running"
     assert resource.managed_launch is not None and resource.managed_launch.model_dump() == artifact["binding"]
     assert not resource.cleanup_failed and (root / "package-lock.json").read_bytes() == lock_bytes
-    references = exchange("GET", base + f"/mcp/installations/{artifact['binding']['installation_id']}/references", "npm-references")["data"]
+    references = exchange("GET", installation_base + f"/installations/{artifact['binding']['installation_id']}/references", "npm-references")["data"]
     assert {item["kind"] for item in references["references"]} >= {"source_layer", "active", "connection"}
-    rejected = exchange("DELETE", base + f"/mcp/installations/{artifact['binding']['installation_id']}", "npm-reference-blocked", {"target": target,
+    rejected = exchange("DELETE", installation_base + f"/installations/{artifact['binding']['installation_id']}", "npm-reference-blocked", {"target": target,
         "binding": artifact["binding"], "operation_id": "npm-blocked-remove"}, status=409)
     assert rejected["data"]["binding"] == artifact["binding"] and command.is_file()
     invoke("after-failure-and-cancel")
@@ -347,6 +349,7 @@ def test_workbench_npm_install_action_uses_explicit_root_bin_without_configuring
     installation_case: InstallationCase, npm_index: NpmIndex,
 ) -> None:
     case = installation_case
+    _, installation_base = installation_route(case.client)
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "npm 安装 UI 验收需要真实 Chromium"
     # 安装 UI 只发布制品；私有输入已由上面的真实候选／配置／Thread 场景单独核实。
@@ -377,5 +380,5 @@ def test_workbench_npm_install_action_uses_explicit_root_bin_without_configuring
     assert Path(artifact["command"]).is_file() and Path(artifact["runtime_executable"]).is_absolute()
     assert artifact["runtime_version"].startswith("v")
     assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original
-    assert case.client.get("/api/v1/mcp/installations").json()["data"] == [artifact]
+    assert case.client.get(installation_base + "/installations").json()["data"] == [artifact]
     assert case.client.get("/api/v1/mcp/servers").json()["data"] == []

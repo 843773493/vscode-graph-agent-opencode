@@ -740,6 +740,22 @@ message McpInstallationTargetDTO {
   string backend_id = 3;
 }
 
+message McpInstallationTargetListRequestDTO {
+  int32 protocol_version = 1;
+  string gateway_id = 2;
+  optional string gateway_connection_id = 3;
+}
+
+message McpInstallationTargetListResponseDTO {
+  optional int64 code = 1;
+  optional string message = 2;
+  repeated McpInstallationTargetDTO data = 3;
+  string request_id = 4;
+  int32 protocol_version = 5;
+  string gateway_id = 6;
+  string source = 7;
+}
+
 // definition 仅供明确手动来源；目录来源由目标读取原始 manifest，不消费展示 DTO。
 message McpCandidateSourceDTO {
   string kind = 1;

@@ -223,3 +223,10 @@
 - 定向19 passed／0.87秒，真实 Gateway→Backend→uv 恢复1 passed／56.98秒，均有外部超时与4GiB保护；四份owned Python的Ruff、Pyright零诊断。覆盖发布中取消后保留成功、进度中取消后中断、迟到发布拒绝、原错误及写失败原因保留；真实入口验证4个同键并发唯一操作、成功重试、异入口409、阻塞实际wheel下载后原PID退出、正式runtime/start恢复、原操作interrupted且不重放、旧制品保留及工作区配置不变。
 - 准确命令、源码／日志SHA、原始输出、实际退出码及owned patch见 `out/tests/temp/extension_next_20261105/artifacts/final-evidence.json`；产品原件为 `out/tests/integration/gateway/test_mcp_installation_recovery/runs/run-4f18389ed259/nodes/node-c9d6543a3801/artifacts/`。首轮误用要求存活drain端点的restart-force，改用既有死亡owner的runtime/start后通过；失败原件保留，未修改Gateway行为。
 - 仅完成既有PyPI链的终态与恢复子项；未新增用户取消API、npm／OCI／NuGet、版本复用、引用或物理卸载，不将2.4整项及其它生态记为完成。没有公开协议或前端变更，不重复运行无依赖变化的Workbench构建。
+
+### 2026-11-07：MCP 目标管理与工作区配置分离
+
+- 安装域发现、候选、安装／库存／引用／操作统一走明确 Gateway／Backend 的管理入口，Backend 只注入原安装 owner；旧两种 workspace 安装 mount 返回410。工作区配置及私有输入保留原精确工作区链。共用候选解析，package 安装不消费运行输入；配置阶段再校验参数与私有引用。原 MCP 标题目标选择、详情、通知和制品命令沿用独立视图选择及显式连接，切焦点不改投；授权深链仍保留原对象归属。
+- 真实 HTTP 共享／取消／双 Gateway 批6项通过；PyPI／npm 制品及原 Thread 批中4项通过；正式 Workbench 安装2项、私有env重启／中断恢复／页面卸载／取消4项、最终配置确认／响应丢失查询及双 Gateway路由3项分别通过。批次有重叠，不相加。页面经真实Gateway初始化，保留原request_id、来源CAS、实际制品／进程及工具配对断言；没有修改断言掩盖失败。前轮失败原件保留：缺原生组件、根fixture覆盖manifest及模块插件复用遗漏fixture；分别显式配置测试组件、局部传入manifest及直接导入fixture后通过。
+- 精确提交快照248项单元／合同、共享树227项协议合同、203项前端定向测试、138份实际转换源码类型及正式79扩展构建通过；协议生成一致性、OpenAPI导出和OpenSpec strict通过。核心Python类型零诊断；14份外围文件按完整HEAD对照，Pyright120→118、Ruff14→14，无新增。末尾空行清理保留AST等价证明。完整命令、源码／原始输出指纹、失败归属及提交切片见 `out/tests/temp/2026/11/07/mcp_target_installation/artifacts/verification-v1.json`，前端原件见同日 `mcp_management_target/artifacts/`。
+- 本片闭合目标管理与配置路由，不以局部证据勾完跨模块1.7／3.1／3.2／8.3／第9组。package必填输入的交互收集、manual／HTTP新增界面、动态定义Provider、真实SSH／Windows／Electron及其它未支持生态继续待办；不将原生路径、浏览器位置或活动工作区当作安装身份。

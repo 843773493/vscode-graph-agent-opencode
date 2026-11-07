@@ -7,19 +7,24 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
 import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
+import { listMcpInstallationTargets } from '../../web/src/api/mcpConnections.js';
 import type { ExtensionTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
 
-type ManagementScope = 'extensions' | 'settings';
-type ManagementTarget = GatewayManagementTargetDTO & { backend_id?: string };
+type ManagementScope = 'extensions' | 'settings' | 'mcp';
+export type ManagementTarget = GatewayManagementTargetDTO & { backend_id?: string };
 const selections = new Map<ManagementScope, { entryGatewayId: string; target: ManagementTarget }>();
 const selecting = new Map<ManagementScope, AbortController>();
 export const selectExtensionManagementTargetCommand = 'boxteam.extensions.selectTarget';
 export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
+export const selectMcpManagementTargetCommand = 'boxteam.mcp.selectTarget';
 const extensionTitle = new MutableDisposable();
+const mcpTitle = new MutableDisposable();
 const extensionManagementChanged = new Emitter<void>();
 export const onDidChangeExtensionManagementTarget = extensionManagementChanged.event;
+const mcpManagementChanged = new Emitter<void>();
+export const onDidChangeMcpManagementTarget = mcpManagementChanged.event;
 
 /** 仅刷新当前管理视图；在途操作的目标由发起方冻结，不随此展示事件改投。 */
 export function refreshExtensionManagementTarget(target?: { gatewayId: string; backendId: string }): void {
@@ -38,17 +43,31 @@ function updateExtensionTitle(): void {
     when: ContextKeyExpr.equals('viewContainer', VIEWLET_ID), group: 'navigation', order: 0,
   });
 }
+function updateMcpTitle(): void {
+  const target = selections.get('mcp')?.target;
+  mcpTitle.value = MenuRegistry.appendMenuItem(MenuId.ViewTitle, {
+    command: { id: selectMcpManagementTargetCommand, title: `目标：${target?.name ?? '本地'}`,
+      tooltip: target ? `${target.gateway_id}${target.backend_id ? ` · ${target.backend_id}` : ''}` : '选择 MCP 管理目标' },
+    when: ContextKeyExpr.or(...['boxteam.mcp.view', 'workbench.views.mcp.installed', 'workbench.views.mcp.marketplace']
+      .map(view => ContextKeyExpr.equals('view', view))), group: 'navigation', order: 0,
+  });
+}
 updateExtensionTitle();
-onGatewayUserSessionInvalidated(0, () => { selections.clear(); updateExtensionTitle(); extensionManagementChanged.fire(); });
+updateMcpTitle();
+onGatewayUserSessionInvalidated(0, () => {
+  selections.clear(); updateExtensionTitle(); updateMcpTitle(); extensionManagementChanged.fire(); mcpManagementChanged.fire();
+});
 workspaceContext.subscribe(() => {
-  let extensionChanged = false;
+  let extensionChanged = false, mcpChanged = false;
   for (const [scope, selection] of selections) {
     if (selection.entryGatewayId !== workspaceContext.getSnapshot().gatewayId) {
       selections.delete(scope);
       if (scope === 'extensions') extensionChanged = true;
+      if (scope === 'mcp') mcpChanged = true;
     }
   }
   if (extensionChanged) { updateExtensionTitle(); extensionManagementChanged.fire(); }
+  if (mcpChanged) { updateMcpTitle(); mcpManagementChanged.fire(); }
 });
 
 /** 各管理视图只保存自己的展示选择；原 Gateway 仍持有路由和安装事实。 */
@@ -88,11 +107,33 @@ export async function extensionManagementTarget(target: ManagementTarget, signal
   return resolved;
 }
 
-for (const scope of ['extensions', 'settings'] as const) registerAction2(class extends Action2 {
+async function mcpDomains(target: ManagementTarget, signal: AbortSignal) {
+  const domains = await listMcpInstallationTargets(0, target, signal);
+  signal.throwIfAborted();
+  if (!domains.length) throw new Error('所选 Gateway 没有可用的 MCP 安装域，请显式启动目标安装服务');
+  return domains;
+}
+
+/** 安装目标独立于工作区焦点；默认单域直接使用，多域只由标题动作明确选择。 */
+export async function mcpManagementTarget(target: ManagementTarget, signal: AbortSignal): Promise<ManagementTarget & { backend_id: string }> {
+  if (target.backend_id) return { ...target, backend_id: target.backend_id };
+  const previous = selections.get('mcp'), entryGatewayId = workspaceContext.getSnapshot().gatewayId!;
+  const domains = await mcpDomains(target, signal);
+  if (domains.length !== 1) throw new Error('当前 Gateway 有多个安装域，请从 MCP 视图标题工具栏选择安装域');
+  const resolved = { ...target, backend_id: domains[0].backend_id };
+  if (selections.get('mcp') === previous && workspaceContext.getSnapshot().gatewayId === entryGatewayId) {
+    selections.set('mcp', { entryGatewayId, target: resolved });
+    updateMcpTitle();
+  }
+  return resolved;
+}
+
+for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(class extends Action2 {
   constructor() {
-    super({ id: scope === 'extensions' ? selectExtensionManagementTargetCommand : selectSettingsManagementTargetCommand,
+    super({ id: scope === 'extensions' ? selectExtensionManagementTargetCommand : scope === 'mcp' ? selectMcpManagementTargetCommand : selectSettingsManagementTargetCommand,
       title: scope === 'extensions' ? { value: '选择扩展管理目标', original: 'Select Extension Management Target' }
-        : { value: '选择设置管理目标', original: 'Select Settings Management Target' }, f1: true });
+        : scope === 'mcp' ? { value: '选择 MCP 管理目标', original: 'Select MCP Management Target' }
+          : { value: '选择设置管理目标', original: 'Select Settings Management Target' }, f1: true });
   }
   async run(accessor: ServicesAccessor): Promise<void> {
     const quickInput = accessor.get(IQuickInputService);
@@ -112,7 +153,8 @@ for (const scope of ['extensions', 'settings'] as const) registerAction2(class e
         label: target.connection_kind === 'local' ? '本地' : target.name,
         description: target.gateway_id, detail: target.connection_error ?? target.gateway_connection_id,
         picked: target.gateway_id === current.gateway_id && target.gateway_connection_id === current.gateway_connection_id, target,
-      })), { title: scope === 'extensions' ? '扩展管理目标' : '设置管理目标', placeHolder: '本地指当前页面的原生 Gateway；选择不会启动工作区或扩展宿主' }, cancellation.token);
+      })), { title: scope === 'extensions' ? '扩展管理目标' : scope === 'mcp' ? 'MCP 管理目标' : '设置管理目标',
+        placeHolder: '本地指当前页面的原生 Gateway；选择不会启动工作区或扩展宿主' }, cancellation.token);
       controller.signal.throwIfAborted();
       if (!picked) return;
       let target: ManagementTarget = { ...picked.target };
@@ -124,9 +166,18 @@ for (const scope of ['extensions', 'settings'] as const) registerAction2(class e
         controller.signal.throwIfAborted();
         if (!domain) return;
         target = { ...target, backend_id: domain.backend_id };
+      } else if (scope === 'mcp') {
+        const domains = await mcpDomains(target, controller.signal);
+        const domain = domains.length === 1 ? domains[0] : (await quickInput.pick(domains.map(domain => ({
+          label: domain.backend_id, description: target.name, target: domain,
+        })), { title: `选择 MCP 安装域 · ${target.name}`, placeHolder: '该选择用于后续制品安装、查询和卸载' }, cancellation.token))?.target;
+        controller.signal.throwIfAborted();
+        if (!domain) return;
+        target = { ...target, backend_id: domain.backend_id };
       }
       selections.set(scope, { entryGatewayId: entry, target });
       if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
+      if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }
     } finally {
       if (selecting.get(scope) === controller) selecting.delete(scope);
       releaseUser(); releaseContext(); cancellation.dispose(); controller.abort();

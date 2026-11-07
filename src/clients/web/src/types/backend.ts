@@ -382,7 +382,8 @@ export type WorkspaceNavigationNodeUpdateRequest =
 export type WorkspaceNavigationPlacementRequest =
   GeneratedWorkspaceNavigationPlacementRequest;
 
-export type GatewayWorkspace = Omit<Required<GatewayWorkspaceDTO>, "backend_generation" | "parent_workspace" | "runtime_action" | "config_reload" | "connection_error"> & {
+export type GatewayWorkspace = Omit<Required<GatewayWorkspaceDTO>, "backend_id" | "backend_generation" | "parent_workspace" | "runtime_action" | "config_reload" | "connection_error"> & {
+  backend_id?: GatewayWorkspaceDTO["backend_id"];
   backend_generation?: string | null;
   parent_workspace?: GatewayWorkspaceDTO["parent_workspace"];
   runtime_action?: GatewayWorkspaceDTO["runtime_action"];

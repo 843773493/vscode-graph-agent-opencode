@@ -30,7 +30,7 @@ def manifest(definition: dict[str, object]):
 
 def test_fixed_and_repeated_arguments_preserve_order_and_replacement_text(package_definition: dict[str, object]) -> None:
     variant, = manifest(package_definition).variants
-    disposition, parameters = candidate_parameters(variant, {"--tag": ["a", "b"]})
+    disposition, parameters = candidate_parameters(variant, {"--tag": ["a", "b"]}, purpose="configuration")
     assert disposition == "requires_artifact"
     assert parameters["arguments"] == ["serve", "literal-$&", "--tag", "a", "--tag", "b"]
     assert parameters["runtime_arguments"] == ["--offline"]
@@ -58,7 +58,7 @@ def test_unrepresentable_or_unpinned_package_is_rejected(package_definition: dic
         definition["environmentVariables"] = [{"name": "MODE", "value": "a"}, {"name": "MODE", "value": "b"}]
     variant, = manifest(definition).variants
     with pytest.raises(ValueError) as error:
-        candidate_parameters(variant, {"--tag": ["a"]})
+        candidate_parameters(variant, {"--tag": ["a"]}, purpose="configuration")
     assert "private-sentinel" not in str(error.value)
 
 
@@ -80,11 +80,11 @@ def test_declared_variables_preserve_literal_replacement_and_do_not_accept_unkno
            "variables": {"path": {"isRequired": True}}, "headers": [{"name": "X-Mode", "value": "{mode}",
            "variables": {"mode": {"choices": ["$&"]}}}]}]}
     doc = parse_candidate_manifest(raw, kind="manual", protocol=None, name="remote", version="1", entry_id=None)
-    disposition, parameters = candidate_parameters(doc.variants[0], {"path": "mcp", "mode": "$&"})
+    disposition, parameters = candidate_parameters(doc.variants[0], {"path": "mcp", "mode": "$&"}, purpose="configuration")
     assert disposition == "configuration_only"
     assert parameters == {"transport": "streamable_http", "url": "https://service.test/mcp", "headers": {"X-Mode": "$&"}}
     with pytest.raises(ValueError, match="未使用"):
-        candidate_parameters(doc.variants[0], {"path": "mcp", "mode": "$&", "unused": "wrong"})
+        candidate_parameters(doc.variants[0], {"path": "mcp", "mode": "$&", "unused": "wrong"}, purpose="configuration")
 
 
 @pytest.mark.parametrize("transport", ["sse", "unknown"])
@@ -92,7 +92,7 @@ def test_old_sse_and_unknown_remote_transport_are_not_reinterpreted(transport: s
     raw = {"name": "remote", "version": "1", "remotes": [{"type": transport, "url": "https://service.test/mcp"}]}
     doc = parse_candidate_manifest(raw, kind="manual", protocol=None, name="remote", version="1", entry_id=None)
     with pytest.raises(ValueError, match="SSE"):
-        candidate_parameters(doc.variants[0], {})
+        candidate_parameters(doc.variants[0], {}, purpose="configuration")
 
 
 @pytest.mark.parametrize(("definition", "values", "message"), [
@@ -110,7 +110,7 @@ def test_required_and_template_constraints_cannot_be_dropped(
     package_definition["packageArguments"] = [{"type": "named", "name": "--value", **definition}]
     variant, = manifest(package_definition).variants
     with pytest.raises(ValueError, match=message):
-        candidate_parameters(variant, values)
+        candidate_parameters(variant, values, purpose="configuration")
 
 
 @pytest.mark.parametrize("argument", [
@@ -121,14 +121,14 @@ def test_argument_type_cannot_silently_ignore_conflicting_name(package_definitio
     package_definition["packageArguments"] = [argument]
     variant, = manifest(package_definition).variants
     with pytest.raises(ValueError, match="不一致"):
-        candidate_parameters(variant, {})
+        candidate_parameters(variant, {}, purpose="configuration")
 
 
 def test_duplicate_optional_environment_name_is_rejected_before_missing_value_is_omitted(package_definition: dict[str, object]) -> None:
     package_definition["environmentVariables"] = [{"name": "MODE"}, {"name": "MODE", "value": "fixed"}]
     variant, = manifest(package_definition).variants
     with pytest.raises(ValueError, match="重复"):
-        candidate_parameters(variant, {"--tag": ["a"]})
+        candidate_parameters(variant, {"--tag": ["a"]}, purpose="configuration")
 
 
 @pytest.mark.parametrize("location", ["envelope", "server", "manual"])

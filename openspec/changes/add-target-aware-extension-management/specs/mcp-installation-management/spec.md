@@ -26,6 +26,8 @@ MCP 管理视图 SHALL 在标题工具栏复用扩展管理的目标控件与交
 
 远端安装 SHALL 由远端原生 Gateway 授权并交其目标安装 owner 执行；直接访问该 Gateway 页面与经 Relay 管理 SHALL 读取同一制品和安装记录，当前页面不另建本地安装副本。统一目标入口 MUST NOT 将 MCP 和 VSIX 的不同协议／生态安装算法复制成一套通用插件平台。
 
+安装域发现、候选原件、安装计划、重验、库存及操作查询 SHALL 经明确 Gateway／Backend 的管理入口，Backend 安装适配层只依赖原安装 owner，不装配 workspace graph。package 安装计划 SHALL 只解析制品准备所需字段，不消费工作区运行参数和私有输入；即使 manifest 声明必填运行参数或秘密 env，用户也可先安装制品，再为明确工作区规划配置。配置阶段 SHALL 沿同一候选解析实现校验运行参数、秘密引用与来源 CAS，不复用安装计划的空参数冒充完整配置。
+
 来源身份 SHALL 区分 registry／endpoint、稳定 entry ID（只有名称时冻结名称及 manifest digest）、显式 package／remote variant、精确制品版本／摘要及安装域。同名不同源不得合并；更新须基于原安装来源和 manifest 基线重做计划，来源身份变化不能静默重绑。
 
 #### Scenario: 选定远端后切换当前会话
@@ -35,6 +37,10 @@ MCP 管理视图 SHALL 在标题工具栏复用扩展管理的目标控件与交
 #### Scenario: 两来源同名同版本指向不同包
 - **WHEN** 两个 registry 提供同名同版本、不同 digest 的包，用户安装其中一个，随后目录同名条目被替换
 - **THEN** 两条目与安装保持独立身份，原安装不被改绑；更新展示来源变化并要求新计划，不按名称复用另一制品
+
+#### Scenario: 未选工作区安装含必填运行输入的包
+- **WHEN** 用户沿所选 Gateway／Backend 安装一个声明必填启动参数及秘密 env 的 package，尚未选择配置工作区
+- **THEN** 安装计划只准备制品，不读取工作区或私有输入；安装入口拒绝混入运行输入。后续启用须明确工作区并重新校验完整配置，不把安装成功视为连接就绪
 
 ### Requirement: 目录手动定义与 HTTP 服务必须进入同一管理链
 

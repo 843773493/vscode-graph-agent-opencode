@@ -4,6 +4,7 @@ import { observableValue } from '../../upstream/src/vs/base/common/observable.js
 import { MarkdownString } from '../../upstream/src/vs/base/common/htmlContent.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { IIterativePage, IIterativePager } from '../../upstream/src/vs/base/common/paging.js';
 import { IMcpGalleryManifest } from '../../upstream/src/vs/platform/mcp/common/mcpGalleryManifest.js';
 import { IGalleryMcpServer, IMcpGalleryService, IQueryOptions } from '../../upstream/src/vs/platform/mcp/common/mcpManagement.js';
@@ -22,10 +23,13 @@ import { IExtensionsWorkbenchService } from '../../upstream/src/vs/workbench/con
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import type { IWorkbencMcpServerInstallOptions } from '../../upstream/src/vs/workbench/services/mcp/common/mcpWorkbenchManagementService.js';
-import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { GatewayManagementDirectoryDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { WorkspaceMcpCatalog } from './catalog.js';
+import { managementGateway, mcpManagementTarget, onDidChangeMcpManagementTarget } from '../managementTarget.js';
+import { WorkspaceMcpCatalog, mcpCatalogKey, pendingMcpOperation } from './catalog.js';
 import { galleryInstallationSource, publishMcpArtifact } from './installation.js';
 import { offerMcpArtifactConfiguration } from './configuration.js';
 import { WorkspaceMcpServer } from './server.js';
@@ -43,8 +47,12 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   private readonly resets = this._register(new Emitter<void>());
   readonly onReset = this.resets.event;
   private readonly scopes = new Map<string, { catalog: WorkspaceMcpCatalog; models: Map<string, WorkspaceMcpServer> }>();
-  private selected?: WorkspaceMcpCatalog;
+  private selected = new Set<WorkspaceMcpCatalog>();
+  private entryGatewayId?: string;
   private selectionError?: Error;
+  private authorizationCatalog?: WorkspaceMcpCatalog;
+  private authorizationOpening = false;
+  private readonly authorizationController = new AbortController();
   private visibleLists = 0;
   private readonly visibleDetails = new Map<WorkspaceMcpCatalog, number>();
   private readonly reportedErrors = new WeakMap<WorkspaceMcpCatalog, string>();
@@ -59,64 +67,147 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   constructor(
     @IEditorService private readonly editors: IEditorService,
     @INotificationService private readonly notifications: INotificationService,
+    @IQuickInputService private readonly quickInput: IQuickInputService,
   ) {
     super();
     this._register(toDisposable(workspaceContext.subscribe(() => this.synchronizeTargets())));
+    this._register(onDidChangeMcpManagementTarget(() => this.synchronizeTargets()));
+    this._register(toDisposable(onGatewayUserSessionInvalidated(0, () => {
+      for (const { catalog } of this.scopes.values()) catalog.dispose();
+      this.authorizationController.abort(new Error('原 MCP 授权入口的用户身份已失效，请重新打开原对象'));
+      this.authorizationCatalog = undefined;
+      this.scopes.clear(); this.selected.clear(); this.publish(); this.resets.fire();
+    })));
     const timer = window.setInterval(() => {
       for (const { catalog } of this.scopes.values()) {
-        if (!catalog.isBusy && ((catalog === this.selected && this.visibleLists > 0) || this.visibleDetails.has(catalog) || catalog.pending)) {
-          void catalog.refresh().then(() => this.reportedErrors.delete(catalog), error => this.report(catalog, error));
+        if (!catalog.isBusy && ((this.selected.has(catalog) && this.visibleLists > 0) || this.visibleDetails.has(catalog) || catalog.pending || catalog === this.authorizationCatalog)) {
+          void catalog.refresh().then(async () => {
+            this.reportedErrors.delete(catalog);
+            if (catalog === this.authorizationCatalog) await this.openAuthorizationCatalog(catalog);
+          }).catch(error => this.report(catalog, error));
         }
       }
     }, 2000);
-    this._register(toDisposable(() => { window.clearInterval(timer); for (const { catalog } of this.scopes.values()) catalog.dispose(); }));
+    this._register(toDisposable(() => { window.clearInterval(timer); this.authorizationController.abort(); for (const { catalog } of this.scopes.values()) catalog.dispose(); }));
     this.synchronizeTargets();
+    const authorizationWorkspace = new URLSearchParams(location.search).get('mcp_workspace');
+    if (authorizationWorkspace) void this.openAuthorizationTarget(authorizationWorkspace).catch(error => this.notifications.error(error));
   }
 
-  get local(): WorkspaceMcpServer[] { return this.servers.get().filter(server => server.catalog === this.selected); }
+  get local(): WorkspaceMcpServer[] { return this.servers.get().filter(server => this.selected.has(server.catalog)); }
   get hasCurrentCatalog(): boolean {
     const context = workspaceContext.getSnapshot();
-    return !context.loading && !context.error && Boolean(this.selected?.snapshot.catalog) && !this.selected?.snapshot.error && !this.selectionError;
+    return !context.loading && !context.error && Boolean(context.gatewayId) && !this.selectionError
+      && [...this.selected].every(catalog => Boolean(catalog.snapshot.catalog) && !catalog.snapshot.error);
   }
 
   private synchronizeTargets(): void {
     const snapshot = workspaceContext.getSnapshot();
-    if (snapshot.loading || snapshot.error) return;
+    if (snapshot.loading || snapshot.error || !snapshot.gatewayId) return;
+    if (this.entryGatewayId !== snapshot.gatewayId) {
+      if (this.entryGatewayId) {
+        this.authorizationController.abort(new Error('页面 Gateway 已改变，请重新打开原 MCP 授权对象'));
+        this.authorizationCatalog = undefined;
+      }
+      for (const { catalog } of this.scopes.values()) catalog.dispose();
+      this.scopes.clear(); this.selected.clear(); this.entryGatewayId = snapshot.gatewayId;
+    }
     for (const [key, scope] of this.scopes) {
-      if (!snapshot.workspaces.some(workspace => gatewayWorkspaceKey(workspace) === key)) {
+      if (!snapshot.workspaces.some(workspace => workspace.gateway_id === scope.catalog.target.gateway_id
+        && workspace.workspace_id === scope.catalog.target.workspace_id && workspace.backend_id === scope.catalog.target.backend_id)) {
         scope.catalog.dispose();
         scope.catalog.snapshot = { ...scope.catalog.snapshot, error: '此工作区已从 Gateway 移除' };
         for (const model of scope.models.values()) if (model.changed()) this.updates.fire(model);
         this.scopes.delete(key);
       }
     }
-    const selectedKey = new URLSearchParams(location.search).get('mcp_workspace') ?? snapshot.activeId;
-    if (!selectedKey) { this.selectionError = undefined; this.selected = undefined; this.publish(); this.resets.fire(); return; }
     let target;
-    try { target = requireGatewayWorkspaceRequestTarget(snapshot.workspaces, selectedKey); }
+    try { target = managementGateway('mcp'); }
     catch (error) {
       this.selectionError = error instanceof Error ? error : new Error(String(error));
-      this.selected = undefined;
+      this.selected.clear();
       this.publish();
       this.resets.fire();
       return;
     }
     this.selectionError = undefined;
-    const key = gatewayWorkspaceKey(target);
-    let scope = this.scopes.get(key);
-    if (!scope) {
-      const label = snapshot.workspaces.find(workspace => gatewayWorkspaceKey(workspace) === key)!.name;
-      scope = { catalog: new WorkspaceMcpCatalog(target, label, () => this.publish()), models: new Map() };
-      this.scopes.set(key, scope);
+    const selected = new Set<WorkspaceMcpCatalog>();
+    for (const workspace of snapshot.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id)) {
+      const route = { gateway_id: workspace.gateway_id, workspace_id: workspace.workspace_id,
+        backend_id: workspace.backend_id, gateway_connection_id: target.gateway_connection_id };
+      const key = mcpCatalogKey(route);
+      let scope = this.scopes.get(key);
+      if (!scope) {
+        scope = { catalog: new WorkspaceMcpCatalog(route, workspace.name, () => this.publish()), models: new Map() };
+        this.scopes.set(key, scope);
+      }
+      selected.add(scope.catalog);
     }
-    if (this.selected !== scope.catalog) {
-      this.selected = scope.catalog;
+    if (selected.size !== this.selected.size || [...selected].some(catalog => !this.selected.has(catalog))) {
+      this.selected = selected;
       this.publish();
       this.resets.fire();
-      const catalog = scope.catalog;
-      if (this.visibleLists > 0) void catalog.refresh().catch(error => this.report(catalog, error));
+      if (this.visibleLists > 0) for (const catalog of selected) void catalog.refresh().catch(error => this.report(catalog, error));
     }
     this.publish();
+  }
+
+  /** 深链只打开原工作区的授权对象，不改变普通管理视图的 Gateway 选择。 */
+  private async openAuthorizationTarget(selection: string): Promise<void> {
+    if (workspaceContext.getSnapshot().loading) await workspaceContext.refresh();
+    const snapshot = workspaceContext.getSnapshot();
+    if (snapshot.error) throw new Error(snapshot.error);
+    const workspace = requireGatewayWorkspaceRequestTarget(snapshot.workspaces, selection);
+    const signal = this.authorizationController.signal;
+    signal.throwIfAborted();
+    const explicit = new URLSearchParams(location.search).get('gateway_connection_id') ?? undefined;
+    let connection: string | undefined;
+    if (workspace.gateway_id !== snapshot.gatewayId) {
+      const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal });
+      signal.throwIfAborted();
+      if (directory.local_gateway_id !== snapshot.gatewayId || workspaceContext.getSnapshot().gatewayId !== snapshot.gatewayId) throw new Error('MCP 授权入口不再属于原页面 Gateway');
+      const matches = directory.items.filter(item => item.gateway_id === workspace.gateway_id
+        && item.connection_kind === 'remote_gateway' && (!explicit || item.gateway_connection_id === explicit));
+      if (matches.length !== 1 || !matches[0].gateway_connection_id) throw new Error('MCP 授权工作区存在多个或缺失的 Gateway 连接，请使用精确连接重新打开原对象');
+      connection = matches[0].gateway_connection_id;
+    } else if (explicit) throw new Error('本地 MCP 授权对象不能携带远端 Gateway 连接');
+    const target = { gateway_id: workspace.gateway_id, workspace_id: workspace.workspace_id,
+      backend_id: workspace.backend_id, gateway_connection_id: connection };
+    const key = mcpCatalogKey(target);
+    let scope = this.scopes.get(key);
+    if (!scope) {
+      scope = { catalog: new WorkspaceMcpCatalog(target, workspace.name, () => this.publish()), models: new Map() };
+      this.scopes.set(key, scope);
+    }
+    this.authorizationCatalog = scope.catalog;
+    await scope.catalog.refresh();
+    await this.openAuthorizationCatalog(scope.catalog);
+  }
+
+  private async openAuthorizationCatalog(catalog: WorkspaceMcpCatalog): Promise<void> {
+    if (catalog !== this.authorizationCatalog || this.authorizationOpening) return;
+    this.authorizationController.signal.throwIfAborted();
+    this.authorizationOpening = true;
+    const cancellation = new CancellationTokenSource();
+    const abort = () => cancellation.cancel();
+    this.authorizationController.signal.addEventListener('abort', abort, { once: true });
+    try {
+      const candidates = catalog.snapshot.operations.filter(pendingMcpOperation)
+        .map(operation => ({ operation, server: this.scopes.get(catalog.key)?.models.get(operation.server_id) }))
+        .filter(item => item.server !== undefined);
+      if (!candidates.length) {
+        this.authorizationCatalog = undefined;
+        throw new Error('原工作区没有待继续的 MCP 连接操作，请查看实际工作区状态');
+      }
+      const selected = candidates.length === 1 ? candidates[0] : (await this.quickInput.pick(candidates.map(item => ({
+        label: item.server!.name, description: item.operation.operation_id, item,
+      })), { title: '选择原工作区的 MCP 连接操作', placeHolder: `${catalog.label} · ${catalog.target.gateway_id}` }, cancellation.token))?.item;
+      this.authorizationController.signal.throwIfAborted();
+      if (selected?.server) await this.open(selected.server);
+      this.authorizationCatalog = undefined;
+    } finally {
+      this.authorizationController.signal.removeEventListener('abort', abort); cancellation.dispose(); this.authorizationOpening = false;
+    }
   }
 
   private publish(): void {
@@ -147,20 +238,16 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     const snapshot = workspaceContext.getSnapshot();
     if (snapshot.error) throw new Error(snapshot.error);
     if (this.selectionError) throw this.selectionError;
-    if (!this.selected) throw new Error('请先选择目标工作区，再读取 MCP 服务');
-    await this.selected.refresh(options);
-    return this.local;
+    if (!snapshot.gatewayId) throw new Error('Gateway 身份尚未完成初始化，无法读取 MCP 服务');
+    const catalogs = [...this.selected];
+    await Promise.all(catalogs.map(catalog => catalog.refresh(options)));
+    if (catalogs.length !== this.selected.size || catalogs.some(catalog => !this.selected.has(catalog))) throw new CancellationError();
+    return this.servers.get().filter(server => catalogs.includes(server.catalog));
   }
 
-  installationTarget(): { target: WorkspaceMcpCatalog['target']; label: string } {
-    const snapshot = workspaceContext.getSnapshot();
-    if (snapshot.loading) throw new Error('工作区目标尚未完成初始化');
-    if (snapshot.error) throw new Error(snapshot.error);
-    if (this.selectionError) throw this.selectionError;
-    if (!this.selected) throw new Error('请先选择制品安装所属的目标工作区');
-    const registered = snapshot.workspaces.find(workspace => gatewayWorkspaceKey(workspace) === gatewayWorkspaceKey(this.selected!.target));
-    if (registered?.status !== 'ready') throw new Error('目标工作区尚未就绪，请先显式连接或启动 Backend');
-    return { target: this.selected.target, label: this.selected.label };
+  installationTarget() {
+    const target = managementGateway('mcp');
+    return { target, label: target.name };
   }
 
   private report(catalog: WorkspaceMcpCatalog, error: unknown): void {
@@ -244,7 +331,7 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
     if (!server.gallery) throw new Error('请从原 MCP 目录选择待安装制品');
     if (options && Object.values(options).some(value => value !== undefined)) throw new Error('制品安装不消费工作区配置选项，请从明确目标的制品入口安装');
     const selected = this.owner.installationTarget();
-    const target = Object.freeze({ ...selected.target });
+    const gatewayTarget = Object.freeze({ ...selected.target });
     const label = selected.label;
     const gatewayId = workspaceContext.getSnapshot().gatewayId;
     const controller = new AbortController();
@@ -257,13 +344,14 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
     const assertAccess = () => {
       if (workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidate();
       controller.signal.throwIfAborted();
-      const original = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces,
-        { gatewayId: target.gateway_id, workspaceId: target.workspace_id });
-      if (original.status !== 'ready') throw new Error('原目标工作区尚未就绪，请先显式连接或启动 Backend');
     };
     const finish = () => { release(); releaseContext(); controller.abort(); };
     let offered = false;
     try {
+      assertAccess();
+      const resolved = await mcpManagementTarget(gatewayTarget, controller.signal);
+      const target = Object.freeze({ kind: 'backend', gateway_id: resolved.gateway_id, backend_id: resolved.backend_id,
+        gateway_connection_id: resolved.gateway_connection_id });
       assertAccess();
       const published = await this.progress.withProgress({ location: ProgressLocation.Notification, title: `安装 MCP 制品 · ${label}`, cancellable: true },
         progress => publishMcpArtifact(server.gallery!, target, label, this.quickInput, progress, cancellation.token, controller.signal), () => cancellation.cancel());

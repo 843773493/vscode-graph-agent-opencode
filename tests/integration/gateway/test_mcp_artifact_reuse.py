@@ -19,7 +19,10 @@ import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.gateway.test_mcp_artifact_installation import _wheel
+from tests.integration.gateway.test_mcp_artifact_installation import (
+    _wheel,
+    installation_route,
+)
 from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -109,12 +112,13 @@ def reuse_case(request: pytest.FixtureRequest) -> Iterator[ReuseCase]:
 @pytest.mark.parametrize("mode", ["warm", "cold", "cold-failure"])
 def test_shared_artifact_preserves_generation_and_independent_workspace_connections(reuse_case: ReuseCase, mode: str) -> None:
     case = reuse_case
+    target, installation_base = installation_route(case.client)
     evidence: list[dict[str, object]] = []
     native_processes: list[dict[str, object]] = []
     prepare_processes: list[dict[str, object]] = []
 
     def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None) -> dict:
-        response = case.client.request(method, path, json=body, headers={"X-Request-ID": key})
+        response = case.client.request(method, path, json=body, headers={"X-Request-ID": key, "X-BoxTeam-Gateway-Id": target["gateway_id"]})
         payload = response.json()
         assert response.headers["X-Request-ID"] == payload["request_id"] == key
         evidence.append({"method": method, "path": path, "request_id": key, "status": response.status_code, "body": payload})
@@ -123,11 +127,11 @@ def test_shared_artifact_preserves_generation_and_independent_workspace_connecti
 
     def completed(base: str, operation_id: str, status: str = "succeeded") -> dict:
         deadline = time.monotonic() + 40
-        operation = exchange("GET", base + "/mcp/installation-operations/" + operation_id, operation_id + "-observe")["data"]
+        operation = exchange("GET", base + "/installation-operations/" + operation_id, operation_id + "-observe")["data"]
         while operation["status"] == "running":
             assert time.monotonic() < deadline, operation
             time.sleep(0.1)
-            operation = exchange("GET", base + "/mcp/installation-operations/" + operation_id, operation_id + "-observe")["data"]
+            operation = exchange("GET", base + "/installation-operations/" + operation_id, operation_id + "-observe")["data"]
         assert operation["status"] == status, operation
         return operation
 
@@ -153,13 +157,16 @@ def test_shared_artifact_preserves_generation_and_independent_workspace_connecti
         first_id = exchange("GET", "/api/gateway/workspaces", "reuse-workspaces")["data"]["items"][0]["workspace_id"]
         first_base = f"/api/v1/workspaces/{first_id}"
         exchange("GET", first_base + "/workspace", "reuse-A1-workspace")
-        target = exchange("GET", first_base + "/mcp/installation-capabilities", "reuse-A1-capabilities")["target"]
+        target = exchange("GET", installation_base + "/installation-capabilities", "reuse-A1-capabilities")["target"]
         listing = exchange("POST", "/api/gateway/managed-workspaces", "reuse-register-A2",
             {"root_path": str(case.workspaces[1]), "name": "共享制品 A2"})["data"]
         second_id = next(item["workspace_id"] for item in listing["items"] if item["workspace_id"] != first_id)
         second_base = f"/api/v1/workspaces/{second_id}"
+        # 安装域入口不选择工作区；跨进程验收明确调用第二 Backend 的同一私有 HTTP 入口。
+        second_backend = next(item for item in exchange("GET", "/api/gateway/workspaces", "reuse-backend-routes")["data"]["items"] if item["workspace_id"] == second_id)
+        second_installation_base = second_backend["backend_url"].rstrip("/") + "/api/v1/mcp"
         exchange("GET", second_base + "/workspace", "reuse-A2-workspace")
-        assert exchange("GET", second_base + "/mcp/installation-capabilities", "reuse-A2-capabilities")["target"] == target
+        assert exchange("GET", second_installation_base + "/installation-capabilities", "reuse-A2-capabilities")["target"] == target
         healths: list[dict] = []
         for label, base in (("A1", first_base), ("A2", second_base)):
             key = "reuse-" + label + "-process"
@@ -175,31 +182,31 @@ def test_shared_artifact_preserves_generation_and_independent_workspace_connecti
             {"registryType": "pypi", "identifier": "artifact-server", "version": "1.0.0", "registryBaseUrl": case.index,
              "transport": {"type": "stdio"}, "packageArguments": [{"type": "positional", "valueHint": "workspace-argument", "isRequired": True}],
              "environmentVariables": [{"name": "MCP_WORKSPACE_MARKER", "isRequired": True}]}]}}
-        inspected = exchange("POST", first_base + "/mcp/candidate-manifests", "reuse-inspect", {"target": target, "source": source})["data"]
+        inspected = exchange("POST", installation_base + "/candidate-manifests", "reuse-inspect", {"target": target, "source": source})["data"]
 
-        def install_intent(base: str, label: str) -> dict[str, object]:
+        def install_intent(label: str) -> dict[str, object]:
             candidate = {"target": target, "source": source, "manifest_digest": inspected["manifest_digest"], "variant": inspected["variants"][0]["ref"],
-                "inputs": {"workspace-argument": label, "MCP_WORKSPACE_MARKER": label}}
-            plan = exchange("POST", base + "/mcp/candidate-plans", label + "-plan", candidate)["data"]
-            assert plan["parameters"]["arguments"] == [label]
+                "inputs": {}}
+            plan = exchange("POST", installation_base + "/candidate-plans", label + "-plan", candidate)["data"]
+            assert plan["parameters"]["arguments"] == [] and plan["parameters"]["env"] == {}
             return {"candidate": candidate, "plan_digest": plan["plan_digest"], "operation_id": "install-" + label, "entrypoint": "artifact-server"}
 
-        first_intent, second_intent = install_intent(first_base, "A1"), install_intent(second_base, "A2")
-        assert first_intent["plan_digest"] != second_intent["plan_digest"] and case.requests == []
+        first_intent, second_intent = install_intent("A1"), install_intent("A2")
+        assert first_intent["plan_digest"] == second_intent["plan_digest"] and case.requests == []
         first_config, second_config = [(workspace / ".boxteam/workspace.jsonc").read_bytes() for workspace in case.workspaces]
         installation_root = case.home / "artifacts/mcp" / target["backend_id"]
         expected_operations, expected_generations = 2, 1
         case.gate.blocked, case.gate.fail = mode != "warm", mode == "cold-failure"
-        exchange("POST", first_base + "/mcp/installations", "reuse-install-A1", first_intent)
+        exchange("POST", installation_base + "/installations", "reuse-install-A1", first_intent)
         if mode == "warm":
-            original = completed(first_base, "install-A1")
+            original = completed(installation_base, "install-A1")
             requests_before_reuse = list(case.requests)
-            exchange("POST", second_base + "/mcp/installations", "reuse-install-A2", second_intent)
-            reused = completed(second_base, "install-A2")
+            exchange("POST", second_installation_base + "/installations", "reuse-install-A2", second_intent)
+            reused = completed(second_installation_base, "install-A2")
             assert case.requests == requests_before_reuse and "复用原 generation" in reused["log"]
         else:
             assert case.gate.entered.wait(10), "原 uv 未进入真实 wheel 下载响应屏障"
-            accepted = exchange("POST", second_base + "/mcp/installations", "reuse-install-A2", second_intent)["data"]
+            accepted = exchange("POST", second_installation_base + "/installations", "reuse-install-A2", second_intent)["data"]
             assert accepted["status"] == "running" and accepted["artifact"] is None
             with sqlite3.connect((installation_root / "installations.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
                 assert connection.execute("SELECT COUNT(*) FROM operations").fetchone() == (2,)
@@ -218,14 +225,14 @@ def test_shared_artifact_preserves_generation_and_independent_workspace_connecti
             assert len(prepare_processes) == 1 and prepare_processes[0]["backend_pid"] == healths[0]["process_id"]
             case.gate.release.set()
             status = "failed" if mode == "cold-failure" else "succeeded"
-            original, reused = completed(first_base, "install-A1", status), completed(second_base, "install-A2", status)
+            original, reused = completed(installation_base, "install-A1", status), completed(second_installation_base, "install-A2", status)
             assert original["stage"] == reused["stage"] and original["log"] == reused["log"] and original["error"] == reused["error"]
             if mode == "cold-failure":
                 failed_original, failed_follower = original, reused
                 assert original["artifact"] is reused["artifact"] is None and "阶段 lock 失败" in original["error"]
                 requests_before_retry = list(case.requests)
-                assert exchange("POST", first_base + "/mcp/installations", "reuse-failed-A1-retry", first_intent)["data"] == failed_original
-                assert exchange("POST", second_base + "/mcp/installations", "reuse-failed-A2-retry", second_intent)["data"] == failed_follower
+                assert exchange("POST", installation_base + "/installations", "reuse-failed-A1-retry", first_intent)["data"] == failed_original
+                assert exchange("POST", second_installation_base + "/installations", "reuse-failed-A2-retry", second_intent)["data"] == failed_follower
                 assert case.requests == requests_before_retry and generation_root.is_dir()
                 with sqlite3.connect((installation_root / "installations.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
                     assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone() == (0,)
@@ -233,24 +240,24 @@ def test_shared_artifact_preserves_generation_and_independent_workspace_connecti
                 case.gate.blocked = case.gate.fail = False
                 first_intent = {**first_intent, "operation_id": "recovered-A1"}
                 second_intent = {**second_intent, "operation_id": "recovered-A2"}
-                exchange("POST", first_base + "/mcp/installations", "reuse-recover-A1", first_intent)
-                original = completed(first_base, "recovered-A1")
+                exchange("POST", installation_base + "/installations", "reuse-recover-A1", first_intent)
+                original = completed(installation_base, "recovered-A1")
                 requests_before_reuse = list(case.requests)
-                exchange("POST", second_base + "/mcp/installations", "reuse-recover-A2", second_intent)
-                reused = completed(second_base, "recovered-A2")
+                exchange("POST", second_installation_base + "/installations", "reuse-recover-A2", second_intent)
+                reused = completed(second_installation_base, "recovered-A2")
                 assert case.requests == requests_before_reuse
-                assert exchange("GET", first_base + "/mcp/installation-operations/install-A1", "reuse-original-failure")["data"] == failed_original
-                assert exchange("GET", second_base + "/mcp/installation-operations/install-A2", "reuse-follower-failure")["data"] == failed_follower
+                assert exchange("GET", installation_base + "/installation-operations/install-A1", "reuse-original-failure")["data"] == failed_original
+                assert exchange("GET", installation_base + "/installation-operations/install-A2", "reuse-follower-failure")["data"] == failed_follower
                 expected_operations, expected_generations = 4, 2
         artifact = original["artifact"]
         assert artifact["installed_distributions"] == {"artifact-server": "1.0.0", "locked-leaf": "1.0.0"}
-        assert reused["artifact"] == artifact and reused["operation_id"] != original["operation_id"] and reused["intent_digest"] != original["intent_digest"]
+        assert reused["artifact"] == artifact and reused["operation_id"] != original["operation_id"] and reused["intent_digest"] == original["intent_digest"]
         requests_after_install = list(case.requests)
         assert requests_after_install
         assert (case.workspaces[0] / ".boxteam/workspace.jsonc").read_bytes() == first_config
         assert (case.workspaces[1] / ".boxteam/workspace.jsonc").read_bytes() == second_config
-        assert exchange("GET", first_base + "/mcp/installation-operations/" + original["operation_id"], "reuse-original-operation")["data"] == original
-        assert exchange("GET", second_base + "/mcp/installations", "reuse-one-artifact")["data"] == [artifact]
+        assert exchange("GET", installation_base + "/installation-operations/" + original["operation_id"], "reuse-original-operation")["data"] == original
+        assert exchange("GET", installation_base + "/installations", "reuse-one-artifact")["data"] == [artifact]
         assert len(list((installation_root / "generations").glob("*/*"))) == expected_generations
         with sqlite3.connect((installation_root / "installations.sqlite").as_uri() + "?mode=ro", uri=True) as connection:
             assert connection.execute("SELECT COUNT(*) FROM operations").fetchone() == (expected_operations,)

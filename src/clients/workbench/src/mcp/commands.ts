@@ -7,7 +7,7 @@ import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions
 import { IProgressService } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
-import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { managementGateway, mcpManagementTarget, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { manageMcpArtifacts } from './artifacts.js';
 
@@ -45,10 +45,11 @@ export async function showWorkspaceMcpOptions(accessor: ServicesAccessor, id: st
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.mcp.manageArtifacts', title: { value: '管理目标制品', original: 'Manage Target Artifacts' },
     category: { value: 'MCP', original: 'MCP' }, f1: true }); }
-  async run(accessor: ServicesAccessor, explicit?: WorkspaceOwner): Promise<void> {
+  async run(accessor: ServicesAccessor, explicit?: ManagementTarget): Promise<void> {
     const quickInput = accessor.get(IQuickInputService), progress = accessor.get(IProgressService), notifications = accessor.get(INotificationService);
     const initial = workspaceContext.getSnapshot();
-    if (initial.loading || initial.error || !initial.gatewayId) throw new Error(initial.error ?? '工作区目标尚未完成初始化');
+    if (!initial.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
+    const selected = Object.freeze({ ...(explicit ?? managementGateway('mcp')) });
     const controller = new AbortController();
     const invalidate = () => controller.abort(new Error('Gateway 或用户身份已改变，请重新选择 MCP 制品目标'));
     const release = onGatewayUserSessionInvalidated(0, invalidate);
@@ -60,15 +61,10 @@ registerAction2(class extends Action2 {
       controller.signal.throwIfAborted();
     };
     try {
-      const owner = explicit ? { ...explicit } : (await quickInput.pick(initial.workspaces.map(workspace => ({
-        label: workspace.name, description: `${workspace.gateway_id} · ${workspace.status}`, detail: workspace.workspace_id,
-        owner: gatewayWorkspaceOwner(workspace),
-      })), { title: '选择 MCP 制品目标', placeHolder: '选择用于访问安装域的已就绪工作区；不会连接、启动或激活目标' }))?.owner;
-      if (!owner) return;
+      const owner = await mcpManagementTarget(selected, controller.signal);
       assertAccess();
-      const workspace = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces, owner);
-      if (workspace.status !== 'ready') throw new Error('目标工作区尚未就绪，请先显式连接或启动 Backend');
-      await manageMcpArtifacts(workspace, workspace.name, quickInput, progress, notifications, assertAccess, controller.signal);
+      await manageMcpArtifacts({ kind: 'backend', gateway_id: owner.gateway_id, backend_id: owner.backend_id,
+        gateway_connection_id: owner.gateway_connection_id }, owner.name, quickInput, progress, notifications, assertAccess, controller.signal);
     } finally { release(); releaseContext(); controller.abort(); }
   }
 });

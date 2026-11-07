@@ -101,7 +101,7 @@ Python 与 Node 按职责隔离，不按“哪个进程已有某个库”决定�
 
 远端设置新增 `configuration_read` 与 `configuration_write` 能力：前者覆盖获准目标的脱敏 schema／source／effective／pending／提交状态读取及事件订阅；后者覆盖来源预检／候选创建／提交／删除覆盖和 pending 管理，需读取能力时分别核验。重启另沿原生命周期管理能力，不由配置写权限隐式授予。两者沿原 policy 注册，作为管理能力默认拒绝，允许须绑定已认证主体；通配的 discovery／read／managed_workspace_admin 不代授。长订阅在实际披露点核现行权限，撤权停止后续披露／写入准入；已接受操作仍按原身份查询可获准状态，不伪报撤销副作用。该要求不擅自重定义其它既有业务 API 的授权语义。
 
-MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_installation_manage`。该能力默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin 和配置读写均不代授，安装管理也不授予配置写入、Backend 重启或宿主管理。两种 workspace API mount 的候选原件读取、计划生成和消费前重验均在下游请求前及实际披露前核现行能力；Relay 沿原目标路由透传，原生 Gateway 最终判权，无权限时不访问 Backend 或目录来源。
+MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_installation_manage`。该能力默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin 和配置读写均不代授，安装管理也不授予配置写入、Backend 重启或宿主管理。安装域发现、候选原件读取、安装计划、消费前重验、库存与操作均走明确 Gateway／Backend 的管理入口，不借活动 workspace 路由。两种 workspace API mount 只承载精确工作区的配置与私有输入；其中候选配置规划及候选私有输入仍另核安装管理能力。所有入口均在下游请求前及实际披露前核现行能力；Relay 沿原目标路由透传，原生 Gateway 最终判权，无权限时不访问 Backend 或目录来源。迁齐消费者后，旧 workspace 安装入口明确返回已移除，不保留第二条安装链。
 
 目标扩展管理使用两个互不代授的原生 policy capability：`extension_installation_manage` 覆盖明确目标上的 VSIX 制品安装、更新、移除及其安装状态；`extension_host_manage` 统一覆盖该目标 Web／Node 扩展的运行准入、激活、运行状态与停止，以及各自适用的宿主生命周期／通道管理。Web 代码仍在当前浏览器执行，运行授权由安装目标的原生 Gateway 判定，不以浏览器位置或 Node 宿主可用性代替。两者均沿原 `ADMINISTRATIVE_CAPABILITIES` 注册并默认拒绝，仅精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置能力及另一个扩展能力均不得代授。制品管理权限不授予 Web／Node 扩展运行，宿主管理权限也不授予安装或替换制品。Relay 透传目标和原操作，由目标原生 Gateway 最终判权；没有对应授权时不得触达目标 Backend、包资源或宿主。
 
@@ -162,7 +162,7 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 来源身份包含目录 endpoint／registry 身份、该来源稳定 entry ID（仅有名称时冻结名称及 manifest digest）、显式选择的 package／remote variant 和解析后的版本／制品摘要，再与安装域组合；显示名与 server_id 不是包身份。多个 registry 同名条目不合并；安装／更新冻结 manifest 和 variant，候选消失或同名内容被替换须重做计划，不能退回第一个 remote、package 或另一 registry。只支持当前 stdio／Streamable HTTP 的合法映射，旧 SSE 不冒充 Streamable HTTP。
 
-候选原件读取、计划与重验直接扩展原 `McpCatalogOwner`，不建立计划数据库、缓存或 token。目标侧按显式 endpoint／协议／entry URL 有界读取完整原件；v0.1 的 official metadata 只认 envelope 顶层 `_meta`，不从发布者 `server._meta` 借用身份，无稳定 ID 就保持缺省。完整 manifest digest、原 variant ordinal／digest、目标原生平台及解析参数共同冻结计划；消费时同 owner 重读并核原 digest，变化返回冲突。返回的 parameters 只是脱敏展示，配置保存须重新提交原请求并经原 source／CAS owner，不能把该投影保存作 launch。package 计划只表达待制品准备的意图，HTTP 表达纯配置，既有显式动态命令仍不受管；候选阶段不下载、不启动 MCP、不写配置或安装记录。
+候选原件读取、安装计划与重验由原 `McpInstallationOwner` 承担；精确工作区的配置计划继续交 `McpCatalogOwner`，两者复用同一候选读取与解析实现，不建立计划数据库、缓存或 token。目标侧按显式 endpoint／协议／entry URL 有界读取完整原件；v0.1 的 official metadata 只认 envelope 顶层 `_meta`，不从发布者 `server._meta` 借用身份，无稳定 ID 就保持缺省。完整 manifest digest、原 variant ordinal／digest、目标原生平台及解析参数共同冻结计划；消费时原 owner 重读并核原 digest，变化返回冲突。返回的 parameters 只是脱敏展示，配置保存须重新提交原请求并经原 source／CAS owner，不能把该投影保存作 launch。package 安装计划只解析制品准备所需字段，不要求或消费 workspace 运行参数、私有 env；提交运行输入时明确要求改走配置计划。安装后配置再按精确 workspace 解析参数、秘密引用及来源 CAS。HTTP 表达纯配置，既有显式动态命令仍不受管；候选阶段不下载、不启动 MCP、不写配置或安装记录。
 
 配置提案由同一 owner 消费原候选、已发布制品及来源 CAS 生成，返回脱敏 JSONC 和原来源预检；不回显候选输入，不维护草稿账本。JSONC 单成员编辑复用现有 commentjson 语法树和 lexer，只替换精确 Server，保留外围原件。保存时仅以重验后的原候选还原新 Server 的秘密占位，其余占位继续交原文件 writer；整份配置的最终 CAS、幂等键和副作用准入只由原 writer 结算。显式环境引用保留原表达式，计划指纹仍核目标侧实际解释后的参数，不把展开的环境值回写来源。
 

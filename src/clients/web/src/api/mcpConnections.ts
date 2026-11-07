@@ -9,67 +9,94 @@ import type {
   McpCandidateConfigurationRequestDTO, McpCandidateConfigurationResponseDTO,
   McpCandidateConfigurationDraftRequestDTO, McpCandidateConfigurationDraftResponseDTO,
   McpArtifactReferencesResponseDTO, McpManagedLaunchDTO, McpUninstallationRequestDTO,
+  McpInstallationTargetListRequestDTO, McpInstallationTargetListResponseDTO,
 } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData } from "./http";
 
 export type { McpConnectionOperationDTO, McpServerDTO };
 
+export type McpInstallationRequestTarget = McpInstallationTargetDTO & { gateway_connection_id?: string };
+
 type InstallationResponse = McpCandidateInspectResponseDTO | McpCandidatePlanResponseDTO | McpInstallationCapabilitiesResponseDTO
   | McpInstallationOperationResponseDTO | McpInstalledArtifactListResponseDTO | McpArtifactReferencesResponseDTO;
 
-async function installationRequest<T extends InstallationResponse>(port: number, workspace: GatewayWorkspaceRequestTarget, path: string,
-  init: RequestInit = {}, expected?: McpInstallationTargetDTO): Promise<T> {
-  const response = await requestJson<T>(port, `/api/v1/mcp/${path}`, {
-    ...init, headers: gatewayWorkspaceRequestHeaders(workspace), cache: "no-store",
-  });
+function installationResponse<T extends InstallationResponse>(response: T, expected: McpInstallationTargetDTO): T {
   if (response.protocol_version !== 1 || response.target?.kind !== "backend"
-      || response.target.gateway_id !== workspace.gateway_id || !/^[0-9a-f-]{36}$/.test(response.target.backend_id)) {
+      || !/^[0-9a-f-]{36}$/.test(response.target.backend_id)) {
     throw new Error("MCP 制品响应缺少精确原生 Gateway／Backend 或受支持协议");
   }
-  if (expected && (response.target.gateway_id !== expected.gateway_id || response.target.backend_id !== expected.backend_id)) {
+  if (response.target.gateway_id !== expected.gateway_id || response.target.backend_id !== expected.backend_id) {
     throw new Error("MCP 制品响应的 Backend 已改变，不能改投当前目标");
   }
   unwrapApiData<InstallationResponse["data"]>(response);
   return response;
 }
 
-export function getMcpInstallationCapabilities(port: number, workspace: GatewayWorkspaceRequestTarget, signal?: AbortSignal) {
-  return installationRequest<McpInstallationCapabilitiesResponseDTO>(port, workspace, "installation-capabilities", { signal });
+async function installationRequest<T extends InstallationResponse>(port: number, target: McpInstallationRequestTarget, path: string,
+  init: RequestInit = {}, payloadTarget?: McpInstallationTargetDTO): Promise<T> {
+  const expected = { kind: target.kind, gateway_id: target.gateway_id, backend_id: target.backend_id };
+  if (expected.kind !== "backend" || !expected.gateway_id || !expected.backend_id
+      || payloadTarget && (payloadTarget.kind !== "backend" || payloadTarget.gateway_id !== expected.gateway_id || payloadTarget.backend_id !== expected.backend_id)) {
+    throw new Error("MCP 制品请求必须提交给原 Gateway／Backend 安装域");
+  }
+  const connection = target.gateway_connection_id ? `?gateway_connection_id=${encodeURIComponent(target.gateway_connection_id)}` : "";
+  const response = await requestJson<T>(port,
+    `/api/gateway/mcp/${encodeURIComponent(expected.gateway_id)}/${encodeURIComponent(expected.backend_id)}/${path}${connection}`,
+    { ...init, cache: "no-store" });
+  return installationResponse(response, expected);
 }
 
-export function inspectMcpInstallationCandidate(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidateInspectRequestDTO, signal?: AbortSignal) {
-  return installationRequest<McpCandidateInspectResponseDTO>(port, workspace, "candidate-manifests",
+export async function listMcpInstallationTargets(port: number, target: Pick<McpInstallationRequestTarget, "gateway_id" | "gateway_connection_id">, signal?: AbortSignal) {
+  const gatewayId = target.gateway_id;
+  const payload: McpInstallationTargetListRequestDTO = { protocol_version: 1, gateway_id: gatewayId, gateway_connection_id: target.gateway_connection_id };
+  const response = await requestJson<McpInstallationTargetListResponseDTO>(port, "/api/gateway/mcp-installation-targets",
+    { method: "POST", body: JSON.stringify(payload), signal, cache: "no-store" });
+  if (response.code !== 0 || typeof response.message !== 'string') throw new Error('MCP 安装域发现缺少有效成功回执');
+  const targets = unwrapApiData({ ...response, code: response.code, message: response.message });
+  if (response.protocol_version !== 1 || response.gateway_id !== gatewayId || response.source !== "live"
+      || targets.some(item => item.kind !== "backend" || item.gateway_id !== gatewayId || !/^[0-9a-f-]{36}$/.test(item.backend_id))) {
+    throw new Error("MCP 安装域发现返回了不同目标或非实时目录");
+  }
+  return targets;
+}
+
+export function getMcpInstallationCapabilities(port: number, target: McpInstallationRequestTarget, signal?: AbortSignal) {
+  return installationRequest<McpInstallationCapabilitiesResponseDTO>(port, target, "installation-capabilities", { signal });
+}
+
+export function inspectMcpInstallationCandidate(port: number, target: McpInstallationRequestTarget, candidate: McpCandidateInspectRequestDTO, signal?: AbortSignal) {
+  return installationRequest<McpCandidateInspectResponseDTO>(port, target, "candidate-manifests",
     { method: "POST", body: JSON.stringify(candidate), signal }, candidate.target);
 }
 
-export function planMcpInstallation(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidatePlanRequestDTO, signal?: AbortSignal) {
-  return installationRequest<McpCandidatePlanResponseDTO>(port, workspace, "candidate-plans",
+export function planMcpInstallation(port: number, target: McpInstallationRequestTarget, candidate: McpCandidatePlanRequestDTO, signal?: AbortSignal) {
+  return installationRequest<McpCandidatePlanResponseDTO>(port, target, "candidate-plans",
     { method: "POST", body: JSON.stringify(candidate), signal }, candidate.target);
 }
 
-export function installMcpArtifact(port: number, workspace: GatewayWorkspaceRequestTarget, request: McpInstallationRequestDTO, signal?: AbortSignal) {
-  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, "installations",
+export function installMcpArtifact(port: number, target: McpInstallationRequestTarget, request: McpInstallationRequestDTO, signal?: AbortSignal) {
+  return installationRequest<McpInstallationOperationResponseDTO>(port, target, "installations",
     { method: "POST", body: JSON.stringify(request), signal }, request.candidate!.target);
 }
 
-export function getMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string, signal?: AbortSignal) {
-  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}`, { signal }, target);
+export function getMcpInstallationOperation(port: number, target: McpInstallationRequestTarget, operationId: string, signal?: AbortSignal) {
+  return installationRequest<McpInstallationOperationResponseDTO>(port, target, `installation-operations/${encodeURIComponent(operationId)}`, { signal });
 }
 
-export function cancelMcpInstallationOperation(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, operationId: string, signal?: AbortSignal) {
-  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace, `installation-operations/${encodeURIComponent(operationId)}/cancel`,
-    { method: "POST", body: JSON.stringify(target), signal }, target);
+export function cancelMcpInstallationOperation(port: number, target: McpInstallationRequestTarget, operationId: string, signal?: AbortSignal) {
+  const payload = { kind: target.kind, gateway_id: target.gateway_id, backend_id: target.backend_id };
+  return installationRequest<McpInstallationOperationResponseDTO>(port, target, `installation-operations/${encodeURIComponent(operationId)}/cancel`,
+    { method: "POST", body: JSON.stringify(payload), signal });
 }
 
-export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorkspaceRequestTarget, target: McpInstallationTargetDTO, signal?: AbortSignal) {
-  return installationRequest<McpInstalledArtifactListResponseDTO>(port, workspace, "installations", { signal }, target);
+export function listMcpInstalledArtifacts(port: number, target: McpInstallationRequestTarget, signal?: AbortSignal) {
+  return installationRequest<McpInstalledArtifactListResponseDTO>(port, target, "installations", { signal });
 }
 
-export async function getMcpArtifactReferences(port: number, workspace: GatewayWorkspaceRequestTarget,
-  target: McpInstallationTargetDTO, binding: McpManagedLaunchDTO, signal?: AbortSignal) {
+export async function getMcpArtifactReferences(port: number, target: McpInstallationRequestTarget, binding: McpManagedLaunchDTO, signal?: AbortSignal) {
   const expected = { ...binding };
-  const response = await installationRequest<McpArtifactReferencesResponseDTO>(port, workspace,
+  const response = await installationRequest<McpArtifactReferencesResponseDTO>(port, target,
     `installations/${encodeURIComponent(expected.installation_id)}/references`, { signal }, target);
   const actual = response.data?.binding;
   if (!actual || actual.backend_id !== expected.backend_id || actual.installation_id !== expected.installation_id
@@ -79,8 +106,8 @@ export async function getMcpArtifactReferences(port: number, workspace: GatewayW
   return response;
 }
 
-export function uninstallMcpArtifact(port: number, workspace: GatewayWorkspaceRequestTarget, request: McpUninstallationRequestDTO, signal?: AbortSignal) {
-  return installationRequest<McpInstallationOperationResponseDTO>(port, workspace,
+export function uninstallMcpArtifact(port: number, target: McpInstallationRequestTarget, request: McpUninstallationRequestDTO, signal?: AbortSignal) {
+  return installationRequest<McpInstallationOperationResponseDTO>(port, target,
     `installations/${encodeURIComponent(request.binding!.installation_id)}`,
     { method: "DELETE", body: JSON.stringify(request), signal }, request.target);
 }
@@ -101,6 +128,15 @@ async function request<T extends McpResponse>(port: number, target: GatewayWorks
     throw new Error("MCP 管理响应不属于请求的 Gateway／工作区");
   }
   return response;
+}
+
+export async function planMcpCandidateConfiguration(port: number, workspace: GatewayWorkspaceRequestTarget, candidate: McpCandidatePlanRequestDTO, signal?: AbortSignal) {
+  const expected = { ...candidate.target! };
+  if (expected.kind !== "backend" || expected.gateway_id !== workspace.gateway_id) throw new Error("MCP 配置计划必须属于原 Gateway／Backend");
+  const response = await requestJson<McpCandidatePlanResponseDTO>(port, "/api/v1/mcp/candidate-configurations/plans", {
+    method: "POST", body: JSON.stringify(candidate), headers: gatewayWorkspaceRequestHeaders(workspace), signal, cache: "no-store",
+  });
+  return installationResponse(response, expected);
 }
 
 export async function writeMcpPrivateHeader(

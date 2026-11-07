@@ -10,7 +10,12 @@ from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorS
 from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
-from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
+from app.protocol.openapi import (
+    GATEWAY_HTTP_JSON_DESCRIPTORS,
+    HTTP_JSON_DESCRIPTORS,
+    assert_gateway_http_schemas,
+    assert_public_http_schemas,
+)
 from app.schemas.internal_v2.mcp import (
     McpCandidateInspectRequestDTO,
     McpCandidatePlanResponseDTO,
@@ -21,6 +26,31 @@ from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 GATEWAY_ID = "gateway_00000000000040008000000000000001"
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+
+
+def test_gateway_mcp_installation_routes_share_backend_descriptors(gateway_openapi: JsonSchemaValue) -> None:
+    paths = gateway_openapi["paths"]
+    discovery = paths["/api/gateway/mcp-installation-targets"]["post"]
+    assert discovery["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/McpInstallationTargetListRequestDTO")
+    assert discovery["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/McpInstallationTargetListResponseDTO")
+    for method, suffix, model in (
+        ("get", "installation-capabilities", "McpInstallationCapabilitiesResponseDTO"),
+        ("post", "candidate-manifests", "McpCandidateInspectResponseDTO"),
+        ("post", "candidate-plans", "McpCandidatePlanResponseDTO"),
+        ("post", "candidate-plans/validate", "McpCandidatePlanResponseDTO"),
+        ("post", "installations", "McpInstallationOperationResponseDTO"),
+        ("get", "installations", "McpInstalledArtifactListResponseDTO"),
+        ("get", "installation-operations/{operation_id}", "McpInstallationOperationResponseDTO"),
+        ("post", "installation-operations/{operation_id}/cancel", "McpInstallationOperationResponseDTO"),
+        ("get", "installations/{installation_id}/references", "McpArtifactReferencesResponseDTO"),
+        ("delete", "installations/{installation_id}", "McpInstallationOperationResponseDTO"),
+    ):
+        operation = paths["/api/gateway/mcp/{gateway_id}/{backend_id}/" + suffix][method]
+        assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/" + model}
+        assert GATEWAY_HTTP_JSON_DESCRIPTORS[model] == HTTP_JSON_DESCRIPTORS[model]
+        assert {parameter["name"] for parameter in operation["parameters"] if parameter["in"] == "path"} >= {"gateway_id", "backend_id"}
+        assert all(parameter["name"] != "workspace_id" for parameter in operation["parameters"])
+    assert_gateway_http_schemas(gateway_openapi)
 
 
 @pytest.mark.parametrize(("method", "path", "model"), [
@@ -38,6 +68,7 @@ WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
     ("put", "/candidate-configurations", "McpCandidateConfigurationResponseDTO"),
     ("post", "/candidate-configurations/draft", "McpCandidateConfigurationDraftResponseDTO"),
     ("post", "/candidate-plans", "McpCandidatePlanResponseDTO"),
+    ("post", "/candidate-configurations/plans", "McpCandidatePlanResponseDTO"),
     ("post", "/candidate-plans/validate", "McpCandidatePlanResponseDTO"),
     ("post", "/installations", "McpInstallationOperationResponseDTO"),
     ("get", "/installations", "McpInstalledArtifactListResponseDTO"),
@@ -47,7 +78,9 @@ WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 def test_mcp_actual_routes_publish_complete_response_roots(
     http_openapi: JsonSchemaValue, method: str, path: str, model: str,
 ) -> None:
-    operation = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/mcp" + path][method]
+    installation = path.split("/")[1] in {"candidate-manifests", "installations", "installation-operations", "installation-capabilities"} or path in {"/candidate-plans", "/candidate-plans/validate"}
+    prefix = "/api/v1/mcp" if installation else "/api/v1/workspaces/{workspace_id}/mcp"
+    operation = http_openapi["paths"][prefix + path][method]
     response = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert response == {"$ref": "#/components/schemas/" + model}
     assert model in HTTP_JSON_DESCRIPTORS
@@ -65,7 +98,9 @@ def test_mcp_actual_routes_publish_complete_response_roots(
     ("/installations", "McpInstallationRequestDTO"),
 ])
 def test_mcp_candidate_actual_routes_publish_complete_request_roots(http_openapi: JsonSchemaValue, path: str, model: str) -> None:
-    operation = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/mcp" + path]["post"]
+    installation = path.split("/")[1] in {"candidate-manifests", "installations", "installation-operations", "installation-capabilities"} or path in {"/candidate-plans", "/candidate-plans/validate"}
+    prefix = "/api/v1/mcp" if installation else "/api/v1/workspaces/{workspace_id}/mcp"
+    operation = http_openapi["paths"][prefix + path]["post"]
     assert operation["requestBody"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/" + model}
     assert model in HTTP_JSON_DESCRIPTORS
     assert_public_http_schemas(http_openapi)

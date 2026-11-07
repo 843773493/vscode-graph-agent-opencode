@@ -259,6 +259,7 @@ class RegistryDtosMixin:
                 return GatewayWorkspaceDTO(
                     workspace_id=target.workspace_id,
                     gateway_id=target.gateway_id,
+                    backend_id=backend_owner.backend_id if backend_owner is not None else target.backend_id,
                     backend_generation=backend_contract.generation if backend_contract is not None else target.remote_backend_generation,
                     affected_workspace_ids=list(backend_contract.workspace_ids) if backend_contract is not None else list(target.remote_affected_workspace_ids) if target.remote_backend_generation is not None else [target.workspace_id],
                     parent_workspace=GatewaySearchWorkspaceOwnerDTO(gateway_id=target.parent_workspace[0], workspace_id=target.parent_workspace[1]) if target.parent_workspace is not None else None,

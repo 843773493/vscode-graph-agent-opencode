@@ -4,11 +4,11 @@
 
 原联邦 policy 与 Gateway schema SHALL 登记 `mcp_installation_manage`，覆盖 MCP 候选 manifest 读取、确切 variant 计划、消费前重验及后续制品安装管理。该管理能力 SHALL 默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin、configuration_read 和 configuration_write 均不得代授。此能力不隐式授予配置写入、进程重启或宿主管理。
 
-两种 workspace API mount SHALL 使用相同能力边界。Relay SHALL 透传冻结目标、原请求、原错误与同一 request_id，由原生 Gateway 在访问 Backend 前及实际披露前核现行授权；等待目标运行或读取响应期间撤权，不得继续准入或披露候选。无权限时 MUST NOT 请求 Backend、读取目录来源、下载制品、写配置或改投本地。
+安装域发现、候选原件、安装计划、重验、库存及安装操作 SHALL 使用明确 Gateway／Backend 的目标级管理入口，不依赖活动 workspace。两种 workspace API mount SHALL 只保留精确工作区的配置与私有输入，候选配置规划及候选私有输入另核 `mcp_installation_manage`；旧 workspace 安装入口明确拒绝，不转发到另一安装实现。Relay SHALL 透传冻结目标、显式连接、原请求、原错误与同一 request_id，由原生 Gateway 在访问 Backend 前及实际披露前核现行授权；本跳连接选择不得透传为下一跳选择。等待目标运行或读取响应期间撤权，不得继续准入或披露候选。无权限时 MUST NOT 请求 Backend、读取目录来源、下载制品、写配置或改投本地。
 
 #### Scenario: 普通能力与通配 allow 不能规划 MCP 安装
 - **WHEN** 远端主体只有发现、读取、配置或受管 Backend 管理能力，或安装 allow 未精确绑定该认证主体
-- **THEN** 两种 mount 的候选原件、计划及重验请求均被原生 Gateway 拒绝，下游 Backend 与目录来源没有请求，Relay 不使用本机权限代授
+- **THEN** 目标级候选原件、安装计划、重验及两种 workspace mount 的候选配置请求均被原生 Gateway 拒绝，下游 Backend 与目录来源没有请求，Relay 不使用本机权限代授
 
 #### Scenario: 候选请求等待或披露前撤销管理权限
 - **WHEN** 精确主体获准的候选请求正在等待 Backend 或等待完整响应，原生 Gateway 撤销 mcp_installation_manage

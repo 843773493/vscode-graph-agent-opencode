@@ -54,6 +54,7 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
+from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.bootstrap import ResourcePlatform
@@ -136,6 +137,9 @@ class _AppContainerProtocol(Protocol):
 
 
 class _WorkspaceContainerRegistryProtocol(Protocol):
+    @property
+    def mcp_installations(self) -> McpInstallationOwner: ...
+
     def get(self, workspace_id: str) -> _AppContainerProtocol: ...
 
 
@@ -368,6 +372,13 @@ def get_tool_test_service(request: Request) -> ToolTestService:
 
 def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
     return _require_service(request, "mcp_catalog_owner", McpCatalogOwner, "McpCatalogOwner 尚未在应用启动阶段初始化")
+
+
+def get_mcp_installation_owner(request: Request) -> McpInstallationOwner:
+    registry = cast(_WorkspaceContainerRegistryProtocol | None, getattr(request.app.state, "workspace_container_registry", None))
+    if registry is None:
+        raise RuntimeError("Backend 工作区注册表尚未初始化，不能管理 MCP 制品")
+    return registry.mcp_installations
 
 
 def get_mcp_installation_target(request: Request) -> McpInstallationTargetDTO:

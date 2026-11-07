@@ -322,7 +322,9 @@ def _key_values(value: object, inputs: _Inputs, *, private_env: bool = False) ->
     return result
 
 
-def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object]) -> tuple[str, dict[str, object]]:
+def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object], *,
+    purpose: Literal["installation", "configuration"],
+) -> tuple[str, dict[str, object]]:
     payload = _object(json.loads(variant.payload), "MCP variant")
     inputs = _Inputs(values)
     if variant.kind == "manual":
@@ -338,6 +340,8 @@ def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object]
         inputs.finish()
         return "configuration_only", parameters
     _fields(payload, _PACKAGE_FIELDS, "MCP package")
+    if purpose == "installation" and values:
+        raise ValueError("MCP 包安装不接受工作区运行输入，请在明确工作区的配置计划中提供")
     registry = payload.get("registryType")
     if registry not in {"npm", "pypi", "oci", "nuget"}:
         raise ValueError("MCP package registryType 不受支持")
@@ -359,7 +363,7 @@ def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object]
                   "version": version, "registry_base_url": payload.get("registryBaseUrl"),
                   "expected_sha256": expected_sha, "runtime_hint": payload.get("runtimeHint"),
                   "runtime_arguments": _arguments(payload.get("runtimeArguments", []), inputs),
-                  "arguments": _arguments(payload.get("packageArguments", []), inputs),
-                  "env": _key_values(payload.get("environmentVariables", []), inputs, private_env=True)}
+                  "arguments": _arguments(payload.get("packageArguments", []), inputs) if purpose == "configuration" else [],
+                  "env": _key_values(payload.get("environmentVariables", []), inputs, private_env=True) if purpose == "configuration" else {}}
     inputs.finish()
     return "requires_artifact", parameters

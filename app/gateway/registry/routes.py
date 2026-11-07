@@ -163,12 +163,13 @@ class RegistryRoutesMixin:
         workspace_id: WorkspaceSelector,
         *,
         streaming: bool,
+        gateway_connection_id: str | None = None,
     ) -> WorkspaceRouteLease:
         """为代理请求保留路由引用，直到响应体或长连接真正结束。"""
 
         workspace_id = self.workspace_key(workspace_id)
         target = self.resolve(workspace_id)
-        target_connection_id = self.remote_connection_for_target(target).connection_id if target.connection_kind == "remote_gateway" else None
+        target_connection_id = self.remote_connection_for_target(target, connection_id=gateway_connection_id).connection_id if target.connection_kind == "remote_gateway" else None
         lease = self.route_lease(workspace_id)
         requests, streams = self._route_reference_counts.get(workspace_id, (0, 0))
         if streaming:
@@ -310,7 +311,7 @@ class RegistryRoutesMixin:
                 owner=target.owner,
                 remote_gateway_connection_ids=target.remote_gateway_connection_ids,
             )
-    def target_request_headers(self, target: WorkspaceTarget) -> dict[str, str]:
+    def target_request_headers(self, target: WorkspaceTarget, *, gateway_connection_id: str | None = None) -> dict[str, str]:
         """统一查询的定位和凭据；发送方身份与 request_id 由原调用方提供。"""
         validate_workspace_id(target.workspace_id)
         if target.connection_kind == "local":
@@ -320,7 +321,7 @@ class RegistryRoutesMixin:
                 "X-Local-Token": LOCAL_TOKEN,
                 "X-BoxTeam-Workspace-Id": target.workspace_id,
             }
-        connection = self.remote_connection_for_target(target)
+        connection = self.remote_connection_for_target(target, connection_id=gateway_connection_id)
         credential = FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
         ).get(connection.connection_id)

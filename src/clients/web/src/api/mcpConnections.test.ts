@@ -3,6 +3,7 @@ import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation, cancelMcpInstallationOperation,
+  listMcpInstallationTargets, planMcpCandidateConfiguration, listMcpInstalledArtifacts,
   writeMcpPrivateHeader, writeMcpPrivateEnv, draftMcpCandidateConfiguration, saveMcpCandidateConfiguration,
   getMcpArtifactReferences, uninstallMcpArtifact,
 } from "./mcpConnections";
@@ -40,6 +41,43 @@ function installFetch(respond: (url: URL, init: RequestInit | undefined) => unkn
 }
 
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("安装域发现只指定Gateway与本跳连接，不读取或选择工作区", async () => {
+  const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  let actual = { ...envelope([native]), gateway_id: native.gateway_id, source: "live" };
+  const port = installFetch((url, init) => {
+    expect(url.pathname).toBe("/api/gateway/mcp-installation-targets");
+    expect(JSON.parse(String(init?.body))).toEqual({ protocol_version: 1, gateway_id: native.gateway_id, gateway_connection_id: "original-connection" });
+    expect(new Headers(init?.headers).has("X-BoxTeam-Workspace-Id")).toBe(false);
+    return actual;
+  });
+  const route = { gateway_id: native.gateway_id, gateway_connection_id: "original-connection" };
+  expect(await listMcpInstallationTargets(port, route)).toEqual([native]);
+  actual = { ...actual, data: [{ ...native, gateway_id: otherGateway }] };
+  await expect(listMcpInstallationTargets(port, route)).rejects.toThrow("不同目标");
+  actual = { ...actual, data: [native], source: "cached" };
+  await expect(listMcpInstallationTargets(port, route)).rejects.toThrow("非实时目录");
+});
+
+test("配置计划使用精确工作区和原连接，安装计划只使用Backend", async () => {
+  const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  const candidate = { target: native, source: { kind: "manual", name: "original", version: "1", definition: { command: "/original" } },
+    manifest_digest: revision, variant: { kind: "manual", index: 0, digest: revision }, inputs: {}, server_id: "configured" };
+  const route = { ...target, gateway_connection_id: "original-connection" };
+  let actual = native;
+  const port = installFetch((url, init) => {
+    expect(url.pathname).toBe("/api/v1/mcp/candidate-configurations/plans");
+    expect(JSON.parse(String(init?.body))).toEqual(candidate);
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+    expect(headers.get("X-BoxTeam-Gateway-Connection-Id")).toBe("original-connection");
+    return envelope({ plan_digest: revision }, { target: actual });
+  });
+  await planMcpCandidateConfiguration(port, route, candidate);
+  actual = { ...native, backend_id: "00000000-0000-4000-8000-000000000012" };
+  await expect(planMcpCandidateConfiguration(port, route, candidate)).rejects.toThrow("Backend 已改变");
+});
 
 test("配置提案消费原脱敏JSONC，冻结来源与幂等键，拒绝异主回执", async () => {
   const edit = { ...target, source_key: "workspace_root_mutable_override", jsonc: "// 原件\n{}", idempotency_key: "draft-operation",
@@ -133,6 +171,7 @@ test("私有 header 只交给精确工作区，核对原输入和不透明版本
 
 test("制品入口冻结原生 Backend，实际安装与查询沿相同目标且不替换为workspace响应", async () => {
   const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  const route = { ...native, gateway_connection_id: "original/connection" };
   const requests: { url: URL; init: RequestInit | undefined }[] = [];
   let actual = native;
   const port = installFetch((url, init) => {
@@ -141,28 +180,34 @@ test("制品入口冻结原生 Backend，实际安装与查询沿相同目标且
   });
   const candidate = { target: native, source: { kind: "manual", name: "exact", version: "1", definition: { packages: [] } },
     manifest_digest: "sha256:jcs:v1:" + "a".repeat(64), variant: { kind: "package", index: 2, digest: "sha256:jcs:v1:" + "b".repeat(64) }, inputs: {} };
-  await getMcpInstallationCapabilities(port, target);
-  await inspectMcpInstallationCandidate(port, target, candidate);
-  await planMcpInstallation(port, target, candidate);
+  await getMcpInstallationCapabilities(port, route);
+  await inspectMcpInstallationCandidate(port, route, candidate);
+  await planMcpInstallation(port, route, candidate);
   const intent = { candidate, plan_digest: "sha256:jcs:v1:" + "c".repeat(64), operation_id: "original", entrypoint: "selected-entry" };
-  await installMcpArtifact(port, target, intent);
-  await getMcpInstallationOperation(port, target, native, "original/id");
-  await cancelMcpInstallationOperation(port, target, native, "original/id");
+  await installMcpArtifact(port, route, intent);
+  await getMcpInstallationOperation(port, route, "original/id");
+  await cancelMcpInstallationOperation(port, route, "original/id");
+  await listMcpInstalledArtifacts(port, route);
+  const prefix = `/api/gateway/mcp/${native.gateway_id}/${native.backend_id}/`;
   expect(requests.map(({ url }) => url.pathname)).toEqual([
-    "/api/v1/mcp/installation-capabilities", "/api/v1/mcp/candidate-manifests", "/api/v1/mcp/candidate-plans",
-    "/api/v1/mcp/installations", "/api/v1/mcp/installation-operations/original%2Fid",
-    "/api/v1/mcp/installation-operations/original%2Fid/cancel",
-  ]);
+    "installation-capabilities", "candidate-manifests", "candidate-plans", "installations", "installation-operations/original%2Fid",
+    "installation-operations/original%2Fid/cancel", "installations",
+  ].map(path => prefix + path));
   expect(JSON.parse(String(requests[3]!.init?.body))).toEqual(intent);
   expect(requests[5]!.init?.method).toBe("POST");
   expect(JSON.parse(String(requests[5]!.init?.body))).toEqual(native);
-  for (const { init } of requests) {
-    expect(new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
-    expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+  for (const { url, init } of requests) {
+    expect(url.searchParams.get("gateway_connection_id")).toBe(route.gateway_connection_id);
+    expect(new Headers(init?.headers).has("X-BoxTeam-Target-Gateway-Id")).toBe(false);
+    expect(new Headers(init?.headers).has("X-BoxTeam-Workspace-Id")).toBe(false);
+    expect(init?.cache).toBe("no-store");
   }
   actual = { ...native, backend_id: "00000000-0000-4000-8000-000000000012" };
-  await expect(getMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
-  await expect(cancelMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
+  await expect(getMcpInstallationOperation(port, route, "original")).rejects.toThrow("Backend 已改变");
+  await expect(cancelMcpInstallationOperation(port, route, "original")).rejects.toThrow("Backend 已改变");
+  const before = requests.length;
+  await expect(installMcpArtifact(port, { ...route, backend_id: actual.backend_id }, intent)).rejects.toThrow("原 Gateway／Backend");
+  expect(requests).toHaveLength(before);
 });
 
 test("制品引用核原generation，卸载向原安装域传递完整binding与唯一操作", async () => {
@@ -174,20 +219,21 @@ test("制品引用核原generation，卸载向原安装域传递完整binding与
     requests.push({ url, init });
     return envelope({ binding: actual, references: [] }, { target: native });
   });
-  expect((await getMcpArtifactReferences(port, target, native, binding)).data?.binding).toEqual(binding);
+  expect((await getMcpArtifactReferences(port, native, binding)).data?.binding).toEqual(binding);
   const intent = { target: native, binding, operation_id: "one-removal" };
-  await uninstallMcpArtifact(port, target, intent);
-  expect(requests[0]!.url.pathname).toBe("/api/v1/mcp/installations/artifact%2Fid/references");
-  expect(requests[1]!.url.pathname).toBe("/api/v1/mcp/installations/artifact%2Fid");
+  await uninstallMcpArtifact(port, native, intent);
+  const prefix = `/api/gateway/mcp/${native.gateway_id}/${native.backend_id}/installations/artifact%2Fid`;
+  expect(requests[0]!.url.pathname).toBe(prefix + "/references");
+  expect(requests[1]!.url.pathname).toBe(prefix);
   expect(requests[1]!.init?.method).toBe("DELETE");
   expect(JSON.parse(String(requests[1]!.init?.body))).toEqual(intent);
   for (const { init } of requests) {
-    expect(new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
-    expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+    expect(new Headers(init?.headers).has("X-BoxTeam-Target-Gateway-Id")).toBe(false);
+    expect(new Headers(init?.headers).has("X-BoxTeam-Workspace-Id")).toBe(false);
     expect(init?.cache).toBe("no-store");
   }
   actual = { ...binding, generation: "different" };
-  await expect(getMcpArtifactReferences(port, target, native, binding)).rejects.toThrow("原 generation");
+  await expect(getMcpArtifactReferences(port, native, binding)).rejects.toThrow("原 generation");
 });
 
 test("卸载收到会话401触发原身份屏障后，真实HTTP恢复链不重发旧确认", async () => {
@@ -204,14 +250,14 @@ test("卸载收到会话401触发原身份屏障后，真实HTTP恢复链不重�
       ++sessions;
       return Response.json({ data: { kind: "guest", user_id: null }, request_id: "recovered-identity" });
     }
-    expect(path).toBe("/api/v1/mcp/installations/artifact");
+    expect(path).toBe(`/api/gateway/mcp/${native.gateway_id}/${native.backend_id}/installations/artifact`);
     expect(init?.method).toBe("DELETE");
     expect(JSON.parse(String(init?.body))).toEqual({ target: native, binding, operation_id: "old-confirmation" });
     ++deletions;
     return Response.json({ detail: "user_session_required" }, { status: 401, headers: { "X-Request-ID": "expired-identity" } });
   }, { preconnect: originalFetch.preconnect });
   try {
-    const failure = await uninstallMcpArtifact(port, target, { target: native, binding, operation_id: "old-confirmation" }, controller.signal)
+    const failure = await uninstallMcpArtifact(port, native, { target: native, binding, operation_id: "old-confirmation" }, controller.signal)
       .catch((cause: unknown) => cause);
     expect(failure).toBe(controller.signal.reason);
     expect(controller.signal.aborted).toBe(true);

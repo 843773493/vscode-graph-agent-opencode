@@ -20,6 +20,7 @@ class FederationProtocolManifestDTO(BaseModel):
 
 
 class FederationWorkspaceDTO(BaseModel):
+    backend_id: str | None = None
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: CanonicalWorkspaceId

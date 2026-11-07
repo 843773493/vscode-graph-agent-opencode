@@ -197,7 +197,7 @@ class FederationProtocolManifestDTO(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., federation_depth: _Optional[int] = ..., capabilities: _Optional[_Iterable[str]] = ..., config_event_cursor: _Optional[int] = ..., config_reload_state: _Optional[str] = ..., config_reload_restart_required: _Optional[bool] = ..., config_reload_candidate_ref: _Optional[str] = ...) -> None: ...
 
 class FederationWorkspaceDTO(_message.Message):
-    __slots__ = ("workspace_id", "name", "managed", "connection_kind", "services", "backend_generation", "affected_workspace_ids")
+    __slots__ = ("workspace_id", "name", "managed", "connection_kind", "services", "backend_generation", "affected_workspace_ids", "backend_id")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     MANAGED_FIELD_NUMBER: _ClassVar[int]
@@ -205,6 +205,7 @@ class FederationWorkspaceDTO(_message.Message):
     SERVICES_FIELD_NUMBER: _ClassVar[int]
     BACKEND_GENERATION_FIELD_NUMBER: _ClassVar[int]
     AFFECTED_WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     workspace_id: str
     name: str
     managed: bool
@@ -212,7 +213,8 @@ class FederationWorkspaceDTO(_message.Message):
     services: _containers.RepeatedScalarFieldContainer[str]
     backend_generation: str
     affected_workspace_ids: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., managed: _Optional[bool] = ..., connection_kind: _Optional[str] = ..., services: _Optional[_Iterable[str]] = ..., backend_generation: _Optional[str] = ..., affected_workspace_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+    backend_id: str
+    def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., managed: _Optional[bool] = ..., connection_kind: _Optional[str] = ..., services: _Optional[_Iterable[str]] = ..., backend_generation: _Optional[str] = ..., affected_workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ...) -> None: ...
 
 class FederationWorkspaceListDTO(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "items", "excluded", "identities_verified")
@@ -1279,7 +1281,7 @@ class GatewayUserViewStateUpdateRequest(_message.Message):
     def __init__(self, turn_anchor: _Optional[str] = ..., scroll_offset: _Optional[float] = ..., follow_latest: _Optional[bool] = ..., projection_version: _Optional[int] = ..., tool_details_expanded: _Optional[bool] = ...) -> None: ...
 
 class GatewayWorkspaceDTO(_message.Message):
-    __slots__ = ("workspace_id", "name", "backend_url", "connection_kind", "status", "active", "managed", "removable", "system_default", "runtime_action", "config_reload", "services", "connection_error", "checked_at", "backend_generation", "affected_workspace_ids", "gateway_id", "parent_workspace", "remote_gateways")
+    __slots__ = ("workspace_id", "name", "backend_url", "connection_kind", "status", "active", "managed", "removable", "system_default", "runtime_action", "config_reload", "services", "connection_error", "checked_at", "backend_generation", "affected_workspace_ids", "gateway_id", "parent_workspace", "remote_gateways", "backend_id")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     BACKEND_URL_FIELD_NUMBER: _ClassVar[int]
@@ -1299,6 +1301,7 @@ class GatewayWorkspaceDTO(_message.Message):
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_WORKSPACE_FIELD_NUMBER: _ClassVar[int]
     REMOTE_GATEWAYS_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     workspace_id: str
     name: str
     backend_url: str
@@ -1318,7 +1321,8 @@ class GatewayWorkspaceDTO(_message.Message):
     gateway_id: str
     parent_workspace: GatewaySearchWorkspaceOwnerDTO
     remote_gateways: _containers.RepeatedCompositeFieldContainer[GatewayRemoteConnectionSummaryDTO]
-    def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., backend_url: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., active: _Optional[bool] = ..., managed: _Optional[bool] = ..., removable: _Optional[bool] = ..., system_default: _Optional[bool] = ..., runtime_action: _Optional[str] = ..., config_reload: _Optional[_Union[GatewayConfigReloadStatusDTO, _Mapping]] = ..., services: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., connection_error: _Optional[str] = ..., checked_at: _Optional[str] = ..., backend_generation: _Optional[str] = ..., affected_workspace_ids: _Optional[_Iterable[str]] = ..., gateway_id: _Optional[str] = ..., parent_workspace: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., remote_gateways: _Optional[_Iterable[_Union[GatewayRemoteConnectionSummaryDTO, _Mapping]]] = ...) -> None: ...
+    backend_id: str
+    def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., backend_url: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., active: _Optional[bool] = ..., managed: _Optional[bool] = ..., removable: _Optional[bool] = ..., system_default: _Optional[bool] = ..., runtime_action: _Optional[str] = ..., config_reload: _Optional[_Union[GatewayConfigReloadStatusDTO, _Mapping]] = ..., services: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., connection_error: _Optional[str] = ..., checked_at: _Optional[str] = ..., backend_generation: _Optional[str] = ..., affected_workspace_ids: _Optional[_Iterable[str]] = ..., gateway_id: _Optional[str] = ..., parent_workspace: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., remote_gateways: _Optional[_Iterable[_Union[GatewayRemoteConnectionSummaryDTO, _Mapping]]] = ..., backend_id: _Optional[str] = ...) -> None: ...
 
 class GatewayWorkspaceListDTO(_message.Message):
     __slots__ = ("items", "active_workspace")

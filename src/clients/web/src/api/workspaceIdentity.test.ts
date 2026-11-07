@@ -33,6 +33,15 @@ describe("Gateway 与 UUID 的唯一工作区身份", () => {
     expect(gatewayWorkspaceKey(owner)).toBe(gatewayWorkspaceKey(remoteWorkspace));
   });
 
+  test('显式Gateway连接只作为本跳请求头，不改变Gateway与工作区业务身份', () => {
+    const route = { ...remoteWorkspace, gateway_connection_id: 'original-connection' };
+    expect(gatewayWorkspaceRequestHeaders(route)).toEqual({
+      'X-BoxTeam-Target-Gateway-Id': remoteWorkspace.gateway_id, 'X-BoxTeam-Workspace-Id': workspaceId,
+      'X-BoxTeam-Gateway-Connection-Id': route.gateway_connection_id,
+    });
+    expect(gatewayWorkspaceKey(route)).toBe(gatewayWorkspaceKey(remoteWorkspace));
+  });
+
   test("未知 Gateway 不借用同 UUID 的其他登记", () => {
     expect(() => requireGatewayWorkspaceRequestTarget([localWorkspace, remoteWorkspace], {
       gatewayId: "gateway_unknown", workspaceId,

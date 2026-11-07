@@ -51,7 +51,7 @@ class McpServerConfig:
 def parse_mcp_server_configs(
     raw_config: object,
     *,
-    workspace_root: Path,
+    workspace_root: Path | None,
     installation_resolver: Callable[[McpManagedLaunchDTO], McpInstalledArtifactDTO] | None = None,
 ) -> tuple[McpServerConfig, ...]:
     if raw_config is None:
@@ -103,7 +103,7 @@ def _parse_server(
     server_id: str,
     raw_server: object,
     *,
-    workspace_root: Path,
+    workspace_root: Path | None,
     installation_resolver: Callable[[McpManagedLaunchDTO], McpInstalledArtifactDTO] | None,
 ) -> McpServerConfig:
     if not isinstance(raw_server, dict):
@@ -143,7 +143,7 @@ def _parse_server(
 
 
 def _parse_oauth(
-    server_id: str, raw_server: dict[str, object], *, workspace_root: Path,
+    server_id: str, raw_server: dict[str, object], *, workspace_root: Path | None,
 ) -> McpOAuthConfig | None:
     if "oauth" not in raw_server:
         return None
@@ -168,7 +168,7 @@ def _parse_stdio_connection(
     server_id: str,
     raw_server: dict[str, object],
     *,
-    workspace_root: Path,
+    workspace_root: Path | None,
     managed_artifact: McpInstalledArtifactDTO | None = None,
 ) -> tuple[Connection, tuple[McpPrivateEnvRefDTO, ...]]:
     _reject_unknown_fields(server_id, raw_server, _STDIO_FIELDS)
@@ -195,7 +195,7 @@ def _parse_stdio_connection(
 
     raw_cwd = raw_server.get("cwd")
     cwd = (
-        str(workspace_root)
+        (str(workspace_root) if workspace_root is not None else None)
         if raw_cwd is None
         else _expand_value(
             _required_string(raw_cwd, f"mcp.servers.{server_id}.cwd"),
@@ -218,6 +218,8 @@ def _parse_stdio_connection(
     if private_env:
         definition = (candidate_env_definition(managed_artifact.source, managed_artifact.manifest_digest, managed_artifact.variant)
                       if managed_artifact is not None else stdio_env_definition(connection))
+        if workspace_root is None:
+            raise ValueError("MCP 私有 env 需要明确工作区配置上下文")
         private_store = McpPrivateInputStore(workspace_root=workspace_root)
         for key, reference in private_env.items():
             private_store.require_env_binding(reference, server_id=server_id,
@@ -229,7 +231,7 @@ def _parse_http_connection(
     server_id: str,
     raw_server: dict[str, object],
     *,
-    workspace_root: Path,
+    workspace_root: Path | None,
 ) -> tuple[Connection, tuple[McpPrivateHeaderRefDTO, ...]]:
     _reject_unknown_fields(server_id, raw_server, _HTTP_FIELDS)
     url = _expand_value(
@@ -249,6 +251,8 @@ def _parse_http_connection(
             headers[key] = _expand_value(value, workspace_root=workspace_root)
         else:
             reference = McpPrivateHeaderRefDTO.model_validate(value)
+            if workspace_root is None:
+                raise ValueError("MCP 私有 header 需要明确工作区配置上下文")
             McpPrivateInputStore(workspace_root=workspace_root).require_binding(
                 reference, server_id=server_id, header_name=key, endpoint=url,
             )
@@ -260,13 +264,15 @@ def _parse_http_connection(
     }, tuple(private_headers)
 
 
-def _expand_value(value: str, *, workspace_root: Path) -> str:
+def _expand_value(value: str, *, workspace_root: Path | None) -> str:
     if "${" not in value:
         return value
 
     def resolve_placeholder(placeholder_match: re.Match[str]) -> str:
         placeholder_name = placeholder_match.group(1)
         if placeholder_name == "workspaceRoot":
+            if workspace_root is None:
+                raise ValueError("MCP workspaceRoot 需要明确工作区配置上下文")
             return str(workspace_root)
         environment_value = os.environ.get(placeholder_name)
         if environment_value is None:

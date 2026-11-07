@@ -34,6 +34,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, candidate_source
+from app.services.infrastructure.mcp.candidate_plans import inspect_candidate
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from app.services.infrastructure.mcp.installation.runtime import artifact_digest
 from app.services.infrastructure.mcp.installation.store import artifact_key
@@ -129,13 +130,13 @@ async def test_catalog_secret_env_consumes_original_request_through_source_cas(p
         return httpx.Response(200, json=raw)
 
     monkeypatch.setattr(candidate_source.httpx, "AsyncClient", lambda **options: real_client(transport=httpx.MockTransport(respond), **options))
-    inspected = await owner.inspect_installation_candidate(McpCandidateInspectRequestDTO(target=installation_target, source=source), actual_target=installation_target)
+    inspected = await inspect_candidate(McpCandidateInspectRequestDTO(target=installation_target, source=source), actual_target=installation_target)
     candidate = McpCandidatePlanRequestDTO(target=installation_target, source=source, manifest_digest=inspected.manifest_digest,
         variant=inspected.variants[0].ref, server_id="secure")
     reference = await owner.write_private_env(McpPrivateEnvWriteRequestDTO(target=target, server_id="secure", input_key="API_KEY",
         candidate=candidate, value=SecretStr(SECRET)), actual_target=target, installation_target=installation_target, candidate_required=True)
     candidate = candidate.model_copy(update={"inputs": {"API_KEY": reference.model_dump()}})
-    plan = await owner.prepare_installation_candidate(candidate, actual_target=installation_target)
+    plan = await owner.prepare_candidate_configuration(candidate, actual_target=installation_target)
     assert plan.parameters["env"] == {"API_KEY": reference.model_dump()} and SECRET not in plan.model_dump_json()
 
     operation = McpInstallationOperationDTO(operation_id="publish-unit", intent_digest="unit", status="running", stage="prepare", created_at=1, updated_at=1)

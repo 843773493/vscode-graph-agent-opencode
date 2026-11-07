@@ -224,7 +224,8 @@ export function workspaceHeader(selection?: string | WorkspaceOwner | null): Rec
 }
 
 export function gatewayWorkspaceRequestHeaders(target: GatewayWorkspaceRequestTarget): Record<string, string> {
-  return workspaceHeader(gatewayWorkspaceOwner(target));
+  return { ...workspaceHeader(gatewayWorkspaceOwner(target)),
+    ...(target.gateway_connection_id ? { "X-BoxTeam-Gateway-Connection-Id": target.gateway_connection_id } : {}) };
 }
 
 export function getApiBaseUrl(port: number): string {
@@ -431,7 +432,8 @@ async function runGatewayRequest<T>(
   const abortState = createRequestAbortState(signal, timeoutMs, timeoutErrorMessage);
 
   try {
-    if (!skipGatewayUserSession && path.startsWith("/api/v1/")) {
+    if (!skipGatewayUserSession && (path.startsWith("/api/v1/") || path.startsWith("/api/gateway/mcp/")
+      || path === "/api/gateway/mcp-installation-targets")) {
       await ensureGatewayUserSession(port, abortState.signal);
     }
     // Gateway 重启会轮换本地凭据；同一个 SPA 进程不能永久复用旧 token。

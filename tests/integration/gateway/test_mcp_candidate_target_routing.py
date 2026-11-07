@@ -31,7 +31,8 @@ def test_native_gateway_authorizes_exact_backend_candidate_without_installing(
     source = {"kind": "manual", "name": "same-http", "version": "1", "definition": {"remotes": [
         {"type": "streamable-http", "url": "https://service.test/mcp"}]}}
     intent: dict[str, object] = {"target": target, "source": source}
-    paths = ("/api/v1/mcp", f"/api/v1/workspaces/{network.workspace_id}/mcp")
+    path = f"/api/gateway/mcp/{gateway_b}/{backend_b}"
+    paths = (path,)
     workspace_sources = tuple(root / ".boxteam/workspace.jsonc" for root in network.workspace_roots)
     originals = tuple(path.read_bytes() for path in workspace_sources)
     evidence: list[dict[str, object]] = []
@@ -76,7 +77,7 @@ def test_native_gateway_authorizes_exact_backend_candidate_without_installing(
         if reaches_backend:
             backend, = downstream
             assert (backend["sender_gateway_id"], backend["workspace_id"], backend["response_request_id"]) == (
-                gateway_b, network.workspace_id, request_id,
+                gateway_b, None, request_id,
             )
         else:
             assert downstream == []
@@ -109,30 +110,39 @@ def test_native_gateway_authorizes_exact_backend_candidate_without_installing(
                 assert_native_only(request_id, reaches_backend=False)
 
         publish_policy([{"capability": "mcp_installation_manage", "effect": "allow", "principal_ref": principal}], "mcp-explicit")
-        for index, path in enumerate(paths):
-            inspected = exchange(local, "POST", path + "/candidate-manifests", f"mcp-inspect-{index}", body=intent, remote=True)
-            assert inspected.status_code == 200, inspected.text
-            manifest = inspected.json()["data"]
-            assert inspected.json()["target"] == target
-            candidate = {**intent, "manifest_digest": manifest["manifest_digest"], "variant": manifest["variants"][0]["ref"]}
-            prepared = exchange(local, "POST", path + "/candidate-plans", f"mcp-prepare-{index}", body=candidate, remote=True)
-            assert prepared.status_code == 200, prepared.text
-            plan = prepared.json()["data"]
-            assert plan["disposition"] == "configuration_only" and plan["download_required"] is False
-            assert prepared.headers["Cache-Control"] == "no-store" and "command" not in plan["parameters"]
-            validated = exchange(local, "POST", path + "/candidate-plans/validate", f"mcp-validate-{index}",
-                                 body={"candidate": candidate, "plan_digest": plan["plan_digest"]}, remote=True)
-            assert validated.status_code == 200 and validated.json()["data"] == plan
-            wrong_target = {**candidate, "target": {**target, "backend_id": backend_a}}
-            rejected = exchange(local, "POST", path + "/candidate-plans", f"mcp-wrong-backend-{index}", body=wrong_target, remote=True)
-            assert rejected.status_code == 409, rejected.text
-            for stage in ("inspect", "prepare", "validate", "wrong-backend"):
-                assert_native_only(f"mcp-{stage}-{index}", reaches_backend=True)
+        for client, label in ((local, "relay"), (native, "native")):
+            discovery = exchange(client, "POST", "/api/gateway/mcp-installation-targets", f"mcp-discover-{label}",
+                body={"gateway_id": gateway_b})
+            assert discovery.status_code == 200 and discovery.json()["data"] == [target], discovery.text
+        for old_path in ("/api/v1/mcp", f"/api/v1/workspaces/{network.workspace_id}/mcp"):
+            removed = exchange(native, "POST", old_path + "/candidate-manifests", "mcp-old-workspace-route", body=intent)
+            assert removed.status_code == 410, removed.text
+        index = 0
+        inspected = exchange(local, "POST", path + "/candidate-manifests", f"mcp-inspect-{index}", body=intent, remote=True)
+        assert inspected.status_code == 200, inspected.text
+        manifest = inspected.json()["data"]
+        assert inspected.json()["target"] == target
+        candidate = {**intent, "manifest_digest": manifest["manifest_digest"], "variant": manifest["variants"][0]["ref"]}
+        prepared = exchange(local, "POST", path + "/candidate-plans", f"mcp-prepare-{index}", body=candidate, remote=True)
+        assert prepared.status_code == 200, prepared.text
+        plan = prepared.json()["data"]
+        assert plan["disposition"] == "configuration_only" and plan["download_required"] is False
+        assert prepared.headers["Cache-Control"] == "no-store" and "command" not in plan["parameters"]
+        validated = exchange(local, "POST", path + "/candidate-plans/validate", f"mcp-validate-{index}",
+                             body={"candidate": candidate, "plan_digest": plan["plan_digest"]}, remote=True)
+        assert validated.status_code == 200 and validated.json()["data"] == plan
+        wrong_target = {**candidate, "target": {**target, "backend_id": backend_a}}
+        rejected = exchange(local, "POST", path + "/candidate-plans", f"mcp-wrong-backend-{index}", body=wrong_target, remote=True)
+        assert rejected.status_code == 409, rejected.text
+        for stage in ("inspect", "prepare", "validate"):
+            assert_native_only(f"mcp-{stage}-{index}", reaches_backend=True)
+        for owner in ("gateway-b", "backend-a", "backend-b"):
+            assert _observations(network.observation_paths[owner], f"mcp-wrong-backend-{index}") == []
 
         publish_policy([], "mcp-revoke")
         for index, path in enumerate(paths):
             request_id = f"mcp-revoked-{index}"
-            denied = exchange(local, "POST", path + "/candidate-plans", request_id, body=intent, remote=True)
+            denied = exchange(local, "POST", path + "/candidate-plans", request_id, body=candidate, remote=True)
             assert denied.status_code == 403, denied.text
             assert_native_only(request_id, reaches_backend=False)
         assert tuple(path.read_bytes() for path in workspace_sources) == originals
