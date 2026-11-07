@@ -1,4 +1,7 @@
+import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
 import { VSBuffer } from '../../upstream/src/vs/base/common/buffer.js';
+import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationError, isCancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { Emitter, Event } from '../../upstream/src/vs/base/common/event.js';
 import { Disposable, DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { OperatingSystem, language } from '../../upstream/src/vs/base/common/platform.js';
@@ -35,6 +38,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
   uriTransformer: TargetUriTransformer | undefined;
   customerInstantiationService: IInstantiationService | undefined;
   private readonly configurationLifetime = this._register(new DisposableStore());
+  private readonly startupCancellation = this._register(new CancellationTokenSource());
   private readonly exited = this._register(new Emitter<[number, string | null]>());
   readonly onExit = this.exited.event;
   private socket: WebSocket | undefined;
@@ -60,17 +64,20 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
     return this.startPromise ??= this.connect().catch(error => {
       this.configurationLifetime.dispose();
       this.socket?.close();
-      this.notifications.error(error instanceof Error ? error : String(error));
+      if (!(this.closing && isCancellationError(error))) this.notifications.error(error instanceof Error ? error : String(error));
       throw error;
     });
   }
   private async connect(): Promise<IMessagePassingProtocol> {
-    const snapshot = await this.snapshot();
-    if (this.closing) throw new Error('Node 宿主代际已经关闭');
+    if (this.closing) throw new CancellationError();
+    const snapshot = await raceCancellationError(this.snapshot(), this.startupCancellation.token);
+    if (this.closing) throw new CancellationError();
     const all = this.runningLocations.getHostExtensions(snapshot.extensions, this.runningLocation);
     const mine = this.runningLocations.filterByRunningLocation(all, this.runningLocation);
     this.extensions = new ExtensionHostExtensions(snapshot.versionId, all, mine.map(extension => extension.identifier));
-    const token = await getGatewayToken(0);
+    // 认证可由其它窗口消费者共享；只取消本宿主等待，迟到结果不能创建新通道。
+    const token = await raceCancellationError(getGatewayToken(0), this.startupCancellation.token);
+    if (this.closing) throw new CancellationError();
     const url = new URL('/api/gateway/extension-hosts/channel', location.href);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('token', token);
@@ -81,7 +88,12 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
       workspace_ids: [...this.runningLocation.workspaceIds] };
     const binding = await new Promise<ExtensionHostConnectionDTO>((resolve, reject) => {
       const timer = setTimeout(() => { socket.close(); reject(new Error('等待 Node 宿主绑定超时')); }, 30_000);
-      const cleanup = () => { clearTimeout(timer); socket.removeEventListener('message', onMessage); socket.removeEventListener('close', onClose); };
+      const cleanup = () => {
+        clearTimeout(timer); cancellation.dispose(); socket.removeEventListener('open', onOpen);
+        socket.removeEventListener('message', onMessage); socket.removeEventListener('close', onClose);
+      };
+      const cancellation = this.startupCancellation.token.onCancellationRequested(() => { cleanup(); reject(new CancellationError()); });
+      const onOpen = () => socket.send(JSON.stringify(request));
       const onClose = (event: CloseEvent) => { cleanup(); reject(new Error('Node 宿主绑定前关闭：' + event.code + ' ' + event.reason)); };
       const onMessage = (event: MessageEvent<unknown>) => {
         try {
@@ -104,22 +116,27 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
           cleanup(); resolve(value);
         } catch (error) { cleanup(); reject(error); }
       };
-      socket.addEventListener('open', () => socket.send(JSON.stringify(request)), { once: true });
+      socket.addEventListener('open', onOpen, { once: true });
       socket.addEventListener('message', onMessage);
       socket.addEventListener('close', onClose);
     });
+    if (this.closing) throw new CancellationError();
     const protocol = this.protocol!;
     this._register(protocol.onSocketClose(event => {
       this.configurationLifetime.dispose();
       if (!this.closing) this.exited.fire([1, event && 'reason' in event ? event.reason : 'extension_host_channel_closed']);
     }));
-    this.customerInstantiationService = await targetConfigurationServices(this.instantiation, binding, this.uriTransformer!, this.configurationLifetime);
-    if (this.closing || this.configurationLifetime.isDisposed) throw new Error('Node 宿主在配置初始化时关闭');
+    const configuration = await raceCancellationError(
+      targetConfigurationServices(this.instantiation, binding, this.uriTransformer!, this.configurationLifetime), this.startupCancellation.token);
+    if (this.closing) throw new CancellationError();
+    if (this.configurationLifetime.isDisposed) throw new Error('Node 宿主在配置初始化时关闭');
+    this.customerInstantiationService = configuration;
     await new Promise<void>((resolve, reject) => {
       const listeners = new DisposableStore();
       const timer = setTimeout(() => finish(new Error('Node 宿主原初始化握手超时')), 60_000);
       const finish = (error?: Error) => { clearTimeout(timer); listeners.dispose(); error ? reject(error) : resolve(); };
       let initialized = false;
+      listeners.add(this.startupCancellation.token.onCancellationRequested(() => finish(new CancellationError())));
       listeners.add(protocol.onSocketClose(() => finish(new Error('Node 宿主在初始化时断开'))));
       listeners.add(protocol.onMessage(message => {
         if (isMessageOfType(message, MessageType.Ready) && !initialized) {
@@ -129,6 +146,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
         else finish(new Error('Node 宿主初始化收到意外消息'));
       }));
     });
+    if (this.closing) throw new CancellationError();
     return protocol;
   }
   private createInitData(binding: ExtensionHostConnectionDTO): IExtensionHostInitData {
@@ -157,15 +175,17 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
   async disconnect(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.startupCancellation.cancel();
     this.configurationLifetime.dispose();
-    if (this.protocol) {
-      this.protocol.send(createMessageOfType(MessageType.Terminate));
-      this.protocol.sendDisconnect();
-      await this.protocol.drain();
-    }
-    this.socket?.close();
+    try {
+      if (this.protocol) {
+        this.protocol.send(createMessageOfType(MessageType.Terminate));
+        this.protocol.sendDisconnect();
+        await this.protocol.drain();
+      }
+    } finally { this.socket?.close(); }
   }
-  override dispose(): void { this.closing = true; this.socket?.close(); super.dispose(); }
+  override dispose(): void { this.closing = true; this.startupCancellation.cancel(); this.socket?.close(); super.dispose(); }
 }
 
 class GatewaySocket extends Disposable implements ISocket {

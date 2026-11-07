@@ -18,6 +18,8 @@
 
 安装身份来自 API envelope，工作区集合来自原 IWorkspaceContextService；每个 Backend 当前只支持一个明确 default view，集合变更必须 reload。初始化位置只读已认证 binding，URI 只转换 typed 字段并复用 workspaceFiles 原投影；原宿主协议和代际撤销机制保持。测试和临时产物遵守根 AGENTS。
 
+宿主关闭用原取消机制结清快照、共享认证、绑定、配置与原协议初始化等待；只撤销本宿主的认证等待，不取消共享凭据请求。每个异步结果在创建后续资源或发布成功前核当前代际，撤销同时释放监听与期限；明确取消保持拒绝，真实失败仍保留原原因。
+
 目标配置与 workspace context 由每个 host 的原 WorkspaceService 同时持有；原 MainThread customer 从同一 child DI 取得它。profile／多根配置只访问认证 binding 的两个具名资源，folder 配置复用普通工作区文件链；不轮换窗口 RemoteAgent，不新增正文、保存基线或配置合并实现。共享配置 provider 只合并同一资源的有效传输引用，文件 RPC 仍核发起 host 的精确资源。
 
 共同目标发现只消费明确根及原生 Gateway 的两项管理能力，多根最终核完整有序集合，单根不重复发现。视图仍保存在原 running-location owner；只有安装权限不读取宿主状态／库存或启动宿主，宿主初始化可只读原 profile 描述，不授安装写入权限。
