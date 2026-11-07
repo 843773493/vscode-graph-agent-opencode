@@ -31,9 +31,11 @@ from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
     ExtensionWebHostOpenRequest,
 )
+from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    ExtensionManagementError,
     NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
@@ -178,6 +180,41 @@ def test_web_context_uses_same_target_configuration_api_without_node_host(web_ca
         assert not (owner._home / "state/backend/extension-hosts").exists()
     closed = web_case.client.post("/api/internal/extension-configurations/read", json=request, headers=web_case.headers)
     assert closed.status_code == 409 and "content_base64" not in closed.text
+
+
+@pytest.mark.parametrize("with_workspace", [False, True])
+def test_settings_prepare_and_file_operations_need_no_host_or_installed_extension(web_case: WebCase, with_workspace: bool) -> None:
+    owner = web_case.registry.extension_hosts
+    owner.runtime = None
+    target = {name: web_case.payload[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id")}
+    target["workspace_ids"] = list(web_case.registry.mounted_workspaces.workspace_ids) if with_workspace else []
+    prepared = web_case.client.post("/api/internal/extension-configurations/prepare", json=target, headers=web_case.headers)
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.headers["X-Request-ID"] == prepared.json()["request_id"] == "web-private"
+    binding = prepared.json()["data"]
+    assert {name: binding[name] for name in target} == target
+    assert binding["profile_id"] == "default-profile" and "generation" not in binding
+    assert not owner.active and not web_case.reads
+    assert [folder["workspace_id"] for folder in binding["context"]["workspace"]["folders"]] == target["workspace_ids"]
+    request = {**target, "profile_id": binding["profile_id"], "resource_uri": binding["context"]["remote_settings"]["resource_uri"]}
+    content = b'/* standalone */\n{"probe.option": "target"}\n'
+    encoded = b64encode(content).decode()
+    saved = web_case.client.post("/api/internal/extension-configurations/write", json={**request, "content_base64": encoded,
+        "options": {"create": True, "overwrite": True, "unlock": False, "atomic": False, "append": False}}, headers=web_case.headers)
+    assert saved.status_code == 200, saved.text
+    read = web_case.client.post("/api/internal/extension-configurations/read", json=request, headers=web_case.headers)
+    assert read.status_code == 200 and read.json()["data"]["content_base64"] == encoded
+    assert web_case.settings.read_bytes() == content
+    for change in ({"profile_id": "foreign"}, {"backend_id": str(uuid4())},
+                   {"resource_uri": str(request["resource_uri"]).replace("/profiles/default-profile/", "/profiles/foreign/")}):
+        rejected = web_case.client.post("/api/internal/extension-configurations/read", json={**request, **change}, headers=web_case.headers)
+        assert rejected.status_code == 409 and "content_base64" not in rejected.text
+    for change in ({"profile_id": None}, {"generation": "made-up-host"}):
+        assert web_case.client.post("/api/internal/extension-configurations/read", json={**request, **change}, headers=web_case.headers).status_code == 422
+    owner.close_admission()
+    rejected = web_case.client.post("/api/internal/extension-configurations/read", json=request, headers=web_case.headers)
+    assert rejected.status_code == 409 and "content_base64" not in rejected.text
+    assert owner.active == () and not (owner._home / "state/backend/extension-hosts").exists()
 
 
 @pytest.mark.parametrize("wrong", ["client", "gateway", "backend", "view", "generation", "workspaces", "resource"])
@@ -379,3 +416,26 @@ def test_web_request_rejects_ambiguous_or_empty_run_set(web_case: WebCase, chang
         payload["extension_keys"] = [""]
     with pytest.raises(ValidationError):
         ExtensionWebHostOpenRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize("operation", ["prepare", "stat", "read", "write", "events"])
+def test_cold_settings_environment_error_preserves_configuration_error_owner(web_case: WebCase,
+    monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    async def denied(_management: ExtensionManagementClient) -> NativeManagementEnvironment:
+        raise ExtensionManagementError("目标配置环境不可访问", "NoPermissions")
+
+    monkeypatch.setattr(ExtensionManagementClient, "environment", denied)
+    payload = {name: web_case.payload[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids")}
+    if operation != "prepare":
+        payload["profile_id"] = "default-profile"
+    if operation in {"stat", "read", "write"}:
+        payload["resource_uri"] = extension_configuration_uri(gateway_id=GATEWAY,
+            backend_id=web_case.registry.extension_hosts.backend_id, profile_id="default-profile")
+    if operation == "write":
+        payload.update(content_base64="eA==", options={"create": True, "overwrite": True, "unlock": False, "atomic": False, "append": False})
+    response = web_case.client.post(f"/api/internal/extension-configurations/{operation}", json=payload, headers=web_case.headers)
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == {"owner": "extension_configuration", "code": "NoPermissions", "message": "目标配置环境不可访问"}
+    assert response.headers["X-Request-ID"] == "web-private"
+    assert web_case.registry.extension_hosts.active == () and not web_case.settings.exists()

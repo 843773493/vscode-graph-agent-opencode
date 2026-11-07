@@ -16,6 +16,7 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayCon
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import extension_host, extension_package
+from app.schemas.gateway.extension_configuration import ExtensionWebHostContextDTO
 from app.schemas.gateway.extension_host import (
     ExtensionHostConfigurationResourceDTO,
     ExtensionHostWorkspaceDTO,
@@ -23,7 +24,6 @@ from app.schemas.gateway.extension_host import (
 from app.schemas.gateway.extension_installation import ProfileExtensionInventory
 from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
-    ExtensionWebHostContextDTO,
 )
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from tests.unit.gateway.server.test_extension_host import GATEWAY, PEER

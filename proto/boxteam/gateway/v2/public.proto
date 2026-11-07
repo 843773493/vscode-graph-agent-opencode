@@ -1123,6 +1123,25 @@ message ExtensionHostWorkspaceDTO {
   ExtensionHostConfigurationResourceDTO configuration = 4;
 }
 
+message ExtensionConfigurationTargetRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  optional string gateway_connection_id = 6;
+}
+
+message ExtensionConfigurationViewDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string profile_id = 6;
+  ExtensionWebHostContextDTO context = 7;
+}
+
 message ExtensionConfigurationViewRequest {
   uint32 protocol_version = 1;
   string gateway_id = 2;
@@ -1133,6 +1152,16 @@ message ExtensionConfigurationViewRequest {
   optional string gateway_connection_id = 7;
 }
 
+message ExtensionConfigurationProfileViewRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string profile_id = 6;
+  optional string gateway_connection_id = 7;
+}
+
 message ExtensionConfigurationFileRequest {
   uint32 protocol_version = 1;
   string gateway_id = 2;
@@ -1140,6 +1169,17 @@ message ExtensionConfigurationFileRequest {
   string view_id = 4;
   repeated string workspace_ids = 5;
   string generation = 6;
+  string resource_uri = 7;
+  optional string gateway_connection_id = 8;
+}
+
+message ExtensionConfigurationProfileFileRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string profile_id = 6;
   string resource_uri = 7;
   optional string gateway_connection_id = 8;
 }
@@ -1159,6 +1199,19 @@ message ExtensionConfigurationWriteRequest {
   string view_id = 4;
   repeated string workspace_ids = 5;
   string generation = 6;
+  string resource_uri = 7;
+  string content_base64 = 8;
+  ExtensionConfigurationWriteOptions options = 9;
+  optional string gateway_connection_id = 10;
+}
+
+message ExtensionConfigurationProfileWriteRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string view_id = 4;
+  repeated string workspace_ids = 5;
+  string profile_id = 6;
   string resource_uri = 7;
   string content_base64 = 8;
   ExtensionConfigurationWriteOptions options = 9;

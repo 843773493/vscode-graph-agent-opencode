@@ -5,22 +5,57 @@ from __future__ import annotations
 from base64 import b64decode
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.gateway.extension_host import (
     ExtensionConfigurationURI,
+    ExtensionHostConfigurationResourceDTO,
+    ExtensionHostWorkspaceDTO,
     _ExtensionHostViewRequest,
     _HostValue,
+    validate_extension_view,
 )
 
 
-class ExtensionConfigurationViewRequest(_ExtensionHostViewRequest):
-    generation: str = Field(min_length=1)
+class ExtensionConfigurationTargetRequest(_ExtensionHostViewRequest):
     gateway_connection_id: str | None = Field(default=None, min_length=1)
 
 
-class ExtensionConfigurationFileRequest(ExtensionConfigurationViewRequest):
+class ExtensionConfigurationViewRequest(ExtensionConfigurationTargetRequest):
+    generation: str = Field(min_length=1)
+
+
+class ExtensionConfigurationProfileViewRequest(ExtensionConfigurationTargetRequest):
+    profile_id: str = Field(min_length=1)
+
+
+class ExtensionWebHostContextDTO(_HostValue):
+    os: Literal["linux", "windows", "macos"]
+    remote_settings: ExtensionHostConfigurationResourceDTO
+    workspace: ExtensionHostWorkspaceDTO
+
+
+class ExtensionConfigurationViewDTO(_ExtensionHostViewRequest):
+    profile_id: str = Field(min_length=1)
+    context: ExtensionWebHostContextDTO
+
+    @model_validator(mode="after")
+    def context_matches_target(self) -> ExtensionConfigurationViewDTO:
+        validate_extension_view(gateway_id=self.gateway_id, backend_id=self.backend_id, workspace_ids=self.workspace_ids,
+            workspace=self.context.workspace, profile_id=self.profile_id, settings=self.context.remote_settings)
+        return self
+
+
+class _ConfigurationResource(_HostValue):
     resource_uri: ExtensionConfigurationURI
+
+
+class ExtensionConfigurationFileRequest(ExtensionConfigurationViewRequest, _ConfigurationResource):
+    pass
+
+
+class ExtensionConfigurationProfileFileRequest(ExtensionConfigurationProfileViewRequest, _ConfigurationResource):
+    pass
 
 
 class ExtensionConfigurationWriteOptions(_HostValue):
@@ -31,7 +66,7 @@ class ExtensionConfigurationWriteOptions(_HostValue):
     append: bool
 
 
-class ExtensionConfigurationWriteRequest(ExtensionConfigurationFileRequest):
+class _ConfigurationContent(_HostValue):
     content_base64: str
     options: ExtensionConfigurationWriteOptions
 
@@ -40,6 +75,14 @@ class ExtensionConfigurationWriteRequest(ExtensionConfigurationFileRequest):
     def valid_base64(cls, value: str) -> str:
         b64decode(value, validate=True)
         return value
+
+
+class ExtensionConfigurationWriteRequest(ExtensionConfigurationFileRequest, _ConfigurationContent):
+    pass
+
+
+class ExtensionConfigurationProfileWriteRequest(ExtensionConfigurationProfileFileRequest, _ConfigurationContent):
+    pass
 
 
 class ExtensionConfigurationStatDTO(_HostValue):

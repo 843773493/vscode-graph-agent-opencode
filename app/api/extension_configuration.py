@@ -1,4 +1,4 @@
-"""宿主配置的私有控制入口；资源只能来自已认证代际的冻结映射。"""
+"""目标配置私有入口；独立设置及宿主 API 共用原文件与 watcher owner。"""
 
 from __future__ import annotations
 
@@ -19,8 +19,13 @@ from app.core.trace_middleware import get_request_id
 from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationEventDTO,
     ExtensionConfigurationFileRequest,
+    ExtensionConfigurationProfileFileRequest,
+    ExtensionConfigurationProfileViewRequest,
+    ExtensionConfigurationProfileWriteRequest,
     ExtensionConfigurationReadDTO,
     ExtensionConfigurationStatDTO,
+    ExtensionConfigurationTargetRequest,
+    ExtensionConfigurationViewDTO,
     ExtensionConfigurationViewRequest,
     ExtensionConfigurationWriteRequest,
 )
@@ -35,15 +40,21 @@ from app.services.infrastructure.extension_host.management import (
 router = APIRouter()
 
 
-def configuration_files(request: Request, payload: ExtensionConfigurationViewRequest,
-                        registry: WorkspaceContainerRegistry) -> ExtensionConfigurationFiles:
+def configuration_client(request: Request, payload: ExtensionConfigurationTargetRequest) -> str:
     if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
         raise HTTPException(400, "配置请求的目标 Gateway 身份冲突")
     client_id = request.headers.get("x-boxteam-extension-client-id")
     if not client_id:
         raise HTTPException(400, "配置请求缺少 Gateway 认证的客户端绑定")
+    return client_id
+
+
+async def configuration_files(request: Request, payload: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest,
+                              registry: WorkspaceContainerRegistry) -> ExtensionConfigurationFiles:
     try:
-        return registry.extension_hosts.configuration_files(payload, client_id=client_id)
+        return await registry.extension_hosts.configuration_files(payload, client_id=configuration_client(request, payload))
+    except ExtensionManagementError as error:
+        raise configuration_error(error) from error
     except (ValueError, KeyError) as error:
         raise HTTPException(409, str(error)) from error
 
@@ -53,59 +64,73 @@ def configuration_error(error: ExtensionManagementError) -> HTTPException:
     return HTTPException(status, detail={"owner": "extension_configuration", "code": error.code, "message": str(error)})
 
 
+@router.post("/api/internal/extension-configurations/prepare", response_model=APIResponse[ExtensionConfigurationViewDTO], include_in_schema=False)
+async def configuration_prepare(payload: ExtensionConfigurationTargetRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionConfigurationViewDTO]:
+    try:
+        result = await registry.extension_hosts.prepare_configuration(payload, client_id=configuration_client(request, payload))
+    except ExtensionManagementError as error:
+        raise configuration_error(error) from error
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.post("/api/internal/extension-configurations/stat", response_model=APIResponse[ExtensionConfigurationStatDTO], include_in_schema=False)
-async def configuration_stat(payload: ExtensionConfigurationFileRequest, request: Request,
+async def configuration_stat(payload: ExtensionConfigurationFileRequest | ExtensionConfigurationProfileFileRequest, request: Request,
     registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[ExtensionConfigurationStatDTO]:
-    files = configuration_files(request, payload, registry)
+    files = await configuration_files(request, payload, registry)
     try:
         result = await files.stat(payload.resource_uri)
     except ExtensionManagementError as error:
         raise configuration_error(error) from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    configuration_files(request, payload, registry)
+    await configuration_files(request, payload, registry)
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post("/api/internal/extension-configurations/read", response_model=APIResponse[ExtensionConfigurationReadDTO], include_in_schema=False)
-async def configuration_read(payload: ExtensionConfigurationFileRequest, request: Request,
+async def configuration_read(payload: ExtensionConfigurationFileRequest | ExtensionConfigurationProfileFileRequest, request: Request,
     registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[ExtensionConfigurationReadDTO]:
-    files = configuration_files(request, payload, registry)
+    files = await configuration_files(request, payload, registry)
     try:
         result = await files.read(payload.resource_uri)
     except ExtensionManagementError as error:
         raise configuration_error(error) from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    configuration_files(request, payload, registry)
+    await configuration_files(request, payload, registry)
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post("/api/internal/extension-configurations/write", response_model=APIResponse[ExtensionConfigurationStatDTO], include_in_schema=False)
-async def configuration_write(payload: ExtensionConfigurationWriteRequest, request: Request,
+async def configuration_write(payload: ExtensionConfigurationWriteRequest | ExtensionConfigurationProfileWriteRequest, request: Request,
     registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
     request_id: Annotated[str, Depends(get_request_id)],
 ) -> APIResponse[ExtensionConfigurationStatDTO]:
-    files = configuration_files(request, payload, registry)
+    files = await configuration_files(request, payload, registry)
     try:
         result = await files.write(payload.resource_uri, payload.content_base64, payload.options)
     except ExtensionManagementError as error:
         raise configuration_error(error) from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    configuration_files(request, payload, registry)
+    await configuration_files(request, payload, registry)
     return APIResponse(data=result, request_id=request_id)
 
 
 @router.post("/api/internal/extension-configurations/events", include_in_schema=False)
-async def configuration_events(payload: ExtensionConfigurationViewRequest, request: Request,
+async def configuration_events(payload: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest, request: Request,
     registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
 ) -> StreamingResponse:
-    files = configuration_files(request, payload, registry)
+    files = await configuration_files(request, payload, registry)
 
     async def generate():
         first = True
@@ -113,9 +138,9 @@ async def configuration_events(payload: ExtensionConfigurationViewRequest, reque
                             close_source_on_exit=True, is_disconnected=request.is_disconnected)) as stream:
             async for batch in stream:
                 try:
-                    configuration_files(request, payload, registry)
+                    await configuration_files(request, payload, registry)
                 except HTTPException:
-                    event = ExtensionConfigurationEventDTO(changes=[], overflow=False, error="配置所属宿主代际已撤销")
+                    event = ExtensionConfigurationEventDTO(changes=[], overflow=False, error="配置所属目标或宿主代际已撤销")
                     yield f"event: error\ndata: {event.model_dump_json()}\n\n"
                     return
                 if isinstance(batch, str):

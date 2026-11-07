@@ -12,6 +12,7 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayCon
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import extension_configuration, extension_host
+from app.schemas.gateway.extension_host import ExtensionHostOpenRequest
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from tests.unit.gateway.server.test_extension_host import GATEWAY, PEER
 from tests.unit.gateway.server.test_extension_installation import (
@@ -122,3 +123,57 @@ def test_configuration_relay_preserves_connection_and_rejects_late_old_route(con
     assert not h.registry._remote_gateway_reference_counts
     if replace_route:
         assert "content_base64" not in response.text
+
+
+@pytest.mark.parametrize("operation", ["read", "write"])
+@pytest.mark.parametrize("capabilities", [[], ["extension_host_manage"], ["configuration_read"],
+    ["configuration_write"], ["configuration_read", "configuration_write"]])
+def test_standalone_settings_require_configuration_permissions_without_host_permission(configuration_proxy, operation, capabilities):
+    h, calls, _, payload = configuration_proxy
+    payload.pop("generation")
+    payload["profile_id"] = "default-profile"
+    h.policy.publish({"rules": [{"capability": capability, "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(PEER)} for capability in capabilities]})
+    if operation == "write":
+        payload.update(content_base64="dGFyZ2V0", options={"create": True, "overwrite": True,
+            "unlock": False, "atomic": False, "append": False})
+    response = h.client.post(f"/api/gateway/extension-configurations/{operation}", json=payload,
+        headers={"X-BoxTeam-Federation-Token": h.federation_token, extension_host.CLIENT_HEADER: "settings-client"})
+    required = {"configuration_read"} | ({"configuration_write"} if operation == "write" else set())
+    allowed = required.issubset(capabilities)
+    assert response.status_code == (200 if allowed else 403), response.text
+    assert len(calls) == int(allowed)
+    if allowed:
+        assert calls[0].url.path == f"/api/internal/extension-configurations/{operation}"
+        assert json.loads(calls[0].content) == payload
+
+
+@pytest.mark.parametrize("root_count", [0, 2])
+def test_settings_prepare_returns_frozen_target_context_without_host_generation(configuration_proxy, root_count):
+    h, calls, handlers, payload = configuration_proxy
+    payload.pop("generation")
+    payload.pop("resource_uri")
+    payload["workspace_ids"] = h.request.workspace_ids[:root_count]
+    initialization = h.initialization(ExtensionHostOpenRequest(**{**payload, "workspace_ids": h.request.workspace_ids}))
+    workspace = initialization.workspace.model_copy(update={"folders": [], "configuration": None}) if not root_count else initialization.workspace
+    result = {**payload, "profile_id": initialization.environment.profile_id, "context": {
+        "os": initialization.os, "remote_settings": initialization.environment.remote_settings.model_dump(),
+        "workspace": workspace.model_dump()}}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]},
+            json={"request_id": request.headers["X-Request-ID"], "data": result})
+
+    handlers[0] = reply
+    h.policy.publish({"rules": [{"capability": "configuration_read", "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(PEER)}]})
+    response = h.client.post("/api/gateway/extension-configurations/prepare", json=payload,
+        headers={"X-BoxTeam-Federation-Token": h.federation_token, extension_host.CLIENT_HEADER: "settings-client", "X-Request-ID": "settings-prepare"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == result
+    assert calls[0].url.path == "/api/internal/extension-configurations/prepare"
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "settings-prepare"
+    result["view_id"] = "wrong-view"
+    rejected = h.client.post("/api/gateway/extension-configurations/prepare", json=payload,
+        headers={"X-Local-Token": h.token})
+    assert rejected.status_code == 409 and "context" not in rejected.text

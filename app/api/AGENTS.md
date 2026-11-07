@@ -10,7 +10,7 @@
 - `runtime_logging.py`：Backend 与 Gateway 共用的进程级内部日志控制路由；不挂到 `workspace_api`，不依赖工作区容器，不按工作区复制共享 Backend 的日志设置。入口只接受无浏览器来源头的 loopback 请求，并核对 Gateway 私有凭据；Backend 单服务未显式配置控制凭据时拒绝管理，不接受固定开发 token。
 - `extension_host.py`：Backend 进程级私有宿主WebSocket及实时目标发现入口，不挂`workspace_api`；复用运行时控制凭据和唯一宿主owner。发现只读owner的稳定身份、绑定版本与准入状态，不启动进程；通道收发结清后确认settled，再由owner关闭IPC与实际进程，不复制扩展RPC。
 - `mcp_installation.py`：Backend 进程级私有 MCP 制品管理入口，不挂 `workspace_api`；只注入唯一安装 owner，读取候选、发布制品及查询原操作，不装配工作区图。工作区配置计划与私有输入继续归 `mcp.py`。
-- `extension_configuration.py`：同一Backend的私有配置stat/read/write/events入口，不挂`workspace_api`；复用运行时凭据和宿主owner，按已认证client、generation、view及有序工作区集合取得原Node／Web配置文件与共享watcher，不读取任意本机路径、不建立第二保存基线。
+- `extension_configuration.py`：同一 Backend 的私有配置 prepare/stat/read/write/events 入口，不挂 `workspace_api`；复用运行时凭据和原 owner，独立设置按明确 profile/view、扩展 API 按已认证 client/generation/view 取得同一配置文件与共享 watcher，不要求设置编辑先启动宿主，不读取任意本机路径、不建立第二保存基线。
 - `workspace_file_response.py`：复用 Starlette 文件响应的 Range 与头部实现，协调延迟 I/O 错误、发头时点和临时下载清理；普通 raw 完整 GET 按稳定 owner／规范 URI／stat 生成弱 ETag，当前读取权限通过后才可304，下载、临时及Range仍no-store。文件解析与归档准备仍归 Workspace 文件 owner，stat校验器不代替保存CAS。
 - 其余 `*.py`：按业务域（`sessions`、`messages`、`workspace`、`jobs`、`tools`、`mcp`、`node_debug`、`runtime` 等）拆分的路由实现。同层不再有前端 TS 文件；浏览器前端的 gateway API 客户端位于 `src/clients/web/src/gatewayApi.ts`，pending request 客户端位于 `src/clients/web/src/pendingRequestsApi.ts`，二者不属于本目录。
 - `messages.py` 与 `session_turns.py` 分别适配 `sessions/{session_id}/threads/{thread_id}/messages` 和同 thread 的 `/history`，复用消息准入和唯一历史 reader；Session-only 入口仍由业务 owner 解析 main thread。

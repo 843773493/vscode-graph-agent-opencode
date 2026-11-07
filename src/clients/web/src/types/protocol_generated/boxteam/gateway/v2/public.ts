@@ -1140,6 +1140,25 @@ export interface ExtensionHostWorkspaceDTO {
   configuration: ExtensionHostConfigurationResourceDTO | undefined;
 }
 
+export interface ExtensionConfigurationTargetRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  gateway_connection_id?: string | undefined;
+}
+
+export interface ExtensionConfigurationViewDTO {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  profile_id: string;
+  context: ExtensionWebHostContextDTO | undefined;
+}
+
 export interface ExtensionConfigurationViewRequest {
   protocol_version: number;
   gateway_id: string;
@@ -1150,6 +1169,16 @@ export interface ExtensionConfigurationViewRequest {
   gateway_connection_id?: string | undefined;
 }
 
+export interface ExtensionConfigurationProfileViewRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  profile_id: string;
+  gateway_connection_id?: string | undefined;
+}
+
 export interface ExtensionConfigurationFileRequest {
   protocol_version: number;
   gateway_id: string;
@@ -1157,6 +1186,17 @@ export interface ExtensionConfigurationFileRequest {
   view_id: string;
   workspace_ids: string[];
   generation: string;
+  resource_uri: string;
+  gateway_connection_id?: string | undefined;
+}
+
+export interface ExtensionConfigurationProfileFileRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  profile_id: string;
   resource_uri: string;
   gateway_connection_id?: string | undefined;
 }
@@ -1176,6 +1216,19 @@ export interface ExtensionConfigurationWriteRequest {
   view_id: string;
   workspace_ids: string[];
   generation: string;
+  resource_uri: string;
+  content_base64: string;
+  options: ExtensionConfigurationWriteOptions | undefined;
+  gateway_connection_id?: string | undefined;
+}
+
+export interface ExtensionConfigurationProfileWriteRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  profile_id: string;
   resource_uri: string;
   content_base64: string;
   options: ExtensionConfigurationWriteOptions | undefined;
@@ -9220,6 +9273,148 @@ export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = 
   },
 };
 
+function createBaseExtensionConfigurationTargetRequest(): ExtensionConfigurationTargetRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    gateway_connection_id: undefined,
+  };
+}
+
+export const ExtensionConfigurationTargetRequest: MessageFns<ExtensionConfigurationTargetRequest> = {
+  fromJSON(object: any): ExtensionConfigurationTargetRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationTargetRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationTargetRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationTargetRequest {
+    return ExtensionConfigurationTargetRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationTargetRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationTargetRequest {
+    const message = createBaseExtensionConfigurationTargetRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationViewDTO(): ExtensionConfigurationViewDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    profile_id: "",
+    context: undefined,
+  };
+}
+
+export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationViewDTO> = {
+  fromJSON(object: any): ExtensionConfigurationViewDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      context: isSet(object.context) ? ExtensionWebHostContextDTO.fromJSON(object.context) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationViewDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.context !== undefined) {
+      obj.context = ExtensionWebHostContextDTO.toJSON(message.context);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationViewDTO>, I>>(base?: I): ExtensionConfigurationViewDTO {
+    return ExtensionConfigurationViewDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationViewDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationViewDTO {
+    const message = createBaseExtensionConfigurationViewDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.profile_id = object.profile_id ?? "";
+    message.context = (object.context !== undefined && object.context !== null)
+      ? ExtensionWebHostContextDTO.fromPartial(object.context)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseExtensionConfigurationViewRequest(): ExtensionConfigurationViewRequest {
   return {
     protocol_version: 0,
@@ -9290,6 +9485,81 @@ export const ExtensionConfigurationViewRequest: MessageFns<ExtensionConfiguratio
     message.view_id = object.view_id ?? "";
     message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
     message.generation = object.generation ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationProfileViewRequest(): ExtensionConfigurationProfileViewRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    profile_id: "",
+    gateway_connection_id: undefined,
+  };
+}
+
+export const ExtensionConfigurationProfileViewRequest: MessageFns<ExtensionConfigurationProfileViewRequest> = {
+  fromJSON(object: any): ExtensionConfigurationProfileViewRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationProfileViewRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationProfileViewRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationProfileViewRequest {
+    return ExtensionConfigurationProfileViewRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationProfileViewRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationProfileViewRequest {
+    const message = createBaseExtensionConfigurationProfileViewRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.profile_id = object.profile_id ?? "";
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     return message;
   },
@@ -9370,6 +9640,87 @@ export const ExtensionConfigurationFileRequest: MessageFns<ExtensionConfiguratio
     message.view_id = object.view_id ?? "";
     message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
     message.generation = object.generation ?? "";
+    message.resource_uri = object.resource_uri ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationProfileFileRequest(): ExtensionConfigurationProfileFileRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    profile_id: "",
+    resource_uri: "",
+    gateway_connection_id: undefined,
+  };
+}
+
+export const ExtensionConfigurationProfileFileRequest: MessageFns<ExtensionConfigurationProfileFileRequest> = {
+  fromJSON(object: any): ExtensionConfigurationProfileFileRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationProfileFileRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationProfileFileRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationProfileFileRequest {
+    return ExtensionConfigurationProfileFileRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationProfileFileRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationProfileFileRequest {
+    const message = createBaseExtensionConfigurationProfileFileRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.profile_id = object.profile_id ?? "";
     message.resource_uri = object.resource_uri ?? "";
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     return message;
@@ -9514,6 +9865,101 @@ export const ExtensionConfigurationWriteRequest: MessageFns<ExtensionConfigurati
     message.view_id = object.view_id ?? "";
     message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
     message.generation = object.generation ?? "";
+    message.resource_uri = object.resource_uri ?? "";
+    message.content_base64 = object.content_base64 ?? "";
+    message.options = (object.options !== undefined && object.options !== null)
+      ? ExtensionConfigurationWriteOptions.fromPartial(object.options)
+      : undefined;
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationProfileWriteRequest(): ExtensionConfigurationProfileWriteRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    profile_id: "",
+    resource_uri: "",
+    content_base64: "",
+    options: undefined,
+    gateway_connection_id: undefined,
+  };
+}
+
+export const ExtensionConfigurationProfileWriteRequest: MessageFns<ExtensionConfigurationProfileWriteRequest> = {
+  fromJSON(object: any): ExtensionConfigurationProfileWriteRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      content_base64: isSet(object.content_base64) ? globalThis.String(object.content_base64) : "",
+      options: isSet(object.options) ? ExtensionConfigurationWriteOptions.fromJSON(object.options) : undefined,
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationProfileWriteRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.resource_uri !== "") {
+      obj.resource_uri = message.resource_uri;
+    }
+    if (message.content_base64 !== "") {
+      obj.content_base64 = message.content_base64;
+    }
+    if (message.options !== undefined) {
+      obj.options = ExtensionConfigurationWriteOptions.toJSON(message.options);
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationProfileWriteRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationProfileWriteRequest {
+    return ExtensionConfigurationProfileWriteRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationProfileWriteRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationProfileWriteRequest {
+    const message = createBaseExtensionConfigurationProfileWriteRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.profile_id = object.profile_id ?? "";
     message.resource_uri = object.resource_uri ?? "";
     message.content_base64 = object.content_base64 ?? "";
     message.options = (object.options !== undefined && object.options !== null)

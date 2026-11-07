@@ -27,6 +27,7 @@
 - 公开传输先登记settled占用；owner通知stopping并等待传输双向任务结清，才关闭IPC和实际进程。
 - 关闭Backend只结清其管理HTTP客户端与运行宿主，不关闭共享管理进程。控制回执丢失须明确报告且不重放安装；Gateway换代只在已接受调用结清后释放句柄，完整停机才排空并核管理进程退出；安装域锁始终由管理服务持有。
 - 配置 stat/read/write 只消费原 session 冻结的稳定 view 与有序 roots，不经过管理 Node，不建立额外保存基线；只有 owner 初始化可首次物化 view，stat/read 不重建已删除文件。同步 I/O 复用 run_sync_shielded，取消必须等待原 worker 结清；跨 Backend 沿同一目标磁盘文件和原生文件锁保持读写可见。
+- 独立设置通过同一 owner 的 prepare 获取明确 profile 与稳定视图，不创建运行宿主或配置 session；后续请求用 profile 归属，扩展 API 请求仍用原宿主 generation，两种归属互斥。必要原生环境描述在 Backend 生命周期内复用，正文及保存基线不缓存；独立设置初始化和文件 worker 与关闭共用原配置锁。
 - 管理授权、稳定目标与 view 必须在公开入口接线时完成；本层不提供 HTTP 入口。
 - 目标 VSIX 来源由原文件 owner 解析已挂接工作区的文件 URI，保留私有目录保护；安装与库存消费同一 Node 控制回执，不启动 Agent 容器或另建安装事实。
 - Gateway独立通道认证、原生管理权限和持续撤权归`app/gateway/server/extension_host.py`；Backend私有入口归`app/api/extension_host.py`与`extension_configuration.py`。配置操作必须匹配已认证client、generation、view和原mount中的有序工作区集合；认证、集合校验或局部配置验证不能替代完整窗口隔离验收。

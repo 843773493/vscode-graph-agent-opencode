@@ -7,13 +7,14 @@ from typing import Annotated, Literal, TypeVar
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from app.schemas.gateway.extension_configuration import (
-    ExtensionConfigurationViewRequest,
+    ExtensionConfigurationTargetRequest,
 )
 from app.schemas.gateway.extension_host import _HostValue
 from app.schemas.internal_v2.mcp import require_mcp_http_url
 
 
-class ExtensionMcpDefinitionChannelRequest(ExtensionConfigurationViewRequest):
+class ExtensionMcpDefinitionChannelRequest(ExtensionConfigurationTargetRequest):
+    generation: str = Field(min_length=1)
     host_kind: Literal["node", "web"]
 
 

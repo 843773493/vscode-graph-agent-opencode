@@ -57,7 +57,7 @@ from app.gateway.server.workspace_proxy import (
     verify_user_access_for_proxy,
 )
 from app.schemas.gateway.extension_configuration import (
-    ExtensionConfigurationViewRequest,
+    ExtensionConfigurationTargetRequest,
 )
 from app.schemas.gateway.extension_host import (
     ExtensionHostConnectionDTO,
@@ -472,26 +472,27 @@ async def _native_installation(payload: ExtensionInstallationInventoryRequest, r
 
 
 @contextmanager
-def _installation_route(request: HTTPConnection, payload: ExtensionInstallationInventoryRequest | ExtensionWebHostOpenRequest | ExtensionConfigurationViewRequest,
+def _installation_route(request: HTTPConnection, payload: ExtensionInstallationInventoryRequest | ExtensionWebHostOpenRequest | ExtensionConfigurationTargetRequest,
                         auth: GatewayAuthContext, *, streaming: bool = False) -> Iterator[GatewayManagementRoute]:
     with management_gateway_route(request, gateway_id=payload.gateway_id, gateway_connection_id=payload.gateway_connection_id, auth=auth) as remote:
         if remote is not None:
             yield remote
             return
-        _check_inventory_permission(request, auth)
-        if isinstance(payload, (ExtensionWebHostOpenRequest, ExtensionConfigurationViewRequest)) and payload.workspace_ids:
+        if not isinstance(payload, ExtensionConfigurationTargetRequest):
+            _check_inventory_permission(request, auth)
+        if isinstance(payload, (ExtensionWebHostOpenRequest, ExtensionConfigurationTargetRequest)) and payload.workspace_ids:
             # 非空运行视图沿原挂接根路由；直连 Backend 不必具有 Launcher 进程组 owner。
             with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
                 auth=auth, streaming=streaming, gateway_connection_id=payload.gateway_connection_id) as route:
                 yield route
             return
-        needs_backend = isinstance(payload, (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest)) or getattr(payload, "generation", None) is not None
+        needs_backend = isinstance(payload, (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest, ExtensionConfigurationTargetRequest)) or getattr(payload, "generation", None) is not None
         if not needs_backend:
             management_owner(request, payload.backend_id)
             yield GatewayManagementRoute("", False, {}, [])
             return
         workspace_ids = tuple(payload.workspace_ids) if isinstance(payload,
-            (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest, ExtensionConfigurationViewRequest)) else ()
+            (ExtensionInstallationInstallRequest, ExtensionWebHostOpenRequest, ExtensionConfigurationTargetRequest)) else ()
         with request.app.state.registry.backend_management_routes(backend_id=payload.backend_id, workspace_ids=workspace_ids, streaming=streaming) as routes:
             [selected] = routes
             yield GatewayManagementRoute(selected.base_url, False, {"X-Request-ID": get_request_id(request),

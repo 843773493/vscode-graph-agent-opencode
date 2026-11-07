@@ -41,7 +41,6 @@ from app.services.infrastructure.extension_host.management import (
     NativeFileStat,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
-    WorkspaceFileChange,
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_files.runtime import rename_entry_exclusive
@@ -119,14 +118,20 @@ def _validate_roots(resource: Path, content: bytes, roots: tuple[str, ...]) -> N
         raise ExtensionManagementError("配置中的有序工作区根与已准入视图不符，必须重新打开明确视图", "Unknown")
 
 
+def workspace_configuration_file(workspace_home_uri: str, workspace: ExtensionHostWorkspaceDTO) -> Path | None:
+    if len(workspace.folders) < 2:
+        return None
+    if str(UUID(workspace.id)) != workspace.id.lower():
+        raise ValueError("稳定工作区视图 ID 必须是规范 UUID")
+    return native_path(workspace_home_uri) / workspace.id / "workspace.code-workspace"
+
+
 def initialize_configuration_files(settings_uri: str, workspace_home_uri: str, workspace: ExtensionHostWorkspaceDTO) -> str | None:
     with native_file_errors():
         native_io_path(native_path(settings_uri).parent).mkdir(parents=True, exist_ok=True)
-        if len(workspace.folders) < 2:
+        resource = workspace_configuration_file(workspace_home_uri, workspace)
+        if resource is None:
             return None
-        if str(UUID(workspace.id)) != workspace.id.lower():
-            raise ValueError("稳定工作区视图 ID 必须是规范 UUID")
-        resource = native_path(workspace_home_uri) / workspace.id / "workspace.code-workspace"
         target = native_io_path(resource)
         target.parent.mkdir(parents=True, exist_ok=True)
         roots = tuple(folder.native_uri for folder in workspace.folders)
@@ -201,7 +206,7 @@ def _write_bytes(path: Path, content: bytes, options: ExtensionConfigurationWrit
 
 class ExtensionConfigurationFiles:
     def __init__(self, settings: ExtensionHostConfigurationResourceDTO, workspace: ExtensionHostWorkspaceDTO,
-                 watcher: WorkspaceFileWatchService, stopping: asyncio.Event) -> None:
+                 watcher: WorkspaceFileWatchService, stopping: asyncio.Event, *, lock: asyncio.Lock | None = None) -> None:
         resources = [settings]
         if workspace.configuration is not None:
             resources.append(workspace.configuration)
@@ -219,20 +224,15 @@ class ExtensionConfigurationFiles:
             self._changes[self._path_key(native)] = resource.resource_uri
         self._roots = tuple(dict.fromkeys(native_path(value).parent for value in self._files.values()))
         self._watcher, self._stopping = watcher, stopping
-        self._lock = asyncio.Lock()
-        # watcher 按 filter 对象身份共享；同一代际的订阅必须复用这个对象。
-        self._change_filter = self._accept_change
+        self._lock = lock if lock is not None else asyncio.Lock()
 
     @staticmethod
     def _path_key(path: Path) -> str:
         return os.path.normcase(os.path.abspath(path))
 
-    def _accept_change(self, change: WorkspaceFileChange) -> bool:
-        return self._path_key(Path(change.path)) in self._changes
-
     def _native(self, resource_uri: str, *, parent: bool = False) -> str:
         if self._stopping.is_set():
-            raise ValueError("配置资源所属宿主代际已停止")
+            raise ValueError("配置资源所属目标已停止")
         native = self._files.get(resource_uri)
         if native is None and parent:
             native = self._parents.get(resource_uri)
@@ -269,12 +269,12 @@ class ExtensionConfigurationFiles:
             pass
 
     async def events(self) -> AsyncGenerator[ExtensionConfigurationEventDTO, None]:
-        stream = self._watcher.subscribe_roots(self._roots, recursive=False, include_internal_paths=True,
-                                              change_filter=self._change_filter)
+        # 精确文件筛选留在订阅内；不同客户端共享同一直接父目录的原生监听。
+        stream = self._watcher.subscribe_roots(self._roots, recursive=False, include_internal_paths=True)
         pending = asyncio.create_task(anext(stream))
         stopped = asyncio.create_task(self._stopping.wait())
         initialized = asyncio.create_task(self._watcher.wait_until_ready(
-            self._roots, recursive=False, change_filter=self._change_filter,
+            self._roots, recursive=False,
         ))
         failure: BaseException | None = None
         try:
@@ -301,7 +301,7 @@ class ExtensionConfigurationFiles:
                     return
                 pending = asyncio.create_task(anext(stream))
                 changes = [ExtensionConfigurationChangeDTO(resource_uri=self._changes[self._path_key(Path(change.path))],
-                    kind=change.kind) for change in batch.changes]
+                    kind=change.kind) for change in batch.changes if self._path_key(Path(change.path)) in self._changes]
                 if changes or batch.overflow:
                     yield ExtensionConfigurationEventDTO(changes=changes, overflow=batch.overflow)
         except BaseException as error:

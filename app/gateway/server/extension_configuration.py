@@ -40,8 +40,13 @@ from app.gateway.server.workspace_proxy import (
 from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationEventDTO,
     ExtensionConfigurationFileRequest,
+    ExtensionConfigurationProfileFileRequest,
+    ExtensionConfigurationProfileViewRequest,
+    ExtensionConfigurationProfileWriteRequest,
     ExtensionConfigurationReadDTO,
     ExtensionConfigurationStatDTO,
+    ExtensionConfigurationTargetRequest,
+    ExtensionConfigurationViewDTO,
     ExtensionConfigurationViewRequest,
     ExtensionConfigurationWriteRequest,
 )
@@ -49,14 +54,15 @@ from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.sse import sse_responses
 
 router = APIRouter()
-ConfigurationResult = TypeVar("ConfigurationResult", ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO)
+ConfigurationResult = TypeVar("ConfigurationResult", ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO, ExtensionConfigurationViewDTO)
 
 
 def _require_access(request: Request, auth: GatewayAuthContext, access: UserAccessContext | None,
-                    route: GatewayManagementRoute, *, write: bool = False) -> None:
+                    route: GatewayManagementRoute, payload: ExtensionConfigurationTargetRequest, *, write: bool = False) -> None:
     check_management_route(request, route)
-    _check(request, auth, access, route.leases, capability="extension_host_manage")
-    require_federation_capability(request, auth, "configuration_read")
+    _check(request, auth, access, route.leases, capability="configuration_read")
+    if isinstance(payload, ExtensionConfigurationViewRequest):
+        _check(request, auth, access, route.leases, capability="extension_host_manage")
     if write:
         require_federation_capability(request, auth, "configuration_write")
     if access is not None:
@@ -65,19 +71,19 @@ def _require_access(request: Request, auth: GatewayAuthContext, access: UserAcce
             raise PermissionError("配置请求的用户访问租约已过期")
 
 
-async def _file_request(payload: ExtensionConfigurationFileRequest, request: Request,
-    auth: GatewayAuthContext, access: UserAccessContext | None, *, operation: Literal["stat", "read", "write"],
+async def _file_request(payload: ExtensionConfigurationTargetRequest, request: Request,
+    auth: GatewayAuthContext, access: UserAccessContext | None, *, operation: Literal["stat", "read", "write", "prepare"],
     response_type: type[APIResponse[ConfigurationResult]],
 ) -> APIResponse[ConfigurationResult] | Response:
     client_id = extension_client_identity(request, auth, access)
     request_id = get_request_id(request)
     try:
         with _installation_route(request, payload, auth) as route:
-            _require_access(request, auth, access, route, write=operation == "write")
+            _require_access(request, auth, access, route, payload, write=operation == "write")
             prefix = "api/gateway" if route.remote else "api/internal"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{prefix}/extension-configurations/{operation}",
-                headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=30)
-            _require_access(request, auth, access, route, write=operation == "write")
+                headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(exclude={"gateway_connection_id"}, exclude_none=True), timeout=30)
+            _require_access(request, auth, access, route, payload, write=operation == "write")
             if response.headers.get("X-Request-ID") != request_id:
                 raise ValueError("配置响应的 request_id 与原请求不一致")
             if not response.is_success:
@@ -86,8 +92,15 @@ async def _file_request(payload: ExtensionConfigurationFileRequest, request: Req
                     raise ValueError("配置错误响应不属于原请求")
                 return Response(response.content, status_code=response.status_code, media_type="application/json")
             result = response_type.model_validate_json(response.content)
-            if result.code != 0 or result.request_id != request_id or result.data is None or result.data.resource_uri != payload.resource_uri:
+            if result.code != 0 or result.request_id != request_id or result.data is None:
                 raise ValueError("配置响应不属于原具名资源或请求")
+            if isinstance(payload, (ExtensionConfigurationFileRequest, ExtensionConfigurationProfileFileRequest)):
+                if not isinstance(result.data, (ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO)) or result.data.resource_uri != payload.resource_uri:
+                    raise ValueError("配置响应不属于原具名资源")
+            elif (not isinstance(result.data, ExtensionConfigurationViewDTO)
+                or result.data.model_dump(include=set(ExtensionConfigurationTargetRequest.model_fields) - {"gateway_connection_id"})
+                != payload.model_dump(exclude={"gateway_connection_id"})):
+                raise ValueError("配置准备回执不属于原目标视图")
             return result
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
@@ -97,8 +110,16 @@ async def _file_request(payload: ExtensionConfigurationFileRequest, request: Req
         raise HTTPException(409, str(error)) from error
 
 
+@router.post("/api/gateway/extension-configurations/prepare", response_model=APIResponse[ExtensionConfigurationViewDTO])
+async def configuration_prepare(payload: ExtensionConfigurationTargetRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+) -> APIResponse[ExtensionConfigurationViewDTO] | Response:
+    return await _file_request(payload, request, auth, access, operation="prepare", response_type=APIResponse[ExtensionConfigurationViewDTO])
+
+
 @router.post("/api/gateway/extension-configurations/stat", response_model=APIResponse[ExtensionConfigurationStatDTO])
-async def configuration_stat(payload: ExtensionConfigurationFileRequest, request: Request,
+async def configuration_stat(payload: ExtensionConfigurationFileRequest | ExtensionConfigurationProfileFileRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> APIResponse[ExtensionConfigurationStatDTO] | Response:
@@ -106,7 +127,7 @@ async def configuration_stat(payload: ExtensionConfigurationFileRequest, request
 
 
 @router.post("/api/gateway/extension-configurations/read", response_model=APIResponse[ExtensionConfigurationReadDTO])
-async def configuration_read(payload: ExtensionConfigurationFileRequest, request: Request,
+async def configuration_read(payload: ExtensionConfigurationFileRequest | ExtensionConfigurationProfileFileRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> APIResponse[ExtensionConfigurationReadDTO] | Response:
@@ -114,7 +135,7 @@ async def configuration_read(payload: ExtensionConfigurationFileRequest, request
 
 
 @router.post("/api/gateway/extension-configurations/write", response_model=APIResponse[ExtensionConfigurationStatDTO])
-async def configuration_write(payload: ExtensionConfigurationWriteRequest, request: Request,
+async def configuration_write(payload: ExtensionConfigurationWriteRequest | ExtensionConfigurationProfileWriteRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> APIResponse[ExtensionConfigurationStatDTO] | Response:
@@ -123,14 +144,14 @@ async def configuration_write(payload: ExtensionConfigurationWriteRequest, reque
 
 class _ConfigurationStreamResponse(StreamingResponse):
     def __init__(self, body: UpstreamResponseBody, request: Request, auth: GatewayAuthContext,
-                 access: UserAccessContext | None, route: GatewayManagementRoute) -> None:
+                 access: UserAccessContext | None, route: GatewayManagementRoute, payload: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest) -> None:
         self._body = body
 
         async def generate():
             try:
                 async for chunk in body:
                     try:
-                        _require_access(request, auth, access, route)
+                        _require_access(request, auth, access, route, payload)
                     except (HTTPException, PermissionError, LookupError):
                         event = ExtensionConfigurationEventDTO(changes=[], overflow=False, error="配置读取权限、用户租约或目标路由已撤销")
                         yield f"\n\nevent: error\ndata: {event.model_dump_json()}\n\n".encode()
@@ -151,7 +172,7 @@ class _ConfigurationStreamResponse(StreamingResponse):
 @router.post("/api/gateway/extension-configurations/events", response_class=StreamingResponse,
     responses=sse_responses("精确目标配置变更", {name: ExtensionConfigurationEventDTO for name in ("ready", "changes", "error")},
                             models={"ExtensionConfigurationEventDTO": ExtensionConfigurationEventDTO}))
-async def configuration_events(payload: ExtensionConfigurationViewRequest, request: Request,
+async def configuration_events(payload: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
@@ -161,14 +182,14 @@ async def configuration_events(payload: ExtensionConfigurationViewRequest, reque
     handed_off = False
     try:
         route = references.enter_context(_installation_route(request, payload, auth, streaming=True))
-        _require_access(request, auth, access, route)
+        _require_access(request, auth, access, route, payload)
         prefix = "api/gateway" if route.remote else "api/internal"
         client = _http_client(request, streaming=True)
         upstream = client.build_request("POST", f"{route.base_url.rstrip('/')}/{prefix}/extension-configurations/events",
-            headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=None)
+            headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(exclude={"gateway_connection_id"}, exclude_none=True), timeout=None)
         async with asyncio.timeout(UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS):
             response = await client.send(upstream, stream=True)
-        _require_access(request, auth, access, route)
+        _require_access(request, auth, access, route, payload)
         if response.headers.get("X-Request-ID") != get_request_id(request):
             raise ValueError("配置事件流返回了不同 request_id")
         if not response.is_success:
@@ -179,7 +200,7 @@ async def configuration_events(payload: ExtensionConfigurationViewRequest, reque
             return Response(response.content, status_code=response.status_code, media_type="application/json")
         if response.headers.get("content-type", "").split(";", 1)[0].strip() != "text/event-stream":
             raise ValueError("配置事件流返回了错误媒体类型")
-        result = _ConfigurationStreamResponse(UpstreamResponseBody(response, on_close=references.close), request, auth, access, route)
+        result = _ConfigurationStreamResponse(UpstreamResponseBody(response, on_close=references.close), request, auth, access, route, payload)
         handed_off = True
         return result
     except PermissionError as error:

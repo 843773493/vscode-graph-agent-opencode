@@ -478,8 +478,9 @@ async def test_web_publication_freezes_native_descriptors_and_reads_without_furt
 
 
 @pytest.mark.parametrize("root_count", [0, 2], ids=["empty-view", "multi-root-view"])
+@pytest.mark.parametrize("host_bound", [False, True], ids=["standalone-settings", "web-host"])
 async def test_web_context_routes_configuration_to_target_python_without_node_runtime(
-    management_backends: ManagementBackends, vsix_factory, root_count: int,
+    management_backends: ManagementBackends, vsix_factory, root_count: int, host_bound: bool,
     network_scope: AsyncExitStack, serve_extension_application: Callable[[FastAPI], Awaitable[str]],
 ) -> None:
     case = management_backends
@@ -505,13 +506,13 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
         domain.registry.upsert(WorkspaceTarget(gateway_id=domain.gateway_id, workspace_id=mount.workspace_id,
             name=mount.workspace_root.name, root_path=str(mount.workspace_root), backend_url=backend_url,
             connection_kind="local", backend_id=owner.backend_id), activate=False)
-    installed = await owner.management.install(vsix_factory(case.workspace, "1.0.0", "web-config",
-        manifest_overrides={"browser": "./extension.js"}))
-    profile = installed.inventory.profile_id
-    [entry] = installed.inventory.extensions
     payload = {"protocol_version": 1, "gateway_id": domain.gateway_id, "backend_id": owner.backend_id,
-        "view_id": "web-configuration", "workspace_ids": list(registry.mounted_workspaces.workspace_ids) if root_count else [],
-        "profile_id": profile, "extension_keys": [entry.extension_key]}
+        "view_id": "web-configuration", "workspace_ids": list(registry.mounted_workspaces.workspace_ids) if root_count else []}
+    if host_bound:
+        installed = await owner.management.install(vsix_factory(case.workspace, "1.0.0", "web-config",
+            manifest_overrides={"browser": "./extension.js"}))
+        [entry] = installed.inventory.extensions
+        payload.update(profile_id=installed.inventory.profile_id, extension_keys=[entry.extension_key])
     node_calls: list[str] = []
 
     async def observe(request: httpx.Request) -> None:
@@ -521,15 +522,25 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
     domain.owner._client.event_hooks["request"].append(observe)
     client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10, trust_env=False, headers=domain.headers))
     endpoint = domain.url.replace("http://", "ws://") + "/api/gateway/extension-web-hosts/channel"
-    async with connect(endpoint, additional_headers=domain.headers, compression=None) as channel:
-        await channel.send(json.dumps(payload))
-        binding = json.loads(await channel.recv())
+    async with AsyncExitStack() as channels:
+        if host_bound:
+            channel = await channels.enter_async_context(connect(endpoint, additional_headers=domain.headers, compression=None))
+            await channel.send(json.dumps(payload))
+            binding = json.loads(await channel.recv())
+        else:
+            prepared = await client.post(domain.url + "/api/gateway/extension-configurations/prepare", json=payload,
+                headers={"X-Request-ID": "settings-prepare"})
+            assert prepared.status_code == 200, prepared.text
+            assert prepared.headers["X-Request-ID"] == prepared.json()["request_id"] == "settings-prepare"
+            binding = prepared.json()["data"]
+            assert owner.active == () and "generation" not in binding
         context = binding["context"]
         assert set(context) == {"os", "remote_settings", "workspace"}
         assert [folder["workspace_id"] for folder in context["workspace"]["folders"]] == payload["workspace_ids"]
         assert (context["workspace"]["configuration"] is not None) == bool(root_count)
         assert node_calls == ["/management"]
-        request = {name: binding[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation")}
+        request = {name: binding[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids")}
+        request.update({"generation": binding["generation"]} if host_bound else {"profile_id": binding["profile_id"]})
         settings_uri = context["remote_settings"]["resource_uri"]
         resources = [context["remote_settings"]]
         if context["workspace"]["configuration"] is not None:
@@ -577,10 +588,12 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
                 await asyncio.gather(watching, return_exceptions=True)
         assert node_calls == ["/management"], "配置 I/O 和监听不得重新请求 Node"
         assert not (owner._home / "state/backend/extension-hosts").exists()
+    if not host_bound:
+        owner.close_admission()
     rejected = await client.post(domain.url + "/api/gateway/extension-configurations/read",
         json={**request, "resource_uri": settings_uri})
     assert rejected.status_code == 409 and "content_base64" not in rejected.text
-    (case.context.artifacts_dir / f"web-context-{root_count}.json").write_text(json.dumps({
+    (case.context.artifacts_dir / f"web-context-{root_count}-{host_bound}.json").write_text(json.dumps({
         "binding": binding, "writes": receipts, "events": events, "node_calls": node_calls,
         "after_close_status": rejected.status_code}, ensure_ascii=False, indent=2) + "\n")
 
@@ -1260,7 +1273,7 @@ async def test_configuration_uses_original_session_view_with_persistent_manageme
     async with owner.connect(gateway_id="gateway_" + uuid4().hex, expected_backend_id=owner.backend_id,
             client_id="configuration-test", view_id="configuration", workspace_ids=registry.mounted_workspaces.workspace_ids) as connection:
         identity = connection.identity
-        files = owner.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
+        files = await owner.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
             gateway_id=identity.gateway_id, backend_id=identity.backend_id, workspace_ids=list(identity.workspace_ids),
             view_id=identity.view_id, generation=identity.generation), client_id=identity.client_id)
         initialization = connection.initialization
@@ -1300,7 +1313,7 @@ console.log(JSON.stringify({type: 1, ctime: stat.birthtime.getTime(), mtime: sta
                     shared = other.initialization.environment.remote_settings
                     assert shared == resource
                     other_identity = other.identity
-                    other_files = sibling.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
+                    other_files = await sibling.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
                         gateway_id=other_identity.gateway_id, backend_id=other_identity.backend_id,
                         workspace_ids=list(other_identity.workspace_ids), view_id=other_identity.view_id,
                         generation=other_identity.generation), client_id=other_identity.client_id)

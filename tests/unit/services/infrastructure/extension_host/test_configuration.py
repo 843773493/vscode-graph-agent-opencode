@@ -15,6 +15,8 @@ from uuid import uuid4
 import pytest
 
 from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationProfileViewRequest,
+    ExtensionConfigurationTargetRequest,
     ExtensionConfigurationViewRequest,
     ExtensionConfigurationWriteOptions,
 )
@@ -118,9 +120,9 @@ def blocked_initialization(case: Case, monkeypatch: pytest.MonkeyPatch) -> Itera
         release.set()
 
 
-def _files(owner: NodeExtensionHostOwner, connection: NodeHostConnection) -> ExtensionConfigurationFiles:
+async def _files(owner: NodeExtensionHostOwner, connection: NodeHostConnection) -> ExtensionConfigurationFiles:
     identity = connection.identity
-    return owner.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
+    return await owner.configuration_files(ExtensionConfigurationViewRequest(protocol_version=1,
         gateway_id=identity.gateway_id, backend_id=identity.backend_id, workspace_ids=list(identity.workspace_ids),
         view_id=identity.view_id, generation=identity.generation), client_id=identity.client_id)
 
@@ -135,7 +137,7 @@ async def test_stable_view_reuses_jsonc_bytes_with_relative_roots(case: Case, wr
                    for folder in first.initialization.workspace.folders]
         content = ("\ufeff/* 保留块注释 */\n{\n// 保留行注释\n\"folders\": " + json.dumps(folders)
             + ',\n"settings": {"probe.saved": "字节不变", "probe.large": 1e400, "probe.escape": "\\ud800",},\n}\n').encode()
-        files = _files(case.owner, first)
+        files = await _files(case.owner, first)
         await files.write(resource.resource_uri, b64encode(content).decode(), write_options)
         assert b64decode((await files.read(resource.resource_uri)).content_base64) == content
     async with case.owner.connect(gateway_id=GATEWAY, expected_backend_id=case.owner.backend_id,
@@ -190,7 +192,7 @@ async def test_profile_files_are_shared_across_backend_owners(case: Case, siblin
         resources = [connection.initialization.environment.remote_settings for connection in connections]
         assert resources[0].native_uri == resources[1].native_uri
         assert resources[0].resource_uri != resources[1].resource_uri
-        files = [_files(owner, connection) for owner, connection in zip((case.owner, sibling_owner), connections, strict=True)]
+        files = [await _files(owner, connection) for owner, connection in zip((case.owner, sibling_owner), connections, strict=True)]
         content = b'{"probe.shared": true}\n'
         first = await files[0].write(resources[0].resource_uri, b64encode(content).decode(), write_options)
         assert b64decode((await files[1].read(resources[1].resource_uri)).content_base64) == content
@@ -202,7 +204,7 @@ async def test_file_write_flags_missing_resources_and_permissions(case: Case, wr
     async with case.owner.connect(gateway_id=GATEWAY, expected_backend_id=case.owner.backend_id,
             client_id="flags", view_id="single", workspace_ids=case.workspace_ids[:1]) as connection:
         resource = connection.initialization.environment.remote_settings
-        files, path = _files(case.owner, connection), native_path(resource.native_uri)
+        files, path = await _files(case.owner, connection), native_path(resource.native_uri)
         for operation in (files.stat, files.read):
             with pytest.raises(ExtensionManagementError) as caught:
                 await operation(resource.resource_uri)
@@ -235,7 +237,7 @@ async def test_owner_close_settles_original_write_and_rejects_queued_operations(
     started, release, calls = blocked_write
     async with case.owner.connect(gateway_id=GATEWAY, expected_backend_id=case.owner.backend_id,
             client_id="write", view_id="single", workspace_ids=case.workspace_ids[:1]) as connection:
-        files = _files(case.owner, connection)
+        files = await _files(case.owner, connection)
         resource = connection.initialization.environment.remote_settings
         writing = asyncio.create_task(files.write(resource.resource_uri, "eA==", write_options))
         pending: list[asyncio.Task[object]] = []
@@ -299,7 +301,7 @@ async def test_owner_close_waits_for_initial_view_publication(case: Case,
 async def test_configuration_watchers_filter_share_and_release(case: Case, write_options: ExtensionConfigurationWriteOptions, ending: str) -> None:
     async with case.owner.connect(gateway_id=GATEWAY, expected_backend_id=case.owner.backend_id,
             client_id="watch", view_id="single", workspace_ids=case.workspace_ids[:1]) as connection:
-        files = _files(case.owner, connection)
+        files = await _files(case.owner, connection)
         resource = connection.initialization.environment.remote_settings
         first, second = files.events(), files.events()
         try:
@@ -329,3 +331,94 @@ async def test_configuration_watchers_filter_share_and_release(case: Case, write
         finally:
             await first.aclose()
             await second.aclose()
+
+
+async def test_standalone_prepare_reuses_environment_and_never_recreates_deleted_view(case: Case,
+    write_options: ExtensionConfigurationWriteOptions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = ExtensionManagementClient.environment
+    calls = []
+
+    async def environment(management: ExtensionManagementClient):
+        calls.append(management.backend_id)
+        return await original(management)
+
+    monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
+    case.owner.runtime = None
+    target = ExtensionConfigurationTargetRequest(protocol_version=1, gateway_id=GATEWAY,
+        backend_id=case.owner.backend_id, workspace_ids=list(case.workspace_ids), view_id="settings")
+    view = await case.owner.prepare_configuration(target, client_id="settings-client")
+    assert view.context.workspace.configuration is not None
+    resource = view.context.workspace.configuration
+    path = native_path(resource.native_uri)
+    content = path.read_bytes().replace(b'"folders"', b'/* user comment */ "folders"')
+    path.write_bytes(content)
+    assert await case.owner.prepare_configuration(target, client_id="another-client") == view
+    assert path.read_bytes() == content
+    request = ExtensionConfigurationProfileViewRequest(**target.model_dump(), profile_id=view.profile_id)
+    files = await case.owner.configuration_files(request, client_id="settings-client")
+    assert b64decode((await files.read(resource.resource_uri)).content_base64) == content
+    path.unlink()
+    for operation in (files.stat, files.read):
+        with pytest.raises(ExtensionManagementError) as failure:
+            await operation(resource.resource_uri)
+        assert failure.value.code == "EntryNotFound" and not path.exists()
+    other = await case.owner.configuration_files(request, client_id="another-client")
+    assert not path.exists()
+    await other.write(view.context.remote_settings.resource_uri, "eA==", write_options)
+    assert calls == [case.owner.backend_id] and not case.hosts and case.owner.active == ()
+
+
+async def test_standalone_prepare_shutdown_waits_for_original_initialization_worker(case: Case,
+    blocked_initialization: tuple[threading.Event, threading.Event],
+) -> None:
+    started, release = blocked_initialization
+    target = ExtensionConfigurationTargetRequest(protocol_version=1, gateway_id=GATEWAY,
+        backend_id=case.owner.backend_id, workspace_ids=list(case.workspace_ids), view_id="settings")
+    preparing = asyncio.create_task(case.owner.prepare_configuration(target, client_id="settings-client"))
+    closing = None
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        closing = asyncio.create_task(case.owner.close())
+        await asyncio.sleep(0)
+        assert case.owner._admission_closed and not closing.done()
+        release.set()
+        with pytest.raises(ValueError, match="正在关闭"):
+            await preparing
+        await closing
+        assert case.owner.drained and case.owner.active == ()
+    finally:
+        release.set()
+        await asyncio.gather(preparing, *([closing] if closing else []), return_exceptions=True)
+
+
+async def test_independent_settings_clients_share_native_watcher_without_sharing_session(case: Case,
+    write_options: ExtensionConfigurationWriteOptions,
+) -> None:
+    target = ExtensionConfigurationTargetRequest(protocol_version=1, gateway_id=GATEWAY,
+        backend_id=case.owner.backend_id, workspace_ids=list(case.workspace_ids[:1]), view_id="settings")
+    view = await case.owner.prepare_configuration(target, client_id="first")
+    request = ExtensionConfigurationProfileViewRequest(**target.model_dump(), profile_id=view.profile_id)
+    first_files = await case.owner.configuration_files(request, client_id="first")
+    second_files = await case.owner.configuration_files(request, client_id="second")
+    assert first_files is not second_files and case.owner.active == ()
+    first, second = first_files.events(), second_files.events()
+    try:
+        ready = await asyncio.wait_for(asyncio.gather(anext(first), anext(second)), 3)
+        assert all(event.overflow for event in ready)
+        watchers = case.owner._configuration_watch._watchers
+        assert len(watchers) == 1
+        watcher = next(iter(watchers.values()))
+        assert len(watcher.subscribers) == 2
+        (case.profile / "unrelated.json").write_text("{}")
+        uri = view.context.remote_settings.resource_uri
+        await first_files.write(uri, "eA==", write_options)
+        events = await asyncio.wait_for(asyncio.gather(anext(first), anext(second)), 3)
+        assert all([change.resource_uri for change in event.changes] == [uri] for event in events)
+        await first.aclose()
+        assert len(watcher.subscribers) == 1 and not watcher.task.done()
+        await second.aclose()
+        assert watcher.task.done() and not watchers
+    finally:
+        await first.aclose()
+        await second.aclose()

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field, model_validator
 
+from app.schemas.gateway.extension_configuration import ExtensionWebHostContextDTO
 from app.schemas.gateway.extension_host import (
-    ExtensionHostConfigurationResourceDTO,
-    ExtensionHostWorkspaceDTO,
     _ExtensionHostViewRequest,
-    _HostValue,
     validate_extension_view,
 )
 from app.schemas.gateway.extension_installation import ProfileExtensionInventory
@@ -29,12 +27,6 @@ class _WebHostBinding(_ExtensionHostViewRequest):
 
 class ExtensionWebHostOpenRequest(_WebHostBinding):
     gateway_connection_id: str | None = Field(default=None, min_length=1)
-
-
-class ExtensionWebHostContextDTO(_HostValue):
-    os: Literal["linux", "windows", "macos"]
-    remote_settings: ExtensionHostConfigurationResourceDTO
-    workspace: ExtensionHostWorkspaceDTO
 
 
 class ExtensionWebHostConnectionDTO(_WebHostBinding):

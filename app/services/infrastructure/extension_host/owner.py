@@ -17,7 +17,11 @@ from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationProfileViewRequest,
+    ExtensionConfigurationTargetRequest,
+    ExtensionConfigurationViewDTO,
     ExtensionConfigurationViewRequest,
+    ExtensionWebHostContextDTO,
 )
 from app.schemas.gateway.extension_host import (
     ExtensionHostConfigurationResourceDTO,
@@ -33,7 +37,6 @@ from app.schemas.gateway.extension_installation import (
     ProfileExtensionInventory,
 )
 from app.schemas.gateway.extension_web import (
-    ExtensionWebHostContextDTO,
     ExtensionWebHostOpenRequest,
 )
 from app.schemas.gateway.mcp_definitions import (
@@ -45,6 +48,7 @@ from app.services.infrastructure.config.source_uri import extension_configuratio
 from app.services.infrastructure.extension_host.configuration import (
     ExtensionConfigurationFiles,
     initialize_configuration_files,
+    workspace_configuration_file,
 )
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
@@ -203,6 +207,9 @@ class NodeExtensionHostOwner:
         self._management = management
         self._configuration_watch = WorkspaceFileWatchService(workspace_root=home / "state/backend/extension-management" / backend_id)
         self._configuration_closed = True
+        self._configuration_lock = asyncio.Lock()
+        self._configuration_stopping = asyncio.Event()
+        self._configuration_environment: NativeManagementEnvironment | None = None
 
     @property
     def active(self) -> tuple[NodeHostIdentity, ...]:
@@ -210,6 +217,7 @@ class NodeExtensionHostOwner:
 
     def close_admission(self) -> None:
         self._admission_closed = True
+        self._configuration_stopping.set()
         for session in self._sessions.values():
             if session.mcp_definitions is not None:
                 session.mcp_definitions.close()
@@ -228,7 +236,42 @@ class NodeExtensionHostOwner:
     def drained(self) -> bool:
         return not self._sessions and self._configuration_closed and (self._management is None or self._management.drained)
 
-    def configuration_files(self, request: ExtensionConfigurationViewRequest, *, client_id: str) -> ExtensionConfigurationFiles:
+    def _check_configuration_target(self, request: ExtensionConfigurationTargetRequest, client_id: str) -> None:
+        self.management_target(request.backend_id, require_management=True)
+        if not client_id.strip():
+            raise ValueError("配置请求必须绑定已认证客户端")
+        for workspace_id in request.workspace_ids:
+            self._mounts.resolve(workspace_id)
+
+    async def _native_configuration_environment(self) -> NativeManagementEnvironment:
+        # 原安装 owner 的 profile 描述在本客户端生命周期内不变；文件操作不反复请求 Node。
+        async with self._configuration_lock:
+            if self._configuration_environment is None:
+                self._configuration_environment = await self.management.environment()
+            return self._configuration_environment
+
+    async def prepare_configuration(self, request: ExtensionConfigurationTargetRequest, *, client_id: str) -> ExtensionConfigurationViewDTO:
+        self._check_configuration_target(request, client_id)
+        environment = await self._native_configuration_environment()
+        async with self._configuration_lock:
+            self._check_configuration_target(request, client_id)
+            self._configuration_closed = False
+            context = await self._configuration_context(request, environment, initialize=True)
+            self._check_configuration_target(request, client_id)
+        return ExtensionConfigurationViewDTO(**request.model_dump(exclude={"gateway_connection_id"}),
+            profile_id=environment.profile_id, context=context)
+
+    async def configuration_files(self, request: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest, *, client_id: str) -> ExtensionConfigurationFiles:
+        if isinstance(request, ExtensionConfigurationProfileViewRequest):
+            self._check_configuration_target(request, client_id)
+            environment = await self._native_configuration_environment()
+            if request.profile_id != environment.profile_id:
+                raise ValueError("配置请求不属于目标安装域的明确 profile")
+            context = await self._configuration_context(request, environment, initialize=False)
+            self._check_configuration_target(request, client_id)
+            self._configuration_closed = False
+            return ExtensionConfigurationFiles(context.remote_settings, context.workspace, self._configuration_watch,
+                self._configuration_stopping, lock=self._configuration_lock)
         session = self._sessions.get(request.generation)
         if (self._admission_closed or session is None or session.closed or session.stopping.is_set()
             or session.identity != NodeHostIdentity(request.gateway_id, request.backend_id, client_id,
@@ -394,16 +437,24 @@ class NodeExtensionHostOwner:
         self._sessions.pop(session.identity.generation, None)
 
     async def _initialization(self, identity: NodeHostIdentity, directory: Path) -> ExtensionHostInitializationDTO:
-        native_environment = await self.management.environment()
+        native_environment = await self._native_configuration_environment()
+        context = await self._configuration_context(identity, native_environment, initialize=True)
         environment = ExtensionHostEnvironmentDTO(**native_environment.model_dump(exclude={"settings_native_uri", "untitled_workspaces_home_uri"}),
-            remote_settings=ExtensionHostConfigurationResourceDTO(native_uri=native_environment.settings_native_uri,
-                resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id, backend_id=identity.backend_id,
-                                                        profile_id=native_environment.profile_id)))
-        workspace = await self._workspace(identity, native_environment)
-        return ExtensionHostInitializationDTO(os="windows" if sys.platform == "win32" else "linux",
-            parent_pid=os.getpid(), environment=environment, logs_location_uri=directory.as_uri(), workspace=workspace)
+            remote_settings=context.remote_settings)
+        return ExtensionHostInitializationDTO(os=context.os,
+            parent_pid=os.getpid(), environment=environment, logs_location_uri=directory.as_uri(), workspace=context.workspace)
 
-    async def _workspace(self, identity: NodeHostIdentity, native_environment: NativeManagementEnvironment) -> ExtensionHostWorkspaceDTO:
+    async def _configuration_context(self, identity: NodeHostIdentity | ExtensionConfigurationTargetRequest, environment: NativeManagementEnvironment,
+                                     *, initialize: bool) -> ExtensionWebHostContextDTO:
+        settings = ExtensionHostConfigurationResourceDTO(native_uri=environment.settings_native_uri,
+            resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id, backend_id=identity.backend_id,
+                                                    profile_id=environment.profile_id))
+        workspace = await self._workspace(identity, environment, initialize=initialize)
+        return ExtensionWebHostContextDTO(os="windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux",
+            remote_settings=settings, workspace=workspace)
+
+    async def _workspace(self, identity: NodeHostIdentity | ExtensionConfigurationTargetRequest, native_environment: NativeManagementEnvironment,
+                         *, initialize: bool = True) -> ExtensionHostWorkspaceDTO:
         folders = []
         for workspace_id in identity.workspace_ids:
             mount = self._mounts.resolve(workspace_id)
@@ -415,8 +466,12 @@ class NodeExtensionHostOwner:
         view = json.dumps([identity.gateway_id, identity.backend_id, identity.view_id, identity.workspace_ids], separators=(",", ":"))
         workspace = ExtensionHostWorkspaceDTO(id=str(uuid5(NAMESPACE_URL, view)),
             name=", ".join(folder.name for folder in folders) or "空工作区", folders=folders)
-        location = await run_sync_shielded(initialize_configuration_files, native_environment.settings_native_uri,
-            native_environment.untitled_workspaces_home_uri, workspace)
+        if initialize:
+            location = await run_sync_shielded(initialize_configuration_files, native_environment.settings_native_uri,
+                native_environment.untitled_workspaces_home_uri, workspace)
+        else:
+            path = workspace_configuration_file(native_environment.untitled_workspaces_home_uri, workspace)
+            location = path.as_uri() if path is not None else None
         if location is not None:
             workspace = workspace.model_copy(update={"configuration": ExtensionHostConfigurationResourceDTO(
                 native_uri=location, resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id,
@@ -523,16 +578,12 @@ class NodeExtensionHostOwner:
             async with session._lock:
                 if self._admission_closed or session.stopping.is_set():
                     raise RuntimeError("Web 宿主初始化期间 Backend 已撤销准入")
-                settings = ExtensionHostConfigurationResourceDTO(native_uri=publication.environment.settings_native_uri,
-                    resource_uri=extension_configuration_uri(gateway_id=identity.gateway_id, backend_id=identity.backend_id,
-                                                            profile_id=profile_id))
-                workspace = await self._workspace(identity, publication.environment)
+                context = await self._configuration_context(identity, publication.environment, initialize=True)
                 if self._admission_closed or session.stopping.is_set():
                     raise RuntimeError("Web 宿主初始化期间 Backend 已撤销准入")
                 self._configuration_closed = False
-                session.configuration = ExtensionConfigurationFiles(settings, workspace, self._configuration_watch, session.stopping)
-                context = ExtensionWebHostContextDTO(os="windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux",
-                    remote_settings=settings, workspace=workspace)
+                session.configuration = ExtensionConfigurationFiles(context.remote_settings, context.workspace,
+                    self._configuration_watch, session.stopping)
             yield WebHostConnection(identity, snapshot, context, session.stopping, session.transport_settled)
         finally:
             session.stopping.set()
@@ -557,5 +608,6 @@ class NodeExtensionHostOwner:
         await run_cleanup_shielded(close_all)
 
     async def _close_configuration(self) -> None:
-        await self._configuration_watch.shutdown()
-        self._configuration_closed = True
+        async with self._configuration_lock:
+            await self._configuration_watch.shutdown()
+            self._configuration_closed = True

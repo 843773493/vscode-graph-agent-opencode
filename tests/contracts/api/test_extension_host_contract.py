@@ -12,6 +12,17 @@ from pydantic import ValidationError
 from app.core.resource_uri import resource_display_uri
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import assert_public_schema
+from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationFileRequest,
+    ExtensionConfigurationProfileFileRequest,
+    ExtensionConfigurationProfileViewRequest,
+    ExtensionConfigurationProfileWriteRequest,
+    ExtensionConfigurationTargetRequest,
+    ExtensionConfigurationViewDTO,
+    ExtensionConfigurationViewRequest,
+    ExtensionConfigurationWriteRequest,
+    ExtensionWebHostContextDTO,
+)
 from app.schemas.gateway.extension_host import (
     ExtensionHostConfigurationResourceDTO,
     ExtensionHostConnectionDTO,
@@ -27,7 +38,6 @@ from app.schemas.gateway.extension_installation import (
 )
 from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
-    ExtensionWebHostContextDTO,
 )
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 
@@ -145,3 +155,32 @@ def test_initialization_rejects_view_and_locator_mismatch(host_binding: Extensio
         payload["initialization"]["workspace"]["folders"] = folders[:1]
     with pytest.raises(ValidationError):
         ExtensionHostConnectionDTO.model_validate(payload)
+
+
+@pytest.mark.parametrize("host_bound", [False, True])
+def test_configuration_proto_preserves_distinct_settings_and_host_ownership(host_binding: ExtensionHostConnectionDTO, host_bound: bool) -> None:
+    for model in (ExtensionConfigurationTargetRequest, ExtensionConfigurationViewDTO, ExtensionConfigurationViewRequest,
+                  ExtensionConfigurationFileRequest,
+    ExtensionConfigurationProfileFileRequest,
+    ExtensionConfigurationProfileViewRequest,
+    ExtensionConfigurationProfileWriteRequest, ExtensionConfigurationWriteRequest):
+        assert_public_schema(model.model_json_schema(), public_pb2.DESCRIPTOR.message_types_by_name[model.__name__])
+    target = host_binding.model_dump(include={"protocol_version", "gateway_id", "backend_id", "workspace_ids", "view_id"})
+    context = ExtensionWebHostContextDTO(os=host_binding.initialization.os,
+        workspace=host_binding.initialization.workspace, remote_settings=host_binding.initialization.environment.remote_settings)
+    view = ExtensionConfigurationViewDTO(**target, profile_id=host_binding.initialization.environment.profile_id, context=context)
+    binding = {"generation": host_binding.generation} if host_bound else {"profile_id": view.profile_id}
+    request_type = ExtensionConfigurationFileRequest if host_bound else ExtensionConfigurationProfileFileRequest
+    request = request_type.model_validate({**target, **binding, "resource_uri": context.remote_settings.resource_uri})
+    for original in (view, request):
+        message = getattr(public_pb2, type(original).__name__)()
+        json_format.ParseDict(original.model_dump(mode="json", exclude_none=True), message)
+        restored = type(original).model_validate(json_format.MessageToDict(message, preserving_proto_field_name=True,
+            always_print_fields_with_no_presence=True))
+        assert restored == original
+    encoded = getattr(public_pb2, request_type.__name__)()
+    json_format.ParseDict(request.model_dump(mode="json", exclude_none=True), encoded)
+    assert set(encoded.DESCRIPTOR.fields_by_name) & {"generation", "profile_id"} == ({"generation"} if host_bound else {"profile_id"})
+    for invalid in ({}, {"generation": "host", "profile_id": view.profile_id}):
+        with pytest.raises(ValidationError):
+            (ExtensionConfigurationViewRequest if host_bound else ExtensionConfigurationProfileViewRequest).model_validate({**target, **invalid})
