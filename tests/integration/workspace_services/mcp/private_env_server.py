@@ -28,15 +28,18 @@ def main() -> None:
                 "serverInfo": {"name": "private-env-artifact", "version": "1.0.0"}}
         elif method == "tools/list":
             result = {"tools": [{"name": "private_env_probe", "description": "验证实际进程获得私有 env，原值不进入回执",
-                "inputSchema": {"type": "object", "properties": {"proof": {"type": "string"}},
+                "inputSchema": {"type": "object", "properties": {"proof": {"type": "string"}, "include_inputs": {"type": "boolean"}},
                     "required": ["proof"], "additionalProperties": False}}]}
         elif method == "tools/call":
             if request["params"]["name"] != "private_env_probe":
                 raise ValueError("测试制品没有此工具")
             proof = request["params"]["arguments"]["proof"]
             record("called", proof)
-            result = {"content": [{"type": "text", "text": json.dumps({
-                "proof": proof, "secret_digest": digest, "prefix": sys.prefix})}]}
+            observed: dict[str, object] = {"proof": proof, "secret_digest": digest, "prefix": sys.prefix}
+            if request["params"]["arguments"].get("include_inputs"):
+                observed.update({"arguments": sys.argv[1:], "environment": {key: os.environ.get(key)
+                    for key in ("MCP_PLAIN_VALUE", "MCP_EMPTY_VALUE", "MCP_SKIPPED_VALUE")}})
+            result = {"content": [{"type": "text", "text": json.dumps(observed)}]}
         elif method == "ping":
             result = {}
         else:

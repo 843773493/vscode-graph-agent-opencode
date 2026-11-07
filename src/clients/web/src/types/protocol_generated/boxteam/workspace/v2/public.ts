@@ -798,12 +798,27 @@ export interface McpCandidateVariantRefDTO {
   digest: string;
 }
 
+/** 原候选解析器提供的工作区运行输入；秘密值仅经私有写入入口提交。 */
+export interface McpCandidateInputDTO {
+  key: string;
+  description?: string | undefined;
+  is_required: boolean;
+  format: string;
+  default_value?: any | undefined;
+  choices: Array<any> | undefined;
+  is_secret: boolean;
+  is_repeated: boolean;
+  can_skip: boolean;
+}
+
 export interface McpCandidateVariantDTO {
   ref: McpCandidateVariantRefDTO | undefined;
   transport: string;
   registry_type?: string | undefined;
   identifier?: string | undefined;
   version?: string | undefined;
+  configuration_inputs: McpCandidateInputDTO[];
+  configuration_unavailable_reason?: string | undefined;
 }
 
 export interface McpCandidateInspectRequestDTO {
@@ -8988,8 +9003,95 @@ export const McpCandidateVariantRefDTO: MessageFns<McpCandidateVariantRefDTO> = 
   },
 };
 
+function createBaseMcpCandidateInputDTO(): McpCandidateInputDTO {
+  return {
+    key: "",
+    description: undefined,
+    is_required: false,
+    format: "",
+    default_value: undefined,
+    choices: undefined,
+    is_secret: false,
+    is_repeated: false,
+    can_skip: false,
+  };
+}
+
+export const McpCandidateInputDTO: MessageFns<McpCandidateInputDTO> = {
+  fromJSON(object: any): McpCandidateInputDTO {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
+      is_required: isSet(object.is_required) ? globalThis.Boolean(object.is_required) : false,
+      format: isSet(object.format) ? globalThis.String(object.format) : "",
+      default_value: isSet(object?.default_value) ? object.default_value : undefined,
+      choices: globalThis.Array.isArray(object.choices) ? [...object.choices] : undefined,
+      is_secret: isSet(object.is_secret) ? globalThis.Boolean(object.is_secret) : false,
+      is_repeated: isSet(object.is_repeated) ? globalThis.Boolean(object.is_repeated) : false,
+      can_skip: isSet(object.can_skip) ? globalThis.Boolean(object.can_skip) : false,
+    };
+  },
+
+  toJSON(message: McpCandidateInputDTO): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.description !== undefined) {
+      obj.description = message.description;
+    }
+    if (message.is_required !== false) {
+      obj.is_required = message.is_required;
+    }
+    if (message.format !== "") {
+      obj.format = message.format;
+    }
+    if (message.default_value !== undefined) {
+      obj.default_value = message.default_value;
+    }
+    if (message.choices !== undefined) {
+      obj.choices = message.choices;
+    }
+    if (message.is_secret !== false) {
+      obj.is_secret = message.is_secret;
+    }
+    if (message.is_repeated !== false) {
+      obj.is_repeated = message.is_repeated;
+    }
+    if (message.can_skip !== false) {
+      obj.can_skip = message.can_skip;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateInputDTO>, I>>(base?: I): McpCandidateInputDTO {
+    return McpCandidateInputDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateInputDTO>, I>>(object: I): McpCandidateInputDTO {
+    const message = createBaseMcpCandidateInputDTO();
+    message.key = object.key ?? "";
+    message.description = object.description ?? undefined;
+    message.is_required = object.is_required ?? false;
+    message.format = object.format ?? "";
+    message.default_value = object.default_value ?? undefined;
+    message.choices = object.choices ?? undefined;
+    message.is_secret = object.is_secret ?? false;
+    message.is_repeated = object.is_repeated ?? false;
+    message.can_skip = object.can_skip ?? false;
+    return message;
+  },
+};
+
 function createBaseMcpCandidateVariantDTO(): McpCandidateVariantDTO {
-  return { ref: undefined, transport: "", registry_type: undefined, identifier: undefined, version: undefined };
+  return {
+    ref: undefined,
+    transport: "",
+    registry_type: undefined,
+    identifier: undefined,
+    version: undefined,
+    configuration_inputs: [],
+    configuration_unavailable_reason: undefined,
+  };
 }
 
 export const McpCandidateVariantDTO: MessageFns<McpCandidateVariantDTO> = {
@@ -9000,6 +9102,12 @@ export const McpCandidateVariantDTO: MessageFns<McpCandidateVariantDTO> = {
       registry_type: isSet(object.registry_type) ? globalThis.String(object.registry_type) : undefined,
       identifier: isSet(object.identifier) ? globalThis.String(object.identifier) : undefined,
       version: isSet(object.version) ? globalThis.String(object.version) : undefined,
+      configuration_inputs: globalThis.Array.isArray(object?.configuration_inputs)
+        ? object.configuration_inputs.map((e: any) => McpCandidateInputDTO.fromJSON(e))
+        : [],
+      configuration_unavailable_reason: isSet(object.configuration_unavailable_reason)
+        ? globalThis.String(object.configuration_unavailable_reason)
+        : undefined,
     };
   },
 
@@ -9020,6 +9128,12 @@ export const McpCandidateVariantDTO: MessageFns<McpCandidateVariantDTO> = {
     if (message.version !== undefined) {
       obj.version = message.version;
     }
+    if (message.configuration_inputs?.length) {
+      obj.configuration_inputs = message.configuration_inputs.map((e) => McpCandidateInputDTO.toJSON(e));
+    }
+    if (message.configuration_unavailable_reason !== undefined) {
+      obj.configuration_unavailable_reason = message.configuration_unavailable_reason;
+    }
     return obj;
   },
 
@@ -9035,6 +9149,8 @@ export const McpCandidateVariantDTO: MessageFns<McpCandidateVariantDTO> = {
     message.registry_type = object.registry_type ?? undefined;
     message.identifier = object.identifier ?? undefined;
     message.version = object.version ?? undefined;
+    message.configuration_inputs = object.configuration_inputs?.map((e) => McpCandidateInputDTO.fromPartial(e)) || [];
+    message.configuration_unavailable_reason = object.configuration_unavailable_reason ?? undefined;
     return message;
   },
 };

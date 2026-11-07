@@ -790,12 +790,27 @@ message McpCandidateVariantRefDTO {
   string digest = 3;
 }
 
+// 原候选解析器提供的工作区运行输入；秘密值仅经私有写入入口提交。
+message McpCandidateInputDTO {
+  string key = 1;
+  optional string description = 2;
+  bool is_required = 3;
+  string format = 4;
+  optional google.protobuf.Value default_value = 5;
+  google.protobuf.ListValue choices = 6;
+  bool is_secret = 7;
+  bool is_repeated = 8;
+  bool can_skip = 9;
+}
+
 message McpCandidateVariantDTO {
   McpCandidateVariantRefDTO ref = 1;
   string transport = 2;
   optional string registry_type = 3;
   optional string identifier = 4;
   optional string version = 5;
+  repeated McpCandidateInputDTO configuration_inputs = 6;
+  optional string configuration_unavailable_reason = 7;
 }
 
 message McpCandidateInspectRequestDTO {

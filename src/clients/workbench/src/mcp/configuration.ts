@@ -1,12 +1,12 @@
-import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationTokenSource, type CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import type { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Severity, type INotificationHandle, type INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import { getConfigSourceDocument } from '../../../web/src/api/configSources.js';
-import { draftMcpCandidateConfiguration, planMcpCandidateConfiguration, saveMcpCandidateConfiguration,
+import { draftMcpCandidateConfiguration, planMcpCandidateConfiguration, saveMcpCandidateConfiguration, writeMcpPrivateEnv,
   type McpInstallationRequestTarget } from '../../../web/src/api/mcpConnections.js';
-import type { ConfigSourceDocumentDTO, McpCandidateConfigurationRequestDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { ConfigSourceDocumentDTO, McpCandidateConfigurationRequestDTO, McpCandidateInputDTO, McpPrivateEnvRefDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { PublishedMcpArtifact } from './installation.js';
 import { workspaceContext } from '../workspaceContext.js';
 
@@ -35,11 +35,72 @@ function sourceStatus(document: ConfigSourceDocumentDTO, key: string): string {
     : '尚未查到原提交记录，保存结果仍未确认'} · ${document.source_key} · 提交 ${key}`;
 }
 
+async function inputValue(input: McpCandidateInputDTO, owner: string, quickInput: IQuickInputService,
+  token: CancellationToken, check: () => void): Promise<string | undefined> {
+  const title = `配置 MCP 输入 ${input.key}`;
+  const prompt = `${owner}${input.description ? ` · ${input.description}` : ''}`;
+  const choices: string[] | undefined = input.choices ?? (input.format === 'boolean' ? ['true', 'false'] : undefined);
+  if (choices) {
+    const selected = await quickInput.pick(choices.filter(value => !input.is_required || value.length > 0).map(value => ({ label: value || '空字符串', value })),
+      { title, prompt, placeHolder: '选择一个值' }, token);
+    check();
+    return selected?.value;
+  }
+  const value = await quickInput.input({ title, prompt, password: input.is_secret,
+    placeHolder: input.is_required ? '输入值，不能为空字符串' : '输入值，可以明确留空',
+    validateInput: async value => input.is_required && value.length === 0 ? '此输入不能为空字符串' : undefined }, token);
+  check();
+  return value;
+}
+
+/** 全部交互完成前只保留本次内存输入；重复项逐次收集，不能经多选丢失顺序或重复值。 */
+async function configurationInputs(definitions: McpCandidateInputDTO[], owner: string, quickInput: IQuickInputService,
+  token: CancellationToken, check: () => void): Promise<{ values: Record<string, string | string[]>; secrets: Map<string, string> } | undefined> {
+  const values: Record<string, string | string[]> = Object.create(null), secrets = new Map<string, string>();
+  for (const input of definitions) {
+    const title = `配置 MCP 输入 ${input.key}`;
+    if (input.default_value != null || input.can_skip) {
+      const selected = await quickInput.pick([
+        { label: '输入值', enter: true },
+        { label: input.default_value != null ? '使用默认值' : '跳过此输入', enter: false },
+      ], { title, prompt: `${owner}${input.description ? ` · ${input.description}` : ''}` }, token);
+      check();
+      if (!selected) return;
+      if (!selected.enter) continue;
+    }
+    let value: string | string[] | undefined;
+    if (input.is_repeated) {
+      const repeated: string[] = [];
+      for (;;) {
+        const selected = await quickInput.pick([
+          { label: '添加一个值', add: true },
+          ...(!input.is_required || repeated.length ? [{ label: '完成输入', add: false }] : []),
+        ], { title, placeHolder: `已添加 ${repeated.length} 个值，按加入顺序保存`, prompt: owner }, token);
+        check();
+        if (!selected) return;
+        if (!selected.add) break;
+        const item = await inputValue(input, owner, quickInput, token, check);
+        if (item === undefined) return;
+        repeated.push(item);
+      }
+      value = repeated;
+    } else {
+      value = await inputValue(input, owner, quickInput, token, check);
+      if (value === undefined) return;
+    }
+    if (input.is_secret) {
+      if (Array.isArray(value)) throw new Error('MCP 私有 env 输入必须是单个字符串');
+      secrets.set(input.key, value);
+    } else values[input.key] = value;
+  }
+  return { values, secrets };
+}
+
 /** 制品发布后的可选纵向配置；正文由原候选 owner 生成，不消费脱敏 plan.parameters。 */
 export async function offerMcpArtifactConfiguration(published: PublishedMcpArtifact, installation: McpInstallationRequestTarget, label: string,
   quickInput: IQuickInputService, notifications: INotificationService, assertAccess: () => void, signal: AbortSignal): Promise<void> {
   const installationTarget = Object.freeze({ ...installation });
-  const { artifact, candidate: original } = structuredClone(published);
+  const { artifact, candidate: original, configuration_inputs, configuration_unavailable_reason } = structuredClone(published);
   const binding = artifact.binding!;
   const check = () => { assertAccess(); signal.throwIfAborted(); };
   const cancellation = new CancellationTokenSource();
@@ -47,6 +108,10 @@ export async function offerMcpArtifactConfiguration(published: PublishedMcpArtif
   signal.addEventListener('abort', abortInput, { once: true });
   try {
     check();
+    if (configuration_unavailable_reason != null) {
+      notifications.warn(`MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。工作区配置不可用：${configuration_unavailable_reason}`);
+      return;
+    }
     if (!await notificationAction(notifications, Severity.Info,
       `MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。尚未配置或连接工作区；generation ${binding.generation}`,
       '选择工作区配置', signal)) return;
@@ -86,12 +151,23 @@ export async function offerMcpArtifactConfiguration(published: PublishedMcpArtif
     const document = await getConfigSourceDocument(0, route, sourceKey, { signal });
     checkWorkspace();
     if (!document.writable) throw new Error('原工作区配置来源不可写');
-    const candidate = { ...original, server_id: serverId };
+    const collected = await configurationInputs(configuration_inputs, owner, quickInput, cancellation.token, checkWorkspace);
+    checkWorkspace();
+    if (!collected) return;
+    const inputs: Record<string, string | string[] | McpPrivateEnvRefDTO> = Object.assign(Object.create(null), collected.values);
+    const candidate = { ...original, server_id: serverId, inputs };
+    const target = { kind: 'workspace', gateway_id: route.gateway_id, workspace_id: route.workspace_id };
+    for (const [input_key, value] of collected.secrets) {
+      const reference = await writeMcpPrivateEnv(0, route, { target, server_id: serverId, input_key,
+        candidate: structuredClone(candidate), value }, signal);
+      checkWorkspace();
+      inputs[input_key] = reference;
+    }
+    collected.secrets.clear();
     const planned = await planMcpCandidateConfiguration(0, route, candidate, signal);
     checkWorkspace();
     if (!planned.data || planned.data.disposition !== 'requires_artifact') throw new Error('原候选不再对应已发布制品，必须重新选择');
     const plan = { candidate, plan_digest: planned.data.plan_digest };
-    const target = { kind: 'workspace', gateway_id: route.gateway_id, workspace_id: route.workspace_id };
     const idempotencyKey = crypto.randomUUID();
     const draft = await draftMcpCandidateConfiguration(0, route, { target, server_id: serverId, plan, managed_launch: binding,
       enabled: selected.enabled, source_edit: { gateway_id: route.gateway_id, workspace_id: route.workspace_id, source_key: sourceKey, jsonc: document.jsonc,

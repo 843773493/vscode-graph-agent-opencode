@@ -7,9 +7,13 @@ from pathlib import Path
 
 import pytest
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
+from google.protobuf.json_format import MessageToDict, ParseDict
 from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
+from app.protocol.generated.boxteam.workspace.v2.public_pb2 import (
+    McpCandidateInputDTO as InputMessage,
+)
 from app.protocol.openapi import (
     GATEWAY_HTTP_JSON_DESCRIPTORS,
     HTTP_JSON_DESCRIPTORS,
@@ -17,6 +21,7 @@ from app.protocol.openapi import (
     assert_public_http_schemas,
 )
 from app.schemas.internal_v2.mcp import (
+    McpCandidateInputDTO,
     McpCandidateInspectRequestDTO,
     McpCandidatePlanResponseDTO,
     McpServerListResponseDTO,
@@ -26,6 +31,17 @@ from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 GATEWAY_ID = "gateway_00000000000040008000000000000001"
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+
+
+@pytest.mark.parametrize(("default", "choices"), [(None, None), ("", []), (["a", "a", "b"], ["a", "b"])])
+def test_configuration_input_proto_roundtrip_preserves_empty_and_repeated_values(
+    default: str | list[str] | None, choices: list[str] | None,
+) -> None:
+    source = McpCandidateInputDTO(key="--tag", default_value=default, choices=choices, is_repeated=isinstance(default, list),
+        is_required=False, can_skip=False)
+    wire = MessageToDict(ParseDict(source.model_dump(exclude_none=True), InputMessage()),
+        preserving_proto_field_name=True, always_print_fields_with_no_presence=True)
+    assert McpCandidateInputDTO.model_validate(wire) == source
 
 
 def test_gateway_mcp_installation_routes_share_backend_descriptors(gateway_openapi: JsonSchemaValue) -> None:

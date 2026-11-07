@@ -47,8 +47,15 @@ class McpCandidateVariant:
         value = _object(json.loads(self.payload), "variant")
         transport = value.get("transport") if self.kind == "manual" else (
             value.get("type") if self.kind == "remote" else _object(value.get("transport"), "package.transport").get("type"))
-        return {"ref": self.ref(), "transport": _text(transport, "variant.transport"),
-                "registry_type": value.get("registryType"), "identifier": value.get("identifier"), "version": value.get("version")}
+        result = {"ref": self.ref(), "transport": _text(transport, "variant.transport"),
+                  "registry_type": value.get("registryType"), "identifier": value.get("identifier"), "version": value.get("version")}
+        try:
+            result["configuration_inputs"] = _configuration_inputs(self)
+        except (ValueError, TypeError) as error:
+            # 配置声明不可用不妨碍先选择并安装制品；不返回部分输入。
+            result["configuration_inputs"] = []
+            result["configuration_unavailable_reason"] = str(error)
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,19 +158,22 @@ def parse_candidate_manifest(
 
 
 class _Inputs:
-    def __init__(self, values: dict[str, object]) -> None:
+    def __init__(self, values: dict[str, object] | None) -> None:
         self.values = values
         self.used: set[str] = set()
-        self.definitions: dict[str, str] = {}
+        self.definitions: dict[str, tuple[dict[str, object], bool]] = {}
+        self.descriptions: dict[str, dict[str, object]] = {}
 
-    def value(self, definition: dict[str, object], key: str, *, repeated: bool = False) -> list[str]:
+    def declare(self, definition: dict[str, object], key: str, *, repeated: bool = False, private_env: bool = False) -> None:
         _fields(definition, _INPUT_FIELDS, "MCP input")
         for flag in ("isRequired", "isSecret"):
             if flag in definition and not isinstance(definition[flag], bool):
                 raise ValueError(f"MCP input.{flag} 必须是布尔值")
-        if definition.get("isSecret") is True:
+        if definition.get("isSecret") is True and not private_env:
             # TODO(3.2)：secret arguments、模板变量和非 env 输入尚未实现私有引用消费。
             raise ValueError("MCP secret input 尚无工作区私有引用能力，不能创建此候选")
+        if "description" in definition and not isinstance(definition["description"], str):
+            raise TypeError("MCP input.description 必须是字符串")
         choices = definition.get("choices")
         if choices is not None and (not isinstance(choices, list) or not all(isinstance(item, str) for item in choices)):
             raise ValueError("MCP input.choices 必须是字符串数组")
@@ -171,18 +181,27 @@ class _Inputs:
         if format_name not in {"string", "number", "boolean", "filepath"}:
             raise ValueError("MCP input.format 不受支持")
         if "value" not in definition:
-            signature = sha256_jcs(definition)
+            signature = (definition, repeated)
             if key in self.definitions and self.definitions[key] != signature:
                 raise ValueError("MCP input 名称存在冲突定义")
             self.definitions[key] = signature
+            if self.values is None and key not in self.descriptions:
+                self.descriptions[key] = {"key": key, "description": definition.get("description"),
+                    "is_required": definition.get("isRequired", False), "format": format_name,
+                    "default_value": definition.get("default"), "choices": choices,
+                    "is_secret": definition.get("isSecret", False), "is_repeated": repeated,
+                    "can_skip": not definition.get("isRequired", False)}
+
+    def value(self, definition: dict[str, object], key: str, *, repeated: bool = False) -> list[str]:
+        self.declare(definition, key, repeated=repeated)
         if "value" in definition:
             selected = definition["value"]
-        elif key in self.values:
+        elif self.values is not None and key in self.values:
             self.used.add(key)
             selected = self.values[key]
         elif "default" in definition:
             selected = definition["default"]
-        elif definition.get("isRequired"):
+        elif self.values is not None and definition.get("isRequired"):
             raise ValueError("MCP 候选缺少必需 input")
         else:
             return []
@@ -194,8 +213,9 @@ class _Inputs:
                 raise TypeError("MCP input 必须是字符串，重复参数才允许字符串数组")
             if definition.get("isRequired") and not item:
                 raise ValueError("MCP 必需 input 不能为空字符串")
-            if choices is not None and item not in choices:
+            if definition.get("choices") is not None and item not in cast(list[str], definition["choices"]):
                 raise ValueError("MCP input 不在允许的 choices 中")
+            format_name = definition.get("format", "string")
             if format_name == "boolean" and item not in {"true", "false"}:
                 raise ValueError("MCP boolean input 必须为 true 或 false")
             if format_name == "number":
@@ -205,16 +225,25 @@ class _Inputs:
                     raise ValueError("MCP number input 无效") from error
                 if not math.isfinite(number):
                     raise ValueError("MCP number input 必须有限")
-        return cast(list[str], selected_values)
+        return cast(list[str], selected_values) if self.values is not None else []
 
-    def template(self, value: str, variables: object) -> str:
+    def template(self, value: str, variables: object) -> str | None:
         definitions = _object(variables, "MCP variables")
         resolved: dict[str, str] = {}
         for key, definition in definitions.items():
             selected = self.value(_object(definition, "MCP variable"), key)
-            if not selected:
+            if key in self.descriptions:
+                # 模板必须取得值，但未标 required 时允许明确的空字符串。
+                self.descriptions[key]["can_skip"] = False
+            if not selected and self.values is not None:
                 raise ValueError("MCP 模板变量缺少明确值")
-            resolved[key] = selected[0]
+            if selected:
+                resolved[key] = selected[0]
+
+        if self.values is None:
+            if any(match.group(1) not in definitions for match in _VARIABLE_REFERENCE.finditer(value)):
+                raise ValueError("MCP 模板引用了未声明的变量")
+            return None
 
         def replace(match: re.Match[str]) -> str:
             if match.group(1) not in resolved:
@@ -224,7 +253,7 @@ class _Inputs:
         return _VARIABLE_REFERENCE.sub(replace, value)
 
     def finish(self) -> None:
-        if set(self.values) - self.used:
+        if self.values is not None and set(self.values) - self.used:
             raise ValueError("MCP 候选包含未使用或不允许覆盖的 input")
 
 
@@ -237,6 +266,10 @@ def _resolve_values(definition: dict[str, object], key: str, inputs: _Inputs, *,
     if not isinstance(template, str):
         raise TypeError("含 variables 的 MCP input 必须提供明确字符串模板")
     resolved = inputs.template(template, definition["variables"])
+    if resolved is None:
+        # 只核外层声明，不对尚未插值的模板执行 number／choices 等值校验。
+        inputs.declare({**{field: value for field, value in definition.items() if field in _INPUT_FIELDS}, "value": template}, key)
+        return []
     return inputs.value({**{field: value for field, value in definition.items() if field in _INPUT_FIELDS}, "value": resolved}, key)
 
 
@@ -284,14 +317,7 @@ def secret_env_input_keys(variant: McpCandidateVariant) -> frozenset[str]:
     payload = _object(json.loads(variant.payload), "MCP variant")
     if _object(payload.get("transport"), "MCP package.transport").get("type") != "stdio":
         raise ValueError("MCP 私有 env 仅支持 stdio package")
-    keys = set()
-    for item in _list(payload.get("environmentVariables", []), "MCP environmentVariables"):
-        definition = _object(item, "MCP env input")
-        _fields(definition, _VARIABLE_FIELDS | {"name"}, "MCP env input")
-        if definition.get("isSecret") is True:
-            _private_env_definition(definition)
-            keys.add(_text(definition.get("name"), "MCP input.name"))
-    return frozenset(keys)
+    return frozenset(cast(str, item["key"]) for item in _configuration_inputs(variant) if item["is_secret"])
 
 
 def _key_values(value: object, inputs: _Inputs, *, private_env: bool = False) -> dict[str, object]:
@@ -306,6 +332,9 @@ def _key_values(value: object, inputs: _Inputs, *, private_env: bool = False) ->
         names.add(key)
         if private_env and definition.get("isSecret") is True:
             _private_env_definition(definition)
+            inputs.declare({field: value for field, value in definition.items() if field in _INPUT_FIELDS}, key, private_env=True)
+            if inputs.values is None:
+                continue
             if key not in inputs.values:
                 if definition.get("isRequired"):
                     raise ValueError("MCP 候选缺少必需私有 env 引用")
@@ -325,8 +354,19 @@ def _key_values(value: object, inputs: _Inputs, *, private_env: bool = False) ->
 def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object], *,
     purpose: Literal["installation", "configuration"],
 ) -> tuple[str, dict[str, object]]:
+    return _candidate_parameters(variant, _Inputs(values), purpose=purpose)
+
+
+def _configuration_inputs(variant: McpCandidateVariant) -> list[dict[str, object]]:
+    inputs = _Inputs(None)
+    _candidate_parameters(variant, inputs, purpose="configuration")
+    return list(inputs.descriptions.values())
+
+
+def _candidate_parameters(variant: McpCandidateVariant, inputs: _Inputs, *,
+    purpose: Literal["installation", "configuration"],
+) -> tuple[str, dict[str, object]]:
     payload = _object(json.loads(variant.payload), "MCP variant")
-    inputs = _Inputs(values)
     if variant.kind == "manual":
         inputs.finish()
         return ("explicit_command" if payload.get("transport") == "stdio" else "configuration_only"), payload
@@ -340,7 +380,7 @@ def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object]
         inputs.finish()
         return "configuration_only", parameters
     _fields(payload, _PACKAGE_FIELDS, "MCP package")
-    if purpose == "installation" and values:
+    if purpose == "installation" and inputs.values:
         raise ValueError("MCP 包安装不接受工作区运行输入，请在明确工作区的配置计划中提供")
     registry = payload.get("registryType")
     if registry not in {"npm", "pypi", "oci", "nuget"}:

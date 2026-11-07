@@ -277,12 +277,26 @@ class McpCandidateVariantRefDTO(_McpCandidateModel):
     digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
 
 
+class McpCandidateInputDTO(_McpCandidateModel):
+    key: str = Field(min_length=1)
+    description: str | None = None
+    is_required: bool = False
+    format: Literal["string", "number", "boolean", "filepath"] = "string"
+    default_value: str | list[str] | None = None
+    choices: list[str] | None = None
+    is_secret: bool = False
+    is_repeated: bool = False
+    can_skip: bool = True
+
+
 class McpCandidateVariantDTO(_McpCandidateModel):
     ref: McpCandidateVariantRefDTO
     transport: str
     registry_type: str | None = None
     identifier: str | None = None
     version: str | None = None
+    configuration_inputs: list[McpCandidateInputDTO] = Field(default_factory=list)
+    configuration_unavailable_reason: str | None = None
 
 
 class McpCandidateInspectRequestDTO(_McpCandidateModel):

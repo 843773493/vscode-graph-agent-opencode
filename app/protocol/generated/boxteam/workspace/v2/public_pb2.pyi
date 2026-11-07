@@ -1346,19 +1346,45 @@ class McpCandidateVariantRefDTO(_message.Message):
     digest: str
     def __init__(self, kind: _Optional[str] = ..., index: _Optional[int] = ..., digest: _Optional[str] = ...) -> None: ...
 
+class McpCandidateInputDTO(_message.Message):
+    __slots__ = ("key", "description", "is_required", "format", "default_value", "choices", "is_secret", "is_repeated", "can_skip")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    IS_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    FORMAT_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_VALUE_FIELD_NUMBER: _ClassVar[int]
+    CHOICES_FIELD_NUMBER: _ClassVar[int]
+    IS_SECRET_FIELD_NUMBER: _ClassVar[int]
+    IS_REPEATED_FIELD_NUMBER: _ClassVar[int]
+    CAN_SKIP_FIELD_NUMBER: _ClassVar[int]
+    key: str
+    description: str
+    is_required: bool
+    format: str
+    default_value: _struct_pb2.Value
+    choices: _struct_pb2.ListValue
+    is_secret: bool
+    is_repeated: bool
+    can_skip: bool
+    def __init__(self, key: _Optional[str] = ..., description: _Optional[str] = ..., is_required: _Optional[bool] = ..., format: _Optional[str] = ..., default_value: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., choices: _Optional[_Union[_struct_pb2.ListValue, _Mapping]] = ..., is_secret: _Optional[bool] = ..., is_repeated: _Optional[bool] = ..., can_skip: _Optional[bool] = ...) -> None: ...
+
 class McpCandidateVariantDTO(_message.Message):
-    __slots__ = ("ref", "transport", "registry_type", "identifier", "version")
+    __slots__ = ("ref", "transport", "registry_type", "identifier", "version", "configuration_inputs", "configuration_unavailable_reason")
     REF_FIELD_NUMBER: _ClassVar[int]
     TRANSPORT_FIELD_NUMBER: _ClassVar[int]
     REGISTRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     IDENTIFIER_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_INPUTS_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_UNAVAILABLE_REASON_FIELD_NUMBER: _ClassVar[int]
     ref: McpCandidateVariantRefDTO
     transport: str
     registry_type: str
     identifier: str
     version: str
-    def __init__(self, ref: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., transport: _Optional[str] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ...) -> None: ...
+    configuration_inputs: _containers.RepeatedCompositeFieldContainer[McpCandidateInputDTO]
+    configuration_unavailable_reason: str
+    def __init__(self, ref: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., transport: _Optional[str] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ..., configuration_inputs: _Optional[_Iterable[_Union[McpCandidateInputDTO, _Mapping]]] = ..., configuration_unavailable_reason: _Optional[str] = ...) -> None: ...
 
 class McpCandidateInspectRequestDTO(_message.Message):
     __slots__ = ("target", "source")

@@ -29,7 +29,7 @@ function prepare() {
     async (_gallery: unknown, route: typeof target, _label: string, _input: unknown, _progress: unknown, _token: unknown, original: AbortSignal) => {
       signals.push(original); expect(route).toMatchObject({ kind: 'backend', gateway_id: target.gateway_id, backend_id: target.backend_id,
         gateway_connection_id: target.gateway_connection_id }); expect(route).not.toHaveProperty('workspace_id');
-      return { artifact: {}, candidate: {} };
+      return { artifact: {}, candidate: {}, configuration_inputs: [] };
     },
     async (_published: unknown, route: typeof target, _label: string, _input: unknown, _notify: unknown, check: () => void, original: AbortSignal) => {
       signals.push(original); signal = original; guard = check;

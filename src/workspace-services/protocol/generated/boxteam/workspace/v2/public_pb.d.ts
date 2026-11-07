@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
-import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
+import type { ListValue, Timestamp, Value } from "@bufbuild/protobuf/wkt";
 import type { AttachmentRef } from "./message_pb.js";
 
 /**
@@ -3465,6 +3465,64 @@ export declare type McpCandidateVariantRefDTO = Message<"boxteam.workspace.v2.Mc
 export declare const McpCandidateVariantRefDTOSchema: GenMessage<McpCandidateVariantRefDTO>;
 
 /**
+ * 原候选解析器提供的工作区运行输入；秘密值仅经私有写入入口提交。
+ *
+ * @generated from message boxteam.workspace.v2.McpCandidateInputDTO
+ */
+export declare type McpCandidateInputDTO = Message<"boxteam.workspace.v2.McpCandidateInputDTO"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: optional string description = 2;
+   */
+  description?: string | undefined;
+
+  /**
+   * @generated from field: bool is_required = 3;
+   */
+  isRequired: boolean;
+
+  /**
+   * @generated from field: string format = 4;
+   */
+  format: string;
+
+  /**
+   * @generated from field: optional google.protobuf.Value default_value = 5;
+   */
+  defaultValue?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.ListValue choices = 6;
+   */
+  choices?: ListValue | undefined;
+
+  /**
+   * @generated from field: bool is_secret = 7;
+   */
+  isSecret: boolean;
+
+  /**
+   * @generated from field: bool is_repeated = 8;
+   */
+  isRepeated: boolean;
+
+  /**
+   * @generated from field: bool can_skip = 9;
+   */
+  canSkip: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCandidateInputDTO.
+ * Use `create(McpCandidateInputDTOSchema)` to create a new message.
+ */
+export declare const McpCandidateInputDTOSchema: GenMessage<McpCandidateInputDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.McpCandidateVariantDTO
  */
 export declare type McpCandidateVariantDTO = Message<"boxteam.workspace.v2.McpCandidateVariantDTO"> & {
@@ -3492,6 +3550,16 @@ export declare type McpCandidateVariantDTO = Message<"boxteam.workspace.v2.McpCa
    * @generated from field: optional string version = 5;
    */
   version?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpCandidateInputDTO configuration_inputs = 6;
+   */
+  configurationInputs: McpCandidateInputDTO[];
+
+  /**
+   * @generated from field: optional string configuration_unavailable_reason = 7;
+   */
+  configurationUnavailableReason?: string | undefined;
 };
 
 /**

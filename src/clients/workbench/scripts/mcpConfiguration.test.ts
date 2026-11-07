@@ -4,8 +4,9 @@ import * as sources from '../../web/src/api/configSources.js';
 import { HttpRequestError } from '../../web/src/api/http.js';
 import { offerMcpArtifactConfiguration } from '../src/mcp/configuration.js';
 import type { PublishedMcpArtifact } from '../src/mcp/installation.js';
-import type { ConfigSourceDocumentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import type { IQuickInputService, IQuickPickItem, QuickPickInput } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import type { ConfigSourceDocumentDTO, McpCandidateInputDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { IInputOptions, IQuickInputService, IQuickPickItem, QuickPickInput } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import type { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import type { INotificationService, IPromptChoice, IPromptOptions } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { workspaceContext } from '../src/workspaceContext.js';
 import type { GatewayWorkspace } from '../../web/src/types/backend.js';
@@ -25,7 +26,7 @@ const published: PublishedMcpArtifact = { artifact: {
   identifier: 'chosen', version: '1.0.0', entrypoint: 'chosen', command: '/original/chosen', lock_digest: digest,
   installed_distributions: { chosen: '1.0.0' }, state: 'published',
 }, candidate: { target, source: { kind: 'gallery', name: 'original/server', version: 'release-1', endpoint: 'https://original.test',
-  protocol: 'v0.1', entry_url: 'https://original.test/exact' }, manifest_digest: digest, variant: { kind: 'package', index: 1, digest }, inputs: {} } };
+  protocol: 'v0.1', entry_url: 'https://original.test/exact' }, manifest_digest: digest, variant: { kind: 'package', index: 1, digest }, inputs: {} }, configuration_inputs: [] };
 const document: ConfigSourceDocumentDTO = { ...workspace, source_key: 'workspace_root_mutable_override', layer: 'workspace', writable: true,
   jsonc: '// 原 source 与占位\r\n{"private":"***"}\r\n', file_presence: 'present', file_digest: 'original-file', layer_revision: 3,
   layer_digest: 'original-layer', source_generation: 'original-generation', active_revision: 2, active_digest: 'original-active',
@@ -39,6 +40,9 @@ const choose = (label: string): Step => items => {
   expect(choice).toBeDefined();
   return choice as IQuickPickItem;
 };
+const inputDefinition = (key: string, fields: Partial<McpCandidateInputDTO> = {}): McpCandidateInputDTO => ({
+  key, is_required: true, can_skip: false, format: 'string', choices: undefined, is_secret: false, is_repeated: false, ...fields,
+});
 
 function prepare(steps: Step[] = [choose('暂不启用此 Server'), choose('确认保存工作区配置')], notificationChoices: (boolean | 'hold')[] = [true]) {
   let snapshot = { ...workspaceContext.getSnapshot(), gatewayId: workspace.gateway_id, workspaces: [registered], loading: false, error: null };
@@ -57,14 +61,16 @@ function prepare(steps: Step[] = [choose('暂不启用此 Server'), choose('确�
     ...document, edit: { idempotency_key: request.source_edit!.idempotency_key, candidate_id: 'source-candidate', state: 'pending',
       file_digest: 'saved-file', source_saved: true, layer_imported: true },
   }));
-  mocks.push(context, refresh, read, plan, draft, save);
-  const input = spyOn({ input: async (): Promise<string | undefined> => 'server-a' }, 'input');
+  const write = spyOn(api, 'writeMcpPrivateEnv').mockImplementation(async (_port, _route, request) => ({ kind: 'mcp_private_env',
+    workspace_id: workspace.workspace_id, server_id: request.server_id, input_key: request.input_key, definition_digest: digest, version: 'f'.repeat(32) }));
+  mocks.push(context, refresh, read, plan, draft, save, write);
+  const input = spyOn({ input: async (_options: IInputOptions, _token: CancellationToken): Promise<string | undefined> => 'server-a' }, 'input');
   const quick = { input, pick: async (items: QuickPickInput<IQuickPickItem>[]) => {
     const step = steps.shift(); if (!step) throw new Error('出现计划外 Quick Input'); return step(items);
   } } as unknown as IQuickInputService;
-  const messages: string[] = [], prompts: { text: string; choices: IPromptChoice[]; options?: IPromptOptions }[] = [];
+  const messages: string[] = [], warnings: string[] = [], prompts: { text: string; choices: IPromptChoice[]; options?: IPromptOptions }[] = [];
   let closed = 0;
-  const notifications = { info: (text: string) => messages.push(text),
+  const notifications = { info: (text: string) => messages.push(text), warn: (text: string) => warnings.push(text),
     prompt: (_severity: unknown, text: string, choices: IPromptChoice[], options?: IPromptOptions) => {
       prompts.push({ text, choices, options });
       const selected = notificationChoices.shift();
@@ -75,7 +81,7 @@ function prepare(steps: Step[] = [choose('暂不启用此 Server'), choose('确�
   const controller = new AbortController();
   const run = (owner = route, original = published, assertAccess = () => {}) =>
     offerMcpArtifactConfiguration(original, owner, '目标 A', quick, notifications, assertAccess, controller.signal);
-  return { run, read, refresh, plan, draft, save, input, messages, prompts, controller, closed: () => closed,
+  return { run, read, refresh, plan, draft, save, write, input, messages, warnings, prompts, controller, closed: () => closed,
     update: (change: Partial<typeof snapshot>) => { snapshot = { ...snapshot, ...change }; } };
 }
 
@@ -202,4 +208,157 @@ test('身份失效关闭尚未选择的发布通知，不留下可恢复的旧�
   const running = fixture.run(); const reason = new Error('root Gateway changed'); fixture.controller.abort(reason);
   await expect(running).rejects.toBe(reason); expect(fixture.closed()).toBe(1);
   expect(fixture.read).not.toHaveBeenCalled(); expect(fixture.save).not.toHaveBeenCalled();
+});
+
+test('真实配置入口保留重复顺序、格式原串、默认选择和可选空串／跳过', async () => {
+  const original = { ...published, configuration_inputs: [
+    inputDefinition('--tag', { choices: ['red', 'blue'], is_repeated: true }),
+    inputDefinition('--port', { format: 'number', default_value: '8123' }),
+    inputDefinition('--number', { format: 'number' }),
+    inputDefinition('--boolean', { format: 'boolean' }),
+    inputDefinition('--directory', { format: 'filepath', is_required: false, can_skip: true }),
+    inputDefinition('--optional', { is_required: false, can_skip: true }),
+    inputDefinition('--empty', { is_required: false, can_skip: true }),
+    inputDefinition('label', { is_required: false, can_skip: false }),
+    inputDefinition('MCP_PLAIN_VALUE', { default_value: 'normal', choices: ['normal', 'fast'], is_required: false, can_skip: true }),
+    inputDefinition('MCP_EMPTY_VALUE', { is_required: false, can_skip: true }),
+  ] };
+  const fixture = prepare([choose('启用此 Server'),
+    choose('添加一个值'), choose('red'), choose('添加一个值'), choose('red'), choose('添加一个值'), choose('blue'), choose('完成输入'),
+    choose('使用默认值'), choose('true'), choose('输入值'), choose('跳过此输入'), choose('输入值'),
+    choose('输入值'), choose('fast'), choose('输入值'), choose('确认保存工作区配置')]);
+  for (const value of ['server-a', ' 1.50 ', '/native target/with spaces', '', '', '']) fixture.input.mockResolvedValueOnce(value);
+  await fixture.run(route, original);
+  const expected = { '--tag': ['red', 'red', 'blue'], '--number': ' 1.50 ', '--boolean': 'true',
+    '--directory': '/native target/with spaces', '--empty': '', label: '', MCP_PLAIN_VALUE: 'fast', MCP_EMPTY_VALUE: '' };
+  for (const call of [fixture.plan.mock.calls[0]![2], fixture.draft.mock.calls[0]![2].plan!.candidate!, fixture.save.mock.calls[0]![2].plan!.candidate!]) {
+    expect(call.inputs).toEqual(expected);
+    expect(call.inputs).not.toHaveProperty('--port'); expect(call.inputs).not.toHaveProperty('--optional');
+  }
+  expect(fixture.write).not.toHaveBeenCalled();
+  const required = fixture.input.mock.calls.find(([options]) => options.title === '配置 MCP 输入 --number')![0];
+  expect(await required.validateInput!('')).toBe('此输入不能为空字符串');
+  const template = fixture.input.mock.calls.find(([options]) => options.title === '配置 MCP 输入 label')![0];
+  expect(await template.validateInput!('')).toBeUndefined();
+});
+
+test('所有输入完成后才写私有env，后续候选只携带精确引用', async () => {
+  const original = { ...published, configuration_inputs: [inputDefinition('FIRST_SECRET', { is_secret: true }),
+    inputDefinition('--after-secret'), inputDefinition('LAST_SECRET', { is_secret: true, is_required: false, can_skip: true })] };
+  const fixture = prepare([choose('暂不启用此 Server'), choose('输入值'), choose('确认保存工作区配置')]);
+  let entered = 0;
+  const values = ['server-a', 'first-private-value', 'ordinary-value', 'last-private-value'];
+  fixture.input.mockImplementation(async () => {
+    expect(fixture.write).not.toHaveBeenCalled();
+    const value = values[entered++];
+    if (entered > 1) expect(fixture.read).toHaveBeenCalledTimes(1);
+    return value;
+  });
+  await fixture.run(route, original);
+  expect(entered).toBe(4); expect(fixture.write).toHaveBeenCalledTimes(2);
+  const expectedInputs: Record<string, unknown> = { '--after-secret': 'ordinary-value' };
+  for (const [index, key] of ['FIRST_SECRET', 'LAST_SECRET'].entries()) {
+    const request = fixture.write.mock.calls[index]!;
+    expect(request[1]).toEqual(workspaceRoute); expect(request[3]).toBe(fixture.controller.signal);
+    expect(request[2]).toMatchObject({ target: { kind: 'workspace', ...workspace }, server_id: 'server-a', input_key: key,
+      value: index ? 'last-private-value' : 'first-private-value', candidate: { ...published.candidate, server_id: 'server-a' } });
+    expect(request[2].candidate?.inputs).toEqual(expectedInputs);
+    expectedInputs[key] = { kind: 'mcp_private_env', workspace_id: workspace.workspace_id, server_id: 'server-a',
+      input_key: key, definition_digest: digest, version: 'f'.repeat(32) };
+  }
+  for (const key of ['FIRST_SECRET', 'LAST_SECRET']) {
+    const options = fixture.input.mock.calls.find(([options]) => options.title === `配置 MCP 输入 ${key}`)![0];
+    expect(options.password).toBe(true); expect(options).not.toHaveProperty('value');
+  }
+  for (const call of [fixture.plan.mock.calls[0]![2], fixture.draft.mock.calls[0]![2], fixture.save.mock.calls[0]![2]]) {
+    expect(JSON.stringify(call)).not.toContain('first-private-value'); expect(JSON.stringify(call)).not.toContain('last-private-value');
+  }
+  expect(fixture.plan.mock.calls[0]![2].inputs).toEqual(expectedInputs);
+  expect(fixture.draft.mock.calls[0]![2].plan?.candidate?.inputs).toEqual(expectedInputs);
+  expect(fixture.save.mock.calls[0]![2].plan?.candidate?.inputs).toEqual(expectedInputs);
+  expect(original.candidate.inputs).toEqual({});
+});
+
+test.each(['text', 'optional', 'repeated'])('收集%s输入时取消，已输入的秘密不写私有env或候选配置', async stage => {
+  const next = stage === 'optional' ? inputDefinition('--next', { is_required: false, can_skip: true })
+    : inputDefinition('--next', { is_repeated: stage === 'repeated' });
+  const original = { ...published, configuration_inputs: [inputDefinition('TOKEN', { is_secret: true }), next] };
+  const fixture = prepare(stage === 'text' ? [choose('暂不启用此 Server')] : [choose('暂不启用此 Server'), () => undefined]);
+  fixture.input.mockResolvedValueOnce('server-a').mockResolvedValueOnce('collected-private-value').mockResolvedValueOnce(undefined);
+  await fixture.run(route, original);
+  expect(fixture.write).not.toHaveBeenCalled(); expect(fixture.plan).not.toHaveBeenCalled();
+  expect(fixture.draft).not.toHaveBeenCalled(); expect(fixture.save).not.toHaveBeenCalled();
+});
+
+test.each(['identity', 'stopped'])('收集结束时%s失效阻止已收集秘密写入原工作区', async kind => {
+  const original = { ...published, configuration_inputs: [inputDefinition('TOKEN', { is_secret: true }), inputDefinition('--last')] };
+  const fixture = prepare([choose('暂不启用此 Server')]);
+  fixture.input.mockResolvedValueOnce('server-a').mockResolvedValueOnce('collected-private-value').mockImplementationOnce(async (_options, token) => {
+    if (kind === 'identity') {
+      fixture.controller.abort(new Error('原身份已失效')); expect(token.isCancellationRequested).toBe(true);
+    } else fixture.update({ workspaces: [{ ...registered, status: 'stopped' }] });
+    return 'last-value';
+  });
+  await expect(fixture.run(route, original)).rejects.toThrow(kind === 'identity' ? '原身份已失效' : '原目标工作区尚未就绪');
+  expect(fixture.write).not.toHaveBeenCalled(); expect(fixture.plan).not.toHaveBeenCalled(); expect(fixture.save).not.toHaveBeenCalled();
+});
+
+test('私有env写入失败保留原错误，不重试、不生成候选计划或保存', async () => {
+  const original = { ...published, configuration_inputs: [inputDefinition('TOKEN', { is_secret: true })] };
+  const fixture = prepare([choose('暂不启用此 Server')]);
+  fixture.input.mockResolvedValueOnce('server-a').mockResolvedValueOnce('private-value');
+  const cause = new HttpRequestError(409, 'Conflict', '私有定义已变化', '/candidate-plans/private-env', 'private-write-request');
+  fixture.write.mockRejectedValueOnce(cause);
+  await expect(fixture.run(route, original)).rejects.toBe(cause);
+  expect(fixture.write).toHaveBeenCalledTimes(1); expect(fixture.plan).not.toHaveBeenCalled();
+  expect(fixture.draft).not.toHaveBeenCalled(); expect(fixture.save).not.toHaveBeenCalled();
+});
+
+test('配置声明不可用明确显示原因，不按空输入读取工作区或生成计划', async () => {
+  const fixture = prepare();
+  await fixture.run(route, { ...published, configuration_unavailable_reason: 'secret argument 尚无私有引用能力' });
+  expect(fixture.warnings).toEqual(['MCP 制品 chosen 1.0.0 已在 目标 A 发布。工作区配置不可用：secret argument 尚无私有引用能力']);
+  expect(fixture.prompts).toEqual([]); expect(fixture.refresh).not.toHaveBeenCalled(); expect(fixture.read).not.toHaveBeenCalled();
+  expect(fixture.write).not.toHaveBeenCalled(); expect(fixture.plan).not.toHaveBeenCalled(); expect(fixture.save).not.toHaveBeenCalled();
+});
+
+test('原source不可写时不开始参数收集或私有env写入', async () => {
+  const original = { ...published, configuration_inputs: [inputDefinition('TOKEN', { is_secret: true })] };
+  const fixture = prepare([choose('暂不启用此 Server')]);
+  fixture.read.mockResolvedValueOnce({ ...document, writable: false });
+  await expect(fixture.run(route, original)).rejects.toThrow('原工作区配置来源不可写');
+  expect(fixture.input).toHaveBeenCalledTimes(1); expect(fixture.write).not.toHaveBeenCalled(); expect(fixture.plan).not.toHaveBeenCalled();
+});
+
+test('原published描述符在Server ID输入期间变化不替换本次冻结输入', async () => {
+  const original = { ...published, configuration_inputs: [inputDefinition('--choice', { choices: ['original-choice'] })] };
+  const fixture = prepare([choose('暂不启用此 Server'), choose('original-choice'), choose('确认保存工作区配置')]);
+  fixture.input.mockImplementationOnce(async () => {
+    original.configuration_inputs[0]!.key = '--changed'; original.configuration_inputs[0]!.choices![0] = 'changed-choice';
+    return 'server-a';
+  });
+  await fixture.run(route, original);
+  expect(fixture.plan.mock.calls[0]![2].inputs).toEqual({ '--choice': 'original-choice' });
+});
+
+test('真实HTTP可选字段为null时仍收集输入，不虚构默认值或配置不可用', async () => {
+  const original = { ...published, configuration_unavailable_reason: null,
+    configuration_inputs: [{ ...inputDefinition('label', { is_required: false, can_skip: false }),
+      description: null, default_value: null, choices: null }] } as unknown as PublishedMcpArtifact;
+  const fixture = prepare([choose('暂不启用此 Server'), choose('确认保存工作区配置')]);
+  fixture.input.mockResolvedValueOnce('server-a').mockResolvedValueOnce('');
+  await fixture.run(route, original);
+  expect(fixture.warnings).toEqual([]); expect(fixture.save).toHaveBeenCalledTimes(1);
+  expect(fixture.plan.mock.calls[0]![2].inputs).toEqual({ label: '' });
+  expect(fixture.input.mock.calls[1]![0].prompt).not.toContain('null');
+});
+
+test('必需choices不提供空字符串选项', async () => {
+  const original = { ...published, configuration_inputs: [inputDefinition('--choice', { choices: ['', 'valid'] })] };
+  const fixture = prepare([choose('暂不启用此 Server'), items => {
+    expect(items.filter(item => item.type !== 'separator').map(item => item.label)).toEqual(['valid']);
+    return choose('valid')(items);
+  }, choose('确认保存工作区配置')]);
+  await fixture.run(route, original);
+  expect(fixture.plan.mock.calls[0]![2].inputs).toEqual({ '--choice': 'valid' });
 });

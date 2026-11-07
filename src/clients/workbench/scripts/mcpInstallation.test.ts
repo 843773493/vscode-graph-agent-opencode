@@ -3,6 +3,7 @@ import * as api from '../../web/src/api/mcpConnections.js';
 import { galleryInstallationSource, publishMcpArtifact } from '../src/mcp/installation.js';
 import type { IGalleryMcpServer } from '../upstream/src/vs/platform/mcp/common/mcpManagement.js';
 import type { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import type { McpCandidateInputDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 
 const workspace = Object.freeze({ gateway_id: 'gateway_00000000000040008000000000000001', workspace_id: '00000000-0000-4000-8000-000000000001' });
@@ -22,8 +23,10 @@ afterEach(() => { mocks.splice(0).forEach(mock => mock.mockRestore()); });
 function prepare(registry: 'pypi' | 'npm' = 'pypi') {
   const capabilities = spyOn(api, 'getMcpInstallationCapabilities').mockResolvedValue(envelope({ platform: {}, pypi_wheel_available: registry === 'pypi',
     npm_available: registry === 'npm', unsupported_registry_types: [], limitations: [] }));
-  const inspect = spyOn(api, 'inspectMcpInstallationCandidate').mockResolvedValue(envelope({ source: {}, manifest_digest: digest, platform: {}, variants: [0, 1].map(index => ({
-    ref: { kind: 'package', index, digest }, transport: 'stdio', registry_type: registry, identifier: index ? 'chosen' : 'wrong-first', version: '1.0.0' })) }));
+  const variants = [0, 1].map(index => ({
+    ref: { kind: 'package', index, digest }, transport: 'stdio', registry_type: registry, identifier: index ? 'chosen' : 'wrong-first', version: '1.0.0',
+    configuration_inputs: [] as McpCandidateInputDTO[], configuration_unavailable_reason: undefined as string | undefined }));
+  const inspect = spyOn(api, 'inspectMcpInstallationCandidate').mockResolvedValue(envelope({ source: {}, manifest_digest: digest, platform: {}, variants }));
   const published = registry === 'npm' ? { ...artifact, registry_type: registry, command: '/published/node_modules/chosen/bin/server.js',
     runtime_executable: '/target/bin/node', runtime_version: 'v24.22.1' } : artifact;
   const plan = spyOn(api, 'planMcpInstallation').mockResolvedValue(envelope({ source: {}, manifest_digest: digest, variant: artifact.variant, platform: {}, plan_digest: digest,
@@ -32,7 +35,7 @@ function prepare(registry: 'pypi' | 'npm' = 'pypi') {
   const input = spyOn({ input: async (_options: { prompt?: string }) => 'explicit-entry' }, 'input');
   mocks.push(capabilities, inspect, plan, install, input);
   const quickInput = { pick: async (items: { variant: { ref: { index: number } } }[]) => items[1], input } as unknown as IQuickInputService;
-  return { capabilities, inspect, plan, install, input, quickInput, published };
+  return { capabilities, inspect, plan, install, input, quickInput, published, variants };
 }
 
 test('原安装工作流使用来源owner给出的精确URI和用户选择，返回发布回执不生成local配置', async () => {
@@ -42,6 +45,8 @@ test('原安装工作流使用来源owner给出的精确URI和用户选择，返
   expect(receipt.artifact).toEqual(artifact);
   expect(receipt.candidate).toEqual(plan.mock.calls[0]![2]);
   expect(receipt.candidate).not.toHaveProperty('server_id');
+  expect(receipt.candidate.inputs).toEqual({});
+  expect(receipt.configuration_inputs).toEqual([]);
   expect(plan.mock.calls[0]![2].variant?.index).toBe(1);
   expect(plan.mock.calls[0]![2].source?.entry_url).toBe(galleryInstallationSource(gallery).entry_url);
   expect(install.mock.calls[0]![2]).toMatchObject({ entrypoint: 'explicit-entry', candidate: { target, variant: { index: 1 } } });
@@ -53,11 +58,59 @@ test('原安装工作流使用来源owner给出的精确URI和用户选择，返
   }
 });
 
+test('冻结显式非首项的配置声明，安装期间不收集工作区输入', async () => {
+  const fixture = prepare();
+  const descriptor: McpCandidateInputDTO = { key: '--path', description: '原说明', is_required: true, can_skip: false,
+    format: 'filepath', default_value: '/original/path', choices: undefined, is_secret: false, is_repeated: false };
+  fixture.variants[0]!.configuration_inputs.push({ ...descriptor, key: 'wrong-first' });
+  fixture.variants[1]!.configuration_inputs.push(descriptor);
+  const expected = structuredClone(descriptor);
+  fixture.plan.mockImplementationOnce(async () => {
+    descriptor.description = '迟到修改'; descriptor.default_value = '/changed/path';
+    fixture.variants[1]!.configuration_inputs.push({ ...descriptor, key: 'late' });
+    return envelope({ source: {}, manifest_digest: digest, variant: artifact.variant, platform: {}, plan_digest: digest,
+      disposition: 'requires_artifact', download_required: true, parameters: {} });
+  });
+  const receipt = await publishMcpArtifact(gallery, route, '目标 A', fixture.quickInput, { report() {} }, CancellationToken.None, new AbortController().signal);
+  expect(receipt.configuration_inputs).toEqual([expected]);
+  expect(fixture.input).toHaveBeenCalledTimes(1);
+  expect(fixture.plan.mock.calls[0]![2].inputs).toEqual({});
+  expect(fixture.install.mock.calls[0]![2].candidate?.inputs).toEqual({});
+});
+
+test('配置声明不可用仍允许发布制品，并保留目标给出的具体原因', async () => {
+  const fixture = prepare();
+  fixture.variants[1]!.configuration_unavailable_reason = 'secret argument 尚无私有引用能力';
+  const receipt = await publishMcpArtifact(gallery, route, '目标 A', fixture.quickInput, { report() {} }, CancellationToken.None, new AbortController().signal);
+  expect(receipt.artifact).toEqual(artifact);
+  expect(receipt.configuration_unavailable_reason).toBe('secret argument 尚无私有引用能力');
+  expect(fixture.install).toHaveBeenCalledTimes(1);
+});
+
 test('安装结果未知时不重放原意图，也不生成虚假的已安装回执', async () => {
   const { install, quickInput } = prepare();
   install.mockRejectedValueOnce(new Error('socket disconnected'));
   await expect(publishMcpArtifact(gallery, route, '目标 A', quickInput, { report() {} }, CancellationToken.None, new AbortController().signal)).rejects.toThrow('不能自动重放');
   expect(install).toHaveBeenCalledTimes(1);
+});
+
+test('安装已确认running后身份立即失效仍保留原操作ID，不查询、取消或重放', async () => {
+  const fixture = prepare(), controller = new AbortController();
+  const reason = new Error('原身份已失效');
+  const query = spyOn(api, 'getMcpInstallationOperation').mockRejectedValue(new Error('失效身份不能查询'));
+  const cancel = spyOn(api, 'cancelMcpInstallationOperation').mockRejectedValue(new Error('失效身份不能取消'));
+  mocks.push(query, cancel);
+  fixture.install.mockImplementationOnce(async (_port, _route, request) => {
+    controller.abort(reason);
+    return envelope({ operation_id: request.operation_id, intent_digest: digest, status: 'running', stage: 'resolve',
+      created_at: 1, updated_at: 2, log: '' });
+  });
+  const failure = await publishMcpArtifact(gallery, route, '目标 A', fixture.quickInput, { report() {} }, CancellationToken.None,
+    controller.signal).catch((cause: unknown) => cause);
+  expect(failure).toBeInstanceOf(Error); expect((failure as Error).cause).toBe(reason);
+  expect((failure as Error).message).toContain(fixture.install.mock.calls[0]![2].operation_id);
+  expect((failure as Error).message).toContain('原操作可能仍在运行');
+  expect(fixture.install).toHaveBeenCalledTimes(1); expect(query).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled();
 });
 
 test('npm目标不依赖PyPI能力，保留明确bin和发布时绑定的Node', async () => {

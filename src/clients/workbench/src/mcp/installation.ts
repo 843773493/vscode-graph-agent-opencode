@@ -10,7 +10,7 @@ import {
   type McpInstallationRequestTarget,
 } from '../../../web/src/api/mcpConnections.js';
 import type {
-  McpCandidateSourceDTO, McpCandidatePlanRequestDTO, McpInstalledArtifactDTO,
+  McpCandidateSourceDTO, McpCandidatePlanRequestDTO, McpCandidateVariantDTO, McpInstalledArtifactDTO,
 } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 export function galleryInstallationSource(gallery: IGalleryMcpServer): McpCandidateSourceDTO {
@@ -23,7 +23,7 @@ export function galleryInstallationSource(gallery: IGalleryMcpServer): McpCandid
     name: gallery.name, version: gallery.version, entry_id: gallery.id };
 }
 
-export interface PublishedMcpArtifact {
+export interface PublishedMcpArtifact extends Pick<McpCandidateVariantDTO, 'configuration_inputs' | 'configuration_unavailable_reason'> {
   artifact: McpInstalledArtifactDTO;
   candidate: McpCandidatePlanRequestDTO;
 }
@@ -46,19 +46,20 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, route: McpI
   })), { title: `安装 MCP 制品至 ${label}`, placeHolder: `显式选择运行方式 · Backend ${target.backend_id}` }, token);
   signal.throwIfAborted();
   if (!selected) throw new CancellationError();
-  if (!['pypi', 'npm'].includes(selected.variant.registry_type ?? '') || selected.variant.ref?.kind !== 'package') {
+  const variant = structuredClone(selected.variant);
+  if (!['pypi', 'npm'].includes(variant.registry_type ?? '') || variant.ref?.kind !== 'package') {
     throw new Error('本批支持 PyPI wheel 与 npm 制品；HTTP 服务须经工作区配置入口，其它生态尚未支持');
   }
-  const npm = selected.variant.registry_type === 'npm';
+  const npm = variant.registry_type === 'npm';
   if (npm ? !capabilities.data.npm_available : !capabilities.data.pypi_wheel_available) {
     throw new Error((npm ? capabilities.data.npm_unavailable_reason : capabilities.data.unavailable_reason)
       ?? `目标尚无可用的 ${npm ? 'npm' : 'PyPI wheel'} 安装能力`);
   }
   const candidate: McpCandidatePlanRequestDTO = { target, source, manifest_digest: inspected.data.manifest_digest,
-    variant: selected.variant.ref, inputs: {} };
+    variant: variant.ref, inputs: {} };
   const planned = await planMcpInstallation(0, route, candidate, signal);
   if (!planned.data || planned.data.disposition !== 'requires_artifact') throw new Error('目标计划没有可安装制品');
-  const entrypoint = await quickInput.input({ title: `验证 ${selected.variant.identifier} 的入口`,
+  const entrypoint = await quickInput.input({ title: `验证 ${variant.identifier} 的入口`,
     prompt: `输入${npm ? '根 package 的 bin 名称' : '根 distribution 的 console entry point'}；制品安装后不会自动创建工作区配置`,
     placeHolder: '例如 mcp-server-fetch', validateInput: async value => /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value) ? undefined : '请输入明确的入口名称' }, token);
   signal.throwIfAborted();
@@ -73,7 +74,7 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, route: McpI
   }
   let cancellationSent = false;
   while (receipt.data?.status === 'running') {
-    signal.throwIfAborted();
+    if (signal.aborted) throw new Error(`安装状态读取中断，原操作可能仍在运行。请查询 ${operationId}`, { cause: signal.reason });
     if (token.isCancellationRequested && !cancellationSent) {
       try { receipt = await cancelMcpInstallationOperation(0, route, operationId, signal); }
       catch (cause) { throw new Error(`取消请求未确认，请查询原安装操作 ${operationId}`, { cause }); }
@@ -93,5 +94,6 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, route: McpI
     throw new Error('安装回执不属于原目标、候选或显式入口');
   }
   signal.throwIfAborted();
-  return { artifact, candidate };
+  return { artifact, candidate, configuration_inputs: variant.configuration_inputs,
+    configuration_unavailable_reason: variant.configuration_unavailable_reason };
 }
