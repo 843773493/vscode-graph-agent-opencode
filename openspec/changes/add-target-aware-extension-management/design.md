@@ -134,7 +134,9 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 包安装复用各生态标准工具与隔离环境，仓库 JS／Python 依赖仍遵守 bun／uv；不自动全局安装缺失的 Node、Python 或容器环境。目录要求的能力不具备时给出目标侧具体原因，不转换成另一种执行方式冒充原计划。
 
-首批制品发布仅支持目标已有 uv／Python 与标准 PyPI wheel，使用明确 index 的 `uv lock` 和 `uv sync --locked --no-build`，拒绝自定义 runtimeArguments、sdist、单文件 fileSha256 及尚无验证链的 npm／OCI／NuGet。console entry point 由用户显式输入，并核根 distribution 的实际版本和可调用入口。准备开始即使用最终 installation／generation 绝对路径，避免改名破坏 venv shebang；验证完整文件内容、权限和符号链接后，由唯一 SQLite 事务同时发布制品与操作完成。
+PyPI 制品发布使用目标已有 uv／Python 与标准 wheel，使用明确 index 的 `uv lock` 和 `uv sync --locked --no-build`。console entry point 由用户显式输入，并核根 distribution 的实际版本和可调用入口。准备开始即使用最终 installation／generation 绝对路径，避免改名破坏 venv shebang；验证完整文件内容、权限和符号链接后，由唯一 SQLite 事务同时发布制品与操作完成。
+
+npm 制品沿同一安装 owner、SQLite reserve／producer、取消、发布及引用链准备，使用目标已有 Node／npm、明确标准 registry、精确 semver 和 `package-lock` v3／`npm ci`，不新增账本或动态启动链。npm 自带解析器验证根包及版本，原锁保留嵌套依赖版本和 integrity；隔离用户 npm 配置，核实际依赖树及根 package 的显式 JavaScript bin 后才发布。记录目标 Node 的实际路径与初始版本，launch 直接使用记录路径与原 bin，不重新按 PATH 选择，也不在每次启动额外 hash runtime 二进制。原制品 digest 继续保护发布内容；Node 路径缺失或不可执行明确失败，runtime 原地升级与现有 Python 基运行时遵循相同边界。窗口按所选生态核对应 capability 与原因，PyPI 缺失不阻止 npm。首批 npm 不执行 install scripts，实际依赖需要构建时明确失败；OCI／NuGet、自定义 runtimeArguments、sdist 和单文件 fileSha256 继续明确不支持，不把这些限制隐藏为安装成功。
 
 同一 BOXTEAM_HOME 的稳定 Backend 安装域允许多个真实 Backend 进程共享账本；schema 初始化仅短持锁，安装意图由 SQLite 唯一 reserve，不持生命周期独占锁。操作 owner 记录 PID 与进程创建时间；另一个活 Backend 不得中断原操作，只有确认原进程已退出时才将运行中记录标为 interrupted。相同意图始终返回原操作，不因重启重放，未发布目录不具备可启动 binding。
 

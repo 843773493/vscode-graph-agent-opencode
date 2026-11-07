@@ -4156,6 +4156,16 @@ export declare type McpInstalledArtifactDTO = Message<"boxteam.workspace.v2.McpI
    * @generated from field: optional string removal_error = 15;
    */
   removalError?: string | undefined;
+
+  /**
+   * @generated from field: optional string runtime_executable = 16;
+   */
+  runtimeExecutable?: string | undefined;
+
+  /**
+   * @generated from field: optional string runtime_version = 17;
+   */
+  runtimeVersion?: string | undefined;
 };
 
 /**
@@ -4489,6 +4499,16 @@ export declare type McpInstallationCapabilitiesDTO = Message<"boxteam.workspace.
    * @generated from field: repeated string limitations = 5;
    */
   limitations: string[];
+
+  /**
+   * @generated from field: bool npm_available = 6;
+   */
+  npmAvailable: boolean;
+
+  /**
+   * @generated from field: optional string npm_unavailable_reason = 7;
+   */
+  npmUnavailableReason?: string | undefined;
 };
 
 /**

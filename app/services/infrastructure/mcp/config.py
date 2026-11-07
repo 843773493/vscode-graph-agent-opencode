@@ -182,13 +182,16 @@ def _parse_stdio_connection(
         raise TypeError(f"mcp.servers.{server_id}.env 只接受字符串或私有引用对象")
     private_env = {key: McpPrivateEnvRefDTO.model_validate(value) for key, value in raw_env.items() if not isinstance(value, str)}
     plain_env = {key: value for key, value in raw_env.items() if isinstance(value, str)}
-    if managed_command is not None:
+    if managed_artifact is not None and managed_artifact.registry_type == "pypi":
         if any(key.upper() in {"PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE"} for key in raw_env):
             raise ValueError("受管 MCP 制品不能通过 Python 导入路径环境变量替换锁定依赖")
         plain_env = {**plain_env, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
         if any(key.upper() in {"PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE"} and not isinstance(value, str)
                for key, value in raw_env.items()):
             raise ValueError("受管 MCP 制品的 Python 隔离参数不能使用私有输入替换")
+    if (managed_artifact is not None and managed_artifact.registry_type == "npm"
+            and any(key.upper() in {"NODE_PATH", "NODE_OPTIONS"} for key in raw_env)):
+        raise ValueError("受管 npm 制品不能通过 Node 导入路径或启动选项替换锁定依赖")
 
     raw_cwd = raw_server.get("cwd")
     cwd = (

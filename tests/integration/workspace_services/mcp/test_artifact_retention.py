@@ -35,8 +35,8 @@ from app.services.infrastructure.external_resource_leases import (
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.candidate_source import native_mcp_platform
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
-from app.services.infrastructure.mcp.installation.python import artifact_digest
 from app.services.infrastructure.mcp.installation.references import McpArtifactInUse
+from app.services.infrastructure.mcp.installation.runtime import artifact_digest
 from app.services.infrastructure.mcp.installation.store import (
     InstallationStore,
     artifact_key,

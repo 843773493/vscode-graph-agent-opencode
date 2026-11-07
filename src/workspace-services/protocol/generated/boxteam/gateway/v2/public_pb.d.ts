@@ -4847,6 +4847,70 @@ export declare type ExtensionHostTargetDTO = Message<"boxteam.gateway.v2.Extensi
 export declare const ExtensionHostTargetDTOSchema: GenMessage<ExtensionHostTargetDTO>;
 
 /**
+ * 目标身份和当前管理授权投影；不暴露宿主运行态，也不启动 Backend。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionTargetCapabilitiesDTO
+ */
+export declare type ExtensionTargetCapabilitiesDTO = Message<"boxteam.gateway.v2.ExtensionTargetCapabilitiesDTO"> & {
+  /**
+   * @generated from field: bool installation_manage = 1;
+   */
+  installationManage: boolean;
+
+  /**
+   * @generated from field: bool host_manage = 2;
+   */
+  hostManage: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionTargetCapabilitiesDTO.
+ * Use `create(ExtensionTargetCapabilitiesDTOSchema)` to create a new message.
+ */
+export declare const ExtensionTargetCapabilitiesDTOSchema: GenMessage<ExtensionTargetCapabilitiesDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionTargetDTO
+ */
+export declare type ExtensionTargetDTO = Message<"boxteam.gateway.v2.ExtensionTargetDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 3;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string source = 5;
+   */
+  source: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionTargetCapabilitiesDTO capabilities = 6;
+   */
+  capabilities?: ExtensionTargetCapabilitiesDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionTargetDTO.
+ * Use `create(ExtensionTargetDTOSchema)` to create a new message.
+ */
+export declare const ExtensionTargetDTOSchema: GenMessage<ExtensionTargetDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.ExtensionValidation
  */
 export declare type ExtensionValidation = Message<"boxteam.gateway.v2.ExtensionValidation"> & {

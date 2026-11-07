@@ -946,6 +946,8 @@ message McpInstalledArtifactDTO {
   string state = 13;
   optional string removal_operation_id = 14;
   optional string removal_error = 15;
+  optional string runtime_executable = 16;
+  optional string runtime_version = 17;
 }
 
 message McpInstallationOperationDTO {
@@ -1019,6 +1021,8 @@ message McpInstallationCapabilitiesDTO {
   optional string unavailable_reason = 3;
   repeated string unsupported_registry_types = 4;
   repeated string limitations = 5;
+  bool npm_available = 6;
+  optional string npm_unavailable_reason = 7;
 }
 
 message McpInstallationCapabilitiesResponseDTO {

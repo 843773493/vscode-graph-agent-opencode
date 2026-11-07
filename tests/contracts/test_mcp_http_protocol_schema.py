@@ -111,8 +111,12 @@ def test_mcp_candidate_actual_routes_publish_complete_request_roots(http_openapi
     ("McpInstallationRequestDTO", "entrypoint"),
     ("McpInstalledArtifactDTO", "binding"),
     ("McpInstalledArtifactDTO", "installed_distributions"),
+    ("McpInstalledArtifactDTO", "runtime_executable"),
+    ("McpInstalledArtifactDTO", "runtime_version"),
     ("McpInstallationOperationDTO", "artifact"),
     ("McpInstallationCapabilitiesDTO", "pypi_wheel_available"),
+    ("McpInstallationCapabilitiesDTO", "npm_available"),
+    ("McpInstallationCapabilitiesDTO", "npm_unavailable_reason"),
 ])
 def test_mcp_target_and_generation_fields_cannot_drift(
     http_openapi: JsonSchemaValue, model: str, field: str,

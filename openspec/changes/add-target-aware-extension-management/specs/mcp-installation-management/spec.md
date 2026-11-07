@@ -56,7 +56,9 @@
 
 目标侧实际制品安装是新增能力，不能以原版写 gallery manifest／动态 npx、uvx、docker、dnx 启动配置代替。受管 launch SHALL 绑定已验证的隔离制品 generation／digest 和锁定依赖，容器绑定不可变镜像 digest；不具备该安装方式时明确不支持。已有用户显式动态命令保持原合同，不追认为受管安装或自动改写。
 
-首批 PyPI wheel 能力 SHALL 使用目标已有 uv／Python、显式 index 和锁定依赖，不自动安装系统 runtime。标准 wheel、根 distribution 的实际版本及用户显式 console entry point 验证完成后才发布；npm／OCI／NuGet、sdist、自定义 runtimeArguments 和目录单文件 fileSha256 未有验证链时明确拒绝，并在 capability 返回具体限制。venv 准备 SHALL 从最终固定 generation 路径开始，不能先准备再改名破坏绝对 shebang。
+PyPI wheel 能力 SHALL 使用目标已有 uv／Python、显式 index 和锁定依赖，不自动安装系统 runtime。标准 wheel、根 distribution 的实际版本及用户显式 console entry point 验证完成后才发布。venv 准备 SHALL 从最终固定 generation 路径开始，不能先准备再改名破坏绝对 shebang。
+
+npm 能力 SHALL 使用目标已有 Node／npm、显式标准 registry、精确 semver 及 `package-lock` v3／`npm ci`。发布前验证根 package 的名称、版本及用户明确选择的 JavaScript bin，依赖来源、integrity 与实际依赖树沿同一生态工具核对。发布记录 SHALL 保留目标实际 Node 路径和版本；启动只使用该 Node 和原 generation 中的 bin，不通过当前 PATH、npx 或 latest 重新选择。PyPI 与 npm 的 capability 和不可用原因 SHALL 分别报告，窗口根据用户选定 variant 核对对应能力，不因另一生态缺失改投或阻止可用生态。首批 npm 不执行 install scripts，需要该构建步骤的实际依赖明确拒绝；OCI／NuGet、sdist、自定义 runtimeArguments 和目录单文件 fileSha256 未有验证链时明确拒绝，并在 capability 返回具体限制。
 
 同一 BOXTEAM_HOME／稳定 Backend 安装域的多个进程 SHALL 共享唯一 SQLite 安装账本；操作 reserve 由事务竞争唯一取得，活进程持有的操作不因另一 Backend 启动被判中断。只有原 PID 与创建时间已确认不存在时才标记 interrupted，相同意图不重放；发布制品和操作成功 SHALL 在同一事务中提交。
 
@@ -71,6 +73,14 @@
 #### Scenario: 真实启动使用已发布锁定制品
 - **WHEN** 目标完成服务安装后，目录 latest 改变，用户从真实 Thread 启动并调用服务
 - **THEN** 实际 launch 路径／镜像及依赖仍匹配原安装 generation／digest，未重新动态解析 latest；仅写配置或启动时临时下载不能算通过
+
+#### Scenario: npm 制品发布后环境与 registry 更新
+- **WHEN** npm 根包和依赖已锁定发布，registry 增加新版，目标 PATH 中的默认 Node 改变，用户显式配置原制品并经真实 Thread 调用
+- **THEN** 启动使用发布记录中的 Node 路径和原 generation 的显式 bin，根包与依赖保持原版本；原 Node 缺失或不可执行时明确失败，不切换 runtime 或下载新版
+
+#### Scenario: npm 入口无效或依赖需要构建
+- **WHEN** 用户明确选择的 bin 不属于根包，或实际依赖需要尚未支持的 install scripts
+- **THEN** 原操作明确失败，不发布可启动 binding，不改写旧制品或工作区配置，也不退回依赖包入口或动态 npx
 
 ### Requirement: 安装操作必须保持幂等并可核实中断结果
 

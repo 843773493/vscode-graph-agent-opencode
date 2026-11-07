@@ -56,8 +56,8 @@ from app.services.infrastructure.mcp.candidate_source import (
     McpCandidateSourceUnavailable,
 )
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
-from app.services.infrastructure.mcp.installation.python import InstallationUnavailable
 from app.services.infrastructure.mcp.installation.references import McpArtifactInUse
+from app.services.infrastructure.mcp.installation.runtime import InstallationUnavailable
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 

@@ -954,6 +954,8 @@ export interface McpInstalledArtifactDTO {
   state: string;
   removal_operation_id?: string | undefined;
   removal_error?: string | undefined;
+  runtime_executable?: string | undefined;
+  runtime_version?: string | undefined;
 }
 
 export interface McpInstalledArtifactDTO_InstalledDistributionsEntry {
@@ -1032,6 +1034,8 @@ export interface McpInstallationCapabilitiesDTO {
   unavailable_reason?: string | undefined;
   unsupported_registry_types: string[];
   limitations: string[];
+  npm_available: boolean;
+  npm_unavailable_reason?: string | undefined;
 }
 
 export interface McpInstallationCapabilitiesResponseDTO {
@@ -9917,6 +9921,8 @@ function createBaseMcpInstalledArtifactDTO(): McpInstalledArtifactDTO {
     state: "",
     removal_operation_id: undefined,
     removal_error: undefined,
+    runtime_executable: undefined,
+    runtime_version: undefined,
   };
 }
 
@@ -9953,6 +9959,8 @@ export const McpInstalledArtifactDTO: MessageFns<McpInstalledArtifactDTO> = {
         ? globalThis.String(object.removal_operation_id)
         : undefined,
       removal_error: isSet(object.removal_error) ? globalThis.String(object.removal_error) : undefined,
+      runtime_executable: isSet(object.runtime_executable) ? globalThis.String(object.runtime_executable) : undefined,
+      runtime_version: isSet(object.runtime_version) ? globalThis.String(object.runtime_version) : undefined,
     };
   },
 
@@ -10009,6 +10017,12 @@ export const McpInstalledArtifactDTO: MessageFns<McpInstalledArtifactDTO> = {
     if (message.removal_error !== undefined) {
       obj.removal_error = message.removal_error;
     }
+    if (message.runtime_executable !== undefined) {
+      obj.runtime_executable = message.runtime_executable;
+    }
+    if (message.runtime_version !== undefined) {
+      obj.runtime_version = message.runtime_version;
+    }
     return obj;
   },
 
@@ -10049,6 +10063,8 @@ export const McpInstalledArtifactDTO: MessageFns<McpInstalledArtifactDTO> = {
     message.state = object.state ?? "";
     message.removal_operation_id = object.removal_operation_id ?? undefined;
     message.removal_error = object.removal_error ?? undefined;
+    message.runtime_executable = object.runtime_executable ?? undefined;
+    message.runtime_version = object.runtime_version ?? undefined;
     return message;
   },
 };
@@ -10547,6 +10563,8 @@ function createBaseMcpInstallationCapabilitiesDTO(): McpInstallationCapabilities
     unavailable_reason: undefined,
     unsupported_registry_types: [],
     limitations: [],
+    npm_available: false,
+    npm_unavailable_reason: undefined,
   };
 }
 
@@ -10564,6 +10582,10 @@ export const McpInstallationCapabilitiesDTO: MessageFns<McpInstallationCapabilit
       limitations: globalThis.Array.isArray(object?.limitations)
         ? object.limitations.map((e: any) => globalThis.String(e))
         : [],
+      npm_available: isSet(object.npm_available) ? globalThis.Boolean(object.npm_available) : false,
+      npm_unavailable_reason: isSet(object.npm_unavailable_reason)
+        ? globalThis.String(object.npm_unavailable_reason)
+        : undefined,
     };
   },
 
@@ -10584,6 +10606,12 @@ export const McpInstallationCapabilitiesDTO: MessageFns<McpInstallationCapabilit
     if (message.limitations?.length) {
       obj.limitations = message.limitations;
     }
+    if (message.npm_available !== false) {
+      obj.npm_available = message.npm_available;
+    }
+    if (message.npm_unavailable_reason !== undefined) {
+      obj.npm_unavailable_reason = message.npm_unavailable_reason;
+    }
     return obj;
   },
 
@@ -10601,6 +10629,8 @@ export const McpInstallationCapabilitiesDTO: MessageFns<McpInstallationCapabilit
     message.unavailable_reason = object.unavailable_reason ?? undefined;
     message.unsupported_registry_types = object.unsupported_registry_types?.map((e) => e) || [];
     message.limitations = object.limitations?.map((e) => e) || [];
+    message.npm_available = object.npm_available ?? false;
+    message.npm_unavailable_reason = object.npm_unavailable_reason ?? undefined;
     return message;
   },
 };

@@ -35,7 +35,7 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
   const source = galleryInstallationSource(gallery);
   signal.throwIfAborted();
   const capabilities = await getMcpInstallationCapabilities(0, workspace, signal);
-  if (!capabilities.data?.pypi_wheel_available) throw new Error(capabilities.data?.unavailable_reason ?? '目标尚无可用的 PyPI wheel 安装能力');
+  if (!capabilities.data) throw new Error('目标未返回制品安装能力');
   const target = Object.freeze({ ...capabilities.target! });
   const inspected = await inspectMcpInstallationCandidate(0, workspace, { target, source }, signal);
   if (!inspected.data) throw new Error('目标未返回候选原件');
@@ -46,16 +46,21 @@ export async function publishMcpArtifact(gallery: IGalleryMcpServer, workspace: 
   })), { title: `安装 MCP 制品至 ${label}`, placeHolder: `显式选择运行方式 · Backend ${target.backend_id}` }, token);
   signal.throwIfAborted();
   if (!selected) throw new CancellationError();
-  if (selected.variant.registry_type !== 'pypi' || selected.variant.ref?.kind !== 'package') {
-    throw new Error('本批仅支持 PyPI wheel 制品；HTTP 服务须经工作区配置入口，其它生态尚未支持');
+  if (!['pypi', 'npm'].includes(selected.variant.registry_type ?? '') || selected.variant.ref?.kind !== 'package') {
+    throw new Error('本批支持 PyPI wheel 与 npm 制品；HTTP 服务须经工作区配置入口，其它生态尚未支持');
+  }
+  const npm = selected.variant.registry_type === 'npm';
+  if (npm ? !capabilities.data.npm_available : !capabilities.data.pypi_wheel_available) {
+    throw new Error((npm ? capabilities.data.npm_unavailable_reason : capabilities.data.unavailable_reason)
+      ?? `目标尚无可用的 ${npm ? 'npm' : 'PyPI wheel'} 安装能力`);
   }
   const candidate: McpCandidatePlanRequestDTO = { target, source, manifest_digest: inspected.data.manifest_digest,
     variant: selected.variant.ref, inputs: {} };
   const planned = await planMcpInstallation(0, workspace, candidate, signal);
   if (!planned.data || planned.data.disposition !== 'requires_artifact') throw new Error('目标计划没有可安装制品');
   const entrypoint = await quickInput.input({ title: `验证 ${selected.variant.identifier} 的入口`,
-    prompt: '输入根 distribution 的 console entry point；制品安装后不会自动创建工作区配置',
-    placeHolder: '例如 mcp-server-fetch', validateInput: async value => /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value) ? undefined : '请输入明确的 console entry point 名称' }, token);
+    prompt: `输入${npm ? '根 package 的 bin 名称' : '根 distribution 的 console entry point'}；制品安装后不会自动创建工作区配置`,
+    placeHolder: '例如 mcp-server-fetch', validateInput: async value => /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value) ? undefined : '请输入明确的入口名称' }, token);
   signal.throwIfAborted();
   if (entrypoint === undefined) throw new CancellationError();
   if (token.isCancellationRequested) throw new CancellationError();

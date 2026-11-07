@@ -107,7 +107,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     payload_digest,
 )
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
-from app.services.infrastructure.mcp.installation.python import InstallationUnavailable
+from app.services.infrastructure.mcp.installation.runtime import InstallationUnavailable
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from app.services.infrastructure.mcp.oauth import is_authorization_required
 from app.services.infrastructure.mcp.private_inputs import (

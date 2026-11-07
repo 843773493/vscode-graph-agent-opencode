@@ -7,8 +7,11 @@ import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const fixture = JSON.parse(process.env.BOXTEAM_ARTIFACT_FIXTURE);
 assert(fixture.artifacts, '必须显式指定浏览器产物目录');
+const registryType = fixture.registryType ?? 'pypi';
+const identifier = fixture.identifier ?? 'artifact-server';
+const entrypoint = fixture.entrypoint ?? 'artifact-server';
 const scope = TestRunContext.fromTestFile(fixture.testFile);
-const result = { classification: 'Integration', boundary: '真实 Workbench/Gateway/Backend/uv；目录及标准 wheel 来自受控本地 PyPI index',
+const result = { classification: 'Integration', boundary: `真实 Workbench/Gateway/Backend/${registryType === 'npm' ? 'npm；目录及标准 tgz 来自受控本地 registry' : 'uv；目录及标准 wheel 来自受控本地 PyPI index'}`,
   phase: 'prepare', pageErrors: [], requests: [], responses: [], initialization: [] };
 let page;
 let failure;
@@ -97,10 +100,10 @@ try {
   await install.click();
   const quick = page.locator('.quick-input-widget');
   await expect(quick).toBeVisible();
-  await quick.locator('.monaco-list-row').filter({ hasText: 'pypi: artifact-server 1.0.0' }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: `${registryType}: ${identifier} 1.0.0` }).click();
   result.phase = 'explicit-entrypoint';
-  await expect(quick).toContainText('输入根 distribution 的 console entry point');
-  await quick.locator('input').first().fill('artifact-server');
+  await expect(quick).toContainText(registryType === 'npm' ? '输入根 package 的 bin 名称' : '输入根 distribution 的 console entry point');
+  await quick.locator('input').first().fill(entrypoint);
   await page.keyboard.press('Enter');
   if (fixture.cancel) {
     result.phase = 'cancel';
@@ -121,8 +124,13 @@ try {
     const complete = result.responses.find(item => item.body.data?.status === 'succeeded');
     assert(complete?.body.data.artifact, '原安装操作必须真实确认发布');
     result.operation = complete.body.data;
-    assert.equal(result.operation.artifact.identifier, 'artifact-server');
-    assert.equal(result.operation.artifact.entrypoint, 'artifact-server');
+    assert.equal(result.operation.artifact.registry_type, registryType);
+    assert.equal(result.operation.artifact.identifier, identifier);
+    assert.equal(result.operation.artifact.entrypoint, entrypoint);
+    if (registryType === 'npm') {
+      assert(result.operation.artifact.runtime_executable);
+      assert(result.operation.artifact.runtime_version);
+    }
   }
   const submitted = result.responses.filter(item => item.method === 'POST' && new URL(item.url).pathname.endsWith('/mcp/installations'));
   assert.equal(submitted.length, 1, '原安装意图只能提交一次');

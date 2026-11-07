@@ -233,8 +233,8 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
     try {
       if (!server.gallery) throw new Error('当前安装入口只支持具有精确来源的 MCP 目录制品');
       galleryInstallationSource(server.gallery);
-      if (!server.gallery.configuration.packages?.some(item => item.registryType === 'pypi' && item.transport.type === 'stdio')) {
-        throw new Error('当前目标只支持 PyPI wheel 制品，所选目录没有该运行方式');
+      if (!server.gallery.configuration.packages?.some(item => ['pypi', 'npm'].includes(item.registryType) && item.transport.type === 'stdio')) {
+        throw new Error('当前安装入口支持 PyPI wheel 与 npm 制品，所选目录没有这些运行方式');
       }
       this.owner.installationTarget();
       return true;

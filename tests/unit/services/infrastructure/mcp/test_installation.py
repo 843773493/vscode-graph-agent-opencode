@@ -43,12 +43,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
 )
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
-from app.services.infrastructure.mcp.installation.python import (
+from app.services.infrastructure.mcp.installation.python import python_package
+from app.services.infrastructure.mcp.installation.runtime import (
     InstallationUnavailable,
     StageCallback,
-    _run,
     artifact_digest,
-    python_package,
+    run_tool,
 )
 from app.services.infrastructure.mcp.installation.store import (
     InstallationReservation,
@@ -159,7 +159,7 @@ async def test_managed_python_executes_original_script_or_launcher_archive(
     async def progress(stage: str, output: str) -> None:
         pass
 
-    actual = json.loads(await _run([command, *args], directory=directory, progress=progress, stage="verify"))
+    actual = json.loads(await run_tool([command, *args], directory=directory, progress=progress, stage="verify", environment=os.environ, tool="Python"))
     assert actual["argv"] == [artifact.command, *arguments] and Path(actual["cwd"]) == directory
     assert Path(actual["prefix"]) == entry.parent.parent and Path(actual["executable"]).samefile(command)
     assert artifact_digest(dependency.parent) == artifact.binding.artifact_digest

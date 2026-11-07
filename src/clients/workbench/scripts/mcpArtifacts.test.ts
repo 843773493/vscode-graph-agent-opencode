@@ -24,7 +24,7 @@ afterEach(() => { mocks.splice(0).forEach(mock => mock.mockRestore()); });
 
 function prepare(steps: ((items: QuickPickInput<IQuickPickItem>[]) => IQuickPickItem | undefined | Promise<IQuickPickItem | undefined>)[]) {
   const capabilities = spyOn(api, 'getMcpInstallationCapabilities').mockResolvedValue(envelope({ platform: artifact.platform,
-    pypi_wheel_available: false, unsupported_registry_types: [], limitations: [] }));
+    pypi_wheel_available: false, npm_available: false, unsupported_registry_types: [], limitations: [] }));
   const listing = spyOn(api, 'listMcpInstalledArtifacts').mockResolvedValue(envelope([artifact]));
   const references = spyOn(api, 'getMcpArtifactReferences').mockResolvedValue(envelope({ binding, references: [] }));
   const uninstall = spyOn(api, 'uninstallMcpArtifact').mockImplementation(async (_port, _workspace, intent) => envelope(operation(intent.operation_id)));

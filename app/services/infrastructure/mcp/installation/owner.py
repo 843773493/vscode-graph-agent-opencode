@@ -30,15 +30,24 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp.candidate_source import native_mcp_platform
+from app.services.infrastructure.mcp.installation.npm import (
+    NpmRuntime,
+    npm_entrypoint,
+    npm_package,
+    npm_runtime,
+    prepare_npm_artifact,
+)
 from app.services.infrastructure.mcp.installation.python import (
-    InstallationUnavailable,
-    artifact_digest,
     prepare_python_artifact,
     python_package,
 )
 from app.services.infrastructure.mcp.installation.references import (
     McpArtifactInUse,
     workspace_references,
+)
+from app.services.infrastructure.mcp.installation.runtime import (
+    InstallationUnavailable,
+    artifact_digest,
 )
 from app.services.infrastructure.mcp.installation.store import (
     InstallationCancelled,
@@ -58,14 +67,21 @@ class McpInstallationOwner:
 
     def capabilities(self) -> McpInstallationCapabilitiesDTO:
         reason = None
+        npm_reason = None
         try:
             python_package({"registry_type": "pypi", "identifier": "capability-check", "version": "1"})
         except InstallationUnavailable as error:
             reason = str(error)
+        try:
+            npm_runtime()
+        except InstallationUnavailable as error:
+            npm_reason = str(error)
         if self._closed:
             reason = "Backend 制品安装 owner 已关闭准入"
+            npm_reason = reason
         return McpInstallationCapabilitiesDTO(platform=native_mcp_platform(),
-            pypi_wheel_available=reason is None, unavailable_reason=reason)
+            pypi_wheel_available=reason is None, unavailable_reason=reason,
+            npm_available=npm_reason is None, npm_unavailable_reason=npm_reason)
 
     async def install(self, request: McpInstallationRequestDTO, *, plan: McpCandidatePlanDTO,
         parameters: dict[str, object]) -> McpInstallationOperationDTO:
@@ -75,7 +91,8 @@ class McpInstallationOwner:
             raise McpCandidateConflict("MCP 安装请求与原 Backend／候选计划不一致")
         if plan.disposition != "requires_artifact":
             raise InstallationUnavailable("该候选属于配置或显式动态命令，没有可安装制品")
-        name, version, index = python_package(parameters)
+        runtime = npm_runtime() if parameters.get("registry_type") == "npm" else None
+        name, version, index = npm_package(parameters) if runtime is not None else python_package(parameters)
         intent_digest = sha256_jcs({"target": request.candidate.target.model_dump(), "plan_digest": plan.plan_digest,
             "entrypoint": request.entrypoint, "registry": index, "package": name, "version": version})
         now = time.time()
@@ -83,14 +100,14 @@ class McpInstallationOwner:
             operation_id=request.operation_id, intent_digest=intent_digest, status="running", stage="prepare", created_at=now, updated_at=now),
             key=artifact_key(plan, identifier=name, version=version, entrypoint=request.entrypoint))
         if reservation.artifact is not None or reservation.preparation is not None:
-            task = asyncio.create_task(self._prepare(reservation, request, plan, name, version, index),
+            task = asyncio.create_task(self._prepare(reservation, request, plan, name, version, index, runtime),
                 name=f"mcp-installation:{request.operation_id}")
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
         return reservation.operation
 
     async def _prepare(self, reservation: InstallationReservation, request: McpInstallationRequestDTO,
-        plan: McpCandidatePlanDTO, name: str, version: str, index: str) -> None:
+        plan: McpCandidatePlanDTO, name: str, version: str, index: str, runtime: NpmRuntime | None) -> None:
         operation = reservation.operation
         async def progress(stage: str, output: str = "") -> None:
             nonlocal operation
@@ -125,9 +142,15 @@ class McpInstallationOwner:
                     raise RuntimeError("MCP 制品准备缺少事务准入，不能自行分配新 generation")
                 installation_id, generation = preparation.installation_id, preparation.generation
                 root = self._root / "generations" / installation_id / generation
-                command, lock_digest, distributions = await prepare_python_artifact(root,
-                    name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress,
-                    execution_directory=self._root)
+                runtime_version = None
+                if runtime is None:
+                    command, lock_digest, distributions = await prepare_python_artifact(root,
+                        name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress,
+                        execution_directory=self._root)
+                else:
+                    command, lock_digest, distributions, runtime_version = await prepare_npm_artifact(root,
+                        name=name, version=version, index=index, entrypoint=request.entrypoint, runtime=runtime,
+                        progress=progress, execution_directory=self._root)
                 await progress("publish")
                 digest = await run_sync_shielded(artifact_digest, root)
                 artifact = McpInstalledArtifactDTO(
@@ -135,7 +158,9 @@ class McpInstallationOwner:
                         generation=generation, artifact_digest=digest),
                     source=plan.source, manifest_digest=plan.manifest_digest, variant=plan.variant, platform=plan.platform,
                     identifier=name, version=version, entrypoint=request.entrypoint, command=command,
-                    lock_digest=lock_digest, installed_distributions=distributions)
+                    registry_type="npm" if runtime is not None else "pypi", lock_digest=lock_digest,
+                    installed_distributions=distributions, runtime_executable=str(runtime.node) if runtime is not None else None,
+                    runtime_version=runtime_version)
             await run_sync_shielded(self._store.publish, operation, artifact)
         except BaseException as cause:
             error = monitoring_error or cause
@@ -181,8 +206,9 @@ class McpInstallationOwner:
         if artifact.state != "published":
             raise McpCandidateConflict(f"MCP 制品当前为 {artifact.state}，不能作为 ready launch；原卸载操作: {artifact.removal_operation_id}")
         root = self._root / "generations" / binding.installation_id / binding.generation
-        expected_command = root / ".venv" / ("Scripts" if os.name == "nt" else "bin") / (
-            artifact.entrypoint + ".exe" if os.name == "nt" else artifact.entrypoint)
+        expected_command = (npm_entrypoint(root, name=artifact.identifier, version=artifact.version, entrypoint=artifact.entrypoint)
+            if artifact.registry_type == "npm" else root / ".venv" / ("Scripts" if os.name == "nt" else "bin") / (
+                artifact.entrypoint + ".exe" if os.name == "nt" else artifact.entrypoint))
         if artifact.command != str(expected_command) or not expected_command.is_file():
             raise ValueError("受管 MCP 制品发布路径丢失或与唯一安装记录不一致")
         return artifact
@@ -195,6 +221,12 @@ class McpInstallationOwner:
         root = self._root / "generations" / binding.installation_id / binding.generation
         if artifact_digest(root) != binding.artifact_digest:
             raise ValueError("受管 MCP 制品内容已改变；拒绝启动，必须重新验证并发布新 generation")
+        if artifact.registry_type == "npm":
+            assert artifact.runtime_executable is not None
+            node = Path(artifact.runtime_executable)
+            if not node.is_absolute() or not node.is_file() or not os.access(node, os.X_OK):
+                raise InstallationUnavailable("已发布 npm 制品绑定的原 Node 路径缺失或不可执行；不会改用当前 PATH")
+            return str(node), [command, *args]
         # Python 直接执行生态生成的脚本／Windows ZIP 入口，保留其 argv 与 entry point 语义。
         # 避免 Windows console trampoline 内部再次启动长路径 Python 时触发 MAX_PATH。
         python = Path(command).with_name("python.exe" if os.name == "nt" else "python")

@@ -18,6 +18,9 @@
 - 只使用显式来源和已有生态工具；不支持的安装方式直接报错。
 - 未发布目录不可启动；固定 generation 路径在准备后不能改名。
 - PyPI 受管启动统一由同一 venv 的 Python 直接执行生态生成的脚本／Windows ZIP 入口，保留原参数和工作目录；不经过 console trampoline 再启动 Python，不新造 entry point 包装器。原显式动态命令仍归普通 stdio 链路。
+- npm 使用目标已有 Node／npm、精确根版本和标准 registry；由 package-lock v3 与 npm ci 固定完整依赖，显式选择根 package 的 JavaScript bin。需要 install scripts 的实际依赖明确拒绝，不把忽略构建报告成发布成功。
+- npm 发布记录冻结目标 Node 的绝对路径与初始版本；实际 launch 使用原路径直接运行已发布 bin。runtime 缺失或不可执行明确失败，不从当前 PATH 重选，也不对目标 runtime 建立二进制摘要。
+- `runtime.py` 统一维护生态工具的原进程容器、取消清理和完整制品摘要；各生态不得复制第二套执行链或安装账本。
 - 数据归 BOXTEAM_HOME 的 Backend 基础设施域；工作区只保存精确引用。
 - 操作日志有界且不包含工作区输入或凭据，重启不重放未知安装。
 - 首次引用与卸载共用原安装事务准入；先取安装域锁，再写工作区。未知占用、清理失败及未结清调用拒绝卸载，不以断开连接代替实际退出证明。

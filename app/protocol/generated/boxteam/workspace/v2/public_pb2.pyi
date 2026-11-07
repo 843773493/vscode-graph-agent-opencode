@@ -1581,7 +1581,7 @@ class McpInstallationRequestDTO(_message.Message):
     def __init__(self, candidate: _Optional[_Union[McpCandidatePlanRequestDTO, _Mapping]] = ..., plan_digest: _Optional[str] = ..., operation_id: _Optional[str] = ..., entrypoint: _Optional[str] = ...) -> None: ...
 
 class McpInstalledArtifactDTO(_message.Message):
-    __slots__ = ("binding", "source", "manifest_digest", "variant", "platform", "registry_type", "identifier", "version", "entrypoint", "command", "lock_digest", "installed_distributions", "state", "removal_operation_id", "removal_error")
+    __slots__ = ("binding", "source", "manifest_digest", "variant", "platform", "registry_type", "identifier", "version", "entrypoint", "command", "lock_digest", "installed_distributions", "state", "removal_operation_id", "removal_error", "runtime_executable", "runtime_version")
     class InstalledDistributionsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -1604,6 +1604,8 @@ class McpInstalledArtifactDTO(_message.Message):
     STATE_FIELD_NUMBER: _ClassVar[int]
     REMOVAL_OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     REMOVAL_ERROR_FIELD_NUMBER: _ClassVar[int]
+    RUNTIME_EXECUTABLE_FIELD_NUMBER: _ClassVar[int]
+    RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
     binding: McpManagedLaunchDTO
     source: McpCandidateProvenanceDTO
     manifest_digest: str
@@ -1619,7 +1621,9 @@ class McpInstalledArtifactDTO(_message.Message):
     state: str
     removal_operation_id: str
     removal_error: str
-    def __init__(self, binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ..., entrypoint: _Optional[str] = ..., command: _Optional[str] = ..., lock_digest: _Optional[str] = ..., installed_distributions: _Optional[_Mapping[str, str]] = ..., state: _Optional[str] = ..., removal_operation_id: _Optional[str] = ..., removal_error: _Optional[str] = ...) -> None: ...
+    runtime_executable: str
+    runtime_version: str
+    def __init__(self, binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ..., entrypoint: _Optional[str] = ..., command: _Optional[str] = ..., lock_digest: _Optional[str] = ..., installed_distributions: _Optional[_Mapping[str, str]] = ..., state: _Optional[str] = ..., removal_operation_id: _Optional[str] = ..., removal_error: _Optional[str] = ..., runtime_executable: _Optional[str] = ..., runtime_version: _Optional[str] = ...) -> None: ...
 
 class McpInstallationOperationDTO(_message.Message):
     __slots__ = ("operation_id", "intent_digest", "status", "stage", "created_at", "updated_at", "artifact", "error", "log", "kind", "cancellation_requested")
@@ -1738,18 +1742,22 @@ class McpInstalledArtifactListResponseDTO(_message.Message):
     def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Iterable[_Union[McpInstalledArtifactDTO, _Mapping]]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
 
 class McpInstallationCapabilitiesDTO(_message.Message):
-    __slots__ = ("platform", "pypi_wheel_available", "unavailable_reason", "unsupported_registry_types", "limitations")
+    __slots__ = ("platform", "pypi_wheel_available", "unavailable_reason", "unsupported_registry_types", "limitations", "npm_available", "npm_unavailable_reason")
     PLATFORM_FIELD_NUMBER: _ClassVar[int]
     PYPI_WHEEL_AVAILABLE_FIELD_NUMBER: _ClassVar[int]
     UNAVAILABLE_REASON_FIELD_NUMBER: _ClassVar[int]
     UNSUPPORTED_REGISTRY_TYPES_FIELD_NUMBER: _ClassVar[int]
     LIMITATIONS_FIELD_NUMBER: _ClassVar[int]
+    NPM_AVAILABLE_FIELD_NUMBER: _ClassVar[int]
+    NPM_UNAVAILABLE_REASON_FIELD_NUMBER: _ClassVar[int]
     platform: McpTargetPlatformDTO
     pypi_wheel_available: bool
     unavailable_reason: str
     unsupported_registry_types: _containers.RepeatedScalarFieldContainer[str]
     limitations: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., pypi_wheel_available: _Optional[bool] = ..., unavailable_reason: _Optional[str] = ..., unsupported_registry_types: _Optional[_Iterable[str]] = ..., limitations: _Optional[_Iterable[str]] = ...) -> None: ...
+    npm_available: bool
+    npm_unavailable_reason: str
+    def __init__(self, platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., pypi_wheel_available: _Optional[bool] = ..., unavailable_reason: _Optional[str] = ..., unsupported_registry_types: _Optional[_Iterable[str]] = ..., limitations: _Optional[_Iterable[str]] = ..., npm_available: _Optional[bool] = ..., npm_unavailable_reason: _Optional[str] = ...) -> None: ...
 
 class McpInstallationCapabilitiesResponseDTO(_message.Message):
     __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")

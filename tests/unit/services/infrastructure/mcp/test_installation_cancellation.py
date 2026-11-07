@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ import pytest
 from app.core import child_process
 from app.domain.mcp_candidates import McpCandidateConflict
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
-from app.services.infrastructure.mcp.installation.python import _run
+from app.services.infrastructure.mcp.installation.runtime import run_tool
 from app.services.infrastructure.mcp.installation.store import (
     InstallationCancelled,
     InstallationStore,
@@ -92,8 +93,8 @@ async def running_installation(tmp_path, monkeypatch, installation_intent):
         root.mkdir(parents=True)
         roots.append(root)
         started.set()
-        await _run([sys.executable, "-c", "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); print('stdout',flush=True); print('stderr',file=sys.stderr,flush=True); time.sleep(60)",
-            str(root / "pid")], directory=execution_directory, progress=progress, stage="install")
+        await run_tool([sys.executable, "-c", "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); print('stdout',flush=True); print('stderr',file=sys.stderr,flush=True); time.sleep(60)",
+            str(root / "pid")], directory=execution_directory, progress=progress, stage="install", environment=os.environ, tool="test-runtime")
         pytest.fail("取消后的真实子进程不得进入发布")
 
     monkeypatch.setattr(child_process.OwnedChildProcess, "close", close)
@@ -154,8 +155,8 @@ async def test_tool_output_merges_stdout_and_stderr(tmp_path):
     async def report(stage, output):
         progress.append((stage, output))
 
-    output = await _run([sys.executable, "-c", "import sys; print('original-out',flush=True); print('original-error',file=sys.stderr,flush=True)"],
-        directory=tmp_path, progress=report, stage="verify")
+    output = await run_tool([sys.executable, "-c", "import sys; print('original-out',flush=True); print('original-error',file=sys.stderr,flush=True)"],
+        directory=tmp_path, progress=report, stage="verify", environment=os.environ, tool="test-runtime")
     assert "original-out" in output and "original-error" in output
     assert progress == [("verify", ""), ("verify", output)]
 
@@ -192,8 +193,8 @@ async def test_other_process_records_cancellation_in_original_sqlite(installatio
     async def progress(stage, output):
         pass
 
-    output = await _run([sys.executable, "-c", "import pathlib,sys; from app.services.infrastructure.mcp.installation.store import InstallationStore; print(InstallationStore(pathlib.Path(sys.argv[1])).request_cancel(sys.argv[2]).model_dump_json())",
-        str(root), operation.operation_id], directory=Path.cwd(), progress=progress, stage="verify")
+    output = await run_tool([sys.executable, "-c", "import pathlib,sys; from app.services.infrastructure.mcp.installation.store import InstallationStore; print(InstallationStore(pathlib.Path(sys.argv[1])).request_cancel(sys.argv[2]).model_dump_json())",
+        str(root), operation.operation_id], directory=Path.cwd(), progress=progress, stage="verify", environment=os.environ, tool="test-runtime")
     receipt = json.loads(output)
     assert receipt["status"] == "running" and receipt["cancellation_requested"]
     assert installation_store.cancellation_pending(operation.operation_id)

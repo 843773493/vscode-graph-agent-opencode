@@ -419,16 +419,24 @@ class McpInstalledArtifactDTO(_McpCandidateModel):
     manifest_digest: str
     variant: McpCandidateVariantRefDTO
     platform: McpTargetPlatformDTO
-    registry_type: Literal["pypi"] = "pypi"
+    registry_type: Literal["pypi", "npm"] = "pypi"
     identifier: str
     version: str
     entrypoint: str
     command: str
     lock_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     installed_distributions: dict[str, str]
+    runtime_executable: str | None = Field(default=None, min_length=1)
+    runtime_version: str | None = Field(default=None, min_length=1)
     state: Literal["published", "removing", "removal_failed", "removed"] = "published"
     removal_operation_id: str | None = None
     removal_error: str | None = None
+
+    @model_validator(mode="after")
+    def require_npm_runtime(self) -> McpInstalledArtifactDTO:
+        if self.registry_type == "npm" and (self.runtime_executable is None or self.runtime_version is None):
+            raise ValueError("已发布 npm 制品必须记录目标实际 Node 路径及版本")
+        return self
 
 
 class McpInstallationOperationDTO(_McpCandidateModel):
@@ -485,12 +493,15 @@ class McpInstallationCapabilitiesDTO(_McpCandidateModel):
     platform: McpTargetPlatformDTO
     pypi_wheel_available: bool
     unavailable_reason: str | None = None
-    unsupported_registry_types: list[str] = Field(default_factory=lambda: ["npm", "oci", "nuget"])
+    npm_available: bool
+    npm_unavailable_reason: str | None = None
+    unsupported_registry_types: list[str] = Field(default_factory=lambda: ["oci", "nuget"])
     limitations: list[str] = Field(default_factory=lambda: [
-        "仅使用目标已有 uv／Python，不自动安装系统 runtime",
-        "只安装 wheel，不运行 sdist 构建或自定义 runtimeArguments",
-        "入口须显式选择并验证为根 distribution 的 console entry point",
-        "依赖使用 uv.lock 校验，暂不支持目录单文件 fileSha256",
+        "仅使用目标已有 uv／Python 或 Node／npm，不自动安装系统 runtime",
+        "PyPI 只安装 wheel，不运行 sdist 构建；入口须为根 distribution 的 console entry point",
+        "npm 使用标准 registry 与 package-lock v3／ci；入口须为根 package 的 JavaScript bin",
+        "npm 不执行 install scripts，需要构建的依赖明确拒绝",
+        "不执行自定义 runtimeArguments，锁定依赖校验暂不支持目录单文件 fileSha256",
         "安装不写入工作区配置、不等于连接 ready；物理卸载须先结清全部实际引用",
     ])
 

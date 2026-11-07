@@ -35,7 +35,7 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, candidate_source
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
-from app.services.infrastructure.mcp.installation.python import artifact_digest
+from app.services.infrastructure.mcp.installation.runtime import artifact_digest
 from app.services.infrastructure.mcp.installation.store import artifact_key
 from app.services.infrastructure.mcp.private_inputs import McpPrivateInputStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
