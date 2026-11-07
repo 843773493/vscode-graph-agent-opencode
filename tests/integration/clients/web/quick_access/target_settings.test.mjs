@@ -32,12 +32,18 @@ async function exercise(mode) {
     const result = await page.evaluate(mode => import('/target-settings.mjs').then(module => module.targetSettingsContract(mode)), mode);
     expect(errors).toEqual([]);
     if (!['identity', 'gateway', 'offline', 'duplicate'].includes(mode)) expect(result.commandError).toBeUndefined();
-    expect(result.requests.filter(item => item.path !== '/api/gateway/management/gateways')
+    expect(result.requests.filter(item => item.path.startsWith('/api/v1/'))
       .every(item => item.owner.gateway_id === result.target.gateway_id && item.owner.workspace_id === result.target.workspace_id)).toBe(true);
+    const discovery = result.requests.filter(item => item.path === '/api/gateway/extension-configurations/targets');
+    if (mode === 'selected-remote') {
+      expect(discovery).toHaveLength(1);
+      expect(discovery[0]).toMatchObject({ method: 'POST', body: { protocol_version: 1,
+        gateway_id: result.target.gateway_id, gateway_connection_id: 'connection-a' } });
+    } else expect(discovery).toEqual([]);
     return result;
   } finally { await context.close(); }
 }
-const writes = result => result.requests.filter(item => item.method !== 'GET');
+const writes = result => result.requests.filter(item => item.path.startsWith('/api/v1/') && item.method !== 'GET');
 const puts = result => result.requests.filter(item => item.method === 'PUT');
 
 for (const mode of ['choose', 'cancel', 'scopes', 'identity', 'gateway', 'mismatch']) test(`管理视图目标 ${mode} 不依赖工作区且不任取同目标连接`, async () => {
@@ -53,6 +59,7 @@ for (const mode of ['choose', 'cancel', 'scopes', 'identity', 'gateway', 'mismat
     const expectedRequests = ['/api/gateway/management/gateways'];
     if (['choose', 'cancel', 'scopes'].includes(mode)) expectedRequests.push('/api/gateway/extension-targets');
     if (mode === 'cancel' || mode === 'scopes') expectedRequests.push('/api/gateway/management/gateways');
+    if (mode === 'scopes') expectedRequests.push('/api/gateway/extension-configurations/targets');
     expect(result.requests).toEqual(expectedRequests);
     if (['choose', 'cancel', 'scopes'].includes(mode)) {
       expect(result.error).toBeUndefined();
@@ -61,7 +68,8 @@ for (const mode of ['choose', 'cancel', 'scopes', 'identity', 'gateway', 'mismat
       expect(result.toolbar.title).toBe('目标：同一目标');
       expect(result.picks[0][2].detail).toBe('远端离线');
       if (mode === 'cancel') expect(result.picks[1].map(item => item.picked)).toEqual([false, true, false]);
-      if (mode === 'scopes') expect(result.settings).toMatchObject({ gateway_id: 'gateway-b', gateway_connection_id: 'connection-b2' });
+      if (mode === 'scopes') expect(result.settings).toMatchObject({ gateway_id: 'gateway-b', gateway_connection_id: 'connection-b2',
+        backend_id: '22222222-2222-4222-8222-222222222222' });
       else expect(result.settings.gateway_id).toBe('gateway-entry');
     } else {
       expect(result.error).toContain(mode === 'mismatch' ? '不属于' : '已改变');

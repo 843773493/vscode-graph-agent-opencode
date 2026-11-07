@@ -13,6 +13,7 @@ from app.core.resource_uri import resource_display_uri
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import assert_public_schema
 from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationContributionDTO,
     ExtensionConfigurationFileRequest,
     ExtensionConfigurationProfileFileRequest,
     ExtensionConfigurationProfileViewRequest,
@@ -159,7 +160,7 @@ def test_initialization_rejects_view_and_locator_mismatch(host_binding: Extensio
 
 @pytest.mark.parametrize("host_bound", [False, True])
 def test_configuration_proto_preserves_distinct_settings_and_host_ownership(host_binding: ExtensionHostConnectionDTO, host_bound: bool) -> None:
-    for model in (ExtensionConfigurationTargetRequest, ExtensionConfigurationViewDTO, ExtensionConfigurationViewRequest,
+    for model in (ExtensionConfigurationTargetRequest, ExtensionConfigurationContributionDTO, ExtensionConfigurationViewDTO, ExtensionConfigurationViewRequest,
                   ExtensionConfigurationFileRequest,
     ExtensionConfigurationProfileFileRequest,
     ExtensionConfigurationProfileViewRequest,
@@ -168,7 +169,12 @@ def test_configuration_proto_preserves_distinct_settings_and_host_ownership(host
     target = host_binding.model_dump(include={"protocol_version", "gateway_id", "backend_id", "workspace_ids", "view_id"})
     context = ExtensionWebHostContextDTO(os=host_binding.initialization.os,
         workspace=host_binding.initialization.workspace, remote_settings=host_binding.initialization.environment.remote_settings)
-    view = ExtensionConfigurationViewDTO(**target, profile_id=host_binding.initialization.environment.profile_id, context=context)
+    extension = ExtensionConfigurationContributionDTO(extension_id="fixture.settings", name="settings", publisher="fixture",
+        configuration={"properties": {"fixture.value": {"type": "string", "default": "value"}}},
+        configuration_defaults={"[typescript]": {"editor.tabSize": 3}},
+        capabilities={"untrustedWorkspaces": {"supported": "limited", "restrictedConfigurations": ["fixture.value"]}},
+        enabled_api_proposals=[])
+    view = ExtensionConfigurationViewDTO(**target, profile_id=host_binding.initialization.environment.profile_id, context=context, extensions=[extension])
     binding = {"generation": host_binding.generation} if host_bound else {"profile_id": view.profile_id}
     request_type = ExtensionConfigurationFileRequest if host_bound else ExtensionConfigurationProfileFileRequest
     request = request_type.model_validate({**target, **binding, "resource_uri": context.remote_settings.resource_uri})

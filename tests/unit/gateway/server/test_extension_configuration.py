@@ -205,7 +205,11 @@ def test_settings_prepare_returns_frozen_target_context_without_host_generation(
     payload["workspace_ids"] = h.request.workspace_ids[:root_count]
     initialization = h.initialization(ExtensionHostOpenRequest(**{**payload, "workspace_ids": h.request.workspace_ids}))
     workspace = initialization.workspace.model_copy(update={"folders": [], "configuration": None}) if not root_count else initialization.workspace
-    result = {**payload, "profile_id": initialization.environment.profile_id, "context": {
+    result = {**payload, "profile_id": initialization.environment.profile_id, "extensions": [{
+        "extension_id": "fixture.settings", "name": "settings", "publisher": "fixture", "display_name": "设置探针",
+        "configuration": {"properties": {"fixture.setting": {"type": "string", "default": "schema-value"}}},
+        "configuration_defaults": None, "capabilities": None, "enabled_api_proposals": [],
+    }], "context": {
         "os": initialization.os, "remote_settings": initialization.environment.remote_settings.model_dump(),
         "workspace": workspace.model_dump()}}
 

@@ -15,6 +15,7 @@ from urllib.request import url2pathname
 import commentjson
 import pytest
 
+from app.core.resource_uri import resource_display_uri
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
@@ -26,6 +27,9 @@ from tests.integration.gateway.test_mcp_artifact_installation import (
 )
 from tests.integration.workspace_services.extension_host.test_extension_management import (
     management_runtime as management_runtime,  # noqa: PLC0414
+)
+from tests.integration.workspace_services.extension_host.test_extension_management import (
+    vsix_factory as vsix_factory,  # noqa: PLC0414
 )
 from tests.support.paths import chromium_temporary_environment
 
@@ -43,11 +47,26 @@ def settings_management_component(management_runtime, runtime_manifest_path: Pat
     monkeypatch.setenv("BOXTEAM_TEST_MCP_RUNTIME_MANIFEST", str(manifest))
 
 
-async def test_settings_editor_saves_target_json_and_restores_same_profile(installation_case: InstallationCase) -> None:
+async def test_settings_editor_saves_target_json_and_restores_same_profile(installation_case: InstallationCase, vsix_factory) -> None:
     case = installation_case
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "设置编辑器验收需要真实 Chromium"
     workspace_config = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
+    vsix = vsix_factory(case.workspace, "1.0.0", "settings-only", manifest_overrides={
+        "contributes": {"configuration": {"title": "独立安装设置", "properties": {
+            "schemaProbe.independent": {"type": "string", "default": "schema-default", "scope": "window",
+                "description": "无需运行扩展宿主即可发现与保存"}}},
+            "configurationDefaults": {"editor.tabSize": 3, "[typescript]": {"editor.tabSize": 5}}},
+    })
+    listing = case.client.get("/api/gateway/workspaces")
+    listing.raise_for_status()
+    target = listing.json()["data"]["active_workspace"]
+    directory = case.client.post("/api/gateway/extension-configurations/targets", json={"protocol_version": 1, "gateway_id": target["gateway_id"]})
+    directory.raise_for_status()
+    backend_id, = directory.json()["data"]["backend_ids"]
+    install = {"protocol_version": 1, "gateway_id": target["gateway_id"], "backend_id": backend_id,
+        "workspace_ids": [target["workspace_id"]], "source_uri": resource_display_uri(scope="workspace",
+            scope_id=target["workspace_id"], kind="files", tail_segments=("root", vsix.name), gateway_authority=target["gateway_id"])}
     result_path = case.context.artifacts_dir / "settings-editor-browser.json"
     supervisor = Path.cwd() / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
@@ -55,6 +74,7 @@ async def test_settings_editor_saves_target_json_and_restores_same_profile(insta
     with chromium_temporary_environment(case.context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"]) / "chromium-tmp") as temporary:
         result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=135, check=False,
             env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+                "BOXTEAM_BROWSER_SETTINGS_INSTALL": json.dumps(install),
                 "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url).rstrip("/"), "BOXTEAM_BROWSER_RESULT_PATH": str(result_path)})
     (case.context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
     (case.context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
@@ -67,6 +87,7 @@ async def test_settings_editor_saves_target_json_and_restores_same_profile(insta
     assert browser["hostChannels"] == [], "独立设置不需要扩展宿主"
     assert browser["writes"] and all("generation" not in item for item in browser["writes"])
     assert browser["jsonSavedAfterClosingSettingsUI"] and browser["jsonReturnedToTargetUI"] and browser["restoredTarget"]
+    assert browser["independentSchemaSaved"]
     binding = browser["binding"]
     uri = urlsplit(binding["context"]["remote_settings"]["native_uri"])
     assert uri.scheme == "file" and not uri.netloc

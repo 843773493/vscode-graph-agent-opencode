@@ -538,7 +538,7 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
         assert set(context) == {"os", "remote_settings", "workspace"}
         assert [folder["workspace_id"] for folder in context["workspace"]["folders"]] == payload["workspace_ids"]
         assert (context["workspace"]["configuration"] is not None) == bool(root_count)
-        assert node_calls == ["/management"]
+        assert node_calls == ["/management"] * (1 if host_bound else 2)
         request = {name: binding[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids")}
         request.update({"generation": binding["generation"]} if host_bound else {"profile_id": binding["profile_id"]})
         settings_uri = context["remote_settings"]["resource_uri"]
@@ -586,7 +586,7 @@ async def test_web_context_routes_configuration_to_target_python_without_node_ru
             finally:
                 watching.cancel()
                 await asyncio.gather(watching, return_exceptions=True)
-        assert node_calls == ["/management"], "配置 I/O 和监听不得重新请求 Node"
+        assert node_calls == ["/management"] * (1 if host_bound else 2), "配置 I/O 和监听不得重新请求 Node"
         assert not (owner._home / "state/backend/extension-hosts").exists()
     if not host_bound:
         owner.close_admission()

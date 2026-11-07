@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import JsonValue
 
 from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationProfileViewRequest,
@@ -21,6 +22,10 @@ from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationWriteOptions,
 )
 from app.schemas.gateway.extension_host import ExtensionHostWorkspaceDTO
+from app.schemas.gateway.extension_installation import (
+    InstalledExtension,
+    ProfileExtensionInventory,
+)
 from app.services.infrastructure.extension_host import configuration
 from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.configuration import (
@@ -42,6 +47,17 @@ from tests.unit.services.infrastructure.extension_host.test_owner import (
 )
 
 GATEWAY = "gateway_" + "a" * 32
+
+
+@pytest.fixture(autouse=True)
+def configuration_inventory(monkeypatch: pytest.MonkeyPatch) -> ProfileExtensionInventory:
+    inventory = ProfileExtensionInventory(profile_id="test-profile", target_platform="linux-x64", extensions=[])
+
+    async def read_inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
+        return inventory
+
+    monkeypatch.setattr(ExtensionManagementClient, "inventory", read_inventory)
+    return inventory
 
 
 @pytest.fixture
@@ -367,6 +383,38 @@ async def test_standalone_prepare_reuses_environment_and_never_recreates_deleted
     assert not path.exists()
     await other.write(view.context.remote_settings.resource_uri, "eA==", write_options)
     assert calls == [case.owner.backend_id] and not case.hosts and case.owner.active == ()
+
+
+async def test_settings_prepare_projects_only_valid_configuration_declarations_without_starting_host(
+    case: Case, configuration_inventory: ProfileExtensionInventory,
+) -> None:
+    contributes: dict[str, JsonValue] = {"configuration": {"title": "本地化分组", "properties": {"fixture.setting": {"type": "string", "default": "first"}}},
+        "configurationDefaults": {"editor.tabSize": 3}, "commands": [{"command": "private.command"}]}
+    declaration: dict[str, JsonValue] = {"identifier": {"value": "fixture.settings"}, "name": "settings", "publisher": "fixture",
+        "displayName": "本地化名称", "main": "./private-entry.js", "extensionLocation": {"path": "/private/package"},
+        "contributes": contributes,
+        "capabilities": {"untrustedWorkspaces": {"supported": "limited", "restrictedConfigurations": ["fixture.setting"]}},
+        "enabledApiProposals": ["agentsWindowConfiguration"]}
+    installed = InstalledExtension(source="profile", extension_key="fixture.settings-1.0.0", description=declaration,
+        is_valid=True, validations=[], metadata={"private": "metadata"})
+    configuration_inventory.extensions.extend([installed, installed.model_copy(update={"is_valid": False}),
+        InstalledExtension(source="profile", extension_key="fixture.no-settings-1.0.0",
+            description={"contributes": {"commands": []}}, is_valid=True, validations=[])])
+    case.owner.runtime = None
+    target = ExtensionConfigurationTargetRequest(protocol_version=1, gateway_id=GATEWAY,
+        backend_id=case.owner.backend_id, workspace_ids=[], view_id="settings")
+    view = await case.owner.prepare_configuration(target, client_id="settings-client")
+    [extension] = view.extensions
+    assert extension.extension_id == "fixture.settings" and extension.display_name == "本地化名称"
+    assert extension.configuration == contributes["configuration"]
+    assert extension.configuration_defaults == {"editor.tabSize": 3}
+    assert extension.capabilities == declaration["capabilities"]
+    assert set(extension.model_dump()) == {"extension_id", "name", "publisher", "display_name", "configuration",
+        "configuration_defaults", "capabilities", "enabled_api_proposals"}
+    assert "private" not in view.model_dump_json()
+    configuration_inventory.extensions.clear()
+    assert (await case.owner.prepare_configuration(target, client_id="settings-client")).extensions == []
+    assert len(view.extensions) == 1 and case.owner.active == () and not case.hosts
 
 
 async def test_standalone_prepare_shutdown_waits_for_original_initialization_worker(case: Case,

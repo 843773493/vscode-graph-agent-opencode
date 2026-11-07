@@ -8,7 +8,7 @@ const required = name => { if (!process.env[name]) throw new Error('缺少 ' + n
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/test_settings_editor_target.py').prepare();
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const result = { phase: 'initialize', pageErrors: [], writes: [], preparations: [], hostChannels: [], receipts: [],
-  boundary: '正式Workbench、独立真实Gateway和Backend、固定原Node管理组件；仅本地Code OSS设置UI/JSON/刷新，无扩展宿主及模型执行，不代表Relay或独立扩展schema发现。' };
+  boundary: '正式Workbench、独立真实Gateway和Backend、固定原Node管理组件；页面初始化后经正式安装API生成未激活VSIX，再由configuration_read准备声明并在原设置UI保存。无扩展宿主及模型执行，不代表Relay/SSH/Windows或扩展运行API验收。' };
 const pending = [];
 const save = () => writeFile(output, JSON.stringify(result, null, 2) + '\n');
 const phase = async value => { result.phase = value; await save(); };
@@ -21,7 +21,7 @@ try {
   run.addCleanup('设置 BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error.stack ?? error)));
-  page.on('websocket', socket => { if (new URL(socket.url()).pathname.includes('/extension-hosts/channel')) result.hostChannels.push(socket.url()); });
+  page.on('websocket', socket => { if (/\/extension-(?:web-)?hosts\/channel$/.test(new URL(socket.url()).pathname)) result.hostChannels.push(socket.url()); });
   page.on('request', request => {
     if (new URL(request.url()).pathname === '/api/gateway/extension-configurations/write') result.writes.push(request.postDataJSON());
   });
@@ -56,6 +56,9 @@ try {
   const editor = page.locator('.settings-editor:visible');
   await expect(editor).toBeVisible();
   expect(result.preparations).toHaveLength(0);
+  // 在窗口运行清单已初始化后经产品入口安装，设置不能借已运行扩展的贡献补全 schema。
+  const installed = await api('/api/gateway/extension-installations/install', 'POST', JSON.parse(required('BOXTEAM_BROWSER_SETTINGS_INSTALL')));
+  expect(installed.installed.id).toBe('boxteam-probe.target-inventory');
   await phase('choose-target');
   await editor.getByRole('button', { name: '选择设置目标', exact: true }).click();
   const picker = page.locator('.quick-input-widget:visible');
@@ -65,13 +68,25 @@ try {
   await Promise.all(pending);
   expect(result.preparations.length).toBeGreaterThan(0);
   result.binding = result.preparations.at(-1);
+  expect(result.binding.extensions.map(extension => extension.extension_id)).toContain('boxteam-probe.target-inventory');
   const read = async () => {
     const { protocol_version, gateway_id, backend_id, profile_id, view_id, workspace_ids } = result.binding;
     const value = await api('/api/gateway/extension-configurations/read', 'POST', { protocol_version, gateway_id, backend_id, profile_id, view_id, workspace_ids,
       resource_uri: result.binding.context.remote_settings.resource_uri });
     return parse(Buffer.from(value.content_base64, 'base64').toString('utf8'));
   };
+  await phase('independent-schema');
   await command('settings.action.search');
+  await page.keyboard.insertText('@ext:boxteam-probe.target-inventory @id:schemaProbe.independent');
+  const independent = editor.locator('[data-key="schemaProbe.independent"] .setting-item-control input');
+  await expect(independent).toBeVisible({ timeout: 15_000 });
+  await expect(independent).toHaveValue('schema-default');
+  await independent.fill('schema-saved');
+  await command('workbench.action.files.save');
+  await expect.poll(read).toEqual({ 'schemaProbe.independent': 'schema-saved' });
+  result.independentSchemaSaved = true;
+  await command('settings.action.search');
+  await page.keyboard.press('Control+A');
   await page.keyboard.insertText('@id:http.proxy');
   await expect(editor.locator('.settings-header .view-lines')).toContainText('@id:http.proxy');
   const value = editor.locator('[data-key="http.proxy"] .setting-item-control input');

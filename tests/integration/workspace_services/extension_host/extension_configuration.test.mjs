@@ -12,6 +12,10 @@ const upstream = './src/clients/workbench/upstream/src/vs/';
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
 await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { targetConfigurationServices } from './src/clients/workbench/src/extensions/configuration.js';
+export { targetConfigurationSourceFilter } from './src/clients/workbench/src/extensions/targetContext.js';
+export { acquireConfigurationContributions, acceptRuntimeConfigurationExtensions } from '${upstream}workbench/api/common/configurationExtensionPoint.js';
+export { ExtensionIdentifier } from '${upstream}platform/extensions/common/extensions.js';
+export { DefaultSettings } from '${upstream}workbench/services/preferences/common/preferencesModels.js';
 export { registerTargetConfigurationFiles } from './src/clients/workbench/src/extensions/configurationFiles.js';
 export { TargetUriTransformer } from './src/clients/workbench/src/extensions/targetUris.js';
 export { MainThreadConfiguration } from '${upstream}workbench/api/browser/mainThreadConfiguration.js';
@@ -271,6 +275,87 @@ test('相同配置传输引用共享SSE并按最后引用释放，不合并不�
     expect(result.afterOneRelease).toBe(1); expect(result.changes).toBeGreaterThan(0);
     expect(result.afterLastRelease).toBe(false); expect(result.readFailure).toContain('未绑定'); expect(result.written).toBe('shared-ref-write');
     checks.push('同一kind/完整请求/资源集合注册复用一条SSE，单引用释放不撤销读写通知，最后引用释放后请求拒绝；generation/route仍独立');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('独立设置声明进入原扩展点和配置模型，目标默认值与窗口隔离且按最后来源撤销', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, m = p.m, a = await p.make('A'), b = await p.make('B'), window = await p.make('Window');
+      a.store.dispose(); b.store.dispose();
+      const declaration = label => ({ extension_id: 'fixture.schema-' + label.toLowerCase(), name: 'schema-' + label, publisher: 'fixture',
+        display_name: '目标 ' + label + ' 设置', configuration: { title: '目标 ' + label, properties: {
+          ['schema' + label + '.own']: { type: 'string', default: label + '-schema', scope: 'window' },
+        } }, configuration_defaults: { 'probe.value': label + '-default', '[typescript]': { 'probe.value': label + '-language' } },
+        capabilities: null, enabled_api_proposals: [] });
+      const prepare = async (host, entry) => {
+        const { gateway_id, backend_id, view_id, workspace_ids, initialization } = host.binding;
+        const scope = { kind: 'settings', connection: { protocol_version: 1, gateway_id, backend_id, view_id, workspace_ids, profile_id: 'default',
+          context: { os: initialization.os, remote_settings: initialization.environment.remote_settings, workspace: initialization.workspace }, extensions: [entry] } };
+        const lifetime = p.lifetime.add(new m.DisposableStore());
+        const child = await m.targetConfigurationServices(p.parent, scope, lifetime);
+        const owner = child.invokeFunction(accessor => accessor.get(m.IConfigurationService));
+        const defaults = lifetime.add(new m.DefaultSettings([], m.ConfigurationTarget.USER_REMOTE, owner, m.targetConfigurationSourceFilter(scope)));
+        return { owner, lifetime, defaults, scope };
+      };
+      const first = await prepare(a, declaration('A')), same = await prepare(a, declaration('A')), other = await prepare(b, declaration('B'));
+      const snapshot = view => ({ builtin: view.owner.inspect('probe.value').defaultValue,
+        language: view.owner.inspect('probe.value', { overrideIdentifier: 'typescript' }).defaultValue,
+        ownA: view.owner.getValue('schemaA.own'), ownB: view.owner.getValue('schemaB.own'),
+        keys: view.defaults.getRegisteredGroups().flatMap(group => group.sections.flatMap(section => section.settings.map(setting => setting.key))) });
+      const before = { a: snapshot(first), b: snapshot(other), window: window.owner.inspect('probe.value').defaultValue,
+        windowLanguage: window.owner.inspect('probe.value', { overrideIdentifier: 'typescript' }).defaultValue };
+      first.lifetime.dispose();
+      const afterFirst = snapshot(same);
+      const registry = m.Registry.as(m.Extensions.Configuration);
+      const retained = !!registry.getConfigurationProperties()['schemaA.own'];
+      same.lifetime.dispose();
+      const afterLast = { a: !!registry.getConfigurationProperties()['schemaA.own'], b: !!registry.getConfigurationProperties()['schemaB.own'],
+        window: window.owner.inspect('probe.value').defaultValue, other: snapshot(other) };
+      other.lifetime.dispose();
+      return { before, afterFirst, retained, afterLast };
+    });
+    expect(result.before.a).toMatchObject({ builtin: 'A-default', language: 'A-language', ownA: 'A-schema' });
+    expect(result.before.b).toMatchObject({ builtin: 'B-default', language: 'B-language', ownB: 'B-schema' });
+    expect(result.before.a.ownB).toBeUndefined(); expect(result.before.b.ownA).toBeUndefined();
+    expect(result.before.a.keys).toContain('schemaA.own'); expect(result.before.a.keys).not.toContain('schemaB.own');
+    expect(result.before.b.keys).toContain('schemaB.own'); expect(result.before.b.keys).not.toContain('schemaA.own');
+    expect(result.before.window).toBe('default'); expect(result.before.windowLanguage).toBe('default');
+    expect(result.afterFirst).toEqual(result.before.a); expect(result.retained).toBe(true);
+    expect(result.afterLast.a).toBe(false); expect(result.afterLast.b).toBe(true);
+    expect(result.afterLast.other).toEqual(result.before.b); expect(result.afterLast.window).toBe('default');
+    checks.push('配置声明沿原扩展点/WorkspaceService/DefaultSettings进入目标模型；A/B内置和语言默认值隔离，窗口不消费configurationOnly，租约最后引用才撤销');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('原配置来源owner拒绝冲突、保留运行来源，并让同ID更新真实替换schema和defaults', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(() => {
+      const p = globalThis.probe, m = p.m, registry = m.Registry.as(m.Extensions.Configuration), messages = [];
+      const declaration = value => ({ identifier: new m.ExtensionIdentifier('fixture.replace'), name: 'replace', publisher: 'fixture', isBuiltin: false,
+        contributes: { configuration: { properties: { 'replacement.value': { type: 'string', default: value, policy: { name: 'ReplacementPolicy' } } } },
+          configurationDefaults: { 'probe.value': value } } });
+      const first = declaration('first');
+      m.acceptRuntimeConfigurationExtensions([first], message => messages.push(message));
+      const lease = m.acquireConfigurationContributions([first], message => messages.push(message));
+      let conflict;
+      try { m.acquireConfigurationContributions([declaration('conflict')], message => messages.push(message)); }
+      catch (error) { conflict = error.message; }
+      lease.dispose();
+      const retained = registry.getConfigurationProperties()['replacement.value'].default;
+      m.acceptRuntimeConfigurationExtensions([declaration('second')], message => messages.push(message));
+      const updated = registry.getConfigurationProperties()['replacement.value'].default;
+      const defaultValue = registry.getConfigurationProperties()['probe.value'].default;
+      const policy = registry.getPolicyConfigurations().get('ReplacementPolicy');
+      m.acceptRuntimeConfigurationExtensions([], message => messages.push(message));
+      return { conflict, retained, updated, defaultValue, policy, removed: !registry.getConfigurationProperties()['replacement.value'], messages };
+    });
+    expect(result.conflict).toContain('冲突'); expect(result.retained).toBe('first');
+    expect(result.updated).toBe('second'); expect(result.defaultValue).toBe('second');
+    expect(result.policy).toBe('replacement.value'); expect(result.removed).toBe(true); expect(result.messages).toEqual([]);
+    checks.push('运行与设置租约共享同ID；冲突预检拒绝，释放设置不撤运行，同ID新内容经原delta替换schema/defaults/policy');
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
 

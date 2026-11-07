@@ -7,6 +7,8 @@ export const settingsEditorSourcePaths = [
   'src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorHandler.ts',
+  'src/vs/workbench/services/preferences/common/preferencesModels.ts',
+  'src/vs/workbench/contrib/preferences/browser/settingsTree.ts',
 ];
 
 function section(source, start, end, replacement, replaceOnce) {
@@ -100,10 +102,11 @@ import type { TargetConfigurationContext } from ${context};
     contents = `import { FileEditorInput } from '../../../contrib/files/browser/editors/fileEditorInput.js';
 import { settingsFileLocation, settingsEditorIdentity } from ${editor};
 import { ITargetSettingsContext } from ${scope};
-import { targetSettings } from ${context};
+import { targetSettings, targetConfigurationSourceFilter } from ${context};
 ` + contents;
     contents = replaceOnce(contents, '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,',
       '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,\n    @ITargetSettingsContext private readonly targetSettingsContext: ITargetSettingsContext,');
+    contents = contents.replaceAll('target, this.configurationService)', 'target, this.configurationService, targetConfigurationSourceFilter(this.targetSettingsContext.target?.configuration))');
     contents = replaceOnce(contents, '\t\t// The default keybindings.json updates based on keyboard layouts,', '\t\tif (!this.targetSettingsContext.target) {\n\t\t// The default keybindings.json updates based on keyboard layouts,');
     contents = replaceOnce(contents, '\t\tthis._register(urlService.registerHandler(this));', '\t\tthis._register(urlService.registerHandler(this));\n    }');
     contents = section(contents, '\tprivate createOrGetCachedSettingsEditor2Input()', '\tgetFolderSettingsResource(', `  private async createSettingsEditor2Input(): Promise<SettingsEditor2Input> {
@@ -230,15 +233,15 @@ export class SettingsEditor2 extends EditorPane {`);
     }));`);
     contents = replaceOnce(contents, '\t\tconst installedExtensions = await this.extensionManagementService.getInstalled();', `    const target = this.targetSettingsContext.target;
     if (target) {
-      // TODO: 配置只读身份的独立 schema 发现尚待接入；不借 VSIX 库存权限或启动宿主补全。
-      this.installedExtensionIds = this.extensionService.extensions.filter(extension => {
-        const owner = extension.installationTarget;
-        return owner?.kind === 'backend' && owner.gatewayId === target.location.gateway_id && owner.backendId === target.location.backend_id
-          && !!extension.contributes?.configuration;
-      }).map(extension => extension.identifier.value);
+      if (target.configuration.kind !== 'settings') throw new Error('设置输入缺少配置专用声明');
+      this.installedExtensionIds = target.configuration.connection.extensions.map(extension => extension.extension_id);
       return;
     }
 \t\tconst installedExtensions = await this.extensionManagementService.getInstalled();`);
+    contents = replaceOnce(contents, 'createTocTreeForExtensionSettings(this.extensionService, extensionSettingsGroups, filter)', `createTocTreeForExtensionSettings(this.extensionService, extensionSettingsGroups, filter,
+      this.targetSettingsContext.target?.configuration.kind === 'settings'
+        ? new Map(this.targetSettingsContext.target.configuration.connection.extensions.map(extension => [extension.extension_id.toLowerCase(),
+          { name: extension.name, displayName: extension.display_name ?? undefined }])) : undefined)`);
     contents = replaceOnce(contents, '\t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,', `    const target = this.targetSettingsContext.target;
     const targetButton = this._register(new Button(headerControlsContainer, defaultButtonStyles));
     targetButton.label = target ? '目标：' + target.location.name + ' · ' + target.location.backend_id : '选择设置目标';
@@ -358,6 +361,24 @@ import type { TargetConfigurationContext } from ${context};
     contents = replaceOnce(contents, 'interface ISerializedFileEditorInput {', 'interface ISerializedFileEditorInput {\n  settingsTarget?: TargetSettingsLocation;');
     contents = replaceOnce(contents, '\t\t\tresourceJSON: resource.toJSON(),', '\t\t\tresourceJSON: resource.toJSON(),\n      settingsTarget: fileEditorInput.settingsLocation,');
     contents = replaceOnce(contents, '\t\t\treturn fileEditorInput;', '\t\t\tif (serializedFileEditorInput.settingsTarget) fileEditorInput.bindSettingsTarget(serializedFileEditorInput.settingsTarget);\n\t\t\treturn fileEditorInput;');
+  }
+  if (path === paths[6]) {
+    contents = `import type { ConfigurationDefaultSource } from '../../../../platform/configuration/common/configurationRegistry.js';\n` + contents;
+    contents = replaceOnce(contents, 'readonly configurationService: IConfigurationService\n\t)',
+      `readonly configurationService: IConfigurationService,
+    private readonly configurationSourceFilter: (source: ConfigurationDefaultSource | undefined) => boolean =
+      source => typeof source !== 'object' || !source?.configurationOnly
+\t)`);
+    contents = replaceOnce(contents, 'registry.getConfigurationProperties()', 'registry.getConfigurationProperties(this.configurationSourceFilter)');
+    contents = replaceOnce(contents, 'registry.getExcludedConfigurationProperties()', 'registry.getExcludedConfigurationProperties(this.configurationSourceFilter)');
+  }
+  if (path === paths[7]) {
+    contents = replaceOnce(contents,
+      'export async function createTocTreeForExtensionSettings(extensionService: IExtensionService, groups: ISettingsGroup[], filter: ITOCFilter | undefined): Promise<ITOCEntry<ISetting>> {',
+      `export async function createTocTreeForExtensionSettings(extensionService: IExtensionService, groups: ISettingsGroup[], filter: ITOCFilter | undefined,
+    descriptions?: ReadonlyMap<string, { name: string; displayName?: string }>): Promise<ITOCEntry<ISetting>> {`);
+    contents = replaceOnce(contents, 'const extension = await extensionService.getExtension(extensionId);',
+      'const extension = descriptions ? descriptions.get(extensionId.toLowerCase()) : await extensionService.getExtension(extensionId);');
   }
   return contents;
 }

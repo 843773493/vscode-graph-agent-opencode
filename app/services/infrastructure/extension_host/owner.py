@@ -17,6 +17,7 @@ from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationContributionDTO,
     ExtensionConfigurationProfileViewRequest,
     ExtensionConfigurationTargetRequest,
     ExtensionConfigurationViewDTO,
@@ -256,10 +257,30 @@ class NodeExtensionHostOwner:
         async with self._configuration_lock:
             self._check_configuration_target(request, client_id)
             self._configuration_closed = False
+            inventory = await self.management.inventory()
+            if inventory.profile_id != environment.profile_id:
+                raise ValueError("配置声明不属于当前目标 profile")
+            extensions = []
+            for entry in inventory.extensions:
+                if not entry.is_valid:
+                    continue
+                description = entry.description
+                contributes = description.get("contributes")
+                if not isinstance(contributes, dict) or not any(key in contributes for key in ("configuration", "configurationDefaults")):
+                    continue
+                identifier = description.get("identifier")
+                extensions.append(ExtensionConfigurationContributionDTO.model_validate({
+                    "extension_id": identifier.get("value") if isinstance(identifier, dict) else None,
+                    "name": description.get("name"), "publisher": description.get("publisher"),
+                    "display_name": description.get("displayName"), "configuration": contributes.get("configuration"),
+                    "configuration_defaults": contributes.get("configurationDefaults"),
+                    "capabilities": description.get("capabilities"),
+                    "enabled_api_proposals": description.get("enabledApiProposals", []),
+                }))
             context = await self._configuration_context(request, environment, initialize=True)
             self._check_configuration_target(request, client_id)
         return ExtensionConfigurationViewDTO(**request.model_dump(exclude={"gateway_connection_id"}),
-            profile_id=environment.profile_id, context=context)
+            profile_id=environment.profile_id, context=context, extensions=extensions)
 
     async def configuration_files(self, request: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest, *, client_id: str) -> ExtensionConfigurationFiles:
         if isinstance(request, ExtensionConfigurationProfileViewRequest):

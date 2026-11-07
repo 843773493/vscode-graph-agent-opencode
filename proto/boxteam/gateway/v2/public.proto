@@ -1144,6 +1144,17 @@ message ExtensionConfigurationTargetListDTO {
   repeated string backend_ids = 3;
 }
 
+message ExtensionConfigurationContributionDTO {
+  string extension_id = 1;
+  string name = 2;
+  string publisher = 3;
+  optional string display_name = 4;
+  google.protobuf.Value configuration = 5;
+  google.protobuf.Struct configuration_defaults = 6;
+  google.protobuf.Struct capabilities = 7;
+  repeated string enabled_api_proposals = 8;
+}
+
 message ExtensionConfigurationViewDTO {
   uint32 protocol_version = 1;
   string gateway_id = 2;
@@ -1152,6 +1163,7 @@ message ExtensionConfigurationViewDTO {
   repeated string workspace_ids = 5;
   string profile_id = 6;
   ExtensionWebHostContextDTO context = 7;
+  repeated ExtensionConfigurationContributionDTO extensions = 8;
 }
 
 message ExtensionConfigurationViewRequest {

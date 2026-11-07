@@ -5,7 +5,7 @@ from __future__ import annotations
 from base64 import b64decode
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.schemas.gateway.extension_host import (
     BackendId,
@@ -55,14 +55,31 @@ class ExtensionWebHostContextDTO(_HostValue):
     workspace: ExtensionHostWorkspaceDTO
 
 
+class ExtensionConfigurationContributionDTO(_HostValue):
+    """原 scanner 已本地化的配置声明；不披露运行入口、包位置或安装元数据。"""
+
+    extension_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    publisher: str = Field(min_length=1)
+    display_name: str | None = None
+    configuration: JsonValue = None
+    configuration_defaults: dict[str, JsonValue] | None = None
+    capabilities: dict[str, JsonValue] | None = None
+    enabled_api_proposals: list[str]
+
+
 class ExtensionConfigurationViewDTO(_ExtensionHostViewRequest):
     profile_id: str = Field(min_length=1)
     context: ExtensionWebHostContextDTO
+    extensions: list[ExtensionConfigurationContributionDTO]
 
     @model_validator(mode="after")
     def context_matches_target(self) -> ExtensionConfigurationViewDTO:
         validate_extension_view(gateway_id=self.gateway_id, backend_id=self.backend_id, workspace_ids=self.workspace_ids,
             workspace=self.context.workspace, profile_id=self.profile_id, settings=self.context.remote_settings)
+        identifiers = [extension.extension_id.lower() for extension in self.extensions]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("配置声明包含重复扩展身份")
         return self
 
 

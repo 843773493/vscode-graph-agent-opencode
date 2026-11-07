@@ -51,6 +51,8 @@ export async function targetSettingsContract(mode) {
     if (path === '/api/gateway/management/gateways') return success({ local_gateway_id: initial.gatewayId,
       items: [{ gateway_id: initial.gatewayId, name: '入口', connection_kind: 'local' },
         { gateway_id: target.gateway_id, name: '远端目标', connection_kind: 'remote_gateway', gateway_connection_id: 'connection-a' }] });
+    if (path === '/api/gateway/extension-configurations/targets') return success({ protocol_version: 1,
+      gateway_id: target.gateway_id, backend_ids: ['11111111-1111-4111-8111-111111111111'] });
     if (path === '/api/v1/config/sources') return success({ sources: [{ source_key: sourceKey, layer: 'workspace', presence: 'present', precedence: 4, uri: 'boxteam-source://original/workspace.jsonc' }] });
     if (path.endsWith('/preflight')) {
       const errors = [], payload = parse(body.jsonc, errors);
@@ -143,6 +145,9 @@ export async function managementTargetContract(mode) {
         capabilities: { installation_manage: true, host_manage: false },
       }],
     } }, { headers: { 'X-Request-ID': 'extension-domain' } });
+    if (path === '/api/gateway/extension-configurations/targets') return Response.json({ code: 0, request_id: 'configuration-domain',
+      data: { protocol_version: 1, gateway_id: 'gateway-b', backend_ids: ['22222222-2222-4222-8222-222222222222'] },
+    }, { headers: { 'X-Request-ID': 'configuration-domain' } });
     if (path !== '/api/gateway/management/gateways') throw new Error('目标选择不应访问业务 API：' + path);
     return Response.json({ code: 0, request_id: 'management-directory', data: {
       local_gateway_id: mode === 'mismatch' ? 'another-entry' : 'gateway-entry', items: [

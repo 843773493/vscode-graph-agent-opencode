@@ -1942,8 +1942,28 @@ class ExtensionConfigurationTargetListDTO(_message.Message):
     backend_ids: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_ids: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class ExtensionConfigurationContributionDTO(_message.Message):
+    __slots__ = ("extension_id", "name", "publisher", "display_name", "configuration", "configuration_defaults", "capabilities", "enabled_api_proposals")
+    EXTENSION_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    PUBLISHER_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_DEFAULTS_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    ENABLED_API_PROPOSALS_FIELD_NUMBER: _ClassVar[int]
+    extension_id: str
+    name: str
+    publisher: str
+    display_name: str
+    configuration: _struct_pb2.Value
+    configuration_defaults: _struct_pb2.Struct
+    capabilities: _struct_pb2.Struct
+    enabled_api_proposals: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, extension_id: _Optional[str] = ..., name: _Optional[str] = ..., publisher: _Optional[str] = ..., display_name: _Optional[str] = ..., configuration: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., configuration_defaults: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., capabilities: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., enabled_api_proposals: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class ExtensionConfigurationViewDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "context")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "context", "extensions")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1951,6 +1971,7 @@ class ExtensionConfigurationViewDTO(_message.Message):
     WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_FIELD_NUMBER: _ClassVar[int]
+    EXTENSIONS_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
@@ -1958,7 +1979,8 @@ class ExtensionConfigurationViewDTO(_message.Message):
     workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     profile_id: str
     context: ExtensionWebHostContextDTO
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., context: _Optional[_Union[ExtensionWebHostContextDTO, _Mapping]] = ...) -> None: ...
+    extensions: _containers.RepeatedCompositeFieldContainer[ExtensionConfigurationContributionDTO]
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., context: _Optional[_Union[ExtensionWebHostContextDTO, _Mapping]] = ..., extensions: _Optional[_Iterable[_Union[ExtensionConfigurationContributionDTO, _Mapping]]] = ...) -> None: ...
 
 class ExtensionConfigurationViewRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "gateway_connection_id")

@@ -3,6 +3,7 @@ import type { IExtensionDescription } from '../../upstream/src/vs/platform/exten
 import type { Event } from '../../upstream/src/vs/base/common/event.js';
 import type { IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
+import type { ConfigurationDefaultSource } from '../../upstream/src/vs/platform/configuration/common/configurationRegistry.js';
 import type { ExtensionConfigurationProfileViewRequest, ExtensionConfigurationViewDTO, ExtensionConfigurationViewRequest, ExtensionHostConnectionDTO, ExtensionWebHostConnectionDTO, ExtensionWebHostOpenRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 
 export interface ITargetWebHostConnection extends IDisposable {
@@ -24,6 +25,13 @@ export type TargetConfigurationContext = TargetExtensionContext | {
   readonly connection: ExtensionConfigurationViewDTO;
   readonly gatewayConnectionId?: string;
 };
+
+/** 目标设置仅消费所选安装集合；原内置贡献和非扩展核心默认值继续保留。 */
+export function targetConfigurationSourceFilter(context?: TargetConfigurationContext): (source: ConfigurationDefaultSource | undefined) => boolean {
+  if (context?.kind !== 'settings') return source => typeof source !== 'object' || !source?.configurationOnly;
+  const ids = new Set(context.connection.extensions.map(extension => extension.extension_id.toLowerCase()));
+  return source => typeof source !== 'object' || !source?.id || !!source.isBuiltin || ids.has(source.id.toLowerCase());
+}
 
 export function targetWorkspace(context: TargetConfigurationContext) {
   const workspace = context.kind === 'node' ? context.connection.initialization?.workspace : context.connection.context?.workspace;

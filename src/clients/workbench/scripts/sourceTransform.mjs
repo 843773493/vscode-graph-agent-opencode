@@ -19,6 +19,8 @@ import { extensionLanguageFeaturesSourcePaths, transformExtensionLanguageFeature
 import { extensionWorkspaceSymbolsSourcePaths, transformExtensionWorkspaceSymbols } from './extensions/extensionWorkspaceSymbolsTransform.mjs';
 import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
 import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
+import { configurationContributionSourcePaths, transformConfigurationContributions } from './extensions/configurationContributionTransform.mjs';
+import { configurationRegistrySourcePaths, transformConfigurationRegistry } from './extensions/configurationRegistryTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
 import { nativeManagementSourcePaths, transformNativeManagement } from './nativeManagementTransform.mjs';
 import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './settingsEditorScopeTransform.mjs';
@@ -79,7 +81,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionLanguageFeaturesSourcePaths,
   ...extensionWorkspaceSymbolsSourcePaths,
   ...extensionStorageSourcePaths,
-  ...extensionConfigurationSourcePaths,
+  ...extensionConfigurationSourcePaths, ...configurationContributionSourcePaths, ...configurationRegistrySourcePaths,
   ...extensionFileEventsSourcePaths,
   ...settingsEditorScopeSourcePaths,
   ...settingsEditorSourcePaths,
@@ -151,6 +153,8 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     if (runtime === 'node') return transformNativeManagement(root, path, contents, replaceOnce);
     contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
+    contents = transformConfigurationContributions(root, path, contents, replaceOnce);
+    contents = transformConfigurationRegistry(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
     contents = transformSettingsEditor(root, path, contents, replaceOnce);
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);

@@ -4924,6 +4924,57 @@ export declare type ExtensionConfigurationTargetListDTO = Message<"boxteam.gatew
 export declare const ExtensionConfigurationTargetListDTOSchema: GenMessage<ExtensionConfigurationTargetListDTO>;
 
 /**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationContributionDTO
+ */
+export declare type ExtensionConfigurationContributionDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationContributionDTO"> & {
+  /**
+   * @generated from field: string extension_id = 1;
+   */
+  extensionId: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string publisher = 3;
+   */
+  publisher: string;
+
+  /**
+   * @generated from field: optional string display_name = 4;
+   */
+  displayName?: string | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value configuration = 5;
+   */
+  configuration?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct configuration_defaults = 6;
+   */
+  configurationDefaults?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct capabilities = 7;
+   */
+  capabilities?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated string enabled_api_proposals = 8;
+   */
+  enabledApiProposals: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationContributionDTO.
+ * Use `create(ExtensionConfigurationContributionDTOSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationContributionDTOSchema: GenMessage<ExtensionConfigurationContributionDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.ExtensionConfigurationViewDTO
  */
 export declare type ExtensionConfigurationViewDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationViewDTO"> & {
@@ -4961,6 +5012,11 @@ export declare type ExtensionConfigurationViewDTO = Message<"boxteam.gateway.v2.
    * @generated from field: boxteam.gateway.v2.ExtensionWebHostContextDTO context = 7;
    */
   context?: ExtensionWebHostContextDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.ExtensionConfigurationContributionDTO extensions = 8;
+   */
+  extensions: ExtensionConfigurationContributionDTO[];
 };
 
 /**

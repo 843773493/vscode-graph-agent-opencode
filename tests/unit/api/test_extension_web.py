@@ -118,6 +118,11 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
             untitled_workspaces_home_uri=(owner._home / "Workspaces").as_uri(),
             profile_id="default-profile", settings_native_uri=result.settings.as_uri())
 
+    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
+        return result.inventory
+
+    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
+
     monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
     monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
     monkeypatch.setattr(owner_module, "publication_file", file_read)

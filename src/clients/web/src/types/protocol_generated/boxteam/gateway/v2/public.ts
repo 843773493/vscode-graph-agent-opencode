@@ -1161,6 +1161,17 @@ export interface ExtensionConfigurationTargetListDTO {
   backend_ids: string[];
 }
 
+export interface ExtensionConfigurationContributionDTO {
+  extension_id: string;
+  name: string;
+  publisher: string;
+  display_name?: string | undefined;
+  configuration: any | undefined;
+  configuration_defaults: { [key: string]: any } | undefined;
+  capabilities: { [key: string]: any } | undefined;
+  enabled_api_proposals: string[];
+}
+
 export interface ExtensionConfigurationViewDTO {
   protocol_version: number;
   gateway_id: string;
@@ -1169,6 +1180,7 @@ export interface ExtensionConfigurationViewDTO {
   workspace_ids: string[];
   profile_id: string;
   context: ExtensionWebHostContextDTO | undefined;
+  extensions: ExtensionConfigurationContributionDTO[];
 }
 
 export interface ExtensionConfigurationViewRequest {
@@ -9444,6 +9456,85 @@ export const ExtensionConfigurationTargetListDTO: MessageFns<ExtensionConfigurat
   },
 };
 
+function createBaseExtensionConfigurationContributionDTO(): ExtensionConfigurationContributionDTO {
+  return {
+    extension_id: "",
+    name: "",
+    publisher: "",
+    display_name: undefined,
+    configuration: undefined,
+    configuration_defaults: undefined,
+    capabilities: undefined,
+    enabled_api_proposals: [],
+  };
+}
+
+export const ExtensionConfigurationContributionDTO: MessageFns<ExtensionConfigurationContributionDTO> = {
+  fromJSON(object: any): ExtensionConfigurationContributionDTO {
+    return {
+      extension_id: isSet(object.extension_id) ? globalThis.String(object.extension_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      publisher: isSet(object.publisher) ? globalThis.String(object.publisher) : "",
+      display_name: isSet(object.display_name) ? globalThis.String(object.display_name) : undefined,
+      configuration: isSet(object?.configuration) ? object.configuration : undefined,
+      configuration_defaults: isObject(object.configuration_defaults) ? object.configuration_defaults : undefined,
+      capabilities: isObject(object.capabilities) ? object.capabilities : undefined,
+      enabled_api_proposals: globalThis.Array.isArray(object?.enabled_api_proposals)
+        ? object.enabled_api_proposals.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationContributionDTO): unknown {
+    const obj: any = {};
+    if (message.extension_id !== "") {
+      obj.extension_id = message.extension_id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.publisher !== "") {
+      obj.publisher = message.publisher;
+    }
+    if (message.display_name !== undefined) {
+      obj.display_name = message.display_name;
+    }
+    if (message.configuration !== undefined) {
+      obj.configuration = message.configuration;
+    }
+    if (message.configuration_defaults !== undefined) {
+      obj.configuration_defaults = message.configuration_defaults;
+    }
+    if (message.capabilities !== undefined) {
+      obj.capabilities = message.capabilities;
+    }
+    if (message.enabled_api_proposals?.length) {
+      obj.enabled_api_proposals = message.enabled_api_proposals;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationContributionDTO>, I>>(
+    base?: I,
+  ): ExtensionConfigurationContributionDTO {
+    return ExtensionConfigurationContributionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationContributionDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationContributionDTO {
+    const message = createBaseExtensionConfigurationContributionDTO();
+    message.extension_id = object.extension_id ?? "";
+    message.name = object.name ?? "";
+    message.publisher = object.publisher ?? "";
+    message.display_name = object.display_name ?? undefined;
+    message.configuration = object.configuration ?? undefined;
+    message.configuration_defaults = object.configuration_defaults ?? undefined;
+    message.capabilities = object.capabilities ?? undefined;
+    message.enabled_api_proposals = object.enabled_api_proposals?.map((e) => e) || [];
+    return message;
+  },
+};
+
 function createBaseExtensionConfigurationViewDTO(): ExtensionConfigurationViewDTO {
   return {
     protocol_version: 0,
@@ -9453,6 +9544,7 @@ function createBaseExtensionConfigurationViewDTO(): ExtensionConfigurationViewDT
     workspace_ids: [],
     profile_id: "",
     context: undefined,
+    extensions: [],
   };
 }
 
@@ -9468,6 +9560,9 @@ export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationVie
         : [],
       profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
       context: isSet(object.context) ? ExtensionWebHostContextDTO.fromJSON(object.context) : undefined,
+      extensions: globalThis.Array.isArray(object?.extensions)
+        ? object.extensions.map((e: any) => ExtensionConfigurationContributionDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -9494,6 +9589,9 @@ export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationVie
     if (message.context !== undefined) {
       obj.context = ExtensionWebHostContextDTO.toJSON(message.context);
     }
+    if (message.extensions?.length) {
+      obj.extensions = message.extensions.map((e) => ExtensionConfigurationContributionDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -9513,6 +9611,7 @@ export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationVie
     message.context = (object.context !== undefined && object.context !== null)
       ? ExtensionWebHostContextDTO.fromPartial(object.context)
       : undefined;
+    message.extensions = object.extensions?.map((e) => ExtensionConfigurationContributionDTO.fromPartial(e)) || [];
     return message;
   },
 };
