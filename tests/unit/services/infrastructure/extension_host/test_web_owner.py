@@ -21,10 +21,10 @@ from app.schemas.gateway.extension_web import ExtensionWebHostOpenRequest
 from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    HostExtensionPublication,
     NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
-    WebExtensionPublication,
 )
 from app.services.infrastructure.extension_host.owner import WebHostConnection
 from tests.unit.services.infrastructure.extension_host.test_owner import (
@@ -71,17 +71,17 @@ def web_case(case: Case, monkeypatch: pytest.MonkeyPatch) -> WebCase:
         package.mkdir(parents=True)
         (package / "main.js").write_text(key)
 
-    async def publication(_management: ExtensionManagementClient, *, profile_id: str,
-                          extension_keys: list[str]) -> WebExtensionPublication:
+    async def publication(_management: ExtensionManagementClient, _service: object, _reference: object, *, profile_id: str,
+                          extension_keys: list[str]) -> HostExtensionPublication:
         result.scans.append(len(case.owner.active))
         result.scanning.set()
         await result.gate.wait()
-        return WebExtensionPublication(inventory=result.inventory, environment=await _management.environment(), publications=[
+        return HostExtensionPublication(inventory=result.inventory, environment=await _management.environment(), publications=[
             NativeExtensionPublication(extension_id="publisher.other" if key == OTHER_KEY else "publisher.probe",
                 extension_key=key, native_uri=(root / key).as_uri(), extensions_root_uri=root.as_uri())
             for key in extension_keys])
 
-    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
+    monkeypatch.setattr(ExtensionManagementClient, "host_publication", publication)
     return result
 
 
@@ -237,6 +237,21 @@ async def test_cancelled_web_scan_releases_reserved_generation(web_case: WebCase
     finally:
         web_case.gate.set()
         await asyncio.gather(opening, return_exceptions=True)
+
+
+async def test_failed_web_reference_release_preserves_original_error_until_retry(web_case: WebCase) -> None:
+    original, cleanup = ValueError("原 Web 传输失败"), OSError("原引用释放未确认")
+    owner = web_case.node.owner
+    connection: WebHostConnection | None = None
+    with pytest.raises(BaseExceptionGroup) as caught:
+        async with owner.connect_web(web_case.request, client_id="client") as connection:
+            web_case.node.reference_failures.append(cleanup)
+            raise original
+    assert caught.value.exceptions == (original, cleanup)
+    assert connection is not None and owner.active == (connection.identity,)
+    assert connection.identity.generation in web_case.node.references
+    await owner.close()
+    assert not web_case.node.references and owner.drained
 
 
 async def test_web_stop_revokes_reads_before_waiting_for_transport_settlement(web_case: WebCase) -> None:

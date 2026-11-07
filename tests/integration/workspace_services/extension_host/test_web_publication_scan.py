@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import time
+from uuid import uuid4
 
 import pytest
 
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
+    NativeHostReference,
 )
 from tests.integration.workspace_services.extension_host.test_extension_management import (
     _backend,
@@ -30,8 +32,19 @@ async def test_web_admission_rechecks_profile_and_manifest_without_repeated_pack
         manifest_overrides={"name": f"scan-{index}", "browser": "./extension.js"}, omit=("main",))) for index in range(4)]
     inventory = installed[-1].inventory
     keys = [entry.extension_key for entry in reversed(inventory.extensions)]
+    environment = await management.environment()
+
+    async def new_publication(*, profile_id: str, extension_keys: list[str]):
+        reference = NativeHostReference(generation=str(uuid4()), capability=uuid4().hex)
+        service = environment.reference_service
+        await management.host_reference(service, reference, operation="open-host")
+        try:
+            return await management.host_publication(service, reference, profile_id=profile_id, extension_keys=extension_keys)
+        finally:
+            await management.host_reference(service, reference, operation="close-host")
+
     started = time.time()
-    publication = await management.web_publication(profile_id=inventory.profile_id, extension_keys=keys)
+    publication = await new_publication(profile_id=inventory.profile_id, extension_keys=keys)
     completed = time.time()
     assert [entry.extension_key for entry in publication.inventory.extensions] == keys
     assert [entry.extension_key for entry in publication.publications] == keys
@@ -46,9 +59,9 @@ async def test_web_admission_rechecks_profile_and_manifest_without_repeated_pack
 
     for rejected_keys in ([], [keys[0], keys[0]], ["not-installed"]):
         with pytest.raises(ExtensionManagementError):
-            await management.web_publication(profile_id=inventory.profile_id, extension_keys=rejected_keys)
+            await new_publication(profile_id=inventory.profile_id, extension_keys=rejected_keys)
     with pytest.raises(ExtensionManagementError):
-        await management.web_publication(profile_id="another-profile", extension_keys=keys)
+        await new_publication(profile_id="another-profile", extension_keys=keys)
 
     directory = case.domains[0].owner.directory / "extensions"
     manifest = directory / keys[0] / "package.json"
@@ -59,13 +72,13 @@ async def test_web_admission_rechecks_profile_and_manifest_without_repeated_pack
             assert content != original
             manifest.write_bytes(content)
             with pytest.raises(ExtensionManagementError):
-                await management.web_publication(profile_id=inventory.profile_id, extension_keys=keys)
+                await new_publication(profile_id=inventory.profile_id, extension_keys=keys)
         manifest.unlink()
         with pytest.raises(ExtensionManagementError):
-            await management.web_publication(profile_id=inventory.profile_id, extension_keys=keys)
+            await new_publication(profile_id=inventory.profile_id, extension_keys=keys)
     finally:
         manifest.write_bytes(original)
-    assert [entry.extension_key for entry in (await management.web_publication(
+    assert [entry.extension_key for entry in (await new_publication(
         profile_id=inventory.profile_id, extension_keys=keys)).inventory.extensions] == keys
 
     profile = directory / "extensions.json"
@@ -74,7 +87,7 @@ async def test_web_admission_rechecks_profile_and_manifest_without_repeated_pack
     try:
         profile.write_text(json.dumps([*members, members[0]]))
         with pytest.raises(ExtensionManagementError):
-            await management.web_publication(profile_id=inventory.profile_id, extension_keys=keys)
+            await new_publication(profile_id=inventory.profile_id, extension_keys=keys)
     finally:
         profile.write_bytes(original_profile)
 
@@ -90,9 +103,9 @@ async def test_web_admission_rechecks_profile_and_manifest_without_repeated_pack
             profile.write_text(json.dumps(relocated))
             # 有效 manifest 和 profile 成员也不能授权非发布目录。
             with pytest.raises(ExtensionManagementError):
-                await management.web_publication(profile_id=inventory.profile_id, extension_keys=keys)
+                await new_publication(profile_id=inventory.profile_id, extension_keys=keys)
         finally:
             profile.write_bytes(original_profile)
             alternate.rename(original_package)
-    assert [entry.extension_key for entry in (await management.web_publication(
+    assert [entry.extension_key for entry in (await new_publication(
         profile_id=inventory.profile_id, extension_keys=keys)).publications] == keys

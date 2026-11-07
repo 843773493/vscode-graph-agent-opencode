@@ -19,10 +19,11 @@ from app.core.trace_middleware import TraceMiddleware
 
 
 @pytest.fixture
-def private_host_client(empty_workspace_scope: tuple[str, Path], monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, WorkspaceContainerRegistry]]:
+def private_host_client(empty_workspace_scope: tuple[str, Path], monkeypatch: pytest.MonkeyPatch,
+                        tmp_path: Path) -> Iterator[tuple[TestClient, WorkspaceContainerRegistry]]:
     workspace_id, root = empty_workspace_scope
     monkeypatch.delenv("BOXTEAM_RUNTIME_MANIFEST", raising=False)
-    monkeypatch.setenv("BOXTEAM_HOME", str(root.parent / "boxteam-home"))
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", "private-host-token")
     registry = WorkspaceContainerRegistry(mounted_workspaces=MountedWorkspaceRegistry([
         MountedWorkspace(workspace_id, root)]), backend_id=str(uuid4()))

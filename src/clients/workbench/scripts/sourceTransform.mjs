@@ -158,6 +158,18 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
       contents = replaceOnce(contents, 'createAsyncRotatingLogger(name, logfilePath, filesize, filecount)',
         'createAsyncRotatingLogger(name, toNamespacedPath(logfilePath), filesize, filecount)');
     }
+    if (runtime === 'node' && path === join(upstream, 'src/vs/workbench/api/common/extHostExtensionService.ts')) {
+      contents = `import { retainNodeExtensionVersions } from ${JSON.stringify(join(root, 'node/extensionHostReferences.js'))};\n` + contents;
+      // 先沿原流程注册 API actors，再在运行 barrier 打开前取得实际版本引用。
+      contents = replaceOnce(contents, 'this._almostReadyToRunExtensions.open();',
+        `if (this._initData.isTargetExtensionHost) {
+        try { await retainNodeExtensionVersions(this._myRegistry.getAllExtensionDescriptions()); }
+        catch (error) { this.terminate('运行版本准入失败：' + String(error), 1); throw error; }
+      }
+      this._almostReadyToRunExtensions.open();`);
+      contents = replaceOnce(contents, 'const searchTree = await this._createExtensionPathIndex(myRegistry.getAllExtensionDescriptions());',
+        'if (this._initData.isTargetExtensionHost) await retainNodeExtensionVersions(myRegistry.getAllExtensionDescriptions());\n      const searchTree = await this._createExtensionPathIndex(myRegistry.getAllExtensionDescriptions());');
+    }
     // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return transformNativeManagement(root, path, contents, replaceOnce);
     contents = transformFileDialog(root, path, contents, replaceOnce);

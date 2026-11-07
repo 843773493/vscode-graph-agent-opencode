@@ -53,11 +53,13 @@ from app.services.infrastructure.extension_host.configuration import (
 )
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    HostExtensionPublication,
     NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
+    NativeHostReference,
     NativeManagementEnvironment,
-    WebExtensionPublication,
+    NativeReferenceService,
 )
 from app.services.infrastructure.extension_host.mcp_definitions import (
     McpDefinitionChannel,
@@ -119,12 +121,13 @@ class _HostSession:
                  environment: Mapping[str, str], startup_timeout: float) -> None:
         self.identity = identity
         self._runtime, self._directory = runtime, directory
-        self._environment, self._startup_timeout = environment, startup_timeout
+        self._environment, self._startup_timeout = dict(environment), startup_timeout
         self._scope = AsyncExitStack()
         self._lock = asyncio.Lock()
         self._output: BinaryIO | None = None
         self.host: NodeExtensionHost | None = None
         self.configuration: ExtensionConfigurationFiles | None = None
+        self.reference: tuple[NativeReferenceService, NativeHostReference] | None = None
         self.mcp_definitions: McpDefinitionChannel | None = None
         self.closed = False
         self.stopping = asyncio.Event()
@@ -166,6 +169,7 @@ class _WebHostSession:
     def __init__(self, identity: NodeHostIdentity) -> None:
         self.identity = identity
         self.profile_id: str | None = None
+        self.reference: tuple[NativeReferenceService, NativeHostReference] | None = None
         self.publications: dict[str, NativeExtensionPublication] = {}
         self.configuration: ExtensionConfigurationFiles | None = None
         self.mcp_definitions: McpDefinitionChannel | None = None
@@ -455,12 +459,27 @@ class NodeExtensionHostOwner:
         if session.mcp_definitions is not None:
             session.mcp_definitions.close()
         await session.close()
+        if session.reference is not None:
+            assert self._management is not None
+            service, reference = session.reference
+            result = await self._management.host_reference(service, reference, operation="close-host")
+            if result != reference:
+                raise ValueError("运行引用释放回执不属于原宿主")
+            session.reference = None
         self._sessions.pop(session.identity.generation, None)
+
+    async def _open_reference(self, session: _HostSession | _WebHostSession,
+                              environment: NativeManagementEnvironment) -> None:
+        reference = NativeHostReference(generation=session.identity.generation, capability=uuid4().hex)
+        session.reference = environment.reference_service, reference
+        result = await self.management.host_reference(environment.reference_service, reference, operation="open-host")
+        if result != reference:
+            raise ValueError("运行引用准入回执不属于原宿主")
 
     async def _initialization(self, identity: NodeHostIdentity, directory: Path) -> ExtensionHostInitializationDTO:
         native_environment = await self._native_configuration_environment()
         context = await self._configuration_context(identity, native_environment, initialize=True)
-        environment = ExtensionHostEnvironmentDTO(**native_environment.model_dump(exclude={"settings_native_uri", "untitled_workspaces_home_uri"}),
+        environment = ExtensionHostEnvironmentDTO(**native_environment.model_dump(exclude={"settings_native_uri", "untitled_workspaces_home_uri", "reference_service"}),
             remote_settings=context.remote_settings)
         return ExtensionHostInitializationDTO(os=context.os,
             parent_pid=os.getpid(), environment=environment, logs_location_uri=directory.as_uri(), workspace=context.workspace)
@@ -531,6 +550,13 @@ class NodeExtensionHostOwner:
                 if session.stopping.is_set():
                     raise RuntimeError("Node 宿主初始化期间 Backend 已撤销准入")
                 initialization = await self._initialization(identity, directory)
+                if self._admission_closed or session.stopping.is_set():
+                    raise RuntimeError("Node 宿主初始化期间 Backend 已撤销准入")
+                native_environment = await self._native_configuration_environment()
+                await self._open_reference(session, native_environment)
+                assert session.reference is not None
+                session._environment.update(self.management.reference_environment(*session.reference,
+                    gateway_id=identity.gateway_id, profile_id=native_environment.profile_id))
                 self._configuration_closed = False
                 session.configuration = ExtensionConfigurationFiles(initialization.environment.remote_settings, initialization.workspace,
                     self._configuration_watch, session.stopping)
@@ -568,8 +594,9 @@ class NodeExtensionHostOwner:
         self._sessions[identity.generation] = session
         profile_id, extension_keys = request.profile_id, tuple(request.extension_keys)
         snapshot: ProfileExtensionInventory | None = None
+        failure: BaseException | None = None
 
-        def freeze(publication: WebExtensionPublication) -> None:
+        def freeze(publication: HostExtensionPublication) -> None:
             nonlocal snapshot
             if self._admission_closed or session.closed or session.stopping.is_set():
                 raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
@@ -584,12 +611,19 @@ class NodeExtensionHostOwner:
             snapshot = ProfileExtensionInventory(profile_id=inventory.profile_id,
                 target_platform=inventory.target_platform, extensions=[members[key] for key in extension_keys])
             # 冻结同次原 scanner 发布描述；后续文件 I/O 不再逐文件调用 Gateway／Node。
-            # TODO(4.4)：Node 实际运行集合及最终引用回收未闭合，当前继续禁止全局物理 cleanUp。
+            # TODO(4.4)：管理服务异常重建的引用对账与最终回收未闭合，继续禁止全局 cleanUp。
             session.profile_id = inventory.profile_id
             session.publications = publications
 
         try:
-            publication = await self.management.web_publication(profile_id=profile_id, extension_keys=list(extension_keys))
+            async with session._lock:
+                if session.stopping.is_set():
+                    raise RuntimeError("Web 宿主初始化期间 Backend 已撤销准入")
+                native_environment = await self._native_configuration_environment()
+                await self._open_reference(session, native_environment)
+            assert session.reference is not None
+            publication = await self.management.host_publication(*session.reference,
+                profile_id=profile_id, extension_keys=list(extension_keys))
             freeze(publication)
             if self._admission_closed or session.closed or session.stopping.is_set():
                 raise RuntimeError("Web 宿主启动期间 Backend 已撤销准入")
@@ -606,9 +640,17 @@ class NodeExtensionHostOwner:
                 session.configuration = ExtensionConfigurationFiles(context.remote_settings, context.workspace,
                     self._configuration_watch, session.stopping)
             yield WebHostConnection(identity, snapshot, context, session.stopping, session.transport_settled)
+        except BaseException as error:
+            failure = error
+            raise
         finally:
             session.stopping.set()
-            await run_cleanup_shielded(lambda: self._release(session))
+            try:
+                await run_cleanup_shielded(lambda: self._release(session))
+            except BaseException as close_error:
+                if failure is not None:
+                    raise BaseExceptionGroup("Web 宿主连接及原引用回收均失败", [failure, close_error]) from None
+                raise
 
     async def close(self) -> None:
         self.close_admission()
@@ -619,7 +661,7 @@ class NodeExtensionHostOwner:
                 session.stopping.set()
             results = await asyncio.gather(*(self._release(session) for session in sessions), return_exceptions=True)
             pending = [self._close_configuration()]
-            if self._management is not None:
+            if self._management is not None and not self._sessions:
                 pending.append(self._management.close())
             results.extend(await asyncio.gather(*pending, return_exceptions=True))
             errors = [result for result in results if isinstance(result, BaseException)]

@@ -43,7 +43,8 @@ import { ExtensionsScannerService } from '../upstream/src/vs/server/node/extensi
 import { IServerEnvironmentService, ServerEnvironmentService, type ServerParsedArgs } from '../upstream/src/vs/server/node/serverEnvironmentService.js';
 
 /** 与官方 server 使用相同的安装／扫描 owner，只装配本组件需要的原生服务。 */
-export async function createExtensionManagement(directory: string, builtinExtensionsPath: string) {
+export async function createExtensionManagement(directory: string, builtinExtensionsPath: string,
+  referenceService: () => { url: string; backend_id: string; runtime_instance_id: string }) {
   const scope = new DisposableStore();
   const consumers = scope.add(new DisposableStore());
   try {
@@ -95,6 +96,13 @@ export async function createExtensionManagement(directory: string, builtinExtens
       const scanner = accessor.get(IExtensionsScannerService);
       const profileScanner = accessor.get(IExtensionsProfileScannerService);
       const profile = profiles.defaultProfile;
+      // 引用由原 Backend session 提供，原安装 owner 持有；不另建安装或资源账本。
+      const hosts = new Map<string, { capability: string; extensions: Map<string, IScannedExtension> }>();
+      function hostReference(generation: string, capability: string) {
+        const host = hosts.get(generation);
+        if (!host || host.capability !== capability) throw new Error('运行引用不属于原宿主 generation');
+        return host;
+      }
       async function profileMember(profileId: string, extensionId: string, version: string) {
         if (profileId !== profile.id) throw new ExtensionManagementError('扩展操作 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
         const members = (await profileScanner.scanProfileExtensions(profile.extensionsResource))
@@ -190,6 +198,7 @@ export async function createExtensionManagement(directory: string, builtinExtens
       return {
         ready: management.whenNativeManagementReady,
         async dispose() {
+          if (hosts.size) throw new Error(`仍有 ${hosts.size} 个宿主引用未由原 Backend 结清，不能关闭安装服务`);
           const failures: unknown[] = [];
           // 先排空写入及消费者，再沿原 watcher 停止 API 关句柄，最后释放 provider。
           for (const close of [() => management.drainNativeManagement(), () => consumers.dispose(),
@@ -205,7 +214,7 @@ export async function createExtensionManagement(directory: string, builtinExtens
             global_storage_home_uri: profile.globalStorageHome.toString(),
             workspace_storage_home_uri: environment.workspaceStorageHome.toString(),
             untitled_workspaces_home_uri: environment.untitledWorkspacesHome.toString(),
-            profile_id: profile.id, settings_native_uri: profile.settingsResource.toString() };
+            profile_id: profile.id, settings_native_uri: profile.settingsResource.toString(), reference_service: referenceService() };
         },
         async inventory() {
           return describeInventory(await scanProfile());
@@ -213,20 +222,37 @@ export async function createExtensionManagement(directory: string, builtinExtens
         async publication(profileId: string, extensionId: string, extensionKey: string, currentProfileMember: boolean) {
           return publishedExtension(profileId, extensionId, extensionKey, currentProfileMember);
         },
-        async webPublication(profileId: string, extensionKeys: readonly string[]) {
+        get hasHostReferences() { return hosts.size > 0; },
+        openHost(generation: string, capability: string) {
+          const previous = hosts.get(generation);
+          if (previous && previous.capability !== capability) throw new Error('运行引用 generation 已被其它持有者占用');
+          if (!previous) hosts.set(generation, { capability, extensions: new Map() });
+          return { generation, capability };
+        },
+        closeHost(generation: string, capability: string) {
+          if (hosts.has(generation)) hostReference(generation, capability);
+          hosts.delete(generation);
+          return { generation, capability };
+        },
+        async hostPublication(generation: string, capability: string, profileId: string, extensionKeys: readonly string[]) {
+          const host = hostReference(generation, capability);
           if (profile.id !== profileId || !extensionKeys.length || new Set(extensionKeys).size !== extensionKeys.length) {
-            throw new ExtensionManagementError('Web 宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
+            throw new ExtensionManagementError('宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
           }
           // 原 profile 扫描已读取并校验每份 manifest；同次准入不再逐包重读 manifest 和整个 profile。
-          const members = new Map((await scanProfile()).map(extension => [ExtensionKey.create(extension).toString(), extension]));
+          const members = extensionKeys.some(key => !host.extensions.has(key))
+            ? new Map((await scanProfile()).map(extension => [ExtensionKey.create(extension).toString(), extension])) : host.extensions;
           const extensions = extensionKeys.map(key => {
-            const extension = members.get(key);
-            if (!extension?.isValid) throw new ExtensionManagementError('Web 宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
+            const extension = host.extensions.get(key) ?? members.get(key);
+            if (!extension?.isValid) throw new ExtensionManagementError('宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
             return extension;
           });
           const publications = extensions.map(describePublication);
-          // TODO(4.4)：Node 真实运行集合与最终引用回收尚未闭合，不能启用全局物理 cleanUp。
-          return { inventory: await describeInventory(extensions), publications, environment: await this.environment() };
+          const publication = { inventory: await describeInventory(extensions), publications, environment: await this.environment() };
+          // Node 已加载代码不能动态卸载；曾准入版本一直保护到真实 child 退出。
+          for (const extension of extensions) host.extensions.set(ExtensionKey.create(extension).toString(), extension);
+          // TODO(4.4)：管理服务异常重建的引用对账与最终回收尚未闭合，继续禁止全局 cleanUp。
+          return publication;
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。

@@ -36,11 +36,13 @@ from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
     ExtensionManagementError,
+    HostExtensionPublication,
     NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
+    NativeHostReference,
     NativeManagementEnvironment,
-    WebExtensionPublication,
+    NativeReferenceService,
 )
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
@@ -96,9 +98,9 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
         package.mkdir(parents=True)
         (package / "main.js").write_bytes(b"frozen-bytes")
 
-    async def publication(_management: ExtensionManagementClient, *, profile_id: str,
-                          extension_keys: list[str]) -> WebExtensionPublication:
-        return WebExtensionPublication(inventory=result.inventory, environment=await _management.environment(), publications=[
+    async def publication(_management: ExtensionManagementClient, _service: object, _reference: object, *, profile_id: str,
+                          extension_keys: list[str]) -> HostExtensionPublication:
+        return HostExtensionPublication(inventory=result.inventory, environment=await _management.environment(), publications=[
             NativeExtensionPublication(extension_id="publisher.other" if key == OTHER_KEY else "publisher.probe",
                 extension_key=key, native_uri=(root / key).as_uri(), extensions_root_uri=root.as_uri())
             for key in extension_keys])
@@ -116,7 +118,14 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
             global_storage_home_uri=(owner._home / "globalStorage").as_uri(),
             workspace_storage_home_uri=(owner._home / "workspaceStorage").as_uri(),
             untitled_workspaces_home_uri=(owner._home / "Workspaces").as_uri(),
-            profile_id="default-profile", settings_native_uri=result.settings.as_uri())
+            profile_id="default-profile", settings_native_uri=result.settings.as_uri(),
+            reference_service=NativeReferenceService(url="http://127.0.0.1:45002/references",
+                backend_id=owner.backend_id, runtime_instance_id="original-service"))
+
+    async def reference(_management: ExtensionManagementClient, service: NativeReferenceService,
+                        reference: NativeHostReference, *, operation: str) -> NativeHostReference:
+        assert service.backend_id == owner.backend_id
+        return reference
 
     async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
         return result.inventory
@@ -124,7 +133,8 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
     monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
 
     monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
-    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
+    monkeypatch.setattr(ExtensionManagementClient, "host_reference", reference)
+    monkeypatch.setattr(ExtensionManagementClient, "host_publication", publication)
     monkeypatch.setattr(owner_module, "publication_file", file_read)
     try:
         yield result
@@ -252,7 +262,7 @@ def test_web_configuration_requires_original_context_and_authenticated_identity(
 def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(web_case: WebCase, monkeypatch: pytest.MonkeyPatch) -> None:
     scanning, cancelled = threading.Event(), threading.Event()
 
-    async def publication(_management: ExtensionManagementClient, **_selection: object) -> WebExtensionPublication:
+    async def publication(_management: ExtensionManagementClient, _service: object, _reference: object, **_selection: object) -> HostExtensionPublication:
         scanning.set()
         try:
             await asyncio.Event().wait()
@@ -260,7 +270,7 @@ def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(w
             cancelled.set()
         pytest.fail("已断开的准入不能返回库存")
 
-    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
+    monkeypatch.setattr(ExtensionManagementClient, "host_publication", publication)
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as websocket:
         websocket.send_json(web_case.payload)
         assert scanning.wait(2)

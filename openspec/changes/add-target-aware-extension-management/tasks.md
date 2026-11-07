@@ -131,6 +131,10 @@
   - 2026-11-06 真实窗口联调发现安装域跨进程组缺口：同 BOXTEAM_HOME 的多个本机 Backend 进程共享同一稳定安装身份，原生管理进程生命周期锁会拒绝第二 owner（AlreadyLocked）；它们不能作为同 ID 不同安装版本的两个目标。需共用同一原生 profile 管理 owner，不能去锁、按进程生成身份或放宽隔离断言。代码保留 TODO，原件见 `out/tests/temp/2026/11/06/extension_instance_migration/artifacts/browser-03.json` 及对应 Backend 日志；双目标验收仍须独立安装域。
   - 2026-11-06 目标侧 VSIX 安装 API 切片：原 Gateway／Backend 管理入口冻结稳定目标与挂接 workspace 的文件 URI，复用原文件 owner 和原生 Code OSS 安装器；安装与完整库存由同一次串行 Node 操作返回，强制晚到回执仍保留本次版本，升级保留原制品且不声称切换运行实例。150项单元／公开合同通过，最终37项 Gateway 回归及8项真实 Node／HTTP／profile 集成通过，覆盖双目标隔离、不兼容安装、升级、并发回执、重启及原进程回收。真实安装后的取消／损坏回执沿同一结果未知关闭链拒绝重放，明确业务错误仍可查库存。Python 类型／Ruff、专用 Node 类型、真实基线 Buf breaking 和生成一致性通过；准确命令、指纹、失败原件及适用构建证据见 `out/tests/temp/2026/11/06/target_vsix_install/artifacts/verification-v1.json`。窗口安装 UI、完整运行引用／卸载、SSH／Windows及Electron尚未验，本项保持未勾选。
 
+  - 2026-11-07 实际宿主版本引用切片：原安装服务在内存持有各宿主代际的冻结发布对象，Backend 开通／结清原 session；Node 由真实 registry 在首次运行 barrier 和增量发布前提交实际用户扩展集合，移除 delta 不提前释放可能已加载的代码。Web 复用同次 scanner 准入，关闭等待传输及真实文件 worker；Node 等实际 child 退出，释放失败保留原 session 和 HTTP 客户端供显式结清。引用直连原常驻管理实例，Gateway 换代不截断；有引用时管理 shutdown 明确409。通用管理 token 不进入运行宿主，专用能力在首次运行前移入模块私有闭包并删除环境项，不建立第二套安装事实或授权账本。
+  - 最终 owner／API 定向277通过、4跳过；Linux真实安装／Backend／原IPC／RPC／registry组合6项通过，覆盖初始与delta、错key／目标／URI、同版双实例、升级及卸载后旧包读取、移除delta仍保护、单实例关闭、同PID管理交接和最后实际退出。Windows固定Node24.22.1同链及扫描损坏准入2项通过，26份正式原件共376243字节逐份核SHA及字节；远端快照 `d9055dc5bb09cf8d54837307a04dda3a4f82077b`。最终Python相关14份类型零诊断及Ruff通过；170份实际Node转换源码仍有与既有完整基线相同的两条IExtensionInfo诊断，新增0，不称类型全绿。164份Browser转换逐字节未变，复用已有正式Web构建；未改公开协议。
+  - 首轮fixture未迁引用服务、固定Home残留、初始化hook早于actor注册及Node fetch附带浏览器来源头的失败均保留原件，分别迁齐装具、逐测试Home、官方barrier顺序及原生HTTP后通过，没有放宽断言。准确命令、最终指纹、退出码、Windows原件核验和复用范围见 `out/tests/temp/2026/11/07/extension_runtime_references/artifacts/verification-v1.json`。管理服务异常重建的引用对账及最终物理回收仍待明确边界，代码保留TODO且禁止全局cleanUp；完整Workbench、真实SSH和打包Electron未由本片验证，4.4保持未勾选。
+
 ## 5. 多目标 Node Extension Host 闭包
 
 - [ ] 5.1 清点原 Remote 及 extension ID 单例假设：description registry、enablement、RunningLocation／Tracker、HostManager／Factory、activation、依赖、MainThread／ExtHost RPC、贡献／卸载及全部消费者／测试，确定唯一扩展服务内的多目标接入点。

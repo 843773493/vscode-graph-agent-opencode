@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -22,7 +23,9 @@ from app.schemas.gateway.extension_installation import (
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
+    NativeHostReference,
     NativeManagementEnvironment,
+    NativeReferenceService,
 )
 from app.services.infrastructure.extension_host.owner import (
     NodeExtensionHostOwner,
@@ -43,6 +46,9 @@ class Case:
     started: asyncio.Event = field(default_factory=asyncio.Event)
     hosts: list[NodeExtensionHost] = field(default_factory=list)
     close_failures: list[OSError] = field(default_factory=list)
+    references: dict[str, NativeHostReference] = field(default_factory=dict)
+    reference_events: list[tuple[str, str]] = field(default_factory=list)
+    reference_failures: list[OSError] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -84,9 +90,27 @@ async def case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
             global_storage_home_uri=(tmp_path / "profile/globalStorage").as_uri(),
             workspace_storage_home_uri=(tmp_path / "profile/workspaceStorage").as_uri(), profile_id="test-profile",
             untitled_workspaces_home_uri=result.views.as_uri(),
-            settings_native_uri=(tmp_path / "profile/settings.json").as_uri())
+            settings_native_uri=(tmp_path / "profile/settings.json").as_uri(),
+            reference_service=NativeReferenceService(url="http://127.0.0.1:45002/references",
+                backend_id=_management.backend_id, runtime_instance_id="original-service"))
+
+    async def reference(_management: ExtensionManagementClient, service: NativeReferenceService,
+                        reference: NativeHostReference, *, operation: Literal["open-host", "close-host"]) -> NativeHostReference:
+        assert service.backend_id == _management.backend_id
+        session = owner._sessions.get(reference.generation)
+        if operation == "open-host":
+            result.references[reference.generation] = reference
+        else:
+            if isinstance(session, _HostSession) and session.host is not None:
+                assert session.host.child.state.exit_verified
+            if result.reference_failures:
+                raise result.reference_failures.pop(0)
+            assert result.references.pop(reference.generation, reference) == reference
+        result.reference_events.append((operation, reference.generation))
+        return reference
 
     monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
+    monkeypatch.setattr(ExtensionManagementClient, "host_reference", reference)
     # 测试的是owner的身份及生命周期；平台IPC由真实进程集成验证。
     monkeypatch.setattr(sys, "platform", "linux")
     try:
@@ -94,7 +118,9 @@ async def case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
     finally:
         result.gate.set()
         result.close_failures.clear()
+        result.reference_failures.clear()
         await owner.close()
+        assert not result.references
 
 
 @pytest.mark.parametrize("invalid", ["backend", "empty", "duplicate", "foreign", "client", "unavailable"])
@@ -144,6 +170,10 @@ async def test_views_preserve_client_identity_and_independent_generations(case: 
             assert first.identity.workspace_ids == case.workspace_ids
             assert second.identity.workspace_ids == case.workspace_ids[::-1]
             assert first.identity.generation != second.identity.generation
+            for connection in (first, second):
+                transport = json.loads(connection.host._environment["BOXTEAM_EXTENSION_HOST_REFERENCE"])
+                assert transport["reference"]["generation"] == connection.identity.generation
+            assert "reference_service" not in first.initialization.environment.model_dump()
             with pytest.raises(ValueError, match="尚未关闭"):
                 async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                         client_id="one", view_id="same", workspace_ids=case.workspace_ids[:1]):
@@ -271,6 +301,27 @@ async def test_cleanup_failure_preserves_original_error_generation_and_log_until
         async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
                 client_id="new", view_id="view", workspace_ids=case.workspace_ids):
             pytest.fail("关闭后不能重建宿主")
+
+
+async def test_reference_release_failure_retains_original_session_and_client_for_retry(case: Case) -> None:
+    failure = OSError("原安装服务引用释放未确认")
+    connection: NodeHostConnection | None = None
+    with pytest.raises(OSError, match="引用释放未确认"):
+        async with case.owner.connect(gateway_id="gateway_" + "a" * 32, expected_backend_id=case.owner.backend_id,
+                client_id="client", view_id="view", workspace_ids=case.workspace_ids) as connection:
+            case.reference_failures.append(failure)
+    assert connection is not None and connection.host.child.state.exit_verified
+    assert case.owner.active == (connection.identity,)
+    assert connection.identity.generation in case.references
+    assert case.owner._management is not None and not case.owner._management.drained
+    # 第一次完整关闭失败也不能关闭用于结清原引用的 HTTP 客户端。
+    case.reference_failures.append(failure)
+    with pytest.raises(BaseExceptionGroup):
+        await case.owner.close()
+    assert not case.owner._management.drained and case.owner.active == (connection.identity,)
+    await case.owner.close()
+    assert not case.references and case.owner.drained
+    assert case.reference_events == [("open-host", connection.identity.generation), ("close-host", connection.identity.generation)]
 
 
 @pytest.mark.parametrize("unavailable", ["none", "runtime", "platform", "draining"])

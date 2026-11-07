@@ -431,10 +431,12 @@ def install_request_id() -> Iterator[str]:
 
 
 @pytest.fixture
-def environment_reply() -> dict[str, JsonValue]:
+def environment_reply(control: HttpControl) -> dict[str, JsonValue]:
     return {"result": {"app_root_uri": "file:///target/app", "global_storage_home_uri": "file:///target/global",
         "workspace_storage_home_uri": "file:///target/workspaces", "untitled_workspaces_home_uri": "file:///target/untitled",
-        "profile_id": "default", "settings_native_uri": "file:///target/settings.json"}}
+        "profile_id": "default", "settings_native_uri": "file:///target/settings.json",
+        "reference_service": {"url": control.instance.base_url + "/references", "backend_id": control.owner.backend_id,
+            "runtime_instance_id": control.instance.runtime_instance_id}}}
 
 
 @pytest.mark.parametrize("known_error", [False, True])

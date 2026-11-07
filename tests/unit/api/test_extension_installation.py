@@ -19,11 +19,13 @@ from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
     ExtensionManagementError,
+    HostExtensionPublication,
     NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
+    NativeHostReference,
     NativeManagementEnvironment,
-    WebExtensionPublication,
+    NativeReferenceService,
 )
 from tests.unit.api.test_extension_host import (
     private_host_client as private_host_client,  # noqa: PLC0414
@@ -44,16 +46,26 @@ def private_package(
         gateway_url="http://127.0.0.1:8014", token="private-host-token", operation_timeout=2)
     calls: list[dict[str, object]] = []
 
-    async def publication(_management: ExtensionManagementClient, *, profile_id: str,
-                          extension_keys: list[str]) -> WebExtensionPublication:
+    async def environment(_management: ExtensionManagementClient) -> NativeManagementEnvironment:
+        return NativeManagementEnvironment(app_root_uri=tmp_path.as_uri(),
+            global_storage_home_uri=(tmp_path / "globalStorage").as_uri(),
+            workspace_storage_home_uri=(tmp_path / "workspaceStorage").as_uri(),
+            untitled_workspaces_home_uri=(tmp_path / "Workspaces").as_uri(),
+            profile_id="default-profile", settings_native_uri=(tmp_path / "settings.json").as_uri(),
+            reference_service=NativeReferenceService(url="http://127.0.0.1:45002/references",
+                backend_id=owner.backend_id, runtime_instance_id="original-service"))
+
+    async def reference(_management: ExtensionManagementClient, service: NativeReferenceService,
+                        reference: NativeHostReference, *, operation: str) -> NativeHostReference:
+        assert service.backend_id == owner.backend_id
+        return reference
+
+    async def publication(_management: ExtensionManagementClient, _service: object, _reference: object, *, profile_id: str,
+                          extension_keys: list[str]) -> HostExtensionPublication:
         assert profile_id == "default-profile" and extension_keys == [KEY]
-        return WebExtensionPublication(inventory=ProfileExtensionInventory(target_platform="linux-x64", profile_id=profile_id, extensions=[InstalledExtension(
+        return HostExtensionPublication(inventory=ProfileExtensionInventory(target_platform="linux-x64", profile_id=profile_id, extensions=[InstalledExtension(
             source="profile", extension_key=KEY, description={"browser": "dist/main.js"},
-            is_valid=True, validations=[])]), environment=NativeManagementEnvironment(
-                app_root_uri=tmp_path.as_uri(), global_storage_home_uri=(tmp_path / "globalStorage").as_uri(),
-                workspace_storage_home_uri=(tmp_path / "workspaceStorage").as_uri(),
-                untitled_workspaces_home_uri=(tmp_path / "Workspaces").as_uri(),
-                profile_id=profile_id, settings_native_uri=(tmp_path / "settings.json").as_uri()),
+            is_valid=True, validations=[])]), environment=await environment(_management),
             publications=[NativeExtensionPublication(extension_id="publisher.probe", extension_key=KEY,
                 native_uri=(tmp_path / "extensions" / KEY).as_uri(), extensions_root_uri=(tmp_path / "extensions").as_uri())])
 
@@ -63,7 +75,9 @@ def private_package(
             "extension_id": publication.extension_id, "relative_segments": relative_segments, "current_profile_member": False})
         return NativeFileStat(type=1, ctime=0, mtime=123, size=3, permissions=1) if file_operation == "stat" else NativeFileRead(content_base64="YWJj")
 
-    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
+    monkeypatch.setattr(ExtensionManagementClient, "host_publication", publication)
+    monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
+    monkeypatch.setattr(ExtensionManagementClient, "host_reference", reference)
     monkeypatch.setattr(owner_module, "publication_file", file_read)
     headers = {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": GATEWAY,
         "X-BoxTeam-Extension-Client-Id": "authenticated-client", "X-Request-ID": "package-private"}

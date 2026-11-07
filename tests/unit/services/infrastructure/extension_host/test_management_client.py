@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
+from typing import Literal
 from uuid import uuid4
 
 import httpx
@@ -13,6 +15,8 @@ from app.core.trace_middleware import reset_current_request_id, set_current_requ
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
     ExtensionManagementError,
+    NativeHostReference,
+    NativeReferenceService,
 )
 
 
@@ -89,3 +93,39 @@ async def test_client_checks_original_receipt_and_preserves_semantic_errors(clie
     finally:
         reset_current_request_id(token)
     assert calls == 1
+
+
+@pytest.mark.parametrize("operation", ["open-host", "close-host"])
+async def test_reference_cancellation_settles_same_service_without_replay(client: ExtensionManagementClient,
+    operation: Literal["open-host", "close-host"],
+) -> None:
+    service = NativeReferenceService(url="http://127.0.0.1:45002/references",
+        backend_id=client.backend_id, runtime_instance_id="original-management")
+    reference = NativeHostReference(generation="original-host", capability="host-only")
+    entered, release = asyncio.Event(), asyncio.Event()
+    requests: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json={"result": reference.model_dump()})
+
+    client._http = httpx.AsyncClient(transport=httpx.MockTransport(respond), headers={"X-Local-Token": "original-runtime-token"})
+    if operation == "close-host":
+        client.close_admission()
+    opening = asyncio.create_task(client.host_reference(service, reference, operation=operation))
+    await entered.wait()
+    opening.cancel("原通道已取消")
+    await asyncio.sleep(0)
+    assert not opening.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError, match="原通道已取消"):
+        await opening
+    assert len(requests) == 1 and str(requests[0].url) == service.url
+    assert json.loads(requests[0].content) == {"method": operation, "backend_id": client.backend_id,
+        "runtime_instance_id": service.runtime_instance_id, **reference.model_dump()}
+    client.close_admission()
+    with pytest.raises(RuntimeError, match="停止运行准入"):
+        await client.host_reference(service, reference, operation="open-host")
+    assert len(requests) == 1

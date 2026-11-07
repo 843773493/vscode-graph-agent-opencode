@@ -37,7 +37,6 @@ from app.services.infrastructure.extension_host.management import (
     NativeManagementEnvironment,
     ProfileExtensionInventory,
     UninstalledProfile,
-    WebExtensionPublication,
 )
 from app.services.infrastructure.extension_host.package_files import (
     publication_file,
@@ -271,7 +270,13 @@ class GatewayExtensionManagement:
                     raise ExtensionManagementError(reply["error"], reply["code"])
                 if set(reply) != {"result"}:
                     raise ValueError("扩展管理控制回执不完整")
-                return response_type.model_validate(reply["result"])
+                result = response_type.model_validate(reply["result"])
+                if isinstance(result, NativeManagementEnvironment):
+                    service = result.reference_service
+                    if (service.backend_id != self.backend_id or service.runtime_instance_id != self.instance.runtime_instance_id
+                        or service.url != f"{self.instance.base_url}/references"):
+                        raise ValueError("运行引用服务与已接管的原安装实例不匹配")
+                return result
             except ExtensionManagementError:
                 raise
             except httpx.HTTPStatusError as error:
@@ -318,7 +323,7 @@ class GatewayExtensionManagement:
             except ExtensionManagementError as error:
                 return {"error": str(error), "code": error.code}
             return {"result": result.model_dump(mode="json")}
-        if operation not in {"inventory", "environment", "install", "install-gallery", "metadata", "uninstall", "web-publication"}:
+        if operation not in {"inventory", "environment", "install", "install-gallery", "metadata", "uninstall"}:
             raise ValueError("未登记的扩展安装管理操作")
         response_type = {
             "inventory": ProfileExtensionInventory,
@@ -327,7 +332,6 @@ class GatewayExtensionManagement:
             "install-gallery": InstalledProfile,
             "metadata": ProfileExtensionInventory,
             "uninstall": UninstalledProfile,
-            "web-publication": WebExtensionPublication,
         }[operation]
         try:
             result = await self._request(command, response_type=response_type, download_base_url=download_base_url)

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -44,6 +45,19 @@ class ExtensionManagementError(RuntimeError):
         self.code = code
 
 
+class NativeReferenceService(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    url: str
+    backend_id: str
+    runtime_instance_id: str
+
+
+class NativeHostReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    generation: str = Field(min_length=1)
+    capability: str = Field(min_length=1)
+
+
 class NativeManagementEnvironment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     app_root_uri: NativeFileURI
@@ -52,6 +66,7 @@ class NativeManagementEnvironment(BaseModel):
     untitled_workspaces_home_uri: NativeFileURI
     profile_id: str
     settings_native_uri: NativeFileURI
+    reference_service: NativeReferenceService
 
 
 class NativeFileStat(BaseModel):
@@ -76,7 +91,7 @@ class NativeExtensionPublication(BaseModel):
     extensions_root_uri: NativeFileURI
 
 
-class WebExtensionPublication(BaseModel):
+class HostExtensionPublication(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     inventory: ProfileExtensionInventory
     publications: list[NativeExtensionPublication]
@@ -157,9 +172,55 @@ class ExtensionManagementClient:
     async def environment(self) -> NativeManagementEnvironment:
         return await self._request({"method": "environment"}, response_type=NativeManagementEnvironment)
 
-    async def web_publication(self, *, profile_id: str, extension_keys: list[str]) -> WebExtensionPublication:
-        return await self._request({"method": "web-publication", "profile_id": profile_id,
-                                   "extension_keys": list(extension_keys)}, response_type=WebExtensionPublication)
+    def reference_environment(self, service: NativeReferenceService, reference: NativeHostReference, *, gateway_id: str, profile_id: str) -> dict[str, str]:
+        return {"BOXTEAM_EXTENSION_HOST_REFERENCE": json.dumps({
+            "service": service.model_dump(), "reference": reference.model_dump(),
+            "gateway_id": gateway_id, "profile_id": profile_id,
+            "timeout_seconds": self._http.timeout.read,
+        })}
+
+    async def host_reference(self, service: NativeReferenceService, reference: NativeHostReference,
+                             *, operation: Literal["open-host", "close-host"]) -> NativeHostReference:
+        return await self._reference_request(service, reference, operation=operation, response_type=NativeHostReference)
+
+    async def host_publication(self, service: NativeReferenceService, reference: NativeHostReference,
+                               *, profile_id: str, extension_keys: list[str]) -> HostExtensionPublication:
+        return await self._reference_request(service, reference, operation="host-publication",
+            response_type=HostExtensionPublication, profile_id=profile_id, extension_keys=list(extension_keys))
+
+    async def _reference_request(self, service: NativeReferenceService, reference: NativeHostReference,
+                                 *, operation: str, response_type: type[Result], **selection: JsonValue) -> Result:
+        parsed = urlsplit(service.url)
+        if (service.backend_id != self.backend_id or parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+            or parsed.port is None or parsed.path != "/references" or parsed.query or parsed.fragment or parsed.username or parsed.password):
+            raise ValueError("运行引用服务不属于目标本机安装域")
+
+        async def exchange() -> Result:
+            async with self._lock:
+                # 原宿主关闭仍须结清引用；Backend 停止新准入不撤销已有引用的释放资格。
+                if self._closing and operation != "close-host":
+                    raise RuntimeError("Backend 扩展管理客户端已停止运行准入")
+                response = await self._http.post(service.url, json={
+                    "method": operation, "backend_id": service.backend_id,
+                    "runtime_instance_id": service.runtime_instance_id, **reference.model_dump(), **selection,
+                })
+                response.raise_for_status()
+                reply = response.json()
+                if set(reply) == {"error", "code"}:
+                    raise ExtensionManagementError(reply["error"], reply["code"])
+                if set(reply) != {"result"}:
+                    raise ValueError("运行引用回执不完整")
+                return response_type.model_validate(reply["result"])
+
+        pending = asyncio.create_task(exchange())
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            async def settle() -> None:
+                await pending
+
+            await run_cleanup_shielded(settle)
+            raise
 
     async def extension_file_stat(self, *, profile_id: str, extension_key: str, extension_id: str,
                                   relative_segments: list[str], current_profile_member: bool) -> NativeFileStat:

@@ -83,6 +83,7 @@ class NodeExtensionHost:
             # 沿上游 writeExtHostConnection 的互斥语义，只提供一种实际 IPC 模式。
             environment = {key: value for key, value in self._environment.items() if key not in {
                 "VSCODE_EXTHOST_IPC_HOOK", "VSCODE_EXTHOST_WILL_SEND_SOCKET", "VSCODE_WILL_SEND_MESSAGE_PORT",
+                "BOXTEAM_RUNTIME_CONTROL_TOKEN",
             }}
             environment.update(VSCODE_EXTHOST_IPC_HOOK=address, VSCODE_RECONNECTION_GRACE_TIME="0")
             exited: asyncio.Task[int] | None = None

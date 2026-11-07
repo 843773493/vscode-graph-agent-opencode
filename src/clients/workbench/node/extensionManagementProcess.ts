@@ -33,7 +33,10 @@ try {
   };
   // 缺少原凭据立即失败，不能发布一个不可认证或无认证的服务。
   verifyRuntimeControlToken(process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN, process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
-  const management = await createExtensionManagement(directory, join(import.meta.dirname, 'builtin-extensions'));
+  let baseUrl: string;
+  const management = await createExtensionManagement(directory, join(import.meta.dirname, 'builtin-extensions'), () => ({
+    url: baseUrl + '/references', backend_id: backendId, runtime_instance_id: identity.runtime_instance_id,
+  }));
   let queue = Promise.resolve();
   let stopping = false;
   let disposed = false;
@@ -52,25 +55,25 @@ try {
         : typeof error?.statusCode === 'number' ? error.statusCode : 500);
     });
   });
-  let baseUrl: string;
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.socket.remoteAddress !== '127.0.0.1' || request.headers.origin !== undefined
       || Object.keys(request.headers).some(header => header.startsWith('sec-fetch-'))) {
       respond(response, { error: '扩展管理只接受本机管理通道' }, 403);
       return;
     }
-    verifyRuntimeControlToken(request.headers['x-local-token'], process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
     const pathname = request.url;
+    // 运行进程只持有本代引用能力，不能取得通用安装管理凭据。
+    if (pathname !== '/references') verifyRuntimeControlToken(request.headers['x-local-token'], process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
     if (await handleRuntimeLoggingRequest(request, response, { pathname, service: 'extension-management', readJson })) return;
     if (pathname === '/health' && request.method === 'GET') {
       respond(response, { ...identity, base_url: baseUrl, status: stopping ? 'stopping' : 'ok' });
       return;
     }
-    if (request.method !== 'POST' || !['/management', '/publication', '/shutdown'].includes(pathname ?? '')) {
+    if (request.method !== 'POST' || !['/management', '/publication', '/references', '/shutdown'].includes(pathname ?? '')) {
       respond(response, { error: '不支持的扩展管理入口' }, 404);
       return;
     }
-    if (stopping) {
+    if (stopping && pathname !== '/references') {
       respond(response, { error: '扩展管理服务正在排空' }, 503);
       return;
     }
@@ -78,6 +81,11 @@ try {
       stopping = true;
       try {
         await queue;
+        if (management.hasHostReferences) {
+          stopping = false;
+          respond(response, { error: '运行宿主引用尚未由原 Backend 结清', code: 'RuntimeReferencesActive' }, 409);
+          return;
+        }
         await management.dispose();
         disposed = true;
         respond(response, { drained: true });
@@ -90,7 +98,7 @@ try {
     }
     const input: unknown = await readJson(request);
     // 读取请求体时可能已有完整停机请求进入，不能在已排空队列之后追加新工作。
-    if (stopping) {
+    if (stopping && pathname !== '/references') {
       respond(response, { error: '扩展管理服务正在排空' }, 503);
       return;
     }
@@ -100,6 +108,27 @@ try {
           throw new TypeError('扩展管理控制请求无效');
         }
         let result: unknown;
+        if (pathname === '/references') {
+          if (input.method !== 'host-publication') {
+            verifyRuntimeControlToken(request.headers['x-local-token'], process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
+          }
+          if (!('backend_id' in input) || input.backend_id !== backendId
+            || !('runtime_instance_id' in input) || input.runtime_instance_id !== identity.runtime_instance_id
+            || !('generation' in input) || typeof input.generation !== 'string' || !input.generation
+            || !('capability' in input) || typeof input.capability !== 'string' || !input.capability) {
+            throw new TypeError('运行引用不属于本安装域或管理服务代际');
+          }
+          if (stopping && input.method !== 'close-host') throw new Error('扩展管理服务正在排空，拒绝新的运行引用');
+          if (input.method === 'open-host') result = management.openHost(input.generation, input.capability);
+          else if (input.method === 'close-host') result = management.closeHost(input.generation, input.capability);
+          else if (input.method === 'host-publication' && 'profile_id' in input && typeof input.profile_id === 'string'
+            && 'extension_keys' in input && Array.isArray(input.extension_keys)
+            && input.extension_keys.every((key: unknown) => typeof key === 'string')) {
+            result = await management.hostPublication(input.generation, input.capability, input.profile_id, input.extension_keys);
+          } else throw new TypeError('未登记的宿主运行引用操作');
+          respond(response, { result });
+          return;
+        }
         if (pathname === '/publication' && input.method === 'extension-publication'
           && 'profile_id' in input && typeof input.profile_id === 'string'
           && 'extension_id' in input && typeof input.extension_id === 'string'
@@ -117,11 +146,6 @@ try {
         if (pathname !== '/management') throw new TypeError('不支持的扩展管理操作');
         if (input.method === 'inventory') result = await management.inventory();
         else if (input.method === 'environment') result = await management.environment();
-        else if (input.method === 'web-publication' && 'profile_id' in input && typeof input.profile_id === 'string'
-          && 'extension_keys' in input && Array.isArray(input.extension_keys)
-          && input.extension_keys.every((key: unknown) => typeof key === 'string')) {
-          result = await management.webPublication(input.profile_id, input.extension_keys);
-        }
         else if (input.method === 'install' && 'vsix_path' in input && typeof input.vsix_path === 'string' && isAbsolute(input.vsix_path)) {
           const requestTransport = 'request_transport' in input ? input.request_transport : undefined;
           const vsixPath = input.vsix_path;
