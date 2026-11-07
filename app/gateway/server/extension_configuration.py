@@ -32,6 +32,7 @@ from app.gateway.server.extension_host import (
 from app.gateway.server.management_routes import (
     GatewayManagementRoute,
     check_management_route,
+    management_gateway_route,
 )
 from app.gateway.server.workspace_proxy import (
     _http_client,
@@ -45,6 +46,8 @@ from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationProfileWriteRequest,
     ExtensionConfigurationReadDTO,
     ExtensionConfigurationStatDTO,
+    ExtensionConfigurationTargetListDTO,
+    ExtensionConfigurationTargetListRequest,
     ExtensionConfigurationTargetRequest,
     ExtensionConfigurationViewDTO,
     ExtensionConfigurationViewRequest,
@@ -55,6 +58,78 @@ from app.schemas.internal_v2.sse import sse_responses
 
 router = APIRouter()
 ConfigurationResult = TypeVar("ConfigurationResult", ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO, ExtensionConfigurationViewDTO)
+
+
+@router.post("/api/gateway/extension-configurations/targets", response_model=APIResponse[ExtensionConfigurationTargetListDTO])
+async def configuration_targets(payload: ExtensionConfigurationTargetListRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+) -> APIResponse[ExtensionConfigurationTargetListDTO] | Response:
+    try:
+        require_federation_capability(request, auth, "configuration_read")
+        if access is not None:
+            expires = _users(request).expires_at(access)
+            if expires is None or datetime.fromisoformat(expires) <= datetime.now(UTC):
+                raise PermissionError("配置目标发现的用户访问租约已过期")
+        with management_gateway_route(request, gateway_id=payload.gateway_id,
+                gateway_connection_id=payload.gateway_connection_id, auth=auth) as remote:
+            request_id = get_request_id(request)
+            if remote is not None:
+                response = await _http_client(request).post(
+                    f"{remote.base_url.rstrip('/')}/api/gateway/extension-configurations/targets",
+                    headers=remote.headers,
+                    json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=10)
+                check_management_route(request, remote)
+                require_federation_capability(request, auth, "configuration_read")
+                if access is not None:
+                    expires = _users(request).expires_at(access)
+                    if expires is None or datetime.fromisoformat(expires) <= datetime.now(UTC):
+                        raise PermissionError("配置目标发现的用户访问租约已过期")
+                if response.headers.get("X-Request-ID") != request_id:
+                    raise ValueError("配置目标发现响应的 request_id 与原请求不一致")
+                if not response.is_success:
+                    failure = response.json()
+                    if not isinstance(failure, dict) or failure.get("request_id") != request_id:
+                        raise ValueError("配置目标发现错误回执不属于原请求")
+                    return Response(response.content, status_code=response.status_code, media_type="application/json")
+                result = APIResponse[ExtensionConfigurationTargetListDTO].model_validate_json(response.content)
+                if (result.code != 0 or result.request_id != request_id or result.data is None
+                    or result.data.gateway_id != payload.gateway_id
+                    or result.data.protocol_version != payload.protocol_version):
+                    raise ValueError("配置目标发现回执不属于原 Gateway 或请求")
+                return result
+
+            registry = request.app.state.registry
+            registered_ids = {owner.backend_id for owner in registry.backend_owners()
+                if owner.backend_id is not None and owner.error is None
+                and owner.process is not None and owner.process.is_alive()}
+            registered_ids.update(target.backend_id for target in registry.targets()
+                if target.gateway_id == registry.gateway_id and target.connection_kind == "local"
+                and target.backend_id is not None and not target.managed
+                and target.connection_error is None and target.backend_url)
+            backend_ids = []
+            for backend_id in sorted(registered_ids):
+                try:
+                    with registry.backend_management_routes(backend_id=backend_id) as candidates:
+                        if (len(candidates) == 1 and candidates[0].backend_id == backend_id
+                            and (access is None or not access.invalidated.is_set())):
+                            backend_ids.append(backend_id)
+                except LookupError:
+                    continue
+            if access is not None:
+                expires = _users(request).expires_at(access)
+                if access.invalidated.is_set() or expires is None or datetime.fromisoformat(expires) <= datetime.now(UTC):
+                    raise PermissionError("配置目标发现的用户访问租约已失效")
+            require_federation_capability(request, auth, "configuration_read")
+            return APIResponse(data=ExtensionConfigurationTargetListDTO(
+                protocol_version=payload.protocol_version, gateway_id=payload.gateway_id,
+                backend_ids=backend_ids), request_id=request_id)
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    except (LookupError, ValueError, RuntimeError) as error:
+        raise HTTPException(409, str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(502, "远端配置目标发现连接失败") from error
 
 
 def _require_access(request: Request, auth: GatewayAuthContext, access: UserAccessContext | None,

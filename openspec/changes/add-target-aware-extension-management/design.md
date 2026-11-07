@@ -42,6 +42,8 @@
 
 MCP 管理视图标题工具栏、设置编辑器顶部在需要目标切换时复用相同控件、目标选项与交互规则，各自保留当前选择；共享控件不等于共享一个随焦点变化的全局目标。打开带有明确目标的既有管理对象时，展示并保留该对象目标，不重写其它管理视图的选择；普通编辑器、会话或工作区焦点变化不改变管理目标。选择沿原 registry／导航／Quick Input，不新增目标登记或选择平台。
 
+设置目标发现属于原配置 owner 的专用 `/api/gateway/extension-configurations/targets` 入口，使用 `configuration_read`，不复用扩展安装域目录或其 VSIX 管理授权。请求只带 Gateway 身份及可选的明确远端连接；响应只含 Gateway 身份和已登记、身份已确认且当前可路由的 Backend ID 列表。列表由现有 registry／Backend 管理路由得出，不要求 workspace，不推测未知 ID，不触发启动，并且不暴露库存、扩展能力或 route 别名。远端 Relay 沿 `management_gateway_route` 保持 request_id 与连接租约，并在响应披露前复核连接身份及 `configuration_read`；配置写操作仍独立要求 `configuration_write`。
+
 远端目标由其原生 Gateway 判权并交所管理的 Backend／配置 owner 执行；当前 Gateway 只转送。SSH 是既有连接方式，不形成另一安装路径。每个 Gateway 可以提供自己的工作台页面；直接打开 B，或在 A 的页面选择 B，看到的 B 安装、版本与配置来自同一 owner。跨端搜索和消息传递沿既有索引、资源归属与路由，不触发插件复制或隐式跨目标启用。
 
 只有配置／启用确实属于工作区或来源层时才补选范围，已有明确上下文则带入。稳定 Backend、profile、view 和 generation 继续用于内部路由及生命周期，不逐项暴露为用户必须重复选择的“目标”。一个 Gateway 下若有多个合法安装域且上下文不足以唯一确定，在视图选择目标时明确补选该域，后续安装沿用，不逐个插件重选或任选首项。

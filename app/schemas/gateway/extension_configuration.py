@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from base64 import b64decode
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from app.schemas.gateway.extension_host import (
+    BackendId,
+    CanonicalGatewayId,
     ExtensionConfigurationURI,
     ExtensionHostConfigurationResourceDTO,
     ExtensionHostWorkspaceDTO,
@@ -19,6 +21,24 @@ from app.schemas.gateway.extension_host import (
 
 class ExtensionConfigurationTargetRequest(_ExtensionHostViewRequest):
     gateway_connection_id: str | None = Field(default=None, min_length=1)
+
+
+class ExtensionConfigurationTargetListRequest(_HostValue):
+    protocol_version: Annotated[int, Field(ge=1, le=1)]
+    gateway_id: CanonicalGatewayId
+    gateway_connection_id: str | None = Field(default=None, min_length=1)
+
+
+class ExtensionConfigurationTargetListDTO(_HostValue):
+    protocol_version: Annotated[int, Field(ge=1, le=1)]
+    gateway_id: CanonicalGatewayId
+    backend_ids: list[BackendId]
+
+    @model_validator(mode="after")
+    def unique_backend_ids(self) -> ExtensionConfigurationTargetListDTO:
+        if len(self.backend_ids) != len(set(self.backend_ids)):
+            raise ValueError("配置目标目录包含重复 Backend 身份")
+        return self
 
 
 class ExtensionConfigurationViewRequest(ExtensionConfigurationTargetRequest):

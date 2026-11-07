@@ -1132,6 +1132,18 @@ message ExtensionConfigurationTargetRequest {
   optional string gateway_connection_id = 6;
 }
 
+message ExtensionConfigurationTargetListRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  optional string gateway_connection_id = 3;
+}
+
+message ExtensionConfigurationTargetListDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  repeated string backend_ids = 3;
+}
+
 message ExtensionConfigurationViewDTO {
   uint32 protocol_version = 1;
   string gateway_id = 2;

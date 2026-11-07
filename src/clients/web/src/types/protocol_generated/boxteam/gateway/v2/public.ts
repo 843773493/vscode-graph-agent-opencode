@@ -1149,6 +1149,18 @@ export interface ExtensionConfigurationTargetRequest {
   gateway_connection_id?: string | undefined;
 }
 
+export interface ExtensionConfigurationTargetListRequest {
+  protocol_version: number;
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+}
+
+export interface ExtensionConfigurationTargetListDTO {
+  protocol_version: number;
+  gateway_id: string;
+  backend_ids: string[];
+}
+
 export interface ExtensionConfigurationViewDTO {
   protocol_version: number;
   gateway_id: string;
@@ -9338,6 +9350,96 @@ export const ExtensionConfigurationTargetRequest: MessageFns<ExtensionConfigurat
     message.view_id = object.view_id ?? "";
     message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationTargetListRequest(): ExtensionConfigurationTargetListRequest {
+  return { protocol_version: 0, gateway_id: "", gateway_connection_id: undefined };
+}
+
+export const ExtensionConfigurationTargetListRequest: MessageFns<ExtensionConfigurationTargetListRequest> = {
+  fromJSON(object: any): ExtensionConfigurationTargetListRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationTargetListRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationTargetListRequest>, I>>(
+    base?: I,
+  ): ExtensionConfigurationTargetListRequest {
+    return ExtensionConfigurationTargetListRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationTargetListRequest>, I>>(
+    object: I,
+  ): ExtensionConfigurationTargetListRequest {
+    const message = createBaseExtensionConfigurationTargetListRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionConfigurationTargetListDTO(): ExtensionConfigurationTargetListDTO {
+  return { protocol_version: 0, gateway_id: "", backend_ids: [] };
+}
+
+export const ExtensionConfigurationTargetListDTO: MessageFns<ExtensionConfigurationTargetListDTO> = {
+  fromJSON(object: any): ExtensionConfigurationTargetListDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_ids: globalThis.Array.isArray(object?.backend_ids)
+        ? object.backend_ids.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ExtensionConfigurationTargetListDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_ids?.length) {
+      obj.backend_ids = message.backend_ids;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionConfigurationTargetListDTO>, I>>(
+    base?: I,
+  ): ExtensionConfigurationTargetListDTO {
+    return ExtensionConfigurationTargetListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionConfigurationTargetListDTO>, I>>(
+    object: I,
+  ): ExtensionConfigurationTargetListDTO {
+    const message = createBaseExtensionConfigurationTargetListDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_ids = object.backend_ids?.map((e) => e) || [];
     return message;
   },
 };

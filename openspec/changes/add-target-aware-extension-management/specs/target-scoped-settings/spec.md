@@ -28,6 +28,20 @@ Web 与 Node 扩展的目标配置 SHALL 使用同一所选目标及合法 Code 
 - **WHEN** B 的设置编辑器已有未提交修改，用户将 Extensions 视图标题工具栏切为 A，再返回原设置编辑器保存
 - **THEN** 设置编辑器仍显示并保存 B 的原来源层，不重新询问每个设置项的目标；用户主动在设置编辑器切换目标时沿原 dirty 编辑处理保留或结清 B 草稿，不把它写入 A
 
+### Requirement: 设置目标发现只披露已登记且可路由的稳定身份
+
+设置编辑器 SHALL 通过配置专属目标发现 API 获取 Gateway 下当前可路由的稳定 Backend ID；该目录允许没有 workspace 上下文，并只返回 Gateway 身份及 Backend ID。目标身份只能来自现有 Gateway registry／Backend 路由登记且已确认的身份，未知身份不得猜测，离线或不可路由目标不进入结果，发现不得启动 Backend 或其它管理服务。
+
+该发现 API SHALL 使用既有 `configuration_read` 授权。它只披露配置目标身份，不返回 VSIX 库存、扩展安装／宿主管理能力或其它扩展状态。远端 Gateway SHALL 由目标 Gateway 再次执行相同授权与发现；中继须在实际披露时确认原连接路由及请求身份仍有效。`configuration_read` 不授予配置写入、扩展管理或目标启动能力。
+
+#### Scenario: 无 workspace 的设置编辑发现多个目标
+- **WHEN** 设置编辑器向 Gateway 请求目标列表，且当前没有挂接 workspace
+- **THEN** 只返回 registry 中身份已确认且通过现有 Backend 路由可达的 Backend ID；不启动离线 Backend，不从名称、URL 或工作区猜测身份，也不附带 VSIX 库存或安装权限
+
+#### Scenario: 远端配置读取权限控制目标披露
+- **WHEN** 中继 Gateway 请求发现远端 Gateway 的设置目标
+- **THEN** 远端仅在 `configuration_read` 仍授权且原连接未换代时披露 Backend ID；缺少权限或连接失效时不返回目录，普通 `read`、`discovery` 与 VSIX 管理能力不能代授
+
 ### Requirement: 设置归属必须复用原 owner 而非统一成新配置域
 
 Workbench 展示设置、Gateway runtime 配置、Workspace 配置、会话设置、Gateway 用户视图和 registry 手动操作 SHALL 保留各自权威来源及提交语义。统一设置 UI 只导航／编辑合法对象，MUST NOT 将非配置状态伪装成 runtime candidate，或增加跨 Gateway 自动继承／同步规则。业务配置更改不得只写前端状态。

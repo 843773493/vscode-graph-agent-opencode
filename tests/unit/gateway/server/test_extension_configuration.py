@@ -8,6 +8,8 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.core.path_utils import get_gateway_root
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -53,6 +55,53 @@ def configuration_proxy(inventory_proxy):
         "resource_uri": extension_configuration_uri(gateway_id=GATEWAY, backend_id=h.request.backend_id,
             profile_id="default-profile")}
     return h, calls, handlers, payload
+
+
+def test_configuration_target_discovery_returns_only_routable_registered_backend_ids(configuration_proxy):
+    h, calls, _, _ = configuration_proxy
+    response = h.client.post("/api/gateway/extension-configurations/targets",
+        json={"protocol_version": 1, "gateway_id": GATEWAY},
+        headers={"X-Local-Token": h.token, "X-Request-ID": "settings-targets"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {"protocol_version": 1, "gateway_id": GATEWAY,
+        "backend_ids": [h.request.backend_id]}
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "settings-targets"
+    assert calls == []
+
+    for target in h.registry.targets():
+        target.backend_id = None
+    empty = h.client.post("/api/gateway/extension-configurations/targets",
+        json={"protocol_version": 1, "gateway_id": GATEWAY}, headers={"X-Local-Token": h.token})
+    assert empty.status_code == 200 and empty.json()["data"]["backend_ids"] == []
+
+
+def test_configuration_target_discovery_requires_configuration_read_and_relays(configuration_proxy):
+    h, calls, handlers, _ = configuration_proxy
+    h.registry.upsert_remote_gateway(RemoteGatewayConnection(connection_id="settings-peer", name="peer",
+        host="remote.test", port=22, username="unit", private_key_path=None, ssh_config_host=None,
+        remote_gateway_port=8014, remote_gateway_id=PEER, protocol_version=FEDERATION_PROTOCOL_VERSION,
+        source_owner="manual"), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}))
+    FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+        connection_id="settings-peer", peer_gateway_id=PEER)
+    body = {"protocol_version": 1, "gateway_id": PEER, "backend_ids": [h.request.backend_id]}
+    handlers[0] = lambda request: httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]},
+        json={"request_id": request.headers["X-Request-ID"], "data": body})
+    h.policy.publish({"rules": [{"capability": "configuration_read", "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(PEER)}]})
+    response = h.client.post("/api/gateway/extension-configurations/targets",
+        json={"protocol_version": 1, "gateway_id": PEER, "gateway_connection_id": "settings-peer"},
+        headers={"X-Local-Token": h.token, "X-Request-ID": "settings-peer-targets"})
+    assert response.status_code == 200, response.text
+    assert calls[0].url == "http://remote.test/api/gateway/extension-configurations/targets"
+    assert "gateway_connection_id" not in json.loads(calls[0].content)
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "settings-peer-targets"
+
+    h.policy.publish({"rules": [{"capability": "read", "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(PEER)}]})
+    denied = h.client.post("/api/gateway/extension-configurations/targets",
+        json={"protocol_version": 1, "gateway_id": PEER, "gateway_connection_id": "settings-peer"},
+        headers={"X-BoxTeam-Federation-Token": h.federation_token})
+    assert denied.status_code == 403 and len(calls) == 1
 
 
 @pytest.mark.parametrize("root_count", [0, 1, 2])

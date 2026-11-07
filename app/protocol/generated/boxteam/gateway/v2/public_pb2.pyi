@@ -1922,6 +1922,26 @@ class ExtensionConfigurationTargetRequest(_message.Message):
     gateway_connection_id: str
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
+class ExtensionConfigurationTargetListRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "gateway_connection_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionConfigurationTargetListDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_ids")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_IDS_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class ExtensionConfigurationViewDTO(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "context")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]

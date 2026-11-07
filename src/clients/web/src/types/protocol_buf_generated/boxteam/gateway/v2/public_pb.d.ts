@@ -4872,6 +4872,58 @@ export declare type ExtensionConfigurationTargetRequest = Message<"boxteam.gatew
 export declare const ExtensionConfigurationTargetRequestSchema: GenMessage<ExtensionConfigurationTargetRequest>;
 
 /**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationTargetListRequest
+ */
+export declare type ExtensionConfigurationTargetListRequest = Message<"boxteam.gateway.v2.ExtensionConfigurationTargetListRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 3;
+   */
+  gatewayConnectionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationTargetListRequest.
+ * Use `create(ExtensionConfigurationTargetListRequestSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationTargetListRequestSchema: GenMessage<ExtensionConfigurationTargetListRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionConfigurationTargetListDTO
+ */
+export declare type ExtensionConfigurationTargetListDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationTargetListDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: repeated string backend_ids = 3;
+   */
+  backendIds: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionConfigurationTargetListDTO.
+ * Use `create(ExtensionConfigurationTargetListDTOSchema)` to create a new message.
+ */
+export declare const ExtensionConfigurationTargetListDTOSchema: GenMessage<ExtensionConfigurationTargetListDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.ExtensionConfigurationViewDTO
  */
 export declare type ExtensionConfigurationViewDTO = Message<"boxteam.gateway.v2.ExtensionConfigurationViewDTO"> & {
