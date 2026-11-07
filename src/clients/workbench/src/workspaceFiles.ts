@@ -40,6 +40,8 @@ export function workspaceFileUri(owner: WorkspaceOwner, path: string, rootPath: 
 
 export function workspaceFileSource(resource: URI): WorkspaceOwner & { path: string; root: string } {
   const [, workspaceId, encodedRoot, ...children] = resource.path.split('/');
+  // 原文件选择器用一个尾分隔符表示目录；只消费该段，不折叠内部空段或改写不透明根。
+  if (children.at(-1) === '') children.pop();
   // 原媒体 Webview 添加的 version 仅用于绕过浏览器缓存，不是资源版本参数。
   const mediaCacheQuery = getMediaMime(resource.path) && /^version=\d+$/.test(resource.query);
   if (resource.scheme !== scheme || !resource.authority || !workspaceId || !encodedRoot || (resource.query && !mediaCacheQuery) || resource.fragment) {
@@ -192,8 +194,10 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     signal?.throwIfAborted();
     try { return await action(workspaceKey); }
     catch (error) {
-      if (error instanceof GatewayRequestError && error.status === 404) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotFound);
-      if (error instanceof GatewayRequestError && error.status === 403) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.NoPermissions);
+      if (error instanceof GatewayRequestError && (error.status === 404 || error.status === 403)) {
+        throw Object.assign(createFileSystemProviderError(error, error.status === 404
+          ? FileSystemProviderErrorCode.FileNotFound : FileSystemProviderErrorCode.NoPermissions), { cause: error });
+      }
       throw error;
     }
   }

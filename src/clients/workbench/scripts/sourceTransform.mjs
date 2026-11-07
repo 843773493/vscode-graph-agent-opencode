@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
+import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
 import { extensionHostStateSourcePaths, transformExtensionHostState } from './extensionHostStateTransform.mjs';
 import { extensionInstanceSourcePaths, transformExtensionInstances } from './extensions/extensionInstanceTransform.mjs';
@@ -56,6 +57,7 @@ export const transformedSourcePaths = [...new Set([
   'extensions/markdown-language-features/src/preview/preview.ts',
   ...searchEditorSourcePaths,
   ...outlineSourcePaths,
+  ...fileDialogSourcePaths,
   ...mcpSourcePaths,
   ...extensionHostStateSourcePaths,
   ...extensionInstanceSourcePaths,
@@ -121,6 +123,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce, runtime);
     // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
+    contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);

@@ -1,6 +1,6 @@
 import { describe, expect, test, spyOn } from 'bun:test';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
-import { joinPath, relativePath, isEqualOrParent } from '../upstream/src/vs/base/common/resources.js';
+import { addTrailingPathSeparator, joinPath, relativePath, isEqualOrParent } from '../upstream/src/vs/base/common/resources.js';
 import { FileService } from '../upstream/src/vs/platform/files/common/fileService.js';
 import { FileType, FileChangeType, FileSystemProviderErrorCode, toFileSystemProviderErrorCode, type IFileChange } from '../upstream/src/vs/platform/files/common/files.js';
 import { VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
@@ -31,6 +31,20 @@ function fileService() {
 }
 
 describe('后端文件目录根和稳定投影', () => {
+  test('唯一反投影只消费原picker一个目录尾分隔符，保留根编码和内部空段', () => {
+    const directory = workspaceFileUri(owner, root, root);
+    for (const path of [root, root + '/' + encodeURIComponent('中文 目录') + '/%252F.vsix', root + '/100%25%20%23%3F.vsix']) {
+      const resource = workspaceFileUri(owner, path, root);
+      expect(workspaceFileSource(addTrailingPathSeparator(resource))).toEqual({ ...owner, root, path });
+      expect(workspaceFileSource(URI.parse(addTrailingPathSeparator(resource).toString()))).toEqual({ ...owner, root, path });
+    }
+    expect(workspaceFileSource(directory.with({ path: directory.path + '/a//b/' })).path).toBe(root + '/a//b');
+    expect(workspaceFileSource(directory.with({ path: directory.path + '/a//' })).path).toBe(root + '/a/');
+    expect(workspaceFileSource(directory.with({ path: directory.path + '//' })).path).toBe(root + '/');
+    const opaqueRoot = root + '%2Fopaque';
+    expect(workspaceFileSource(addTrailingPathSeparator(workspaceFileUri(owner, opaqueRoot, opaqueRoot))).root).toBe(opaqueRoot);
+  });
+
   test('根拼接／相对路径和序列化往返保留 Unicode 与字面百分号', () => {
     const directory = workspaceFileUri(owner, root, root);
     for (const name of ['中文 目录/🧪 %.txt', '%2F.txt', '含#?@.txt']) {
@@ -718,6 +732,26 @@ describe('后端文件目录读取', () => {
     return { path: root, root_path: root, directory_key: { workspace_id: owner.workspaceId, scope: 'workspace', root, path: root },
       directory_revision: 7, items, truncated: false, limit: 500, ...pagination };
   }
+
+  test('Provider经真实FileService处理picker尾分隔符，stat和list都只发规范资源URI', async () => {
+    const files = fileService(), subdirectory = root + '/' + encodeURIComponent('中文 目录');
+    const reply = (uri: string) => ({ node: { uri, resource_shape: 'directory', stat: { size: 0, modified_at_ms: 1, changed_at_ms: 1 } } });
+    const request = spyOn(gateway, 'request').mockResolvedValueOnce(reply(root)).mockResolvedValueOnce(reply(subdirectory));
+    const list = spyOn(fileApi, 'getWorkspaceFiles').mockResolvedValueOnce(page([])).mockResolvedValueOnce(page([], {
+      path: subdirectory, directory_key: { workspace_id: owner.workspaceId, scope: 'workspace', root, path: subdirectory },
+    }));
+    try {
+      for (const path of [root, subdirectory]) {
+        const resource = addTrailingPathSeparator(workspaceFileUri(owner, path, root));
+        const resolved = await files.resolve(resource);
+        expect(resolved.isDirectory).toBe(true); expect(resolved.children).toEqual([]);
+      }
+      expect(request.mock.calls.map(([, options, key]) => [JSON.parse(String(options?.body)), key])).toEqual([
+        [{ uri: root, operation: 'describe' }, ownerKey], [{ uri: subdirectory, operation: 'describe' }, ownerKey],
+      ]);
+      expect(list.mock.calls).toEqual([[0, root, ownerKey, undefined, undefined], [0, subdirectory, ownerKey, undefined, undefined]]);
+    } finally { request.mockRestore(); list.mockRestore(); files.dispose(); }
+  });
 
   test('原FileService.resolve调用stat/readdir，多页名称、类型和完整workspace key保持', async () => {
     const files = fileService(), resource = workspaceFileUri(owner, root, root), provider = files.getProvider(resource.scheme)!;
