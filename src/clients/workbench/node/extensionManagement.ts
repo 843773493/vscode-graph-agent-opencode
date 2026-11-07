@@ -15,7 +15,7 @@ import { AllowedExtensionsService } from '../upstream/src/vs/platform/extensionM
 import { ExtensionGalleryServiceWithNoStorageService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryService.js';
 import { IExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifest.js';
 import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifestService.js';
-import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
+import { IExtensionsScannerService, toExtensionDescription, type IScannedExtension } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
 import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
 import { ExtensionType } from '../upstream/src/vs/platform/extensions/common/extensions.js';
 import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_EXTENSION_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
@@ -116,6 +116,47 @@ export async function createExtensionManagement(directory: string, builtinExtens
         if (matches.length !== 1) throw new ExtensionManagementError(`目标扩展市场不包含唯一的 ${extensionId}@${version}`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
         return matches[0];
       }
+      async function scanProfile() {
+        // 不调用 scanAllExtensions 的跨来源 dedup；此库存只承诺同一默认 profile。
+        const extensions = await scanner.scanUserExtensions({ profileLocation: profile.extensionsResource, includeInvalid: true });
+        const members = await profileScanner.scanProfileExtensions(profile.extensionsResource);
+        const byId = new Map(members.map(extension => [extension.identifier.id.toLowerCase(), extension]));
+        if (byId.size !== members.length) throw new Error('目标 profile 存在重复扩展 ID，不能静默选择版本');
+        if (extensions.length !== members.length || extensions.some(extension => {
+          const member = byId.get(extension.identifier.id.toLowerCase());
+          return !member || member.version !== extension.manifest.version || !identity.extUri.isEqual(member.location, extension.location);
+        })) throw new Error('目标 profile 包含无法解析的已安装扩展');
+        return extensions;
+      }
+      async function describeInventory(extensions: readonly IScannedExtension[]) {
+        const entries = await Promise.all(extensions.map(async extension => {
+          // 沿原描述转换识别真实 README/CHANGELOG，复用本次扫描对象，不另扫库存。
+          const local = await management.describeNativeExtension(extension);
+          const assetPath = (resource: URI | undefined) => {
+            if (!resource) return null;
+            const relative = identity.extUri.relativePath(extension.location, resource);
+            if (!relative) throw new Error('扩展描述资源不属于原包根');
+            return relative;
+          };
+          return { source: 'profile' as const, description: toExtensionDescription(extension, false),
+            extension_key: ExtensionKey.create(extension).toString(), metadata: extension.metadata ?? {},
+            readme_path: assetPath(local.readmeUrl), changelog_path: assetPath(local.changelogUrl),
+            is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
+          };
+        }));
+        return { profile_id: profile.id, target_platform: await management.getTargetPlatform(), extensions: entries };
+      }
+      function describePublication(extension: IScannedExtension) {
+        const key = ExtensionKey.create(extension).toString(), root = scanner.userExtensionsLocation;
+        const location = joinPath(root, key);
+        if (!extension.isValid || !identity.extUri.isEqual(dirname(location), root) || basename(location) !== key
+          || !identity.extUri.isEqual(extension.location, location)) {
+          throw new ExtensionManagementError(`目标 profile 不包含有效的精确扩展包 ${key}`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        }
+        // 安装身份与 profile 资格沿原 scanner；包内路径及字节读取交目标 Python。
+        return { extension_id: extension.identifier.id, extension_key: key,
+          native_uri: extension.location.toString(), extensions_root_uri: root.toString() };
+      }
       async function publishedExtension(profileId: string, extensionId: string, extensionKeyText: string,
         currentProfileMember: boolean) {
         if (profileId !== profile.id) throw new ExtensionManagementError('扩展文件 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
@@ -144,9 +185,7 @@ export async function createExtensionManagement(directory: string, builtinExtens
             throw new ExtensionManagementError(`扩展包 ${extensionKeyText} 不再是默认 profile 当前成员`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
           }
         }
-        // 安装身份与 profile 资格沿原 scanner；包内路径及字节读取交目标 Python。
-        return { extension_id: scanned.identifier.id, extension_key: extensionKeyText,
-          native_uri: scanned.location.toString(), extensions_root_uri: root.toString() };
+        return describePublication(scanned);
       }
       return {
         ready: management.whenNativeManagementReady,
@@ -169,47 +208,25 @@ export async function createExtensionManagement(directory: string, builtinExtens
             profile_id: profile.id, settings_native_uri: profile.settingsResource.toString() };
         },
         async inventory() {
-          // 不调用 scanAllExtensions 的跨来源 dedup；此库存只承诺同一默认 profile。
-          const extensions = await scanner.scanUserExtensions({ profileLocation: profile.extensionsResource, includeInvalid: true });
-          const members = await profileScanner.scanProfileExtensions(profile.extensionsResource);
-          const byId = new Map(members.map(extension => [extension.identifier.id.toLowerCase(), extension]));
-          if (byId.size !== members.length) throw new Error('目标 profile 存在重复扩展 ID，不能静默选择版本');
-          if (extensions.length !== members.length || extensions.some(extension => {
-            const member = byId.get(extension.identifier.id.toLowerCase());
-            return !member || member.version !== extension.manifest.version || !identity.extUri.isEqual(member.location, extension.location);
-          })) throw new Error('目标 profile 包含无法解析的已安装扩展');
-          const entries = await Promise.all(extensions.map(async extension => {
-            // 沿原描述转换识别真实 README/CHANGELOG，复用本次扫描对象，不另扫库存。
-            const local = await management.describeNativeExtension(extension);
-            const assetPath = (resource: URI | undefined) => {
-              if (!resource) return null;
-              const relative = identity.extUri.relativePath(extension.location, resource);
-              if (!relative) throw new Error('扩展描述资源不属于原包根');
-              return relative;
-            };
-            return { source: 'profile' as const, description: toExtensionDescription(extension, false),
-              extension_key: ExtensionKey.create(extension).toString(), metadata: extension.metadata ?? {},
-              readme_path: assetPath(local.readmeUrl), changelog_path: assetPath(local.changelogUrl),
-              is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
-            };
-          }));
-          return { profile_id: profile.id, target_platform: await management.getTargetPlatform(), extensions: entries };
+          return describeInventory(await scanProfile());
         },
         async publication(profileId: string, extensionId: string, extensionKey: string, currentProfileMember: boolean) {
           return publishedExtension(profileId, extensionId, extensionKey, currentProfileMember);
         },
         async webPublication(profileId: string, extensionKeys: readonly string[]) {
-          const inventory = await this.inventory();
-          const members = new Map(inventory.extensions.map(extension => [extension.extension_key, extension]));
-          if (inventory.profile_id !== profileId || !extensionKeys.length || new Set(extensionKeys).size !== extensionKeys.length
-            || extensionKeys.some(key => !members.get(key)?.is_valid)) {
+          if (profile.id !== profileId || !extensionKeys.length || new Set(extensionKeys).size !== extensionKeys.length) {
             throw new ExtensionManagementError('Web 宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
           }
-          const extensions = extensionKeys.map(key => members.get(key)!);
-          const publications = await Promise.all(extensions.map(extension => publishedExtension(profileId,
-            extension.description.identifier.value, extension.extension_key, true)));
+          // 原 profile 扫描已读取并校验每份 manifest；同次准入不再逐包重读 manifest 和整个 profile。
+          const members = new Map((await scanProfile()).map(extension => [ExtensionKey.create(extension).toString(), extension]));
+          const extensions = extensionKeys.map(key => {
+            const extension = members.get(key);
+            if (!extension?.isValid) throw new ExtensionManagementError('Web 宿主请求不属于目标 profile 当前有效的精确安装版本', ExtensionManagementErrorCode.InstalledExtensionNotFound);
+            return extension;
+          });
+          const publications = extensions.map(describePublication);
           // TODO(4.4)：Node 真实运行集合与最终引用回收尚未闭合，不能启用全局物理 cleanUp。
-          return { inventory: { profile_id: profileId, target_platform: inventory.target_platform, extensions }, publications, environment: await this.environment() };
+          return { inventory: await describeInventory(extensions), publications, environment: await this.environment() };
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。

@@ -23,3 +23,4 @@
 - 市场安装由目标原 Gallery 按 ID／版本重新取对象并交原 installFromGallery；元数据写入只接受公开布尔选项，UUID、publisher 和平台等事实从原 Gallery 重取。选项校验与字段映射共用生成 proto descriptor，不复制逐字段转换。库存中的平台、metadata 和 README／CHANGELOG 相对路径消费同次原安装／扫描服务，不按浏览器平台或候选正文猜测。
 - `installed.reused`消费同次原安装器context的实际版本复用结果；不能以候选manifest声称已替换正文。私有进程回执保留原ExtensionManagementError.code，文件系统错误继续使用原Provider错误映射。
 - 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。Web 旧实例资格与描述由原 Backend session 保留，包边界和字节统一由 Python 的 publication_file 检查；current-only 仍即时核当前成员。TODO(4.4)：Node 真实运行集合与最终引用回收未接通，不能启用全局物理 cleanUp。
+- Web 准入在本次串行请求内共用原 profile 扫描对象生成库存与发布描述，不逐包重复扫描 profile／manifest；后续请求仍重新扫描，不能持久缓存准入资格或省略原件、精确版本和发布根校验。
