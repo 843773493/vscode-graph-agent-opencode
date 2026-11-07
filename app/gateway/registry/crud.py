@@ -76,6 +76,10 @@ class RegistryCrudMixin:
             or runtime is not None
             or self._route_signatures.get(target.key) != route_signature
         )
+        if existing is not None and existing.backend_id is not None:
+            if target.backend_id is not None and target.backend_id != existing.backend_id:
+                raise ValueError("外部 Backend 安装域与原登记不匹配，不能隐式改绑")
+            target.backend_id = existing.backend_id
         if route_changed and existing is not None and preserve_generation:
             target.target_generation = f"target_generation_{uuid4().hex}"
         if runtime is not None:

@@ -27,12 +27,16 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostRuntimeDTO,
     ExtensionHostTargetDTO,
     ExtensionHostTargetRequest,
+    ExtensionTargetListRequest,
 )
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
+    ExtensionInstallationTarget,
+    ExtensionInstallationUninstallDTO,
+    ExtensionInstallationUninstallRequest,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
@@ -72,19 +76,35 @@ async def resolve_extension_host(
         raise HTTPException(409, str(error)) from error
     runtime = status.runtime
     result = ExtensionHostTargetDTO(
-        **payload.model_dump(exclude={"backend_id"}), backend_id=status.backend_id, platform=status.platform,
+        **payload.model_dump(exclude={"backend_id", "gateway_connection_id"}), backend_id=status.backend_id, platform=status.platform,
         channel_state="draining" if status.reason == "backend_draining" else "unavailable" if status.reason else "available",
         reason=status.reason, runtime=ExtensionHostRuntimeDTO(commit=runtime.commit, vscode_version=runtime.vscode_version,
             node_version=runtime.node_version) if runtime is not None else None)
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.post("/api/internal/extension-targets/resolve", response_model=APIResponse[ExtensionInstallationInventoryRequest], include_in_schema=False)
+@router.post("/api/internal/extension-targets", response_model=APIResponse[ExtensionInstallationTarget], include_in_schema=False)
+async def extension_targets(
+    payload: ExtensionTargetListRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationTarget]:
+    if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
+        raise HTTPException(400, "扩展目标 Gateway 身份冲突")
+    try:
+        backend_id = registry.extension_hosts.management_target()
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return APIResponse(data=ExtensionInstallationTarget(protocol_version=payload.protocol_version,
+        gateway_id=payload.gateway_id, backend_id=backend_id), request_id=request_id)
+
+
+@router.post("/api/internal/extension-targets/resolve", response_model=APIResponse[ExtensionHostTargetRequest], response_model_exclude_none=True, include_in_schema=False)
 async def resolve_extension_target(
     payload: ExtensionHostTargetRequest, request: Request,
     registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
     request_id: Annotated[str, Depends(get_request_id)],
-) -> APIResponse[ExtensionInstallationInventoryRequest]:
+) -> APIResponse[ExtensionHostTargetRequest]:
     if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
         raise HTTPException(400, "扩展目标 Gateway 身份冲突")
     try:
@@ -92,7 +112,7 @@ async def resolve_extension_target(
             workspace_ids=tuple(payload.workspace_ids))
     except (ValueError, KeyError) as error:
         raise HTTPException(409, str(error)) from error
-    result = ExtensionInstallationInventoryRequest(protocol_version=payload.protocol_version,
+    result = ExtensionHostTargetRequest(protocol_version=payload.protocol_version,
         gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids, backend_id=status.backend_id)
     return APIResponse(data=result, request_id=request_id)
 
@@ -114,6 +134,23 @@ async def extension_installation_install(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.post("/api/internal/extension-installations/uninstall", response_model=APIResponse[ExtensionInstallationUninstallDTO], include_in_schema=False)
+async def extension_installation_uninstall(
+    payload: ExtensionInstallationUninstallRequest, request: Request,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationUninstallDTO]:
+    if request.headers.get("x-boxteam-gateway-id") != payload.gateway_id:
+        raise HTTPException(400, "扩展卸载目标 Gateway 身份冲突")
+    try:
+        result = await registry.extension_hosts.uninstall(payload)
+    except (ValueError, KeyError) as error:
+        raise HTTPException(409, str(error)) from error
+    except ExtensionManagementError as error:
+        raise HTTPException(409 if error.code in {"Invalid", "InstalledExtensionNotFound"} else 400, str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
 @router.post("/api/internal/extension-installations/inventory", response_model=APIResponse[ExtensionInstallationInventoryDTO], include_in_schema=False)
 async def extension_installation_inventory(
     payload: ExtensionInstallationInventoryRequest, request: Request,
@@ -126,16 +163,14 @@ async def extension_installation_inventory(
 
     def check_target() -> None:
         try:
-            status = owner.describe(expected_backend_id=payload.backend_id, workspace_ids=tuple(payload.workspace_ids))
+            owner.management_target(payload.backend_id, require_runtime=True)
         except (ValueError, KeyError) as error:
             raise HTTPException(409, str(error)) from error
-        if status.reason is not None:
-            raise HTTPException(409, f"目标扩展库存不可用: {status.reason}")
 
     check_target()
     inventory = await owner.management.inventory()
     check_target()
-    result = ExtensionInstallationInventoryDTO(**payload.model_dump(exclude={"backend_id"}),
+    result = ExtensionInstallationInventoryDTO(**payload.model_dump(exclude={"backend_id", "gateway_connection_id"}),
         backend_id=owner.backend_id, inventory=inventory)
     return APIResponse(data=result, request_id=request_id)
 

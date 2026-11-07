@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -16,10 +18,27 @@ from app.gateway.routes._shared import (
     _wait_for_managed_runtime_restore_tasks,
     get_registry,
 )
+from app.schemas.gateway.management_targets import (
+    GatewayManagementDirectoryDTO,
+    GatewayManagementTargetDTO,
+)
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter()
+
+
+@router.get("/api/gateway/management/gateways", response_model=APIResponse[GatewayManagementDirectoryDTO])
+async def list_management_gateways(
+    _: Annotated[str, Depends(verify_gateway_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+) -> APIResponse[GatewayManagementDirectoryDTO]:
+    items = [GatewayManagementTargetDTO(gateway_id=registry.gateway_id, name="本地", connection_kind="local")]
+    items.extend(GatewayManagementTargetDTO(gateway_id=connection.remote_gateway_id, name=connection.name,
+        connection_kind="remote_gateway", gateway_connection_id=connection.connection_id,
+        connection_error=connection.connection_error) for connection in registry.remote_gateway_connections())
+    return APIResponse(data=GatewayManagementDirectoryDTO(local_gateway_id=registry.gateway_id, items=items), request_id=request_id)
 
 
 async def _wait_for_managed_runtime_restores(request: Request) -> None:

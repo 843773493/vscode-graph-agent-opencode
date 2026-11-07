@@ -13,6 +13,7 @@ const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_target_settings.py');
 const sourceKey = 'workspace_root_mutable_override', sourcePath = `/api/v1/config/sources/${sourceKey}`;
 const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], requests: [], receipts: [], apiReceipts: [], forbiddenWrites: [],
+  managementRequests: [],
   boundary: '真实Gateway／Backend及原Command／QuickInput；注释预备也经原来源API，模型回放仅供启动且要求零调用' };
 const responseReads = [], responseErrors = [];
 const checkpoint = async phase => { result.phase = phase; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
@@ -31,6 +32,7 @@ try {
       owner: { gateway_id: headers['x-boxteam-target-gateway-id'], workspace_id: headers['x-boxteam-workspace-id'] },
       body: request.postData() ? JSON.parse(request.postData()) : undefined };
     if (url.pathname.startsWith('/api/v1/config/')) result.requests.push(item);
+    if (url.pathname === '/api/gateway/management/gateways' || url.pathname === '/api/gateway/extension-targets') result.managementRequests.push(item);
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(url.pathname)) result.forbiddenWrites.push(item);
   });
   page.on('requestfinished', request => {
@@ -81,6 +83,26 @@ try {
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeEnabled({ timeout: 30_000 });
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const choose = async text => { const row = quick.locator('.monaco-list-row').filter({ hasText: text }); await expect(row).toHaveCount(1); await row.click(); };
+  await checkpoint('extensions-title-target');
+  await command('workbench.view.extensions');
+  const targetAction = page.locator('.monaco-action-bar .action-label').filter({ hasText: '目标：本地' });
+  await expect(targetAction).toHaveCount(1);
+  const directoryResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/management/gateways');
+  await targetAction.click();
+  await expect(quick).toContainText('扩展管理目标');
+  const domainsResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/extension-targets' && response.request().method() === 'POST');
+  await choose('本地');
+  for (const response of await Promise.all([directoryResponse, domainsResponse])) {
+    const body = await response.json();
+    expect(response.status()).toBe(200); expect(body.request_id).toBe(response.headers()['x-request-id']);
+    result.apiReceipts.push({ phase: result.phase, path: new URL(response.url()).pathname, body });
+  }
+  await expect(quick).toBeHidden();
+  await expect(targetAction).toBeVisible();
+  expect(result.managementRequests.map(item => item.path)).toEqual(['/api/gateway/management/gateways', '/api/gateway/extension-targets']);
+  expect(result.managementRequests[1].body).toEqual({ protocol_version: 1, gateway_id: ownerA.gateway_id, gateway_connection_id: null });
+  expect(result.requests.filter(item => item.phase === 'extensions-title-target')).toEqual([]);
+  result.extensionTargetSelectedFromTitle = true;
   const open = async (source = sourceKey, palette = false) => {
     if (palette) {
       await command('workbench.action.showCommands');

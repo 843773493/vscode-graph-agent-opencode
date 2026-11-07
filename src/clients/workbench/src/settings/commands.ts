@@ -6,6 +6,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { managementGateway } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
 
 export const defaultAgentSourceCommand = 'boxteam.settings.defaultAgentSource';
@@ -32,10 +33,12 @@ registerAction2(class extends Action2 {
       }
     };
     try {
-      selected = explicit ? { ...explicit } : (await quickInput.pick(initial.workspaces.map(workspace => ({
+      const target = managementGateway('settings', explicit?.gatewayId);
+      selected = explicit ? { ...explicit } : (await quickInput.pick(initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({
         label: workspace.name, description: `${workspace.gateway_id} · ${workspace.status}`, detail: workspace.workspace_id,
         owner: gatewayWorkspaceOwner(workspace),
-      })), { title: '选择业务配置目标', placeHolder: '选择已就绪工作区；此操作不会连接、启动或激活目标' }, cancellation.token))?.owner;
+      })), { title: '选择业务配置目标', prompt: `管理目标：${target.name} · ${target.gateway_id}`,
+        placeHolder: '选择当前设置目标内的工作区来源；未就绪工作区需先显式启动' }, cancellation.token))?.owner;
       if (!selected) return;
       check();
       const workspace = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces, selected);

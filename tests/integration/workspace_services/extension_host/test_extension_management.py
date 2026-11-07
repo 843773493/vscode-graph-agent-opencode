@@ -45,6 +45,7 @@ from app.schemas.gateway.extension_configuration import (
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,
+    UninstalledProfile,
 )
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from tests.harness.python.run_context import TestRunContext
@@ -683,10 +684,37 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     headers = {"X-Local-Token": token, "Cookie": f"{USER_ACCESS_COOKIE_NAME}={access.access_session_id}"}
     receipts: list[dict[str, object]] = []
 
+    # 显式目录从真实 Backend 入口确认安装域；不手工向 registry 写入身份投影。
+    discovered = await client.post(f"{url}/api/gateway/extension-targets", headers={**headers, "X-Request-ID": "domain-discovery"},
+        json={"protocol_version": 1, "gateway_id": gateway_id})
+    assert discovered.status_code == 200, discovered.text
+    assert discovered.headers["X-Request-ID"] == discovered.json()["request_id"] == "domain-discovery"
+    domains = discovered.json()["data"]["targets"]
+    assert {domain["backend_id"] for domain in domains} == {first.extension_hosts.backend_id, second.extension_hosts.backend_id}
+    assert all("workspace_ids" not in domain for domain in domains)
+    assert [target.backend_id for target in targets] == [first.extension_hosts.backend_id, second.extension_hosts.backend_id]
+    assert first.extension_hosts.active == second.extension_hosts.active == ()
+    assert first.extension_hosts._management is second.extension_hosts._management is None
+    receipts.append({"request_id": "domain-discovery", "status": discovered.status_code, "body": discovered.json()})
+
+    # 真实 B 来源不能替浏览器更换已选 A 安装域，拒绝发生在任何管理 child 启动前。
+    assert targets[1].root_path is not None
+    wrong_source = vsix_factory(Path(targets[1].root_path), "9.0.0", "must-not-install")
+    cross_domain = await client.post(f"{url}/api/gateway/extension-installations/install",
+        headers={**headers, "X-Request-ID": "install-source-cannot-change-domain"}, json={
+            "protocol_version": 1, "gateway_id": gateway_id, "backend_id": first.extension_hosts.backend_id,
+            "workspace_ids": [targets[1].workspace_id],
+            "source_uri": resource_display_uri(scope="workspace", scope_id=targets[1].workspace_id, kind="files",
+                tail_segments=("root", wrong_source.name), gateway_authority=gateway_id)})
+    assert cross_domain.status_code == 409, cross_domain.text
+    assert cross_domain.headers["X-Request-ID"] == cross_domain.json()["request_id"] == "install-source-cannot-change-domain"
+    assert first.extension_hosts._management is second.extension_hosts._management is None
+    receipts.append({"request_id": "install-source-cannot-change-domain", "status": cross_domain.status_code, "body": cross_domain.json()})
+
     async def inventory(index: int, backend_id: str, request_id: str) -> httpx.Response:
         response = await client.post(f"{url}/api/gateway/extension-installations/inventory",
             headers={**headers, "X-Request-ID": request_id}, json={"protocol_version": 1,
-                "gateway_id": gateway_id, "workspace_ids": [targets[index].workspace_id], "backend_id": backend_id})
+                "gateway_id": gateway_id, "backend_id": backend_id})
         body = response.json()
         assert response.headers["X-Request-ID"] == body["request_id"] == request_id
         receipts.append({"request_id": request_id, "status": response.status_code, "body": body})
@@ -726,13 +754,18 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
         assert response.status_code == 200, response.text
         result = response.json()["data"]
         assert result["backend_id"] == backend.extension_hosts.backend_id
-        assert result["gateway_id"] == gateway_id and result["workspace_ids"] == [target.workspace_id]
+        assert result["gateway_id"] == gateway_id and "workspace_ids" not in result
         assert result["profile_scope"] == "default"
         assert result["inventory"] == (await backend.extension_hosts.management.inventory()).model_dump()
         assert len(result["inventory"]["extensions"]) == 1
         extension = result["inventory"]["extensions"][0]
         assert extension["description"]["version"] == version and extension["is_valid"]
     previous = b.json()["data"]
+    # B 离线时，精确 A 的库存仍经原 Gateway／Backend／Node 读取，不重新发现 B。
+    registry.upsert(replace(targets[1], connection_error="B 已离线"), activate=False)
+    isolated = await inventory(0, first.extension_hosts.backend_id, "inventory-a-with-b-offline")
+    assert isolated.status_code == 200 and isolated.json()["data"] == a.json()["data"]
+    registry.upsert(targets[1], activate=False)
     failed = await install(0, "3.0.0", engine="^999.0.0")
     assert failed.status_code == 400 and "not compatible" in failed.text
     assert (await inventory(0, first.extension_hosts.backend_id, "failed-install-kept")).json()["data"] == a.json()["data"]
@@ -785,7 +818,7 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     recovered = _backend(workspace / "b", backends, backend_id=backend_id)
     apps[1].state.workspace_container_registry = recovered
     assert (await inventory(1, backend_id, "inventory-recovered")).json()["data"] == previous
-    assert (await inventory(1, first.extension_hosts.backend_id, "inventory-wrong-backend")).status_code == 409
+    assert (await inventory(1, str(uuid4()), "inventory-wrong-backend")).status_code == 409
     # 旧登记指向另一真实 Backend 时不读取对方同 ID 的扩展，也不修改原安装事实。
     registry.upsert(replace(targets[1], backend_url=targets[0].backend_url), activate=False)
     rejected = await inventory(1, backend_id, "inventory-reused-route")
@@ -793,4 +826,120 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     assert (await first.extension_hosts.management.inventory()).extensions[0].description["version"] == "6.0.0"
     assert (await recovered.extension_hosts.management.inventory()).extensions[0].description["version"] == "2.0.0"
     assert first.extension_hosts.active == recovered.extension_hosts.active == original_owner.active == ()
+    registry.upsert(targets[1], activate=False)
+
+    selection = {"protocol_version": 1, "gateway_id": gateway_id, "backend_id": first.extension_hosts.backend_id,
+        "profile_id": earlier.json()["data"]["inventory"]["profile_id"],
+        "extension_id": "boxteam-probe.target-inventory", "version": "6.0.0"}
+    rejected = await client.post(f"{url}/api/gateway/extension-installations/uninstall",
+        headers={**headers, "X-Request-ID": "uninstall-stale-version"}, json={**selection, "version": "5.0.0"})
+    assert rejected.status_code == 409 and rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == "uninstall-stale-version"
+    assert (await first.extension_hosts.management.inventory()).extensions[0].description["version"] == "6.0.0"
+    retained = {path: installation_snapshot(path) for path in directory.iterdir() if path.is_dir()}
+    native_uninstall = first.extension_hosts.management.uninstall
+    published.clear()
+    deliver.clear()
+
+    async def hold_uninstall_publication(**member: str) -> UninstalledProfile:
+        publication = await native_uninstall(**member)
+        published.set()
+        await deliver.wait()
+        return publication
+
+    monkeypatch.setattr(first.extension_hosts.management, "uninstall", hold_uninstall_publication)
+    delayed_uninstall = asyncio.create_task(client.post(f"{url}/api/gateway/extension-installations/uninstall",
+        headers={**headers, "X-Request-ID": "uninstall-original-publication"}, json=selection))
+    try:
+        async with asyncio.timeout(10):
+            await published.wait()
+            assert (await install(0, "7.0.0")).status_code == 200
+    finally:
+        deliver.set()
+        removed = await delayed_uninstall
+    assert removed.status_code == 200, removed.text
+    assert removed.headers["X-Request-ID"] == removed.json()["request_id"] == "uninstall-original-publication"
+    removal = removed.json()["data"]
+    assert "workspace_ids" not in removal
+    assert removal["uninstalled"] == {"id": selection["extension_id"], "version": "6.0.0", "profile_id": selection["profile_id"]}
+    assert removal["inventory"]["extensions"] == []
+    assert (await first.extension_hosts.management.inventory()).extensions[0].description["version"] == "7.0.0"
+    assert (await recovered.extension_hosts.management.inventory()).model_dump() == previous["inventory"]
+    assert all(installation_snapshot(path) == snapshot for path, snapshot in retained.items())
+    assert first.extension_hosts.active == recovered.extension_hosts.active == ()
+    receipts.append({"request_id": "uninstall-original-publication", "status": removed.status_code, "body": removed.json()})
     (context.artifacts_dir / "gateway-inventory.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
+
+
+async def test_native_profile_uninstall_keeps_all_versions_and_rejects_stale_selection(
+    management_backends, vsix_factory, installation_snapshot,
+) -> None:
+    _, workspace, backends = management_backends
+    first = _backend(workspace / "a", backends).extension_hosts.management
+    second = _backend(workspace / "b", backends).extension_hosts.management
+    original = vsix_factory(workspace, "1.0.0", "v1-remains-readable")
+    await first.install(original)
+    current = await first.install(vsix_factory(workspace, "2.0.0", "v2-remains-readable"))
+    await first.install(vsix_factory(workspace, "1.0.0", "unrelated", manifest_overrides={"name": "unrelated"}))
+    peer = await second.install(vsix_factory(workspace, "9.0.0", "other-target"))
+    profile_id, extension_id = current.installed.profile_id, current.installed.id
+    directory = first._directory / "extensions"
+    profile = directory / "extensions.json"
+    profile_bytes = profile.read_bytes()
+    retained = {path: installation_snapshot(path) for path in directory.iterdir() if path.is_dir()}
+    assert len(retained) == 3
+    for selection in (
+        {"profile_id": "stale-profile", "extension_id": extension_id, "version": "2.0.0"},
+        {"profile_id": profile_id, "extension_id": "boxteam-probe.missing", "version": "2.0.0"},
+        {"profile_id": profile_id, "extension_id": extension_id, "version": "1.0.0"},
+    ):
+        with pytest.raises(ExtensionManagementError) as caught:
+            await first.uninstall(**selection)
+        assert caught.value.code == ("Invalid" if selection["profile_id"] != profile_id else "InstalledExtensionNotFound")
+        assert profile.read_bytes() == profile_bytes
+        assert all(installation_snapshot(path) == snapshot for path, snapshot in retained.items())
+        assert await second.inventory() == peer.inventory
+
+    removed = await first.uninstall(profile_id=profile_id, extension_id=extension_id, version="2.0.0")
+    assert removed.uninstalled.model_dump() == {"id": extension_id, "version": "2.0.0", "profile_id": profile_id}
+    remaining = []
+    for entry in removed.inventory.extensions:
+        identifier = entry.description["identifier"]
+        assert isinstance(identifier, dict)
+        remaining.append((identifier["value"], entry.description["version"]))
+    assert remaining == [("boxteam-probe.unrelated", "1.0.0")]
+    assert await first.inventory() == removed.inventory
+    assert all(installation_snapshot(path) == snapshot for path, snapshot in retained.items())
+    with pytest.raises(ExtensionManagementError) as caught:
+        await first.uninstall(profile_id=profile_id, extension_id=extension_id, version="2.0.0")
+    assert caught.value.code == "InstalledExtensionNotFound" and await first.inventory() == removed.inventory
+    reused = await first.install(original)
+    assert reused.installed.reused and reused.installed.version == "1.0.0"
+    assert all(installation_snapshot(path) == snapshot for path, snapshot in retained.items())
+    assert await second.inventory() == peer.inventory
+
+
+async def test_native_profile_uninstall_retains_original_dependency_failure_and_other_target(
+    management_backends, vsix_factory, installation_snapshot,
+) -> None:
+    _, workspace, backends = management_backends
+    first = _backend(workspace / "a", backends).extension_hosts.management
+    second = _backend(workspace / "b", backends).extension_hosts.management
+    base = await first.install(vsix_factory(workspace, "1.0.0", "dependency"))
+    dependent = await first.install(vsix_factory(workspace, "1.0.0", "dependent", manifest_overrides={
+        "name": "dependent", "extensionDependencies": [base.installed.id]}))
+    peer = await second.install(vsix_factory(workspace, "2.0.0", "other-target"))
+    directory = first._directory / "extensions"
+    before = installation_snapshot(directory)
+    with pytest.raises(ExtensionManagementError, match="depends on this"):
+        await first.uninstall(profile_id=base.installed.profile_id, extension_id=base.installed.id, version="1.0.0")
+    assert installation_snapshot(directory) == before
+    assert await first.inventory() == dependent.inventory
+    assert await second.inventory() == peer.inventory
+    assert not first._failed and first.drained
+    removed_dependent = await first.uninstall(profile_id=dependent.installed.profile_id,
+        extension_id=dependent.installed.id, version=dependent.installed.version)
+    assert len(removed_dependent.inventory.extensions) == 1
+    removed_base = await first.uninstall(profile_id=base.installed.profile_id,
+        extension_id=base.installed.id, version=base.installed.version)
+    assert removed_base.inventory.extensions == [] and first.drained
+    assert await second.inventory() == peer.inventory

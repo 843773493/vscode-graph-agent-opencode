@@ -2,7 +2,7 @@ import { revive } from '../../upstream/src/vs/base/common/marshalling.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { ExtensionIdentifier, IExtensionDescription, IBoundExtensionDescription, IExtensionWorkspaceView, bindExtensionDescription, installationTargetKey } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
 import type { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
-import type { ExtensionHostTargetDTO, ExtensionInstallationInventoryDTO, ExtensionTargetDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import type { ExtensionHostTargetDTO, ExtensionInstallationInventoryDTO, ExtensionTargetViewDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 
@@ -19,10 +19,10 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
     if (source.path !== source.root) throw new Error('Node 宿主只能挂接原工作区文件根');
     return source;
   });
-  const groups = new Map<string, { target: ExtensionTargetDTO; workspaceIds: string[] }>();
+  const groups = new Map<string, { target: ExtensionTargetViewDTO; workspaceIds: string[] }>();
   for (const owner of owners) {
     const payload = { protocol_version: 1, gateway_id: owner.gatewayId, workspace_ids: [owner.workspaceId] };
-    const target = await gateway.request<ExtensionTargetDTO>('/api/gateway/extension-targets/resolve', {
+    const target = await gateway.request<ExtensionTargetViewDTO>('/api/gateway/extension-targets/resolve', {
       method: 'POST', body: JSON.stringify(payload),
     });
     assertInstallationTarget(target, payload);
@@ -37,7 +37,7 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
     const request = { protocol_version: 1, gateway_id: target.gateway_id, backend_id: target.backend_id, workspace_ids: workspaceIds };
     // 单根回执已覆盖完整集合；多根在原 owner 核验完整有序视图，不合并分根权限。
     const resolvedTarget = workspaceIds.length === 1 ? target
-      : await gateway.request<ExtensionTargetDTO>('/api/gateway/extension-targets/resolve', {
+      : await gateway.request<ExtensionTargetViewDTO>('/api/gateway/extension-targets/resolve', {
         method: 'POST', body: JSON.stringify(request),
       });
     assertInstallationTarget(resolvedTarget, request);
@@ -50,10 +50,10 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
     });
     assertTarget(resolved, request);
     const inventory = await gateway.request<ExtensionInstallationInventoryDTO>('/api/gateway/extension-installations/inventory', {
-      method: 'POST', body: JSON.stringify(request),
+      method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: request.gateway_id, backend_id: request.backend_id }),
     });
     if (inventory.protocol_version !== 1 || inventory.gateway_id !== request.gateway_id || inventory.backend_id !== request.backend_id
-      || JSON.stringify(inventory.workspace_ids) !== JSON.stringify(workspaceIds) || inventory.profile_scope !== 'default'
+      || inventory.profile_scope !== 'default'
       || !inventory.inventory?.profile_id || !Array.isArray(inventory.inventory.extensions)) {
       throw new Error('扩展库存响应的目标、默认 profile 或有序工作区视图不匹配');
     }
@@ -78,9 +78,9 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
   return { views, extensions };
 }
 
-function assertInstallationTarget(target: ExtensionTargetDTO,
-  expected: { gateway_id: string; workspace_ids: string[]; backend_id?: string }): asserts target is ExtensionTargetDTO & {
-    capabilities: NonNullable<ExtensionTargetDTO['capabilities']>;
+function assertInstallationTarget(target: ExtensionTargetViewDTO,
+  expected: { gateway_id: string; workspace_ids: string[]; backend_id?: string }): asserts target is ExtensionTargetViewDTO & {
+    capabilities: NonNullable<ExtensionTargetViewDTO['capabilities']>;
   } {
   if (target.protocol_version !== 1 || target.source !== 'live' || !target.backend_id || target.gateway_id !== expected.gateway_id
     || expected.backend_id && target.backend_id !== expected.backend_id || JSON.stringify(target.workspace_ids) !== JSON.stringify(expected.workspace_ids)

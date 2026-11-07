@@ -52,13 +52,12 @@ def test_extension_target_resolution_http_contract_uses_original_gateway_route(
         operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[1]
     ]
     target_schema = envelope["properties"]["data"]["anyOf"][0]["$ref"]
-    assert target_schema.endswith("/ExtensionTargetDTO")
-    assert {"ExtensionTargetDTO", "ExtensionInstallationInventoryRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    assert target_schema.endswith("/ExtensionTargetViewDTO")
+    assert {"ExtensionTargetViewDTO", "ExtensionInstallationInventoryRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
     openapi.assert_gateway_http_schemas(gateway_openapi)
     assert gateway_openapi == original
 
     target = ExtensionTargetDTO.model_validate({"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32,
-        "workspace_ids": ["01900000-0000-7000-8000-000000000001"],
         "backend_id": "01900000-0000-7000-8000-000000000001", "source": "live",
         "capabilities": {"installation_manage": True, "host_manage": False}})
     assert target.capabilities.installation_manage and not target.capabilities.host_manage

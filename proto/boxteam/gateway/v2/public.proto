@@ -1116,6 +1116,7 @@ message ExtensionHostTargetRequest {
   string gateway_id = 2;
   repeated string workspace_ids = 3;
   optional string backend_id = 4;
+  optional string gateway_connection_id = 5;
 }
 
 message ExtensionHostRuntimeDTO {
@@ -1146,10 +1147,48 @@ message ExtensionTargetCapabilitiesDTO {
 message ExtensionTargetDTO {
   uint32 protocol_version = 1;
   string gateway_id = 2;
+  reserved 3;
+  reserved "workspace_ids";
+  string backend_id = 4;
+  string source = 5;
+  ExtensionTargetCapabilitiesDTO capabilities = 6;
+}
+
+// 运行视图继续携带原挂接集合，不作为安装域目录。
+message ExtensionTargetViewDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
   repeated string workspace_ids = 3;
   string backend_id = 4;
   string source = 5;
   ExtensionTargetCapabilitiesDTO capabilities = 6;
+}
+
+message ExtensionTargetListRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  optional string gateway_connection_id = 3;
+}
+
+message ExtensionTargetListDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string source = 3;
+  repeated ExtensionTargetDTO targets = 4;
+}
+
+// 当前 registry 的入口投影，包括未投影任何工作区的远端连接。
+message GatewayManagementTargetDTO {
+  string gateway_id = 1;
+  string name = 2;
+  string connection_kind = 3;
+  optional string gateway_connection_id = 4;
+  optional string connection_error = 5;
+}
+
+message GatewayManagementDirectoryDTO {
+  string local_gateway_id = 1;
+  repeated GatewayManagementTargetDTO items = 2;
 }
 
 message ExtensionValidation {
@@ -1174,15 +1213,18 @@ message ProfileExtensionInventory {
 message ExtensionInstallationInventoryRequest {
   uint32 protocol_version = 1;
   string gateway_id = 2;
-  repeated string workspace_ids = 3;
+  reserved 3;
+  reserved "workspace_ids";
   string backend_id = 4;
+  optional string gateway_connection_id = 5;
 }
 
 // 只承诺目标默认 profile 的用户安装项，不代表窗口的启用或激活视图。
 message ExtensionInstallationInventoryDTO {
   uint32 protocol_version = 1;
   string gateway_id = 2;
-  repeated string workspace_ids = 3;
+  reserved 3;
+  reserved "workspace_ids";
   string backend_id = 4;
   string profile_scope = 5;
   ProfileExtensionInventory inventory = 6;
@@ -1195,6 +1237,7 @@ message ExtensionInstallationInstallRequest {
   repeated string workspace_ids = 3;
   string backend_id = 4;
   string source_uri = 5;
+  optional string gateway_connection_id = 6;
 }
 
 message VsixInstallResult {
@@ -1214,4 +1257,35 @@ message ExtensionInstallationInstallDTO {
   string profile_scope = 5;
   ProfileExtensionInventory inventory = 6;
   VsixInstallResult installed = 7;
+}
+
+// 只移除已核实的默认 profile 成员；版本制品与当前宿主继续保留。
+message ExtensionInstallationUninstallRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  reserved 3;
+  reserved "workspace_ids";
+  string backend_id = 4;
+  string profile_id = 5;
+  string extension_id = 6;
+  string version = 7;
+  optional string gateway_connection_id = 8;
+}
+
+message ExtensionUninstallResult {
+  string id = 1;
+  string version = 2;
+  string profile_id = 3;
+}
+
+// 原卸载操作与同次完整库存；不声明版本已物理删除或运行实例已停用。
+message ExtensionInstallationUninstallDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  reserved 3;
+  reserved "workspace_ids";
+  string backend_id = 4;
+  string profile_scope = 5;
+  ProfileExtensionInventory inventory = 6;
+  ExtensionUninstallResult uninstalled = 7;
 }

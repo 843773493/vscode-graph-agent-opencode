@@ -6,13 +6,15 @@ import { ConfigurationService } from '../upstream/src/vs/platform/configuration/
 import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 import { DownloadService } from '../upstream/src/vs/platform/download/common/downloadService.js';
 import { IDownloadService } from '../upstream/src/vs/platform/download/common/download.js';
-import { IAllowedExtensionsService, IExtensionGalleryService } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
+import { ExtensionManagementError, ExtensionManagementErrorCode, IAllowedExtensionsService, IExtensionGalleryService } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
+import { areSameExtensions } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagementUtil.js';
 import { AllowedExtensionsService } from '../upstream/src/vs/platform/extensionManagement/common/allowedExtensionsService.js';
 import { ExtensionGalleryServiceWithNoStorageService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryService.js';
 import { IExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifest.js';
 import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryManifestService.js';
 import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
 import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
+import { ExtensionType } from '../upstream/src/vs/platform/extensions/common/extensions.js';
 import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_VSIX_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
 import { ExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/node/extensionsProfileScannerService.js';
 import { ExtensionSignatureVerificationService, IExtensionSignatureVerificationService } from '../upstream/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.js';
@@ -131,6 +133,24 @@ export async function createExtensionManagement(directory: string, builtinExtens
           // 在同一串行控制请求内读取发布后的库存，避免并发安装把回执拼成另一版本。
           return { installed: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id,
             reused: context[NATIVE_VSIX_REUSED_CONTEXT] },
+            inventory: await this.inventory() };
+        },
+        async uninstall(profileId: string, extensionId: string, version: string) {
+          if (profileId !== profile.id) throw new ExtensionManagementError('扩展卸载 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
+          const members = (await profileScanner.scanProfileExtensions(profile.extensionsResource))
+            .filter(member => areSameExtensions(member.identifier, { id: extensionId }));
+          if (members.length !== 1 || members[0].version !== version) {
+            throw new ExtensionManagementError(`目标 profile 不再包含唯一的 ${extensionId}@${version}，请重新读取库存`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+          }
+          const [member] = members;
+          const installed = (await management.getInstalled(ExtensionType.User, profile.extensionsResource))
+            .filter(extension => areSameExtensions(extension.identifier, member.identifier)
+              && extension.manifest.version === version && identity.extUri.isEqual(extension.location, member.location));
+          if (installed.length !== 1) throw new ExtensionManagementError(`目标 profile 的 ${extensionId}@${version} 无法解析为原安装成员`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+          const [extension] = installed;
+          // 原卸载服务保留依赖／pack 规则；只移除 profile，不请求删除版本目录。
+          await management.uninstall(extension, { profileLocation: profile.extensionsResource });
+          return { uninstalled: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id },
             inventory: await this.inventory() };
         },
       };

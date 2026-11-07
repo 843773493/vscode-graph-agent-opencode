@@ -120,6 +120,37 @@ def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, mo
 
 
 @pytest.mark.asyncio
+async def test_external_registration_confirms_health_installation_domain_without_rebinding(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry, creation_boundary: CreationBoundary,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "external"
+    root.mkdir()
+    creation_app.state.gateway_config = GatewayConfig()
+    installation_domain = "00000000-0000-4000-8000-000000000099"
+    health_requests: list[str] = []
+
+    async def health(url: str, workspace_id: str, **_):
+        health_requests.append(url)
+        return {"workspace_id": workspace_id, "backend_id": installation_domain}
+
+    monkeypatch.setattr(workspaces_lifecycle, "wait_for_workspace_health", health)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=creation_app), base_url="http://gateway") as client:
+        payload = {"root_path": str(root), "backend_url": "http://127.0.0.1:43001"}
+        accepted = await client.post("/api/gateway/workspaces/local", json=payload)
+        assert accepted.status_code == 200, accepted.text
+        [target] = creation_registry.targets()
+        assert target.backend_id == installation_domain and not target.managed
+        installation_domain = "00000000-0000-4000-8000-000000000098"
+        rejected = await client.post("/api/gateway/workspaces/local", json=payload)
+        assert rejected.status_code == 400, rejected.text
+        assert creation_registry.resolve(target.key) is target
+        assert target.backend_id == "00000000-0000-4000-8000-000000000099"
+    assert health_requests == ["http://127.0.0.1:43001/api/v1/health"] * 2
+    assert creation_boundary.processes == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("external", [False, True], ids=["managed", "external"])
 @pytest.mark.parametrize("damage", ["missing", "mismatch", "root_missing"])
 async def test_reregister_known_root_never_reinitializes_or_rebinds_identity(

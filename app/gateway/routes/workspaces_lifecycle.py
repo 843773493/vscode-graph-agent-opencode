@@ -19,6 +19,7 @@ from fastapi import (
     Request,
 )
 
+from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
@@ -207,7 +208,7 @@ async def add_local_workspace(
                 get_project_root(),
                 workspace_root,
             )
-            await wait_for_workspace_health(
+            health = await wait_for_workspace_health(
                 f"{backend_url}/api/v1/health",
                 backend_workspace_id,
                 request_timeout_seconds=(
@@ -228,6 +229,7 @@ async def add_local_workspace(
                     connection_kind="local",
                     owner="manual",
                     managed=False,
+                    backend_id=validate_backend_id(health.get("backend_id")),
                 ),
                 runtime=WorkspaceRuntime(
                     service_urls={"workspace_api": backend_url},

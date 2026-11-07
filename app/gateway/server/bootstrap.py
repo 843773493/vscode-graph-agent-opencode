@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
@@ -286,11 +287,16 @@ async def _complete_registry_startup(
                 error.add_note(str(cleanup_error))
             raise
     else:
-        await wait_for_workspace_health(
+        health = await wait_for_workspace_health(
             f"{external_backend_url}/api/v1/health", default_workspace_id,
             request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
             poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
         )
+        backend_id = validate_backend_id(health.get("backend_id"))
+        target = registry.resolve(default_workspace_id)
+        if target.backend_id is not None and target.backend_id != backend_id:
+            raise ValueError("外部默认 Backend 安装域与原登记不匹配，不能隐式改绑")
+        target.backend_id = backend_id
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )

@@ -92,6 +92,7 @@ export { OperatingSystem } from '${upstream}base/common/platform.js';
 export { installBackendFiles, workspaceFileUri, workspaceFileSource } from './src/clients/workbench/src/workspaceFiles.js';
 export { workspaceContext } from './src/clients/workbench/src/workspaceContext.js';
 export { invalidateGatewayUserSession } from './src/clients/web/src/api/http.js';
+export { selectExtensionManagementTargetCommand } from './src/clients/workbench/src/managementTarget.js';
 `;
 await writeFile(join(run.artifactsDir, 'original-installation-actions.ts'), fixture);
 const built = await build({ stdin: { contents: fixture, loader: 'ts', resolveDir: resolve('.') }, outfile: bundle,
@@ -101,6 +102,11 @@ const built = await build({ stdin: { contents: fixture, loader: 'ts', resolveDir
 await writeFile(join(run.artifactsDir, 'bundle-meta.json'), JSON.stringify(built.metafile, null, 2));
 const installPath = '/api/gateway/extension-installations/install';
 const backends = { 'gateway-a': '11111111-1111-4111-8111-111111111111', 'gateway-b': '22222222-2222-4222-8222-222222222222' };
+const workspaceOwners = {
+  'workspace-a1': { gatewayId: 'gateway-a', name: 'A1' },
+  'workspace-a2': { gatewayId: 'gateway-a', name: 'A2' },
+  'workspace-b': { gatewayId: 'gateway-b', name: 'B' },
+};
 let browser, server, current;
 function envelope(data, requestId, status = 200) {
   return Response.json({ code: 0, data, message: '', request_id: requestId }, { status, headers: { 'X-Request-ID': requestId } });
@@ -117,6 +123,47 @@ beforeAll(async () => {
     state.requests.push(item);
     if (path === '/api/gateway/auth/local-credential') return envelope({ token: 'test-local-credential' }, requestId);
     if (path === '/api/gateway/users/current') return envelope({ user_id: 'test-user' }, requestId);
+    if (path === '/api/gateway/management/gateways') return envelope({ local_gateway_id: 'gateway-a', items: [
+      { gateway_id: 'gateway-a', name: '本地', connection_kind: 'local' },
+      { gateway_id: 'gateway-b', name: '远端 B', connection_kind: 'remote_gateway', gateway_connection_id: 'connection-b' },
+    ] }, requestId);
+    if (path === '/api/gateway/extension-targets' && request.method === 'POST') {
+      const gatewayId = body.gateway_id;
+      const targetGate = state.targetResolveGate;
+      if (targetGate) { targetGate.seen.resolve(item); await targetGate.release.promise; state.targetResolveGate = undefined; }
+      if (state.policy.discoveryFailure) return Response.json({ detail: { code: 'target-discovery-rejected', message: '安装域发现失败' }, request_id: requestId }, { status: state.policy.discoveryFailure, headers: { 'X-Request-ID': requestId } });
+      const capability = { installation_manage: !(gatewayId === 'gateway-a' && state.policy.hostOnlyA || gatewayId === 'gateway-b' && state.policy.hostOnlyB),
+        host_manage: !(gatewayId === 'gateway-a' && state.policy.installOnlyA) };
+      const targetIds = state.policy.multipleDomains && gatewayId === state.policy.multipleDomainsGateway
+        ? [backends[gatewayId], '33333333-3333-4333-8333-333333333333'] : [backends[gatewayId]];
+      const targets = state.policy.noTargets ? [] : targetIds.filter(Boolean).map(backend_id => ({ protocol_version: 1,
+        gateway_id: gatewayId, backend_id, source: 'live', capabilities: capability }));
+      return envelope({ protocol_version: 1, gateway_id: gatewayId, source: 'live', targets }, requestId);
+    }
+    if (path === '/api/gateway/workspaces' && request.method === 'GET') return envelope({ items: Object.entries(workspaceOwners)
+      .filter(([, owner]) => owner.gatewayId === 'gateway-a' || owner.gatewayId === 'gateway-b')
+      .map(([workspace_id, owner]) => ({ workspace_id, gateway_id: owner.gatewayId, name: owner.name, status: 'connected',
+        backend_url: 'http://127.0.0.1:8010', connection_kind: 'local', runtime_action: 'none', checked_at: '2026-11-07T00:00:00Z',
+        affected_workspace_ids: [], remote_gateways: [] })), active_workspace: null }, requestId);
+    if (path === '/api/gateway/extension-targets/resolve' && request.method === 'POST') {
+      const requestedWorkspace = body.workspace_ids?.[0], owner = workspaceOwners[requestedWorkspace];
+      if (!owner || owner.gatewayId !== body.gateway_id) return Response.json({ detail: '来源工作区归属错误' }, { status: 409, headers: { 'X-Request-ID': requestId } });
+      const backendId = body.backend_id ?? backends[owner.gatewayId];
+      state.targetResolveCount = (state.targetResolveCount ?? 0) + 1;
+      if (state.policy.resolveFailure && (!state.policy.resolveFailAt || state.targetResolveCount === state.policy.resolveFailAt)) {
+        return Response.json({ detail: { code: 'target-resolve-rejected', message: '目标解析失败' }, request_id: requestId }, { status: state.policy.resolveFailure, headers: { 'X-Request-ID': requestId } });
+      }
+      return envelope({ protocol_version: 1, gateway_id: owner.gatewayId, workspace_ids: body.workspace_ids,
+        backend_id: backendId, source: 'live', capabilities: { installation_manage: !(owner.gatewayId === 'gateway-a' && state.policy.hostOnlyA
+          || owner.gatewayId === 'gateway-b' && state.policy.hostOnlyB),
+          host_manage: true } }, requestId);
+    }
+    if (path === '/api/v1/workspace/files/roots' && request.method === 'GET') {
+      const workspaceId = item.workspaceId;
+      if (!workspaceOwners[workspaceId]) return Response.json({ detail: 'unknown workspace' }, { status: 404, headers: { 'X-Request-ID': requestId } });
+      return envelope({ workspace_uri: `boxteam://workspace/${workspaceId}/resources/files/root`,
+        filesystem_uri: `boxteam://workspace/${workspaceId}/resources/files/root`, filesystem_label: 'Workspace' }, requestId);
+    }
     const fail = status => Response.json({ detail: { code: 'directory-read-failed', message: '原目录读取失败：' + requestId } },
       { status, headers: { 'X-Request-ID': requestId } });
     const emptySegment = () => Response.json({ detail: { owner: 'resource_uri_grammar', code: 'empty_segment', message: 'URI 不得有空 segment' }, request_id: requestId },
@@ -159,7 +206,7 @@ beforeAll(async () => {
       workspace_ids: body.workspace_ids, profile_scope: 'default', inventory: { profile_id: profile, extensions: [] },
       installed: { id: 'probe.from-receipt', version, profile_id: profile, reused: state.policy.reused ?? false } };
     if (state.policy.badReceipt === 'target') result.backend_id = backends['gateway-b'];
-    if (state.policy.badReceipt === 'view') result.workspace_ids = [...body.workspace_ids].reverse();
+    if (state.policy.badReceipt === 'view') result.workspace_ids = ['workspace-a2'];
     if (state.policy.badReceipt === 'profile') result.installed.profile_id = 'another-profile';
     if (state.policy.badReceipt === 'version') result.installed.version = '';
     if (state.policy.badReceipt === 'reused') delete result.installed.reused;
@@ -175,7 +222,7 @@ afterAll(async () => {
   finally {
     const after = await fingerprint(), drift = sourcePaths.filter(path => fingerprints[path] !== after[path]);
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, fingerprintsAfter: after, drift,
-      boundary: '真实Chromium内运行AST提取的两条原VSIX action注册、原registerExtensionAction、原CommandsRegistry/MenuRegistry/ContextKey表达式、新安装owner、原workspaceFileUri/Source、workspaceContext、agentApi及共享HTTP/凭据/用户失效屏障。安装视图由真实Tracker和AST提取的原AbstractExtensionService setter/getter投影。目录组另外运行实际转换后的原FileService、产品WorkspaceFiles和原SimpleFileDialog；QuickInput控件、路径/语言/上下文/存储服务为具名UI边界。原action其余组的文件对话框服务、registration等待、挂接根、进度/通知/reload为具名边界。HTTP服务只提供具名Gateway安装/文件回执和故障，不调用真实Gateway/Backend/Node或磁盘安装器；不证明完整主窗口渲染、真实权限/磁盘错误、安装/profile或Windows。',
+      boundary: '真实 Chromium 中运行 AST 提取的两条原 VSIX action 注册、原 registerExtensionAction、原 CommandsRegistry/MenuRegistry/ContextKey 表达式、新安装 owner、原 workspaceFileUri/Source、workspaceContext、agentApi 及共享 HTTP/凭据/用户失效屏障。HTTP fixture 覆盖安装域发现、来源工作区列表、目标解析、工作区文件根和安装回执；目录组运行实际转换后的原 FileService、产品 WorkspaceFiles 和 SimpleFileDialog。QuickInput、路径/语言/上下文/存储服务为具名 UI 边界；文件对话框、进度/通知/reload 为具名边界。HTTP 服务不调用真实 Gateway/Backend/Node 或磁盘安装器；不证明完整主窗口渲染、真实权限/磁盘错误、安装/profile 或 Windows。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
@@ -184,7 +231,7 @@ afterAll(async () => {
 });
 
 async function inBrowser(name, config, body, policy = {}) {
-  const state = { name, policy: { ...policy, realDialog: config.realDialog }, requests: [], installSeen: Promise.withResolvers(), installGate: Promise.withResolvers(),
+  const state = { name, policy: { ...config, ...policy, realDialog: config.realDialog }, requests: [], installSeen: Promise.withResolvers(), installGate: Promise.withResolvers(),
     directoryGates: new Map(), statGates: new Map() };
   current = state;
   const context = await browser.newContext(), page = await context.newPage(), errors = [];
@@ -211,7 +258,7 @@ async function inBrowser(name, config, body, policy = {}) {
         { installationTarget: { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' }, viewId: 'default', workspaceIds: ['workspace-b'],
           capabilities: { installation_manage: !config.hostOnlyB, host_manage: true } } ];
       owner._setExtensionWorkspaceViews(config.noView ? views.slice(1) : config.noViewB ? views.slice(0, 1) : views);
-      m.workspaceContext.publish({ gatewayId: 'control-gateway', workspaces: [], activeId: 'active-a1', settings: null, loading: false, error: null });
+      m.workspaceContext.publish({ gatewayId: 'gateway-a', workspaces: [], activeId: 'active-a1', settings: null, loading: false, error: null });
       const picks = [], dialogs = [], prompts = [], reports = [], gate = Promise.withResolvers(), registration = Promise.withResolvers();
       const filePicks = [], contextValues = new Map(), storageChanged = lifetime.add(new m.Emitter());
       let hiddenFiles = true;
@@ -264,7 +311,7 @@ async function inBrowser(name, config, body, policy = {}) {
         filePicks, files, originalDialog, root: folders[0]?.uri,
         openDialog(options = {}) {
           p.completed = false; p.error = undefined;
-          const original = originalDialog({ defaultUri: folders[0].uri, availableFileSystems: ['boxteam-file'], canSelectFiles: true, ...options });
+          const original = originalDialog({ defaultUri: folders[0]?.uri, availableFileSystems: ['boxteam-file'], canSelectFiles: true, ...options });
           p.activeDialog = original.dialog;
           p.outcome = original.result.then(value => { p.selection = Array.isArray(value) ? value.map(uri => uri.toString()) : value?.toString(); p.error = null; },
             error => { p.error = { name: error.name, message: error.message, cause: error.cause && { message: error.cause.message, status: error.cause.status } }; })
@@ -284,23 +331,45 @@ async function inBrowser(name, config, body, policy = {}) {
           const id = command === 'select' ? 'workbench.extensions.action.installVSIX' : 'workbench.extensions.command.installFromVSIX';
           const resources = keys.map(resource);
           p.inputResources = resources;
-          p.outcome = Promise.resolve(m.CommandsRegistry.getCommand(id).handler(accessor, ...(command === 'select' ? [] : [singular ? resources[0] : resources])))
+          const outcome = m.CommandsRegistry.getCommand(id).handler(accessor, ...(command === 'select' ? [] : [singular ? resources[0] : resources]));
+          accessorValid = false;
+          p.outcome = Promise.resolve(outcome)
             .then(() => { p.error = null; }, error => { p.error = { name: error.name, message: error.message, status: error.status, requestId: error.requestId,
               cause: error.cause && { name: error.cause.name, message: error.cause.message, status: error.cause.status,
                 detail: error.cause.detail, path: error.cause.path, requestId: error.cause.requestId,
-                cause: error.cause.cause && { message: error.cause.cause.message, status: error.cause.cause.status, requestId: error.cause.cause.requestId } } }; }).finally(() => { p.completed = true; });
+                cause: error.cause.cause && { message: error.cause.cause.message, status: error.cause.cause.status, requestId: error.cause.cause.requestId } } }; }).finally(() => { p.completed = true; accessorValid = true; });
           await p.outcome; return p.result();
         },
         async finish() { await p.outcome; return p.result(); },
+        async chooseExtensionTarget(gatewayId = 'gateway-a', domainIndex = 0) {
+          p.targetGatewayId = gatewayId;
+          p.targetDomainIndex = domainIndex;
+          const outcome = m.CommandsRegistry.getCommand(m.selectExtensionManagementTargetCommand).handler(accessor);
+          accessorValid = false;
+          try {
+            await outcome; p.error = null;
+            return p.result();
+          } catch (error) { p.error = { name: error.name, message: error.message }; return p.result(); }
+          finally { accessorValid = true; }
+        },
         dispose() { lifetime.dispose(); },
       };
       const services = new Map([
         [m.IWorkspaceContextService, { getCompleteWorkspace: async () => ({ folders }), getWorkspace: () => ({ folders }), onDidChangeWorkspaceFolders: changed.event }],
         [m.IExtensionService, { whenInstalledExtensionsRegistered: async () => { p.registrationCalls++; if (config.holdRegistration) await registration.promise; },
           getExtensionWorkspaceViews: () => { p.viewReads++; return owner.getExtensionWorkspaceViews(); } }],
-        [m.IQuickInputService, { pick: async (items, options, token) => { picks.push({ items: items.map(item => ({ label: item.label, description: item.description,
-          detail: item.detail, root: item.root.toString(), workspaceIds: item.target.workspace_ids, capabilities: item.capabilities })), options }); p.pickToken = token;
-          return config.cancelPick ? undefined : items[config.pickIndex ?? 0]; } }],
+        [m.IQuickInputService, { pick: async (items, options, token) => { const pickIndex = options.title === '扩展管理目标'
+          ? items.findIndex(item => item.target.gateway_id === (p.targetGatewayId ?? config.targetGatewayId ?? 'gateway-a'))
+          : options.title?.startsWith('选择扩展安装域') ? (p.targetDomainIndex ?? config.targetDomainIndex ?? 0)
+            : options.title?.startsWith('选择 VSIX 来源工作区') && config.sourceWorkspaceId
+              ? items.findIndex(item => item.workspace.workspace_id === config.sourceWorkspaceId) : config.pickIndex ?? 0;
+          p.targetGatewayId = undefined; p.targetDomainIndex = undefined;
+          picks.push({ items: items.map(item => ({ label: item.label, description: item.description,
+          detail: item.detail, root: item.workspace ? item.workspace.workspace_id : item.target?.backend_id,
+          workspaceIds: item.target?.workspace_ids, capabilities: item.target?.capabilities,
+          workspaceId: item.workspace?.workspace_id })), options }); p.pickToken = token;
+          return (config.cancelPick && options.title !== '扩展管理目标' || config.cancelDomainPick && options.title?.startsWith('选择扩展安装域'))
+            ? undefined : items[pickIndex]; } }],
         [m.IFileDialogService, { showOpenDialog: async options => { dialogs.push({ ...options, defaultUri: options.defaultUri.toString() });
           if (config.focusDialog) { p.focus(); p.replaceView(); }
           if (config.realDialog) { const original = originalDialog(options); p.activeDialog = original.dialog; return original.result; }
@@ -312,12 +381,15 @@ async function inBrowser(name, config, body, policy = {}) {
         [m.INotificationService, { prompt: (severity, message, choices) => { prompts.push({ severity, message, choices }); } }],
         [m.IHostService, { reload: async () => { p.reloads++; } }],
       ]);
-      const accessor = { get: id => { if (!services.has(id)) throw new Error('安装命令不应读取其它服务：' + id); return services.get(id); } };
+      let accessorValid = true;
+      const accessor = { get: id => { if (!accessorValid) throw new Error('ServicesAccessor 在命令同步调用后已失效');
+        if (!services.has(id)) throw new Error('安装命令不应读取其它服务：' + id); return services.get(id); } };
       globalThis.vsix = p;
     }, config);
     await body(page, state);
     expect(errors).toEqual([]);
-    expect(state.requests.filter(item => ![installPath, '/api/gateway/auth/local-credential', '/api/gateway/users/current'].includes(item.path)
+    const managementPaths = ['/api/gateway/management/gateways', '/api/gateway/extension-targets', '/api/gateway/workspaces', '/api/gateway/extension-targets/resolve', '/api/v1/workspace/files/roots'];
+    expect(state.requests.filter(item => ![installPath, '/api/gateway/auth/local-credential', '/api/gateway/users/current', ...managementPaths].includes(item.path)
       && !(config.realDialog && (item.path === '/api/v1/workspace/files' || item.path.endsWith('/resources/navigation'))))).toEqual([]);
     if (config.realDialog) expect(state.requests.filter(item => item.path === '/api/v1/workspace/files' || item.path.endsWith('/resources/navigation'))
       .filter(item => (item.body?.uri ?? item.query.path).endsWith('/'))).toEqual([]);
@@ -325,6 +397,7 @@ async function inBrowser(name, config, body, policy = {}) {
     state.installGate.resolve();
     for (const gate of state.directoryGates.values()) gate.release.resolve();
     for (const gate of state.statGates.values()) gate.release.resolve();
+    state.targetResolveGate?.release.resolve();
     observations.push({ name, requests: state.requests, outcome: await page.evaluate(() => globalThis.vsix?.result()).catch(() => undefined), pageErrors: errors });
     await page.evaluate(() => globalThis.vsix?.dispose()); await context.close();
   }
@@ -336,9 +409,12 @@ const pickerReady = page => page.waitForFunction(() => { const p = globalThis.vs
 const pickerCompleted = page => page.waitForFunction(() => globalThis.vsix.completed);
 const listRequests = state => state.requests.filter(item => item.path === '/api/v1/workspace/files');
 const hold = () => ({ seen: Promise.withResolvers(), release: Promise.withResolvers() });
-const requestFor = (key, gateway = 'gateway-a') => ({ protocol_version: 1, gateway_id: gateway, backend_id: backends[gateway],
-  workspace_ids: gateway === 'gateway-a' ? ['workspace-a2', 'workspace-a1'] : ['workspace-b'],
-  source_uri: 'boxteam://workspace/' + key + '/resources/files/root/packages/filename-1.0.0.vsix' });
+const requestFor = (key, gateway = 'gateway-a') => {
+  const workspaceId = key.startsWith('workspace-') ? key : ({ a1: 'workspace-a1', a2: 'workspace-a2', b: 'workspace-b' })[key];
+  return { protocol_version: 1, gateway_id: gateway, ...(gateway === 'gateway-b' ? { gateway_connection_id: 'connection-b' } : {}),
+    backend_id: backends[gateway], workspace_ids: [workspaceId],
+    source_uri: 'boxteam://workspace/' + workspaceId + '/resources/files/root/packages/filename-1.0.0.vsix' };
+};
 
 for (const fault of [403, 404, 503, 'truncated']) {
   test(`真实原文件对话框目录${fault}沿原action失败，不返回空目录或安装`, async () => inBrowser('original-directory-' + fault,
@@ -642,7 +718,7 @@ test('原两条命令和菜单在纯Web窗口可达，Explorer只接受工作区
     [backends['gateway-a'], 'default', ['workspace-a2', 'workspace-a1']], [backends['gateway-b'], 'default', ['workspace-b']]]);
 }));
 
-test('原getter保留仅安装view的身份及顺序，原selector无需host权限仍向完整目标安装', async () => inBrowser('installation-only', { installOnlyA: true, hostOnlyB: true }, async (page, state) => {
+test('原宿主view投影保持独立，安装目标权限只由Gateway实时解析', async () => inBrowser('installation-only', { installOnlyA: true, hostOnlyB: true }, async (page, state) => {
   const projection = await page.evaluate(() => {
     const { owner, tracker, views } = globalThis.vsix, projected = owner.getExtensionWorkspaceViews();
     return { sameViews: projected.map((view, index) => view === views[index]), sameCapabilities: projected.map((view, index) => view.capabilities === views[index].capabilities),
@@ -652,57 +728,111 @@ test('原getter保留仅安装view的身份及顺序，原selector无需host权�
   expect(projection).toEqual({ sameViews: [true, true], sameCapabilities: [true, true],
     capabilities: [{ installation_manage: true, host_manage: false }, { installation_manage: false, host_manage: true }],
     workspaceIds: [['workspace-a2', 'workspace-a1'], ['workspace-b']], hosts: [backends['gateway-b']] });
-  const result = await invoke(page, 'select');
+  const result = await invoke(page, 'direct', ['a1']);
   expect(result.error).toBeNull(); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1')]);
-  expect(result.picks[0].items.map(item => item.label)).toEqual(['A1', 'A2', 'B']);
-  expect(result.picks[0].items[2].detail).toContain('未获扩展安装管理权限');
-  expect(result.prompts).toHaveLength(1); expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
+  expect(result.picks).toEqual([]); expect(result.prompts).toHaveLength(1);
+  expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
 }));
 
-for (const command of ['direct', 'select']) test(`原${command} action拒绝仅宿主管理目标，保留其它目标也不改投或发请求`, async () => inBrowser('host-only-' + command, { hostOnlyA: true }, async (page, state) => {
-  const result = await invoke(page, command);
-  expect(result.error?.message).toContain('未授权扩展安装管理'); expect(state.requests).toEqual([]);
-  expect(result.dialogs).toEqual([]); expect(result.prompts).toEqual([]);
-  if (command === 'select') {
-    expect(result.picks[0].items.map(item => item.label)).toEqual(['A1', 'A2', 'B']);
-    expect(result.picks[0].items[0].detail).toContain('未获扩展安装管理权限');
-  }
+test('标题栏选择 B 后连续安装沿用其 Backend，无逐次目标选择且焦点变化不改投', async () => inBrowser('selected-freeze', { focusDialog: true, targetGatewayId: 'gateway-b', dialogKeys: ['b'] }, async (page, state) => {
+  await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-b'));
+  const targetPickCount = await page.evaluate(() => globalThis.vsix.picks.filter(pick => pick.options.title === '扩展管理目标').length);
+  const first = await invoke(page, 'select', ['b']);
+  const second = await invoke(page, 'direct', ['b']);
+  const result = second;
+  expect(first.error).toBeNull(); expect(result.error).toBeNull();
+  expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-b', 'gateway-b'), requestFor('workspace-b', 'gateway-b')]);
+  expect(await page.evaluate(() => globalThis.vsix.picks.filter(pick => pick.options.title === '扩展管理目标').length)).toBe(targetPickCount);
+  expect(result.dialogs).toHaveLength(1);
+  expect(state.requests.filter(item => item.path === '/api/gateway/extension-targets/resolve').map(item => item.body)).toEqual([
+    { protocol_version: 1, gateway_id: 'gateway-b', workspace_ids: ['workspace-b'], gateway_connection_id: 'connection-b', backend_id: backends['gateway-b'] },
+    { protocol_version: 1, gateway_id: 'gateway-b', workspace_ids: ['workspace-b'], gateway_connection_id: 'connection-b', backend_id: backends['gateway-b'] },
+  ]);
+  expect(result.prompts.at(-1).message).toContain('gateway-b');
 }));
 
-test('原直接URI批次后项只有host权限时，合法前项目标也零安装', async () => inBrowser('mixed-capabilities-batch', { hostOnlyA: true }, async (page, state) => {
-  const result = await invoke(page, 'direct', ['b', 'a1']);
-  expect(result.error?.message).toContain('未授权扩展安装管理'); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
-}));
-
-for (const cancel of ['cancelPick', 'cancelDialog']) test(`${cancel}取消原服务零安装请求`, async () => inBrowser(cancel, { [cancel]: true }, async (page, state) => {
-  const result = await invoke(page, 'select');
-  expect(result.error).toBeNull(); expect(installs(state)).toEqual([]); expect(state.requests).toEqual([]);
-  expect(result.dialogs).toHaveLength(cancel === 'cancelPick' ? 0 : 1); expect(result.rootListeners).toBe(false); expect(result.prompts).toEqual([]);
-}));
-
-test('原selector固定完整有序view，活动标签和后续view变化不改投，使用原回执版本及reload', async () => inBrowser('selected-freeze', { focusDialog: true }, async (page, state) => {
-  const result = await invoke(page, 'select');
+test('文件对话框等待期间切换管理目标不改写已冻结的安装', async () => inBrowser('selected-freeze', { focusDialog: true, holdDialog: true, targetGatewayId: 'gateway-a' }, async (page, state) => {
+  await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-a'));
+  await page.evaluate(() => { void globalThis.vsix.start('select'); });
+  await page.waitForFunction(() => globalThis.vsix.dialogs.length === 1);
+  await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-b'));
+  await page.evaluate(() => globalThis.vsix.releaseDialog());
+  const result = await page.evaluate(() => globalThis.vsix.finish());
   expect(result.error).toBeNull(); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1')]);
   expect(installs(state)[0].token).toBe('test-local-credential');
+  expect(result.dialogs).toHaveLength(1);
   expect(result.dialogs[0]).toMatchObject({ availableFileSystems: ['boxteam-file'], canSelectFiles: true, canSelectFolders: false, canSelectMany: true,
     filters: [{ name: 'VSIX Extensions', extensions: ['vsix'] }] });
-  expect(result.dialogs[0].defaultUri).toBe(result.picks[0].items[0].root);
-  expect(result.picks[0].items[0].detail).toContain(backends['gateway-a']);
-  expect(result.picks[0].items[0].workspaceIds).toEqual(['workspace-a2', 'workspace-a1']);
+  expect(result.dialogs[0].defaultUri).toContain('workspace-a1');
+  expect(result.picks.at(-1).items[0].workspaceId).toBe('workspace-a1');
+  expect(state.requests.filter(item => item.path === '/api/gateway/extension-targets/resolve').map(item => item.body)).toEqual([
+    { protocol_version: 1, gateway_id: 'gateway-a', workspace_ids: ['workspace-a1'], backend_id: backends['gateway-a'] },
+  ]);
   expect(result.prompts).toHaveLength(1); expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
   expect(result.prompts[0].message).toContain('当前运行版本尚未切换'); expect(result.prompts[0].choices).toEqual(['重新加载窗口']);
   expect(result.reloads).toBe(0); await page.evaluate(() => globalThis.vsix.prompts[0].choices[0].run());
   expect(await page.evaluate(() => globalThis.vsix.reloads)).toBe(1); expect(installs(state)).toHaveLength(1);
 }));
 
-test('原直接URI入口保留单URI合同，跨目标列表按原顺序安装并汇总一次通知', async () => inBrowser('direct-targets', {}, async (page, state) => {
+test('多安装域未从标题栏选择时安装明确拒绝，选择后才沿用所选 Backend', async () => inBrowser('multiple-install-domains',
+  { multipleDomains: true, multipleDomainsGateway: 'gateway-a', targetGatewayId: 'gateway-a', targetDomainIndex: 1 }, async (page, state) => {
+    let result = await invoke(page, 'direct', ['a1']);
+    expect(result.error?.message).toContain('从扩展视图标题工具栏选择安装域'); expect(installs(state)).toEqual([]);
+    await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-a', 1));
+    const titlePicks = await page.evaluate(() => globalThis.vsix.picks.map(pick => pick.options.title));
+    expect(titlePicks).toEqual(['扩展管理目标', '选择扩展安装域 · 本地']);
+    expect(state.requests.filter(item => item.path === '/api/gateway/extension-targets').map(item => item.body)).toEqual([
+      { protocol_version: 1, gateway_id: 'gateway-a' },
+      { protocol_version: 1, gateway_id: 'gateway-a' },
+    ]);
+    result = await invoke(page, 'direct', ['a2']);
+    expect(result.error).toBeNull(); expect(installs(state).map(item => item.body)).toEqual([{
+      protocol_version: 1, gateway_id: 'gateway-a', backend_id: '33333333-3333-4333-8333-333333333333',
+      workspace_ids: ['workspace-a2'], source_uri: 'boxteam://workspace/workspace-a2/resources/files/root/packages/filename-1.0.0.vsix',
+    }]);
+  }));
+
+test('标题栏取消安装域选择保留原管理目标且不安装', async () => inBrowser('cancel-domain-selection',
+  { multipleDomains: true, multipleDomainsGateway: 'gateway-a', cancelDomainPick: true }, async (page, state) => {
+    await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-a'));
+    expect(await page.evaluate(() => globalThis.vsix.picks.map(pick => pick.options.title))).toEqual(['扩展管理目标', '选择扩展安装域 · 本地']);
+    const result = await invoke(page, 'direct', ['a1']);
+    expect(result.error?.message).toContain('有多个安装域'); expect(installs(state)).toEqual([]);
+  }));
+
+test('直接URI来源不隐式切换目标；同Gateway多来源工作区按原顺序安装', async () => inBrowser('direct-targets', {}, async (page, state) => {
   let result = await invoke(page, 'direct', ['a1'], true);
   expect(result.error).toBeNull(); expect(installs(state)[0].body).toEqual(requestFor('workspace-a1'));
-  result = await invoke(page, 'direct', ['b', 'a2']);
+  result = await invoke(page, 'direct', ['a2']);
   expect(result.error).toBeNull(); expect(result.picks).toEqual([]); expect(result.dialogs).toEqual([]);
-  expect(installs(state).slice(1).map(item => item.body)).toEqual([requestFor('workspace-b', 'gateway-b'), requestFor('workspace-a2')]);
-  expect(result.prompts).toHaveLength(2); expect(result.prompts[1].message).toContain('probe.from-receipt@2.4.8');
-  expect(result.prompts[1].message).toContain('probe.from-receipt@8.7.6');
+  expect(installs(state).slice(1).map(item => item.body)).toEqual([requestFor('workspace-a2')]);
+  expect(result.prompts).toHaveLength(2); expect(result.prompts[1].message).toContain('probe.from-receipt@8.7.6');
+  expect(result.prompts[1].message).not.toContain('probe.from-receipt@2.4.8');
+}));
+
+test('跨Gateway直接来源在整个批次零安装拒绝', async () => inBrowser('cross-gateway-source', {}, async (page, state) => {
+  const result = await invoke(page, 'direct', ['a1', 'b']);
+  expect(result.error?.message).toContain('当前不支持跨 Gateway 来源');
+  expect(installs(state)).toEqual([]); expect(result.prompts).toEqual([]);
+}));
+
+test('所选安装域缺少安装权限时来源解析拒绝且不安装', async () => inBrowser('installation-permission-denied',
+  { hostOnlyB: true, targetGatewayId: 'gateway-b' }, async (page, state) => {
+    await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-b'));
+    const result = await invoke(page, 'direct', ['b']);
+    expect(result.error?.message).toContain('未授权扩展安装管理'); expect(installs(state)).toEqual([]);
+    expect(state.requests.filter(item => item.path === '/api/gateway/extension-targets').map(item => item.body)).toEqual([
+      { protocol_version: 1, gateway_id: 'gateway-b', gateway_connection_id: 'connection-b' },
+    ]);
+  }));
+
+test('取消来源工作区选择不打开文件选择器且不安装', async () => inBrowser('cancel-source-workspace', { cancelPick: true }, async (page, state) => {
+  const result = await invoke(page, 'select');
+  expect(result.error).toBeNull(); expect(result.dialogs).toEqual([]); expect(installs(state)).toEqual([]);
+  expect(state.requests.map(item => item.path)).toEqual([
+    '/api/gateway/auth/local-credential', '/api/gateway/extension-targets', '/api/gateway/workspaces',
+  ]);
+  expect(result.picks.map(pick => pick.options.title)).toEqual(['选择 VSIX 来源工作区 · 本地']);
 }));
 
 test('复用回执明确说明原正文未覆盖且仍需重新加载，不再次请求安装', async () => inBrowser('reuse-version', {}, async (page, state) => {
@@ -718,52 +848,44 @@ test('复用回执明确说明原正文未覆盖且仍需重新加载，不再�
 
 for (const invalid of ['native', 'unknown', 'root', 'invalid']) test(`直接URI批次后项${invalid}非法时整批零安装`, async () => inBrowser('invalid-' + invalid, {}, async (page, state) => {
   const result = await invoke(page, 'direct', ['a1', invalid]);
-  expect(result.error?.message).toBeTruthy(); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
+  expect(result.error?.message).toBeTruthy(); expect(installs(state)).toEqual([]); expect(result.prompts).toEqual([]);
+  if (invalid === 'unknown') expect(state.requests.some(item => item.path === '/api/gateway/extension-targets/resolve')).toBe(true);
+  else expect(state.requests).toEqual([]);
 }));
 
-test('目标文件对话框返回另一已挂接根仍拒绝，零安装且不改投', async () => inBrowser('dialog-other-root', { dialogKeys: ['b'] }, async (page, state) => {
+test('目标文件对话框返回另一工作区根仍拒绝，零安装且不改投', async () => inBrowser('dialog-other-root', { dialogKeys: ['a2'] }, async (page, state) => {
   const result = await invoke(page, 'select');
-  expect(result.error?.message).toContain('本次选择'); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
+  expect(result.error?.message).toContain('本次选择'); expect(installs(state)).toEqual([]); expect(result.prompts).toEqual([]);
 }));
 
-for (const config of [{ noView: true }, { noRoots: true }]) test(`${Object.keys(config)[0]}没有明确安装view时零发现零安装`, async () => inBrowser(Object.keys(config)[0], config, async (page, state) => {
-  const result = await invoke(page, config.noRoots ? 'select' : 'direct');
-  expect(result.error?.message).toBeTruthy(); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
+test('Gateway没有安装域时不查询来源工作区、不打开文件选择器或安装', async () => inBrowser('no-targets', { noTargets: true }, async (page, state) => {
+  const result = await page.evaluate(() => globalThis.vsix.chooseExtensionTarget('gateway-a'));
+  expect(result.error?.message).toContain('没有可用的扩展安装域'); expect(result.dialogs).toEqual([]);
+  expect(state.requests.map(item => item.path)).toEqual([
+    '/api/gateway/auth/local-credential', '/api/gateway/management/gateways', '/api/gateway/extension-targets',
+  ]);
+  expect(state.requests.at(-1).body).toEqual({ protocol_version: 1, gateway_id: 'gateway-a' });
 }));
 
-test('批次后项目标view缺失时前项零安装，完整view的其它根缺失也拒绝', async () => {
-  await inBrowser('later-view-missing', { noViewB: true }, async (page, state) => {
-    const result = await invoke(page, 'direct', ['a1', 'b']);
-    expect(result.error?.message).toContain('安装视图'); expect(state.requests).toEqual([]);
-  });
-  await inBrowser('view-peer-root-missing', { missingPeerRoot: true }, async (page, state) => {
-    const result = await invoke(page);
-    expect(result.error?.message).toContain('工作区集合已改变'); expect(state.requests).toEqual([]);
-  });
-});
+test('直接批次后项目标解析失败时前项零安装', async () => inBrowser('later-target-resolve-missing', { resolveFailure: 409, resolveFailAt: 2 }, async (page, state) => {
+  const result = await invoke(page, 'direct', ['a1', 'a2']);
+  expect(result.error?.message).toBeTruthy(); expect(installs(state)).toEqual([]);
+}));
 
-for (const invalidation of ['a2', 'identity', 'gateway']) test(`文件选择等待中${invalidation}失效，迟到资源零安装`, async () => inBrowser('dialog-invalidated-' + invalidation, { holdDialog: true }, async (page, state) => {
+for (const invalidation of ['identity', 'gateway']) test(`文件选择等待中${invalidation}失效，迟到资源零安装`, async () => inBrowser('dialog-invalidated-' + invalidation, { holdDialog: true }, async (page, state) => {
   await page.evaluate(() => { void globalThis.vsix.start('select'); });
   await page.waitForFunction(() => globalThis.vsix.dialogs.length === 1);
   await page.evaluate(kind => { globalThis.vsix.invalidate(kind); globalThis.vsix.releaseDialog(); }, invalidation);
   const result = await page.evaluate(() => globalThis.vsix.finish());
-  expect(result.error?.message).toContain('已改变'); expect(state.requests).toEqual([]); expect(result.prompts).toEqual([]);
+  expect(result.error?.message).toContain('已改变'); expect(installs(state)).toEqual([]); expect(result.prompts).toEqual([]);
   expect(result.rootListeners).toBe(false);
 }));
 
-test('等待原extension注册完成前不读取view或写入，之后仍沿同一原命令安装', async () => inBrowser('registration', { holdRegistration: true }, async (page, state) => {
+test('首次await前冻结调用方URI数组，目标解析等待中的外部改写不改投或追加', async () => inBrowser('input-array-freeze', {}, async (page, state) => {
+  const targetGate = hold(); state.targetResolveGate = targetGate;
   await page.evaluate(() => { void globalThis.vsix.start('direct'); });
-  await page.waitForFunction(() => globalThis.vsix.registrationCalls === 1);
-  expect(await page.evaluate(() => globalThis.vsix.viewReads)).toBe(0); expect(state.requests).toEqual([]);
-  await page.evaluate(() => globalThis.vsix.registration.resolve());
-  const result = await page.evaluate(() => globalThis.vsix.finish());
-  expect(result.error).toBeNull(); expect(result.viewReads).toBe(1); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1')]);
-}));
-
-test('首次await前冻结调用方URI数组，注册等待中的外部改写不改投或追加', async () => inBrowser('input-array-freeze', { holdRegistration: true }, async (page, state) => {
-  await page.evaluate(() => { void globalThis.vsix.start('direct'); });
-  await page.waitForFunction(() => globalThis.vsix.registrationCalls === 1);
-  await page.evaluate(() => { globalThis.vsix.mutateResources(['b', 'a2']); globalThis.vsix.registration.resolve(); });
+  await targetGate.seen.promise;
+  await page.evaluate(() => globalThis.vsix.mutateResources(['a2'])); targetGate.release.resolve();
   const result = await page.evaluate(() => globalThis.vsix.finish());
   expect(result.error).toBeNull(); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1')]);
 }));
@@ -777,7 +899,7 @@ test('已发安装等待中身份失效，迟到回执不提示成功也不重�
 }, { holdInstall: true }));
 
 for (const httpStatus of [403, 409]) test(`HTTP ${httpStatus}保留原cause/status/detail/request_id，失败批次不重放或继续后项`, async () => inBrowser('http-error-' + httpStatus, {}, async (page, state) => {
-  const result = await invoke(page, 'direct', ['a1', 'b']);
+  const result = await invoke(page, 'direct', ['a1', 'a2']);
   expect(result.error?.cause).toMatchObject({ name: 'HttpRequestError', status: httpStatus, path: installPath,
     detail: { code: 'target-install-rejected', message: '原安装后的权限或回执检查失败' }, requestId: installs(state)[0].requestId });
   expect(result.error?.message).toContain(result.error.cause.message); expect(result.error?.message).toContain('核实后再决定重试');
@@ -785,18 +907,17 @@ for (const httpStatus of [403, 409]) test(`HTTP ${httpStatus}保留原cause/stat
 }, { failAt: 1, httpStatus }));
 
 test('后项失败保留已确认成功回执，一次通知和原错误并存，第三项不安装', async () => inBrowser('partial-error', {}, async (page, state) => {
-  const result = await invoke(page, 'direct', ['a1', 'b', 'a2']);
-  expect(result.error?.cause?.status).toBe(409); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1'), requestFor('workspace-b', 'gateway-b')]);
+  const result = await invoke(page, 'direct', ['a1', 'a2', 'a1']);
+    expect(result.error?.cause?.status).toBe(409); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1'), requestFor('workspace-a2')]);
   expect(result.prompts).toHaveLength(1); expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
   expect(result.prompts[0].message).not.toContain('2.4.8'); expect(result.reloads).toBe(0);
 }, { failAt: 2 }));
 
-for (const invalidation of ['a2', 'identity', 'gateway']) test(`首项已确认后${invalidation}中止后项，撤根保留回执且身份失效不泄露旧结果`, async () => inBrowser('partial-invalidated-' + invalidation,
+for (const invalidation of ['identity', 'gateway']) test(`首项已确认后${invalidation}中止后项，不泄露旧结果`, async () => inBrowser('partial-invalidated-' + invalidation,
   { invalidateAtSecondReport: invalidation }, async (page, state) => {
-    const result = await invoke(page, 'direct', ['a1', 'b', 'a2']);
+    const result = await invoke(page, 'direct', ['a1', 'a2', 'a1']);
     expect(result.error?.cause?.message).toContain('已改变'); expect(installs(state).map(item => item.body)).toEqual([requestFor('workspace-a1')]);
-    expect(result.prompts).toHaveLength(invalidation === 'a2' ? 1 : 0);
-    if (invalidation === 'a2') expect(result.prompts[0].message).toContain('probe.from-receipt@8.7.6');
+    expect(result.prompts).toEqual([]);
   }));
 
 for (const badReceipt of ['target', 'view', 'profile', 'version', 'reused']) test(`安装${badReceipt}回执不匹配只提示未确认，不重放或伪造成功`, async () => inBrowser('bad-receipt-' + badReceipt, {}, async (page, state) => {

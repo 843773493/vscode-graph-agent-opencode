@@ -151,6 +151,17 @@ type ExtractExtensionResult = { readonly local: ILocalExtension; readonly reused
 \t\t\tawait this.extensionsProfileScannerService.addExtensionsToProfile([[local, metadata]], this.options.profileLocation, !local.isValid);`);
     // 本地 VSIX 的原 metadata 更新同样可能继续写盘，不能在它完成前退出。
     source = replaceOnce(source, 'this.updateMetadata(local, token);', 'await this.updateMetadata(local, token);');
+  } else if (matches('common/abstractExtensionManagementService')) {
+    const start = source.indexOf('\tasync uninstallExtensions(');
+    const end = source.indexOf('\n\tprivate checkForDependents(', start);
+    const uninstall = source.slice(start, end);
+    let settled = replaceOnce(uninstall, 'const error = toExtensionManagementError(e);\n\t\t\tfor (const { task } of allTasks) {',
+      `const error = toExtensionManagementError(e);
+      // 先观察全部原任务，再取消尚未启动的任务；保留原业务错误并等待取消结算。
+      const settling = Promise.allSettled(allTasks.map(({ task }) => task.waitUntilTaskIsFinished()));
+\t\t\tfor (const { task } of allTasks) {`);
+    settled = replaceOnce(settled, '\t\t\tthrow error;\n\t\t} finally {', '\t\t\tawait settling;\n\t\t\tthrow error;\n\t\t} finally {');
+    source = replaceOnce(source, uninstall, settled);
   } else if (matches('node/extensionsWatcher')) {
     source = lifecycleImport() + source;
     source = replaceOnce(source, 'combinedDisposable, Disposable, DisposableMap', 'combinedDisposable, Disposable, DisposableMap, DisposableStore');

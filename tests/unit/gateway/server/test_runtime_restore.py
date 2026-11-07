@@ -735,11 +735,12 @@ async def test_default_external_backend_discards_only_stopped_singleton_owner(st
     defaults, _ = add(("Default",), default=True)
     monkeypatch.setenv("BOXTEAM_DEFAULT_BACKEND_URL", "http://127.0.0.1:41000")
     async def healthy(*_, **__):
-        return {"workspace_id": startup_case.identities[startup_case.default_root]}
+        return {"workspace_id": startup_case.identities[startup_case.default_root], "backend_id": "00000000-0000-4000-8000-000000000099"}
     monkeypatch.setattr(bootstrap, "wait_for_workspace_health", healthy)
     registry = await bootstrap.create_registry()
     assert registry.backend_owner(defaults[0].workspace_id) is None
     assert registry.resolve(defaults[0].workspace_id).managed is False
+    assert registry.resolve(defaults[0].workspace_id).backend_id == "00000000-0000-4000-8000-000000000099"
     assert not startup_case.started
 
 

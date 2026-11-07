@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Literal, TypeVar
@@ -27,6 +27,7 @@ from starlette.responses import JSONResponse
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
+from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -39,6 +40,7 @@ from app.gateway.control.user_access import (
     UserAccessContext,
     UserAccessService,
 )
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.policy import (
     Capability,
     FederationPolicyStore,
@@ -46,6 +48,7 @@ from app.gateway.federation.policy import (
     require_federation_capability,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
+from app.gateway.registry.routes import BackendManagementRoute
 from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
@@ -57,12 +60,18 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostTargetRequest,
     ExtensionTargetCapabilitiesDTO,
     ExtensionTargetDTO,
+    ExtensionTargetListDTO,
+    ExtensionTargetListRequest,
+    ExtensionTargetViewDTO,
 )
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
+    ExtensionInstallationTarget,
+    ExtensionInstallationUninstallDTO,
+    ExtensionInstallationUninstallRequest,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
@@ -148,11 +157,14 @@ class _HostRoute:
     remote: bool
     headers: dict[str, str]
     leases: list[WorkspaceRouteLease]
+    connection_id: str | None = None
+    connection_identity: tuple[object, object] | None = None
+    management_routes: tuple[BackendManagementRoute, ...] = ()
 
 
 @contextmanager
 def _target_route(connection: HTTPConnection, *, gateway_id: str, workspace_ids: list[str],
-                  auth: GatewayAuthContext, streaming: bool) -> Iterator[_HostRoute]:
+                  auth: GatewayAuthContext, streaming: bool, gateway_connection_id: str | None = None) -> Iterator[_HostRoute]:
     registry = getattr(connection.app.state, "registry", None)
     if not isinstance(registry, GatewayWorkspaceRegistry):
         raise TypeError("Gateway 工作区注册表尚未初始化")
@@ -174,12 +186,156 @@ def _target_route(connection: HTTPConnection, *, gateway_id: str, workspace_ids:
         if remote:
             if len({registry.remote_connection_for_target(target).connection_id for target in targets}) != 1:
                 raise ValueError("Node 宿主视图必须使用同一明确远端连接")
+            if gateway_connection_id is not None and registry.remote_connection_for_target(targets[0]).connection_id != gateway_connection_id:
+                raise ValueError("宿主工作区视图与明确 Gateway 连接不匹配")
             headers.update(registry.target_request_headers(targets[0]))
         else:
+            if gateway_connection_id is not None:
+                raise ValueError("原生 Gateway 不能指定远端连接")
             if gateway_id != registry.gateway_id:
                 raise ValueError("Node 宿主目标不属于原生 Gateway")
             headers.update({"X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": registry.gateway_id})
-        yield _HostRoute(urls.pop(), remote, headers, leases)
+        base_url = urls.pop()
+        management_routes = () if remote else tuple(
+            BackendManagementRoute(base_url, target.system_default, tuple(leases), None,
+                registry.backend_owner(target.key), target if registry.backend_owner(target.key) is None else None)
+            for target in targets
+        )
+        yield _HostRoute(base_url, remote, headers, leases, management_routes=management_routes)
+
+
+def _check_management_route(request: HTTPConnection, route: _HostRoute) -> None:
+    if route.connection_id is not None:
+        registry = request.app.state.registry
+        current = registry.remote_gateway_route_identity(route.connection_id)
+        if route.connection_identity is None or any(before is not after for before, after in zip(route.connection_identity, current, strict=True)):
+            raise LookupError("远端 Gateway 管理路由已换代，请重新发现原目标")
+    _check_access(None, route.leases)
+
+
+@contextmanager
+def _management_gateway_route(request: HTTPConnection, payload: ExtensionTargetListRequest | ExtensionInstallationInventoryRequest,
+                              auth: GatewayAuthContext) -> Iterator[_HostRoute | None]:
+    registry = request.app.state.registry
+    if not isinstance(registry, GatewayWorkspaceRegistry):
+        raise TypeError("Gateway 原 registry 尚未初始化")
+    if payload.gateway_id == registry.gateway_id:
+        if payload.gateway_connection_id is not None:
+            raise ValueError("原生 Gateway 不能指定远端连接")
+        yield None
+        return
+    if auth.kind == "federation":
+        raise PermissionError("联邦入站请求禁止再次 Relay 到其它 Gateway")
+    connections = [connection for connection in registry.remote_gateway_connections()
+                   if connection.remote_gateway_id == payload.gateway_id
+                   and (payload.gateway_connection_id is None or connection.connection_id == payload.gateway_connection_id)]
+    if len(connections) != 1:
+        raise LookupError("目标 Gateway 管理连接不能唯一确定，请明确 gateway_connection_id")
+    connection = connections[0]
+    credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").get(connection.connection_id)
+    identity = registry.remote_gateway_route_identity(connection.connection_id)
+    url = registry.acquire_remote_gateway_reference(connection.connection_id)
+    try:
+        route = _HostRoute(url, True, {"X-Request-ID": get_request_id(request),
+            "X-BoxTeam-Federation-Token": credential.token, "X-BoxTeam-Target-Gateway-Id": payload.gateway_id,
+            "X-BoxTeam-Gateway-Id": registry.gateway_id}, [], connection.connection_id, identity)
+        _check_management_route(request, route)
+        yield route
+    finally:
+        registry.release_remote_gateway_reference(connection.connection_id)
+
+
+@asynccontextmanager
+async def _native_installation_routes(request: Request, *, protocol_version: int, gateway_id: str,
+                                      auth: GatewayAuthContext, access: UserAccessContext | None,
+                                      capabilities: tuple[bool, bool]) -> AsyncIterator[dict[str, BackendManagementRoute]]:
+    registry = request.app.state.registry
+    with registry.backend_management_routes() as routes:
+        by_backend: dict[str, list[BackendManagementRoute]] = {}
+        for route in routes:
+            _check_inventory_access(request, auth, access, list(route.leases), capabilities)
+            response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/api/internal/extension-targets",
+                headers={"X-Request-ID": get_request_id(request), "X-Local-Token": get_gateway_local_token(),
+                         "X-BoxTeam-Gateway-Id": gateway_id},
+                json={"protocol_version": protocol_version, "gateway_id": gateway_id}, timeout=10)
+            _check_inventory_access(request, auth, access, list(route.leases), capabilities)
+            _check_management_response(response, get_request_id(request))
+            response.raise_for_status()
+            envelope = APIResponse[ExtensionInstallationTarget].model_validate_json(response.content)
+            target = envelope.data
+            if (envelope.code != 0 or target is None or target.gateway_id != gateway_id
+                or target.protocol_version != protocol_version):
+                raise ValueError("Backend 返回了不同安装域或协议版本")
+            registry.confirm_backend_management_identity(route, target.backend_id)
+            by_backend.setdefault(target.backend_id, []).append(route)
+        selected: dict[str, BackendManagementRoute] = {}
+        for backend_id, candidates in by_backend.items():
+            preferred = [candidate for candidate in candidates if candidate.preferred]
+            if len(preferred) == 1:
+                selected[backend_id] = preferred[0]
+            elif len(candidates) == 1:
+                selected[backend_id] = candidates[0]
+            else:
+                raise ValueError("同一 Backend 安装域有多个管理路由且原 registry 未明确唯一管理入口")
+        yield selected
+
+
+def _check_management_response(response: httpx.Response, request_id: str) -> None:
+    body = response.json()
+    if (response.headers.get("X-Request-ID") != request_id or not isinstance(body, dict)
+        or body.get("request_id") != request_id):
+        raise ValueError("扩展管理响应不属于原 request_id")
+
+
+@router.post("/api/gateway/extension-targets", response_model=APIResponse[ExtensionTargetListDTO])
+async def list_extension_targets(
+    payload: ExtensionTargetListRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionTargetListDTO] | Response:
+    try:
+        with _management_gateway_route(request, payload, auth) as remote:
+            if remote is not None:
+                _check_access(access, [])
+                response = await _http_client(request).post(f"{remote.base_url.rstrip('/')}/api/gateway/extension-targets",
+                    headers=remote.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=10)
+                _check_management_route(request, remote)
+                _check_access(access, [])
+                if access is not None:
+                    expires_at = _users(request).expires_at(access)
+                    if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
+                        raise PermissionError("扩展目标客户端租约已过期")
+                _check_management_response(response, request_id)
+                if not response.is_success:
+                    return Response(response.content, status_code=response.status_code, media_type="application/json")
+                result = APIResponse[ExtensionTargetListDTO].model_validate_json(response.content)
+                if result.code != 0 or result.data is None or result.data.gateway_id != payload.gateway_id or result.data.protocol_version != payload.protocol_version:
+                    raise ValueError("远端安装域目录不属于原 Gateway 或协议")
+                return result
+            capabilities = _check_inventory_permission(request, auth)
+            async with _native_installation_routes(request, protocol_version=payload.protocol_version,
+                gateway_id=payload.gateway_id, auth=auth, access=access, capabilities=capabilities) as routes:
+                _check_inventory_access(request, auth, access, [lease for route in routes.values() for lease in route.leases], capabilities)
+                if access is not None:
+                    expires_at = _users(request).expires_at(access)
+                    if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
+                        raise PermissionError("扩展目标客户端租约已过期")
+                targets = [ExtensionTargetDTO(protocol_version=payload.protocol_version, gateway_id=payload.gateway_id,
+                    backend_id=backend_id, capabilities=ExtensionTargetCapabilitiesDTO(
+                        installation_manage=capabilities[0], host_manage=capabilities[1])) for backend_id in routes]
+                return APIResponse(data=ExtensionTargetListDTO(protocol_version=payload.protocol_version,
+                    gateway_id=payload.gateway_id, targets=targets), request_id=request_id)
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    except ValidationError as error:
+        raise HTTPException(502, f"目标安装域发现回执结构无效: {error.errors(include_input=False)}") from error
+    except (LookupError, ValueError, RuntimeError) as error:
+        raise HTTPException(409, str(error)) from error
+    except httpx.HTTPStatusError as error:
+        return Response(error.response.content, status_code=error.response.status_code, media_type="application/json")
+    except httpx.RequestError as error:
+        raise HTTPException(502, f"目标安装域发现失败: {error}") from error
 
 
 @router.post("/api/gateway/extension-hosts/resolve", response_model=APIResponse[ExtensionHostTargetDTO])
@@ -192,11 +348,11 @@ async def resolve_extension_host(
     require_federation_capability(request, auth, "extension_host_manage")
     try:
         with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
-                           auth=auth, streaming=False) as route:
+                           auth=auth, streaming=False, gateway_connection_id=payload.gateway_connection_id) as route:
             _check(request, auth, access, route.leases, capability="extension_host_manage")
             path = "api/gateway/extension-hosts/resolve" if route.remote else "api/internal/extension-hosts/resolve"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
-                headers=route.headers, json=payload.model_dump(), timeout=10)
+                headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=10)
             _check(request, auth, access, route.leases, capability="extension_host_manage")
             if access is not None:
                 expires_at = _users(request).expires_at(access)
@@ -211,6 +367,8 @@ async def resolve_extension_host(
                 or target.protocol_version != payload.protocol_version
                 or (payload.backend_id is not None and target.backend_id != payload.backend_id)):
                 raise ValueError("Node 宿主返回了不同目标或请求身份")
+            for management_route in route.management_routes:
+                request.app.state.registry.confirm_backend_management_identity(management_route, target.backend_id)
             return result
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
@@ -222,23 +380,23 @@ async def resolve_extension_host(
         raise HTTPException(409, str(error)) from error
 
 
-@router.post("/api/gateway/extension-targets/resolve", response_model=APIResponse[ExtensionTargetDTO])
+@router.post("/api/gateway/extension-targets/resolve", response_model=APIResponse[ExtensionTargetViewDTO])
 async def resolve_extension_target(
     payload: ExtensionHostTargetRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
     request_id: Annotated[str, Depends(get_request_id)],
-) -> APIResponse[ExtensionTargetDTO] | Response:
+) -> APIResponse[ExtensionTargetViewDTO] | Response:
     local_capabilities: tuple[bool, bool] | None = None
     current_capabilities: tuple[bool, bool] | None = None
     try:
         with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
-                           auth=auth, streaming=False) as route:
+                           auth=auth, streaming=False, gateway_connection_id=payload.gateway_connection_id) as route:
             _check_access(access, route.leases)
             local_capabilities = None if route.remote else _check_inventory_permission(request, auth)
             path = "api/gateway/extension-targets/resolve" if route.remote else "api/internal/extension-targets/resolve"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
-                headers=route.headers, json=payload.model_dump(), timeout=10)
+                headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=10)
             _check_access(access, route.leases)
             if local_capabilities is not None:
                 current_capabilities = _extension_capabilities(request, auth)
@@ -256,7 +414,7 @@ async def resolve_extension_target(
                     raise ValueError("扩展目标错误回执不属于原请求")
                 return Response(response.content, status_code=response.status_code, media_type="application/json")
             if route.remote:
-                result = APIResponse[ExtensionTargetDTO].model_validate_json(response.content)
+                result = APIResponse[ExtensionTargetViewDTO].model_validate_json(response.content)
                 resolved = result.data
                 if (result.code != 0 or result.request_id != request_id or resolved is None
                     or resolved.protocol_version != payload.protocol_version
@@ -265,16 +423,19 @@ async def resolve_extension_target(
                     or not (resolved.capabilities.installation_manage or resolved.capabilities.host_manage)):
                     raise ValueError("远端 Gateway 返回了不同目标或无管理能力结果")
                 return result
-            identity = APIResponse[ExtensionInstallationInventoryRequest].model_validate_json(response.content)
+            identity = APIResponse[ExtensionHostTargetRequest].model_validate_json(response.content)
             target = identity.data
             if (identity.code != 0 or identity.request_id != request_id or target is None
+                or target.backend_id is None
                 or target.protocol_version != payload.protocol_version or target.gateway_id != payload.gateway_id
                 or target.workspace_ids != payload.workspace_ids
                 or (payload.backend_id is not None and target.backend_id != payload.backend_id)):
                 raise ValueError("扩展目标 Backend 返回了不同稳定身份或 request_id")
             if current_capabilities is None:
                 raise RuntimeError("原生扩展目标权限未完成重核")
-            result = ExtensionTargetDTO(protocol_version=target.protocol_version, gateway_id=target.gateway_id,
+            for management_route in route.management_routes:
+                request.app.state.registry.confirm_backend_management_identity(management_route, target.backend_id)
+            result = ExtensionTargetViewDTO(protocol_version=target.protocol_version, gateway_id=target.gateway_id,
                 workspace_ids=target.workspace_ids, backend_id=target.backend_id, source="live",
                 capabilities=ExtensionTargetCapabilitiesDTO(installation_manage=current_capabilities[0],
                     host_manage=current_capabilities[1]))
@@ -313,20 +474,45 @@ async def extension_installation_install(
         operation="install", response_type=APIResponse[ExtensionInstallationInstallDTO])
 
 
+@router.post("/api/gateway/extension-installations/uninstall", response_model=APIResponse[ExtensionInstallationUninstallDTO])
+async def extension_installation_uninstall(
+    payload: ExtensionInstallationUninstallRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationUninstallDTO] | Response:
+    return await _installation_request(payload, request, auth, access, request_id,
+        operation="uninstall", response_type=APIResponse[ExtensionInstallationUninstallDTO])
+
+
 InstallationResult = TypeVar("InstallationResult", bound=ExtensionInstallationInventoryDTO)
+
+
+@contextmanager
+def _installation_route(request: Request, payload: ExtensionInstallationInventoryRequest,
+                        auth: GatewayAuthContext) -> Iterator[_HostRoute]:
+    with _management_gateway_route(request, payload, auth) as remote:
+        if remote is not None:
+            yield remote
+            return
+        _check_inventory_permission(request, auth)
+        workspace_ids = tuple(payload.workspace_ids) if isinstance(payload, ExtensionInstallationInstallRequest) else ()
+        with request.app.state.registry.backend_management_routes(backend_id=payload.backend_id, workspace_ids=workspace_ids) as routes:
+            [selected] = routes
+            yield _HostRoute(selected.base_url, False, {"X-Request-ID": get_request_id(request),
+                "X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": payload.gateway_id}, list(selected.leases))
 
 
 async def _installation_request(
     payload: ExtensionInstallationInventoryRequest, request: Request, auth: GatewayAuthContext,
     access: UserAccessContext | None, request_id: str, *,
-    operation: Literal["inventory", "install"], response_type: type[APIResponse[InstallationResult]],
+    operation: Literal["inventory", "install", "uninstall"], response_type: type[APIResponse[InstallationResult]],
 ) -> APIResponse[InstallationResult] | Response:
-    if operation == "install":
+    if operation != "inventory":
         require_federation_capability(request, auth, "extension_installation_manage")
-    label = "扩展安装" if operation == "install" else "扩展库存"
+    label = {"install": "扩展安装", "uninstall": "扩展卸载", "inventory": "扩展库存"}[operation]
     try:
-        with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
-                           auth=auth, streaming=False) as route:
+        with _installation_route(request, payload, auth) as route:
             if operation == "inventory":
                 expected_capabilities = _check_inventory_permission(request, auth)
                 _check_inventory_access(request, auth, access, route.leases, expected_capabilities)
@@ -336,8 +522,9 @@ async def _installation_request(
             prefix = "api/gateway" if route.remote else "api/internal"
             path = f"{prefix}/extension-installations/{operation}"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
-                headers=route.headers, json=payload.model_dump(), timeout=120)
+                headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=120)
             # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
+            _check_management_route(request, route)
             if expected_capabilities is not None:
                 _check_inventory_access(request, auth, access, route.leases, expected_capabilities)
             else:
@@ -356,21 +543,35 @@ async def _installation_request(
             result = response_type.model_validate_json(response.content)
             target = result.data
             if (result.code != 0 or result.request_id != request_id or target is None
-                or target.model_dump(include=set(ExtensionInstallationInventoryRequest.model_fields))
-                != payload.model_dump(include=set(ExtensionInstallationInventoryRequest.model_fields))):
+                or target.model_dump(include=set(ExtensionInstallationTarget.model_fields))
+                != payload.model_dump(include=set(ExtensionInstallationTarget.model_fields))
+                or isinstance(payload, ExtensionInstallationInstallRequest)
+                and (not isinstance(target, ExtensionInstallationInstallDTO) or target.workspace_ids != payload.workspace_ids)):
                 raise ValueError(f"{label}返回了不同目标或请求身份")
+            if isinstance(payload, ExtensionInstallationUninstallRequest) and (
+                not isinstance(target, ExtensionInstallationUninstallDTO)
+                or target.uninstalled.id.lower() != payload.extension_id.lower()
+                or target.uninstalled.version != payload.version
+                or target.uninstalled.profile_id != payload.profile_id
+                or target.inventory.profile_id != payload.profile_id
+            ):
+                raise ValueError("扩展卸载回执与原 profile 成员不匹配")
             return result
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
     except LookupError as error:
         raise HTTPException(409, str(error)) from error
+    except httpx.HTTPStatusError as error:
+        return Response(error.response.content, status_code=error.response.status_code, media_type="application/json")
     except httpx.RequestError as error:
         detail = (f"目标扩展库存读取失败: {error}" if operation == "inventory"
-                  else f"扩展安装回执未确认，请先查询原目标库存: {error}")
+                  else f"{label}回执未确认，请先查询原目标库存: {error}")
         raise HTTPException(502, detail) from error
     except ValidationError as error:
         raise HTTPException(502, f"目标{label}回执结构无效: {error.errors(include_input=False)}") from error
     except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    except RuntimeError as error:
         raise HTTPException(409, str(error)) from error
 
 

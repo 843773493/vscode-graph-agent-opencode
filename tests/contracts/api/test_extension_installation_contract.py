@@ -15,22 +15,69 @@ from pydantic.json_schema import JsonSchemaValue
 from app.protocol import openapi
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import assert_public_schema, descriptor_pool_from_set
+from app.schemas.gateway.extension_host import (
+    ExtensionHostOpenRequest,
+    ExtensionHostTargetRequest,
+    ExtensionTargetDTO,
+    ExtensionTargetListDTO,
+    ExtensionTargetListRequest,
+    ExtensionTargetViewDTO,
+)
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
+    ExtensionInstallationUninstallDTO,
+    ExtensionInstallationUninstallRequest,
+    ExtensionUninstallResult,
     ExtensionValidation,
     InstalledExtension,
     ProfileExtensionInventory,
     VsixInstallResult,
+)
+from app.schemas.gateway.management_targets import (
+    GatewayManagementDirectoryDTO,
+    GatewayManagementTargetDTO,
 )
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 PATH = "/api/gateway/extension-installations/inventory"
 MODELS = (ExtensionInstallationInventoryRequest, ExtensionInstallationInventoryDTO,
           ProfileExtensionInventory, InstalledExtension, ExtensionValidation,
-          ExtensionInstallationInstallRequest, ExtensionInstallationInstallDTO, VsixInstallResult)
+          ExtensionInstallationInstallRequest, ExtensionInstallationInstallDTO, VsixInstallResult,
+          ExtensionInstallationUninstallRequest, ExtensionInstallationUninstallDTO, ExtensionUninstallResult,
+          ExtensionTargetDTO, ExtensionTargetViewDTO, ExtensionTargetListRequest, ExtensionTargetListDTO,
+          GatewayManagementDirectoryDTO, GatewayManagementTargetDTO)
+
+
+def test_management_directory_and_view_keep_separate_workspace_contracts(gateway_openapi: JsonSchemaValue) -> None:
+    schema = gateway_openapi["components"]["schemas"]
+    assert "/api/gateway/management/gateways" in gateway_openapi["paths"]
+    assert "/api/gateway/extension-targets" in gateway_openapi["paths"]
+    for model in (ExtensionTargetDTO, ExtensionTargetListRequest, ExtensionTargetListDTO,
+                  ExtensionInstallationInventoryRequest, ExtensionInstallationInventoryDTO,
+                  ExtensionInstallationUninstallRequest, ExtensionInstallationUninstallDTO):
+        assert "workspace_ids" not in schema[model.__name__]["properties"]
+    for model in (ExtensionHostTargetRequest, ExtensionTargetViewDTO,
+                  ExtensionInstallationInstallRequest, ExtensionInstallationInstallDTO):
+        assert schema[model.__name__]["properties"]["workspace_ids"]["minItems"] == 1
+    assert ExtensionHostOpenRequest.model_json_schema()["properties"]["workspace_ids"]["minItems"] == 1
+    for model in (ExtensionInstallationInventoryDTO, ExtensionInstallationUninstallDTO, ExtensionInstallationInstallDTO):
+        assert "gateway_connection_id" not in schema[model.__name__]["properties"]
+
+
+def test_target_list_proto_preserves_stable_domain_without_workspace() -> None:
+    gateway_id, backend_id = "gateway_" + "a" * 32, str(uuid4())
+    original = ExtensionTargetListDTO.model_validate({"protocol_version": 1, "gateway_id": gateway_id,
+        "targets": [{"protocol_version": 1, "gateway_id": gateway_id, "backend_id": backend_id,
+                     "capabilities": {"installation_manage": True, "host_manage": False}}]})
+    wire = json_format.ParseDict(original.model_dump(mode="json"), public_pb2.ExtensionTargetListDTO())
+    restored = ExtensionTargetListDTO.model_validate(json_format.MessageToDict(wire,
+        preserving_proto_field_name=True, always_print_fields_with_no_presence=True))
+    assert restored == original and "workspace_ids" not in restored.targets[0].model_dump()
+    with pytest.raises(ValidationError):
+        ExtensionHostTargetRequest.model_validate({"protocol_version": 1, "gateway_id": gateway_id, "workspace_ids": []})
 
 
 def test_inventory_contract_follows_actual_read_only_route(gateway_openapi: JsonSchemaValue) -> None:
@@ -40,13 +87,42 @@ def test_inventory_contract_follows_actual_read_only_route(gateway_openapi: Json
     envelope = gateway_openapi["components"]["schemas"][response["$ref"].rsplit("/", 1)[1]]
     assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/ExtensionInstallationInventoryDTO")
     install_path = "/api/gateway/extension-installations/install"
-    assert {path for path in gateway_openapi["paths"] if path.startswith("/api/gateway/extension-installations")} == {PATH, install_path}
+    uninstall_path = "/api/gateway/extension-installations/uninstall"
+    assert {path for path in gateway_openapi["paths"] if path.startswith("/api/gateway/extension-installations")} == {PATH, install_path, uninstall_path}
     install = gateway_openapi["paths"][install_path]["post"]
     assert install["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/ExtensionInstallationInstallRequest")
+    uninstall = gateway_openapi["paths"][uninstall_path]["post"]
+    assert uninstall["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/ExtensionInstallationUninstallRequest")
     assert set(gateway_openapi["paths"][PATH]) == {"post"}
     openapi.assert_gateway_http_schemas(gateway_openapi)
     for model in MODELS:
         assert_public_schema(model.model_json_schema(), public_pb2.DESCRIPTOR.message_types_by_name[model.__name__])
+
+
+@pytest.mark.parametrize("invalid", ["profile_id", "extension_id", "version", "remove", "cleanUp"])
+def test_profile_uninstall_requires_exact_selection_and_has_no_physical_delete_switch(invalid: str) -> None:
+    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32,
+        "backend_id": str(uuid4()),
+        "profile_id": "default-profile", "extension_id": "publisher.probe", "version": "1.0.0"}
+    request = ExtensionInstallationUninstallRequest.model_validate(payload)
+    assert request.extension_id == "publisher.probe" and request.version == "1.0.0"
+    if invalid in {"remove", "cleanUp"}:
+        payload[invalid] = True
+    else:
+        payload.pop(invalid)
+    with pytest.raises(ValidationError):
+        ExtensionInstallationUninstallRequest.model_validate(payload)
+
+
+def test_profile_uninstall_receipt_proto_preserves_selection_and_complete_inventory() -> None:
+    original = ExtensionInstallationUninstallDTO(protocol_version=1, gateway_id="gateway_" + "a" * 32,
+        backend_id=str(uuid4()),
+        uninstalled=ExtensionUninstallResult(id="publisher.probe", version="1.0.0", profile_id="default-profile"),
+        inventory=ProfileExtensionInventory(profile_id="default-profile", extensions=[]))
+    wire = json_format.ParseDict(original.model_dump(mode="json"), public_pb2.ExtensionInstallationUninstallDTO())
+    restored = ExtensionInstallationUninstallDTO.model_validate(json_format.MessageToDict(wire,
+        preserving_proto_field_name=True, always_print_fields_with_no_presence=True))
+    assert restored == original
 
 
 @pytest.mark.parametrize("source", ["foreign-gateway", "foreign-workspace", "directory", "native", "private-kind"])
@@ -73,8 +149,8 @@ def test_vsix_install_source_must_belong_to_explicit_target(source: str) -> None
 
 def test_inventory_proto_preserves_original_description_and_invalid_entry() -> None:
     request = ExtensionInstallationInventoryRequest(protocol_version=1, gateway_id="gateway_" + "a" * 32,
-        backend_id=str(uuid4()), workspace_ids=[str(uuid4())])
-    original = ExtensionInstallationInventoryDTO(**request.model_dump(), inventory=ProfileExtensionInventory(
+        backend_id=str(uuid4()))
+    original = ExtensionInstallationInventoryDTO(**request.model_dump(exclude={"gateway_connection_id"}), inventory=ProfileExtensionInventory(
         profile_id="default-profile", extensions=[InstalledExtension(source="profile", is_valid=False,
             description={"identifier": {"value": "publisher.probe"}, "version": "1.0.0", "isBuiltin": False,
                 "extensionLocation": {"$mid": 1, "scheme": "file", "path": "/backend/extensions/probe"},
@@ -101,7 +177,7 @@ def test_install_result_preserves_explicit_reuse_disposition(reused: bool) -> No
 
 @pytest.mark.parametrize("invalid", ["missing-backend", "null-backend", "view", "duplicate", "boolean-version"])
 def test_inventory_request_requires_precise_backend_and_workspace_roles(invalid: str) -> None:
-    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32, "backend_id": str(uuid4()), "workspace_ids": [str(uuid4())]}
+    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32, "backend_id": str(uuid4())}
     if invalid == "missing-backend":
         del payload["backend_id"]
     elif invalid == "null-backend":
@@ -109,7 +185,7 @@ def test_inventory_request_requires_precise_backend_and_workspace_roles(invalid:
     elif invalid == "view":
         payload["view_id"] = "window-a"
     elif invalid == "duplicate":
-        payload["workspace_ids"] *= 2
+        payload["workspace_ids"] = [str(uuid4())] * 2
     else:
         payload["protocol_version"] = True
     with pytest.raises(ValidationError):

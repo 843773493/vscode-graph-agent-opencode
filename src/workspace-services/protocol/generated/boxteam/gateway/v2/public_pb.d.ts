@@ -4754,6 +4754,11 @@ export declare type ExtensionHostTargetRequest = Message<"boxteam.gateway.v2.Ext
    * @generated from field: optional string backend_id = 4;
    */
   backendId?: string | undefined;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 5;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**
@@ -4884,6 +4889,44 @@ export declare type ExtensionTargetDTO = Message<"boxteam.gateway.v2.ExtensionTa
   gatewayId: string;
 
   /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string source = 5;
+   */
+  source: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionTargetCapabilitiesDTO capabilities = 6;
+   */
+  capabilities?: ExtensionTargetCapabilitiesDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionTargetDTO.
+ * Use `create(ExtensionTargetDTOSchema)` to create a new message.
+ */
+export declare const ExtensionTargetDTOSchema: GenMessage<ExtensionTargetDTO>;
+
+/**
+ * 运行视图继续携带原挂接集合，不作为安装域目录。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionTargetViewDTO
+ */
+export declare type ExtensionTargetViewDTO = Message<"boxteam.gateway.v2.ExtensionTargetViewDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
    * @generated from field: repeated string workspace_ids = 3;
    */
   workspaceIds: string[];
@@ -4905,10 +4948,126 @@ export declare type ExtensionTargetDTO = Message<"boxteam.gateway.v2.ExtensionTa
 };
 
 /**
- * Describes the message boxteam.gateway.v2.ExtensionTargetDTO.
- * Use `create(ExtensionTargetDTOSchema)` to create a new message.
+ * Describes the message boxteam.gateway.v2.ExtensionTargetViewDTO.
+ * Use `create(ExtensionTargetViewDTOSchema)` to create a new message.
  */
-export declare const ExtensionTargetDTOSchema: GenMessage<ExtensionTargetDTO>;
+export declare const ExtensionTargetViewDTOSchema: GenMessage<ExtensionTargetViewDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionTargetListRequest
+ */
+export declare type ExtensionTargetListRequest = Message<"boxteam.gateway.v2.ExtensionTargetListRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 3;
+   */
+  gatewayConnectionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionTargetListRequest.
+ * Use `create(ExtensionTargetListRequestSchema)` to create a new message.
+ */
+export declare const ExtensionTargetListRequestSchema: GenMessage<ExtensionTargetListRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionTargetListDTO
+ */
+export declare type ExtensionTargetListDTO = Message<"boxteam.gateway.v2.ExtensionTargetListDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string source = 3;
+   */
+  source: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.ExtensionTargetDTO targets = 4;
+   */
+  targets: ExtensionTargetDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionTargetListDTO.
+ * Use `create(ExtensionTargetListDTOSchema)` to create a new message.
+ */
+export declare const ExtensionTargetListDTOSchema: GenMessage<ExtensionTargetListDTO>;
+
+/**
+ * 当前 registry 的入口投影，包括未投影任何工作区的远端连接。
+ *
+ * @generated from message boxteam.gateway.v2.GatewayManagementTargetDTO
+ */
+export declare type GatewayManagementTargetDTO = Message<"boxteam.gateway.v2.GatewayManagementTargetDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string connection_kind = 3;
+   */
+  connectionKind: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 4;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string connection_error = 5;
+   */
+  connectionError?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayManagementTargetDTO.
+ * Use `create(GatewayManagementTargetDTOSchema)` to create a new message.
+ */
+export declare const GatewayManagementTargetDTOSchema: GenMessage<GatewayManagementTargetDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayManagementDirectoryDTO
+ */
+export declare type GatewayManagementDirectoryDTO = Message<"boxteam.gateway.v2.GatewayManagementDirectoryDTO"> & {
+  /**
+   * @generated from field: string local_gateway_id = 1;
+   */
+  localGatewayId: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewayManagementTargetDTO items = 2;
+   */
+  items: GatewayManagementTargetDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayManagementDirectoryDTO.
+ * Use `create(GatewayManagementDirectoryDTOSchema)` to create a new message.
+ */
+export declare const GatewayManagementDirectoryDTOSchema: GenMessage<GatewayManagementDirectoryDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.ExtensionValidation
@@ -5002,14 +5161,14 @@ export declare type ExtensionInstallationInventoryRequest = Message<"boxteam.gat
   gatewayId: string;
 
   /**
-   * @generated from field: repeated string workspace_ids = 3;
-   */
-  workspaceIds: string[];
-
-  /**
    * @generated from field: string backend_id = 4;
    */
   backendId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 5;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**
@@ -5033,11 +5192,6 @@ export declare type ExtensionInstallationInventoryDTO = Message<"boxteam.gateway
    * @generated from field: string gateway_id = 2;
    */
   gatewayId: string;
-
-  /**
-   * @generated from field: repeated string workspace_ids = 3;
-   */
-  workspaceIds: string[];
 
   /**
    * @generated from field: string backend_id = 4;
@@ -5091,6 +5245,11 @@ export declare type ExtensionInstallationInstallRequest = Message<"boxteam.gatew
    * @generated from field: string source_uri = 5;
    */
   sourceUri: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 6;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**
@@ -5179,4 +5338,121 @@ export declare type ExtensionInstallationInstallDTO = Message<"boxteam.gateway.v
  * Use `create(ExtensionInstallationInstallDTOSchema)` to create a new message.
  */
 export declare const ExtensionInstallationInstallDTOSchema: GenMessage<ExtensionInstallationInstallDTO>;
+
+/**
+ * 只移除已核实的默认 profile 成员；版本制品与当前宿主继续保留。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationUninstallRequest
+ */
+export declare type ExtensionInstallationUninstallRequest = Message<"boxteam.gateway.v2.ExtensionInstallationUninstallRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string profile_id = 5;
+   */
+  profileId: string;
+
+  /**
+   * @generated from field: string extension_id = 6;
+   */
+  extensionId: string;
+
+  /**
+   * @generated from field: string version = 7;
+   */
+  version: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 8;
+   */
+  gatewayConnectionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationUninstallRequest.
+ * Use `create(ExtensionInstallationUninstallRequestSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationUninstallRequestSchema: GenMessage<ExtensionInstallationUninstallRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionUninstallResult
+ */
+export declare type ExtensionUninstallResult = Message<"boxteam.gateway.v2.ExtensionUninstallResult"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string version = 2;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string profile_id = 3;
+   */
+  profileId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionUninstallResult.
+ * Use `create(ExtensionUninstallResultSchema)` to create a new message.
+ */
+export declare const ExtensionUninstallResultSchema: GenMessage<ExtensionUninstallResult>;
+
+/**
+ * 原卸载操作与同次完整库存；不声明版本已物理删除或运行实例已停用。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationUninstallDTO
+ */
+export declare type ExtensionInstallationUninstallDTO = Message<"boxteam.gateway.v2.ExtensionInstallationUninstallDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 4;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string profile_scope = 5;
+   */
+  profileScope: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ProfileExtensionInventory inventory = 6;
+   */
+  inventory?: ProfileExtensionInventory | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionUninstallResult uninstalled = 7;
+   */
+  uninstalled?: ExtensionUninstallResult | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationUninstallDTO.
+ * Use `create(ExtensionInstallationUninstallDTOSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationUninstallDTOSchema: GenMessage<ExtensionInstallationUninstallDTO>;
 

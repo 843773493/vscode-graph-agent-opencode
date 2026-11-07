@@ -1841,16 +1841,18 @@ class ExtensionHostInitializationDTO(_message.Message):
     def __init__(self, os: _Optional[str] = ..., parent_pid: _Optional[int] = ..., environment: _Optional[_Union[ExtensionHostEnvironmentDTO, _Mapping]] = ..., logs_location_uri: _Optional[str] = ..., workspace: _Optional[_Union[ExtensionHostWorkspaceDTO, _Mapping]] = ...) -> None: ...
 
 class ExtensionHostTargetRequest(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id")
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "gateway_connection_id")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     backend_id: str
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class ExtensionHostRuntimeDTO(_message.Message):
     __slots__ = ("commit", "vscode_version", "node_version")
@@ -1893,6 +1895,20 @@ class ExtensionTargetCapabilitiesDTO(_message.Message):
     def __init__(self, installation_manage: _Optional[bool] = ..., host_manage: _Optional[bool] = ...) -> None: ...
 
 class ExtensionTargetDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "source", "capabilities")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    source: str
+    capabilities: ExtensionTargetCapabilitiesDTO
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., source: _Optional[str] = ..., capabilities: _Optional[_Union[ExtensionTargetCapabilitiesDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionTargetViewDTO(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "source", "capabilities")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1907,6 +1923,50 @@ class ExtensionTargetDTO(_message.Message):
     source: str
     capabilities: ExtensionTargetCapabilitiesDTO
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source: _Optional[str] = ..., capabilities: _Optional[_Union[ExtensionTargetCapabilitiesDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionTargetListRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "gateway_connection_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionTargetListDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "source", "targets")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    TARGETS_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    source: str
+    targets: _containers.RepeatedCompositeFieldContainer[ExtensionTargetDTO]
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., source: _Optional[str] = ..., targets: _Optional[_Iterable[_Union[ExtensionTargetDTO, _Mapping]]] = ...) -> None: ...
+
+class GatewayManagementTargetDTO(_message.Message):
+    __slots__ = ("gateway_id", "name", "connection_kind", "gateway_connection_id", "connection_error")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_KIND_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_ERROR_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    name: str
+    connection_kind: str
+    gateway_connection_id: str
+    connection_error: str
+    def __init__(self, gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., connection_kind: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_error: _Optional[str] = ...) -> None: ...
+
+class GatewayManagementDirectoryDTO(_message.Message):
+    __slots__ = ("local_gateway_id", "items")
+    LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    local_gateway_id: str
+    items: _containers.RepeatedCompositeFieldContainer[GatewayManagementTargetDTO]
+    def __init__(self, local_gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayManagementTargetDTO, _Mapping]]] = ...) -> None: ...
 
 class ExtensionValidation(_message.Message):
     __slots__ = ("severity", "message")
@@ -1937,46 +1997,46 @@ class ProfileExtensionInventory(_message.Message):
     def __init__(self, profile_id: _Optional[str] = ..., extensions: _Optional[_Iterable[_Union[InstalledExtension, _Mapping]]] = ...) -> None: ...
 
 class ExtensionInstallationInventoryRequest(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "gateway_connection_id")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
-    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     backend_id: str
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class ExtensionInstallationInventoryDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "profile_scope", "inventory")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "profile_scope", "inventory")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     PROFILE_SCOPE_FIELD_NUMBER: _ClassVar[int]
     INVENTORY_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
-    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     backend_id: str
     profile_scope: str
     inventory: ProfileExtensionInventory
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ...) -> None: ...
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ...) -> None: ...
 
 class ExtensionInstallationInstallRequest(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "source_uri")
+    __slots__ = ("protocol_version", "gateway_id", "workspace_ids", "backend_id", "source_uri", "gateway_connection_id")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     backend_id: str
     source_uri: str
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source_uri: _Optional[str] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., source_uri: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class VsixInstallResult(_message.Message):
     __slots__ = ("id", "version", "profile_id", "reused")
@@ -2007,3 +2067,47 @@ class ExtensionInstallationInstallDTO(_message.Message):
     inventory: ProfileExtensionInventory
     installed: VsixInstallResult
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ..., installed: _Optional[_Union[VsixInstallResult, _Mapping]] = ...) -> None: ...
+
+class ExtensionInstallationUninstallRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "profile_id", "extension_id", "version", "gateway_connection_id")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_ID_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    profile_id: str
+    extension_id: str
+    version: str
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., profile_id: _Optional[str] = ..., extension_id: _Optional[str] = ..., version: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionUninstallResult(_message.Message):
+    __slots__ = ("id", "version", "profile_id")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    version: str
+    profile_id: str
+    def __init__(self, id: _Optional[str] = ..., version: _Optional[str] = ..., profile_id: _Optional[str] = ...) -> None: ...
+
+class ExtensionInstallationUninstallDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "profile_scope", "inventory", "uninstalled")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    INVENTORY_FIELD_NUMBER: _ClassVar[int]
+    UNINSTALLED_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    profile_scope: str
+    inventory: ProfileExtensionInventory
+    uninstalled: ExtensionUninstallResult
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ..., uninstalled: _Optional[_Union[ExtensionUninstallResult, _Mapping]] = ...) -> None: ...

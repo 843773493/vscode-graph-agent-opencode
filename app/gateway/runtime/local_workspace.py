@@ -331,13 +331,15 @@ def _validate_group_health(
 async def verify_managed_backend_group(
     contract: ManagedBackendContract, *, mounts: tuple[MountedWorkspace, ...], process: ManagedProcess | None = None,
     startup_contracts: dict[str, dict[str, object]] | None = None,
+    backend_id: str | None = None,
     request_timeout_seconds: float = 2, poll_interval_seconds: float = 0.5,
 ) -> int:
     """只在完整集合的 UUID、根摘要、generation、健康与候选 proof 全部通过后返回。"""
     if tuple(mount.workspace_id for mount in mounts) != tuple(member.workspace_id for member in contract.members):
         raise RuntimeError("Backend 启动输入与完整成员身份不匹配")
     manifest_digest = mounted_workspace_manifest_digest(mounts)
-    backend_id = await asyncio.to_thread(read_backend_id, get_boxteam_home())
+    if backend_id is None:
+        backend_id = await asyncio.to_thread(read_backend_id, get_boxteam_home())
     process_id = None
     for member, mount in zip(contract.members, mounts, strict=True):
         payload = await wait_for_workspace_health(
@@ -479,7 +481,9 @@ async def start_managed_backend_runtime(
         isinstance(preferred_backend_port, bool) or not 1 <= preferred_backend_port <= 65535
     ):
         raise ValueError(f"Backend 首选端口非法: {preferred_backend_port}")
-    await asyncio.to_thread(load_or_create_backend_id, get_boxteam_home())
+    backend_id = await asyncio.to_thread(load_or_create_backend_id, get_boxteam_home())
+    if owner.backend_id is not None and owner.backend_id != backend_id:
+        raise RuntimeError("Backend 安装域与原 owner 不匹配，不能隐式改绑")
     adopted = await _adopt_workspace_backend(contract=previous, mounts=mounts, log_dir=log_dir) if previous.backend_url else None
     if adopted is not None and adopt_existing_backend and preferred_backend_port is not None and urlparse(previous.backend_url).port != preferred_backend_port:
         adopted.detach()
@@ -544,9 +548,10 @@ async def start_managed_backend_runtime(
             )
             owner.set_process(started)
         await verify_managed_backend_group(
-            contract, mounts=tuple(ready_mounts), process=started, startup_contracts=startup_contracts,
+            contract, mounts=tuple(ready_mounts), process=started, startup_contracts=startup_contracts, backend_id=backend_id,
             request_timeout_seconds=health_request_timeout_seconds, poll_interval_seconds=health_poll_interval_seconds,
         )
+        owner.backend_id = backend_id
         for member in contract.members:
             runtimes[member.workspace_id].backend_owner = owner
         return contract, {member.workspace_id: runtimes[member.workspace_id] for member in contract.members}

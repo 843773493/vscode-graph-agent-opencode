@@ -20,6 +20,7 @@ from app.schemas.gateway.extension_configuration import (
 )
 from app.schemas.gateway.extension_host import NativeFileURI
 from app.schemas.gateway.extension_installation import (
+    ExtensionUninstallResult,
     ProfileExtensionInventory,
     VsixInstallResult,
 )
@@ -29,6 +30,12 @@ from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 class InstalledProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     installed: VsixInstallResult
+    inventory: ProfileExtensionInventory
+
+
+class UninstalledProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    uninstalled: ExtensionUninstallResult
     inventory: ProfileExtensionInventory
 
 
@@ -227,6 +234,10 @@ class NodeExtensionManagement:
         if not vsix_path.is_absolute():
             raise ValueError("VSIX 必须由目标文件 owner 解析为本机绝对路径")
         return await self._request({"method": "install", "vsix_path": str(vsix_path)}, response_type=InstalledProfile)
+
+    async def uninstall(self, *, profile_id: str, extension_id: str, version: str) -> UninstalledProfile:
+        return await self._request({"method": "uninstall", "profile_id": profile_id,
+                                   "extension_id": extension_id, "version": version}, response_type=UninstalledProfile)
 
     async def _close_process(self) -> None:
         await self.child.close()

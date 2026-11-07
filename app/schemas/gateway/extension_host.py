@@ -88,6 +88,7 @@ class ExtensionWorkspaceTarget(BaseModel):
 
 class ExtensionHostTargetRequest(ExtensionWorkspaceTarget):
     backend_id: BackendId | None = None
+    gateway_connection_id: str | None = Field(default=None, min_length=1)
 
 
 class ExtensionHostOpenRequest(ExtensionWorkspaceTarget):
@@ -166,7 +167,34 @@ class ExtensionTargetCapabilitiesDTO(_HostValue):
         return self
 
 
-class ExtensionTargetDTO(ExtensionWorkspaceTarget):
+class ExtensionTargetDTO(_HostValue):
+    protocol_version: int = Field(ge=1, le=1)
+    gateway_id: CanonicalGatewayId
     backend_id: BackendId
     source: Literal["live"] = "live"
     capabilities: ExtensionTargetCapabilitiesDTO
+
+
+class ExtensionTargetViewDTO(ExtensionWorkspaceTarget, ExtensionTargetDTO):
+    """宿主视图仍核验明确挂接的有序工作区，不作为安装域目录。"""
+
+
+class ExtensionTargetListRequest(_HostValue):
+    protocol_version: int = Field(ge=1, le=1)
+    gateway_id: CanonicalGatewayId
+    gateway_connection_id: str | None = Field(default=None, min_length=1)
+
+
+class ExtensionTargetListDTO(_HostValue):
+    protocol_version: int = Field(ge=1, le=1)
+    gateway_id: CanonicalGatewayId
+    source: Literal["live"] = "live"
+    targets: list[ExtensionTargetDTO]
+
+    @model_validator(mode="after")
+    def unique_native_targets(self) -> ExtensionTargetListDTO:
+        if any(target.gateway_id != self.gateway_id or target.protocol_version != self.protocol_version for target in self.targets):
+            raise ValueError("安装域目录包含不同 Gateway 或协议版本")
+        if len({target.backend_id for target in self.targets}) != len(self.targets):
+            raise ValueError("安装域目录包含重复 Backend 身份")
+        return self

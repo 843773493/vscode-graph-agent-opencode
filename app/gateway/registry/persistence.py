@@ -190,7 +190,7 @@ class RegistryPersistenceMixin:
                     **{
                         key: list(value) if isinstance(value, tuple) else value
                         for key, value in asdict(target).items()
-                        if key != "root_path" or target.connection_kind == "local"
+                        if key != "backend_id" and (key != "root_path" or target.connection_kind == "local")
                     },
                     "parent_workspace": workspace_owner_payload(target.parent_workspace),
                 }

@@ -47,6 +47,10 @@ try {
       else if (request.method === 'environment') result = await management.environment();
       else if (request.method === 'install' && 'vsix_path' in request && typeof request.vsix_path === 'string' && isAbsolute(request.vsix_path)) {
         result = await management.install(request.vsix_path);
+      } else if (request.method === 'uninstall' && 'profile_id' in request && typeof request.profile_id === 'string' && request.profile_id
+        && 'extension_id' in request && typeof request.extension_id === 'string' && request.extension_id
+        && 'version' in request && typeof request.version === 'string' && request.version) {
+        result = await management.uninstall(request.profile_id, request.extension_id, request.version);
       } else if (request.method === 'configuration-view' && 'id' in request && typeof request.id === 'string'
         && 'folders' in request && isFolders(request.folders)) {
         result = await management.configurationFiles.prepareView(request.id, request.folders);

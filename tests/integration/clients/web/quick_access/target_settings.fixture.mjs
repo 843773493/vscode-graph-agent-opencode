@@ -1,8 +1,10 @@
 import { CommandsRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
+import { MenuId, MenuRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/actions/common/actions.js';
 import { parse } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/json.js';
 import { IQuickInputService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { INotificationService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/notification/common/notification.js';
 import { defaultAgentSourceCommand } from '../../../../../src/clients/workbench/src/settings/commands.js';
+import { managementGateway, selectExtensionManagementTargetCommand, selectSettingsManagementTargetCommand } from '../../../../../src/clients/workbench/src/managementTarget.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
@@ -18,8 +20,9 @@ const snapshot = (state = 'active') => ({ healthy: true, revision: 'active-diges
 export async function targetSettingsContract(mode) {
   const before = workspaceContext.getSnapshot(), requests = [], choices = [], notifications = [], inputs = [];
   const a = { ...target, name: '原目标 A', status: mode === 'offline' ? 'offline' : 'ready' };
-  const b = { ...target, workspace_id: '019a0000-0000-7000-8000-000000000002', name: '导航 B', status: 'ready' };
-  const initial = { ...before, gatewayId: 'gateway_control', loading: false, error: null, workspaces: [a, b], activeId: 'A' };
+  const b = { ...target, gateway_id: 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', workspace_id: '019a0000-0000-7000-8000-000000000002', name: '导航 B', status: 'ready' };
+  const initial = { ...before, gatewayId: ['selected-remote', 'explicit-remote'].includes(mode) ? 'gateway_control' : target.gateway_id,
+    loading: false, error: null, workspaces: [a, b], activeId: 'B' };
   workspaceContext.publish(initial);
   const sourceText = mode === 'delete-first' ? '{\n  "default_agent": "default", // 第一项注释\n  "ignored_paths": ["cache/"] // 保留此注释\n}\n'
     : mode === 'delete-last' ? '{\n  "ignored_paths": ["cache/"], // 保留此注释\n  "default_agent": "default", // 最后一项注释\n}\n'
@@ -45,6 +48,9 @@ export async function targetSettingsContract(mode) {
     const params = Object.fromEntries(new URL(url, location.origin).searchParams), headers = new Headers(init.headers);
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, params, body, owner: { gateway_id: headers.get('X-BoxTeam-Target-Gateway-Id'), workspace_id: headers.get('X-BoxTeam-Workspace-Id') } });
+    if (path === '/api/gateway/management/gateways') return success({ local_gateway_id: initial.gatewayId,
+      items: [{ gateway_id: initial.gatewayId, name: '入口', connection_kind: 'local' },
+        { gateway_id: target.gateway_id, name: '远端目标', connection_kind: 'remote_gateway', gateway_connection_id: 'connection-a' }] });
     if (path === '/api/v1/config/sources') return success({ sources: [{ source_key: sourceKey, layer: 'workspace', presence: 'present', precedence: 4, uri: 'boxteam-source://original/workspace.jsonc' }] });
     if (path.endsWith('/preflight')) {
       const errors = [], payload = parse(body.jsonc, errors);
@@ -81,6 +87,7 @@ export async function targetSettingsContract(mode) {
     async pick(items, options, token) {
       choices.push({ title: options.title, prompt: options.prompt, placeHolder: options.placeHolder,
         labels: items.map(item => item.label), actions: items.map(item => item.action), requests: requests.length, puts: requests.filter(item => item.method === 'PUT').length });
+      if (options.title === '设置管理目标') return items.find(item => item.target.gateway_id === target.gateway_id);
       if (options.title === '选择业务配置目标') return mode === 'cancel-target' ? undefined : items[0];
       if (options.title === '选择默认 Agent 配置来源') return mode === 'cancel-source' ? undefined : items[0];
       if (options.title === '目标工作区默认 Agent 来源') {
@@ -116,8 +123,54 @@ export async function targetSettingsContract(mode) {
   try {
     const command = CommandsRegistry.getCommand(defaultAgentSourceCommand);
     if (!command) throw new Error('默认 Agent 来源命令未注册');
-    await command.handler(accessor);
+    if (mode === 'selected-remote') await CommandsRegistry.getCommand(selectSettingsManagementTargetCommand).handler(accessor);
+    await command.handler(accessor, mode === 'explicit-remote' ? { gatewayId: target.gateway_id, workspaceId: target.workspace_id } : undefined);
   } catch (cause) { commandError = String(cause); }
   finally { unwrapSessionApiFetch(); workspaceContext.publish(before); }
   return { target, sourceKey, original: sourceText, document, requests, choices, notifications, inputs, commandError };
+}
+
+/** 各视图独立选择，零工作区的登记连接仍可选；实际操作不在本装具中伪造。 */
+export async function managementTargetContract(mode) {
+  const previous = workspaceContext.getSnapshot(), requests = [], picks = [];
+  workspaceContext.publish({ ...previous, gatewayId: 'gateway-entry', workspaces: [], activeId: null, loading: false, error: null });
+  const initial = managementGateway('extensions'), initialSettings = managementGateway('settings');
+  installSessionApiFetchMock(({ path }) => {
+    requests.push(path);
+    if (path === '/api/gateway/extension-targets') return Response.json({ code: 0, request_id: 'extension-domain', data: {
+      protocol_version: 1, gateway_id: 'gateway-b', source: 'live', targets: [{
+        protocol_version: 1, gateway_id: 'gateway-b', backend_id: '22222222-2222-4222-8222-222222222222', source: 'live',
+        capabilities: { installation_manage: true, host_manage: false },
+      }],
+    } }, { headers: { 'X-Request-ID': 'extension-domain' } });
+    if (path !== '/api/gateway/management/gateways') throw new Error('目标选择不应访问业务 API：' + path);
+    return Response.json({ code: 0, request_id: 'management-directory', data: {
+      local_gateway_id: mode === 'mismatch' ? 'another-entry' : 'gateway-entry', items: [
+        { gateway_id: 'gateway-entry', name: '入口', connection_kind: 'local' },
+        { gateway_id: 'gateway-b', name: '同一目标', connection_kind: 'remote_gateway', gateway_connection_id: 'connection-b1' },
+        { gateway_id: 'gateway-b', name: '同一目标', connection_kind: 'remote_gateway', gateway_connection_id: 'connection-b2', connection_error: '远端离线' },
+      ],
+    } }, { headers: { 'X-Request-ID': 'management-directory' } });
+  });
+  const accessor = { get(service) {
+    if (service !== IQuickInputService) throw new Error('目标选择不应读取其它服务：' + service);
+    return { pick(items, options, token) {
+      picks.push(items.map(item => ({ label: item.label, description: item.description, detail: item.detail, picked: item.picked })));
+      if (mode === 'identity') invalidateGatewayUserSession(0);
+      if (mode === 'gateway') workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'new-entry' });
+      if (mode === 'cancel' && picks.length === 2) return undefined;
+      return items.find(item => item.target.gateway_connection_id === (options.title === '设置管理目标' ? 'connection-b2' : 'connection-b1'));
+    } };
+  } };
+  let error;
+  try {
+    await CommandsRegistry.getCommand(selectExtensionManagementTargetCommand).handler(accessor);
+    if (mode === 'cancel') await CommandsRegistry.getCommand(selectExtensionManagementTargetCommand).handler(accessor);
+    if (mode === 'scopes') await CommandsRegistry.getCommand(selectSettingsManagementTargetCommand).handler(accessor);
+  } catch (cause) { error = String(cause); }
+  try {
+    return { initial, initialSettings, selected: managementGateway('extensions'), settings: managementGateway('settings'),
+      explicit: managementGateway('extensions', 'gateway-c'), requests, picks, error,
+      toolbar: MenuRegistry.getMenuItems(MenuId.ViewContainerTitle).find(item => item.command?.id === selectExtensionManagementTargetCommand)?.command };
+  } finally { unwrapSessionApiFetch(); workspaceContext.publish(previous); }
 }

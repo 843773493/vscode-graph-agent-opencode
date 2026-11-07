@@ -135,7 +135,8 @@ def test_two_backend_processes_share_native_profile_without_losing_publications(
         assert targets[0]["backend_id"] == targets[1]["backend_id"] == healths[0]["backend_id"] == healths[1]["backend_id"]
 
         def inventory(index: int, label: str) -> dict:
-            return exchange("POST", "/api/gateway/extension-installations/inventory", label, targets[index])["inventory"]
+            return exchange("POST", "/api/gateway/extension-installations/inventory", label,
+                {key: value for key, value in targets[index].items() if key != "workspace_ids"})["inventory"]
 
         def install(index: int, name: str, version: str, gate: threading.Barrier | None = None,
                     *, content: str | None = None) -> dict:

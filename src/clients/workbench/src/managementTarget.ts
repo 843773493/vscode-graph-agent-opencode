@@ -1,0 +1,123 @@
+import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
+import { MutableDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
+import { Action2, MenuId, MenuRegistry, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
+import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
+import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
+import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
+import type { ExtensionTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import { gateway } from './agentApi.js';
+import { workspaceContext } from './workspaceContext.js';
+
+type ManagementScope = 'extensions' | 'settings';
+type ManagementTarget = GatewayManagementTargetDTO & { backend_id?: string };
+const selections = new Map<ManagementScope, { entryGatewayId: string; target: ManagementTarget }>();
+const selecting = new Map<ManagementScope, AbortController>();
+export const selectExtensionManagementTargetCommand = 'boxteam.extensions.selectTarget';
+export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
+const extensionTitle = new MutableDisposable();
+
+function updateExtensionTitle(): void {
+  const target = selections.get('extensions')?.target;
+  extensionTitle.value = MenuRegistry.appendMenuItem(MenuId.ViewContainerTitle, {
+    command: { id: selectExtensionManagementTargetCommand, title: `目标：${target?.name ?? '本地'}`,
+      tooltip: target ? `${target.gateway_id}${target.backend_id ? ` · ${target.backend_id}` : ''}` : '选择扩展管理目标' },
+    when: ContextKeyExpr.equals('viewContainer', VIEWLET_ID), group: 'navigation', order: 0,
+  });
+}
+updateExtensionTitle();
+onGatewayUserSessionInvalidated(0, () => { selections.clear(); updateExtensionTitle(); });
+workspaceContext.subscribe(() => {
+  let extensionChanged = false;
+  for (const [scope, selection] of selections) {
+    if (selection.entryGatewayId !== workspaceContext.getSnapshot().gatewayId) {
+      selections.delete(scope);
+      if (scope === 'extensions') extensionChanged = true;
+    }
+  }
+  if (extensionChanged) updateExtensionTitle();
+});
+
+/** 各管理视图只保存自己的展示选择；原 Gateway 仍持有路由和安装事实。 */
+export function managementGateway(scope: ManagementScope, explicitGatewayId?: string): ManagementTarget {
+  const entry = workspaceContext.getSnapshot().gatewayId;
+  if (!entry) throw new Error('Gateway 身份尚未完成初始化，无法确定管理目标');
+  const selection = selections.get(scope);
+  if (selection && selection.entryGatewayId === entry && (!explicitGatewayId || selection.target.gateway_id === explicitGatewayId)) return { ...selection.target };
+  const id = explicitGatewayId ?? entry;
+  return { gateway_id: id, name: id === entry ? '本地' : id, connection_kind: id === entry ? 'local' : 'remote_gateway' };
+}
+
+async function extensionDomains(target: ManagementTarget, signal: AbortSignal) {
+  const result = await gateway.request<ExtensionTargetListDTO>('/api/gateway/extension-targets', {
+    method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
+      gateway_connection_id: target.gateway_connection_id }), signal,
+  });
+  signal.throwIfAborted();
+  if (result.protocol_version !== 1 || result.gateway_id !== target.gateway_id || result.source !== 'live'
+    || result.targets.some(domain => domain.gateway_id !== target.gateway_id || !domain.backend_id)) throw new Error('扩展安装域发现返回了不同目标');
+  if (!result.targets.length) throw new Error('所选 Gateway 没有可用的扩展安装域，请显式启动目标安装服务');
+  return result.targets;
+}
+
+/** 默认单域可直接使用；多域只在标题目标动作中补选，安装命令不逐项弹窗。 */
+export async function extensionManagementTarget(target: ManagementTarget, signal: AbortSignal): Promise<ManagementTarget & { backend_id: string }> {
+  if (target.backend_id) return { ...target, backend_id: target.backend_id };
+  const previous = selections.get('extensions'), entryGatewayId = workspaceContext.getSnapshot().gatewayId!;
+  const domains = await extensionDomains(target, signal);
+  if (domains.length !== 1) throw new Error('当前 Gateway 有多个安装域，请从扩展视图标题工具栏选择安装域');
+  if (!domains[0].capabilities?.installation_manage) throw new Error('所选目标未授权扩展安装管理');
+  const resolved = { ...target, backend_id: domains[0].backend_id };
+  if (selections.get('extensions') === previous && workspaceContext.getSnapshot().gatewayId === entryGatewayId) {
+    selections.set('extensions', { entryGatewayId, target: resolved });
+    updateExtensionTitle();
+  }
+  return resolved;
+}
+
+for (const scope of ['extensions', 'settings'] as const) registerAction2(class extends Action2 {
+  constructor() {
+    super({ id: scope === 'extensions' ? selectExtensionManagementTargetCommand : selectSettingsManagementTargetCommand,
+      title: scope === 'extensions' ? { value: '选择扩展管理目标', original: 'Select Extension Management Target' }
+        : { value: '选择设置管理目标', original: 'Select Settings Management Target' }, f1: true });
+  }
+  async run(accessor: ServicesAccessor): Promise<void> {
+    const quickInput = accessor.get(IQuickInputService);
+    const current = managementGateway(scope), entry = workspaceContext.getSnapshot().gatewayId!;
+    const controller = new AbortController(), cancellation = new CancellationTokenSource();
+    selecting.get(scope)?.abort(new Error('同一管理视图已重新选择目标'));
+    selecting.set(scope, controller);
+    controller.signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
+    const invalidate = () => { controller.abort(new Error('页面 Gateway 或用户身份已改变，请重新选择管理目标')); cancellation.cancel(); };
+    const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
+    const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); });
+    try {
+      const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal: controller.signal });
+      controller.signal.throwIfAborted();
+      if (directory.local_gateway_id !== entry) throw new Error('管理目录不属于当前页面 Gateway');
+      const picked = await quickInput.pick(directory.items.map(target => ({
+        label: target.connection_kind === 'local' ? '本地' : target.name,
+        description: target.gateway_id, detail: target.connection_error ?? target.gateway_connection_id,
+        picked: target.gateway_id === current.gateway_id && target.gateway_connection_id === current.gateway_connection_id, target,
+      })), { title: scope === 'extensions' ? '扩展管理目标' : '设置管理目标', placeHolder: '本地指当前页面的原生 Gateway；选择不会启动工作区或扩展宿主' }, cancellation.token);
+      controller.signal.throwIfAborted();
+      if (!picked) return;
+      let target: ManagementTarget = { ...picked.target };
+      if (scope === 'extensions') {
+        const domains = await extensionDomains(target, controller.signal);
+        const domain = domains.length === 1 ? domains[0] : (await quickInput.pick(domains.map(domain => ({
+          label: domain.backend_id, description: target.name, target: domain,
+        })), { title: `选择扩展安装域 · ${target.name}`, placeHolder: '该选择用于后续安装、更新和卸载' }, cancellation.token))?.target;
+        controller.signal.throwIfAborted();
+        if (!domain) return;
+        target = { ...target, backend_id: domain.backend_id };
+      }
+      selections.set(scope, { entryGatewayId: entry, target });
+      if (scope === 'extensions') updateExtensionTitle();
+    } finally {
+      if (selecting.get(scope) === controller) selecting.delete(scope);
+      releaseUser(); releaseContext(); cancellation.dispose(); controller.abort();
+    }
+  }
+});

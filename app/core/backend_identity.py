@@ -15,6 +15,12 @@ def _identity_path(boxteam_home: Path) -> Path:
     return boxteam_home.expanduser().resolve() / "state" / "backend" / "identity.json"
 
 
+def validate_backend_id(value: object) -> str:
+    if not isinstance(value, str) or str(UUID(value)) != value:
+        raise ValueError("Backend 安装域身份必须为标准 UUID")
+    return value
+
+
 def read_backend_id(boxteam_home: Path) -> str:
     """只读目标环境的身份；损坏或缺失均不能重新分配。"""
     path = _identity_path(boxteam_home)
@@ -24,10 +30,10 @@ def read_backend_id(boxteam_home: Path) -> str:
         raise ValueError(f"Backend 安装域身份结构非法: {path}")
     if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
         raise ValueError(f"Backend 安装域身份版本不支持: {path}")
-    backend_id = payload["backend_id"]
-    if not isinstance(backend_id, str) or str(UUID(backend_id)) != backend_id:
-        raise ValueError(f"Backend 安装域身份必须为标准 UUID: {path}")
-    return backend_id
+    try:
+        return validate_backend_id(payload["backend_id"])
+    except ValueError as error:
+        raise ValueError(f"Backend 安装域身份必须为标准 UUID: {path}") from error
 
 
 def load_or_create_backend_id(boxteam_home: Path) -> str:

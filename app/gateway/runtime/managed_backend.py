@@ -73,6 +73,7 @@ class ManagedBackendOwner:
         self.adopted = False
         self.gateway_generation: str | None = None
         self.error: str | None = None
+        self.backend_id: str | None = None
         self.lock = asyncio.Lock()
         self.unpublished_runtimes: dict[str, WorkspaceRuntime] = {}
 

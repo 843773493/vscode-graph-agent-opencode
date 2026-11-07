@@ -401,7 +401,10 @@ test('库存真实业务入口只发现明确根并核完整集合，包正文�
   expect(m.toExtension(snapshot.extensions[0])).toMatchObject({ isValid: false, validations: [[3, 'manifest invalid']], installationTarget: targetA });
   expect(requests.map(([path]) => path)).toEqual([targetResolvePath, targetResolvePath, targetResolvePath, hostResolvePath, inventoryPath]);
   const complete = { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['a1', 'a2'] };
-  expect(scannedRequests().slice(2)).toEqual([targetResolvePath, hostResolvePath, inventoryPath].map(path => ({ path, method: 'POST', body: complete })));
+  expect(scannedRequests().slice(2)).toEqual([
+    ...[targetResolvePath, hostResolvePath].map(path => ({ path, method: 'POST', body: complete })),
+    { path: inventoryPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId } },
+  ]);
   receipt.scans.push({ name: '原库存及invalid诊断', requests: scannedRequests(), views: snapshot.views });
   const previous = request;
   request = async (...args) => args[0].endsWith('/inventory') ? { ...await previous(...args), backend_id: targetB.backendId } : previous(...args);
@@ -448,7 +451,8 @@ test('真实scanner混合两权限，完整组回执决定权限且保留根顺�
     { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a2'] } },
     { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetB.gatewayId, workspace_ids: ['b1'] } },
     { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a1'] } },
-    { path: targetResolvePath, method: 'POST', body: a }, { path: hostResolvePath, method: 'POST', body: b }, { path: inventoryPath, method: 'POST', body: b },
+    { path: targetResolvePath, method: 'POST', body: a }, { path: hostResolvePath, method: 'POST', body: b },
+    { path: inventoryPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetB.gatewayId, backend_id: targetB.backendId } },
   ]);
   const registry = new m.ExtensionDescriptionRegistry(reader, snapshot.extensions, true), running = tracker(registry);
   try {

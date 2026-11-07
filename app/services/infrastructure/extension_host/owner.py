@@ -29,6 +29,8 @@ from app.schemas.gateway.extension_host import (
 from app.schemas.gateway.extension_installation import (
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
+    ExtensionInstallationUninstallDTO,
+    ExtensionInstallationUninstallRequest,
 )
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.configuration import (
@@ -184,18 +186,34 @@ class NodeExtensionHostOwner:
                   else "platform_unsupported" if sys.platform not in {"linux", "win32"} else None)
         return NodeHostStatus(self.backend_id, sys.platform, reason, self.runtime)
 
+    def management_target(self, expected_backend_id: str | None = None, *, require_runtime: bool = False) -> str:
+        if expected_backend_id is not None and expected_backend_id != self.backend_id:
+            raise ValueError("扩展安装域 Backend 身份不匹配")
+        if self._admission_closed:
+            raise ValueError("Backend 正在关闭，拒绝扩展管理")
+        if require_runtime and self.runtime is None:
+            raise ValueError("目标未提供专用扩展管理运行时")
+        return self.backend_id
+
     async def install(self, request: ExtensionInstallationInstallRequest) -> ExtensionInstallationInstallDTO:
-        status = self.describe(expected_backend_id=request.backend_id, workspace_ids=tuple(request.workspace_ids))
-        if status.reason is not None:
-            raise ValueError(f"目标扩展安装不可用: {status.reason}")
+        self.management_target(request.backend_id, require_runtime=True)
+        for workspace_id in request.workspace_ids:
+            self._mounts.resolve(workspace_id)
         source = parse_resource_uri(request.source_uri, local_gateway_id=request.gateway_id)
         mount = self._mounts.resolve(source.scope_id)
         # 沿原文件 owner 解析及保护私有目录；不装配 Agent 容器或另建根绑定。
         paths = WorkspaceFilePaths(workspace=mount.workspace_root, workspace_id=mount.workspace_id, bindings=None)
         path = await run_sync_shielded(lambda: paths.native(source.display_uri))
         publication = await self.management.install(path)
-        return ExtensionInstallationInstallDTO(**request.model_dump(exclude={"source_uri"}),
+        return ExtensionInstallationInstallDTO(**request.model_dump(exclude={"source_uri", "gateway_connection_id"}),
             installed=publication.installed, inventory=publication.inventory)
+
+    async def uninstall(self, request: ExtensionInstallationUninstallRequest) -> ExtensionInstallationUninstallDTO:
+        self.management_target(request.backend_id, require_runtime=True)
+        publication = await self.management.uninstall(profile_id=request.profile_id,
+            extension_id=request.extension_id, version=request.version)
+        return ExtensionInstallationUninstallDTO(**request.model_dump(exclude={"profile_id", "extension_id", "version", "gateway_connection_id"}),
+            uninstalled=publication.uninstalled, inventory=publication.inventory)
 
     async def _release(self, session: _HostSession) -> None:
         await session.close()

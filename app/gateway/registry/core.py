@@ -70,6 +70,7 @@ class WorkspaceTarget:
     remote_affected_workspace_ids: tuple[str, ...] = ()
     local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
+    backend_id: str | None = None
 
     @property
     def key(self) -> WorkspaceKey:
