@@ -1983,26 +1983,34 @@ class ExtensionValidation(_message.Message):
     def __init__(self, severity: _Optional[int] = ..., message: _Optional[str] = ...) -> None: ...
 
 class InstalledExtension(_message.Message):
-    __slots__ = ("source", "description", "is_valid", "validations", "extension_key")
+    __slots__ = ("source", "description", "is_valid", "validations", "extension_key", "metadata", "readme_path", "changelog_path")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     IS_VALID_FIELD_NUMBER: _ClassVar[int]
     VALIDATIONS_FIELD_NUMBER: _ClassVar[int]
     EXTENSION_KEY_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    README_PATH_FIELD_NUMBER: _ClassVar[int]
+    CHANGELOG_PATH_FIELD_NUMBER: _ClassVar[int]
     source: str
     description: _struct_pb2.Struct
     is_valid: bool
     validations: _containers.RepeatedCompositeFieldContainer[ExtensionValidation]
     extension_key: str
-    def __init__(self, source: _Optional[str] = ..., description: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., is_valid: _Optional[bool] = ..., validations: _Optional[_Iterable[_Union[ExtensionValidation, _Mapping]]] = ..., extension_key: _Optional[str] = ...) -> None: ...
+    metadata: _struct_pb2.Struct
+    readme_path: str
+    changelog_path: str
+    def __init__(self, source: _Optional[str] = ..., description: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., is_valid: _Optional[bool] = ..., validations: _Optional[_Iterable[_Union[ExtensionValidation, _Mapping]]] = ..., extension_key: _Optional[str] = ..., metadata: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., readme_path: _Optional[str] = ..., changelog_path: _Optional[str] = ...) -> None: ...
 
 class ProfileExtensionInventory(_message.Message):
-    __slots__ = ("profile_id", "extensions")
+    __slots__ = ("profile_id", "extensions", "target_platform")
     PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
     EXTENSIONS_FIELD_NUMBER: _ClassVar[int]
+    TARGET_PLATFORM_FIELD_NUMBER: _ClassVar[int]
     profile_id: str
     extensions: _containers.RepeatedCompositeFieldContainer[InstalledExtension]
-    def __init__(self, profile_id: _Optional[str] = ..., extensions: _Optional[_Iterable[_Union[InstalledExtension, _Mapping]]] = ...) -> None: ...
+    target_platform: str
+    def __init__(self, profile_id: _Optional[str] = ..., extensions: _Optional[_Iterable[_Union[InstalledExtension, _Mapping]]] = ..., target_platform: _Optional[str] = ...) -> None: ...
 
 class ExtensionWebHostOpenRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "extension_keys", "gateway_connection_id")
@@ -2181,6 +2189,92 @@ class ExtensionInstallationInstallDTO(_message.Message):
     inventory: ProfileExtensionInventory
     installed: VsixInstallResult
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ..., installed: _Optional[_Union[VsixInstallResult, _Mapping]] = ...) -> None: ...
+
+class ExtensionGalleryInstallOptions(_message.Message):
+    __slots__ = ("install_pre_release_version", "install_given_version", "donot_include_pack_and_dependencies", "is_machine_scoped", "is_application_scoped", "pinned", "pre_release")
+    INSTALL_PRE_RELEASE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    INSTALL_GIVEN_VERSION_FIELD_NUMBER: _ClassVar[int]
+    DONOT_INCLUDE_PACK_AND_DEPENDENCIES_FIELD_NUMBER: _ClassVar[int]
+    IS_MACHINE_SCOPED_FIELD_NUMBER: _ClassVar[int]
+    IS_APPLICATION_SCOPED_FIELD_NUMBER: _ClassVar[int]
+    PINNED_FIELD_NUMBER: _ClassVar[int]
+    PRE_RELEASE_FIELD_NUMBER: _ClassVar[int]
+    install_pre_release_version: bool
+    install_given_version: bool
+    donot_include_pack_and_dependencies: bool
+    is_machine_scoped: bool
+    is_application_scoped: bool
+    pinned: bool
+    pre_release: bool
+    def __init__(self, install_pre_release_version: _Optional[bool] = ..., install_given_version: _Optional[bool] = ..., donot_include_pack_and_dependencies: _Optional[bool] = ..., is_machine_scoped: _Optional[bool] = ..., is_application_scoped: _Optional[bool] = ..., pinned: _Optional[bool] = ..., pre_release: _Optional[bool] = ...) -> None: ...
+
+class ExtensionInstallationGalleryRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "gateway_connection_id", "extension_id", "version", "options")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_ID_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    gateway_connection_id: str
+    extension_id: str
+    version: str
+    options: ExtensionGalleryInstallOptions
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., extension_id: _Optional[str] = ..., version: _Optional[str] = ..., options: _Optional[_Union[ExtensionGalleryInstallOptions, _Mapping]] = ...) -> None: ...
+
+class ExtensionInstallationGalleryDTO(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "profile_scope", "inventory", "installed")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    INVENTORY_FIELD_NUMBER: _ClassVar[int]
+    INSTALLED_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    profile_scope: str
+    inventory: ProfileExtensionInventory
+    installed: VsixInstallResult
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., profile_scope: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ..., installed: _Optional[_Union[VsixInstallResult, _Mapping]] = ...) -> None: ...
+
+class ExtensionMetadataPatch(_message.Message):
+    __slots__ = ("is_machine_scoped", "is_application_scoped", "pinned", "pre_release")
+    IS_MACHINE_SCOPED_FIELD_NUMBER: _ClassVar[int]
+    IS_APPLICATION_SCOPED_FIELD_NUMBER: _ClassVar[int]
+    PINNED_FIELD_NUMBER: _ClassVar[int]
+    PRE_RELEASE_FIELD_NUMBER: _ClassVar[int]
+    is_machine_scoped: bool
+    is_application_scoped: bool
+    pinned: bool
+    pre_release: bool
+    def __init__(self, is_machine_scoped: _Optional[bool] = ..., is_application_scoped: _Optional[bool] = ..., pinned: _Optional[bool] = ..., pre_release: _Optional[bool] = ...) -> None: ...
+
+class ExtensionInstallationMetadataRequest(_message.Message):
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "gateway_connection_id", "profile_id", "extension_id", "version", "metadata", "refresh_from_gallery")
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_ID_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    REFRESH_FROM_GALLERY_FIELD_NUMBER: _ClassVar[int]
+    protocol_version: int
+    gateway_id: str
+    backend_id: str
+    gateway_connection_id: str
+    profile_id: str
+    extension_id: str
+    version: str
+    metadata: ExtensionMetadataPatch
+    refresh_from_gallery: bool
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., profile_id: _Optional[str] = ..., extension_id: _Optional[str] = ..., version: _Optional[str] = ..., metadata: _Optional[_Union[ExtensionMetadataPatch, _Mapping]] = ..., refresh_from_gallery: _Optional[bool] = ...) -> None: ...
 
 class ExtensionInstallationUninstallRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "profile_id", "extension_id", "version", "gateway_connection_id")

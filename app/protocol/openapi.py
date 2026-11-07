@@ -150,6 +150,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "ExtensionInstallationInventoryRequest", "ExtensionInstallationInventoryDTO",
         "ExtensionInstallationInstallRequest", "ExtensionInstallationInstallDTO",
         "ExtensionInstallationUninstallRequest", "ExtensionInstallationUninstallDTO",
+        "ExtensionInstallationGalleryRequest", "ExtensionInstallationGalleryDTO",
+        "ExtensionInstallationMetadataRequest",
         "ExtensionConfigurationViewRequest", "ExtensionConfigurationFileRequest",
         "ExtensionConfigurationWriteRequest", "ExtensionConfigurationStatDTO", "ExtensionConfigurationReadDTO",
         "ExtensionConfigurationEventDTO",

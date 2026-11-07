@@ -24,12 +24,17 @@ from app.schemas.gateway.extension_host import (
     ExtensionTargetViewDTO,
 )
 from app.schemas.gateway.extension_installation import (
+    ExtensionGalleryInstallOptions,
+    ExtensionInstallationGalleryDTO,
+    ExtensionInstallationGalleryRequest,
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
+    ExtensionInstallationMetadataRequest,
     ExtensionInstallationUninstallDTO,
     ExtensionInstallationUninstallRequest,
+    ExtensionMetadataPatch,
     ExtensionUninstallResult,
     ExtensionValidation,
     InstalledExtension,
@@ -47,8 +52,45 @@ MODELS = (ExtensionInstallationInventoryRequest, ExtensionInstallationInventoryD
           ProfileExtensionInventory, InstalledExtension, ExtensionValidation,
           ExtensionInstallationInstallRequest, ExtensionInstallationInstallDTO, VsixInstallResult,
           ExtensionInstallationUninstallRequest, ExtensionInstallationUninstallDTO, ExtensionUninstallResult,
+          ExtensionGalleryInstallOptions, ExtensionInstallationGalleryRequest, ExtensionInstallationGalleryDTO,
+          ExtensionMetadataPatch, ExtensionInstallationMetadataRequest,
           ExtensionTargetDTO, ExtensionTargetViewDTO, ExtensionTargetListRequest, ExtensionTargetListDTO,
           GatewayManagementDirectoryDTO, GatewayManagementTargetDTO)
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_gallery_and_metadata_proto_preserve_explicit_false_and_target(metadata: bool) -> None:
+    target = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32, "backend_id": str(uuid4()),
+        "gateway_connection_id": "frozen-route", "extension_id": "publisher.probe", "version": "1.0.0"}
+    if metadata:
+        original = ExtensionInstallationMetadataRequest.model_validate({**target, "profile_id": "default-profile",
+            "metadata": {"pinned": False, "pre_release": True}, "refresh_from_gallery": True})
+    else:
+        original = ExtensionInstallationGalleryRequest.model_validate({**target,
+            "options": {"pinned": False, "install_given_version": True, "install_pre_release_version": False}})
+    message = getattr(public_pb2, type(original).__name__)()
+    json_format.ParseDict(original.model_dump(mode="json", exclude_none=True), message)
+    restored = type(original).model_validate(json_format.MessageToDict(message, preserving_proto_field_name=True,
+        always_print_fields_with_no_presence=True))
+    assert restored == original
+    options = message.metadata if metadata else message.options
+    assert options.HasField("pinned") and options.pinned is False
+    assert not options.HasField("is_machine_scoped")
+    assert "workspace_ids" not in restored.model_dump()
+
+
+@pytest.mark.parametrize(("model", "field", "patch"), [
+    (ExtensionInstallationGalleryRequest, "options", {"donot_verify_signature": True}),
+    (ExtensionInstallationMetadataRequest, "metadata", {"id": "forged-gallery-id"}),
+    (ExtensionInstallationMetadataRequest, "metadata", {"pinned": "false"}),
+])
+def test_native_installation_options_do_not_accept_unowned_fields(model, field, patch) -> None:
+    payload = {"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32, "backend_id": str(uuid4()),
+        "extension_id": "publisher.probe", "version": "1.0.0", field: patch}
+    if model is ExtensionInstallationMetadataRequest:
+        payload["profile_id"] = "default-profile"
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)
 
 
 def test_management_directory_and_view_keep_separate_workspace_contracts(gateway_openapi: JsonSchemaValue) -> None:
@@ -88,7 +130,9 @@ def test_inventory_contract_follows_actual_read_only_route(gateway_openapi: Json
     assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/ExtensionInstallationInventoryDTO")
     install_path = "/api/gateway/extension-installations/install"
     uninstall_path = "/api/gateway/extension-installations/uninstall"
-    assert {path for path in gateway_openapi["paths"] if path.startswith("/api/gateway/extension-installations")} == {PATH, install_path, uninstall_path}
+    assert {path for path in gateway_openapi["paths"] if path.startswith("/api/gateway/extension-installations")} == {
+        PATH, install_path, uninstall_path, "/api/gateway/extension-installations/install-gallery",
+        "/api/gateway/extension-installations/metadata"}
     install = gateway_openapi["paths"][install_path]["post"]
     assert install["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/ExtensionInstallationInstallRequest")
     uninstall = gateway_openapi["paths"][uninstall_path]["post"]
@@ -118,7 +162,7 @@ def test_profile_uninstall_receipt_proto_preserves_selection_and_complete_invent
     original = ExtensionInstallationUninstallDTO(protocol_version=1, gateway_id="gateway_" + "a" * 32,
         backend_id=str(uuid4()),
         uninstalled=ExtensionUninstallResult(id="publisher.probe", version="1.0.0", profile_id="default-profile"),
-        inventory=ProfileExtensionInventory(profile_id="default-profile", extensions=[]))
+        inventory=ProfileExtensionInventory(target_platform="linux-x64", profile_id="default-profile", extensions=[]))
     wire = json_format.ParseDict(original.model_dump(mode="json"), public_pb2.ExtensionInstallationUninstallDTO())
     restored = ExtensionInstallationUninstallDTO.model_validate(json_format.MessageToDict(wire,
         preserving_proto_field_name=True, always_print_fields_with_no_presence=True))
@@ -150,7 +194,7 @@ def test_vsix_install_source_must_belong_to_explicit_target(source: str) -> None
 def test_inventory_proto_preserves_original_description_and_invalid_entry() -> None:
     request = ExtensionInstallationInventoryRequest(protocol_version=1, gateway_id="gateway_" + "a" * 32,
         backend_id=str(uuid4()))
-    original = ExtensionInstallationInventoryDTO(**request.model_dump(exclude={"gateway_connection_id"}), inventory=ProfileExtensionInventory(
+    original = ExtensionInstallationInventoryDTO(**request.model_dump(exclude={"gateway_connection_id"}), inventory=ProfileExtensionInventory(target_platform="linux-x64",
         profile_id="default-profile", extensions=[InstalledExtension(source="profile", extension_key="publisher.probe-1.0.0", is_valid=False,
             description={"identifier": {"value": "publisher.probe"}, "version": "1.0.0", "isBuiltin": False,
                 "extensionLocation": {"$mid": 1, "scheme": "file", "path": "/backend/extensions/probe"},

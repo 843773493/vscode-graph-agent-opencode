@@ -23,6 +23,7 @@
 - `test_extension_management.py`由真实Gateway常驻owner持有Node管理组件，Backend只经具名本机HTTP客户端调用原安装器；双域使用独立Home和稳定安装ID，同域多个Backend共享一个管理进程。核重启、取消、未知回执不重放及实际退出；故障注入只能在真实安装后修改原件，缺失manifest沿原scanner报告invalid和原因，不能弱化为空列表，也不能把基础设施验证表述为窗口安装UI／实例registry已完成。同进程双域装具共用本机认证凭据，不声称验证跨进程认证隔离。
 - 同文件的 Web 发布场景经真实 Gateway／Backend 资格通道和原 Node scanner 取得冻结描述；后续 stat/read 与原始 GET 的脚本、相对模块及 CSS 资源必须观察到零新增 Node 请求。覆盖双实例版本、升级／逻辑卸载后的旧读与新准入拒绝、逻辑 ID／key 错配、单实例关闭，以及真实 Python I/O 等待期间撤权后零迟到正文。cookie＋same-origin 的 HTTP 客户端验证不代表真实 Worker／浏览器执行，也不证明 Node 运行集合或最终物理回收。
 - `test_native_management_concurrency.py`通过真实Gateway及两个Backend OS进程共享同一Home／稳定安装域，核不同ID并发安装不丢profile成员、同ID并发版本的回执库存、旧制品保留及Backend重启前后同一Gateway管理PID／创建时间；VSIX为测试扩展，不证明旧宿主引用保护、卸载、窗口UI、SSH或Windows验收。复用公共进程装具及集成闸门，固定Node和依赖由环境显式提供，不接管测试设施实现。
+- `test_extension_gallery.py`通过真实 Gateway、固定 Node 和受控 HTTP Gallery 验无工作区安装、依赖下载、预发布升级、同版本复用、原 metadata、目标平台及 current-only README 资源；核同 PID、另一域不变和旧版本拒绝。Gallery 是具名协议装具且关闭签名校验，不代表公网市场、真实签名、运行宿主、Windows 或窗口 UI 验收。
 - `test_management_gateway_lifecycle.py`通过真实Launcher控制通道执行候选失败、重试换代及完整停机；由配置watcher生成交接意图，核实际Gateway、Backend与管理进程身份及退出。故障只注入隔离Home的端口转发配置，不预置generation；不代表Windows、远端或窗口验收。
 - 原生 VSIX manifest 预检通过真实 Node 安装入口核首次／升级候选在发布前拒绝，安装域目录、profile 原字节、库存及旧版制品保持；原 engine 文案、纯声明式 engine 拒绝、合法 Warning 和成功升级不变。原 HTTP 场景另核 Gateway／Backend／Node 的无效升级 400、同一 request_id 与另一目标不变；不据此声称依赖、平台、信任或完整扩展 API 兼容已完成。
 - 本目录真实HTTP统一由`conftest.py`持有已绑定socket与Uvicorn任务并等待关闭；库存网络场景经过原Gateway认证、Backend私有入口及真实Node/profile，核双Backend版本、稳定身份、恢复和route误指，不装配完整工作区业务图，不代表窗口registry、真实SSH或VSIX安装界面验收。

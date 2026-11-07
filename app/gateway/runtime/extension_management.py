@@ -249,7 +249,7 @@ class GatewayExtensionManagement:
             self.assert_healthy()
             assert self._client is not None and self.instance is not None
             native_command = dict(command)
-            if command.get("method") == "install" and download_base_url is not None:
+            if command.get("method") in {"install", "install-gallery"} and download_base_url is not None:
                 request_id = require_current_request_id("扩展下载传输")
                 capability = uuid4().hex
                 self._download_admission = capability, request_id
@@ -317,12 +317,14 @@ class GatewayExtensionManagement:
             except ExtensionManagementError as error:
                 return {"error": str(error), "code": error.code}
             return {"result": result.model_dump(mode="json")}
-        if operation not in {"inventory", "environment", "install", "uninstall", "web-publication"}:
+        if operation not in {"inventory", "environment", "install", "install-gallery", "metadata", "uninstall", "web-publication"}:
             raise ValueError("未登记的扩展安装管理操作")
         response_type = {
             "inventory": ProfileExtensionInventory,
             "environment": NativeManagementEnvironment,
             "install": InstalledProfile,
+            "install-gallery": InstalledProfile,
+            "metadata": ProfileExtensionInventory,
             "uninstall": UninstalledProfile,
             "web-publication": WebExtensionPublication,
         }[operation]
@@ -374,13 +376,14 @@ class GatewayExtensionManagement:
                 return await run_sync_shielded(publication_file, publication, extension_key=extension_key,
                     relative_segments=segments, file_operation=operation)
 
-    async def call(self, command: Mapping[str, JsonValue], *, response_type: type[Result]) -> Result:
+    async def call(self, command: Mapping[str, JsonValue], *, response_type: type[Result],
+                   download_base_url: str | None = None) -> Result:
         operation = command.get("method")
         if operation in {"extension-file-stat", "extension-file-read"}:
             result = await self._read_publication(command,
                 operation="stat" if operation == "extension-file-stat" else "read")
             return response_type.model_validate(result.model_dump(mode="json"))
-        reply = await self.request(command)
+        reply = await self.request(command, download_base_url=download_base_url)
         if set(reply) == {"error", "code"}:
             raise ExtensionManagementError(str(reply["error"]), str(reply["code"]))
         return response_type.model_validate(reply["result"])

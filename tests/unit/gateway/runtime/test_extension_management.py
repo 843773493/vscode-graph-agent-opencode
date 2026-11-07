@@ -273,8 +273,9 @@ async def test_cancelled_management_request_settles_original_http_receipt_before
     await c.owner.start()
     first = asyncio.create_task(c.owner.request({"method": "install", "vsix_path": "/target/a.vsix"}))
     following: asyncio.Task[dict[str, JsonValue]] | None = None
-    inventory: dict[str, JsonValue] = {"profile_id": "default", "extensions": [{"source": "profile",
-        "extension_key": EXTENSION_KEY, "description": {"id": "publisher.probe"}, "is_valid": True, "validations": []}]}
+    inventory: dict[str, JsonValue] = {"profile_id": "default", "target_platform": "linux-x64", "extensions": [{"source": "profile",
+        "extension_key": EXTENSION_KEY, "description": {"id": "publisher.probe"}, "is_valid": True, "validations": [],
+        "metadata": {}, "readme_path": None, "changelog_path": None}]}
     try:
         await asyncio.wait_for(c.command_sent.wait(), 5)
         first.cancel()
@@ -360,11 +361,11 @@ async def test_cancelled_python_read_holds_publication_stream_and_next_http_requ
             if key not in {"method", "relative_segments"}} | {"method": "extension-publication"}
     finally:
         read.release.set()
-        c.reply({"result": {"profile_id": "after-read", "extensions": []}})
+        c.reply({"result": {"profile_id": "after-read", "target_platform": "linux-x64", "extensions": []}})
         await asyncio.gather(reading, *(() if following is None else (following,)), return_exceptions=True)
     with pytest.raises(asyncio.CancelledError):
         reading.result()
-    assert following is not None and following.result() == {"result": {"profile_id": "after-read", "extensions": []}}
+    assert following is not None and following.result() == {"result": {"profile_id": "after-read", "target_platform": "linux-x64", "extensions": []}}
     assert len(read.results) == 1 and isinstance(read.results[0], NativeFileRead)
     assert b64decode(read.results[0].content_base64) == b"target-python-content"
     assert c.events.index("worker-finished") < c.events.index("publication-close")
@@ -390,8 +391,8 @@ async def test_missing_package_file_preserves_native_error_and_owner_health(
         assert result["code"] == "EntryNotFound" and "missing.js" in str(result["error"])
     assert stream.closed.is_set()
     c.owner.assert_healthy()
-    c.reply({"result": {"profile_id": "default", "extensions": []}})
-    assert await c.owner.request({"method": "inventory"}) == {"result": {"profile_id": "default", "extensions": []}}
+    c.reply({"result": {"profile_id": "default", "target_platform": "linux-x64", "extensions": []}})
+    assert await c.owner.request({"method": "inventory"}) == {"result": {"profile_id": "default", "target_platform": "linux-x64", "extensions": []}}
 
 
 async def test_preserve_close_waits_for_worker_before_closing_client_or_detaching(
@@ -437,12 +438,15 @@ def environment_reply() -> dict[str, JsonValue]:
 
 
 @pytest.mark.parametrize("known_error", [False, True])
+@pytest.mark.parametrize("method", ["install", "install-gallery"])
 async def test_download_capability_is_bound_to_original_request_and_revoked_at_terminal_receipt(
-    control: HttpControl, install_request_id: str, known_error: bool,
+    control: HttpControl, install_request_id: str, known_error: bool, method: str,
 ) -> None:
     c = control
     await c.owner.start()
-    installing = asyncio.create_task(c.owner.request({"method": "install", "vsix_path": "/target/a.vsix"},
+    command: dict[str, JsonValue] = ({"method": "install", "vsix_path": "/target/a.vsix"} if method == "install" else
+        {"method": "install-gallery", "extension_id": "publisher.probe", "version": "1.0.0", "options": {}})
+    installing = asyncio.create_task(c.owner.request(command,
         download_base_url="http://127.0.0.1:40500"))
     try:
         await asyncio.wait_for(c.command_sent.wait(), 1)
@@ -457,7 +461,7 @@ async def test_download_capability_is_bound_to_original_request_and_revoked_at_t
     finally:
         c.reply({"error": "依赖不可用", "code": "DownloadFailed"} if known_error else {
             "result": {"installed": {"id": "publisher.probe", "version": "1.0.0", "profile_id": "default", "reused": False},
-                "inventory": {"profile_id": "default", "extensions": []}}})
+                "inventory": {"profile_id": "default", "target_platform": "linux-x64", "extensions": []}}})
         await installing
     with pytest.raises(PermissionError):
         c.owner.authorize_download(capability, install_request_id)

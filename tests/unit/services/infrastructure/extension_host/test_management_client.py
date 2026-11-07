@@ -34,7 +34,7 @@ async def test_client_cancel_and_close_wait_original_exchange_without_replay(cli
         entered.set()
         await release.wait()
         return httpx.Response(200, headers={"X-Request-ID": "original-request"}, json={
-            "request_id": "original-request", "data": {"result": {"profile_id": "profile", "extensions": []}}})
+            "request_id": "original-request", "data": {"result": {"profile_id": "profile", "target_platform": "linux-x64", "extensions": []}}})
 
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(respond), headers={"X-Local-Token": "original-runtime-token"})
     token = set_current_request_id("original-request")
@@ -67,7 +67,7 @@ async def test_client_checks_original_receipt_and_preserves_semantic_errors(clie
         if wrong == "lost-reply":
             raise httpx.ReadTimeout("结果未知", request=request)
         reply = ({"error": "原 manifest 无效", "code": "Invalid"} if wrong == "semantic-error"
-            else {"result": {"profile_id": "profile", "extensions": []}})
+            else {"result": {"profile_id": "profile", "target_platform": "linux-x64", "extensions": []}})
         return httpx.Response(200, headers={"X-Request-ID": "other" if wrong == "header" else "original"}, json={
             "request_id": "other" if wrong == "body" else "original", "data": reply})
 

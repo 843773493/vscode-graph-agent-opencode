@@ -407,7 +407,7 @@ class NodeExtensionHostOwner:
                 or any(key not in members or not members[key].is_valid for key in extension_keys)):
                 raise ValueError("Web 宿主请求不属于目标 profile 当前有效的精确安装版本")
             snapshot = ProfileExtensionInventory(profile_id=inventory.profile_id,
-                extensions=[members[key] for key in extension_keys])
+                target_platform=inventory.target_platform, extensions=[members[key] for key in extension_keys])
             # 冻结同次原 scanner 发布描述；后续文件 I/O 不再逐文件调用 Gateway／Node。
             # TODO(4.4)：Node 实际运行集合及最终引用回收未闭合，当前继续禁止全局物理 cleanUp。
             session.profile_id = inventory.profile_id

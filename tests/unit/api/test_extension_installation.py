@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 import pytest
@@ -13,11 +15,15 @@ from app.schemas.gateway.extension_installation import (
     InstalledExtension,
     ProfileExtensionInventory,
 )
+from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementClient,
     ExtensionManagementError,
+    NativeExtensionPublication,
     NativeFileRead,
     NativeFileStat,
+    NativeManagementEnvironment,
+    WebExtensionPublication,
 )
 from tests.unit.api.test_extension_host import (
     private_host_client as private_host_client,  # noqa: PLC0414
@@ -30,6 +36,7 @@ KEY = "publisher.probe-1.0.0"
 @pytest.fixture
 def private_package(
     private_host_client: tuple[TestClient, WorkspaceContainerRegistry], monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> Iterator[tuple[TestClient, WorkspaceContainerRegistry, dict[str, object], dict[str, str], list[dict[str, object]]]]:
     client, registry = private_host_client
     owner = registry.extension_hosts
@@ -37,22 +44,27 @@ def private_package(
         gateway_url="http://127.0.0.1:8014", token="private-host-token", operation_timeout=2)
     calls: list[dict[str, object]] = []
 
-    async def inventory(_management: ExtensionManagementClient) -> ProfileExtensionInventory:
-        return ProfileExtensionInventory(profile_id="default-profile", extensions=[InstalledExtension(
+    async def publication(_management: ExtensionManagementClient, *, profile_id: str,
+                          extension_keys: list[str]) -> WebExtensionPublication:
+        assert profile_id == "default-profile" and extension_keys == [KEY]
+        return WebExtensionPublication(inventory=ProfileExtensionInventory(target_platform="linux-x64", profile_id=profile_id, extensions=[InstalledExtension(
             source="profile", extension_key=KEY, description={"browser": "dist/main.js"},
-            is_valid=True, validations=[])])
+            is_valid=True, validations=[])]), environment=NativeManagementEnvironment(
+                app_root_uri=tmp_path.as_uri(), global_storage_home_uri=(tmp_path / "globalStorage").as_uri(),
+                workspace_storage_home_uri=(tmp_path / "workspaceStorage").as_uri(),
+                untitled_workspaces_home_uri=(tmp_path / "Workspaces").as_uri(),
+                profile_id=profile_id, settings_native_uri=(tmp_path / "settings.json").as_uri()),
+            publications=[NativeExtensionPublication(extension_id="publisher.probe", extension_key=KEY,
+                native_uri=(tmp_path / "extensions" / KEY).as_uri(), extensions_root_uri=(tmp_path / "extensions").as_uri())])
 
-    async def stat(_management: ExtensionManagementClient, **selection: object) -> NativeFileStat:
-        calls.append(selection)
-        return NativeFileStat(type=1, ctime=0, mtime=123, size=3, permissions=1)
+    def file_read(publication: NativeExtensionPublication, *, extension_key: str,
+                  relative_segments: object, file_operation: Literal["stat", "read"]) -> NativeFileRead | NativeFileStat:
+        calls.append({"profile_id": "default-profile", "extension_key": extension_key,
+            "extension_id": publication.extension_id, "relative_segments": relative_segments, "current_profile_member": False})
+        return NativeFileStat(type=1, ctime=0, mtime=123, size=3, permissions=1) if file_operation == "stat" else NativeFileRead(content_base64="YWJj")
 
-    async def read(_management: ExtensionManagementClient, **selection: object) -> NativeFileRead:
-        calls.append(selection)
-        return NativeFileRead(content_base64="YWJj")
-
-    monkeypatch.setattr(ExtensionManagementClient, "inventory", inventory)
-    monkeypatch.setattr(ExtensionManagementClient, "extension_file_stat", stat)
-    monkeypatch.setattr(ExtensionManagementClient, "extension_file_read", read)
+    monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
+    monkeypatch.setattr(owner_module, "publication_file", file_read)
     headers = {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": GATEWAY,
         "X-BoxTeam-Extension-Client-Id": "authenticated-client", "X-Request-ID": "package-private"}
     request = {"protocol_version": 1, "gateway_id": GATEWAY, "backend_id": owner.backend_id,
@@ -135,14 +147,14 @@ def test_private_package_preserves_control_authentication(private_package, opera
 @pytest.mark.parametrize("operation", ["stat", "read"])
 def test_private_package_does_not_disclose_after_backend_drain(private_package, monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
     client, registry, payload, headers, calls = private_package
-    original = getattr(ExtensionManagementClient, f"extension_file_{operation}")
+    original = owner_module.publication_file
 
-    async def close_after_read(management: ExtensionManagementClient, **selection: object):
-        result = await original(management, **selection)
+    def close_after_read(publication: NativeExtensionPublication, **selection):
+        result = original(publication, **selection)
         registry.extension_hosts.close_admission()
         return result
 
-    monkeypatch.setattr(ExtensionManagementClient, f"extension_file_{operation}", close_after_read)
+    monkeypatch.setattr(owner_module, "publication_file", close_after_read)
     response = client.post(f"/api/internal/extension-files/{operation}", json=payload, headers=headers)
     assert response.status_code == 409 and len(calls) == 1
     assert "content_base64" not in response.text and "permissions" not in response.text
@@ -157,10 +169,10 @@ def test_private_package_preserves_original_owner_error(private_package, monkeyp
                                                       operation: str, code: str, status: int) -> None:
     client, _, payload, headers, _ = private_package
 
-    async def rejected(_management: ExtensionManagementClient, **_selection: object):
+    def rejected(_publication: NativeExtensionPublication, **_selection: object):
         raise ExtensionManagementError("原包读取失败", code)
 
-    monkeypatch.setattr(ExtensionManagementClient, f"extension_file_{operation}", rejected)
+    monkeypatch.setattr(owner_module, "publication_file", rejected)
     response = client.post(f"/api/internal/extension-files/{operation}", json=payload, headers=headers)
     assert response.status_code == status
     assert response.json()["detail"] == {"owner": "extension_package", "code": code, "message": "原包读取失败"}

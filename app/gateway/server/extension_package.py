@@ -59,7 +59,7 @@ def _content_access(request: Request, x_local_token: str | None = Header(default
         auth = verify_gateway_access(x_local_token, x_boxteam_federation_token)
     else:
         # 脚本、样式和字体不能附加管理头；同源浏览器沿原 HttpOnly 用户租约，
-        # 随后仍须匹配该用户已经取得的实例代际。凭据不进入资源 URL。
+        # 随后仍核该用户的管理权限或已取得的实例代际。凭据不进入资源 URL。
         if request.headers.get("sec-fetch-site") != "same-origin":
             raise HTTPException(403, "扩展包资源只接受同源浏览器或 Gateway 访问凭据")
         auth = GatewayAuthContext(kind="local")
@@ -161,6 +161,28 @@ async def extension_package_read(payload: ExtensionPackageFileRequest, request: 
     return await _file_request(payload, request, auth, access, operation="read")
 
 
+@router.get("/api/gateway/extension-packages/current/{gateway_id}/{backend_id}/{profile_id}/{extension_key}/{extension_id}/{relative_path:path}",
+    response_class=Response, responses=_CONTENT_RESPONSES)
+async def current_extension_package_content(
+    gateway_id: CanonicalGatewayId, backend_id: BackendId, profile_id: str, extension_key: str,
+    extension_id: str, relative_path: str, request: Request,
+    access: Annotated[tuple[GatewayAuthContext, UserAccessContext | None], Depends(_content_access)],
+) -> Response:
+    return await _package_content(gateway_id, backend_id, profile_id, None, None, extension_key,
+        extension_id, relative_path, request, access, gateway_connection_id=None)
+
+
+@router.get("/api/gateway/extension-packages/via/{gateway_connection_id}/current/{gateway_id}/{backend_id}/{profile_id}/{extension_key}/{extension_id}/{relative_path:path}",
+    response_class=Response, responses=_CONTENT_RESPONSES)
+async def remote_current_extension_package_content(
+    gateway_connection_id: str, gateway_id: CanonicalGatewayId, backend_id: BackendId, profile_id: str,
+    extension_key: str, extension_id: str, relative_path: str, request: Request,
+    access: Annotated[tuple[GatewayAuthContext, UserAccessContext | None], Depends(_content_access)],
+) -> Response:
+    return await _package_content(gateway_id, backend_id, profile_id, None, None, extension_key,
+        extension_id, relative_path, request, access, gateway_connection_id=gateway_connection_id)
+
+
 @router.get("/api/gateway/extension-packages/content/{gateway_id}/{backend_id}/{profile_id}/{view_id}/{generation}/{extension_key}/{extension_id}/{relative_path:path}",
     response_class=Response, responses=_CONTENT_RESPONSES)
 async def extension_package_content(
@@ -185,7 +207,7 @@ async def remote_extension_package_content(
 
 
 async def _package_content(
-    gateway_id: str, backend_id: str, profile_id: str, view_id: str, generation: str,
+    gateway_id: str, backend_id: str, profile_id: str, view_id: str | None, generation: str | None,
     extension_key: str, extension_id: str, relative_path: str, request: Request,
     access: tuple[GatewayAuthContext, UserAccessContext | None], *, gateway_connection_id: str | None,
 ) -> Response:

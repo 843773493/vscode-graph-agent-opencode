@@ -49,7 +49,7 @@ from app.gateway.federation.policy import (
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
 from app.gateway.registry.routes import BackendManagementRoute
-from app.gateway.server.extension_management import management_owner
+from app.gateway.server.extension_management import _download_base_url, management_owner
 from app.gateway.server.workspace_proxy import (
     _http_client,
     verify_user_access_for_proxy,
@@ -69,10 +69,13 @@ from app.schemas.gateway.extension_host import (
     ExtensionTargetViewDTO,
 )
 from app.schemas.gateway.extension_installation import (
+    ExtensionInstallationGalleryDTO,
+    ExtensionInstallationGalleryRequest,
     ExtensionInstallationInstallDTO,
     ExtensionInstallationInstallRequest,
     ExtensionInstallationInventoryDTO,
     ExtensionInstallationInventoryRequest,
+    ExtensionInstallationMetadataRequest,
     ExtensionInstallationTarget,
     ExtensionInstallationUninstallDTO,
     ExtensionInstallationUninstallRequest,
@@ -88,6 +91,7 @@ from app.services.infrastructure.extension_host.channel import (
 )
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
+    InstalledProfile,
     ProfileExtensionInventory,
     UninstalledProfile,
 )
@@ -451,6 +455,28 @@ async def extension_installation_install(
         operation="install", response_type=APIResponse[ExtensionInstallationInstallDTO])
 
 
+@router.post("/api/gateway/extension-installations/install-gallery", response_model=APIResponse[ExtensionInstallationGalleryDTO])
+async def extension_installation_gallery(
+    payload: ExtensionInstallationGalleryRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationGalleryDTO] | Response:
+    return await _installation_request(payload, request, auth, access, request_id,
+        operation="install-gallery", response_type=APIResponse[ExtensionInstallationGalleryDTO])
+
+
+@router.post("/api/gateway/extension-installations/metadata", response_model=APIResponse[ExtensionInstallationInventoryDTO])
+async def extension_installation_metadata(
+    payload: ExtensionInstallationMetadataRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[ExtensionInstallationInventoryDTO] | Response:
+    return await _installation_request(payload, request, auth, access, request_id,
+        operation="metadata", response_type=APIResponse[ExtensionInstallationInventoryDTO])
+
+
 @router.post("/api/gateway/extension-installations/uninstall", response_model=APIResponse[ExtensionInstallationUninstallDTO])
 async def extension_installation_uninstall(
     payload: ExtensionInstallationUninstallRequest, request: Request,
@@ -463,6 +489,28 @@ async def extension_installation_uninstall(
 
 
 InstallationResult = TypeVar("InstallationResult", bound=ExtensionInstallationInventoryDTO)
+
+
+async def _native_installation(payload: ExtensionInstallationInventoryRequest, request: Request) -> ExtensionInstallationInventoryDTO:
+    owner = management_owner(request, payload.backend_id)
+    target = payload.model_dump(include=set(ExtensionInstallationTarget.model_fields))
+    if isinstance(payload, ExtensionInstallationGalleryRequest):
+        installed = await owner.call({"method": "install-gallery", "extension_id": payload.extension_id,
+            "version": payload.version, "options": payload.options.model_dump(exclude_none=True)},
+            response_type=InstalledProfile, download_base_url=_download_base_url(request))
+        return ExtensionInstallationGalleryDTO(**target, installed=installed.installed, inventory=installed.inventory)
+    if isinstance(payload, ExtensionInstallationMetadataRequest):
+        inventory = await owner.call({"method": "metadata", "profile_id": payload.profile_id,
+            "extension_id": payload.extension_id, "version": payload.version,
+            "metadata": payload.metadata.model_dump(exclude_none=True), "refresh_from_gallery": payload.refresh_from_gallery},
+            response_type=ProfileExtensionInventory)
+        return ExtensionInstallationInventoryDTO(**target, inventory=inventory)
+    if isinstance(payload, ExtensionInstallationUninstallRequest):
+        removed = await owner.call({"method": "uninstall", "profile_id": payload.profile_id,
+            "extension_id": payload.extension_id, "version": payload.version}, response_type=UninstalledProfile)
+        return ExtensionInstallationUninstallDTO(**target, uninstalled=removed.uninstalled, inventory=removed.inventory)
+    inventory = await owner.call({"method": "inventory"}, response_type=ProfileExtensionInventory)
+    return ExtensionInstallationInventoryDTO(**target, inventory=inventory)
 
 
 @contextmanager
@@ -495,11 +543,12 @@ def _installation_route(request: HTTPConnection, payload: ExtensionInstallationI
 async def _installation_request(
     payload: ExtensionInstallationInventoryRequest, request: Request, auth: GatewayAuthContext,
     access: UserAccessContext | None, request_id: str, *,
-    operation: Literal["inventory", "install", "uninstall"], response_type: type[APIResponse[InstallationResult]],
+    operation: Literal["inventory", "install", "install-gallery", "metadata", "uninstall"], response_type: type[APIResponse[InstallationResult]],
 ) -> APIResponse[InstallationResult] | Response:
     if operation != "inventory":
         require_federation_capability(request, auth, "extension_installation_manage")
-    label = {"install": "扩展安装", "uninstall": "扩展卸载", "inventory": "扩展库存"}[operation]
+    label = {"install": "扩展安装", "install-gallery": "扩展市场安装", "metadata": "扩展元数据更新",
+             "uninstall": "扩展卸载", "inventory": "扩展库存"}[operation]
     try:
         with _installation_route(request, payload, auth) as route:
             if operation == "inventory":
@@ -509,22 +558,13 @@ async def _installation_request(
                 expected_capabilities = None
                 _check(request, auth, access, route.leases, capability="extension_installation_manage")
             if not route.remote and operation != "install":
-                owner = management_owner(request, payload.backend_id)
-                if operation == "inventory":
-                    inventory = await owner.call({"method": "inventory"}, response_type=ProfileExtensionInventory)
-                    publication = ExtensionInstallationInventoryDTO(**payload.model_dump(exclude={"gateway_connection_id"}), inventory=inventory)
-                else:
-                    assert isinstance(payload, ExtensionInstallationUninstallRequest)
-                    removed = await owner.call({"method": "uninstall", "profile_id": payload.profile_id,
-                        "extension_id": payload.extension_id, "version": payload.version}, response_type=UninstalledProfile)
-                    publication = ExtensionInstallationUninstallDTO(**payload.model_dump(exclude={"gateway_connection_id", "profile_id", "extension_id", "version"}),
-                        uninstalled=removed.uninstalled, inventory=removed.inventory)
+                publication = await _native_installation(payload, request)
                 result = response_type.model_validate({"data": publication.model_dump(), "request_id": request_id})
             else:
                 prefix = "api/gateway" if route.remote else "api/internal"
                 path = f"{prefix}/extension-installations/{operation}"
                 result = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{path}",
-                    headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=120)
+                    headers=route.headers, json=payload.model_dump(exclude={"gateway_connection_id"}, exclude_none=True), timeout=120)
             # 读取期间撤权、换路由或租约过期时，库存不能再披露给原请求者。
             _check_management_route(request, route)
             if expected_capabilities is not None:
@@ -555,6 +595,13 @@ async def _installation_request(
                 or target.inventory.profile_id != payload.profile_id
             ):
                 raise ValueError("扩展卸载回执与原 profile 成员不匹配")
+            if isinstance(payload, ExtensionInstallationMetadataRequest) and target.inventory.profile_id != payload.profile_id:
+                raise ValueError("扩展元数据回执与原 profile 不匹配")
+            if isinstance(payload, ExtensionInstallationGalleryRequest) and (
+                not isinstance(target, ExtensionInstallationGalleryDTO)
+                or target.installed.profile_id != target.inventory.profile_id
+            ):
+                raise ValueError("扩展市场安装回执与目标 profile 不匹配")
             return result
     except ExtensionManagementError as error:
         raise HTTPException(409 if error.code in {"Invalid", "InstalledExtensionNotFound"} else 400, str(error)) from error

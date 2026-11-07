@@ -51,11 +51,12 @@ def _data(request: httpx.Request) -> dict[str, object]:
     if request.url.path.endswith("/uninstall"):
         uninstalled = {"id": payload.pop("extension_id"), "version": payload.pop("version"), "profile_id": payload.pop("profile_id")}
     result = {**payload, "profile_scope": "default", "inventory": {
-        "profile_id": "default-profile", "extensions": [{"source": "profile", "extension_key": "publisher.probe-1.0.0", "description": {
+        "profile_id": "default-profile", "target_platform": "linux-x64", "extensions": [{"source": "profile", "extension_key": "publisher.probe-1.0.0", "description": {
             "identifier": {"value": "publisher.probe"}, "version": "1.0.0",
             "extensionLocation": {"scheme": "file", "path": "/target/extensions/probe"},
             "contributes": {"commands": [{"command": "probe.run", "title": "原始贡献"}]},
-        }, "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}]}],
+        }, "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}],
+            "metadata": {}, "readme_path": None, "changelog_path": None}],
     }}
     if source is not None:
         result["installed"] = {"id": "publisher.probe", "version": "1.0.0", "profile_id": "default-profile", "reused": False}
@@ -91,10 +92,11 @@ def native_control(host_gateway: Harness, tmp_path: Path, monkeypatch: pytest.Mo
             return {"result": {"content_base64": "b2xk"}}
         if command["method"] == "extension-file-stat":
             return {"result": {"type": 1, "ctime": 0, "mtime": 1, "size": 3, "permissions": 1}}
-        inventory: dict[str, JsonValue] = {"profile_id": "default-profile", "extensions": [{
+        inventory: dict[str, JsonValue] = {"profile_id": "default-profile", "target_platform": "linux-x64", "extensions": [{
             "source": "profile", "extension_key": "publisher.probe-1.0.0", "description": {
                 "identifier": {"value": "publisher.probe"}, "version": "1.0.0"},
-            "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}]}]}
+            "is_valid": False, "validations": [{"severity": 3, "message": "原 manifest 缺失"}],
+            "metadata": {}, "readme_path": None, "changelog_path": None}]}
         if command["method"] == "uninstall":
             inventory["extensions"] = []
             return {"result": {"inventory": inventory, "uninstalled": {"id": command["extension_id"],
@@ -104,13 +106,14 @@ def native_control(host_gateway: Harness, tmp_path: Path, monkeypatch: pytest.Mo
 
     handlers: list[Callable[[dict[str, JsonValue]], Awaitable[dict[str, JsonValue]]]] = [reply]
 
-    async def request(command: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    async def request(command: Mapping[str, JsonValue], *, download_base_url: str | None = None) -> dict[str, JsonValue]:
         calls.append(dict(command))
         return await handlers[0](dict(command))
 
-    async def call(command: Mapping[str, JsonValue], *, response_type: type[NativeResult]) -> NativeResult:
+    async def call(command: Mapping[str, JsonValue], *, response_type: type[NativeResult],
+                   download_base_url: str | None = None) -> NativeResult:
         # 本组只验证真实 Gateway 判权与回执；原生组件在独立 HTTP 集成组验证。
-        reply = await request(command)
+        reply = await request(command, download_base_url=download_base_url)
         return response_type.model_validate(reply["result"])
 
     monkeypatch.setattr(owner, "request", request)

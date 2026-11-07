@@ -27,11 +27,15 @@ class InstalledExtension(_InventoryValue):
     description: dict[str, JsonValue]
     is_valid: bool
     validations: list[ExtensionValidation]
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    readme_path: str | None = Field(default=None, min_length=1)
+    changelog_path: str | None = Field(default=None, min_length=1)
 
 
 class ProfileExtensionInventory(_InventoryValue):
     profile_id: str = Field(min_length=1)
     extensions: list[InstalledExtension]
+    target_platform: str = Field(min_length=1)
 
 
 class ExtensionInstallationTarget(_InventoryValue):
@@ -88,10 +92,46 @@ class ExtensionInstallationInstallDTO(ExtensionInstallationInventoryDTO):
     installed: VsixInstallResult
 
 
-class ExtensionInstallationUninstallRequest(ExtensionInstallationInventoryRequest):
+class ExtensionGalleryInstallOptions(_InventoryValue):
+    install_pre_release_version: bool | None = None
+    install_given_version: bool | None = None
+    donot_include_pack_and_dependencies: bool | None = None
+    is_machine_scoped: bool | None = None
+    is_application_scoped: bool | None = None
+    pinned: bool | None = None
+    pre_release: bool | None = None
+
+
+class ExtensionInstallationGalleryRequest(ExtensionInstallationInventoryRequest):
+    extension_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    options: ExtensionGalleryInstallOptions
+
+
+class ExtensionInstallationGalleryDTO(ExtensionInstallationInventoryDTO):
+    installed: VsixInstallResult
+
+
+class ExtensionMetadataPatch(_InventoryValue):
+    is_machine_scoped: bool | None = None
+    is_application_scoped: bool | None = None
+    pinned: bool | None = None
+    pre_release: bool | None = None
+
+
+class _ProfileMemberRequest(ExtensionInstallationInventoryRequest):
     profile_id: str = Field(min_length=1)
     extension_id: str = Field(min_length=1)
     version: str = Field(min_length=1)
+
+
+class ExtensionInstallationUninstallRequest(_ProfileMemberRequest):
+    pass
+
+
+class ExtensionInstallationMetadataRequest(_ProfileMemberRequest):
+    metadata: ExtensionMetadataPatch
+    refresh_from_gallery: bool = False
 
 
 class ExtensionUninstallResult(_InventoryValue):

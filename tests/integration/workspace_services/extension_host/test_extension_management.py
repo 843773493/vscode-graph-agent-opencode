@@ -71,11 +71,11 @@ from tests.support.sse import read_sse_events_until
 
 
 @pytest.fixture(scope="module")
-def management_runtime() -> tuple[TestRunContext, Path, NodeHostRuntime]:
+def management_runtime(request: pytest.FixtureRequest) -> tuple[TestRunContext, Path, NodeHostRuntime]:
     executable, modules = os.getenv("BOXTEAM_TEST_NODE_HOST_EXECUTABLE"), os.getenv("BOXTEAM_TEST_NODE_HOST_MODULES")
     if not executable or not modules:
         pytest.skip("UNMET_PREREQUISITE: 需显式提供固定 Node 及原扩展管理依赖")
-    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     component = context.run_root / "runtime"
     command = ["bun", "--eval", """
 import {buildNodeExtensionHost} from './src/clients/workbench/scripts/nodeHost.mjs';

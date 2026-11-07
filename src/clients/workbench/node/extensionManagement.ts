@@ -1,5 +1,6 @@
 import { createRuntimeLogger } from '../../../shared/serverRuntimeLogging.mjs';
 import { ExtensionDownloadRequestService } from './extensionDownload.js';
+import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 import { Schemas } from '../upstream/src/vs/base/common/network.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
@@ -8,7 +9,7 @@ import { ConfigurationService } from '../upstream/src/vs/platform/configuration/
 import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 import { DownloadService } from '../upstream/src/vs/platform/download/common/downloadService.js';
 import { IDownloadService } from '../upstream/src/vs/platform/download/common/download.js';
-import { ExtensionManagementError, ExtensionManagementErrorCode, IAllowedExtensionsService, IExtensionGalleryService } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
+import { ExtensionManagementError, ExtensionManagementErrorCode, IAllowedExtensionsService, IExtensionGalleryService, type InstallOptions, type Metadata } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
 import { areSameExtensions, ExtensionKey } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagementUtil.js';
 import { AllowedExtensionsService } from '../upstream/src/vs/platform/extensionManagement/common/allowedExtensionsService.js';
 import { ExtensionGalleryServiceWithNoStorageService } from '../upstream/src/vs/platform/extensionManagement/common/extensionGalleryService.js';
@@ -17,7 +18,7 @@ import { ExtensionGalleryManifestService } from '../upstream/src/vs/platform/ext
 import { IExtensionsScannerService, toExtensionDescription } from '../upstream/src/vs/platform/extensionManagement/common/extensionsScannerService.js';
 import { IExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/common/extensionsProfileScannerService.js';
 import { ExtensionType } from '../upstream/src/vs/platform/extensions/common/extensions.js';
-import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_VSIX_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
+import { ExtensionManagementService, INativeServerExtensionManagementService, NATIVE_EXTENSION_REUSED_CONTEXT } from '../upstream/src/vs/platform/extensionManagement/node/extensionManagementService.js';
 import { ExtensionsProfileScannerService } from '../upstream/src/vs/platform/extensionManagement/node/extensionsProfileScannerService.js';
 import { ExtensionSignatureVerificationService, IExtensionSignatureVerificationService } from '../upstream/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.js';
 import { FileService } from '../upstream/src/vs/platform/files/common/fileService.js';
@@ -90,9 +91,31 @@ export async function createExtensionManagement(directory: string, builtinExtens
     const instantiation = consumers.add(new InstantiationService(services, true));
     return instantiation.invokeFunction(accessor => {
       const management = accessor.get(INativeServerExtensionManagementService);
+      const gallery = accessor.get(IExtensionGalleryService);
       const scanner = accessor.get(IExtensionsScannerService);
       const profileScanner = accessor.get(IExtensionsProfileScannerService);
       const profile = profiles.defaultProfile;
+      async function profileMember(profileId: string, extensionId: string, version: string) {
+        if (profileId !== profile.id) throw new ExtensionManagementError('扩展操作 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
+        const members = (await profileScanner.scanProfileExtensions(profile.extensionsResource))
+          .filter(member => areSameExtensions(member.identifier, { id: extensionId }));
+        if (members.length !== 1 || members[0].version !== version) {
+          throw new ExtensionManagementError(`目标 profile 不再包含唯一的 ${extensionId}@${version}，请重新读取库存`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        }
+        const [member] = members;
+        const installed = (await management.getInstalled(ExtensionType.User, profile.extensionsResource))
+          .filter(extension => areSameExtensions(extension.identifier, member.identifier)
+            && extension.manifest.version === version && identity.extUri.isEqual(extension.location, member.location));
+        if (installed.length !== 1) throw new ExtensionManagementError(`目标 profile 不再包含唯一的 ${extensionId}@${version}，请重新读取库存`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        return installed[0];
+      }
+      async function galleryExtension(extensionId: string, version: string, preRelease?: boolean) {
+        const candidates = await gallery.getExtensions([{ id: extensionId, version, preRelease }],
+          { targetPlatform: await management.getTargetPlatform() }, CancellationToken.None);
+        const matches = candidates.filter(extension => areSameExtensions(extension.identifier, { id: extensionId }) && extension.version === version);
+        if (matches.length !== 1) throw new ExtensionManagementError(`目标扩展市场不包含唯一的 ${extensionId}@${version}`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        return matches[0];
+      }
       async function publishedExtension(profileId: string, extensionId: string, extensionKeyText: string,
         currentProfileMember: boolean) {
         if (profileId !== profile.id) throw new ExtensionManagementError('扩展文件 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
@@ -155,11 +178,22 @@ export async function createExtensionManagement(directory: string, builtinExtens
             const member = byId.get(extension.identifier.id.toLowerCase());
             return !member || member.version !== extension.manifest.version || !identity.extUri.isEqual(member.location, extension.location);
           })) throw new Error('目标 profile 包含无法解析的已安装扩展');
-          return { profile_id: profile.id, extensions: extensions.map(extension => ({
-            source: 'profile' as const, description: toExtensionDescription(extension, false),
-            extension_key: ExtensionKey.create(extension).toString(),
-            is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
-          })) };
+          const entries = await Promise.all(extensions.map(async extension => {
+            // 沿原描述转换识别真实 README/CHANGELOG，复用本次扫描对象，不另扫库存。
+            const local = await management.describeNativeExtension(extension);
+            const assetPath = (resource: URI | undefined) => {
+              if (!resource) return null;
+              const relative = identity.extUri.relativePath(extension.location, resource);
+              if (!relative) throw new Error('扩展描述资源不属于原包根');
+              return relative;
+            };
+            return { source: 'profile' as const, description: toExtensionDescription(extension, false),
+              extension_key: ExtensionKey.create(extension).toString(), metadata: extension.metadata ?? {},
+              readme_path: assetPath(local.readmeUrl), changelog_path: assetPath(local.changelogUrl),
+              is_valid: extension.isValid, validations: extension.validations.map(([severity, message]) => ({ severity, message })),
+            };
+          }));
+          return { profile_id: profile.id, target_platform: await management.getTargetPlatform(), extensions: entries };
         },
         async publication(profileId: string, extensionId: string, extensionKey: string, currentProfileMember: boolean) {
           return publishedExtension(profileId, extensionId, extensionKey, currentProfileMember);
@@ -175,31 +209,43 @@ export async function createExtensionManagement(directory: string, builtinExtens
           const publications = await Promise.all(extensions.map(extension => publishedExtension(profileId,
             extension.description.identifier.value, extension.extension_key, true)));
           // TODO(4.4)：Node 真实运行集合与最终引用回收尚未闭合，不能启用全局物理 cleanUp。
-          return { inventory: { profile_id: profileId, extensions }, publications, environment: await this.environment() };
+          return { inventory: { profile_id: profileId, target_platform: inventory.target_platform, extensions }, publications, environment: await this.environment() };
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。
           // TODO(4.4): 宿主引用闭包接通后，沿原卸载服务回收不再使用的版本。
-          const context = { [NATIVE_VSIX_REUSED_CONTEXT]: false };
+          const context = { [NATIVE_EXTENSION_REUSED_CONTEXT]: false };
           const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource, keepExisting: true, context });
           // 在同一串行控制请求内读取发布后的库存，避免并发安装把回执拼成另一版本。
           return { installed: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id,
-            reused: context[NATIVE_VSIX_REUSED_CONTEXT] },
+            reused: context[NATIVE_EXTENSION_REUSED_CONTEXT] },
             inventory: await this.inventory() };
         },
-        async uninstall(profileId: string, extensionId: string, version: string) {
-          if (profileId !== profile.id) throw new ExtensionManagementError('扩展卸载 profile 与目标默认 profile 不匹配', ExtensionManagementErrorCode.Invalid);
-          const members = (await profileScanner.scanProfileExtensions(profile.extensionsResource))
-            .filter(member => areSameExtensions(member.identifier, { id: extensionId }));
-          if (members.length !== 1 || members[0].version !== version) {
-            throw new ExtensionManagementError(`目标 profile 不再包含唯一的 ${extensionId}@${version}，请重新读取库存`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
+        async installGallery(extensionId: string, version: string, options: InstallOptions) {
+          const candidate = await galleryExtension(extensionId, version, options.installPreReleaseVersion);
+          const context = { [NATIVE_EXTENSION_REUSED_CONTEXT]: false };
+          const extension = await management.installFromGallery(candidate, {
+            ...options, profileLocation: profile.extensionsResource, keepExisting: true, context,
+          });
+          return { installed: { id: extension.identifier.id, version: extension.manifest.version,
+            profile_id: profile.id, reused: context[NATIVE_EXTENSION_REUSED_CONTEXT] }, inventory: await this.inventory() };
+        },
+        async updateMetadata(profileId: string, extensionId: string, version: string, patch: Metadata,
+          refreshFromGallery: boolean) {
+          const extension = await profileMember(profileId, extensionId, version);
+          const metadata: Metadata = {};
+          if (refreshFromGallery) {
+            const original = await galleryExtension(extensionId, version);
+            Object.assign(metadata, { id: original.identifier.uuid, publisherId: original.publisherId,
+              publisherDisplayName: original.publisherDisplayName, private: original.private,
+              isPreReleaseVersion: original.properties.isPreReleaseVersion,
+              hasPreReleaseVersion: original.hasPreReleaseVersion, targetPlatform: original.properties.targetPlatform });
           }
-          const [member] = members;
-          const installed = (await management.getInstalled(ExtensionType.User, profile.extensionsResource))
-            .filter(extension => areSameExtensions(extension.identifier, member.identifier)
-              && extension.manifest.version === version && identity.extUri.isEqual(extension.location, member.location));
-          if (installed.length !== 1) throw new ExtensionManagementError(`目标 profile 的 ${extensionId}@${version} 无法解析为原安装成员`, ExtensionManagementErrorCode.InstalledExtensionNotFound);
-          const [extension] = installed;
+          await management.updateMetadata(extension, { ...metadata, ...patch }, profile.extensionsResource);
+          return this.inventory();
+        },
+        async uninstall(profileId: string, extensionId: string, version: string) {
+          const extension = await profileMember(profileId, extensionId, version);
           // 原卸载服务保留依赖／pack 规则；只移除 profile，不请求删除版本目录。
           await management.uninstall(extension, { profileLocation: profile.extensionsResource });
           return { uninstalled: { id: extension.identifier.id, version: extension.manifest.version, profile_id: profile.id },

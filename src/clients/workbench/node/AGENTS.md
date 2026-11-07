@@ -20,5 +20,6 @@
 - 服务内串行处理安装及精确发布。current-only 发布响应流持有准入到 Python 实际 I/O 结清；Web 准入在同次控制操作内复用原发布函数核精确集合并返回冻结描述，不能持队列等待整个 Web session。错误返回原归属并允许后续合法请求；停止准入后排空原异步回调及缓存写入，释放消费者，沿原watch([])停止provider watcher并释放provider，返回drained后自然退出。Gateway换代只释放句柄，完整停机才调用shutdown并核实际进程；不得用process.exit或每请求dispose替代结算。
 - 当前库存明确限于目标默认 profile 的用户安装项；不将它声称为系统扩展、开发扩展或完整窗口启用视图。
 - VSIX 安装结果与完整库存由同一次串行 Node 控制操作生成；Python 不在释放安装请求后另读库存拼回执。保留原安装器的现有版本复用，物理卸载和运行版本切换须沿各自生命周期完成。
+- 市场安装由目标原 Gallery 按 ID／版本重新取对象并交原 installFromGallery；元数据写入只接受公开布尔选项，UUID、publisher 和平台等事实从原 Gallery 重取。选项校验与字段映射共用生成 proto descriptor，不复制逐字段转换。库存中的平台、metadata 和 README／CHANGELOG 相对路径消费同次原安装／扫描服务，不按浏览器平台或候选正文猜测。
 - `installed.reused`消费同次原安装器context的实际版本复用结果；不能以候选manifest声称已替换正文。私有进程回执保留原ExtensionManagementError.code，文件系统错误继续使用原Provider错误映射。
 - 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。Web 旧实例资格与描述由原 Backend session 保留，包边界和字节统一由 Python 的 publication_file 检查；current-only 仍即时核当前成员。TODO(4.4)：Node 真实运行集合与最终引用回收未接通，不能启用全局物理 cleanUp。

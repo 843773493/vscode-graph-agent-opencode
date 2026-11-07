@@ -85,7 +85,7 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
         "profile_id": "default-profile", "extension_keys": [KEY], "gateway_connection_id": "route-only"},
         {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": GATEWAY,
          "X-BoxTeam-Extension-Client-Id": "authenticated-client", "X-Request-ID": "web-private"},
-        ProfileExtensionInventory(profile_id="default-profile", extensions=[_entry(KEY), _entry(OTHER_KEY)]),
+        ProfileExtensionInventory(target_platform="linux-x64", profile_id="default-profile", extensions=[_entry(KEY), _entry(OTHER_KEY)]),
         tmp_path / "profile" / "settings.json")
 
     root = tmp_path / "extensions"
@@ -139,7 +139,7 @@ def test_private_web_channel_returns_exact_frozen_subset_without_node_initializa
         binding = websocket.receive_json()
         assert binding == {**{name: value for name, value in web_case.payload.items() if name != "gateway_connection_id"},
             "client_id": "authenticated-client", "generation": binding["generation"], "request_id": "web-private",
-            "inventory": {"profile_id": "default-profile", "extensions": [web_case.inventory.extensions[0].model_dump()]},
+            "inventory": {"profile_id": "default-profile", "target_platform": "linux-x64", "extensions": [web_case.inventory.extensions[0].model_dump()]},
             "context": binding["context"]}
         ExtensionWebHostConnectionDTO.model_validate(binding)
         assert binding["context"]["workspace"]["folders"] == []
@@ -267,7 +267,7 @@ def test_retained_package_requires_open_web_binding_and_stops_after_close(web_ca
         websocket.send_json(web_case.payload)
         binding = websocket.receive_json()
         payload = _file(web_case, binding)
-        web_case.inventory = ProfileExtensionInventory(profile_id="default-profile", extensions=[])
+        web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="default-profile", extensions=[])
         response = web_case.client.post(f"/api/internal/extension-files/{operation}", json=payload, headers=web_case.headers)
         assert response.status_code == 200, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "web-private"
@@ -332,12 +332,12 @@ def test_closing_one_window_keeps_other_window_frozen_version(web_case: WebCase)
     with web_case.client.websocket_connect(PATH, headers=web_case.headers) as first:
         first.send_json(web_case.payload)
         first_binding = first.receive_json()
-        web_case.inventory = ProfileExtensionInventory(profile_id="default-profile", extensions=[_entry(NEXT_KEY)])
+        web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="default-profile", extensions=[_entry(NEXT_KEY)])
         with web_case.client.websocket_connect(PATH, headers=web_case.headers) as second:
             second.send_json({**web_case.payload, "view_id": "window-two", "extension_keys": [NEXT_KEY]})
             second_binding = second.receive_json()
             assert first_binding["generation"] != second_binding["generation"]
-            web_case.inventory = ProfileExtensionInventory(profile_id="default-profile", extensions=[])
+            web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="default-profile", extensions=[])
             for binding, key in ((first_binding, KEY), (second_binding, NEXT_KEY)):
                 response = web_case.client.post("/api/internal/extension-files/read", json=_file(web_case, binding, key=key), headers=web_case.headers)
                 assert response.status_code == 200, response.text

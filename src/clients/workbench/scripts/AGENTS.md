@@ -52,6 +52,8 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 
 直接位置和原 Gallery 安装写入前消费同次 toScannedExtension 的 isValid／validations，拒绝无效版本并保留原件；警告及原扫描诊断语义不变，不重复计算 manifest 校验。
 
+项目 protobuf 运行库随 descriptor 内联进 Node 产物，沿项目锁解析；其余外部运行依赖仍只取固定上游 npm 锁。不得为协议选项校验额外要求目标安装项目依赖或复制另一份手写校验器。
+
 原生VSIX在原`ExtensionManagementService.install`创建任务前复用官方`validateExtensionManifest`的Error诊断；保留原engines兼容判断和合法Warning，不在Python或窗口另建manifest校验器。此转换仅进入Node清单，拒绝首次安装或升级时不得改写profile及旧制品；安装预检不等于目标能力、依赖或运行激活已验收。
 
 原生VSIX的`keepExisting=true`沿原scanner只复用有效且ExtensionKey完全一致的已发布目录；候选先预检，原扫描对象通过同次context交给依赖规划和原task，依赖与正文都消费实际复用manifest。`reused`只来自原提取／准备结果，不按目录存在、hash或第二库存猜测；扫描失败保留原错误和目录，成功扫描前不得解除`.obsolete`。false或未指定仍沿原替换语义，原Gallery的复用扫描失败也不得隐式删除重提取；这不代表物理清理或活宿主引用保护已完成。

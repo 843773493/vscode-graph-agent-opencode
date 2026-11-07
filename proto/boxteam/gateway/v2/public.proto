@@ -1206,11 +1206,15 @@ message InstalledExtension {
   bool is_valid = 3;
   repeated ExtensionValidation validations = 4;
   string extension_key = 5;
+  google.protobuf.Struct metadata = 6;
+  optional string readme_path = 7;
+  optional string changelog_path = 8;
 }
 
 message ProfileExtensionInventory {
   string profile_id = 1;
   repeated InstalledExtension extensions = 2;
+  string target_platform = 3;
 }
 
 // Web 实例只冻结本次选择的当前有效包；连接选择不是运行身份。
@@ -1323,6 +1327,56 @@ message ExtensionInstallationInstallDTO {
   string profile_scope = 5;
   ProfileExtensionInventory inventory = 6;
   VsixInstallResult installed = 7;
+}
+
+// 仅传递原安装服务支持的用户选项；下载、依赖、平台和签名仍由目标原服务核验。
+message ExtensionGalleryInstallOptions {
+  optional bool install_pre_release_version = 1;
+  optional bool install_given_version = 2;
+  optional bool donot_include_pack_and_dependencies = 3;
+  optional bool is_machine_scoped = 4;
+  optional bool is_application_scoped = 5;
+  optional bool pinned = 6;
+  optional bool pre_release = 7;
+}
+
+message ExtensionInstallationGalleryRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  optional string gateway_connection_id = 4;
+  string extension_id = 5;
+  string version = 6;
+  ExtensionGalleryInstallOptions options = 7;
+}
+
+message ExtensionInstallationGalleryDTO {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  string profile_scope = 4;
+  ProfileExtensionInventory inventory = 5;
+  VsixInstallResult installed = 6;
+}
+
+// Gallery 身份和版本事实只能由目标 GalleryService 重新取得。
+message ExtensionMetadataPatch {
+  optional bool is_machine_scoped = 1;
+  optional bool is_application_scoped = 2;
+  optional bool pinned = 3;
+  optional bool pre_release = 4;
+}
+
+message ExtensionInstallationMetadataRequest {
+  uint32 protocol_version = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+  optional string gateway_connection_id = 4;
+  string profile_id = 5;
+  string extension_id = 6;
+  string version = 7;
+  ExtensionMetadataPatch metadata = 8;
+  bool refresh_from_gallery = 9;
 }
 
 // 只移除已核实的默认 profile 成员；版本制品与当前宿主继续保留。

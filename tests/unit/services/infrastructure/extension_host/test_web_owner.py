@@ -61,7 +61,7 @@ def web_case(case: Case, monkeypatch: pytest.MonkeyPatch) -> WebCase:
     result = WebCase(case, ExtensionWebHostOpenRequest(protocol_version=1, gateway_id=GATEWAY,
         backend_id=case.owner.backend_id, view_id="window-one", workspace_ids=[],
         profile_id="test-profile", extension_keys=[KEY]),
-        ProfileExtensionInventory(profile_id="test-profile", extensions=[
+        ProfileExtensionInventory(target_platform="linux-x64", profile_id="test-profile", extensions=[
             _entry(KEY), _entry(OTHER_KEY), _entry(INVALID_KEY, valid=False)]))
     result.gate.set()
 
@@ -125,7 +125,7 @@ async def test_web_rejects_noncurrent_or_invalid_members_and_releases_reservatio
     elif change == "invalid":
         payload["extension_keys"] = [INVALID_KEY]
     else:
-        web_case.inventory = ProfileExtensionInventory(profile_id="test-profile", extensions=[])
+        web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="test-profile", extensions=[])
     with pytest.raises((ValueError, KeyError)):
         async with web_case.node.owner.connect_web(ExtensionWebHostOpenRequest.model_validate(payload), client_id="client"):
             pytest.fail("不合法安装成员不能取得运行资格")
@@ -151,11 +151,11 @@ async def test_node_and_web_can_share_view_without_overwriting_the_same_kind(web
 async def test_web_instances_keep_independent_versions_after_update_and_uninstall(web_case: WebCase) -> None:
     owner, request = web_case.node.owner, web_case.request
     async with owner.connect_web(request, client_id="first") as first:
-        web_case.inventory = ProfileExtensionInventory(profile_id="test-profile", extensions=[_entry(NEXT_KEY)])
+        web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="test-profile", extensions=[_entry(NEXT_KEY)])
         next_request = request.model_copy(update={"extension_keys": [NEXT_KEY]})
         async with owner.connect_web(next_request, client_id="second") as second:
             assert first.identity.generation != second.identity.generation
-            web_case.inventory = ProfileExtensionInventory(profile_id="test-profile", extensions=[])
+            web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="test-profile", extensions=[])
             owner.check_web_extension_file(_file(first), client_id="first")
             owner.check_web_extension_file(_file(second, key=NEXT_KEY), client_id="second")
             for candidate in (request, next_request):
@@ -173,7 +173,7 @@ async def test_reopened_web_view_gets_new_generation_and_only_current_version(we
     owner, request = web_case.node.owner, web_case.request
     async with owner.connect_web(request, client_id="client") as original:
         original_file = _file(original)
-    web_case.inventory = ProfileExtensionInventory(profile_id="test-profile", extensions=[_entry(NEXT_KEY)])
+    web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="test-profile", extensions=[_entry(NEXT_KEY)])
     with pytest.raises(ValueError, match="当前有效"):
         async with owner.connect_web(request, client_id="client"):
             pytest.fail("重连不能恢复原旧版")
@@ -258,7 +258,7 @@ async def test_web_stop_revokes_reads_before_waiting_for_transport_settlement(we
 async def test_web_frozen_reads_use_python_without_further_management_calls(web_case: WebCase) -> None:
     owner = web_case.node.owner
     async with owner.connect_web(web_case.request, client_id="client") as connection:
-        web_case.inventory = ProfileExtensionInventory(profile_id="test-profile", extensions=[])
+        web_case.inventory = ProfileExtensionInventory(target_platform="linux-x64", profile_id="test-profile", extensions=[])
         request = _file(connection)
         for _ in range(3):
             stat = await owner.web_extension_file(request, client_id="client", operation="stat")

@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { builtinModules } from 'node:module';
+import { builtinModules, createRequire } from 'node:module';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -86,7 +86,11 @@ export async function buildNodeExtensionHost(root, output) {
     outdir: output, outExtension: { '.js': '.mjs' },
     bundle: true, format: 'esm', platform: 'node', target: `node${nodeVersion}`,
     packages: 'external', metafile: true, tsconfig: join(root, 'tsconfig.jsonc'),
-    plugins: [buildSourcePlugin(root, sourceTransform(root,
+    plugins: [{ name: 'boxteam-protocol-runtime', setup(builder) {
+      // 项目协议库随生成 descriptor 一起打包，上游运行依赖仍取固定 npm 锁。
+      const require = createRequire(import.meta.url);
+      builder.onResolve({ filter: /^@bufbuild\/protobuf(?:\/|$)/ }, ({ path }) => ({ path: require.resolve(path) }));
+    } }, buildSourcePlugin(root, sourceTransform(root,
       { ...product, version: pkg.version, commit, quality: 'stable' }, [], { runtime: 'node' }))],
     banner: { js: `import { createRequire as boxteamCreateRequire } from 'node:module';
 const require = boxteamCreateRequire(import.meta.url);

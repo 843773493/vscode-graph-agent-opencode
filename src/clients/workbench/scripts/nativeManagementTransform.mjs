@@ -42,7 +42,7 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
 \t\t\t\t\t.finally(() => this.extractingGalleryExtensions.delete(extensionKey.toString()));
 \t\t\t\tthis.extractingGalleryExtensions.set(extensionKey.toString(), promise);`);
     source = replaceOnce(source, 'readonly _serviceBrand: undefined;\n\tscanAllUserInstalledExtensions()',
-      'readonly _serviceBrand: undefined;\n\treadonly whenNativeManagementReady: Promise<void>;\n\tdrainNativeManagement(): Promise<void>;\n\tscanAllUserInstalledExtensions()');
+      'readonly _serviceBrand: undefined;\n\treadonly whenNativeManagementReady: Promise<void>;\n\tdrainNativeManagement(): Promise<void>;\n\tdescribeNativeExtension(extension: IScannedExtension): Promise<ILocalExtension>;\n\tscanAllUserInstalledExtensions()');
     source = replaceOnce(source, 'private readonly extensionsScanner: ExtensionsScanner;',
       `private readonly nativeManagementLifecycle = new NativeManagementLifecycle();
   private readonly nativeManagementListeners = this._register(new DisposableStore());
@@ -65,7 +65,11 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
   });
 `);
     source = replaceOnce(source, 'private _targetPlatformPromise: Promise<TargetPlatform> | undefined;',
-      `async drainNativeManagement(): Promise<void> {
+      `describeNativeExtension(extension: IScannedExtension): Promise<ILocalExtension> {
+    return this.extensionsScanner.toLocalExtension(extension);
+  }
+
+  async drainNativeManagement(): Promise<void> {
     // 初始化全部落定后撤销外部事件；内部 profile / install 事件继续结清原任务。
     await this.whenNativeManagementReady.then(() => undefined, () => undefined);
     this.nativeManagementListeners.dispose();
@@ -81,9 +85,10 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
     source = replaceOnce(source, 'this._register(this.fileService.onDidFilesChange(e => this.onDidFilesChange(e)));',
       'this.nativeManagementListeners.add(this.fileService.onDidFilesChange(e => this.nativeManagementLifecycle.track(this.onDidFilesChange(e))));');
     source = replaceOnce(source, 'this.manifestCache.invalidate(profileLocation);', 'await this.manifestCache.invalidate(profileLocation);');
-    // 复用结果来自原提取分支，沿 InstallOptions.context 回到同一次 VSIX 请求。
+    source = replaceOnce(source, 'private async toLocalExtension(extension: IScannedExtension)', 'async toLocalExtension(extension: IScannedExtension)');
+    // 复用结果来自原提取分支，沿 InstallOptions.context 回到同一次安装请求。
     source = replaceOnce(source, 'type ExtractExtensionResult = { readonly local: ILocalExtension;',
-      `export const NATIVE_VSIX_REUSED_CONTEXT = 'boxteam.vsixVersionReused';
+      `export const NATIVE_EXTENSION_REUSED_CONTEXT = 'boxteam.extensionVersionReused';
 const NATIVE_VSIX_PREPARED_CONTEXT = 'boxteam.preparedVSIX';
 type NativeVSIXPreparation = { readonly profileLocation: URI; readonly installed: ILocalExtension[]; readonly local: ILocalExtension | undefined };
 
@@ -151,9 +156,13 @@ type ExtractExtensionResult = { readonly local: ILocalExtension; readonly reused
       '\t\t\t// 未指定保留时仍沿原 VSIX 替换语义。\n\t\t\tconst existingWithSameVersion = this.options.keepExisting === true ? undefined : await this.unsetIfRemoved(this.extensionKey);');
     source = replaceOnce(source, '\t\t\tthis._verificationStatus = result.verificationStatus;',
       `\t\t\tthis._verificationStatus = result.verificationStatus;
-\t\t\tif (this.source instanceof URI && this.options.context) {
-\t\t\t\tthis.options.context[NATIVE_VSIX_REUSED_CONTEXT] = result.reused;
+\t\t\tif (this.options.context) {
+\t\t\t\tthis.options.context[NATIVE_EXTENSION_REUSED_CONTEXT] = result.reused;
 \t\t\t}`);
+    source = replaceOnce(source, '\t\t\t\treturn this.extensionsScanner.updateMetadata(existingExtension, metadata, this.options.profileLocation);',
+      '\t\t\t\tif (this.options.context) this.options.context[NATIVE_EXTENSION_REUSED_CONTEXT] = true;\n\t\t\t\treturn this.extensionsScanner.updateMetadata(existingExtension, metadata, this.options.profileLocation);');
+    source = replaceOnce(source, '\t\t\tlocal = await this.unsetIfRemoved(this.extensionKey);',
+      '\t\t\tlocal = await this.unsetIfRemoved(this.extensionKey);\n\t\t\tif (local && this.options.context) this.options.context[NATIVE_EXTENSION_REUSED_CONTEXT] = true;');
     source = replaceOnce(source, '\t\ttry {\n\t\t\tawait this.extensionsProfileScannerService.addExtensionsToProfile([[local, metadata]], this.options.profileLocation, !local.isValid);',
       `\t\t// 先完成原目录扫描；复用失败不能提前改写 .obsolete。
 \t\tif (this.source instanceof URI && this.options.keepExisting === true) {

@@ -75,7 +75,7 @@ def test_web_context_contract_preserves_target_view_without_process_initializati
         workspace = workspace.model_copy(update={"folders": [], "configuration": None})
     binding = ExtensionWebHostConnectionDTO(**host_binding.model_dump(exclude={"initialization", "workspace_ids"}),
         workspace_ids=[] if empty else host_binding.workspace_ids, profile_id="target-profile", extension_keys=["publisher.probe-1.0.0"],
-        inventory=ProfileExtensionInventory(profile_id="target-profile", extensions=[InstalledExtension(
+        inventory=ProfileExtensionInventory(target_platform="linux-x64", profile_id="target-profile", extensions=[InstalledExtension(
             extension_key="publisher.probe-1.0.0", source="profile", description={}, is_valid=True, validations=[])]),
         context=ExtensionWebHostContextDTO(os="windows", remote_settings=host_binding.initialization.environment.remote_settings,
             workspace=workspace))
@@ -105,7 +105,7 @@ def test_web_context_rejects_configuration_owner_mismatch(host_binding: Extensio
     with pytest.raises(ValidationError):
         ExtensionWebHostConnectionDTO.model_validate({**host_binding.model_dump(exclude={"initialization"}),
             "profile_id": "target-profile", "extension_keys": ["publisher.probe-1.0.0"],
-            "inventory": {"profile_id": "target-profile", "extensions": [{"extension_key": "publisher.probe-1.0.0",
+            "inventory": {"profile_id": "target-profile", "target_platform": "linux-x64", "extensions": [{"extension_key": "publisher.probe-1.0.0",
                 "source": "profile", "description": {}, "is_valid": True, "validations": []}]},
             "context": {"os": "windows", "remote_settings": settings, "workspace": workspace}})
 

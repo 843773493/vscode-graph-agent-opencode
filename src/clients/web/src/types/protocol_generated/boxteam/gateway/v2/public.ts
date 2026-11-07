@@ -1191,11 +1191,15 @@ export interface InstalledExtension {
   is_valid: boolean;
   validations: ExtensionValidation[];
   extension_key: string;
+  metadata: { [key: string]: any } | undefined;
+  readme_path?: string | undefined;
+  changelog_path?: string | undefined;
 }
 
 export interface ProfileExtensionInventory {
   profile_id: string;
   extensions: InstalledExtension[];
+  target_platform: string;
 }
 
 /** Web 实例只冻结本次选择的当前有效包；连接选择不是运行身份。 */
@@ -1304,6 +1308,56 @@ export interface ExtensionInstallationInstallDTO {
   profile_scope: string;
   inventory: ProfileExtensionInventory | undefined;
   installed: VsixInstallResult | undefined;
+}
+
+/** 仅传递原安装服务支持的用户选项；下载、依赖、平台和签名仍由目标原服务核验。 */
+export interface ExtensionGalleryInstallOptions {
+  install_pre_release_version?: boolean | undefined;
+  install_given_version?: boolean | undefined;
+  donot_include_pack_and_dependencies?: boolean | undefined;
+  is_machine_scoped?: boolean | undefined;
+  is_application_scoped?: boolean | undefined;
+  pinned?: boolean | undefined;
+  pre_release?: boolean | undefined;
+}
+
+export interface ExtensionInstallationGalleryRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  gateway_connection_id?: string | undefined;
+  extension_id: string;
+  version: string;
+  options: ExtensionGalleryInstallOptions | undefined;
+}
+
+export interface ExtensionInstallationGalleryDTO {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  profile_scope: string;
+  inventory: ProfileExtensionInventory | undefined;
+  installed: VsixInstallResult | undefined;
+}
+
+/** Gallery 身份和版本事实只能由目标 GalleryService 重新取得。 */
+export interface ExtensionMetadataPatch {
+  is_machine_scoped?: boolean | undefined;
+  is_application_scoped?: boolean | undefined;
+  pinned?: boolean | undefined;
+  pre_release?: boolean | undefined;
+}
+
+export interface ExtensionInstallationMetadataRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  gateway_connection_id?: string | undefined;
+  profile_id: string;
+  extension_id: string;
+  version: string;
+  metadata: ExtensionMetadataPatch | undefined;
+  refresh_from_gallery: boolean;
 }
 
 /** 只移除已核实的默认 profile 成员；版本制品与当前宿主继续保留。 */
@@ -9248,7 +9302,16 @@ export const ExtensionValidation: MessageFns<ExtensionValidation> = {
 };
 
 function createBaseInstalledExtension(): InstalledExtension {
-  return { source: "", description: undefined, is_valid: false, validations: [], extension_key: "" };
+  return {
+    source: "",
+    description: undefined,
+    is_valid: false,
+    validations: [],
+    extension_key: "",
+    metadata: undefined,
+    readme_path: undefined,
+    changelog_path: undefined,
+  };
 }
 
 export const InstalledExtension: MessageFns<InstalledExtension> = {
@@ -9261,6 +9324,9 @@ export const InstalledExtension: MessageFns<InstalledExtension> = {
         ? object.validations.map((e: any) => ExtensionValidation.fromJSON(e))
         : [],
       extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
+      metadata: isObject(object.metadata) ? object.metadata : undefined,
+      readme_path: isSet(object.readme_path) ? globalThis.String(object.readme_path) : undefined,
+      changelog_path: isSet(object.changelog_path) ? globalThis.String(object.changelog_path) : undefined,
     };
   },
 
@@ -9281,6 +9347,15 @@ export const InstalledExtension: MessageFns<InstalledExtension> = {
     if (message.extension_key !== "") {
       obj.extension_key = message.extension_key;
     }
+    if (message.metadata !== undefined) {
+      obj.metadata = message.metadata;
+    }
+    if (message.readme_path !== undefined) {
+      obj.readme_path = message.readme_path;
+    }
+    if (message.changelog_path !== undefined) {
+      obj.changelog_path = message.changelog_path;
+    }
     return obj;
   },
 
@@ -9294,12 +9369,15 @@ export const InstalledExtension: MessageFns<InstalledExtension> = {
     message.is_valid = object.is_valid ?? false;
     message.validations = object.validations?.map((e) => ExtensionValidation.fromPartial(e)) || [];
     message.extension_key = object.extension_key ?? "";
+    message.metadata = object.metadata ?? undefined;
+    message.readme_path = object.readme_path ?? undefined;
+    message.changelog_path = object.changelog_path ?? undefined;
     return message;
   },
 };
 
 function createBaseProfileExtensionInventory(): ProfileExtensionInventory {
-  return { profile_id: "", extensions: [] };
+  return { profile_id: "", extensions: [], target_platform: "" };
 }
 
 export const ProfileExtensionInventory: MessageFns<ProfileExtensionInventory> = {
@@ -9309,6 +9387,7 @@ export const ProfileExtensionInventory: MessageFns<ProfileExtensionInventory> = 
       extensions: globalThis.Array.isArray(object?.extensions)
         ? object.extensions.map((e: any) => InstalledExtension.fromJSON(e))
         : [],
+      target_platform: isSet(object.target_platform) ? globalThis.String(object.target_platform) : "",
     };
   },
 
@@ -9320,6 +9399,9 @@ export const ProfileExtensionInventory: MessageFns<ProfileExtensionInventory> = 
     if (message.extensions?.length) {
       obj.extensions = message.extensions.map((e) => InstalledExtension.toJSON(e));
     }
+    if (message.target_platform !== "") {
+      obj.target_platform = message.target_platform;
+    }
     return obj;
   },
 
@@ -9330,6 +9412,7 @@ export const ProfileExtensionInventory: MessageFns<ProfileExtensionInventory> = 
     const message = createBaseProfileExtensionInventory();
     message.profile_id = object.profile_id ?? "";
     message.extensions = object.extensions?.map((e) => InstalledExtension.fromPartial(e)) || [];
+    message.target_platform = object.target_platform ?? "";
     return message;
   },
 };
@@ -10027,6 +10110,360 @@ export const ExtensionInstallationInstallDTO: MessageFns<ExtensionInstallationIn
     message.installed = (object.installed !== undefined && object.installed !== null)
       ? VsixInstallResult.fromPartial(object.installed)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionGalleryInstallOptions(): ExtensionGalleryInstallOptions {
+  return {
+    install_pre_release_version: undefined,
+    install_given_version: undefined,
+    donot_include_pack_and_dependencies: undefined,
+    is_machine_scoped: undefined,
+    is_application_scoped: undefined,
+    pinned: undefined,
+    pre_release: undefined,
+  };
+}
+
+export const ExtensionGalleryInstallOptions: MessageFns<ExtensionGalleryInstallOptions> = {
+  fromJSON(object: any): ExtensionGalleryInstallOptions {
+    return {
+      install_pre_release_version: isSet(object.install_pre_release_version)
+        ? globalThis.Boolean(object.install_pre_release_version)
+        : undefined,
+      install_given_version: isSet(object.install_given_version)
+        ? globalThis.Boolean(object.install_given_version)
+        : undefined,
+      donot_include_pack_and_dependencies: isSet(object.donot_include_pack_and_dependencies)
+        ? globalThis.Boolean(object.donot_include_pack_and_dependencies)
+        : undefined,
+      is_machine_scoped: isSet(object.is_machine_scoped) ? globalThis.Boolean(object.is_machine_scoped) : undefined,
+      is_application_scoped: isSet(object.is_application_scoped)
+        ? globalThis.Boolean(object.is_application_scoped)
+        : undefined,
+      pinned: isSet(object.pinned) ? globalThis.Boolean(object.pinned) : undefined,
+      pre_release: isSet(object.pre_release) ? globalThis.Boolean(object.pre_release) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionGalleryInstallOptions): unknown {
+    const obj: any = {};
+    if (message.install_pre_release_version !== undefined) {
+      obj.install_pre_release_version = message.install_pre_release_version;
+    }
+    if (message.install_given_version !== undefined) {
+      obj.install_given_version = message.install_given_version;
+    }
+    if (message.donot_include_pack_and_dependencies !== undefined) {
+      obj.donot_include_pack_and_dependencies = message.donot_include_pack_and_dependencies;
+    }
+    if (message.is_machine_scoped !== undefined) {
+      obj.is_machine_scoped = message.is_machine_scoped;
+    }
+    if (message.is_application_scoped !== undefined) {
+      obj.is_application_scoped = message.is_application_scoped;
+    }
+    if (message.pinned !== undefined) {
+      obj.pinned = message.pinned;
+    }
+    if (message.pre_release !== undefined) {
+      obj.pre_release = message.pre_release;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionGalleryInstallOptions>, I>>(base?: I): ExtensionGalleryInstallOptions {
+    return ExtensionGalleryInstallOptions.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionGalleryInstallOptions>, I>>(
+    object: I,
+  ): ExtensionGalleryInstallOptions {
+    const message = createBaseExtensionGalleryInstallOptions();
+    message.install_pre_release_version = object.install_pre_release_version ?? undefined;
+    message.install_given_version = object.install_given_version ?? undefined;
+    message.donot_include_pack_and_dependencies = object.donot_include_pack_and_dependencies ?? undefined;
+    message.is_machine_scoped = object.is_machine_scoped ?? undefined;
+    message.is_application_scoped = object.is_application_scoped ?? undefined;
+    message.pinned = object.pinned ?? undefined;
+    message.pre_release = object.pre_release ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationGalleryRequest(): ExtensionInstallationGalleryRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    gateway_connection_id: undefined,
+    extension_id: "",
+    version: "",
+    options: undefined,
+  };
+}
+
+export const ExtensionInstallationGalleryRequest: MessageFns<ExtensionInstallationGalleryRequest> = {
+  fromJSON(object: any): ExtensionInstallationGalleryRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      extension_id: isSet(object.extension_id) ? globalThis.String(object.extension_id) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      options: isSet(object.options) ? ExtensionGalleryInstallOptions.fromJSON(object.options) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionInstallationGalleryRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.extension_id !== "") {
+      obj.extension_id = message.extension_id;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.options !== undefined) {
+      obj.options = ExtensionGalleryInstallOptions.toJSON(message.options);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationGalleryRequest>, I>>(
+    base?: I,
+  ): ExtensionInstallationGalleryRequest {
+    return ExtensionInstallationGalleryRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationGalleryRequest>, I>>(
+    object: I,
+  ): ExtensionInstallationGalleryRequest {
+    const message = createBaseExtensionInstallationGalleryRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.extension_id = object.extension_id ?? "";
+    message.version = object.version ?? "";
+    message.options = (object.options !== undefined && object.options !== null)
+      ? ExtensionGalleryInstallOptions.fromPartial(object.options)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationGalleryDTO(): ExtensionInstallationGalleryDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    profile_scope: "",
+    inventory: undefined,
+    installed: undefined,
+  };
+}
+
+export const ExtensionInstallationGalleryDTO: MessageFns<ExtensionInstallationGalleryDTO> = {
+  fromJSON(object: any): ExtensionInstallationGalleryDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      profile_scope: isSet(object.profile_scope) ? globalThis.String(object.profile_scope) : "",
+      inventory: isSet(object.inventory) ? ProfileExtensionInventory.fromJSON(object.inventory) : undefined,
+      installed: isSet(object.installed) ? VsixInstallResult.fromJSON(object.installed) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionInstallationGalleryDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.profile_scope !== "") {
+      obj.profile_scope = message.profile_scope;
+    }
+    if (message.inventory !== undefined) {
+      obj.inventory = ProfileExtensionInventory.toJSON(message.inventory);
+    }
+    if (message.installed !== undefined) {
+      obj.installed = VsixInstallResult.toJSON(message.installed);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationGalleryDTO>, I>>(base?: I): ExtensionInstallationGalleryDTO {
+    return ExtensionInstallationGalleryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationGalleryDTO>, I>>(
+    object: I,
+  ): ExtensionInstallationGalleryDTO {
+    const message = createBaseExtensionInstallationGalleryDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.profile_scope = object.profile_scope ?? "";
+    message.inventory = (object.inventory !== undefined && object.inventory !== null)
+      ? ProfileExtensionInventory.fromPartial(object.inventory)
+      : undefined;
+    message.installed = (object.installed !== undefined && object.installed !== null)
+      ? VsixInstallResult.fromPartial(object.installed)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionMetadataPatch(): ExtensionMetadataPatch {
+  return { is_machine_scoped: undefined, is_application_scoped: undefined, pinned: undefined, pre_release: undefined };
+}
+
+export const ExtensionMetadataPatch: MessageFns<ExtensionMetadataPatch> = {
+  fromJSON(object: any): ExtensionMetadataPatch {
+    return {
+      is_machine_scoped: isSet(object.is_machine_scoped) ? globalThis.Boolean(object.is_machine_scoped) : undefined,
+      is_application_scoped: isSet(object.is_application_scoped)
+        ? globalThis.Boolean(object.is_application_scoped)
+        : undefined,
+      pinned: isSet(object.pinned) ? globalThis.Boolean(object.pinned) : undefined,
+      pre_release: isSet(object.pre_release) ? globalThis.Boolean(object.pre_release) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionMetadataPatch): unknown {
+    const obj: any = {};
+    if (message.is_machine_scoped !== undefined) {
+      obj.is_machine_scoped = message.is_machine_scoped;
+    }
+    if (message.is_application_scoped !== undefined) {
+      obj.is_application_scoped = message.is_application_scoped;
+    }
+    if (message.pinned !== undefined) {
+      obj.pinned = message.pinned;
+    }
+    if (message.pre_release !== undefined) {
+      obj.pre_release = message.pre_release;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionMetadataPatch>, I>>(base?: I): ExtensionMetadataPatch {
+    return ExtensionMetadataPatch.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionMetadataPatch>, I>>(object: I): ExtensionMetadataPatch {
+    const message = createBaseExtensionMetadataPatch();
+    message.is_machine_scoped = object.is_machine_scoped ?? undefined;
+    message.is_application_scoped = object.is_application_scoped ?? undefined;
+    message.pinned = object.pinned ?? undefined;
+    message.pre_release = object.pre_release ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionInstallationMetadataRequest(): ExtensionInstallationMetadataRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    gateway_connection_id: undefined,
+    profile_id: "",
+    extension_id: "",
+    version: "",
+    metadata: undefined,
+    refresh_from_gallery: false,
+  };
+}
+
+export const ExtensionInstallationMetadataRequest: MessageFns<ExtensionInstallationMetadataRequest> = {
+  fromJSON(object: any): ExtensionInstallationMetadataRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      profile_id: isSet(object.profile_id) ? globalThis.String(object.profile_id) : "",
+      extension_id: isSet(object.extension_id) ? globalThis.String(object.extension_id) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      metadata: isSet(object.metadata) ? ExtensionMetadataPatch.fromJSON(object.metadata) : undefined,
+      refresh_from_gallery: isSet(object.refresh_from_gallery)
+        ? globalThis.Boolean(object.refresh_from_gallery)
+        : false,
+    };
+  },
+
+  toJSON(message: ExtensionInstallationMetadataRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.profile_id !== "") {
+      obj.profile_id = message.profile_id;
+    }
+    if (message.extension_id !== "") {
+      obj.extension_id = message.extension_id;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.metadata !== undefined) {
+      obj.metadata = ExtensionMetadataPatch.toJSON(message.metadata);
+    }
+    if (message.refresh_from_gallery !== false) {
+      obj.refresh_from_gallery = message.refresh_from_gallery;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionInstallationMetadataRequest>, I>>(
+    base?: I,
+  ): ExtensionInstallationMetadataRequest {
+    return ExtensionInstallationMetadataRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionInstallationMetadataRequest>, I>>(
+    object: I,
+  ): ExtensionInstallationMetadataRequest {
+    const message = createBaseExtensionInstallationMetadataRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.profile_id = object.profile_id ?? "";
+    message.extension_id = object.extension_id ?? "";
+    message.version = object.version ?? "";
+    message.metadata = (object.metadata !== undefined && object.metadata !== null)
+      ? ExtensionMetadataPatch.fromPartial(object.metadata)
+      : undefined;
+    message.refresh_from_gallery = object.refresh_from_gallery ?? false;
     return message;
   },
 };

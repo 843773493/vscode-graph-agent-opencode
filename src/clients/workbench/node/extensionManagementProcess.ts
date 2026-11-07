@@ -2,6 +2,8 @@ import { once } from 'node:events';
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { isAbsolute, join } from 'node:path';
+import { fromJson, type JsonValue } from '@bufbuild/protobuf';
+import { ExtensionGalleryInstallOptionsSchema, ExtensionMetadataPatchSchema } from '../../../workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js';
 import { closeHttpServer } from '../../../shared/serverHttpShutdown.mjs';
 import { createJsonRequestReader } from '../../../shared/serverJsonRequest.mjs';
 import { createRuntimeLogger, runtimeLoggingState } from '../../../shared/serverRuntimeLogging.mjs';
@@ -124,6 +126,19 @@ try {
           const requestTransport = 'request_transport' in input ? input.request_transport : undefined;
           const vsixPath = input.vsix_path;
           result = await withExtensionDownloadTransport(requestTransport, backendId, () => management.install(vsixPath));
+        } else if (input.method === 'install-gallery' && 'extension_id' in input && typeof input.extension_id === 'string' && input.extension_id
+          && 'version' in input && typeof input.version === 'string' && input.version && 'options' in input) {
+          // 结构校验及 snake_case 到原安装选项的映射来自同一 proto descriptor。
+          const { $typeName: _type, ...options } = fromJson(ExtensionGalleryInstallOptionsSchema, input.options as JsonValue);
+          const requestTransport = 'request_transport' in input ? input.request_transport : undefined;
+          const extensionId = input.extension_id, version = input.version;
+          result = await withExtensionDownloadTransport(requestTransport, backendId, () => management.installGallery(extensionId, version, options));
+        } else if (input.method === 'metadata' && 'profile_id' in input && typeof input.profile_id === 'string' && input.profile_id
+          && 'extension_id' in input && typeof input.extension_id === 'string' && input.extension_id
+          && 'version' in input && typeof input.version === 'string' && input.version && 'metadata' in input
+          && 'refresh_from_gallery' in input && typeof input.refresh_from_gallery === 'boolean') {
+          const { $typeName: _type, ...metadata } = fromJson(ExtensionMetadataPatchSchema, input.metadata as JsonValue);
+          result = await management.updateMetadata(input.profile_id, input.extension_id, input.version, metadata, input.refresh_from_gallery);
         } else if (input.method === 'uninstall' && 'profile_id' in input && typeof input.profile_id === 'string' && input.profile_id
           && 'extension_id' in input && typeof input.extension_id === 'string' && input.extension_id
           && 'version' in input && typeof input.version === 'string' && input.version) {

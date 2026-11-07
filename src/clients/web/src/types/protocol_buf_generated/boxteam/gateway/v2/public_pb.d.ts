@@ -5135,6 +5135,21 @@ export declare type InstalledExtension = Message<"boxteam.gateway.v2.InstalledEx
    * @generated from field: string extension_key = 5;
    */
   extensionKey: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct metadata = 6;
+   */
+  metadata?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional string readme_path = 7;
+   */
+  readmePath?: string | undefined;
+
+  /**
+   * @generated from field: optional string changelog_path = 8;
+   */
+  changelogPath?: string | undefined;
 };
 
 /**
@@ -5156,6 +5171,11 @@ export declare type ProfileExtensionInventory = Message<"boxteam.gateway.v2.Prof
    * @generated from field: repeated boxteam.gateway.v2.InstalledExtension extensions = 2;
    */
   extensions: InstalledExtension[];
+
+  /**
+   * @generated from field: string target_platform = 3;
+   */
+  targetPlatform: string;
 };
 
 /**
@@ -5635,6 +5655,230 @@ export declare type ExtensionInstallationInstallDTO = Message<"boxteam.gateway.v
  * Use `create(ExtensionInstallationInstallDTOSchema)` to create a new message.
  */
 export declare const ExtensionInstallationInstallDTOSchema: GenMessage<ExtensionInstallationInstallDTO>;
+
+/**
+ * 仅传递原安装服务支持的用户选项；下载、依赖、平台和签名仍由目标原服务核验。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionGalleryInstallOptions
+ */
+export declare type ExtensionGalleryInstallOptions = Message<"boxteam.gateway.v2.ExtensionGalleryInstallOptions"> & {
+  /**
+   * @generated from field: optional bool install_pre_release_version = 1;
+   */
+  installPreReleaseVersion?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool install_given_version = 2;
+   */
+  installGivenVersion?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool donot_include_pack_and_dependencies = 3;
+   */
+  donotIncludePackAndDependencies?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool is_machine_scoped = 4;
+   */
+  isMachineScoped?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool is_application_scoped = 5;
+   */
+  isApplicationScoped?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool pinned = 6;
+   */
+  pinned?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool pre_release = 7;
+   */
+  preRelease?: boolean | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionGalleryInstallOptions.
+ * Use `create(ExtensionGalleryInstallOptionsSchema)` to create a new message.
+ */
+export declare const ExtensionGalleryInstallOptionsSchema: GenMessage<ExtensionGalleryInstallOptions>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationGalleryRequest
+ */
+export declare type ExtensionInstallationGalleryRequest = Message<"boxteam.gateway.v2.ExtensionInstallationGalleryRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 4;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string extension_id = 5;
+   */
+  extensionId: string;
+
+  /**
+   * @generated from field: string version = 6;
+   */
+  version: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionGalleryInstallOptions options = 7;
+   */
+  options?: ExtensionGalleryInstallOptions | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationGalleryRequest.
+ * Use `create(ExtensionInstallationGalleryRequestSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationGalleryRequestSchema: GenMessage<ExtensionInstallationGalleryRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationGalleryDTO
+ */
+export declare type ExtensionInstallationGalleryDTO = Message<"boxteam.gateway.v2.ExtensionInstallationGalleryDTO"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string profile_scope = 4;
+   */
+  profileScope: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ProfileExtensionInventory inventory = 5;
+   */
+  inventory?: ProfileExtensionInventory | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.VsixInstallResult installed = 6;
+   */
+  installed?: VsixInstallResult | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationGalleryDTO.
+ * Use `create(ExtensionInstallationGalleryDTOSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationGalleryDTOSchema: GenMessage<ExtensionInstallationGalleryDTO>;
+
+/**
+ * Gallery 身份和版本事实只能由目标 GalleryService 重新取得。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionMetadataPatch
+ */
+export declare type ExtensionMetadataPatch = Message<"boxteam.gateway.v2.ExtensionMetadataPatch"> & {
+  /**
+   * @generated from field: optional bool is_machine_scoped = 1;
+   */
+  isMachineScoped?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool is_application_scoped = 2;
+   */
+  isApplicationScoped?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool pinned = 3;
+   */
+  pinned?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool pre_release = 4;
+   */
+  preRelease?: boolean | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionMetadataPatch.
+ * Use `create(ExtensionMetadataPatchSchema)` to create a new message.
+ */
+export declare const ExtensionMetadataPatchSchema: GenMessage<ExtensionMetadataPatch>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionInstallationMetadataRequest
+ */
+export declare type ExtensionInstallationMetadataRequest = Message<"boxteam.gateway.v2.ExtensionInstallationMetadataRequest"> & {
+  /**
+   * @generated from field: uint32 protocol_version = 1;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 4;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string profile_id = 5;
+   */
+  profileId: string;
+
+  /**
+   * @generated from field: string extension_id = 6;
+   */
+  extensionId: string;
+
+  /**
+   * @generated from field: string version = 7;
+   */
+  version: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionMetadataPatch metadata = 8;
+   */
+  metadata?: ExtensionMetadataPatch | undefined;
+
+  /**
+   * @generated from field: bool refresh_from_gallery = 9;
+   */
+  refreshFromGallery: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionInstallationMetadataRequest.
+ * Use `create(ExtensionInstallationMetadataRequestSchema)` to create a new message.
+ */
+export declare const ExtensionInstallationMetadataRequestSchema: GenMessage<ExtensionInstallationMetadataRequest>;
 
 /**
  * 只移除已核实的默认 profile 成员；版本制品与当前宿主继续保留。

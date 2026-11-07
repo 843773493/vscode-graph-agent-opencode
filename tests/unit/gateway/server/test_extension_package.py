@@ -156,6 +156,27 @@ def test_package_content_preserves_frozen_identity_for_relative_assets(package_c
     assert result.headers["Content-Type"].split(";")[0] in {"text/javascript", "application/javascript"}
 
 
+@pytest.mark.parametrize("capability", [None, "read", "extension_installation_manage", "extension_host_manage"])
+def test_current_package_content_uses_current_member_without_runtime_generation(package_proxy, native_control, capability):
+    h, calls, _, _ = package_proxy
+    h.policy.publish({"rules": [] if capability is None else [{"capability": capability, "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(PEER)}]})
+    root = (f"/api/gateway/extension-packages/current/{GATEWAY}/{h.request.backend_id}"
+        "/default-profile/publisher.probe-1.0.0/publisher.probe/")
+    result = h.client.get(root + "assets/readme.svg", headers={"X-BoxTeam-Federation-Token": h.federation_token,
+        extension_host.CLIENT_HEADER: "original-client"})
+    allowed = capability in {"extension_installation_manage", "extension_host_manage"}
+    assert result.status_code == (200 if allowed else 403), result.text
+    assert not calls and len(native_control.calls) == int(allowed)
+    if allowed:
+        assert result.content == b"old" and result.headers["Cache-Control"] == "no-store"
+        assert native_control.calls[0] == {"method": "extension-file-read", "profile_id": "default-profile",
+            "extension_id": "publisher.probe", "extension_key": "publisher.probe-1.0.0",
+            "relative_segments": ["assets", "readme.svg"], "current_profile_member": True}
+    rejected = h.client.get(root + "assets/readme.svg?gateway_connection_id=other", headers={"X-Local-Token": h.token})
+    assert rejected.status_code == 422 and len(native_control.calls) == int(allowed)
+
+
 def test_package_content_same_origin_browser_uses_original_http_only_user_lease(package_content):
     h, calls, _, root = package_content
     result = h.client.get(root + "assets/theme.css", headers={"Sec-Fetch-Site": "same-origin"})
@@ -288,7 +309,7 @@ def test_web_control_channel_without_workspace_uses_original_supervision(package
                 native_uri="file:///target/settings.json", resource_uri=extension_configuration_uri(gateway_id=payload.gateway_id,
                     backend_id=payload.backend_id, profile_id=payload.profile_id)),
                 workspace=ExtensionHostWorkspaceDTO(id="empty-view", name="空工作区", folders=[])),
-            inventory=ProfileExtensionInventory.model_validate({"profile_id": "default-profile", "extensions": [{"extension_key": "publisher.probe-1.0.0",
+            inventory=ProfileExtensionInventory.model_validate({"profile_id": "default-profile", "target_platform": "linux-x64", "extensions": [{"extension_key": "publisher.probe-1.0.0",
                 "source": "profile", "description": {}, "is_valid": True, "validations": []}]}))
         await websocket.send_text(binding.model_dump_json())
         await asyncio.Event().wait()
