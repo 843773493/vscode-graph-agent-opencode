@@ -23,6 +23,7 @@ import { Registry } from '../../../../src/clients/workbench/upstream/src/vs/plat
 import { IWorkspaceContextService } from '../../../../src/clients/workbench/upstream/src/vs/platform/workspace/common/workspace.js';
 import { EditorModel } from '../../../../src/clients/workbench/upstream/src/vs/workbench/common/editor/editorModel.js';
 import { IPreferencesService, SettingMatchType, SettingValueType, validateSettingsEditorOptions } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/preferences/common/preferences.js';
+import { ITextEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textEditorService.js';
 import * as preferences from '../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/preferences/common/preferences.js';
 import { pinnedUpstreamCommit, sourceTransform } from '../../../../src/clients/workbench/scripts/sourceTransform.mjs';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
@@ -91,7 +92,8 @@ const { PreferencesService } = evaluate(await source('workbench/services/prefere
 const ScopeBoundary = createDecorator('settingsEditorTargetIntegrationBoundary');
 const GroupIdentity = createDecorator('settingsEditorTargetIntegrationGroup');
 const helperParsed = await source('src/settings/editor.ts', true);
-const { settingsEditorIdentity, parseSettingsLocation } = evaluate(helperParsed, ['settingsEditorIdentity', 'parseSettingsLocation'], {});
+const { settingsEditorIdentity, parseSettingsLocation, settingsHistoryLocation } = evaluate(helperParsed,
+  ['settingsEditorIdentity', 'parseSettingsLocation', 'settingsHistoryLocation'], {});
 const { prepareSettingsPane } = evaluate(helperParsed, ['prepareSettingsPane'], {
   CancellationError,
   // 只替代配置 HTTP 准备及目标服务装配；原 prepare/取消流程和 Input 模型绑定仍实际执行。
@@ -108,7 +110,9 @@ const { SettingsEditor2Input } = evaluate(await source('workbench/services/prefe
   SettingsEditorIcon: { id: 'settings-integration-icon' }, nls: { localize: (_key, text) => text },
 });
 const { SettingsEditor2InputSerializer } = evaluate(await source('workbench/contrib/preferences/browser/preferences.contribution.ts'),
-  ['SettingsEditor2InputSerializer'], { SettingsEditor2Input, parseSettingsLocation });
+  ['SettingsEditor2InputSerializer'], { SettingsEditor2Input, parseSettingsLocation, settingsHistoryLocation });
+const { FileEditorInputSerializer } = evaluate(await source('workbench/contrib/files/browser/editors/fileEditorHandler.ts'),
+  ['FileEditorInputSerializer'], { URI, isEqual, ITextEditorService, settingsHistoryLocation });
 
 class RendererBoundary extends Disposable {
   constructor(editor, model) { super(); this.model = model; this.renderCount = 0; editor.integrationRenderers.push(this); }
@@ -278,8 +282,13 @@ scenario('原 serializer 仅恢复明确 location，拒绝损坏历史并保留�
   try {
     const serializer = new SettingsEditor2InputSerializer(), input = f.input(location(), { transient: 'must-not-persist' });
     const serialized = serializer.serialize(input), restored = serializer.deserialize(f.parent, serialized);
-    expect(JSON.parse(serialized)).toEqual(location()); expect(serialized.includes('must-not-persist')).toBe(false);
+    const { gateway_connection_id: _route, ...stable } = location();
+    expect(JSON.parse(serialized)).toEqual(stable); expect(serialized.includes('must-not-persist')).toBe(false);
+    expect(input.location.gateway_connection_id).toBe('route-A'); expect(restored.location).toEqual(stable);
     expect(restored.matches(input)).toBe(true); expect(restored.initialContext).toBeUndefined();
+    const previousHistory = serializer.deserialize(f.parent, JSON.stringify(location({ gateway_connection_id: 'removed-route' })));
+    expect(previousHistory.location).toEqual(stable); expect(previousHistory.matches(input)).toBe(true);
+    previousHistory.dispose();
     expect(() => serializer.deserialize(f.parent, '{')).toThrow();
     expect(() => serializer.deserialize(f.parent, JSON.stringify({ version: 1 }))).toThrow('设置历史目标格式无效');
     const plain = serializer.deserialize(f.parent, '');
@@ -287,6 +296,28 @@ scenario('原 serializer 仅恢复明确 location，拒绝损坏历史并保留�
     expect(await plain.resolve()).toBeInstanceOf(Settings2EditorModel);
     restored.dispose(); plain.dispose();
   } finally { f.close(); }
+});
+
+scenario('原文件 serializer 保留规范资源与编辑选项，设置 JSON 历史剥离连接而活跃绑定不变', () => {
+  const serializer = new FileEditorInputSerializer(), resource = URI.parse('boxteam://gateway-A/profile/settings');
+  const active = location(), bindings = [], requests = [];
+  const file = { resource, preferredResource: resource, settingsLocation: active,
+    getPreferredName: () => '目标 JSON', getPreferredDescription: () => '原描述', getEncoding: () => 'utf8', getPreferredLanguageId: () => 'jsonc' };
+  const serialized = JSON.parse(serializer.serialize(file));
+  const { gateway_connection_id: _route, ...stable } = active;
+  expect(serialized.settingsTarget).toEqual(stable); expect(active.gateway_connection_id).toBe('route-A');
+  const restored = { bindSettingsTarget: value => bindings.push(value) };
+  const services = new InstantiationService(new ServiceCollection([ITextEditorService, {
+    createTextEditor(options) { requests.push(options); return restored; },
+  }]));
+  try {
+    expect(serializer.deserialize(services, JSON.stringify({ ...serialized,
+      settingsTarget: { ...stable, gateway_connection_id: 'removed-route' } }))).toBe(restored);
+    expect(bindings).toEqual([stable]);
+    expect(requests).toEqual([{ resource, label: '目标 JSON', description: '原描述', encoding: 'utf8', languageId: 'jsonc', forceFile: true }]);
+    serializer.deserialize(services, JSON.stringify({ ...serialized, settingsTarget: undefined }));
+    expect(bindings).toHaveLength(1);
+  } finally { services.dispose(); }
 });
 
 scenario('同一原输入为两组创建不同原模型，各组关闭只释放自己的模型与绑定', async () => {

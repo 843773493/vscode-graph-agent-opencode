@@ -174,6 +174,49 @@ def test_configuration_relay_preserves_connection_and_rejects_late_old_route(con
         assert "content_base64" not in response.text
 
 
+def test_restored_settings_resolve_current_unique_connection_without_reusing_historical_route(configuration_proxy):
+    h, calls, _, payload = configuration_proxy
+    payload.pop("generation")
+    payload.update(gateway_id=PEER, profile_id="default-profile", resource_uri=extension_configuration_uri(
+        gateway_id=PEER, backend_id=h.request.backend_id, profile_id="default-profile"))
+
+    def register(connection_id: str, gateway_id: str) -> None:
+        h.registry.upsert_remote_gateway(RemoteGatewayConnection(connection_id=connection_id, name="same-name",
+            host="remote.test", port=22, username="unit", private_key_path=None, ssh_config_host=None,
+            remote_gateway_port=8014, remote_gateway_id=gateway_id, protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual"),
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": f"http://{connection_id}.test"}))
+        FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+            connection_id=connection_id, peer_gateway_id=gateway_id)
+
+    register("removed-route", PEER)
+    h.registry.remove_remote_gateway("removed-route")
+    register("current-route", PEER)
+    headers = {"X-Local-Token": h.token, "X-Request-ID": "restored-settings"}
+    restored = h.client.post("/api/gateway/extension-configurations/read", json=payload, headers=headers)
+    assert restored.status_code == 200, restored.text
+    assert calls[0].url == "http://current-route.test/api/gateway/extension-configurations/read"
+    assert json.loads(calls[0].content) == payload
+    assert restored.headers["X-Request-ID"] == restored.json()["request_id"] == "restored-settings"
+
+    stale = h.client.post("/api/gateway/extension-configurations/read",
+        json={**payload, "gateway_connection_id": "removed-route"}, headers=headers)
+    assert stale.status_code == 409 and len(calls) == 1
+    register("ambiguous-route", PEER)
+    ambiguous = h.client.post("/api/gateway/extension-configurations/read", json=payload, headers=headers)
+    assert ambiguous.status_code == 409 and len(calls) == 1
+    explicit = h.client.post("/api/gateway/extension-configurations/read",
+        json={**payload, "gateway_connection_id": "current-route"}, headers=headers)
+    assert explicit.status_code == 200 and len(calls) == 2
+    assert calls[1].url == calls[0].url
+
+    h.registry.remove_remote_gateway("current-route")
+    h.registry.remove_remote_gateway("ambiguous-route")
+    register("current-route", f"gateway_{uuid4().hex}")
+    reused = h.client.post("/api/gateway/extension-configurations/read", json=payload, headers=headers)
+    assert reused.status_code == 409 and len(calls) == 2
+    assert not h.registry._remote_gateway_reference_counts
+
+
 @pytest.mark.parametrize("operation", ["read", "write"])
 @pytest.mark.parametrize("capabilities", [[], ["extension_host_manage"], ["configuration_read"],
     ["configuration_write"], ["configuration_read", "configuration_write"]])

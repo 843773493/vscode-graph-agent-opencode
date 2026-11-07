@@ -158,13 +158,13 @@ import { targetSettings, targetConfigurationSourceFilter } from ${context};
     contents = `import { FileEditorInput } from '../../files/browser/editors/fileEditorInput.js';
 import { SideBySideEditorInput } from '../../../common/editor/sideBySideEditorInput.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
-import { parseSettingsLocation, prepareSettingsContext, settingsFileOptions } from ${editor};
+import { parseSettingsLocation, settingsHistoryLocation, prepareSettingsContext, settingsFileOptions } from ${editor};
 ` + contents;
     contents = section(contents, '\tserialize(input: SettingsEditor2Input): string {', '\n}\n\nRegistry.as<IEditorFactoryRegistry>', `  serialize(input: SettingsEditor2Input): string {
-    return input.location ? JSON.stringify(input.location) : '';
+    return input.location ? JSON.stringify(settingsHistoryLocation(input.location)) : '';
   }
   deserialize(instantiationService: IInstantiationService, serialized: string): SettingsEditor2Input {
-    return instantiationService.createInstance(SettingsEditor2Input, serialized ? parseSettingsLocation(JSON.parse(serialized)) : undefined, undefined);
+    return instantiationService.createInstance(SettingsEditor2Input, serialized ? settingsHistoryLocation(parseSettingsLocation(JSON.parse(serialized))) : undefined, undefined);
   }
 `, replaceOnce);
     contents = replaceOnce(contents, 'model && /\\.(json|code-workspace)$/.test(model.uri.path)',
@@ -357,10 +357,10 @@ import type { TargetConfigurationContext } from ${context};
     return this.verifiedSettingsContext ? retainSettingsFile(this.instantiationService, this.verifiedSettingsContext, this.resource, open) : open();`);
   }
   if (path === paths[5]) {
-    contents = `import type { TargetSettingsLocation } from ${scope};\n` + contents;
-    contents = replaceOnce(contents, 'interface ISerializedFileEditorInput {', 'interface ISerializedFileEditorInput {\n  settingsTarget?: TargetSettingsLocation;');
-    contents = replaceOnce(contents, '\t\t\tresourceJSON: resource.toJSON(),', '\t\t\tresourceJSON: resource.toJSON(),\n      settingsTarget: fileEditorInput.settingsLocation,');
-    contents = replaceOnce(contents, '\t\t\treturn fileEditorInput;', '\t\t\tif (serializedFileEditorInput.settingsTarget) fileEditorInput.bindSettingsTarget(serializedFileEditorInput.settingsTarget);\n\t\t\treturn fileEditorInput;');
+    contents = `import type { TargetSettingsLocation } from ${scope};\nimport { settingsHistoryLocation } from ${editor};\n` + contents;
+    contents = replaceOnce(contents, 'interface ISerializedFileEditorInput {', "interface ISerializedFileEditorInput {\n  settingsTarget?: Omit<TargetSettingsLocation, 'gateway_connection_id'>;");
+    contents = replaceOnce(contents, '\t\t\tresourceJSON: resource.toJSON(),', '\t\t\tresourceJSON: resource.toJSON(),\n      settingsTarget: fileEditorInput.settingsLocation && settingsHistoryLocation(fileEditorInput.settingsLocation),');
+    contents = replaceOnce(contents, '\t\t\treturn fileEditorInput;', '\t\t\tif (serializedFileEditorInput.settingsTarget) fileEditorInput.bindSettingsTarget(settingsHistoryLocation(serializedFileEditorInput.settingsTarget));\n\t\t\treturn fileEditorInput;');
   }
   if (path === paths[6]) {
     contents = `import type { ConfigurationDefaultSource } from '../../../../platform/configuration/common/configurationRegistry.js';\n` + contents;

@@ -34,7 +34,13 @@ export function settingsEditorIdentity(location: TargetSettingsLocation): string
   return JSON.stringify([location.gateway_id, location.backend_id, location.profile_id, location.view_id, location.workspace_ids]);
 }
 
-/** 历史输入只恢复稳定归属；连接路由及权限在 prepare 时重新核验。 */
+/** 历史只保存稳定归属；恢复交原 Gateway registry 解析当前唯一连接，歧义仍明确拒绝。 */
+export function settingsHistoryLocation(location: TargetSettingsLocation): Omit<TargetSettingsLocation, 'gateway_connection_id'> {
+  const { gateway_connection_id: _route, ...stable } = location;
+  return stable;
+}
+
+/** 活跃输入保留明确连接；持久化边界另行投影稳定归属。 */
 export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
   if (!value || typeof value !== 'object') throw new Error('设置历史缺少明确目标');
   const location = value as Record<string, unknown>;
