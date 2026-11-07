@@ -1,9 +1,16 @@
 {
   "extends": "../tsconfig.jsonc",
   "compilerOptions": {
-    "types": ["node"],
+    "types": ["node", "trusted-types"],
     "allowJs": false,
     "noEmit": true
   },
-  "include": ["*.ts", "../upstream/src/typings/*.d.ts"]
+  "include": [
+    "*.ts",
+    "../upstream/src/vs/workbench/api/node/extensionHostProcess.ts",
+    "../upstream/src/typings/*.d.ts",
+    "../upstream/src/vscode-dts/*.d.ts",
+    "../upstream/src/vs/monaco.d.ts",
+    "../upstream/src/vs/workbench/contrib/debug/common/debugProtocol.d.ts"
+  ]
 }

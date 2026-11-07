@@ -17,6 +17,11 @@ const [manifest, metadata, upstreamLock, workbench] = await Promise.all([
   json(join(root, 'upstream/package-lock.json')), json(join(root, 'package.json')),
 ]);
 if (metadata.commit !== commit) throw new Error(`Node 类型检查的组件不属于固定上游：${metadata.commit}`);
+const nodeTypesVersion = upstreamLock.packages['node_modules/@types/node'].version;
+const nodeTypes = await json(join(root, 'node_modules/@types/node/package.json'));
+if (workbench.devDependencies['@types/node'] !== nodeTypesVersion || nodeTypes.version !== nodeTypesVersion) {
+  throw new Error(`Node 类型声明不匹配固定上游：要求 ${nodeTypesVersion}，实际 ${nodeTypes.version}`);
+}
 
 // 解析实际组件的冻结依赖，不从仓库其它 node_modules 偶然捡取同名运行包。
 const paths = {};
@@ -41,7 +46,6 @@ const output = values.outdir ? resolve(values.outdir) : join(repository, 'out/bu
 const { projectedRoot, targets } = await projectTypecheckSources({ repository, root, output,
   paths: nodeTransformedSourcePaths, commit, runtime: 'node' });
 const configuration = join(output, 'tsconfig.jsonc');
-// TODO：原 node/tsconfig 只包含管理入口；完整 Extension Host 入口的声明合同仍须单独迁齐。
 await writeFile(configuration, JSON.stringify({ extends: join(projectedRoot, 'node/tsconfig.jsonc'),
   compilerOptions: { preserveSymlinks: true, typeRoots: [join(root, 'node_modules/@types')], paths } }, null, 2) + '\n');
 await writeFile(join(output, 'sources.json'), JSON.stringify({ commit, runtime, targets, configuration }, null, 2) + '\n');
