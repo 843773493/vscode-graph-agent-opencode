@@ -1032,6 +1032,7 @@ export interface ExtensionConfigurationViewRequest {
   view_id: string;
   workspace_ids: string[];
   generation: string;
+  gateway_connection_id?: string | undefined;
 }
 
 export interface ExtensionConfigurationFileRequest {
@@ -1042,6 +1043,7 @@ export interface ExtensionConfigurationFileRequest {
   workspace_ids: string[];
   generation: string;
   resource_uri: string;
+  gateway_connection_id?: string | undefined;
 }
 
 export interface ExtensionConfigurationWriteOptions {
@@ -1062,6 +1064,7 @@ export interface ExtensionConfigurationWriteRequest {
   resource_uri: string;
   content_base64: string;
   options: ExtensionConfigurationWriteOptions | undefined;
+  gateway_connection_id?: string | undefined;
 }
 
 export interface ExtensionConfigurationStatDTO {
@@ -1219,6 +1222,14 @@ export interface ExtensionWebHostConnectionDTO {
   generation: string;
   request_id: string;
   inventory: ProfileExtensionInventory | undefined;
+  context: ExtensionWebHostContextDTO | undefined;
+}
+
+/** Web 仅取得目标业务视图与具名配置资源，不取得 Node 进程初始化。 */
+export interface ExtensionWebHostContextDTO {
+  os: string;
+  remote_settings: ExtensionHostConfigurationResourceDTO | undefined;
+  workspace: ExtensionHostWorkspaceDTO | undefined;
 }
 
 /** 包逻辑地址不含版本；exact key 与旧版运行资格是独立字段。 */
@@ -8154,7 +8165,15 @@ export const ExtensionHostWorkspaceDTO: MessageFns<ExtensionHostWorkspaceDTO> = 
 };
 
 function createBaseExtensionConfigurationViewRequest(): ExtensionConfigurationViewRequest {
-  return { protocol_version: 0, gateway_id: "", backend_id: "", view_id: "", workspace_ids: [], generation: "" };
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    generation: "",
+    gateway_connection_id: undefined,
+  };
 }
 
 export const ExtensionConfigurationViewRequest: MessageFns<ExtensionConfigurationViewRequest> = {
@@ -8168,6 +8187,9 @@ export const ExtensionConfigurationViewRequest: MessageFns<ExtensionConfiguratio
         ? object.workspace_ids.map((e: any) => globalThis.String(e))
         : [],
       generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
     };
   },
 
@@ -8191,6 +8213,9 @@ export const ExtensionConfigurationViewRequest: MessageFns<ExtensionConfiguratio
     if (message.generation !== "") {
       obj.generation = message.generation;
     }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
     return obj;
   },
 
@@ -8209,6 +8234,7 @@ export const ExtensionConfigurationViewRequest: MessageFns<ExtensionConfiguratio
     message.view_id = object.view_id ?? "";
     message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
     message.generation = object.generation ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     return message;
   },
 };
@@ -8222,6 +8248,7 @@ function createBaseExtensionConfigurationFileRequest(): ExtensionConfigurationFi
     workspace_ids: [],
     generation: "",
     resource_uri: "",
+    gateway_connection_id: undefined,
   };
 }
 
@@ -8237,6 +8264,9 @@ export const ExtensionConfigurationFileRequest: MessageFns<ExtensionConfiguratio
         : [],
       generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
       resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
     };
   },
 
@@ -8263,6 +8293,9 @@ export const ExtensionConfigurationFileRequest: MessageFns<ExtensionConfiguratio
     if (message.resource_uri !== "") {
       obj.resource_uri = message.resource_uri;
     }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
     return obj;
   },
 
@@ -8282,6 +8315,7 @@ export const ExtensionConfigurationFileRequest: MessageFns<ExtensionConfiguratio
     message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
     message.generation = object.generation ?? "";
     message.resource_uri = object.resource_uri ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     return message;
   },
 };
@@ -8350,6 +8384,7 @@ function createBaseExtensionConfigurationWriteRequest(): ExtensionConfigurationW
     resource_uri: "",
     content_base64: "",
     options: undefined,
+    gateway_connection_id: undefined,
   };
 }
 
@@ -8367,6 +8402,9 @@ export const ExtensionConfigurationWriteRequest: MessageFns<ExtensionConfigurati
       resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : "",
       content_base64: isSet(object.content_base64) ? globalThis.String(object.content_base64) : "",
       options: isSet(object.options) ? ExtensionConfigurationWriteOptions.fromJSON(object.options) : undefined,
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
     };
   },
 
@@ -8399,6 +8437,9 @@ export const ExtensionConfigurationWriteRequest: MessageFns<ExtensionConfigurati
     if (message.options !== undefined) {
       obj.options = ExtensionConfigurationWriteOptions.toJSON(message.options);
     }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
     return obj;
   },
 
@@ -8422,6 +8463,7 @@ export const ExtensionConfigurationWriteRequest: MessageFns<ExtensionConfigurati
     message.options = (object.options !== undefined && object.options !== null)
       ? ExtensionConfigurationWriteOptions.fromPartial(object.options)
       : undefined;
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     return message;
   },
 };
@@ -9384,6 +9426,7 @@ function createBaseExtensionWebHostConnectionDTO(): ExtensionWebHostConnectionDT
     generation: "",
     request_id: "",
     inventory: undefined,
+    context: undefined,
   };
 }
 
@@ -9405,6 +9448,7 @@ export const ExtensionWebHostConnectionDTO: MessageFns<ExtensionWebHostConnectio
       generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
       request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
       inventory: isSet(object.inventory) ? ProfileExtensionInventory.fromJSON(object.inventory) : undefined,
+      context: isSet(object.context) ? ExtensionWebHostContextDTO.fromJSON(object.context) : undefined,
     };
   },
 
@@ -9443,6 +9487,9 @@ export const ExtensionWebHostConnectionDTO: MessageFns<ExtensionWebHostConnectio
     if (message.inventory !== undefined) {
       obj.inventory = ProfileExtensionInventory.toJSON(message.inventory);
     }
+    if (message.context !== undefined) {
+      obj.context = ExtensionWebHostContextDTO.toJSON(message.context);
+    }
     return obj;
   },
 
@@ -9465,6 +9512,54 @@ export const ExtensionWebHostConnectionDTO: MessageFns<ExtensionWebHostConnectio
     message.request_id = object.request_id ?? "";
     message.inventory = (object.inventory !== undefined && object.inventory !== null)
       ? ProfileExtensionInventory.fromPartial(object.inventory)
+      : undefined;
+    message.context = (object.context !== undefined && object.context !== null)
+      ? ExtensionWebHostContextDTO.fromPartial(object.context)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionWebHostContextDTO(): ExtensionWebHostContextDTO {
+  return { os: "", remote_settings: undefined, workspace: undefined };
+}
+
+export const ExtensionWebHostContextDTO: MessageFns<ExtensionWebHostContextDTO> = {
+  fromJSON(object: any): ExtensionWebHostContextDTO {
+    return {
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
+      remote_settings: isSet(object.remote_settings)
+        ? ExtensionHostConfigurationResourceDTO.fromJSON(object.remote_settings)
+        : undefined,
+      workspace: isSet(object.workspace) ? ExtensionHostWorkspaceDTO.fromJSON(object.workspace) : undefined,
+    };
+  },
+
+  toJSON(message: ExtensionWebHostContextDTO): unknown {
+    const obj: any = {};
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
+    if (message.remote_settings !== undefined) {
+      obj.remote_settings = ExtensionHostConfigurationResourceDTO.toJSON(message.remote_settings);
+    }
+    if (message.workspace !== undefined) {
+      obj.workspace = ExtensionHostWorkspaceDTO.toJSON(message.workspace);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionWebHostContextDTO>, I>>(base?: I): ExtensionWebHostContextDTO {
+    return ExtensionWebHostContextDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionWebHostContextDTO>, I>>(object: I): ExtensionWebHostContextDTO {
+    const message = createBaseExtensionWebHostContextDTO();
+    message.os = object.os ?? "";
+    message.remote_settings = (object.remote_settings !== undefined && object.remote_settings !== null)
+      ? ExtensionHostConfigurationResourceDTO.fromPartial(object.remote_settings)
+      : undefined;
+    message.workspace = (object.workspace !== undefined && object.workspace !== null)
+      ? ExtensionHostWorkspaceDTO.fromPartial(object.workspace)
       : undefined;
     return message;
   },

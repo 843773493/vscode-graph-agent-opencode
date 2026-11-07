@@ -16,8 +16,16 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayCon
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import extension_host, extension_package
+from app.schemas.gateway.extension_host import (
+    ExtensionHostConfigurationResourceDTO,
+    ExtensionHostWorkspaceDTO,
+)
 from app.schemas.gateway.extension_installation import ProfileExtensionInventory
-from app.schemas.gateway.extension_web import ExtensionWebHostConnectionDTO
+from app.schemas.gateway.extension_web import (
+    ExtensionWebHostConnectionDTO,
+    ExtensionWebHostContextDTO,
+)
+from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from tests.unit.gateway.server.test_extension_host import GATEWAY, PEER
 from tests.unit.gateway.server.test_extension_installation import (
     host_gateway as host_gateway,  # noqa: PLC0414
@@ -276,6 +284,10 @@ def test_web_control_channel_without_workspace_uses_original_supervision(package
     async def upstream(websocket, *, headers, payload, expected_client_id, **_):
         binding = ExtensionWebHostConnectionDTO(**payload.model_dump(exclude={"gateway_connection_id"}),
             client_id=expected_client_id, generation=str(uuid4()), request_id=headers["X-Request-ID"],
+            context=ExtensionWebHostContextDTO(os="linux", remote_settings=ExtensionHostConfigurationResourceDTO(
+                native_uri="file:///target/settings.json", resource_uri=extension_configuration_uri(gateway_id=payload.gateway_id,
+                    backend_id=payload.backend_id, profile_id=payload.profile_id)),
+                workspace=ExtensionHostWorkspaceDTO(id="empty-view", name="空工作区", folders=[])),
             inventory=ProfileExtensionInventory.model_validate({"profile_id": "default-profile", "extensions": [{"extension_key": "publisher.probe-1.0.0",
                 "source": "profile", "description": {}, "is_valid": True, "validations": []}]}))
         await websocket.send_text(binding.model_dump_json())

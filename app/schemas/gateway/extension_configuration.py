@@ -9,13 +9,14 @@ from pydantic import Field, field_validator
 
 from app.schemas.gateway.extension_host import (
     ExtensionConfigurationURI,
-    ExtensionHostOpenRequest,
+    _ExtensionHostViewRequest,
     _HostValue,
 )
 
 
-class ExtensionConfigurationViewRequest(ExtensionHostOpenRequest):
+class ExtensionConfigurationViewRequest(_ExtensionHostViewRequest):
     generation: str = Field(min_length=1)
+    gateway_connection_id: str | None = Field(default=None, min_length=1)
 
 
 class ExtensionConfigurationFileRequest(ExtensionConfigurationViewRequest):

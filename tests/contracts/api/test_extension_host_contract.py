@@ -18,7 +18,16 @@ from app.schemas.gateway.extension_host import (
     ExtensionHostEnvironmentDTO,
     ExtensionHostFolderDTO,
     ExtensionHostInitializationDTO,
+    ExtensionHostOpenRequest,
     ExtensionHostWorkspaceDTO,
+)
+from app.schemas.gateway.extension_installation import (
+    InstalledExtension,
+    ProfileExtensionInventory,
+)
+from app.schemas.gateway.extension_web import (
+    ExtensionWebHostConnectionDTO,
+    ExtensionWebHostContextDTO,
 )
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 
@@ -57,6 +66,48 @@ def test_initialization_contract_and_wire_preserve_target_native_uris(host_bindi
     assert restored == host_binding
     assert restored.initialization.workspace.folders[0].native_uri == "file:///D:/project%200"
     assert restored.initialization.environment.app_root_uri == "file:///C:/BoxTeam/runtime"
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_web_context_contract_preserves_target_view_without_process_initialization(host_binding: ExtensionHostConnectionDTO, empty: bool) -> None:
+    workspace = host_binding.initialization.workspace
+    if empty:
+        workspace = workspace.model_copy(update={"folders": [], "configuration": None})
+    binding = ExtensionWebHostConnectionDTO(**host_binding.model_dump(exclude={"initialization", "workspace_ids"}),
+        workspace_ids=[] if empty else host_binding.workspace_ids, profile_id="target-profile", extension_keys=["publisher.probe-1.0.0"],
+        inventory=ProfileExtensionInventory(profile_id="target-profile", extensions=[InstalledExtension(
+            extension_key="publisher.probe-1.0.0", source="profile", description={}, is_valid=True, validations=[])]),
+        context=ExtensionWebHostContextDTO(os="windows", remote_settings=host_binding.initialization.environment.remote_settings,
+            workspace=workspace))
+    for model in (ExtensionWebHostConnectionDTO, ExtensionWebHostContextDTO):
+        assert_public_schema(model.model_json_schema(), public_pb2.DESCRIPTOR.message_types_by_name[model.__name__])
+    encoded = json_format.ParseDict(binding.model_dump(mode="json"), public_pb2.ExtensionWebHostConnectionDTO())
+    restored = ExtensionWebHostConnectionDTO.model_validate(json_format.MessageToDict(encoded,
+        preserving_proto_field_name=True, always_print_fields_with_no_presence=True))
+    assert restored == binding
+    assert set(restored.context.model_dump()) == {"os", "remote_settings", "workspace"}
+    assert restored.context.remote_settings.native_uri == "file:///C:/BoxTeam/profile/settings.json"
+    if empty:
+        with pytest.raises(ValidationError):
+            ExtensionHostOpenRequest.model_validate(host_binding.model_dump(exclude={"initialization", "client_id", "generation", "request_id"})
+                | {"workspace_ids": []})
+
+
+@pytest.mark.parametrize("wrong", ["profile", "backend", "gateway", "view"])
+def test_web_context_rejects_configuration_owner_mismatch(host_binding: ExtensionHostConnectionDTO, wrong: str) -> None:
+    settings = host_binding.initialization.environment.remote_settings.model_dump()
+    settings["resource_uri"] = extension_configuration_uri(gateway_id="gateway_" + "b" * 32 if wrong == "gateway" else host_binding.gateway_id,
+        backend_id=str(uuid4()) if wrong == "backend" else host_binding.backend_id,
+        profile_id="foreign-profile" if wrong == "profile" else "target-profile")
+    workspace = host_binding.initialization.workspace.model_dump()
+    if wrong == "view":
+        workspace["id"] = str(uuid4())
+    with pytest.raises(ValidationError):
+        ExtensionWebHostConnectionDTO.model_validate({**host_binding.model_dump(exclude={"initialization"}),
+            "profile_id": "target-profile", "extension_keys": ["publisher.probe-1.0.0"],
+            "inventory": {"profile_id": "target-profile", "extensions": [{"extension_key": "publisher.probe-1.0.0",
+                "source": "profile", "description": {}, "is_valid": True, "validations": []}]},
+            "context": {"os": "windows", "remote_settings": settings, "workspace": workspace}})
 
 
 @pytest.mark.parametrize("invalid", ["reordered", "missing", "foreign-workspace", "foreign-gateway", "child", "native-scheme",

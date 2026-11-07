@@ -175,7 +175,7 @@ export async function createExtensionManagement(directory: string, builtinExtens
           const publications = await Promise.all(extensions.map(extension => publishedExtension(profileId,
             extension.description.identifier.value, extension.extension_key, true)));
           // TODO(4.4)：Node 真实运行集合与最终引用回收尚未闭合，不能启用全局物理 cleanUp。
-          return { inventory: { profile_id: profileId, extensions }, publications };
+          return { inventory: { profile_id: profileId, extensions }, publications, environment: await this.environment() };
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。

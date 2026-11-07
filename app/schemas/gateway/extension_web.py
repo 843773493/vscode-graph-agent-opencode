@@ -2,30 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
-from app.schemas.gateway.extension_host import BackendId
+from app.schemas.gateway.extension_host import (
+    ExtensionHostConfigurationResourceDTO,
+    ExtensionHostWorkspaceDTO,
+    _ExtensionHostViewRequest,
+    _HostValue,
+    validate_extension_view,
+)
 from app.schemas.gateway.extension_installation import ProfileExtensionInventory
 
 
-class _WebHostBinding(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
-
-    protocol_version: int = Field(ge=1, le=1)
-    gateway_id: CanonicalGatewayId
-    backend_id: BackendId
-    view_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
-    workspace_ids: list[CanonicalWorkspaceId]
+class _WebHostBinding(_ExtensionHostViewRequest):
     profile_id: str = Field(min_length=1)
     extension_keys: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
 
     @model_validator(mode="after")
     def unique_view_members(self) -> _WebHostBinding:
-        if len(set(self.workspace_ids)) != len(self.workspace_ids):
-            raise ValueError("Web 宿主工作区视图不能重复")
         if len(set(self.extension_keys)) != len(self.extension_keys):
             raise ValueError("Web 宿主扩展集合不能重复")
         return self
@@ -35,11 +31,18 @@ class ExtensionWebHostOpenRequest(_WebHostBinding):
     gateway_connection_id: str | None = Field(default=None, min_length=1)
 
 
+class ExtensionWebHostContextDTO(_HostValue):
+    os: Literal["linux", "windows", "macos"]
+    remote_settings: ExtensionHostConfigurationResourceDTO
+    workspace: ExtensionHostWorkspaceDTO
+
+
 class ExtensionWebHostConnectionDTO(_WebHostBinding):
     client_id: str = Field(min_length=1)
     generation: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
     inventory: ProfileExtensionInventory
+    context: ExtensionWebHostContextDTO
 
     @model_validator(mode="after")
     def snapshot_matches_binding(self) -> ExtensionWebHostConnectionDTO:
@@ -47,4 +50,6 @@ class ExtensionWebHostConnectionDTO(_WebHostBinding):
             or [entry.extension_key for entry in self.inventory.extensions] != self.extension_keys
             or any(not entry.is_valid for entry in self.inventory.extensions)):
             raise ValueError("Web 宿主快照与冻结 profile 和有效扩展集合不符")
+        validate_extension_view(gateway_id=self.gateway_id, backend_id=self.backend_id, workspace_ids=self.workspace_ids,
+            workspace=self.context.workspace, profile_id=self.profile_id, settings=self.context.remote_settings)
         return self

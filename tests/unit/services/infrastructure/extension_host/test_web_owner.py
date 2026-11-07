@@ -76,7 +76,7 @@ def web_case(case: Case, monkeypatch: pytest.MonkeyPatch) -> WebCase:
         result.scans.append(len(case.owner.active))
         result.scanning.set()
         await result.gate.wait()
-        return WebExtensionPublication(inventory=result.inventory, publications=[
+        return WebExtensionPublication(inventory=result.inventory, environment=await _management.environment(), publications=[
             NativeExtensionPublication(extension_id="publisher.other" if key == OTHER_KEY else "publisher.probe",
                 extension_key=key, native_uri=(root / key).as_uri(), extensions_root_uri=root.as_uri())
             for key in extension_keys])

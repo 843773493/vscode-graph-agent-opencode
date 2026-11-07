@@ -251,7 +251,7 @@ async def _web_open(websocket: WebSocket, registry: WorkspaceContainerRegistry,
                     payload: ExtensionWebHostOpenRequest, *, client_id: str, request_id: str) -> None:
     async with registry.extension_hosts.connect_web(payload, client_id=client_id) as connection:
         result = ExtensionWebHostConnectionDTO(**payload.model_dump(exclude={"gateway_connection_id"}), client_id=connection.identity.client_id,
-            generation=connection.identity.generation, request_id=request_id, inventory=connection.inventory)
+            generation=connection.identity.generation, request_id=request_id, inventory=connection.inventory, context=connection.context)
         # 原 owner 等此传输真正结算；关闭监视在库存准入期间已经运行。
         connection.transport_settled.clear()
         try:

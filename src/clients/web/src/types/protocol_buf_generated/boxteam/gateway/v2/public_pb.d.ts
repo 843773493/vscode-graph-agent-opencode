@@ -4438,6 +4438,11 @@ export declare type ExtensionConfigurationViewRequest = Message<"boxteam.gateway
    * @generated from field: string generation = 6;
    */
   generation: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 7;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**
@@ -4484,6 +4489,11 @@ export declare type ExtensionConfigurationFileRequest = Message<"boxteam.gateway
    * @generated from field: string resource_uri = 7;
    */
   resourceUri: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 8;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**
@@ -4576,6 +4586,11 @@ export declare type ExtensionConfigurationWriteRequest = Message<"boxteam.gatewa
    * @generated from field: boxteam.gateway.v2.ExtensionConfigurationWriteOptions options = 9;
    */
   options?: ExtensionConfigurationWriteOptions | undefined;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 10;
+   */
+  gatewayConnectionId?: string | undefined;
 };
 
 /**
@@ -5260,6 +5275,11 @@ export declare type ExtensionWebHostConnectionDTO = Message<"boxteam.gateway.v2.
    * @generated from field: boxteam.gateway.v2.ProfileExtensionInventory inventory = 11;
    */
   inventory?: ProfileExtensionInventory | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionWebHostContextDTO context = 12;
+   */
+  context?: ExtensionWebHostContextDTO | undefined;
 };
 
 /**
@@ -5267,6 +5287,34 @@ export declare type ExtensionWebHostConnectionDTO = Message<"boxteam.gateway.v2.
  * Use `create(ExtensionWebHostConnectionDTOSchema)` to create a new message.
  */
 export declare const ExtensionWebHostConnectionDTOSchema: GenMessage<ExtensionWebHostConnectionDTO>;
+
+/**
+ * Web 仅取得目标业务视图与具名配置资源，不取得 Node 进程初始化。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionWebHostContextDTO
+ */
+export declare type ExtensionWebHostContextDTO = Message<"boxteam.gateway.v2.ExtensionWebHostContextDTO"> & {
+  /**
+   * @generated from field: string os = 1;
+   */
+  os: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostConfigurationResourceDTO remote_settings = 2;
+   */
+  remoteSettings?: ExtensionHostConfigurationResourceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.ExtensionHostWorkspaceDTO workspace = 3;
+   */
+  workspace?: ExtensionHostWorkspaceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionWebHostContextDTO.
+ * Use `create(ExtensionWebHostContextDTOSchema)` to create a new message.
+ */
+export declare const ExtensionWebHostContextDTOSchema: GenMessage<ExtensionWebHostContextDTO>;
 
 /**
  * 包逻辑地址不含版本；exact key 与旧版运行资格是独立字段。

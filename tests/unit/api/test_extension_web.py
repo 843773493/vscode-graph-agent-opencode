@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from base64 import b64encode
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -13,10 +14,12 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.testclient import WebSocketDenialResponse
 
+from app.api.extension_configuration import router as configuration_router
 from app.container import WorkspaceContainerRegistry
 from app.schemas.gateway.extension_host import ExtensionHostConnectionDTO
 from app.schemas.gateway.extension_installation import (
@@ -62,6 +65,7 @@ class WebCase:
     payload: dict[str, object]
     headers: dict[str, str]
     inventory: ProfileExtensionInventory
+    settings: Path
     reads: list[dict[str, object]] = field(default_factory=list)
 
 
@@ -70,6 +74,8 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
              monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[WebCase]:
     client, registry = private_host_client
     owner = registry.extension_hosts
+    assert isinstance(client.app, FastAPI)
+    client.app.include_router(configuration_router)
     owner._management = ExtensionManagementClient(backend_id=owner.backend_id,
         gateway_url="http://127.0.0.1:8014", token="private-host-token", operation_timeout=2)
     owner.runtime = NodeHostRuntime(owner._home / "node", owner._home / "extensionHostProcess.mjs",
@@ -79,7 +85,8 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
         "profile_id": "default-profile", "extension_keys": [KEY], "gateway_connection_id": "route-only"},
         {"X-Local-Token": "private-host-token", "X-BoxTeam-Gateway-Id": GATEWAY,
          "X-BoxTeam-Extension-Client-Id": "authenticated-client", "X-Request-ID": "web-private"},
-        ProfileExtensionInventory(profile_id="default-profile", extensions=[_entry(KEY), _entry(OTHER_KEY)]))
+        ProfileExtensionInventory(profile_id="default-profile", extensions=[_entry(KEY), _entry(OTHER_KEY)]),
+        tmp_path / "profile" / "settings.json")
 
     root = tmp_path / "extensions"
     for key in (KEY, NEXT_KEY, OTHER_KEY):
@@ -89,7 +96,7 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
 
     async def publication(_management: ExtensionManagementClient, *, profile_id: str,
                           extension_keys: list[str]) -> WebExtensionPublication:
-        return WebExtensionPublication(inventory=result.inventory, publications=[
+        return WebExtensionPublication(inventory=result.inventory, environment=await _management.environment(), publications=[
             NativeExtensionPublication(extension_id="publisher.other" if key == OTHER_KEY else "publisher.probe",
                 extension_key=key, native_uri=(root / key).as_uri(), extensions_root_uri=root.as_uri())
             for key in extension_keys])
@@ -102,6 +109,14 @@ def web_case(private_host_client: tuple[TestClient, WorkspaceContainerRegistry],
             "extension_id": publication.extension_id, "relative_segments": relative_segments, "current_profile_member": False})
         return original(publication, extension_key=extension_key, relative_segments=relative_segments, file_operation=file_operation)
 
+    async def environment(_management: ExtensionManagementClient) -> NativeManagementEnvironment:
+        return NativeManagementEnvironment(app_root_uri=owner._home.as_uri(),
+            global_storage_home_uri=(owner._home / "globalStorage").as_uri(),
+            workspace_storage_home_uri=(owner._home / "workspaceStorage").as_uri(),
+            untitled_workspaces_home_uri=(owner._home / "Workspaces").as_uri(),
+            profile_id="default-profile", settings_native_uri=result.settings.as_uri())
+
+    monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
     monkeypatch.setattr(ExtensionManagementClient, "web_publication", publication)
     monkeypatch.setattr(owner_module, "publication_file", file_read)
     try:
@@ -124,12 +139,72 @@ def test_private_web_channel_returns_exact_frozen_subset_without_node_initializa
         binding = websocket.receive_json()
         assert binding == {**{name: value for name, value in web_case.payload.items() if name != "gateway_connection_id"},
             "client_id": "authenticated-client", "generation": binding["generation"], "request_id": "web-private",
-            "inventory": {"profile_id": "default-profile", "extensions": [web_case.inventory.extensions[0].model_dump()]}}
+            "inventory": {"profile_id": "default-profile", "extensions": [web_case.inventory.extensions[0].model_dump()]},
+            "context": binding["context"]}
         ExtensionWebHostConnectionDTO.model_validate(binding)
+        assert binding["context"]["workspace"]["folders"] == []
+        assert set(binding["context"]) == {"os", "remote_settings", "workspace"}
         assert len(owner.active) == 1 and owner.active[0].host_kind == "web"
         assert not (owner._home / "state/backend/extension-hosts").exists()
-        assert owner._configuration_closed
+        assert not owner._configuration_closed
     assert owner.active == ()
+
+
+@pytest.mark.parametrize("with_workspace", [False, True])
+def test_web_context_uses_same_target_configuration_api_without_node_host(web_case: WebCase, with_workspace: bool) -> None:
+    owner = web_case.registry.extension_hosts
+    owner.runtime = None
+    if with_workspace:
+        web_case.payload["workspace_ids"] = list(web_case.registry.mounted_workspaces.workspace_ids)
+    with web_case.client.websocket_connect(PATH, headers=web_case.headers) as socket:
+        socket.send_json(web_case.payload)
+        binding = socket.receive_json()
+        request = {name: binding[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation")}
+        request["resource_uri"] = binding["context"]["remote_settings"]["resource_uri"]
+        assert [folder["workspace_id"] for folder in binding["context"]["workspace"]["folders"]] == binding["workspace_ids"]
+        assert binding["context"]["workspace"]["configuration"] is None
+        assert binding["context"]["remote_settings"]["native_uri"] == web_case.settings.as_uri()
+        encoded = b64encode(b'/* target */\n{"probe.option": true}\n').decode()
+        missing = web_case.client.post("/api/internal/extension-configurations/read", json=request, headers=web_case.headers)
+        assert missing.status_code == 404
+        saved = web_case.client.post("/api/internal/extension-configurations/write", json={**request,
+            "content_base64": encoded, "options": {"create": True, "overwrite": True, "unlock": False, "atomic": False, "append": False}},
+            headers=web_case.headers)
+        assert saved.status_code == 200, saved.text
+        read = web_case.client.post("/api/internal/extension-configurations/read", json=request, headers=web_case.headers)
+        assert read.status_code == 200 and read.json()["data"]["content_base64"] == encoded
+        assert web_case.settings.read_bytes() == b'/* target */\n{"probe.option": true}\n'
+        assert read.headers["X-Request-ID"] == read.json()["request_id"] == "web-private"
+        assert not (owner._home / "state/backend/extension-hosts").exists()
+    closed = web_case.client.post("/api/internal/extension-configurations/read", json=request, headers=web_case.headers)
+    assert closed.status_code == 409 and "content_base64" not in closed.text
+
+
+@pytest.mark.parametrize("wrong", ["client", "gateway", "backend", "view", "generation", "workspaces", "resource"])
+def test_web_configuration_requires_original_context_and_authenticated_identity(web_case: WebCase, wrong: str) -> None:
+    with web_case.client.websocket_connect(PATH, headers=web_case.headers) as socket:
+        socket.send_json(web_case.payload)
+        binding = socket.receive_json()
+        payload = {name: binding[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation")}
+        payload["resource_uri"] = binding["context"]["remote_settings"]["resource_uri"]
+        headers = dict(web_case.headers)
+        if wrong == "client":
+            headers["X-BoxTeam-Extension-Client-Id"] = "another-client"
+        elif wrong == "gateway":
+            payload["gateway_id"] = "gateway_" + "b" * 32
+        elif wrong == "backend":
+            payload["backend_id"] = str(uuid4())
+        elif wrong == "view":
+            payload["view_id"] = "another-view"
+        elif wrong == "generation":
+            payload["generation"] = str(uuid4())
+        elif wrong == "workspaces":
+            payload["workspace_ids"] = list(web_case.registry.mounted_workspaces.workspace_ids)
+        else:
+            payload["resource_uri"] = str(payload["resource_uri"]).replace("/profiles/default-profile/", "/profiles/foreign/")
+        rejected = web_case.client.post("/api/internal/extension-configurations/read", json=payload, headers=headers)
+        assert rejected.status_code == (400 if wrong == "gateway" else 409), rejected.text
+        assert "content_base64" not in rejected.text
 
 
 def test_web_disconnect_during_inventory_cancels_admission_before_context_exit(web_case: WebCase, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,18 +350,10 @@ def test_closing_one_window_keeps_other_window_frozen_version(web_case: WebCase)
 def test_node_binding_keeps_existing_wire_fields_after_shared_identity_gains_kind(web_case: WebCase, monkeypatch: pytest.MonkeyPatch) -> None:
     owner = web_case.registry.extension_hosts
 
-    async def environment(_management: ExtensionManagementClient) -> NativeManagementEnvironment:
-        return NativeManagementEnvironment(app_root_uri=owner._home.as_uri(),
-            global_storage_home_uri=(owner._home / "globalStorage").as_uri(),
-            workspace_storage_home_uri=(owner._home / "workspaceStorage").as_uri(),
-            untitled_workspaces_home_uri=(owner._home / "Workspaces").as_uri(),
-            profile_id="default-profile", settings_native_uri=(owner._home / "settings.json").as_uri())
-
     @asynccontextmanager
     async def connect(_host: NodeExtensionHost) -> AsyncIterator[tuple[asyncio.StreamReader, asyncio.StreamWriter]]:
         yield asyncio.StreamReader(), Mock(spec=asyncio.StreamWriter)
 
-    monkeypatch.setattr(ExtensionManagementClient, "environment", environment)
     monkeypatch.setattr(NodeExtensionHost, "connect", connect)
     payload = {name: web_case.payload[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id")}
     payload["workspace_ids"] = list(web_case.registry.mounted_workspaces.workspace_ids)

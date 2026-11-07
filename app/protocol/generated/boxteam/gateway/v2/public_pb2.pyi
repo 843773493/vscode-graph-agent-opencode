@@ -1715,23 +1715,25 @@ class ExtensionHostWorkspaceDTO(_message.Message):
     def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., folders: _Optional[_Iterable[_Union[ExtensionHostFolderDTO, _Mapping]]] = ..., configuration: _Optional[_Union[ExtensionHostConfigurationResourceDTO, _Mapping]] = ...) -> None: ...
 
 class ExtensionConfigurationViewRequest(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "gateway_connection_id")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     VIEW_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
     view_id: str
     workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     generation: str
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class ExtensionConfigurationFileRequest(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "resource_uri")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "resource_uri", "gateway_connection_id")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1739,6 +1741,7 @@ class ExtensionConfigurationFileRequest(_message.Message):
     WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
     GENERATION_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
@@ -1746,7 +1749,8 @@ class ExtensionConfigurationFileRequest(_message.Message):
     workspace_ids: _containers.RepeatedScalarFieldContainer[str]
     generation: str
     resource_uri: str
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., resource_uri: _Optional[str] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., resource_uri: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class ExtensionConfigurationWriteOptions(_message.Message):
     __slots__ = ("create", "overwrite", "unlock", "atomic", "append")
@@ -1763,7 +1767,7 @@ class ExtensionConfigurationWriteOptions(_message.Message):
     def __init__(self, create: _Optional[bool] = ..., overwrite: _Optional[bool] = ..., unlock: _Optional[bool] = ..., atomic: _Optional[bool] = ..., append: _Optional[bool] = ...) -> None: ...
 
 class ExtensionConfigurationWriteRequest(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "resource_uri", "content_base64", "options")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "resource_uri", "content_base64", "options", "gateway_connection_id")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1773,6 +1777,7 @@ class ExtensionConfigurationWriteRequest(_message.Message):
     RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
     CONTENT_BASE64_FIELD_NUMBER: _ClassVar[int]
     OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
@@ -1782,7 +1787,8 @@ class ExtensionConfigurationWriteRequest(_message.Message):
     resource_uri: str
     content_base64: str
     options: ExtensionConfigurationWriteOptions
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., resource_uri: _Optional[str] = ..., content_base64: _Optional[str] = ..., options: _Optional[_Union[ExtensionConfigurationWriteOptions, _Mapping]] = ...) -> None: ...
+    gateway_connection_id: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., generation: _Optional[str] = ..., resource_uri: _Optional[str] = ..., content_base64: _Optional[str] = ..., options: _Optional[_Union[ExtensionConfigurationWriteOptions, _Mapping]] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class ExtensionConfigurationStatDTO(_message.Message):
     __slots__ = ("resource_uri", "type", "ctime", "mtime", "size", "permissions")
@@ -2019,7 +2025,7 @@ class ExtensionWebHostOpenRequest(_message.Message):
     def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., extension_keys: _Optional[_Iterable[str]] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
 class ExtensionWebHostConnectionDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "extension_keys", "client_id", "generation", "request_id", "inventory")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "extension_keys", "client_id", "generation", "request_id", "inventory", "context")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -2031,6 +2037,7 @@ class ExtensionWebHostConnectionDTO(_message.Message):
     GENERATION_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     INVENTORY_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
@@ -2042,7 +2049,18 @@ class ExtensionWebHostConnectionDTO(_message.Message):
     generation: str
     request_id: str
     inventory: ProfileExtensionInventory
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., extension_keys: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ...) -> None: ...
+    context: ExtensionWebHostContextDTO
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., extension_keys: _Optional[_Iterable[str]] = ..., client_id: _Optional[str] = ..., generation: _Optional[str] = ..., request_id: _Optional[str] = ..., inventory: _Optional[_Union[ProfileExtensionInventory, _Mapping]] = ..., context: _Optional[_Union[ExtensionWebHostContextDTO, _Mapping]] = ...) -> None: ...
+
+class ExtensionWebHostContextDTO(_message.Message):
+    __slots__ = ("os", "remote_settings", "workspace")
+    OS_FIELD_NUMBER: _ClassVar[int]
+    REMOTE_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_FIELD_NUMBER: _ClassVar[int]
+    os: str
+    remote_settings: ExtensionHostConfigurationResourceDTO
+    workspace: ExtensionHostWorkspaceDTO
+    def __init__(self, os: _Optional[str] = ..., remote_settings: _Optional[_Union[ExtensionHostConfigurationResourceDTO, _Mapping]] = ..., workspace: _Optional[_Union[ExtensionHostWorkspaceDTO, _Mapping]] = ...) -> None: ...
 
 class ExtensionPackageFileRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "gateway_connection_id", "resource_uri", "extension_key", "generation", "view_id")

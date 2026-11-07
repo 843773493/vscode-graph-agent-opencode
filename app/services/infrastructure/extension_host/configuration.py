@@ -33,7 +33,7 @@ from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationWriteOptions,
 )
 from app.schemas.gateway.extension_host import (
-    ExtensionHostInitializationDTO,
+    ExtensionHostConfigurationResourceDTO,
     ExtensionHostWorkspaceDTO,
 )
 from app.services.infrastructure.extension_host.management import (
@@ -200,13 +200,13 @@ def _write_bytes(path: Path, content: bytes, options: ExtensionConfigurationWrit
 
 
 class ExtensionConfigurationFiles:
-    def __init__(self, initialization: ExtensionHostInitializationDTO,
+    def __init__(self, settings: ExtensionHostConfigurationResourceDTO, workspace: ExtensionHostWorkspaceDTO,
                  watcher: WorkspaceFileWatchService, stopping: asyncio.Event) -> None:
-        resources = [initialization.environment.remote_settings]
-        if initialization.workspace.configuration is not None:
-            resources.append(initialization.workspace.configuration)
-        self._view = initialization.workspace.configuration
-        self._view_roots = tuple(folder.native_uri for folder in initialization.workspace.folders)
+        resources = [settings]
+        if workspace.configuration is not None:
+            resources.append(workspace.configuration)
+        self._view = workspace.configuration
+        self._view_roots = tuple(folder.native_uri for folder in workspace.folders)
         self._files = {resource.resource_uri: resource.native_uri for resource in resources}
         self._parents: dict[str, str] = {}
         self._changes: dict[str, str] = {}

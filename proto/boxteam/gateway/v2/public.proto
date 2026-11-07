@@ -1045,6 +1045,7 @@ message ExtensionConfigurationViewRequest {
   string view_id = 4;
   repeated string workspace_ids = 5;
   string generation = 6;
+  optional string gateway_connection_id = 7;
 }
 
 message ExtensionConfigurationFileRequest {
@@ -1055,6 +1056,7 @@ message ExtensionConfigurationFileRequest {
   repeated string workspace_ids = 5;
   string generation = 6;
   string resource_uri = 7;
+  optional string gateway_connection_id = 8;
 }
 
 message ExtensionConfigurationWriteOptions {
@@ -1075,6 +1077,7 @@ message ExtensionConfigurationWriteRequest {
   string resource_uri = 7;
   string content_base64 = 8;
   ExtensionConfigurationWriteOptions options = 9;
+  optional string gateway_connection_id = 10;
 }
 
 message ExtensionConfigurationStatDTO {
@@ -1234,6 +1237,14 @@ message ExtensionWebHostConnectionDTO {
   string generation = 9;
   string request_id = 10;
   ProfileExtensionInventory inventory = 11;
+  ExtensionWebHostContextDTO context = 12;
+}
+
+// Web 仅取得目标业务视图与具名配置资源，不取得 Node 进程初始化。
+message ExtensionWebHostContextDTO {
+  string os = 1;
+  ExtensionHostConfigurationResourceDTO remote_settings = 2;
+  ExtensionHostWorkspaceDTO workspace = 3;
 }
 
 // 包逻辑地址不含版本；exact key 与旧版运行资格是独立字段。

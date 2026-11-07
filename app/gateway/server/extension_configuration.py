@@ -22,11 +22,12 @@ from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     UpstreamResponseBody,
 )
-from app.gateway.registry import WorkspaceRouteLease
 from app.gateway.server.extension_host import (
     CLIENT_HEADER,
     _check,
-    _target_route,
+    _check_management_route,
+    _HostRoute,
+    _installation_route,
     _users,
     extension_client_identity,
 )
@@ -50,8 +51,9 @@ ConfigurationResult = TypeVar("ConfigurationResult", ExtensionConfigurationReadD
 
 
 def _require_access(request: Request, auth: GatewayAuthContext, access: UserAccessContext | None,
-                    leases: list[WorkspaceRouteLease], *, write: bool = False) -> None:
-    _check(request, auth, access, leases, capability="extension_host_manage")
+                    route: _HostRoute, *, write: bool = False) -> None:
+    _check_management_route(request, route)
+    _check(request, auth, access, route.leases, capability="extension_host_manage")
     require_federation_capability(request, auth, "configuration_read")
     if write:
         require_federation_capability(request, auth, "configuration_write")
@@ -68,13 +70,12 @@ async def _file_request(payload: ExtensionConfigurationFileRequest, request: Req
     client_id = extension_client_identity(request, auth, access)
     request_id = get_request_id(request)
     try:
-        with _target_route(request, gateway_id=payload.gateway_id, workspace_ids=payload.workspace_ids,
-                           auth=auth, streaming=False) as route:
-            _require_access(request, auth, access, route.leases, write=operation == "write")
+        with _installation_route(request, payload, auth) as route:
+            _require_access(request, auth, access, route, write=operation == "write")
             prefix = "api/gateway" if route.remote else "api/internal"
             response = await _http_client(request).post(f"{route.base_url.rstrip('/')}/{prefix}/extension-configurations/{operation}",
-                headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(), timeout=30)
-            _require_access(request, auth, access, route.leases, write=operation == "write")
+                headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=30)
+            _require_access(request, auth, access, route, write=operation == "write")
             if response.headers.get("X-Request-ID") != request_id:
                 raise ValueError("配置响应的 request_id 与原请求不一致")
             if not response.is_success:
@@ -120,14 +121,14 @@ async def configuration_write(payload: ExtensionConfigurationWriteRequest, reque
 
 class _ConfigurationStreamResponse(StreamingResponse):
     def __init__(self, body: UpstreamResponseBody, request: Request, auth: GatewayAuthContext,
-                 access: UserAccessContext | None, leases: list[WorkspaceRouteLease]) -> None:
+                 access: UserAccessContext | None, route: _HostRoute) -> None:
         self._body = body
 
         async def generate():
             try:
                 async for chunk in body:
                     try:
-                        _require_access(request, auth, access, leases)
+                        _require_access(request, auth, access, route)
                     except (HTTPException, PermissionError, LookupError):
                         event = ExtensionConfigurationEventDTO(changes=[], overflow=False, error="配置读取权限、用户租约或目标路由已撤销")
                         yield f"\n\nevent: error\ndata: {event.model_dump_json()}\n\n".encode()
@@ -157,16 +158,15 @@ async def configuration_events(payload: ExtensionConfigurationViewRequest, reque
     response: httpx.Response | None = None
     handed_off = False
     try:
-        route = references.enter_context(_target_route(request, gateway_id=payload.gateway_id,
-            workspace_ids=payload.workspace_ids, auth=auth, streaming=True))
-        _require_access(request, auth, access, route.leases)
+        route = references.enter_context(_installation_route(request, payload, auth, streaming=True))
+        _require_access(request, auth, access, route)
         prefix = "api/gateway" if route.remote else "api/internal"
         client = _http_client(request, streaming=True)
         upstream = client.build_request("POST", f"{route.base_url.rstrip('/')}/{prefix}/extension-configurations/events",
-            headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(), timeout=None)
+            headers={**route.headers, CLIENT_HEADER: client_id}, json=payload.model_dump(exclude={"gateway_connection_id"}), timeout=None)
         async with asyncio.timeout(UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS):
             response = await client.send(upstream, stream=True)
-        _require_access(request, auth, access, route.leases)
+        _require_access(request, auth, access, route)
         if response.headers.get("X-Request-ID") != get_request_id(request):
             raise ValueError("配置事件流返回了不同 request_id")
         if not response.is_success:
@@ -177,7 +177,7 @@ async def configuration_events(payload: ExtensionConfigurationViewRequest, reque
             return Response(response.content, status_code=response.status_code, media_type="application/json")
         if response.headers.get("content-type", "").split(";", 1)[0].strip() != "text/event-stream":
             raise ValueError("配置事件流返回了错误媒体类型")
-        result = _ConfigurationStreamResponse(UpstreamResponseBody(response, on_close=references.close), request, auth, access, route.leases)
+        result = _ConfigurationStreamResponse(UpstreamResponseBody(response, on_close=references.close), request, auth, access, route)
         handed_off = True
         return result
     except PermissionError as error:

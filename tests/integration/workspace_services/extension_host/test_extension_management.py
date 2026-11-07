@@ -29,6 +29,7 @@ from starlette.responses import Response, StreamingResponse
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from app.api.extension_configuration import router as backend_configuration_router
 from app.api.extension_host import router as backend_host_router
 from app.container import WorkspaceContainerRegistry
 from app.core.backend_identity import load_or_create_backend_id
@@ -44,11 +45,15 @@ from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.extension_download import ExtensionDownloadRequest
 from app.gateway.runtime.extension_management import GatewayExtensionManagement
+from app.gateway.server.extension_configuration import (
+    router as gateway_configuration_router,
+)
 from app.gateway.server.extension_host import router as gateway_host_router
 from app.gateway.server.extension_management import router as gateway_management_router
 from app.gateway.server.extension_package import router as gateway_package_router
 from app.main import workspace_http_exception_handler
 from app.schemas.gateway.extension_configuration import (
+    ExtensionConfigurationEventDTO,
     ExtensionConfigurationViewRequest,
     ExtensionConfigurationWriteOptions,
 )
@@ -62,6 +67,7 @@ from app.services.infrastructure.extension_host.management import (
 )
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from tests.harness.python.run_context import TestRunContext
+from tests.support.sse import read_sse_events_until
 
 
 @pytest.fixture(scope="module")
@@ -469,6 +475,114 @@ async def test_web_publication_freezes_native_descriptors_and_reads_without_furt
             "revoked_late_body_rejected": True}, ensure_ascii=False, indent=2) + "\n")
     finally:
         await first.close()
+
+
+@pytest.mark.parametrize("root_count", [0, 2], ids=["empty-view", "multi-root-view"])
+async def test_web_context_routes_configuration_to_target_python_without_node_runtime(
+    management_backends: ManagementBackends, vsix_factory, root_count: int,
+    network_scope: AsyncExitStack, serve_extension_application: Callable[[FastAPI], Awaitable[str]],
+) -> None:
+    case = management_backends
+    domain = case.domains[0]
+    # 工作区后端继续持有合法 mounts；浏览器视图可不挂接它们，也不需要 Node runtime。
+    roots = tuple(case.workspace / f"web-root-{index}" for index in range(root_count))
+    for root in roots:
+        root.mkdir()
+    registry = _backend(case.workspace / "web-configuration", case, roots=roots)
+    owner = registry.extension_hosts
+    owner.runtime = None
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.exception_handler(HTTPException)(workspace_http_exception_handler)
+    application.include_router(backend_host_router)
+    application.include_router(backend_configuration_router)
+    application.state.workspace_container_registry = registry
+    backend_url = await serve_extension_application(application)
+    domain.application.include_router(gateway_configuration_router)
+    domain.application.state.streaming_http_client = await network_scope.enter_async_context(
+        httpx.AsyncClient(timeout=None, trust_env=False))
+    for mount in registry.mounted_workspaces.mounts:
+        domain.registry.upsert(WorkspaceTarget(gateway_id=domain.gateway_id, workspace_id=mount.workspace_id,
+            name=mount.workspace_root.name, root_path=str(mount.workspace_root), backend_url=backend_url,
+            connection_kind="local", backend_id=owner.backend_id), activate=False)
+    installed = await owner.management.install(vsix_factory(case.workspace, "1.0.0", "web-config",
+        manifest_overrides={"browser": "./extension.js"}))
+    profile = installed.inventory.profile_id
+    [entry] = installed.inventory.extensions
+    payload = {"protocol_version": 1, "gateway_id": domain.gateway_id, "backend_id": owner.backend_id,
+        "view_id": "web-configuration", "workspace_ids": list(registry.mounted_workspaces.workspace_ids) if root_count else [],
+        "profile_id": profile, "extension_keys": [entry.extension_key]}
+    node_calls: list[str] = []
+
+    async def observe(request: httpx.Request) -> None:
+        node_calls.append(request.url.path)
+
+    assert domain.owner._client is not None
+    domain.owner._client.event_hooks["request"].append(observe)
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=10, trust_env=False, headers=domain.headers))
+    endpoint = domain.url.replace("http://", "ws://") + "/api/gateway/extension-web-hosts/channel"
+    async with connect(endpoint, additional_headers=domain.headers, compression=None) as channel:
+        await channel.send(json.dumps(payload))
+        binding = json.loads(await channel.recv())
+        context = binding["context"]
+        assert set(context) == {"os", "remote_settings", "workspace"}
+        assert [folder["workspace_id"] for folder in context["workspace"]["folders"]] == payload["workspace_ids"]
+        assert (context["workspace"]["configuration"] is not None) == bool(root_count)
+        assert node_calls == ["/management"]
+        request = {name: binding[name] for name in ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation")}
+        settings_uri = context["remote_settings"]["resource_uri"]
+        resources = [context["remote_settings"]]
+        if context["workspace"]["configuration"] is not None:
+            resources.append(context["workspace"]["configuration"])
+        receipts = []
+        for resource in resources:
+            if resource is resources[0]:
+                content = b'/* target Python */\n{"probe.setting": 17}\n'
+            else:
+                folders = [{"uri": folder["native_uri"], "name": folder["name"]} for folder in context["workspace"]["folders"]]
+                content = ("/* target view */\n" + json.dumps({"folders": folders, "settings": {"probe.setting": 18}})).encode()
+            encoded = b64encode(content).decode()
+            saved = await client.post(domain.url + "/api/gateway/extension-configurations/write",
+                json={**request, "resource_uri": resource["resource_uri"], "content_base64": encoded,
+                    "options": {"create": True, "overwrite": True, "unlock": False, "atomic": False, "append": False}},
+                headers={"X-Request-ID": "web-configuration-save"})
+            assert saved.status_code == 200, saved.text
+            assert saved.headers["X-Request-ID"] == saved.json()["request_id"] == "web-configuration-save"
+            read = await client.post(domain.url + "/api/gateway/extension-configurations/read",
+                json={**request, "resource_uri": resource["resource_uri"]})
+            assert read.status_code == 200 and read.json()["data"]["content_base64"] == encoded
+            native = Path(url2pathname(urlsplit(resource["native_uri"]).path))
+            assert native.read_bytes() == content
+            receipts.append(saved.json())
+        ready = asyncio.Event()
+
+        def changed(event: dict[str, object]) -> bool:
+            value = ExtensionConfigurationEventDTO.model_validate(event)
+            assert value.error is None
+            if value.overflow:
+                ready.set()
+            return any(change.resource_uri == settings_uri for change in value.changes)
+
+        async with client.stream("POST", domain.url + "/api/gateway/extension-configurations/events", json=request) as response:
+            assert response.status_code == 200, await response.aread()
+            watching = asyncio.create_task(read_sse_events_until(response, changed, timeout_seconds=5))
+            try:
+                await asyncio.wait_for(ready.wait(), 3)
+                native_settings = Path(url2pathname(urlsplit(context["remote_settings"]["native_uri"]).path))
+                native_settings.write_text('/* external */\n{"probe.setting": 23}\n')
+                events = await watching
+                assert any(event.get("changes") for event in events)
+            finally:
+                watching.cancel()
+                await asyncio.gather(watching, return_exceptions=True)
+        assert node_calls == ["/management"], "配置 I/O 和监听不得重新请求 Node"
+        assert not (owner._home / "state/backend/extension-hosts").exists()
+    rejected = await client.post(domain.url + "/api/gateway/extension-configurations/read",
+        json={**request, "resource_uri": settings_uri})
+    assert rejected.status_code == 409 and "content_base64" not in rejected.text
+    (case.context.artifacts_dir / f"web-context-{root_count}.json").write_text(json.dumps({
+        "binding": binding, "writes": receipts, "events": events, "node_calls": node_calls,
+        "after_close_status": rejected.status_code}, ensure_ascii=False, indent=2) + "\n")
 
 
 async def test_native_published_extension_files_are_read_by_exact_retained_key(

@@ -60,7 +60,7 @@ class ExtensionHostFolderDTO(_HostValue):
 class ExtensionHostWorkspaceDTO(_HostValue):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    folders: list[ExtensionHostFolderDTO] = Field(min_length=1)
+    folders: list[ExtensionHostFolderDTO]
     configuration: ExtensionHostConfigurationResourceDTO | None = None
 
 
@@ -91,9 +91,39 @@ class ExtensionHostTargetRequest(ExtensionWorkspaceTarget):
     gateway_connection_id: str | None = Field(default=None, min_length=1)
 
 
-class ExtensionHostOpenRequest(ExtensionWorkspaceTarget):
+class _ExtensionHostViewRequest(ExtensionWorkspaceTarget):
+    workspace_ids: list[CanonicalWorkspaceId]
     backend_id: BackendId
     view_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class ExtensionHostOpenRequest(_ExtensionHostViewRequest):
+    workspace_ids: list[CanonicalWorkspaceId] = Field(min_length=1)
+
+
+def validate_extension_view(*, gateway_id: str, backend_id: str, workspace_ids: list[str],
+                            workspace: ExtensionHostWorkspaceDTO, profile_id: str,
+                            settings: ExtensionHostConfigurationResourceDTO) -> None:
+    folders = workspace.folders
+    if [folder.workspace_id for folder in folders] != workspace_ids:
+        raise ValueError("宿主目录与有序工作区视图不符")
+    for folder in folders:
+        resource = parse_resource_uri(folder.resource_uri)
+        if (resource.gateway_authority is not None or resource.scope != "workspace"
+            or resource.scope_id != folder.workspace_id or resource.kind != "files" or resource.tail_segments != ("root",)):
+            raise ValueError("宿主目录映射不属于原 Gateway 的工作区根")
+    resources = [(settings, ("profiles", profile_id, "settings"))]
+    configuration = workspace.configuration
+    if (len(folders) > 1) != (configuration is not None):
+        raise ValueError("宿主必须仅为明确多根视图提供 workspace 配置")
+    if configuration is not None:
+        resources.append((configuration, ("views", workspace.id, "workspace")))
+    for configuration_resource, tail in resources:
+        resource = parse_resource_uri(configuration_resource.resource_uri)
+        if (resource.gateway_authority != gateway_id or resource.scope != "gateway"
+            or resource.scope_id != gateway_id or resource.kind != "config"
+            or resource.tail_segments != ("extension-host", backend_id, *tail)):
+            raise ValueError("宿主配置不属于原 Gateway、Backend、profile 或工作区视图")
 
 
 class ExtensionHostConnectionDTO(ExtensionHostOpenRequest):
@@ -105,28 +135,9 @@ class ExtensionHostConnectionDTO(ExtensionHostOpenRequest):
     @model_validator(mode="after")
     def initialized_view_matches_binding(self) -> ExtensionHostConnectionDTO:
         initialization = self.initialization
-        folders = initialization.workspace.folders
-        if [folder.workspace_id for folder in folders] != self.workspace_ids:
-            raise ValueError("Node 宿主初始化目录与有序工作区视图不符")
-        for folder in folders:
-            resource = parse_resource_uri(folder.resource_uri)
-            # 原文件 owner 的 display 根不重复编码 Gateway；归属由外层认证 binding 承载。
-            if (resource.gateway_authority is not None or resource.scope != "workspace"
-                or resource.scope_id != folder.workspace_id or resource.kind != "files" or resource.tail_segments != ("root",)):
-                raise ValueError("Node 宿主目录映射不属于原 Gateway 的工作区根")
-        resources = [(initialization.environment.remote_settings,
-                      ("profiles", initialization.environment.profile_id, "settings"))]
-        configuration = initialization.workspace.configuration
-        if (len(folders) > 1) != (configuration is not None):
-            raise ValueError("Node 宿主必须仅为明确多根视图提供 workspace 配置")
-        if configuration is not None:
-            resources.append((configuration, ("views", initialization.workspace.id, "workspace")))
-        for configuration_resource, tail in resources:
-            resource = parse_resource_uri(configuration_resource.resource_uri)
-            if (resource.gateway_authority != self.gateway_id or resource.scope != "gateway"
-                or resource.scope_id != self.gateway_id or resource.kind != "config"
-                or resource.tail_segments != ("extension-host", self.backend_id, *tail)):
-                raise ValueError("Node 宿主配置不属于原 Gateway、Backend、profile 或工作区视图")
+        validate_extension_view(gateway_id=self.gateway_id, backend_id=self.backend_id, workspace_ids=self.workspace_ids,
+            workspace=initialization.workspace, profile_id=initialization.environment.profile_id,
+            settings=initialization.environment.remote_settings)
         return self
 
 

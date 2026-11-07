@@ -11,6 +11,7 @@
 - `management.py`只通过具名本机认证入口调用原生 Gateway 已启动的常驻管理组件，不拥有进程；Code OSS安装／profile／scanner服务持有唯一安装事实，Python不扫描目录或保存清单。管理进程、安装域锁与日志归`app/gateway/runtime/extension_management.py`；多个Backend共用同一服务，读取不启动或下载组件。
 - Web 运行准入经同一具名 HTTP 入口一次取得 Node 原 scanner/profile 核验的精确发布描述，绑定既有 `_WebHostSession`；之后 stat/read 由 Backend 直接调用唯一的 `package_files.publication_file`，不再逐文件调用 Gateway／Node。安装详情的 current-only 请求仍在原 Node 发布流内即时核当前 profile，由 Gateway Python 调用同一字节读取函数；不能用库存 mirror 授权或创建第二套读取实现。
 - Web 关闭先撤准入，等待公开传输和已开始的 Python 同步 I/O 真正结清，读后再核原 client/view/generation/profile/key/逻辑 ID，撤权或取消不得披露迟到正文。TODO(4.4)：Node 真实运行集合及最终引用回收尚未闭合，当前不能启用全局物理 cleanUp；冻结描述不等于回收闭包完成。
+- Web 连接发布独立业务 context，只含目标平台、具名 profile 设置和稳定工作区视图，不包含 Node 进程初始化。未挂接目录的 Web 视图仍可访问该目标 profile；Node 准入继续要求非空根集合。Node／Web 配置共用原 session、客户端、代际校验和 Python 文件／watcher owner，原生环境随同次发布描述返回，不增加逐配置 Node 请求。
 - `configuration.py`直接读写`source_uri.py`正式登记的目标 profile settings 与多根 view 文件；原环境仅提供 profile／untitled workspace 位置描述。稳定 view 以现有无覆盖原子发布原语首次物化，已有文件只验冻结有序根并保留 JSONC 字节，编辑、dirty 与 etag 仍归原 Code OSS。配置观察复用共享`WorkspaceFileWatchService`，仅订阅两个已登记文件的直接父目录并精确过滤。
 
 # 不可修改内容
