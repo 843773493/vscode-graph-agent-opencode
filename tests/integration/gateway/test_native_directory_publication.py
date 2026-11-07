@@ -19,6 +19,7 @@ from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import read_workspace_id
 from app.gateway.lifespan import lifespan
 from app.gateway.routes import native_directories
+from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.schemas.gateway.native_directories import (
     NativeDirectoryBindingDTO,
     NativeDirectoryResolveDTO,
@@ -53,12 +54,12 @@ def _resolve_reply(**values: str) -> NativeDirectoryResolveDTO:
 
 
 @asynccontextmanager
-async def publication_lifespan(application: FastAPI) -> AsyncIterator[None]:
+async def publication_lifespan(application: FastAPI) -> AsyncIterator[dict[str, GatewayExtensionManagement | None]]:
     with patch.object(native_directories, "NativeDirectoryBindingDTO", _binding_reply), patch.object(
         native_directories, "NativeDirectoryResolveDTO", _resolve_reply,
     ):
-        async with lifespan(application):
-            yield
+        async with lifespan(application) as state:
+            yield state
 
 
 def create_gateway_app() -> FastAPI:

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  GATEWAY_SHUTDOWN_TIMEOUT_MS,
   forwardGatewayOutput,
   buildGatewayPendingEnvironment,
   gatewayEndpoint,
@@ -137,7 +138,10 @@ describe("gateway supervisor", () => {
     });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].args.slice(-6)).toEqual([
+    expect(calls[0].args).toEqual([
+      "-m",
+      "app.gateway.server.runner",
+      "app.gateway.main:app",
       "--host",
       "127.0.0.1",
       "--port",
@@ -214,6 +218,29 @@ describe("gateway supervisor", () => {
 
     expect(child.killedWith).toEqual(["SIGTERM", "SIGKILL"]);
     expect(errors.join("")).toContain("Gateway 未在 10ms 内退出");
+  });
+
+  test("默认关闭给原管理结清及普通释放保留150秒", () => {
+    const child = fakeChild();
+    const processObject = new EventEmitter();
+    const timers = [];
+    const remove = installSignalForwarding(child, processObject, "linux", {
+      setTimeoutImpl(callback, milliseconds) {
+        timers.push({ callback, milliseconds });
+        return { unref() {} };
+      },
+      clearTimeoutImpl() {},
+      logger: createRuntimeLogger("launcher", "test", { write() {} }),
+    });
+
+    processObject.emit("SIGTERM");
+    expect(child.killedWith).toEqual(["SIGTERM"]);
+    expect(timers).toHaveLength(1);
+    expect(timers[0].milliseconds).toBe(150_000);
+    expect(timers[0].milliseconds).toBe(GATEWAY_SHUTDOWN_TIMEOUT_MS);
+    timers[0].callback();
+    expect(child.killedWith).toEqual(["SIGTERM", "SIGKILL"]);
+    remove();
   });
 
   test("将 Gateway 输出转发到 Launcher 输出流", () => {

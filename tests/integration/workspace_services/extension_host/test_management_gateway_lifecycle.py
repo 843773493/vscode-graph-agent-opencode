@@ -104,7 +104,7 @@ await symlink(resolve(modules),join(output,'node_modules'),'junction');
                 client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
                 yield case
         finally:
-            terminate_process(process)
+            terminate_process(process, timeout_seconds=160)
 
 
 def test_launcher_reuses_service_after_failed_candidate_and_successful_handoff_then_stops_it(
@@ -198,7 +198,7 @@ console.log(JSON.stringify(await requestGatewayHandoff({boxteamHome:process.env.
         recovered = case.client.get(f"/api/v1/workspaces/{workspace['workspace_id']}/health").raise_for_status().json()
         assert recovered["process_id"] == backend["process_id"]
         evidence["retained"] = {"gateway": changed, "backend": recovered, "service": service}
-        terminate_process(case.process)
+        terminate_process(case.process, timeout_seconds=160)
         assert psutil.wait_procs([manager], timeout=10)[1] == []
         assert not service_file.exists()
         evidence["shutdown"] = {"launcher_exit_code": case.process.returncode, "manager_exited": True}
@@ -208,7 +208,7 @@ console.log(JSON.stringify(await requestGatewayHandoff({boxteamHome:process.env.
         (case.context.artifacts_dir / "lifecycle.json").write_text(json.dumps(evidence,
             ensure_ascii=False, indent=2), encoding="utf-8")
         # 断言失败仍回收本次已验证身份的独立服务，避免将故障进程遗留到后续测试。
-        terminate_process(case.process)
+        terminate_process(case.process, timeout_seconds=160)
         if manager is not None and manager.is_running() and manager.status() != psutil.STATUS_ZOMBIE:
             manager.terminate()
             assert psutil.wait_procs([manager], timeout=10)[1] == []

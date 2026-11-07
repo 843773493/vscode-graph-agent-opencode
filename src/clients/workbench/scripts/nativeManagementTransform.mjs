@@ -7,6 +7,7 @@ export const nativeManagementSourcePaths = [
   'src/vs/platform/extensionManagement/node/extensionDownloader.ts',
   'src/vs/platform/extensionManagement/common/extensionsScannerService.ts',
   'src/vs/platform/files/common/diskFileSystemProvider.ts',
+  'src/vs/platform/request/node/requestService.ts',
 ];
 
 /** 暴露并结算原服务自己的初始化及异步回调，不复制安装、扫描或清理算法。 */
@@ -16,7 +17,12 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
     const imported = relative(dirname(path), join(root, 'node/extensionManagementLifecycle.js')).replaceAll('\\', '/');
     return `import { NativeManagementLifecycle } from ${JSON.stringify(imported)};\n`;
   };
-  if (path === join(root, 'upstream/src/vs/platform/files/common/diskFileSystemProvider.ts')) {
+  if (path === join(root, 'upstream/src/vs/platform/request/node/requestService.ts')) {
+    source = `import { pipeline } from 'node:stream';\n` + source;
+    // pipe 不传播源错误；pipeline 将截断错误交给原消费流，回调不另建错误通道。
+    source = replaceOnce(source, 'stream = res.pipe(createGunzip());',
+      'stream = pipeline(res, createGunzip(), () => {});');
+  } else if (path === join(root, 'upstream/src/vs/platform/files/common/diskFileSystemProvider.ts')) {
     // 原 non-recursive client 的 dispose 不调用 stop；显式空 watch 沿原算法停止所有实例。
     source = replaceOnce(source, 'private refreshNonRecursiveWatchers(): void {',
       `async stopNativeManagementWatchers(): Promise<void> {
@@ -28,6 +34,13 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
   private refreshNonRecursiveWatchers(): void {`);
   } else if (matches('node/extensionManagementService')) {
     source = lifecycleImport() + source;
+    // finally 会生成另一个拒绝的 Promise；返回并复用它，让原安装任务统一观察错误。
+    source = replaceOnce(source,
+      `this.extractingGalleryExtensions.set(extensionKey.toString(), promise = this.downloadAndExtractGalleryExtension(extensionKey, extension, operation, options, token));
+\t\t\t\tpromise.finally(() => this.extractingGalleryExtensions.delete(extensionKey.toString()));`,
+      `promise = this.downloadAndExtractGalleryExtension(extensionKey, extension, operation, options, token)
+\t\t\t\t\t.finally(() => this.extractingGalleryExtensions.delete(extensionKey.toString()));
+\t\t\t\tthis.extractingGalleryExtensions.set(extensionKey.toString(), promise);`);
     source = replaceOnce(source, 'readonly _serviceBrand: undefined;\n\tscanAllUserInstalledExtensions()',
       'readonly _serviceBrand: undefined;\n\treadonly whenNativeManagementReady: Promise<void>;\n\tdrainNativeManagement(): Promise<void>;\n\tscanAllUserInstalledExtensions()');
     source = replaceOnce(source, 'private readonly extensionsScanner: ExtensionsScanner;',

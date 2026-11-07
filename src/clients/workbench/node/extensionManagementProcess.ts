@@ -7,6 +7,7 @@ import { createJsonRequestReader } from '../../../shared/serverJsonRequest.mjs';
 import { createRuntimeLogger, runtimeLoggingState } from '../../../shared/serverRuntimeLogging.mjs';
 import { handleRuntimeLoggingRequest, verifyRuntimeLoggingToken } from '../../../shared/serverRuntimeLoggingControl.mjs';
 import { createExtensionManagement } from './extensionManagement.js';
+import { withExtensionDownloadTransport } from './extensionDownload.js';
 import { acquireProcessLock } from '../upstream/src/vs/platform/agentHost/node/copilot/localModelBridge/shim/processLock.js';
 import { ExtensionManagementError } from '../upstream/src/vs/platform/extensionManagement/common/extensionManagement.js';
 import { FileOperationError, FileOperationResult, FileSystemProviderErrorCode, toFileSystemProviderErrorCode } from '../upstream/src/vs/platform/files/common/files.js';
@@ -115,7 +116,9 @@ try {
         if (input.method === 'inventory') result = await management.inventory();
         else if (input.method === 'environment') result = await management.environment();
         else if (input.method === 'install' && 'vsix_path' in input && typeof input.vsix_path === 'string' && isAbsolute(input.vsix_path)) {
-          result = await management.install(input.vsix_path);
+          const requestTransport = 'request_transport' in input ? input.request_transport : undefined;
+          const vsixPath = input.vsix_path;
+          result = await withExtensionDownloadTransport(requestTransport, backendId, () => management.install(vsixPath));
         } else if (input.method === 'uninstall' && 'profile_id' in input && typeof input.profile_id === 'string' && input.profile_id
           && 'extension_id' in input && typeof input.extension_id === 'string' && input.extension_id
           && 'version' in input && typeof input.version === 'string' && input.version) {

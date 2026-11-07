@@ -78,3 +78,5 @@ JS 控制客户端测试使用本用例创建的 TCP 服务替身，覆盖跨 UT
 - 辅助服务高输出接线同时使用嵌套工作区和显式正式产物根，验证日志归属跟随调用测试，不随工作区深度改变；同一测试的多个服务共用产物根并以唯一日志名区分。
 - 工作区、日志和运行数据写入镜像路径 `out/tests/integration/harness/<测试名>/`。
 - `test_web_diagnostic_response_lifetime.py` 与正式驱动统一用Node／`--expose-gc`，以真实 Chromium 调用正式聊天诊断入口，使用显式 HTTP 正文检验读取后释放；负例仅通过Node模块resolve hook把精确驱动的正文读取替换为旧Playwright缓存读取，证明同一检查会拒绝累积正文，不修改产品或全局原型。同时读取等量成功静态资源，核对已完成请求释放且诊断响应仅保留业务 API。不替代真实 Gateway 完整聊天回归。
+
+- `test_gateway_runner.py`用正式runner独立进程、真实POSIX SIGTERM和新建HTTP连接验证原owner先结清、listener后关闭，并核启动失败／结清失败的非零退出。管理owner为显式门控替身，不证明真实Node安装通过；工作区和原始日志留本文件镜像输出。POSIX／Windows目标命令测试现只生成`app/gateway/server/runner.py`入口替身，替代上述fake Uvicorn，不保留旧模块；Windows跳过不计为原生通过。

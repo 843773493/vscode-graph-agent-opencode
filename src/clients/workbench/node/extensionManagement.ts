@@ -1,4 +1,5 @@
 import { createRuntimeLogger } from '../../../shared/serverRuntimeLogging.mjs';
+import { ExtensionDownloadRequestService } from './extensionDownload.js';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 import { Schemas } from '../upstream/src/vs/base/common/network.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
@@ -31,7 +32,6 @@ import { NullPolicyService } from '../upstream/src/vs/platform/policy/common/pol
 import product from '../upstream/src/vs/platform/product/common/product.js';
 import { IProductService } from '../upstream/src/vs/platform/product/common/productService.js';
 import { IRequestService } from '../upstream/src/vs/platform/request/common/request.js';
-import { RequestService } from '../upstream/src/vs/platform/request/node/requestService.js';
 import { ITelemetryService } from '../upstream/src/vs/platform/telemetry/common/telemetry.js';
 import { NullTelemetryService } from '../upstream/src/vs/platform/telemetry/common/telemetryUtils.js';
 import { IUriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
@@ -77,7 +77,7 @@ export async function createExtensionManagement(directory: string, builtinExtens
     const configuration = consumers.add(new ConfigurationService(profiles.defaultProfile.settingsResource, files, new NullPolicyService(), log));
     services.set(IConfigurationService, configuration);
     await Promise.all([profiles.init(), configuration.initialize()]);
-    services.set(IRequestService, new SyncDescriptor(RequestService, ['remote']));
+    services.set(IRequestService, new SyncDescriptor(ExtensionDownloadRequestService));
     services.set(IDownloadService, new SyncDescriptor(DownloadService));
     services.set(ITelemetryService, NullTelemetryService);
     services.set(IExtensionGalleryManifestService, new SyncDescriptor(ExtensionGalleryManifestService));

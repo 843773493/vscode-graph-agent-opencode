@@ -17,7 +17,8 @@ const RELEASE_DEFAULT_BACKEND_PORT = 8010;
 const GATEWAY_READY_TIMEOUT_MS =
   process.platform === "win32" ? 180_000 : 90_000;
 const GATEWAY_CONNECTION_DRAIN_TIMEOUT_SECONDS = 2;
-const GATEWAY_SHUTDOWN_TIMEOUT_MS = 10_000;
+// 管理停机总期限120秒，另给普通HTTP连接drain及常见收尾留余量。
+export const GATEWAY_SHUTDOWN_TIMEOUT_MS = 150_000;
 
 function resolveDevelopmentGatewayPort(environment) {
   const rawValue = environment?.BOXTEAM_GATEWAY_PORT?.trim() ?? "";
@@ -217,7 +218,7 @@ export function spawnGateway({
     runtime.pythonExecutable,
     [
       "-m",
-      "uvicorn",
+      "app.gateway.server.runner",
       "app.gateway.main:app",
       "--host",
       endpoint.host,

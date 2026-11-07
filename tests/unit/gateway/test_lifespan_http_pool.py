@@ -154,7 +154,8 @@ async def test_gateway_pool_closes_once_on_startup_failure(
 
 @pytest.mark.asyncio
 async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: _LifespanCase) -> None:
-    async with gateway_lifespan.lifespan(lifespan_case.app):
+    async with gateway_lifespan.lifespan(lifespan_case.app) as state:
+        assert state["extension_management"] is lifespan_case.app.state.extension_management
         assert lifespan_case.app.state.http_client is lifespan_case.clients[0]
         assert lifespan_case.app.state.federation_rpc_service.session_main._http_client is lifespan_case.clients[0]
         assert not lifespan_case.clients[0].is_closed
@@ -170,6 +171,7 @@ async def test_extension_management_handoff_uses_gateway_state_before_close(
 ) -> None:
     preserve_checks: list[bool] = []
     extension_cleanup: list[bool] = []
+    owner = Mock()
 
     def preserve_for_handoff(**_: object) -> bool:
         assert "state" not in lifespan_case.events
@@ -181,7 +183,7 @@ async def test_extension_management_handoff_uses_gateway_state_before_close(
         *_: object, preserve_for_handoff: Callable[[], bool],
         **__: object,
     ):
-        yield None
+        yield owner
         extension_cleanup.append(preserve_for_handoff())
 
     monkeypatch.setattr(
@@ -195,8 +197,9 @@ async def test_extension_management_handoff_uses_gateway_state_before_close(
         extension_management_context,
     )
 
-    async with gateway_lifespan.lifespan(lifespan_case.app):
-        pass
+    async with gateway_lifespan.lifespan(lifespan_case.app) as state:
+        assert state["extension_management"] is owner
+        assert lifespan_case.app.state.extension_management is owner
 
     assert preserve_checks == [True]
     assert extension_cleanup == [True]

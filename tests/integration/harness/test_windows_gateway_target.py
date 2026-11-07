@@ -58,10 +58,11 @@ def windows_gateway_case(monkeypatch: pytest.MonkeyPatch) -> WindowsGatewayCase:
 
     package = json.loads((repository_root / "package.json").read_text(encoding="utf-8"))
     capture_path = artifacts / "gateway-process-environment.json"
-    uvicorn = repository_root / "uvicorn"
-    uvicorn.mkdir()
-    (uvicorn / "__init__.py").write_text("", encoding="utf-8")
-    (uvicorn / "__main__.py").write_text(
+    runner_package = repository_root / "app" / "gateway" / "server"
+    runner_package.mkdir(parents=True)
+    for package_path in (repository_root / "app", repository_root / "app" / "gateway", runner_package):
+        (package_path / "__init__.py").write_text("", encoding="utf-8")
+    (runner_package / "runner.py").write_text(
         """\
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

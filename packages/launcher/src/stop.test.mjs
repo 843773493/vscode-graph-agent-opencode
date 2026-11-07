@@ -37,6 +37,24 @@ function stoppingFixture() {
 }
 
 describe("Launcher 停止", () => {
+  test("默认在Gateway关闭预算外再留10秒后才强杀", async () => {
+    const { state, options } = stoppingFixture();
+    delete options.timeoutMs;
+    let forcedAt;
+    options.killImpl = (_pid, signal) => {
+      state.signals.push(signal);
+      if (signal === "SIGKILL") {
+        forcedAt = state.monotonicMs;
+        state.alive = false;
+      }
+    };
+
+    expect(await stopLauncher(options)).toEqual({ status: "force-stopped", pid: 1234 });
+    expect(forcedAt).toBe(160_000);
+    expect(state.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(state.removed).toEqual(["lock-token"]);
+  });
+
   test("没有锁时不操作进程", async () => {
     const signals = [];
     const result = await stopLauncher({

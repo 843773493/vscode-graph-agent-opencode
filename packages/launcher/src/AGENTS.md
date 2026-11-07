@@ -104,3 +104,5 @@ out/tests/packages/launcher/src/instance-lock-errors/
 - 模块抛出包含资源路径和发行标识的明确错误。
 - 顶层入口保持轻量，复杂行为拆到聚焦模块。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+- Launcher停止默认等待160秒，比Gateway的150秒结清／释放期限多10秒；时间替身测试须核实际升级时刻，不能真等或只检查常量定义。

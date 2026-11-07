@@ -10,6 +10,7 @@
 - `extension_configuration.py`透明转发正式具名配置资源的stat/read/write/events；client从原用户租约派生，保留generation／view／有序工作区身份，披露与原心跳重新核对host及configuration读写权限。配置文件与共享watcher仍归目标Backend，不在Gateway建立配置副本或保存基线。
 - 仅服务于 Gateway 入口装配的辅助函数
 - `extension_management.py`是常驻原生管理组件的具名本机控制入口，核原运行时凭据、loopback、安装域及已登记操作；不接受浏览器Origin、联邦凭据或任意method。目标级库存、卸载直接调用安装组件，包字节由Gateway Python在原串行准入内读取；VSIX来源与运行实例仍由Backend原owner核验。
+- 其下载回调须绑定尚未结清的原安装能力与request_id，终态撤销后拒绝旧回调；只允许原安装器具名制品callSite，不提供通用fetch、文件写入或独立服务。回执未知期间不能因普通健康检查拒绝原已受理安装结清下载。
 
 # 不可修改内容
 
@@ -22,3 +23,5 @@
 - 启动失败和代理失败必须返回或抛出明确错误
 - SSH 与本地工作区的持久化权威来源仍由 Gateway registry 管理
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+- `runner.py`是正式Gateway HTTP进程的唯一入口；从原ASGI lifespan state取得同一扩展管理owner，在Uvicorn关闭listener前等待quiesce。启动未完成不结清；结清失败保留原异常和非零退出，不创建第二管理owner。

@@ -25,6 +25,7 @@
 - `test_management_gateway_lifecycle.py`通过真实Launcher控制通道执行候选失败、重试换代及完整停机；由配置watcher生成交接意图，核实际Gateway、Backend与管理进程身份及退出。故障只注入隔离Home的端口转发配置，不预置generation；不代表Windows、远端或窗口验收。
 - 原生 VSIX manifest 预检通过真实 Node 安装入口核首次／升级候选在发布前拒绝，安装域目录、profile 原字节、库存及旧版制品保持；原 engine 文案、纯声明式 engine 拒绝、合法 Warning 和成功升级不变。原 HTTP 场景另核 Gateway／Backend／Node 的无效升级 400、同一 request_id 与另一目标不变；不据此声称依赖、平台、信任或完整扩展 API 兼容已完成。
 - 本目录真实HTTP统一由`conftest.py`持有已绑定socket与Uvicorn任务并等待关闭；库存网络场景经过原Gateway认证、Backend私有入口及真实Node/profile，核双Backend版本、稳定身份、恢复和route误指，不装配完整工作区业务图，不代表窗口registry、真实SSH或VSIX安装界面验收。
+- `extension_download.test.mjs` 必须用固定上游专用 Node 的 `--test` 执行并显式提供 `BOXTEAM_TEST_NODE_HOST_MODULES`；运行真实 RequestService／nodeRequest／HTTP／gzip／取消和 DownloadService／磁盘 Provider，核五个制品 callSite、安装 AsyncLocalStorage 隔离、原 request_id、代理／TLS 配置、错误归属和 POST 不重放／不重定向。日志回归经原 LogService／AdapterLogger 核下载 host、状态及错误类别保留，签名 URL、敏感请求／响应头和异常正文不进入日志。本机 HTTP 模拟 Python 回调及原站，不代表真实 Gateway／Python、完整安装或签名验收；测试不得改用 Bun 的请求行为或修改共享安装 fixture。
 
 - `extension_storage.test.mjs` 在独立本机HTTP来源的真实Chromium中运行原BrowserStorageService／IndexedDB／BroadcastChannel、ExtensionStorageService、MainThreadStorage、ExtHostStorage及Memento；host binding／RPC为具名装具，不能当Gateway／真实Node验收。核同ID目标及稳定视图隔离、Web原键／同步清理、旧代际拒绝、跨窗口通知、整值并发和新窗口恢复；不宣称跨设备同步。`node_host.mjs`另由真实扩展原公共API实写三个目标存储file URI、核包目录分离及setKeysForSync同步明确拒绝，主线程Memento仍是该原生协议装具的具名替身。
 - 同一存储回归运行原 MainThreadSecretState／ExtHostSecretState，并编译 Node 专用入口，核四类秘密操作在 RPC 前拒绝、主线程零秘密读写／广播及 Web 原 API；秘密服务为具名装具。原生 probe 另经真实 Node 的公开 SecretStorage 验证四类拒绝，不能据此宣称目标侧秘密 owner 已实现。

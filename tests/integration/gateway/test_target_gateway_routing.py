@@ -37,6 +37,7 @@ from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.lifespan import lifespan
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
+from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -126,12 +127,12 @@ async def _loopback_gateway_tunnel(
 
 
 @asynccontextmanager
-async def _loopback_lifespan(application: FastAPI) -> AsyncIterator[None]:
+async def _loopback_lifespan(application: FastAPI) -> AsyncIterator[dict[str, GatewayExtensionManagement | None]]:
     with patch.object(federation, "build_ssh_command", _loopback_pairing_command), patch.object(
         remote_gateway, "start_remote_gateway_tunnel", _loopback_gateway_tunnel,
     ):
-        async with lifespan(application):
-            yield
+        async with lifespan(application) as state:
+            yield state
 
 
 def create_gateway_app() -> ASGIApp:

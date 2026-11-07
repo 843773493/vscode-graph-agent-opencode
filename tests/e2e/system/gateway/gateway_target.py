@@ -244,7 +244,7 @@ def _windows_gateway_start_command(
             "$env:BOXTEAM_NODE_BIN = $NodeExecutable",
             "$env:PYTHONUNBUFFERED = '1'",
             (
-                "$GatewayArguments = @('-m', 'uvicorn', 'app.gateway.main:app', '--host', "
+                "$GatewayArguments = @('-m', 'app.gateway.server.runner', 'app.gateway.main:app', '--host', "
                 "'127.0.0.1', '--port', "
                 f"'{remote_gateway_port}', '--log-level', 'warning')"
             ),
@@ -321,7 +321,7 @@ def _posix_gateway_start_command(
         "nohup",
         shlex.quote(python),
         "-m",
-        "uvicorn",
+        "app.gateway.server.runner",
         "app.gateway.main:app",
         "--host",
         "127.0.0.1",

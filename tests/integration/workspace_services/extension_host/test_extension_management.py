@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import os
 import shutil
@@ -22,6 +23,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import JsonValue
+from starlette.responses import Response, StreamingResponse
 from websockets.asyncio.client import connect
 
 from app.api.extension_host import router as backend_host_router
@@ -37,6 +39,7 @@ from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME, UserAccessS
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.extension_download import ExtensionDownloadRequest
 from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.gateway.server.extension_host import router as gateway_host_router
 from app.gateway.server.extension_management import router as gateway_management_router
@@ -506,6 +509,256 @@ async def test_native_vsix_keep_existing_plans_dependencies_from_published_manif
     }, ensure_ascii=False, indent=2))
 
 
+@pytest.mark.parametrize(("primary_fails", "signature_enabled", "body_disconnect"), [
+    (False, False, False), (True, False, False), (False, True, False), (False, False, True),
+], ids=["primary", "fallback", "signature-rejected", "body-disconnect"])
+async def test_gateway_install_downloads_dependency_through_its_target_backend(
+    management_backends, vsix_factory, installation_snapshot, network_scope: AsyncExitStack,
+    serve_extension_application: Callable[[FastAPI], Awaitable[str]], monkeypatch: pytest.MonkeyPatch,
+    primary_fails: bool, signature_enabled: bool, body_disconnect: bool,
+) -> None:
+    case = management_backends
+    context = case.context
+    dependency_id = "boxteam-probe.python-dependency"
+    dependency_vsix = vsix_factory(case.workspace, "1.0.0", "dependency", manifest_overrides={
+        "publisher": "boxteam-probe", "name": "python-dependency"})
+    compressed_dependency = gzip.compress(dependency_vsix.read_bytes())
+    gallery = FastAPI()
+    gallery_requests: list[tuple[str, int, str | None]] = []
+
+    @gallery.post("/gallery/extensionquery")
+    async def query(request: Request):
+        gallery_requests.append(("/gallery/extensionquery", 200, None))
+        version = {
+            "version": "1.0.0", "lastUpdated": "2026-01-01T00:00:00Z",
+            "assetUri": f"{gallery_url}/assets/primary/python-dependency/1.0.0",
+            "fallbackAssetUri": f"{gallery_url}/assets/fallback/python-dependency/1.0.0",
+            "files": [
+                {"assetType": "Microsoft.VisualStudio.Code.Manifest",
+                    "source": f"{gallery_url}/assets/manifest/python-dependency/1.0.0"},
+                {"assetType": "Microsoft.VisualStudio.Services.VSIXPackage",
+                    "source": f"{gallery_url}/assets/vsix/python-dependency/1.0.0"},
+            ],
+            "properties": [{"key": "Microsoft.VisualStudio.Code.Engine", "value": "*"}],
+        }
+        extension = {
+            "extensionId": "dependency-uuid", "extensionName": "python-dependency",
+            "displayName": "Python Dependency", "shortDescription": "Dependency fixture",
+            "publisher": {"displayName": "BoxTeam", "publisherId": "publisher-id",
+                "publisherName": "boxteam-probe"},
+            "versions": [version], "statistics": [], "tags": [], "categories": [], "flags": "",
+            "releaseDate": "2026-01-01T00:00:00Z", "publishedDate": "2026-01-01T00:00:00Z",
+            "lastUpdated": "2026-01-01T00:00:00Z",
+        }
+        return {"results": [{"extensions": [extension], "resultMetadata": [{"metadataType": "ResultCount",
+            "metadataItems": [{"name": "TotalCount", "count": 1}]}]}]}
+
+    @gallery.get("/assets/{source}/python-dependency/1.0.0/{asset_type}")
+    async def dependency_asset(source: str, asset_type: str, request: Request):
+        if asset_type == "Microsoft.VisualStudio.Code.Manifest":
+            gallery_requests.append((f"/{source}/manifest", 200, None))
+            return {"name": "python-dependency", "publisher": "boxteam-probe", "version": "1.0.0",
+                "engines": {"vscode": "^1.0.0"}, "extensionDependencies": []}
+        if asset_type != "Microsoft.VisualStudio.Services.VSIXPackage":
+            raise HTTPException(404, "unknown gallery asset")
+        redirect = request.query_params.get("redirect") == "true"
+        status = 503 if primary_fails and redirect else 200
+        encoding = "gzip" if status == 200 else None
+        gallery_requests.append((f"/{source}/vsix{'?redirect=true' if redirect else ''}", status, encoding))
+        if status != 200:
+            return Response("primary CDN unavailable", status_code=status)
+        if body_disconnect:
+            async def broken_gzip():
+                yield compressed_dependency[:24]
+                raise OSError("fixture compressed response body disconnected")
+            return StreamingResponse(broken_gzip(), media_type="application/octet-stream",
+                headers={"Content-Encoding": "gzip"})
+        return Response(compressed_dependency, media_type="application/octet-stream",
+            headers={"Content-Encoding": "gzip"})
+
+    gallery_url = await serve_extension_application(gallery)
+    product = json.loads((context.project_root / "src/clients/workbench/upstream/product.json").read_text())
+    metadata = json.loads((context.run_root / "runtime/version.json").read_text())
+    product.update({"version": metadata["version"], "commit": metadata["commit"], "quality": "stable",
+        "extensionsGallery": {"serviceUrl": f"{gallery_url}/gallery"}})
+    preload = context.artifacts_dir / "gateway-dependency-gallery.mjs"
+    preload.write_text("globalThis._VSCODE_PRODUCT_JSON = " + json.dumps(product) + ";\n"
+        + "globalThis._VSCODE_PACKAGE_JSON = " + json.dumps({"version": metadata["version"]}) + ";\n")
+    monkeypatch.setenv("NODE_OPTIONS", f"{os.getenv('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
+    synthetic_asset_settings = case.domains[1].owner.directory / "data/User/settings.json"
+    synthetic_asset_settings.parent.mkdir(parents=True, exist_ok=True)
+    synthetic_asset_settings.write_text(json.dumps({"extensions.verifySignature": signature_enabled}))
+    for domain_index in (0, 1):
+        await _restart_gateway_management(case, domain=domain_index)
+
+    backends: list[WorkspaceContainerRegistry] = []
+    targets: list[WorkspaceTarget] = []
+    client = await network_scope.enter_async_context(httpx.AsyncClient(timeout=30, trust_env=False))
+    for index, domain in enumerate(case.domains):
+        backend = _backend(case.workspace / f"download-{index}", case, domain=index)
+        backends.append(backend)
+        backend_app = FastAPI()
+        backend_app.add_middleware(TraceMiddleware)
+        backend_app.exception_handler(HTTPException)(workspace_http_exception_handler)
+        backend_app.include_router(backend_host_router)
+        backend_app.state.workspace_container_registry = backend
+        backend_url = await serve_extension_application(backend_app)
+        mount = backend.mounted_workspaces.resolve(backend.mounted_workspaces.workspace_ids[0])
+        target = WorkspaceTarget(gateway_id=domain.gateway_id, workspace_id=mount.workspace_id,
+            name=f"download-{index}", root_path=str(mount.workspace_root), backend_url=backend_url,
+            connection_kind="local")
+        domain.registry.upsert(target, activate=False)
+        targets.append(target)
+
+    a_domain, b_domain = case.domains
+    a_backend, b_backend = backends
+    b_target = targets[1]
+    assert b_domain.owner.instance is not None and b_domain.owner.process is not None
+    b_instance = b_domain.owner.instance
+    b_process = b_domain.owner.process
+    # A 预先有自己的安装状态；安装 B 的依赖时，A 的库存与原件必须完全不变。
+    await a_backend.extension_hosts.management.install(vsix_factory(case.workspace, "1.0.0", "existing-a"))
+    a_before = await a_backend.extension_hosts.management.inventory()
+    a_installation = a_domain.owner.directory / "extensions"
+    a_entries = json.loads((a_installation / "extensions.json").read_text())
+    [a_package] = a_entries
+    a_package_path = a_installation / a_package["relativeLocation"]
+    a_package_before = installation_snapshot(a_package_path)
+
+    observed: list[tuple[int, str, str]] = []
+    observed_call_sites: list[str] = []
+    import app.gateway.server.extension_management as management_routes
+
+    original_download = management_routes.extension_download
+
+    async def capture_download(payload: ExtensionDownloadRequest) -> Response:
+        observed_call_sites.append(payload.call_site)
+        return await original_download(payload)
+
+    monkeypatch.setattr(management_routes, "extension_download", capture_download)
+    for index, domain in enumerate(case.domains):
+        original_authorize = domain.owner.authorize_download
+
+        def observe(capability: str, request_id: str, *, owner_index: int = index,
+                    authorize: Callable[[str, str], None] = original_authorize) -> None:
+            observed.append((owner_index, capability, request_id))
+            authorize(capability, request_id)
+
+        monkeypatch.setattr(domain.owner, "authorize_download", observe)
+    discovered = await client.post(f"{b_domain.url}/api/gateway/extension-targets",
+        headers={**b_domain.headers, "X-Request-ID": "download-target-discovery"},
+        json={"protocol_version": 1, "gateway_id": b_domain.gateway_id})
+    assert discovered.status_code == 200, discovered.text
+    resolved = await client.post(f"{b_domain.url}/api/gateway/extension-targets/resolve",
+        headers={**b_domain.headers, "X-Request-ID": "download-backend-discovery"},
+        json={"protocol_version": 1, "gateway_id": b_domain.gateway_id,
+            "workspace_ids": [b_target.workspace_id], "backend_id": b_backend.extension_hosts.backend_id})
+    assert resolved.status_code == 200, resolved.text
+    assert b_target.backend_id == b_backend.extension_hosts.backend_id
+    assert b_target.root_path is not None
+    b_before = await b_backend.extension_hosts.management.inventory()
+    source = vsix_factory(Path(b_target.root_path), "1.1.0", "root-b",
+        manifest_overrides={"extensionDependencies": [dependency_id]})
+    request_id = "gateway-download-b"
+    response = await client.post(f"{b_domain.url}/api/gateway/extension-installations/install",
+        headers={**b_domain.headers, "X-Request-ID": request_id}, json={
+            "protocol_version": 1, "gateway_id": b_domain.gateway_id,
+            "backend_id": b_backend.extension_hosts.backend_id, "workspace_ids": [b_target.workspace_id],
+            "source_uri": resource_display_uri(scope="workspace", scope_id=b_target.workspace_id,
+                kind="files", tail_segments=("root", source.name), gateway_authority=b_domain.gateway_id),
+        })
+    if signature_enabled or body_disconnect:
+        assert response.status_code == 400, response.text
+        if signature_enabled:
+            assert "SignatureVerificationFailed" in response.text or "NotSigned" in response.text
+        else:
+            assert "Unable to write file" in response.text and "Error: aborted" in response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+        if body_disconnect:
+            assert await b_backend.extension_hosts.management.inventory() == b_before
+    else:
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+    assert b_domain.owner.instance is b_instance and b_domain.owner.process is b_process and b_process.is_alive()
+    assert b_domain.owner.instance.process_id == b_instance.process_id
+    b_inventory = await b_backend.extension_hosts.management.inventory()
+
+    def inventory_ids() -> set[str]:
+        identifiers: set[str] = set()
+        for item in b_inventory.extensions:
+            identifier = item.description["identifier"]
+            assert isinstance(identifier, dict)
+            value = identifier["value"]
+            assert isinstance(value, str)
+            identifiers.add(value)
+        return identifiers
+
+    installed_ids = inventory_ids()
+    if signature_enabled or body_disconnect:
+        if body_disconnect:
+            assert b_inventory == b_before
+        else:
+            assert dependency_id not in installed_ids
+        recovery_source = vsix_factory(Path(b_target.root_path), "2.0.0", "after-signature-rejection",
+            manifest_overrides={"publisher": "boxteam-probe", "name": "recovery-probe"})
+        recovered = await client.post(f"{b_domain.url}/api/gateway/extension-installations/install",
+            headers={**b_domain.headers, "X-Request-ID": "gateway-recovery-b"}, json={
+                "protocol_version": 1, "gateway_id": b_domain.gateway_id,
+                "backend_id": b_backend.extension_hosts.backend_id, "workspace_ids": [b_target.workspace_id],
+                "source_uri": resource_display_uri(scope="workspace", scope_id=b_target.workspace_id,
+                    kind="files", tail_segments=("root", recovery_source.name),
+                    gateway_authority=b_domain.gateway_id),
+            })
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.headers["X-Request-ID"] == recovered.json()["request_id"] == "gateway-recovery-b"
+        b_inventory = await b_backend.extension_hosts.management.inventory()
+        installed_ids = inventory_ids()
+        assert "boxteam-probe.recovery-probe" in installed_ids
+    else:
+        assert {"boxteam-probe.target-inventory", dependency_id} <= installed_ids
+        published_dependencies = []
+        for entry in json.loads((b_domain.owner.directory / "extensions/extensions.json").read_text()):
+            package = b_domain.owner.directory / "extensions" / entry["relativeLocation"]
+            manifest = json.loads((package / "package.json").read_text())
+            if f"{manifest['publisher']}.{manifest['name']}" == dependency_id:
+                published_dependencies.append(package / "extension.js")
+        assert len(published_dependencies) == 1
+        with ZipFile(dependency_vsix) as archive:
+            assert published_dependencies[0].read_bytes() == archive.read("extension/extension.js")
+
+    assert observed and all(index == 1 for index, _, _ in observed)
+    assert {received_id for _, _, received_id in observed} == {request_id}
+    expected_call_sites = ["extensionGalleryService.download"]
+    if primary_fails:
+        expected_call_sites.append("extensionGalleryService.download.fallback")
+    if body_disconnect:
+        expected_call_sites *= 3
+    assert observed_call_sites == expected_call_sites
+    assert await a_backend.extension_hosts.management.inventory() == a_before
+    assert installation_snapshot(a_package_path) == a_package_before
+    expected_downloads = [
+        ("/fallback/vsix?redirect=true", 503 if primary_fails else 200,
+            None if primary_fails else "gzip"),
+        *([("/fallback/vsix", 200, "gzip")] if primary_fails else []),
+    ]
+    if body_disconnect:
+        expected_downloads *= 3
+    assert [item for item in gallery_requests if "/vsix" in item[0]] == expected_downloads
+    if body_disconnect:
+        assert b_domain.owner.process is b_process and b_process.is_alive()
+    assert any(item[0] == "/primary/manifest" and item[1] == 200 for item in gallery_requests)
+
+    # 安装回执结清后，旧 capability 不得再次下载或被误认为当前安装。
+    _, old_capability, old_request_id = observed[0]
+    before = [item for item in gallery_requests if "/vsix" in item[0]]
+    stale = await client.post(
+        f"{b_domain.url}/api/gateway/internal/extension-management/"
+        f"{b_domain.owner.backend_id}/downloads/{old_capability}",
+        headers={"X-Local-Token": case.token, "X-Request-ID": old_request_id},
+        json={"call_site": "extensionGalleryService.download", "url": f"{gallery_url}/assets/primary/python-dependency/1.0.0/Microsoft.VisualStudio.Services.VSIXPackage",
+            "headers": {}, "timeout_ms": None, "follow_redirects": 0, "proxy_url": None, "strict_ssl": True})
+    assert stale.status_code == 403, stale.text
+    assert [item for item in gallery_requests if "/vsix" in item[0]] == before
 @pytest.mark.parametrize(("retained", "damage"), [
     (retained, damage) for retained in (False, True)
     for damage in ("invalid-manifest", "invalid-json", "missing-manifest", "not-directory")

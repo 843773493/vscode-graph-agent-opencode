@@ -28,3 +28,5 @@ gateway/
 - Docker E2E 工作区固定放在 `out/docker/<相对测试路径>/`，每次测试开始前重置，结束后保留。
 - 测试启动的宿主机和容器内进程默认清理；只有单测试显式传入 `--keep-docker-runtime` 时才允许保留。
 - `gateway_target.py` 只管理当前 E2E 所属远端目标的进程；启动或清理目标服务前先确认该目标专用于本测试，不能对共享开发目标清空通用服务端口。
+
+- 远端POSIX／PowerShell Gateway启动命令统一进入`app.gateway.server.runner`；本地命令集成的入口替身同步迁移，不保留fake Uvicorn第二链路。

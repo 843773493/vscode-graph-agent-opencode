@@ -30,3 +30,5 @@
 该页面使用 `web_workbench_assets` 构建正式 Workbench，由 Launcher 的 Gateway 托管。日志诊断从主侧栏的 Gateway 控制中心进入，按对应 ShadowRoot 内的对话框定位；保留原进程实例、revision 和 request_id 断言。HOME 与产物按运行和 pytest 节点隔离；handoff 后按 Launcher 原有退出期限等待旧进程完成连接排空，不用固定睡眠判断退出。
 
 `test_gateway_logging.py` 使用显式 `runtime_logging_app.py` 测试组合，仍运行真实 Gateway、受管 Backend／Node、HTTP 校验和 SQLite 事务；故障只让发出的前置条件过期，不替换进程状态或写入业务结果。终端验收通过模型回放驱动真实 `exec_command`，同时核 wire、canonical、用户定点详情与工作区专用记录。测试组合不进入产品启动入口，模型响应复用统一 model_stream 资产与编码。
+
+- Gateway测试入口包装原lifespan时必须原样yield其state，使正式runner在listener关闭前取得原扩展管理owner；联邦协议、目标路由与原生目录发布的测试组合不得吞掉该句柄或创建替代owner。Backend测试组合仍沿Workspace生命周期。

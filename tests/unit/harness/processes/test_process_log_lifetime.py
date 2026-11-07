@@ -26,6 +26,7 @@ class ProcessStartup:
     spawn: Mock
     ready: Mock
     terminate: Mock
+    termination_kwargs: dict[str, int]
 
 
 @pytest.fixture(params=["workspace", "gateway"])
@@ -66,7 +67,10 @@ def startup(
             workspace_root=workspace, default_backend_url=None, port=18040,
         )
         close = gateway_processes.close_gateway_process
-    return ProcessStartup(module, start, close, spawn, ready, terminate)
+    return ProcessStartup(
+        module, start, close, spawn, ready, terminate,
+        {} if request.param == "workspace" else {"timeout_seconds": 150},
+    )
 
 
 def test_spawn_failure_closes_both_logs_and_keeps_original_error(startup: ProcessStartup) -> None:
@@ -122,7 +126,7 @@ def test_ready_handle_owns_logs_until_close(startup: ProcessStartup) -> None:
 
     assert handle.stdout_file.closed
     assert handle.stderr_file.closed
-    startup.terminate.assert_called_once_with(handle.process)
+    startup.terminate.assert_called_once_with(handle.process, **startup.termination_kwargs)
 
 
 @pytest.mark.parametrize("startup", ["workspace"], indirect=True)
@@ -154,7 +158,7 @@ def test_readiness_failure_releases_process_and_logs(startup: ProcessStartup) ->
     assert failure.value is error
     assert startup.spawn.call_args.kwargs["stdout"].closed
     assert startup.spawn.call_args.kwargs["stderr"].closed
-    startup.terminate.assert_called_once_with(startup.spawn.return_value)
+    startup.terminate.assert_called_once_with(startup.spawn.return_value, **startup.termination_kwargs)
 
 
 @pytest.mark.parametrize("close_error_type", [OSError, KeyboardInterrupt])
@@ -196,7 +200,7 @@ def test_log_close_failure_still_closes_other_log_and_preserves_all_errors(
             error for error in (termination_error, stdout_error, stderr_error)
             if error is not None
         )
-        startup.terminate.assert_called_once_with(handle.process)
+        startup.terminate.assert_called_once_with(handle.process, **startup.termination_kwargs)
         startup.module.unregister_test_process.assert_not_called()
     finally:
         handle.stdout_file.close()

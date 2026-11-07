@@ -54,6 +54,13 @@ def test_windows_stop_reports_live_server_instead_of_claiming_completion(process
     tree.child.kill.assert_not_called()
 
 
+def test_explicit_gateway_budget_reaches_launcher_and_captured_server(process_tree) -> None:
+    tree = process_tree
+    workspace.terminate_process(tree.process, timeout_seconds=150)
+    tree.process.wait.assert_called_once_with(timeout=150)
+    tree.wait.assert_called_once_with([tree.child], timeout=150)
+
+
 def test_windows_stop_still_waits_children_if_launcher_disappears_during_termination(process_tree) -> None:
     tree = process_tree
     tree.process.terminate.side_effect = ProcessLookupError()

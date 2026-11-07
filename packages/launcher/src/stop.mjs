@@ -3,8 +3,9 @@ import {
   readLauncherLock,
   removeLauncherLock,
 } from "./instance-lock.mjs";
+import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "./gateway/supervisor.mjs";
 
-export const DEFAULT_STOP_TIMEOUT_MS = 15_000;
+export const DEFAULT_STOP_TIMEOUT_MS = GATEWAY_SHUTDOWN_TIMEOUT_MS + 10_000;
 export const DEFAULT_FORCE_STOP_TIMEOUT_MS = 5_000;
 const STOP_POLL_INTERVAL_MS = 100;
 

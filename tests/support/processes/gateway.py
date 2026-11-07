@@ -129,7 +129,7 @@ def start_gateway_process(
     cmd = [
         str(python_executable),
         "-m",
-        "uvicorn",
+        "app.gateway.server.runner",
         asgi_app,
         "--host",
         "127.0.0.1",
@@ -185,7 +185,8 @@ def start_gateway_process(
 def close_gateway_process(handle: GatewayProcess) -> None:
     errors: list[BaseException] = []
     for cleanup in (
-        lambda: terminate_process(handle.process),
+        # 管理停机总期限120秒，另留普通HTTP连接drain余量；非慢浏览器整组回收上界。
+        lambda: terminate_process(handle.process, timeout_seconds=150),
         handle.stdout_file.close,
         handle.stderr_file.close,
     ):

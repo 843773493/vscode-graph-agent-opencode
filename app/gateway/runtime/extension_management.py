@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, TypeVar
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from app.core.backend_identity import load_or_create_backend_id
 from app.core.env import get_project_root
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
@@ -91,6 +93,8 @@ class GatewayExtensionManagement:
         self._detached = False
         self.preserve_on_close = False
         self._failure: BaseException | None = None
+        self._download_admission: tuple[str, str] | None = None
+        self._shutdown_deadline: float | None = None
 
     @classmethod
     def from_environment(cls, home: Path, *, logging_startup: Mapping[str, object]) -> GatewayExtensionManagement | None:
@@ -185,19 +189,8 @@ class GatewayExtensionManagement:
             command = [str(self.runtime.executable), str(entrypoint), str(self.directory), self.backend_id]
             log_file = self._log_store.open("extension-management")
             process = _spawn_logged_process(command, log_file=log_file, cwd=self.directory, env=env, detached=True)
-            managed = ManagedProcess(process=process, log_file=log_file)
-            self.process = managed
-            try:
-                await self._wait_for_instance(log_file)
-            except BaseException:
-                if managed.is_alive():
-                    await asyncio.to_thread(managed.close, timeout_seconds=self._operation_timeout)
-                    self.process = None
-                    self.instance = None
-                elif self._client is not None:
-                    await self._client.aclose()
-                    self._client = None
-                raise
+            self.process = ManagedProcess(process=process, log_file=log_file)
+            await self._wait_for_instance(log_file)
         except BaseException as error:
             self._failure = error
             try:
@@ -244,16 +237,28 @@ class GatewayExtensionManagement:
             return
         raise TimeoutError("扩展管理 Node 服务未在期限内发布 service.json")
 
-    async def _request(self, command: Mapping[str, JsonValue], *, response_type: type[Result]) -> Result:
-        return await self._settle(self._request_locked(command, response_type=response_type))
+    async def _request(self, command: Mapping[str, JsonValue], *, response_type: type[Result],
+                       download_base_url: str | None = None) -> Result:
+        return await self._settle(self._request_locked(command, response_type=response_type,
+            download_base_url=download_base_url))
 
-    async def _request_locked(self, command: Mapping[str, JsonValue], *, response_type: type[Result]) -> Result:
+    async def _request_locked(self, command: Mapping[str, JsonValue], *, response_type: type[Result],
+                              download_base_url: str | None = None) -> Result:
         async with self._lock:
             self.assert_healthy()
             assert self._client is not None and self.instance is not None
+            native_command = dict(command)
+            if command.get("method") == "install" and download_base_url is not None:
+                request_id = require_current_request_id("扩展下载传输")
+                capability = uuid4().hex
+                self._download_admission = capability, request_id
+                native_command["request_transport"] = {
+                    "url": f"{download_base_url}/api/gateway/internal/extension-management/{self.backend_id}/downloads/{capability}",
+                    "request_id": request_id,
+                }
             try:
                 response = await self._client.post(f"{self.instance.base_url}/management",
-                    headers={"X-Local-Token": get_gateway_local_token()}, json=command, follow_redirects=False)
+                    headers={"X-Local-Token": get_gateway_local_token()}, json=native_command, follow_redirects=False)
                 response.raise_for_status()
                 reply = response.json()
                 if not isinstance(reply, dict):
@@ -281,6 +286,14 @@ class GatewayExtensionManagement:
             except BaseException as error:
                 self._failure = error
                 raise
+            finally:
+                # 未知回执后，已受理的 Node 工作仍可结清下载；正常终态立即撤销本次能力。
+                if self._failure is None:
+                    self._download_admission = None
+
+    def authorize_download(self, capability: str, request_id: str) -> None:
+        if self._download_admission != (capability, request_id):
+            raise PermissionError("扩展下载不属于本 Gateway 尚未结清的原安装请求")
 
     @staticmethod
     async def _settle(awaitable: Awaitable[Result]) -> Result:
@@ -293,7 +306,8 @@ class GatewayExtensionManagement:
             await run_cleanup_shielded(wait_for_task)
             raise
 
-    async def request(self, command: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    async def request(self, command: Mapping[str, JsonValue], *,
+                      download_base_url: str | None = None) -> dict[str, JsonValue]:
         operation = command.get("method")
         if operation in {"extension-file-stat", "extension-file-read"}:
             try:
@@ -311,7 +325,7 @@ class GatewayExtensionManagement:
             "uninstall": UninstalledProfile,
         }[operation]
         try:
-            result = await self._request(command, response_type=response_type)
+            result = await self._request(command, response_type=response_type, download_base_url=download_base_url)
         except ExtensionManagementError as error:
             return {"error": str(error), "code": error.code}
         return {"result": result.model_dump(mode="json")}
@@ -369,6 +383,37 @@ class GatewayExtensionManagement:
             raise ExtensionManagementError(str(reply["error"]), str(reply["code"]))
         return response_type.model_validate(reply["result"])
 
+    async def _settle_downloads(self) -> None:
+        if self._download_admission is None:
+            return
+        assert self._client is not None and self.instance is not None
+        # 控制回执未知不等于安装结束。原 environment 与安装共用串行队列，
+        # 等它返回后才能关闭本代下载入口；不重放原安装或另建 drain 接口。
+        response = await self._client.post(f"{self.instance.base_url}/management",
+            headers={"X-Local-Token": get_gateway_local_token()},
+            json={"method": "environment"}, follow_redirects=False)
+        response.raise_for_status()
+        reply = response.json()
+        if not isinstance(reply, dict) or set(reply) != {"result"}:
+            raise ValueError("扩展管理交接没有确认原安装队列结清")
+        NativeManagementEnvironment.model_validate(reply["result"])
+        self._download_admission = None
+
+    def _begin_shutdown(self) -> float:
+        self._closing = True
+        now = asyncio.get_running_loop().time()
+        if self._shutdown_deadline is None:
+            self._shutdown_deadline = now + self._operation_timeout
+        if now >= self._shutdown_deadline:
+            raise TimeoutError("扩展管理停机总期限已耗尽，原工作或实际进程尚未结清")
+        return self._shutdown_deadline
+
+    async def quiesce(self) -> None:
+        """在 HTTP listener 关闭前停止新准入，保留回调直到原安装真正结清。"""
+        async with asyncio.timeout_at(self._begin_shutdown()):
+            async with self._lock:
+                await self._settle_downloads()
+
     async def close(self, *, preserve: bool | None = None) -> None:
         preserve = self.preserve_on_close if preserve is None else preserve
         self._closing = True
@@ -376,9 +421,13 @@ class GatewayExtensionManagement:
             if self._client is not None:
                 await self._client.aclose()
                 self._client = None
+            self._download_admission = None
             return
-        async with self._lock:
+        deadline = self._begin_shutdown()
+        # 监听关闭前结清、HTTP shutdown 和实际进程退出共用总期限，不能逐阶段重开预算。
+        async with asyncio.timeout_at(deadline), self._lock:
             if preserve:
+                await self._settle_downloads()
                 if self._client is not None:
                     await self._client.aclose()
                     self._client = None
@@ -386,10 +435,12 @@ class GatewayExtensionManagement:
                 self.process = None
                 self.instance = None
                 self._detached = True
+                self._download_admission = None
                 return
             if self.instance is None and isinstance(self.process, ManagedProcess):
-                # 仅清理本轮启动但未通过身份证明的 child；接管的旧实例不因证明失败被终止。
-                await asyncio.to_thread(self.process.close, timeout_seconds=self._operation_timeout)
+                # 只处理本轮未通过身份证明的 child；原进程工具的软停／强停各占剩余预算一半。
+                remaining = max(0, deadline - asyncio.get_running_loop().time())
+                await run_sync_shielded(self.process.close, timeout_seconds=remaining / 2)
                 self.process = None
                 self.instance = None
                 if self._client is not None:
@@ -403,18 +454,16 @@ class GatewayExtensionManagement:
                 if response.json() != {"drained": True}:
                     raise ValueError("扩展管理服务没有确认 drain")
             if self.process is not None:
-                deadline = asyncio.get_running_loop().time() + self._operation_timeout
-                while self.process.is_alive() and asyncio.get_running_loop().time() < deadline:
+                while self.process.is_alive():
                     await asyncio.sleep(0.02)
-                if self.process.is_alive():
-                    raise TimeoutError("扩展管理服务确认 drain 后未按时退出")
-                await asyncio.to_thread(self.process.close, timeout_seconds=0)
+                await run_sync_shielded(self.process.close, timeout_seconds=0)
                 self.process = None
                 self.instance = None
             if self._client is not None:
                 await self._client.aclose()
                 self._client = None
             self._detached = False
+            self._download_admission = None
 
 
 @asynccontextmanager

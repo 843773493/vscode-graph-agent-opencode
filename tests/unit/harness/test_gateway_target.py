@@ -149,7 +149,7 @@ def test_posix_gateway_start_uses_platform_runtime_paths(
     }
     command = str(captured["command"])
     assert "nohup" in command
-    assert "-m uvicorn app.gateway.main:app" in command
+    assert "-m app.gateway.server.runner app.gateway.main:app" in command
     assert "BOXTEAM_GATEWAY_ROOT=/tmp/gateway-home/state/gateway" in command
     assert "/dev/null" in command
     assert "-EncodedCommand" not in command
@@ -193,7 +193,7 @@ def test_windows_gateway_start_uses_windows_paths_and_literal_safe_encoding(
         "$Python = 'C:\\boxteam dev\\O''Neil\\repository\\.venv\\Scripts\\python.exe'"
         in script
     )
-    assert "$GatewayArguments = @('-m', 'uvicorn', 'app.gateway.main:app'" in script
+    assert "$GatewayArguments = @('-m', 'app.gateway.server.runner', 'app.gateway.main:app'" in script
     assert "'--port', '24814', '--log-level', 'warning')" in script
     assert "-ArgumentList $GatewayArguments" in script
     assert "Get-Command node.exe -ErrorAction Stop" in script

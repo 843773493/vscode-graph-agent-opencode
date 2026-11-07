@@ -54,3 +54,5 @@ out/tests/packages/launcher/src/gateway/control-channel-encoding/
 - HTTP和WebSocket共用公开监听器当前target；generation的创建和切换归supervisor所有。
 - 保留原始异常和实际退出事实，测试使用进程外超时、内存保护和正式测试输出目录。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+- Gateway统一通过`python -m app.gateway.server.runner app.gateway.main:app`启动；supervisor导出150秒退出等待，为管理停机总期限120秒及普通HTTP连接drain留余量，外层停止入口复用该值。现有慢浏览器与多工作区回收仍有独立期限，不把它视为整组停机总上界。信号及换代仍由原supervisor协调，不保留Uvicorn旧启动分支。

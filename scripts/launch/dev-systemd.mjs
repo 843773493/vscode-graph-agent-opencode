@@ -1,5 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../packages/launcher/src/gateway/supervisor.mjs";
 
 import {
   developmentSystemdUnitName,
@@ -72,7 +73,7 @@ export function buildTransientDevelopmentUnit({
     "--service-type=exec",
     "--property=Restart=no",
     "--property=KillMode=control-group",
-    "--property=TimeoutStopSec=20",
+    `--property=TimeoutStopSec=${GATEWAY_SHUTDOWN_TIMEOUT_MS / 1000 + 30}`,
     `--working-directory=${layout.projectRoot}`,
     ...Object.entries(serviceEnvironment).map(
       ([name, value]) => `--setenv=${name}=${value}`,

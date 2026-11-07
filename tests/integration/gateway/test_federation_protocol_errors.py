@@ -21,6 +21,7 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayCon
 from app.gateway.lifespan import lifespan
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import WorkspaceTarget
+from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
@@ -64,8 +65,8 @@ async def stub_management(request: Request) -> JSONResponse:
 
 
 @asynccontextmanager
-async def protocol_lifespan(application: FastAPI) -> AsyncIterator[None]:
-    async with lifespan(application):
+async def protocol_lifespan(application: FastAPI) -> AsyncIterator[dict[str, GatewayExtensionManagement | None]]:
+    async with lifespan(application) as state:
         # 装具只预置已连接远端及凭据；被测路由、HTTP 客户端与响应解析均为生产实现。
         FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
             connection_id=CONNECTION_ID, peer_gateway_id=load_or_create_gateway_id(get_gateway_root() / "identity.json"),
@@ -88,7 +89,7 @@ async def protocol_lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "workspace_api": f"http://127.0.0.1:{os.environ['BOXTEAM_TEST_FEDERATION_PORT']}",
             }),
         )
-        yield
+        yield state
 
 
 def create_gateway_app() -> FastAPI:

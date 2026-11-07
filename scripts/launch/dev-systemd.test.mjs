@@ -189,6 +189,7 @@ describe("transient systemd 启动", () => {
     expect(unit.systemdRunArguments).toContain("--user");
     expect(unit.systemdRunArguments).toContain("--collect");
     expect(unit.systemdRunArguments).toContain("--property=Restart=no");
+    expect(unit.systemdRunArguments).toContain("--property=TimeoutStopSec=180");
     expect(unit.systemdRunArguments).toContain(
       `--setenv=BOXTEAM_HOME=${fixtureDefaultBoxteamHome}`,
     );

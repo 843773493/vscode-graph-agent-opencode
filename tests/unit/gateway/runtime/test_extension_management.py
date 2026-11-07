@@ -6,7 +6,7 @@ import asyncio
 import json
 import threading
 from base64 import b64decode
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -17,6 +17,7 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
+from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.runtime import extension_management
 from app.gateway.runtime.extension_management import (
     ExtensionManagementInstance,
@@ -202,7 +203,7 @@ async def control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         yield HttpControl(owner, process, client, instance, replies, startup_replies, requests,
             command_sent, events, spawn, adopt_log, open_log, client_factory)
     finally:
-        await owner.close(preserve=True)
+        # 没有真实子进程；停止由各用例显式驱动，teardown 不另开一次停机预算。
         await client.aclose()
 
 
@@ -420,6 +421,152 @@ async def test_preserve_close_waits_for_worker_before_closing_client_or_detachin
     assert not any(request.url.path == "/shutdown" for request in c.requests)
 
 
+@pytest.fixture
+def install_request_id() -> Iterator[str]:
+    token = set_current_request_id("original-install-request")
+    try:
+        yield "original-install-request"
+    finally:
+        reset_current_request_id(token)
+
+
+@pytest.fixture
+def environment_reply() -> dict[str, JsonValue]:
+    return {"result": {"app_root_uri": "file:///target/app", "global_storage_home_uri": "file:///target/global",
+        "workspace_storage_home_uri": "file:///target/workspaces", "untitled_workspaces_home_uri": "file:///target/untitled",
+        "profile_id": "default", "settings_native_uri": "file:///target/settings.json"}}
+
+
+@pytest.mark.parametrize("known_error", [False, True])
+async def test_download_capability_is_bound_to_original_request_and_revoked_at_terminal_receipt(
+    control: HttpControl, install_request_id: str, known_error: bool,
+) -> None:
+    c = control
+    await c.owner.start()
+    installing = asyncio.create_task(c.owner.request({"method": "install", "vsix_path": "/target/a.vsix"},
+        download_base_url="http://127.0.0.1:40500"))
+    try:
+        await asyncio.wait_for(c.command_sent.wait(), 1)
+        transport = json.loads(c.commands[-1].content)["request_transport"]
+        capability = transport["url"].rsplit("/", 1)[1]
+        assert transport == {"url": f"http://127.0.0.1:40500/api/gateway/internal/extension-management/{c.owner.backend_id}/downloads/{capability}",
+            "request_id": install_request_id}
+        c.owner.authorize_download(capability, install_request_id)
+        for rejected in ((capability, "another-request"), ("another-capability", install_request_id)):
+            with pytest.raises(PermissionError):
+                c.owner.authorize_download(*rejected)
+    finally:
+        c.reply({"error": "依赖不可用", "code": "DownloadFailed"} if known_error else {
+            "result": {"installed": {"id": "publisher.probe", "version": "1.0.0", "profile_id": "default", "reused": False},
+                "inventory": {"profile_id": "default", "extensions": []}}})
+        await installing
+    with pytest.raises(PermissionError):
+        c.owner.authorize_download(capability, install_request_id)
+    c.owner.assert_healthy()
+
+
+@pytest.mark.parametrize("barrier_fails", [False, True])
+@pytest.mark.parametrize("quiesce_first", [False, True], ids=["preserve-close", "pre-listener-quiesce"])
+async def test_unknown_install_keeps_download_until_original_node_queue_settles_before_handoff(
+    control: HttpControl, install_request_id: str, environment_reply: dict[str, JsonValue],
+    barrier_fails: bool, quiesce_first: bool,
+) -> None:
+    c = control
+    await c.owner.start()
+    c.reply({"unknown": True})
+    with pytest.raises(ValueError, match="回执不完整"):
+        await c.owner.request({"method": "install", "vsix_path": "/target/a.vsix"},
+            download_base_url="http://127.0.0.1:40500")
+    capability = json.loads(c.commands[-1].content)["request_transport"]["url"].rsplit("/", 1)[1]
+    c.owner.authorize_download(capability, install_request_id)
+    c.command_sent.clear()
+    closing = asyncio.create_task(c.owner.quiesce() if quiesce_first else c.owner.close(preserve=True))
+    try:
+        await asyncio.wait_for(c.command_sent.wait(), 1)
+        assert not closing.done() and not c.client.is_closed and c.process.detach_calls == 0
+        c.owner.authorize_download(capability, install_request_id)
+        assert [json.loads(request.content)["method"] for request in c.commands] == ["install", "environment"]
+    finally:
+        c.reply({"unknown": True} if barrier_fails else environment_reply)
+        await asyncio.gather(closing, return_exceptions=True)
+    if barrier_fails:
+        with pytest.raises(ValueError, match="交接没有确认"):
+            closing.result()
+        assert not c.owner.drained and not c.client.is_closed and c.process.detach_calls == 0
+        c.owner.authorize_download(capability, install_request_id)
+        # 原查询失败不能声称结清；完整停机仍通过原 shutdown 核实际 drain。
+        await c.owner.close(preserve=False)
+    else:
+        closing.result()
+        if quiesce_first:
+            assert not c.owner.drained and not c.client.is_closed and c.process.alive and c.process.detach_calls == 0
+            with pytest.raises(PermissionError):
+                c.owner.authorize_download(capability, install_request_id)
+            await c.owner.close(preserve=True)
+        assert c.owner.drained and c.client.is_closed and c.process.alive and c.process.detach_calls == 1
+    with pytest.raises(PermissionError):
+        c.owner.authorize_download(capability, install_request_id)
+
+
+async def test_pre_listener_quiesce_timeout_keeps_unsettled_download_and_service_identity(
+    control: HttpControl, install_request_id: str,
+) -> None:
+    c = control
+    await c.owner.start()
+    c.reply({"unknown": True})
+    with pytest.raises(ValueError, match="回执不完整"):
+        await c.owner.request({"method": "install", "vsix_path": "/target/a.vsix"},
+            download_base_url="http://127.0.0.1:40500")
+    capability = json.loads(c.commands[-1].content)["request_transport"]["url"].rsplit("/", 1)[1]
+    with pytest.raises(TimeoutError):
+        await c.owner.quiesce()
+    assert not c.owner.drained and not c.client.is_closed and c.process.alive and c.process.detach_calls == 0
+    c.owner.authorize_download(capability, install_request_id)
+    requests = len(c.requests)
+    with pytest.raises(TimeoutError, match="停机总期限已耗尽"):
+        await c.owner.close(preserve=True)
+    assert len(c.requests) == requests and not c.owner.drained
+    c.owner.authorize_download(capability, install_request_id)
+
+
+@pytest.mark.parametrize("quiesce_first", [False, True])
+async def test_full_shutdown_cannot_restart_budget_after_quiesce_or_http_drain(
+    control: HttpControl, monkeypatch: pytest.MonkeyPatch, quiesce_first: bool,
+) -> None:
+    c = control
+    await c.owner.start()
+    c.owner._operation_timeout = 0.3
+    stages: list[str] = []
+    exit_process: asyncio.Task[None] | None = None
+
+    async def delayed_exit() -> None:
+        await asyncio.sleep(0.2)
+        c.process.alive = False
+
+    async def shutdown(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal exit_process
+        stages.append("shutdown-started")
+        await asyncio.sleep(0.2)
+        stages.append("shutdown-drained")
+        exit_process = asyncio.create_task(delayed_exit())
+        return httpx.Response(200, json={"drained": True}, request=httpx.Request("POST", c.instance.base_url + "/shutdown"))
+
+    monkeypatch.setattr(c.client, "post", shutdown)
+    if quiesce_first:
+        await c.owner.quiesce()
+        await asyncio.sleep(0.2)
+    try:
+        with pytest.raises(TimeoutError):
+            await c.owner.close()
+        assert stages == (["shutdown-started"] if quiesce_first else ["shutdown-started", "shutdown-drained"])
+        assert not c.owner.drained and c.process.alive and not c.client.is_closed
+        assert not c.process.close_timeouts and c.process.detach_calls == 0
+    finally:
+        if exit_process is not None:
+            exit_process.cancel()
+            await asyncio.gather(exit_process, return_exceptions=True)
+
+
 @pytest.mark.parametrize("failure", ["health-http", "health-identity", "logging-identity", "log-ownership"])
 async def test_failed_existing_service_candidate_is_never_stopped_or_detached(control: HttpControl, failure: str) -> None:
     c = control
@@ -532,7 +679,8 @@ async def test_unverified_spawn_is_reaped_without_shutting_down_an_unproven_serv
     with pytest.raises(error_type, match=message):
         await c.owner.start()
     assert c.owner.instance is None and c.owner.drained and c.client.is_closed
-    assert not c.process.alive and c.process.close_timeouts == [0.1]
+    assert not c.process.alive and len(c.process.close_timeouts) == 1
+    assert 0 < c.process.close_timeouts[0] <= 0.05
     assert c.process.detach_calls == 0
     assert not any(request.url.path == "/shutdown" for request in c.requests)
     assert c.events == ["process-close", "client-close"]

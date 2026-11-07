@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import cast
 
@@ -67,7 +68,10 @@ from app.gateway.runtime.consumer_protocol import (
     runtime_fencing_token_digest,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.extension_management import extension_management_lifespan
+from app.gateway.runtime.extension_management import (
+    GatewayExtensionManagement,
+    extension_management_lifespan,
+)
 from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
@@ -97,7 +101,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, GatewayExtensionManagement | None]]:
     configure_application_logging(service="gateway")
     load_boxteam_env()
     get_gateway_local_token()
@@ -636,7 +640,7 @@ async def lifespan(app: FastAPI):
             if pending_consumer_result is not None:
                 await pending_consumer_result.finalize()
                 pending_consumer_result = None
-            yield
+            yield {"extension_management": extension_management}
         except BaseException as error:
             recovery_errors: list[Exception] = []
             if pending_consumer_result is not None and not pending_promotion_committed:

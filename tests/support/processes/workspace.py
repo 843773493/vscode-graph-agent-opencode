@@ -41,7 +41,7 @@ class BackendProcess:
     workspace_id: str
 
 
-def terminate_process(process: subprocess.Popen[str], *, force: bool = False) -> None:
+def terminate_process(process: subprocess.Popen[str], *, force: bool = False, timeout_seconds: float = 10) -> None:
     if process.poll() is not None:
         return
 
@@ -51,7 +51,7 @@ def terminate_process(process: subprocess.Popen[str], *, force: bool = False) ->
             # venv 启动器可能先于实际服务器退出；停止前冻结归属，不能等父进程消失后再查。
             children = psutil.Process(process.pid).children(recursive=True)
         except psutil.NoSuchProcess:
-            process.wait(timeout=10)
+            process.wait(timeout=timeout_seconds)
             return
         if force:
             # 崩溃恢复测试必须同时硬退出实际服务器，不能只杀启动器。
@@ -63,7 +63,7 @@ def terminate_process(process: subprocess.Popen[str], *, force: bool = False) ->
     try:
         (process.kill if force else process.terminate)()
         try:
-            process.wait(timeout=10)
+            process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
@@ -74,7 +74,7 @@ def terminate_process(process: subprocess.Popen[str], *, force: bool = False) ->
             f"无法终止进程: pid={process.pid}, returncode={process.poll()}"
         ) from error
     if children:
-        _, alive = psutil.wait_procs(children, timeout=10)
+        _, alive = psutil.wait_procs(children, timeout=timeout_seconds)
         if alive:
             raise RuntimeError(
                 f"测试服务器子进程尚未退出: launcher_pid={process.pid}, "
