@@ -1,8 +1,9 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { pinnedUpstreamCommit } from './sourceTransform.mjs';
+import { nodeTransformedSourcePaths, pinnedUpstreamCommit } from './sourceTransform.mjs';
+import { projectTypecheckSources } from './typecheckProjection.mjs';
 
 const { values } = parseArgs({ options: { runtime: { type: 'string' }, outdir: { type: 'string' } } });
 if (!values.runtime || !isAbsolute(values.runtime)) throw new Error('Node 类型检查必须以 --runtime 指定已安装冻结依赖的绝对目录');
@@ -37,11 +38,15 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
   }
 }
 const output = values.outdir ? resolve(values.outdir) : join(repository, 'out/build/workbench-node-typecheck');
-await mkdir(output, { recursive: true });
+const { projectedRoot, targets } = await projectTypecheckSources({ repository, root, output,
+  paths: nodeTransformedSourcePaths, commit, runtime: 'node' });
 const configuration = join(output, 'tsconfig.jsonc');
-await writeFile(configuration, JSON.stringify({ extends: join(root, 'node/tsconfig.jsonc'),
-  compilerOptions: { typeRoots: [join(root, 'node_modules/@types')], paths } }, null, 2) + '\n');
+// TODO：原 node/tsconfig 只包含管理入口；完整 Extension Host 入口的声明合同仍须单独迁齐。
+await writeFile(configuration, JSON.stringify({ extends: join(projectedRoot, 'node/tsconfig.jsonc'),
+  compilerOptions: { preserveSymlinks: true, typeRoots: [join(root, 'node_modules/@types')], paths } }, null, 2) + '\n');
+await writeFile(join(output, 'sources.json'), JSON.stringify({ commit, runtime, targets, configuration }, null, 2) + '\n');
 console.log(`Node 类型检查使用 ${runtime} 的 ${Object.keys(manifest.dependencies).length} 个冻结依赖（${commit}）`);
+console.log(`投影 ${targets.length} 份实际 Node sourceTransform 源码，按 Node 入口检查依赖图`);
 const code = await new Promise((resolve, reject) => {
   const child = spawn(join(root, 'node_modules/.bin/tsgo'), ['--project', configuration, '--noEmit', '--singleThreaded'], { cwd: root, stdio: 'inherit' });
   child.on('error', reject);

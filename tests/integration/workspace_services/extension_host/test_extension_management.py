@@ -9,6 +9,7 @@ import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
+from hashlib import sha256
 from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
@@ -108,17 +109,115 @@ def _backend(workspace: Path, backends: list[WorkspaceContainerRegistry], *, bac
 
 @pytest.fixture
 def vsix_factory():
-    def create(directory: Path, version: str, content: str, *, engine: str = "^1.0.0") -> Path:
+    def create(directory: Path, version: str, content: str, *, engine: str = "^1.0.0",
+               manifest_overrides: dict[str, object] | None = None, omit: tuple[str, ...] = ()) -> Path:
         vsix = directory / f"probe-{version}-{uuid4()}.vsix"
-        manifest = {"name": "target-inventory", "publisher": "boxteam-probe", "version": version,
+        manifest: dict[str, object] = {"name": "target-inventory", "publisher": "boxteam-probe", "version": version,
             "engines": {"vscode": engine}, "main": "./extension.js", "extensionKind": ["workspace"],
             "activationEvents": ["onCommand:boxteam.inventory"],
             "contributes": {"commands": [{"command": "boxteam.inventory", "title": "库存测试"}]}}
+        manifest.update(manifest_overrides or {})
+        for key in omit:
+            manifest.pop(key)
         with ZipFile(vsix, "w") as archive:
             archive.writestr("extension/package.json", json.dumps(manifest))
             archive.writestr("extension/extension.js", f"exports.activate = () => {json.dumps(content)};\n")
         return vsix
     return create
+
+
+@pytest.fixture
+def installation_snapshot() -> Callable[[Path], dict[str, str]]:
+    def snapshot(directory: Path) -> dict[str, str]:
+        # 只核原安装域，不把管理日志或 scanner 的派生缓存误当制品；目录也必须保持。
+        return {path.relative_to(directory).as_posix(): sha256(path.read_bytes()).hexdigest() if path.is_file() else "directory"
+                for path in sorted(directory.rglob("*"))}
+    return snapshot
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["initial", "upgrade"])
+@pytest.mark.parametrize(("case", "overrides", "diagnostic"), [
+    ("missing-engines", {"engines": None}, "property `engines` is mandatory"),
+    ("invalid-version", {"version": "not-semver"}, "Extension version is not semver compatible"),
+    ("invalid-main", {"main": 42}, "property `main` can be omitted or must be of type `string`"),
+    ("invalid-browser", {"browser": 42}, "property `browser` can be omitted or must be of type `string`"),
+    ("invalid-dependencies", {"extensionDependencies": [42]}, "property `extensionDependencies` can be omitted or must be of type `string[]`"),
+    ("invalid-activation", {"activationEvents": [42]}, "property `activationEvents` can be omitted or must be of type `string[]`"),
+    ("wildcard-engine", {"engines": {"vscode": "*"}}, "Version specified in `engines.vscode`"),
+])
+async def test_native_vsix_manifest_preflight_preserves_installation(
+    management_backends, vsix_factory, installation_snapshot, existing: bool,
+    case: str, overrides: dict[str, object], diagnostic: str,
+) -> None:
+    context, workspace, backends = management_backends
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    if existing:
+        await management.install(vsix_factory(workspace, "1.0.0", "original"))
+    before = await management.inventory()
+    installation = management._directory / "extensions"
+    snapshot = installation_snapshot(installation)
+    # 首次安装也核 profile 的存在状态与原字节；拒绝不能先创建一个空安装记录。
+    profile = installation / "extensions.json"
+    profile_bytes = profile.read_bytes() if profile.exists() else None
+    failure = None
+    try:
+        await management.install(vsix_factory(workspace, "2.0.0", "must-not-publish", manifest_overrides=overrides))
+    except ExtensionManagementError as error:
+        failure = str(error)
+    after_snapshot = installation_snapshot(installation)
+    inventory_error = None
+    after = None
+    try:
+        after = await management.inventory()
+    except ExtensionManagementError as error:
+        inventory_error = str(error)
+    (context.artifacts_dir / f"manifest-preflight-{case}-{'upgrade' if existing else 'initial'}.json").write_text(json.dumps({
+        "failure": failure, "inventory_error": inventory_error,
+        "before": before.model_dump(), "after": after.model_dump() if after is not None else None,
+        "snapshot_before": snapshot, "snapshot_after": after_snapshot,
+    }, ensure_ascii=False, indent=2))
+    assert after_snapshot == snapshot
+    assert (profile.read_bytes() if profile.exists() else None) == profile_bytes
+    assert inventory_error is None and after == before
+    assert failure is not None and diagnostic in failure
+    assert registry.extension_hosts.active == ()
+
+
+async def test_native_vsix_declarative_engine_rejection_keeps_original_diagnostic(
+    management_backends, vsix_factory, installation_snapshot,
+) -> None:
+    _, workspace, backends = management_backends
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    before = await management.inventory()
+    installation = management._directory / "extensions"
+    snapshot = installation_snapshot(installation)
+    # 完整 validator 对纯声明式扩展跳过 engine 版本；原 VSIX install 的拒绝仍必须保留。
+    with pytest.raises(ExtensionManagementError, match="not compatible"):
+        await management.install(vsix_factory(workspace, "1.0.0", "declarative", engine="^999.0.0",
+            omit=("main", "activationEvents", "extensionKind")))
+    assert installation_snapshot(installation) == snapshot
+    assert await management.inventory() == before
+
+
+async def test_native_vsix_manifest_warning_and_valid_upgrade_remain_supported(management_backends, vsix_factory) -> None:
+    _, workspace, backends = management_backends
+    registry = _backend(workspace / "target", backends)
+    management = registry.extension_hosts.management
+    # 原 validator 将入口越出包根诊断为非便携 Warning；本组只验安装，不激活该入口。
+    warning = await management.install(vsix_factory(workspace, "1.0.0", "warning", manifest_overrides={"main": "../extension.js"}))
+    extension = warning.inventory.extensions[0]
+    assert warning.installed.version == "1.0.0" and extension.is_valid
+    assert any(validation.severity == 2 and "Expected `main`" in validation.message for validation in extension.validations)
+    previous = management._directory / "extensions" / json.loads((management._directory / "extensions/extensions.json").read_text())[0]["relativeLocation"]
+    previous_bytes = (previous / "package.json").read_bytes()
+    upgraded = await management.install(vsix_factory(workspace, "2.0.0", "valid"))
+    assert upgraded.installed.version == "2.0.0" and len(upgraded.inventory.extensions) == 1
+    assert upgraded.inventory.extensions[0].is_valid and upgraded.inventory.extensions[0].description["version"] == "2.0.0"
+    assert (previous / "package.json").read_bytes() == previous_bytes
+    assert await management.inventory() == upgraded.inventory
+    assert registry.extension_hosts.active == ()
 
 
 async def test_native_vsix_profile_inventory_isolated_and_recovered(management_backends, vsix_factory) -> None:
@@ -292,7 +391,7 @@ async def test_backend_remains_open_until_management_log_and_lock_are_released(
 
 
 async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reused_address(
-    management_backends, vsix_factory, network_scope: AsyncExitStack,
+    management_backends, vsix_factory, installation_snapshot, network_scope: AsyncExitStack,
     serve_extension_application: Callable[[FastAPI], Awaitable[str]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context, workspace, backends = management_backends
@@ -345,11 +444,12 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
         receipts.append({"request_id": request_id, "status": response.status_code, "body": body})
         return response
 
-    async def install(index: int, version: str, *, engine: str = "^1.0.0") -> httpx.Response:
+    async def install(index: int, version: str, *, engine: str = "^1.0.0",
+                      manifest_overrides: dict[str, object] | None = None) -> httpx.Response:
         target = targets[index]
         backend = (first, second)[index]
         assert target.root_path is not None
-        source = vsix_factory(Path(target.root_path), version, version, engine=engine)
+        source = vsix_factory(Path(target.root_path), version, version, engine=engine, manifest_overrides=manifest_overrides)
         request_id = f"install-{index}-{version}"
         response = await client.post(f"{url}/api/gateway/extension-installations/install",
             headers={**headers, "X-Request-ID": request_id}, json={"protocol_version": 1,
@@ -389,6 +489,14 @@ async def test_gateway_inventory_reads_installed_target_profile_and_rejects_reus
     assert failed.status_code == 400 and "not compatible" in failed.text
     assert (await inventory(0, first.extension_hosts.backend_id, "failed-install-kept")).json()["data"] == a.json()["data"]
     directory = first.extension_hosts.management._directory / "extensions"
+    snapshot = installation_snapshot(directory)
+    profile_bytes = (directory / "extensions.json").read_bytes()
+    malformed = await install(0, "3.1.0", manifest_overrides={"browser": 42})
+    assert malformed.status_code == 400 and "property `browser` can be omitted or must be of type `string`" in malformed.text
+    assert installation_snapshot(directory) == snapshot
+    assert (directory / "extensions.json").read_bytes() == profile_bytes
+    assert (await inventory(0, first.extension_hosts.backend_id, "invalid-manifest-kept")).json()["data"] == a.json()["data"]
+    assert (await inventory(1, second.extension_hosts.backend_id, "peer-after-invalid-manifest")).json()["data"] == previous
     [member] = json.loads((directory / "extensions.json").read_text())
     old_script = directory / member["relativeLocation"] / "extension.js"
     original_bytes = old_script.read_bytes()

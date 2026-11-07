@@ -75,6 +75,10 @@ export const transformedSourcePaths = [...new Set([
   ...extensionFileEventsSourcePaths,
 ])];
 
+export const nodeTransformedSourcePaths = [...transformedSourcePaths,
+  'src/vs/platform/extensionManagement/node/extensionManagementService.ts',
+];
+
 function replaceOnce(source, marker, replacement) {
   if (source.split(marker).length !== 2) throw new Error(`上游转换锚点必须恰好一次：${marker}`);
   return source.replace(marker, () => replacement);
@@ -121,6 +125,17 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
         'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches()).catch(onUnexpectedError);');
     }
     contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce, runtime);
+    if (runtime === 'node' && path === join(upstream, 'src/vs/platform/extensionManagement/node/extensionManagementService.ts')) {
+      contents = replaceOnce(contents, "import { isEngineValid } from '../../extensions/common/extensionValidator.js';",
+        "import { isEngineValid, validateExtensionManifest } from '../../extensions/common/extensionValidator.js';\nimport Severity from '../../../base/common/severity.js';");
+      // 沿原 ExtensionKey 和 scanner 的包根语义预检，先拒绝原扫描器也会标 invalid 的候选，不能发布后才失败。
+      contents = replaceOnce(contents, 'const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });',
+        `const extensionLocation = joinPath(this.extensionsScannerService.userExtensionsLocation, new ExtensionKey({ id: extensionId }, manifest.version).toString().toLowerCase());
+      const errors = validateExtensionManifest(this.productService.version, this.productService.date, extensionLocation, manifest, false)
+        .filter(([severity]) => severity === Severity.Error);
+      if (errors.length) throw new ExtensionManagementError(errors.map(([, message]) => message).join('\\n'), ExtensionManagementErrorCode.Invalid);
+      const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });`);
+    }
     // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
     if (runtime === 'node') return contents;
     contents = transformFileDialog(root, path, contents, replaceOnce);
