@@ -9,12 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
+import anyio
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import StdioConnection, StreamableHttpConnection
 
 from app.core.child_process import ChildProcessState, OwnedChildProcess
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.workspace_identity import read_workspace_id
+from app.schemas.gateway.mcp_definitions import McpProviderStdioLaunchDTO
 from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.invocation import CancellableMcpClientSession
 from app.services.infrastructure.mcp.oauth import (
@@ -25,6 +28,13 @@ from app.services.infrastructure.mcp.private_inputs import (
     McpPrivateInputStore,
     candidate_env_definition,
     stdio_env_definition,
+)
+from app.services.infrastructure.mcp.provider import (
+    McpDefinitionResolver,
+    McpProviderAdmission,
+    McpProviderUnavailable,
+    is_provider_unavailable,
+    provider_launch_diagnostics,
 )
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
 from app.services.infrastructure.mcp.transport.stdio import mcp_stdio_transport
@@ -40,10 +50,11 @@ if TYPE_CHECKING:
 McpChangeNotifyCallback: TypeAlias = Callable[[], None]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class McpSessionLifecycle:
     process: OwnedChildProcess
     on_process_started: Callable[[], Awaitable[None]]
+    provider_admission: McpProviderAdmission | None = None
 
 
 class McpServerSessionPort(Protocol):
@@ -59,11 +70,13 @@ McpSessionFactory: TypeAlias = Callable[
 
 
 class _McpServerSession:
-    def __init__(self, session: ClientSession) -> None:
+    def __init__(self, session: ClientSession, *, private_launch: bool = False) -> None:
         self._session = session
+        self._private_launch = private_launch
 
     async def list_tools(self) -> list[BaseTool]:
-        return await list_mcp_tools(self._session)
+        with provider_launch_diagnostics(self._private_launch):
+            return await list_mcp_tools(self._session)
 
     def supports_tool_list_changed(self) -> bool:
         capabilities = self._session.get_server_capabilities()
@@ -75,7 +88,26 @@ async def production_mcp_session_factory(
     server: McpServerConfig, on_tools_list_changed: McpChangeNotifyCallback, lifecycle: McpSessionLifecycle,
     *, workspace_root: Path | None = None, oauth_provider: McpOAuthProvider | None = None,
     installation_owner: McpInstallationOwner | None = None,
+    provider_resolver: McpDefinitionResolver | None = None,
 ) -> AsyncIterator[McpServerSessionPort]:
+    admission = None
+    connection = server.connection
+    unset_env: tuple[str, ...] = ()
+    if server.provider_definition is not None:
+        if provider_resolver is None or workspace_root is None:
+            raise McpProviderUnavailable("工作区没有原 Provider 宿主，保留来源引用并拒绝启动")
+        admission = await provider_resolver.resolve_mcp_definition(server.provider_definition,
+            workspace_id=read_workspace_id(workspace_root), transport=server.transport)
+        lifecycle.provider_admission = admission
+        launch = admission.launch
+        if isinstance(launch, McpProviderStdioLaunchDTO):
+            connection = {"transport": "stdio", "command": launch.command, "args": launch.args,
+                "env": launch.env, "cwd": launch.cwd or str(workspace_root)}
+            unset_env = tuple(launch.unset_env)
+        else:
+            connection = {"transport": "streamable_http", "url": launch.url, "headers": launch.headers}
+    if connection is None:
+        raise ValueError("MCP 启动缺少原连接定义")
     auth = oauth_provider
     if server.oauth is not None and auth is None:
         if workspace_root is None:
@@ -90,18 +122,18 @@ async def production_mcp_session_factory(
     @asynccontextmanager
     async def transport():
         if server.transport == "stdio":
-            connection = cast(StdioConnection, server.connection)
-            command, args = connection["command"], connection["args"]
+            stdio = cast(StdioConnection, connection)
+            command, args = stdio["command"], stdio["args"]
             if server.managed_launch is not None:
                 if installation_owner is None:
                     raise ValueError("受管 MCP launch 缺少原生 Backend 安装 owner")
                 command, args = await asyncio.to_thread(installation_owner.resolve, server.managed_launch,
                     command=command, args=args)
-            env = dict(connection.get("env") or {})
+            env = dict(stdio.get("env") or {})
             if server.private_env:
                 if workspace_root is None:
                     raise ValueError("MCP 私有 env session 必须显式指定所属工作区")
-                definition = stdio_env_definition(connection)
+                definition = stdio_env_definition(stdio)
                 if server.managed_launch is not None:
                     assert installation_owner is not None
                     artifact = await asyncio.to_thread(installation_owner.artifact, server.managed_launch)
@@ -112,12 +144,12 @@ async def production_mcp_session_factory(
                         server_id=server.server_id, input_key=reference.input_key, definition_digest=definition)
             async with mcp_stdio_transport(StdioServerParameters(
                 command=command, args=args,
-                env=env, cwd=connection.get("cwd"),
-            ), lifecycle.process, lifecycle.on_process_started) as streams:
+                env=env, cwd=stdio.get("cwd"),
+            ), lifecycle.process, lifecycle.on_process_started, unset_env=unset_env) as streams:
                 yield streams
         else:
-            connection = cast(StreamableHttpConnection, server.connection)
-            headers = dict(connection.get("headers") or {})
+            http = cast(StreamableHttpConnection, connection)
+            headers = dict(http.get("headers") or {})
             if server.private_headers:
                 if workspace_root is None:
                     raise ValueError("MCP 私有 header session 必须显式指定所属工作区")
@@ -125,21 +157,45 @@ async def production_mcp_session_factory(
                 for reference in server.private_headers:
                     headers[reference.header_name] = await asyncio.to_thread(
                         store.resolve, reference, server_id=server.server_id,
-                        header_name=reference.header_name, endpoint=connection["url"],
+                        header_name=reference.header_name, endpoint=http["url"],
                     )
             async with create_mcp_http_client(headers=headers, auth=auth) as client:
-                if server.private_headers:
+                if server.private_headers or admission is not None:
                     # 引用只授权精确 endpoint；不能随 SDK 默认重定向把任意 header 交给另一地址。
                     client.follow_redirects = False
-                async with streamable_http_client(connection["url"], http_client=client) as (read, write, _):
+                async with streamable_http_client(http["url"], http_client=client) as (read, write, _):
                     yield read, write
 
     # 两种传输均使用 SDK，原 task 创建和退出 session，不保留旧适配器连接分路。
-    async with transport() as (read, write), CancellableMcpClientSession(
-        read, write, message_handler=message_handler,
-    ) as session:
-        await session.initialize()
-        yield _McpServerSession(session)
+    async def watch_definition() -> None:
+        assert admission is not None
+        await admission.invalidated.wait()
+        if not admission.committed.is_set():
+            raise McpProviderUnavailable("Provider 在原连接发布前失效，取消本次启动")
+
+    @asynccontextmanager
+    async def admission_guard():
+        if admission is None:
+            yield
+            return
+        async with anyio.create_task_group() as group:
+            admission.check()
+            group.start_soon(watch_definition)
+            yield
+            group.cancel_scope.cancel()
+
+    try:
+        with provider_launch_diagnostics(admission is not None):
+            async with admission_guard(), transport() as (read, write), CancellableMcpClientSession(
+                read, write, message_handler=message_handler,
+            ) as session:
+                await session.initialize()
+                if admission is not None:
+                    admission.check()
+                yield _McpServerSession(session, private_launch=admission is not None)
+    finally:
+        # 原 runtime 可以保留失败诊断，但不延长一次连接的秘密寿命。
+        lifecycle.provider_admission = None
 
 
 class McpServerRuntime:
@@ -196,6 +252,20 @@ class McpServerRuntime:
         return self._failure is not None and is_authorization_required(self._failure)
 
     @property
+    def provider_unavailable(self) -> bool:
+        return self._failure is not None and is_provider_unavailable(self._failure)
+
+    def admit_provider(self) -> None:
+        admission = self.lifecycle.provider_admission
+        if admission is not None and not admission.committed.is_set():
+            admission.check()
+
+    def commit_provider(self) -> None:
+        admission = self.lifecycle.provider_admission
+        if admission is not None:
+            admission.committed.set()
+
+    @property
     def session(self) -> McpServerSessionPort:
         if not self.running or self._session is None:
             raise RuntimeError(f"MCP session 不可用: server_id={self.server.server_id}") from self._failure
@@ -233,7 +303,7 @@ class McpServerRuntime:
             if not (self._closing and isinstance(error, asyncio.CancelledError)):
                 # 失败传给 start、close 或 owner 的失效发布，绝不作为成功吞掉。
                 self._failure = error
-                self._close_failed = self._closing
+                self._close_failed = self._closing and not is_provider_unavailable(error)
                 if self._ready.is_set() and not self._closing:
                     self._on_failure(self, error)
         finally:

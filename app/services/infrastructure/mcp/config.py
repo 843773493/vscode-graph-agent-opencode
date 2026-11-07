@@ -15,6 +15,7 @@ from app.schemas.internal_v2.mcp import (
     McpManagedLaunchDTO,
     McpPrivateEnvRefDTO,
     McpPrivateHeaderRefDTO,
+    McpProviderDefinitionRefDTO,
     require_mcp_http_url,
 )
 from app.services.infrastructure.mcp.private_inputs import (
@@ -41,11 +42,12 @@ class McpServerConfig:
     server_id: str
     enabled: bool
     transport: McpTransport
-    connection: Connection
+    connection: Connection | None
     oauth: McpOAuthConfig | None = None
     managed_launch: McpManagedLaunchDTO | None = None
     private_headers: tuple[McpPrivateHeaderRefDTO, ...] = ()
     private_env: tuple[McpPrivateEnvRefDTO, ...] = ()
+    provider_definition: McpProviderDefinitionRefDTO | None = None
 
 
 def parse_mcp_server_configs(
@@ -112,6 +114,15 @@ def _parse_server(
     if not isinstance(enabled, bool):
         raise TypeError(f"mcp.servers.{server_id}.enabled 必须是布尔值")
     transport = raw_server.get("transport")
+    if "provider_definition" in raw_server:
+        _reject_unknown_fields(server_id, raw_server, _COMMON_FIELDS | {"provider_definition"})
+        if transport not in {"stdio", "streamable_http"}:
+            raise ValueError("动态 MCP 定义必须声明真实的 stdio 或 streamable_http 传输")
+        reference = McpProviderDefinitionRefDTO.model_validate(raw_server["provider_definition"])
+        if reference.host_kind == "web" and transport == "stdio":
+            raise ValueError("Web Provider 没有目标原生进程上下文，不能提供 stdio 启动定义")
+        return McpServerConfig(server_id=server_id, enabled=enabled, transport=transport,
+            connection=None, provider_definition=reference)
     if transport == "stdio":
         binding = McpManagedLaunchDTO.model_validate(raw_server["managed_launch"]) if "managed_launch" in raw_server else None
         if binding is not None and ("command" in raw_server or installation_resolver is None):

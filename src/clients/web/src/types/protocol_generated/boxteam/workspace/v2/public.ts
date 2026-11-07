@@ -618,6 +618,20 @@ export interface WorkspaceTraceSearchResultsDTO {
   scanned_bytes: number;
 }
 
+export interface McpProviderDefinitionRefDTO {
+  gateway_id: string;
+  backend_id: string;
+  client_id: string;
+  view_id: string;
+  host_generation: string;
+  host_kind: string;
+  extension_id: string;
+  extension_key: string;
+  collection_id: string;
+  provider_ref: string;
+  definition_ref: string;
+}
+
 export interface McpServerDTO {
   server_id: string;
   transport: string;
@@ -627,6 +641,8 @@ export interface McpServerDTO {
   tools: McpToolDTO[];
   /** 精确连接含原 owner 实例及连接代际；不可用时不借目录 revision 补造执行身份。 */
   connection_ref?: string | undefined;
+  provider_definition?: McpProviderDefinitionRefDTO | undefined;
+  unavailable_reason?: string | undefined;
 }
 
 export interface McpToolDTO {
@@ -7883,8 +7899,108 @@ export const WorkspaceTraceSearchResultsDTO: MessageFns<WorkspaceTraceSearchResu
   },
 };
 
+function createBaseMcpProviderDefinitionRefDTO(): McpProviderDefinitionRefDTO {
+  return {
+    gateway_id: "",
+    backend_id: "",
+    client_id: "",
+    view_id: "",
+    host_generation: "",
+    host_kind: "",
+    extension_id: "",
+    extension_key: "",
+    collection_id: "",
+    provider_ref: "",
+    definition_ref: "",
+  };
+}
+
+export const McpProviderDefinitionRefDTO: MessageFns<McpProviderDefinitionRefDTO> = {
+  fromJSON(object: any): McpProviderDefinitionRefDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      client_id: isSet(object.client_id) ? globalThis.String(object.client_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      host_generation: isSet(object.host_generation) ? globalThis.String(object.host_generation) : "",
+      host_kind: isSet(object.host_kind) ? globalThis.String(object.host_kind) : "",
+      extension_id: isSet(object.extension_id) ? globalThis.String(object.extension_id) : "",
+      extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
+      collection_id: isSet(object.collection_id) ? globalThis.String(object.collection_id) : "",
+      provider_ref: isSet(object.provider_ref) ? globalThis.String(object.provider_ref) : "",
+      definition_ref: isSet(object.definition_ref) ? globalThis.String(object.definition_ref) : "",
+    };
+  },
+
+  toJSON(message: McpProviderDefinitionRefDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.client_id !== "") {
+      obj.client_id = message.client_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.host_generation !== "") {
+      obj.host_generation = message.host_generation;
+    }
+    if (message.host_kind !== "") {
+      obj.host_kind = message.host_kind;
+    }
+    if (message.extension_id !== "") {
+      obj.extension_id = message.extension_id;
+    }
+    if (message.extension_key !== "") {
+      obj.extension_key = message.extension_key;
+    }
+    if (message.collection_id !== "") {
+      obj.collection_id = message.collection_id;
+    }
+    if (message.provider_ref !== "") {
+      obj.provider_ref = message.provider_ref;
+    }
+    if (message.definition_ref !== "") {
+      obj.definition_ref = message.definition_ref;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderDefinitionRefDTO>, I>>(base?: I): McpProviderDefinitionRefDTO {
+    return McpProviderDefinitionRefDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderDefinitionRefDTO>, I>>(object: I): McpProviderDefinitionRefDTO {
+    const message = createBaseMcpProviderDefinitionRefDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.client_id = object.client_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.host_generation = object.host_generation ?? "";
+    message.host_kind = object.host_kind ?? "";
+    message.extension_id = object.extension_id ?? "";
+    message.extension_key = object.extension_key ?? "";
+    message.collection_id = object.collection_id ?? "";
+    message.provider_ref = object.provider_ref ?? "";
+    message.definition_ref = object.definition_ref ?? "";
+    return message;
+  },
+};
+
 function createBaseMcpServerDTO(): McpServerDTO {
-  return { server_id: "", transport: "", enabled: false, status: "", tools: [], connection_ref: undefined };
+  return {
+    server_id: "",
+    transport: "",
+    enabled: false,
+    status: "",
+    tools: [],
+    connection_ref: undefined,
+    provider_definition: undefined,
+    unavailable_reason: undefined,
+  };
 }
 
 export const McpServerDTO: MessageFns<McpServerDTO> = {
@@ -7896,6 +8012,10 @@ export const McpServerDTO: MessageFns<McpServerDTO> = {
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       tools: globalThis.Array.isArray(object?.tools) ? object.tools.map((e: any) => McpToolDTO.fromJSON(e)) : [],
       connection_ref: isSet(object.connection_ref) ? globalThis.String(object.connection_ref) : undefined,
+      provider_definition: isSet(object.provider_definition)
+        ? McpProviderDefinitionRefDTO.fromJSON(object.provider_definition)
+        : undefined,
+      unavailable_reason: isSet(object.unavailable_reason) ? globalThis.String(object.unavailable_reason) : undefined,
     };
   },
 
@@ -7919,6 +8039,12 @@ export const McpServerDTO: MessageFns<McpServerDTO> = {
     if (message.connection_ref !== undefined) {
       obj.connection_ref = message.connection_ref;
     }
+    if (message.provider_definition !== undefined) {
+      obj.provider_definition = McpProviderDefinitionRefDTO.toJSON(message.provider_definition);
+    }
+    if (message.unavailable_reason !== undefined) {
+      obj.unavailable_reason = message.unavailable_reason;
+    }
     return obj;
   },
 
@@ -7933,6 +8059,10 @@ export const McpServerDTO: MessageFns<McpServerDTO> = {
     message.status = object.status ?? "";
     message.tools = object.tools?.map((e) => McpToolDTO.fromPartial(e)) || [];
     message.connection_ref = object.connection_ref ?? undefined;
+    message.provider_definition = (object.provider_definition !== undefined && object.provider_definition !== null)
+      ? McpProviderDefinitionRefDTO.fromPartial(object.provider_definition)
+      : undefined;
+    message.unavailable_reason = object.unavailable_reason ?? undefined;
     return message;
   },
 };

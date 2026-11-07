@@ -13,6 +13,8 @@ import type { ConfigSourceDocumentDTO, McpCandidatePlanRequestDTO, McpPrivateEnv
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { mcpConfigurationErrorMessage, mcpConfigurationSourceKey, saveMcpWorkspaceConfiguration,
   selectMcpConfigurationWorkspace } from './configuration.js';
+import { liveMcpProviderDefinitions } from './providerBridge.js';
+import { addMcpProviderConfiguration } from './providerConfiguration.js';
 
 type ManualDefinition = (McpStdioLaunchDefinitionDTO & {
   transport: 'stdio'; env: Record<string, string | McpPrivateEnvRefDTO>;
@@ -178,6 +180,17 @@ export async function addMcpConfiguration(installation: McpInstallationRequestTa
     checkWorkspace();
     if (!document.writable) throw new Error('原工作区配置来源不可写');
     assertNewServer(document, serverId);
+    const providers = liveMcpProviderDefinitions(installationTarget.gateway_id, installationTarget.backend_id, route.workspace_id);
+    if (providers.length) {
+      const source = await quickInput.pick([{ label: '手动输入 MCP 定义', provider: false }, { label: '从扩展提供的 MCP 定义添加', provider: true }],
+        { title: '选择 MCP 配置来源', prompt: owner }, cancellation.token);
+      checkWorkspace();
+      if (!source) return;
+      if (source.provider) {
+        await addMcpProviderConfiguration(providers, { ...workspace, document, serverId, quickInput, notifications, token: cancellation.token, signal });
+        return;
+      }
+    }
     const transport = await quickInput.pick([{ label: 'stdio', transport: 'stdio' }, { label: 'Streamable HTTP', transport: 'streamable_http' }],
       { title: '选择 MCP 传输方式', prompt: owner }, cancellation.token);
     checkWorkspace();

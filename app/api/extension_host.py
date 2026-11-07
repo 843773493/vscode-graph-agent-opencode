@@ -37,6 +37,13 @@ from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
     ExtensionWebHostOpenRequest,
 )
+from app.schemas.gateway.mcp_definitions import (
+    MCP_PROVIDER_CHANNEL_REQUEST,
+    MCP_PROVIDER_INBOUND,
+    ExtensionMcpDefinitionChannelDTO,
+    McpProviderSnapshotDTO,
+    validate_provider_frame,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.channel import (
     close_channel,
@@ -287,4 +294,51 @@ async def extension_web_host_channel(websocket: WebSocket,
     except Exception:
         logger.exception("Backend Web 宿主通道失败: request_id=%s", request_id)
         await close_channel(websocket, code=1011, reason="extension_web_host_channel_failed")
+        raise
+
+
+@router.websocket("/api/internal/extension-hosts/mcp-definitions")
+async def extension_mcp_definitions(websocket: WebSocket,
+    registry: Annotated[WorkspaceContainerRegistry, Depends(host_registry)]) -> None:
+    request_id = get_request_id(websocket)
+    client_id = websocket.headers.get("x-boxteam-extension-client-id")
+    gateway_id = websocket.headers.get("x-boxteam-gateway-id")
+    if not client_id or not gateway_id:
+        await websocket.send_denial_response(JSONResponse(status_code=400,
+            content={"detail": "Provider 控制通道缺少 Gateway 认证身份", "request_id": request_id}))
+        return
+    await websocket.accept()
+    payload = None
+    try:
+        async with asyncio.timeout(10):
+            payload = validate_provider_frame(MCP_PROVIDER_CHANNEL_REQUEST, await websocket.receive_text())
+        if payload.gateway_id != gateway_id:
+            raise ValueError("Provider 通道 Gateway 身份冲突")
+        async with registry.extension_hosts.mcp_definition_channel(payload, client_id=client_id) as (channel, stopping):
+            binding = ExtensionMcpDefinitionChannelDTO(**payload.model_dump(exclude={"gateway_connection_id"}),
+                client_id=client_id, request_id=request_id)
+            await websocket.send_text(binding.model_dump_json())
+
+            async def receive() -> None:
+                while True:
+                    message = validate_provider_frame(MCP_PROVIDER_INBOUND, await websocket.receive_text())
+                    if isinstance(message, McpProviderSnapshotDTO):
+                        await registry.extension_hosts.validate_mcp_snapshot(payload, message, client_id=client_id)
+                    channel.receive(message)
+
+            async def send() -> None:
+                while True:
+                    await websocket.send_text((await channel.outbound.get()).model_dump_json(exclude_none=True))
+
+            async def stopped(event: asyncio.Event) -> None:
+                await event.wait()
+
+            await run_channel(receive(), send(), stopped(stopping), stopped(channel.closed_event))
+        await close_channel(websocket)
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        logger.exception("Backend Provider 控制通道失败: request_id=%s gateway_id=%s backend_id=%s generation=%s", request_id,
+            payload.gateway_id if payload else None, payload.backend_id if payload else None, payload.generation if payload else None)
+        await close_channel(websocket, code=1011, reason="mcp_provider_channel_failed")
         raise

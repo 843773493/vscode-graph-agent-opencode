@@ -2685,6 +2685,72 @@ export declare type WorkspaceTraceSearchResultsDTO = Message<"boxteam.workspace.
 export declare const WorkspaceTraceSearchResultsDTOSchema: GenMessage<WorkspaceTraceSearchResultsDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.McpProviderDefinitionRefDTO
+ */
+export declare type McpProviderDefinitionRefDTO = Message<"boxteam.workspace.v2.McpProviderDefinitionRefDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 2;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string client_id = 3;
+   */
+  clientId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: string host_generation = 5;
+   */
+  hostGeneration: string;
+
+  /**
+   * @generated from field: string host_kind = 6;
+   */
+  hostKind: string;
+
+  /**
+   * @generated from field: string extension_id = 7;
+   */
+  extensionId: string;
+
+  /**
+   * @generated from field: string extension_key = 8;
+   */
+  extensionKey: string;
+
+  /**
+   * @generated from field: string collection_id = 9;
+   */
+  collectionId: string;
+
+  /**
+   * @generated from field: string provider_ref = 10;
+   */
+  providerRef: string;
+
+  /**
+   * @generated from field: string definition_ref = 11;
+   */
+  definitionRef: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpProviderDefinitionRefDTO.
+ * Use `create(McpProviderDefinitionRefDTOSchema)` to create a new message.
+ */
+export declare const McpProviderDefinitionRefDTOSchema: GenMessage<McpProviderDefinitionRefDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.McpServerDTO
  */
 export declare type McpServerDTO = Message<"boxteam.workspace.v2.McpServerDTO"> & {
@@ -2721,6 +2787,16 @@ export declare type McpServerDTO = Message<"boxteam.workspace.v2.McpServerDTO"> 
    * @generated from field: optional string connection_ref = 6;
    */
   connectionRef?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.McpProviderDefinitionRefDTO provider_definition = 7;
+   */
+  providerDefinition?: McpProviderDefinitionRefDTO | undefined;
+
+  /**
+   * @generated from field: optional string unavailable_reason = 8;
+   */
+  unavailableReason?: string | undefined;
 };
 
 /**

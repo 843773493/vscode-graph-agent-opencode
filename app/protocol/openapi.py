@@ -27,6 +27,18 @@ from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
     ExtensionWebHostOpenRequest,
 )
+from app.schemas.gateway.mcp_definitions import (
+    ExtensionMcpDefinitionChannelDTO,
+    ExtensionMcpDefinitionChannelRequest,
+    McpProviderCancelDTO,
+    McpProviderDefinitionDTO,
+    McpProviderHttpLaunchDTO,
+    McpProviderInvalidateDTO,
+    McpProviderResolvedDTO,
+    McpProviderResolveDTO,
+    McpProviderSnapshotDTO,
+    McpProviderStdioLaunchDTO,
+)
 
 # HTTP 根登记完整消息名，在发布时从本次 descriptor 解析；新增消息不依赖旧生成绑定。
 # 信封合并及中断别名仍在原具名投影中核对。
@@ -221,9 +233,19 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
     _assert_http_schemas(document, GATEWAY_HTTP_JSON_DESCRIPTORS, pool)
     # 独立 WS 的首帧不进入 HTTP OpenAPI，但与生成产物一同核对唯一 proto。
     descriptor_pool = pool if pool is not None else Default()
-    for model in (ExtensionHostOpenRequest, ExtensionHostConnectionDTO, ExtensionWebHostOpenRequest, ExtensionWebHostConnectionDTO):
+    for model in (ExtensionHostOpenRequest, ExtensionHostConnectionDTO, ExtensionWebHostOpenRequest, ExtensionWebHostConnectionDTO,
+                  ExtensionMcpDefinitionChannelRequest, ExtensionMcpDefinitionChannelDTO, McpProviderDefinitionDTO,
+                  McpProviderSnapshotDTO, McpProviderInvalidateDTO, McpProviderResolveDTO, McpProviderCancelDTO,
+                  McpProviderStdioLaunchDTO, McpProviderHttpLaunchDTO):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)
+    # wire 的 launch 是 typed superset；运行时的两种互斥 DTO 已逐一核对。
+    # 此处只把同一 union 的字段合并到 proto 外形，继续核 resolved 根及全部 launch 字段。
+    resolved = McpProviderResolvedDTO.model_json_schema()
+    launch_properties = (resolved["$defs"]["McpProviderStdioLaunchDTO"]["properties"]
+                         | resolved["$defs"]["McpProviderHttpLaunchDTO"]["properties"])
+    resolved["properties"]["launch"] = {"type": "object", "properties": launch_properties}
+    assert_public_schema(resolved, descriptor_pool.FindMessageTypeByName("boxteam.gateway.v2.McpProviderResolvedDTO"))
     name = "GatewayRuntimeGroupRequest"
     components = document["components"]
     schemas = components["schemas"]

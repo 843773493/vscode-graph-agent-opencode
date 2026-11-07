@@ -610,6 +610,20 @@ message WorkspaceTraceSearchResultsDTO {
   int64 scanned_bytes = 8;
 }
 
+message McpProviderDefinitionRefDTO {
+  string gateway_id = 1;
+  string backend_id = 2;
+  string client_id = 3;
+  string view_id = 4;
+  string host_generation = 5;
+  string host_kind = 6;
+  string extension_id = 7;
+  string extension_key = 8;
+  string collection_id = 9;
+  string provider_ref = 10;
+  string definition_ref = 11;
+}
+
 message McpServerDTO {
   string server_id = 1;
   string transport = 2;
@@ -619,6 +633,8 @@ message McpServerDTO {
   repeated McpToolDTO tools = 5;
   // 精确连接含原 owner 实例及连接代际；不可用时不借目录 revision 补造执行身份。
   optional string connection_ref = 6;
+  optional McpProviderDefinitionRefDTO provider_definition = 7;
+  optional string unavailable_reason = 8;
 }
 
 message McpToolDTO {

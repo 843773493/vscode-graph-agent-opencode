@@ -12,6 +12,421 @@ import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
 export declare const file_boxteam_gateway_v2_public: GenFile;
 
 /**
+ * 与原扩展二进制 RPC 分离的具名 Provider 控制通道。
+ *
+ * @generated from message boxteam.gateway.v2.ExtensionMcpDefinitionChannelRequest
+ */
+export declare type ExtensionMcpDefinitionChannelRequest = Message<"boxteam.gateway.v2.ExtensionMcpDefinitionChannelRequest"> & {
+  /**
+   * @generated from field: int64 protocol_version = 1;
+   */
+  protocolVersion: bigint;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string generation = 6;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 7;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string host_kind = 8;
+   */
+  hostKind: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionMcpDefinitionChannelRequest.
+ * Use `create(ExtensionMcpDefinitionChannelRequestSchema)` to create a new message.
+ */
+export declare const ExtensionMcpDefinitionChannelRequestSchema: GenMessage<ExtensionMcpDefinitionChannelRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.ExtensionMcpDefinitionChannelDTO
+ */
+export declare type ExtensionMcpDefinitionChannelDTO = Message<"boxteam.gateway.v2.ExtensionMcpDefinitionChannelDTO"> & {
+  /**
+   * @generated from field: int64 protocol_version = 1;
+   */
+  protocolVersion: bigint;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string backend_id = 3;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string view_id = 4;
+   */
+  viewId: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string generation = 6;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 7;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string host_kind = 8;
+   */
+  hostKind: string;
+
+  /**
+   * @generated from field: string client_id = 9;
+   */
+  clientId: string;
+
+  /**
+   * @generated from field: string request_id = 10;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.ExtensionMcpDefinitionChannelDTO.
+ * Use `create(ExtensionMcpDefinitionChannelDTOSchema)` to create a new message.
+ */
+export declare const ExtensionMcpDefinitionChannelDTOSchema: GenMessage<ExtensionMcpDefinitionChannelDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderDefinitionDTO
+ */
+export declare type McpProviderDefinitionDTO = Message<"boxteam.gateway.v2.McpProviderDefinitionDTO"> & {
+  /**
+   * @generated from field: string definition_ref = 1;
+   */
+  definitionRef: string;
+
+  /**
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: optional string version = 3;
+   */
+  version?: string | undefined;
+
+  /**
+   * @generated from field: string transport = 4;
+   */
+  transport: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderDefinitionDTO.
+ * Use `create(McpProviderDefinitionDTOSchema)` to create a new message.
+ */
+export declare const McpProviderDefinitionDTOSchema: GenMessage<McpProviderDefinitionDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderSnapshotDTO
+ */
+export declare type McpProviderSnapshotDTO = Message<"boxteam.gateway.v2.McpProviderSnapshotDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string extension_id = 2;
+   */
+  extensionId: string;
+
+  /**
+   * @generated from field: string extension_key = 3;
+   */
+  extensionKey: string;
+
+  /**
+   * @generated from field: string collection_id = 4;
+   */
+  collectionId: string;
+
+  /**
+   * @generated from field: string provider_ref = 5;
+   */
+  providerRef: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.McpProviderDefinitionDTO definitions = 6;
+   */
+  definitions: McpProviderDefinitionDTO[];
+
+  /**
+   * @generated from field: optional string error_code = 7;
+   */
+  errorCode?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderSnapshotDTO.
+ * Use `create(McpProviderSnapshotDTOSchema)` to create a new message.
+ */
+export declare const McpProviderSnapshotDTOSchema: GenMessage<McpProviderSnapshotDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderInvalidateDTO
+ */
+export declare type McpProviderInvalidateDTO = Message<"boxteam.gateway.v2.McpProviderInvalidateDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string provider_ref = 2;
+   */
+  providerRef: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderInvalidateDTO.
+ * Use `create(McpProviderInvalidateDTOSchema)` to create a new message.
+ */
+export declare const McpProviderInvalidateDTOSchema: GenMessage<McpProviderInvalidateDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderStdioLaunchDTO
+ */
+export declare type McpProviderStdioLaunchDTO = Message<"boxteam.gateway.v2.McpProviderStdioLaunchDTO"> & {
+  /**
+   * @generated from field: string transport = 1;
+   */
+  transport: string;
+
+  /**
+   * @generated from field: string command = 2;
+   */
+  command: string;
+
+  /**
+   * @generated from field: repeated string args = 3;
+   */
+  args: string[];
+
+  /**
+   * @generated from field: map<string, string> env = 4;
+   */
+  env: { [key: string]: string };
+
+  /**
+   * @generated from field: optional string cwd = 5;
+   */
+  cwd?: string | undefined;
+
+  /**
+   * @generated from field: repeated string unset_env = 6;
+   */
+  unsetEnv: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderStdioLaunchDTO.
+ * Use `create(McpProviderStdioLaunchDTOSchema)` to create a new message.
+ */
+export declare const McpProviderStdioLaunchDTOSchema: GenMessage<McpProviderStdioLaunchDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderHttpLaunchDTO
+ */
+export declare type McpProviderHttpLaunchDTO = Message<"boxteam.gateway.v2.McpProviderHttpLaunchDTO"> & {
+  /**
+   * @generated from field: string transport = 1;
+   */
+  transport: string;
+
+  /**
+   * @generated from field: string url = 2;
+   */
+  url: string;
+
+  /**
+   * @generated from field: map<string, string> headers = 3;
+   */
+  headers: { [key: string]: string };
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderHttpLaunchDTO.
+ * Use `create(McpProviderHttpLaunchDTOSchema)` to create a new message.
+ */
+export declare const McpProviderHttpLaunchDTOSchema: GenMessage<McpProviderHttpLaunchDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderResolveDTO
+ */
+export declare type McpProviderResolveDTO = Message<"boxteam.gateway.v2.McpProviderResolveDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string request_id = 2;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string provider_ref = 3;
+   */
+  providerRef: string;
+
+  /**
+   * @generated from field: string definition_ref = 4;
+   */
+  definitionRef: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderResolveDTO.
+ * Use `create(McpProviderResolveDTOSchema)` to create a new message.
+ */
+export declare const McpProviderResolveDTOSchema: GenMessage<McpProviderResolveDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderCancelDTO
+ */
+export declare type McpProviderCancelDTO = Message<"boxteam.gateway.v2.McpProviderCancelDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string request_id = 2;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderCancelDTO.
+ * Use `create(McpProviderCancelDTOSchema)` to create a new message.
+ */
+export declare const McpProviderCancelDTOSchema: GenMessage<McpProviderCancelDTO>;
+
+/**
+ * transport 选择互斥的 stdio 或 HTTP 字段；运行时按相应具名 launch DTO 校验。
+ *
+ * @generated from message boxteam.gateway.v2.McpProviderLaunchDTO
+ */
+export declare type McpProviderLaunchDTO = Message<"boxteam.gateway.v2.McpProviderLaunchDTO"> & {
+  /**
+   * @generated from field: string transport = 1;
+   */
+  transport: string;
+
+  /**
+   * @generated from field: optional string command = 2;
+   */
+  command?: string | undefined;
+
+  /**
+   * @generated from field: repeated string args = 3;
+   */
+  args: string[];
+
+  /**
+   * @generated from field: map<string, string> env = 4;
+   */
+  env: { [key: string]: string };
+
+  /**
+   * @generated from field: optional string cwd = 5;
+   */
+  cwd?: string | undefined;
+
+  /**
+   * @generated from field: repeated string unset_env = 6;
+   */
+  unsetEnv: string[];
+
+  /**
+   * @generated from field: optional string url = 7;
+   */
+  url?: string | undefined;
+
+  /**
+   * @generated from field: map<string, string> headers = 8;
+   */
+  headers: { [key: string]: string };
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderLaunchDTO.
+ * Use `create(McpProviderLaunchDTOSchema)` to create a new message.
+ */
+export declare const McpProviderLaunchDTOSchema: GenMessage<McpProviderLaunchDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.McpProviderResolvedDTO
+ */
+export declare type McpProviderResolvedDTO = Message<"boxteam.gateway.v2.McpProviderResolvedDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string request_id = 2;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.McpProviderLaunchDTO launch = 3;
+   */
+  launch?: McpProviderLaunchDTO | undefined;
+
+  /**
+   * @generated from field: optional string error_code = 4;
+   */
+  errorCode?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.McpProviderResolvedDTO.
+ * Use `create(McpProviderResolvedDTOSchema)` to create a new message.
+ */
+export declare const McpProviderResolvedDTOSchema: GenMessage<McpProviderResolvedDTO>;
+
+/**
  * 只投影唯一 URI grammar；不表示资源存在、可读或已获得能力。
  *
  * @generated from message boxteam.gateway.v2.GatewayResourceAddressRequest

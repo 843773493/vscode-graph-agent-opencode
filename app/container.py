@@ -529,6 +529,7 @@ class WorkspaceContainerRegistry:
                             startup_mount=mount,
                             clock_ports=self._clock_ports,
                             mcp_installations=self._mcp_installations,
+                            extension_hosts=self._extension_hosts,
                         )
                     components = self.get_catalog_components(
                         mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
@@ -627,6 +628,7 @@ def _build_app_container(
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
     construction: ExitStack,
     mcp_installations: McpInstallationOwner | None = None,
+    extension_hosts: NodeExtensionHostOwner | None = None,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
     if workspace_root is None:
@@ -754,6 +756,7 @@ def _build_app_container(
         leases=external_resource_leases,
         publication_lock=config_service.publication_lock,
         installation_owner=mcp_installations,
+        provider_resolver=extension_hosts,
     )
     config_service.set_mcp_cleanup_provider(mcp_catalog_owner.cleanup_diagnostics)
     mcp_connection_service = McpConnectionService(
@@ -1275,6 +1278,7 @@ def build_app_container(
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
     mcp_installations: McpInstallationOwner | None = None,
+    extension_hosts: NodeExtensionHostOwner | None = None,
 ) -> AppContainer:
     """在显式工作区上下文中装配唯一完整服务图。"""
 
@@ -1291,6 +1295,7 @@ def build_app_container(
                 clock_ports=clock_ports,
                 construction=construction,
                 mcp_installations=mcp_installations,
+                extension_hosts=extension_hosts,
             )
             # 未发布服务图的持久owner由构造作用域回收；成功后交给原WorkspaceLifespan。
             construction.pop_all()

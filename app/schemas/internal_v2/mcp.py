@@ -51,13 +51,33 @@ class McpToolDTO(BaseModel):
     description: str
 
 
+class McpProviderDefinitionRefDTO(BaseModel):
+    """只保存原宿主和原定义的非秘密引用；显示名与版本不构成对象身份。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
+
+    gateway_id: CanonicalGatewayId
+    backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    client_id: str = Field(min_length=1, max_length=256)
+    view_id: str = Field(min_length=1, max_length=128)
+    host_generation: str = Field(min_length=1, max_length=128)
+    host_kind: Literal["node", "web"]
+    extension_id: str = Field(min_length=1, max_length=256)
+    extension_key: str = Field(min_length=1, max_length=512)
+    collection_id: str = Field(min_length=1, max_length=512)
+    provider_ref: str = Field(min_length=1, max_length=128)
+    definition_ref: str = Field(min_length=1, max_length=128)
+
+
 class McpServerDTO(BaseModel):
     server_id: str
     transport: Literal["stdio", "streamable_http"]
     enabled: bool
-    status: Literal["disabled", "ready", "failed", "authorization_required"]
+    status: Literal["disabled", "ready", "failed", "authorization_required", "unavailable"]
     tools: list[McpToolDTO] = Field(default_factory=list)
     connection_ref: str | None = Field(default=None, pattern=r"^mcp-connection:v1:[0-9a-f]{32}:[1-9][0-9]*$")
+    provider_definition: McpProviderDefinitionRefDTO | None = None
+    unavailable_reason: str | None = None
 
 
 class McpConnectionOperationDTO(BaseModel):

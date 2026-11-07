@@ -13,7 +13,7 @@ import {
 import { WorkspaceMcpCatalog, pendingMcpOperation } from './catalog.js';
 
 const statusLabels: Readonly<Record<string, string>> = {
-  ready: '连接可用', disabled: '配置已禁用', failed: '原连接不可用', authorization_required: '需要授权',
+  ready: '连接可用', disabled: '配置已禁用', failed: '原连接不可用', authorization_required: '需要授权', unavailable: '原 Provider 不可用',
   pending: '已排队', waiting_user: '等待用户授权', verifying: '正在验证连接与目录',
   succeeded: '操作已完成', expired: '已过期', cancelled: '已取消',
 };
@@ -116,6 +116,14 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     if (snapshot.actionError) line('管理请求错误', snapshot.actionError);
     if (snapshot.catalog) { line('目录 revision', snapshot.catalog.catalog_revision); line('目录 generation', String(snapshot.catalog.catalog_generation)); }
     if (this.data?.connection_ref) line('连接', this.data.connection_ref);
+    if (this.data?.provider_definition) {
+      const source = this.data.provider_definition;
+      line('扩展来源', `${source.extension_id} · ${source.extension_key}`);
+      line('Provider', `${source.collection_id} · ${source.provider_ref}`);
+      line('原定义', source.definition_ref);
+      line('宿主代际', `${source.host_kind} · ${source.host_generation}`);
+    }
+    if (this.data?.unavailable_reason) line('来源不可用', this.data.unavailable_reason);
     if (this.operation) {
       line('操作', `${this.operation.action} · ${statusLabels[this.operation.status] ?? this.operation.status} · ${this.operation.stage}`);
       line('操作 ID', this.operation.operation_id);

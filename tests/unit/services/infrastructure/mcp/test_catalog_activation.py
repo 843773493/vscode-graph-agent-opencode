@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import errno
 import json
-import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -71,7 +70,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径隔离 SQLite fixture
 )
@@ -127,14 +125,8 @@ class CatalogSessionFactory:
 
 
 @pytest.fixture
-def catalog_workspace(request: pytest.FixtureRequest) -> Path:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    shutil.rmtree(context.workspace_root)
-    shutil.copytree(
-        context.project_root / "tests/fixtures/workspaces/default_test_workspace",
-        context.workspace_root,
-    )
-    return context.workspace_root
+def catalog_workspace(workspace_scope: tuple[str, Path]) -> Path:
+    return workspace_scope[1]
 
 
 @pytest.fixture

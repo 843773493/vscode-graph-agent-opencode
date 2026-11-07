@@ -44,6 +44,8 @@
     { "pattern": "/mcp/servers/*/command", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/managed_launch", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/managed_launch/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/provider_definition", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/provider_definition/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/args", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/env", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/env/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -616,8 +618,42 @@
         },
         {
           "$ref": "#/$defs/mcpStreamableHttpServer"
+        },
+        {
+          "$ref": "#/$defs/mcpProviderServer"
         }
       ]
+    },
+
+    "mcpProviderServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport", "provider_definition"],
+      "description": "只保存目标 VSIX Provider 的非秘密原定义引用；连接前由原宿主解析，离线不缓存 launch。",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "transport": { "enum": ["stdio", "streamable_http"] },
+        "provider_definition": { "$ref": "#/$defs/mcpProviderDefinitionRef" }
+      }
+    },
+
+    "mcpProviderDefinitionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gateway_id", "backend_id", "client_id", "view_id", "host_generation", "host_kind", "extension_id", "extension_key", "collection_id", "provider_ref", "definition_ref"],
+      "properties": {
+        "gateway_id": { "type": "string", "pattern": "^gateway_[0-9a-f]{32}$" },
+        "backend_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "client_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "view_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "host_generation": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "host_kind": { "enum": ["node", "web"] },
+        "extension_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "extension_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "collection_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "provider_ref": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "definition_ref": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
     },
 
     "mcpStdioServer": {

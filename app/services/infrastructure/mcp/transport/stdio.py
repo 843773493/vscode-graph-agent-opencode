@@ -20,9 +20,13 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage
 
 
+class McpProtocolValidationError(ValueError):
+    """官方 SDK 类型校验失败，只交付错误数量，避免持久化消息原值。"""
+
+
 @asynccontextmanager
 async def mcp_stdio_transport(parameters: StdioServerParameters, process: OwnedChildProcess,
-                              on_started: Callable[[], Awaitable[None]]) -> AsyncIterator[tuple[
+                              on_started: Callable[[], Awaitable[None]], *, unset_env: tuple[str, ...] = ()) -> AsyncIterator[tuple[
                                   MemoryObjectReceiveStream[SessionMessage | Exception], MemoryObjectSendStream[SessionMessage]]]:
     incoming, read = anyio.create_memory_object_stream[SessionMessage | Exception](0)
     write, outgoing = anyio.create_memory_object_stream[SessionMessage](0)
@@ -39,7 +43,7 @@ async def mcp_stdio_transport(parameters: StdioServerParameters, process: OwnedC
                     try:
                         message = SessionMessage(JSONRPCMessage.model_validate_json(line))
                     except ValidationError as error:
-                        await incoming.send(error)
+                        raise McpProtocolValidationError(f"MCP JSON-RPC 类型校验失败: count={error.error_count()}") from None
                     else:
                         await incoming.send(message)
 
@@ -54,8 +58,10 @@ async def mcp_stdio_transport(parameters: StdioServerParameters, process: OwnedC
         async with anyio.create_task_group() as group:
             try:
                 command = get_windows_executable_command(parameters.command) if sys.platform == "win32" else parameters.command
-                await process.start([command, *parameters.args],
-                    env={**get_default_environment(), **(parameters.env or {})}, cwd=parameters.cwd)
+                environment = {**get_default_environment(), **(parameters.env or {})}
+                for key in unset_env:
+                    environment.pop(key, None)
+                await process.start([command, *parameters.args], env=environment, cwd=parameters.cwd)
                 await on_started()
                 group.start_soon(receive)
                 group.start_soon(send)

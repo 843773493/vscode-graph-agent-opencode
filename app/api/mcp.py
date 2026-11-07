@@ -181,6 +181,8 @@ async def list_mcp_servers(
             enabled=server.enabled,
             status=server.status,
             connection_ref=server.connection_ref,
+            provider_definition=server.provider_definition,
+            unavailable_reason=server.unavailable_reason,
             tools=[
                 McpToolDTO(
                     tool_id=tool.tool_id,

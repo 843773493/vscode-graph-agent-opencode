@@ -90,6 +90,7 @@ async def resolve_candidate(
         server, = parse_mcp_server_configs({"servers": {server_id: parameters}}, workspace_root=workspace_root,
             installation_resolver=installation_resolver)
         # 沿原配置 parser 在目标侧解析环境引用，不向浏览器泄露 env/headers 值。
+        assert server.connection is not None
         normalized = dict(server.connection)
         if server.managed_launch is not None:
             normalized["managed_launch"] = server.managed_launch.model_dump(mode="json")

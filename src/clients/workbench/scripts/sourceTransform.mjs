@@ -4,6 +4,7 @@ import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTr
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
+import { mcpProviderSourcePaths, transformMcpProviders } from './mcpProviderTransform.mjs';
 import { extensionHostStateSourcePaths, transformExtensionHostState } from './extensionHostStateTransform.mjs';
 import { extensionInstanceSourcePaths, transformExtensionInstances } from './extensions/extensionInstanceTransform.mjs';
 import { extensionRunningSourcePaths, transformExtensionRunning } from './extensions/extensionRunningTransform.mjs';
@@ -61,6 +62,7 @@ export const transformedSourcePaths = [...new Set([
   ...outlineSourcePaths,
   ...fileDialogSourcePaths,
   ...mcpSourcePaths,
+  ...mcpProviderSourcePaths,
   ...extensionHostStateSourcePaths,
   ...extensionInstanceSourcePaths,
   ...extensionRunningSourcePaths,
@@ -112,6 +114,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionEnablement(root, path, contents, replaceOnce);
     contents = transformExtensionDocuments(root, path, contents, replaceOnce);
     contents = transformExtensionStorage(root, path, contents, replaceOnce, runtime);
+    contents = transformMcpProviders(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
       // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
       contents = replaceOnce(contents, '} catch (error) {\n\t\t\tconst getAllDepsAndPacks =',

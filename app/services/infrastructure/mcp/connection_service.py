@@ -21,9 +21,6 @@ from app.schemas.internal_v2.mcp import (
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.oauth import McpOAuthProvider
 from app.services.infrastructure.mcp.operation_store import McpConnectionOperationStore
-from app.services.infrastructure.mcp.session_runtime import (
-    production_mcp_session_factory,
-)
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 _OPERATION_TIMEOUT_SECONDS = 300
@@ -35,7 +32,7 @@ class McpConnectionSummary(TypedDict):
     server_id: str
     transport: Literal["stdio", "streamable_http"]
     enabled: bool
-    status: Literal["disabled", "ready", "failed", "authorization_required"]
+    status: Literal["disabled", "ready", "failed", "authorization_required", "unavailable"]
 
 
 @dataclass
@@ -67,6 +64,9 @@ class McpConnectionService:
         # 可选输入只在实际存在时参与身份，空集合不改变已持久化操作的原指纹合同。
         payload.pop("private_headers")
         payload.pop("private_env")
+        payload.pop("provider_definition")
+        if server.provider_definition is not None:
+            payload["provider_definition"] = server.provider_definition.model_dump(mode="json")
         payload["managed_launch"] = server.managed_launch.model_dump(mode="json") if server.managed_launch is not None else None
         if server.private_headers:
             payload["private_headers"] = [reference.model_dump(mode="json") for reference in server.private_headers]
@@ -205,7 +205,7 @@ class McpConnectionService:
                             server=server, workspace_root=self._workspace_root,
                             redirect_handler=partial(self._redirect, identity), callback_handler=partial(self._callback, identity),
                         )
-                        factory = partial(production_mcp_session_factory, workspace_root=self._workspace_root, oauth_provider=provider)
+                        factory = self._owner.oauth_session_factory(provider)
                     self._advance(identity, status="verifying", stage="initialize")
                     def catalog_ready() -> None:
                         self._advance(identity, status="verifying", stage="catalog")

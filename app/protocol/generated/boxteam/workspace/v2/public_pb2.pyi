@@ -1052,21 +1052,51 @@ class WorkspaceTraceSearchResultsDTO(_message.Message):
     scanned_bytes: int
     def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceTraceMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_nodes: _Optional[int] = ..., scanned_records: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
+class McpProviderDefinitionRefDTO(_message.Message):
+    __slots__ = ("gateway_id", "backend_id", "client_id", "view_id", "host_generation", "host_kind", "extension_id", "extension_key", "collection_id", "provider_ref", "definition_ref")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
+    VIEW_ID_FIELD_NUMBER: _ClassVar[int]
+    HOST_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    HOST_KIND_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_ID_FIELD_NUMBER: _ClassVar[int]
+    EXTENSION_KEY_FIELD_NUMBER: _ClassVar[int]
+    COLLECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_REF_FIELD_NUMBER: _ClassVar[int]
+    DEFINITION_REF_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    backend_id: str
+    client_id: str
+    view_id: str
+    host_generation: str
+    host_kind: str
+    extension_id: str
+    extension_key: str
+    collection_id: str
+    provider_ref: str
+    definition_ref: str
+    def __init__(self, gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., client_id: _Optional[str] = ..., view_id: _Optional[str] = ..., host_generation: _Optional[str] = ..., host_kind: _Optional[str] = ..., extension_id: _Optional[str] = ..., extension_key: _Optional[str] = ..., collection_id: _Optional[str] = ..., provider_ref: _Optional[str] = ..., definition_ref: _Optional[str] = ...) -> None: ...
+
 class McpServerDTO(_message.Message):
-    __slots__ = ("server_id", "transport", "enabled", "status", "tools", "connection_ref")
+    __slots__ = ("server_id", "transport", "enabled", "status", "tools", "connection_ref", "provider_definition", "unavailable_reason")
     SERVER_ID_FIELD_NUMBER: _ClassVar[int]
     TRANSPORT_FIELD_NUMBER: _ClassVar[int]
     ENABLED_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     TOOLS_FIELD_NUMBER: _ClassVar[int]
     CONNECTION_REF_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_DEFINITION_FIELD_NUMBER: _ClassVar[int]
+    UNAVAILABLE_REASON_FIELD_NUMBER: _ClassVar[int]
     server_id: str
     transport: str
     enabled: bool
     status: str
     tools: _containers.RepeatedCompositeFieldContainer[McpToolDTO]
     connection_ref: str
-    def __init__(self, server_id: _Optional[str] = ..., transport: _Optional[str] = ..., enabled: _Optional[bool] = ..., status: _Optional[str] = ..., tools: _Optional[_Iterable[_Union[McpToolDTO, _Mapping]]] = ..., connection_ref: _Optional[str] = ...) -> None: ...
+    provider_definition: McpProviderDefinitionRefDTO
+    unavailable_reason: str
+    def __init__(self, server_id: _Optional[str] = ..., transport: _Optional[str] = ..., enabled: _Optional[bool] = ..., status: _Optional[str] = ..., tools: _Optional[_Iterable[_Union[McpToolDTO, _Mapping]]] = ..., connection_ref: _Optional[str] = ..., provider_definition: _Optional[_Union[McpProviderDefinitionRefDTO, _Mapping]] = ..., unavailable_reason: _Optional[str] = ...) -> None: ...
 
 class McpToolDTO(_message.Message):
     __slots__ = ("tool_id", "server_id", "remote_name", "description")

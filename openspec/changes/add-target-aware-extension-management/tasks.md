@@ -79,7 +79,7 @@
 - [ ] 3.3 接入连接操作、OAuth、目录通知和工具调用原生命周期；验证目录 revision／generation、热替换、封存资格、排空及结果未知合同，无第二套资源租约或逻辑 session 固定功能。
   - 2026-11-07 受管制品显式重连：普通 connect 复用原 MCP owner 已绑定安装及凭据依赖的 session factory，OAuth 仍注入本次交互回调。真实 Gateway／Backend／锁定 uv 制品／产品 Thread 单项通过（1 passed／105.98 秒），核断开后原进程实际退出、重连生成新 connection_ref、复用同一 managed_launch、来源字节不变及随后真实工具调用；未新增 client 或资源账本。两份文件 Ruff／Pyright 零诊断，独立只读审查通过；命令、源码指纹和原始输出见 `out/tests/temp/2026/11/07/mcp_managed_reconnect/artifacts/`。本片不代替动态 Provider、远端及原生平台验收，3.3 保持未勾选。
   - 2026-11-07 并行调用检查点继承：只对 manifest 声明了 projection_group 的消息扩展完整组；共享模型调用语义组的独立 stream items 按精确 anchor 继承，保留归属和完整组校验，不修改 canonical 正文或 owner。真实 accumulator／Saver 的同步、异步、冷重开和损坏组拒绝3项通过，相关历史／工具归属89项及消息组／状态版本集成37项通过；原并行双工具 Workbench 产品场景随手动配置验收通过，没有改成逐轮调用。Ruff通过，Pyright两条诊断与完整HEAD归档逐条相同、无新增，独立只读审查通过；源码指纹、准确命令、首轮测试数据未形成显式组的失败原件和修正后结果见 `out/tests/temp/2026/11/07/checkpoint_stream_group/artifacts/`。不据此关闭3.3或平台矩阵。
-- [ ] 3.4 支持受验证 VSIX 动态 definition Provider，保留来源实例／host generation／collection／原定义、provide／启动前 resolve／change／dispose／取消语义，仍明确选择 workspace 并交项目 owner 启用；验跨目标同 ID、离线、迟到 resolve、配置 unavailable，拒绝 A 本机动态定义到 B 执行，静态可迁移模板须重新校验且不搬秘密，不在 Extension Host 另启项目 Agent MCP client。
+- [x] 3.4 支持受验证 VSIX 动态 definition Provider，保留来源实例／host generation／collection／原定义、provide／启动前 resolve／change／dispose／取消语义，仍明确选择 workspace 并交项目 owner 启用；验跨目标同 ID、离线、迟到 resolve、配置 unavailable，拒绝 A 本机动态定义到 B 执行，静态可迁移模板须重新校验且不搬秘密，不在 Extension Host 另启项目 Agent MCP client。
 - [ ] 3.5 在本地 A1/A2 与远端 B1 的真实 Thread 调用独有测试工具，核同名 server、凭据、授权等待、原 tool_call_id 和实际目标；包安装成功不能替代 Agent 真调用。
 
 ## 4. 原版扩展管理与 Web 宿主

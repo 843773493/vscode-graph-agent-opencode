@@ -8,6 +8,119 @@
 
 export const protobufPackage = "boxteam.gateway.v2";
 
+/** 与原扩展二进制 RPC 分离的具名 Provider 控制通道。 */
+export interface ExtensionMcpDefinitionChannelRequest {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  generation: string;
+  gateway_connection_id?: string | undefined;
+  host_kind: string;
+}
+
+export interface ExtensionMcpDefinitionChannelDTO {
+  protocol_version: number;
+  gateway_id: string;
+  backend_id: string;
+  view_id: string;
+  workspace_ids: string[];
+  generation: string;
+  gateway_connection_id?: string | undefined;
+  host_kind: string;
+  client_id: string;
+  request_id: string;
+}
+
+export interface McpProviderDefinitionDTO {
+  definition_ref: string;
+  label: string;
+  version?: string | undefined;
+  transport: string;
+}
+
+export interface McpProviderSnapshotDTO {
+  kind: string;
+  extension_id: string;
+  extension_key: string;
+  collection_id: string;
+  provider_ref: string;
+  definitions: McpProviderDefinitionDTO[];
+  error_code?: string | undefined;
+}
+
+export interface McpProviderInvalidateDTO {
+  kind: string;
+  provider_ref: string;
+}
+
+export interface McpProviderStdioLaunchDTO {
+  transport: string;
+  command: string;
+  args: string[];
+  env: { [key: string]: string };
+  cwd?: string | undefined;
+  unset_env: string[];
+}
+
+export interface McpProviderStdioLaunchDTO_EnvEntry {
+  key: string;
+  value: string;
+}
+
+export interface McpProviderHttpLaunchDTO {
+  transport: string;
+  url: string;
+  headers: { [key: string]: string };
+}
+
+export interface McpProviderHttpLaunchDTO_HeadersEntry {
+  key: string;
+  value: string;
+}
+
+export interface McpProviderResolveDTO {
+  kind: string;
+  request_id: string;
+  provider_ref: string;
+  definition_ref: string;
+}
+
+export interface McpProviderCancelDTO {
+  kind: string;
+  request_id: string;
+}
+
+/** transport 选择互斥的 stdio 或 HTTP 字段；运行时按相应具名 launch DTO 校验。 */
+export interface McpProviderLaunchDTO {
+  transport: string;
+  command?: string | undefined;
+  args: string[];
+  env: { [key: string]: string };
+  cwd?: string | undefined;
+  unset_env: string[];
+  url?: string | undefined;
+  headers: { [key: string]: string };
+}
+
+export interface McpProviderLaunchDTO_EnvEntry {
+  key: string;
+  value: string;
+}
+
+export interface McpProviderLaunchDTO_HeadersEntry {
+  key: string;
+  value: string;
+}
+
+export interface McpProviderResolvedDTO {
+  kind: string;
+  request_id: string;
+  launch?: McpProviderLaunchDTO | undefined;
+  error_code?: string | undefined;
+}
+
 /** 只投影唯一 URI grammar；不表示资源存在、可读或已获得能力。 */
 export interface GatewayResourceAddressRequest {
   uri: string;
@@ -1388,6 +1501,881 @@ export interface ExtensionInstallationUninstallDTO {
   inventory: ProfileExtensionInventory | undefined;
   uninstalled: ExtensionUninstallResult | undefined;
 }
+
+function createBaseExtensionMcpDefinitionChannelRequest(): ExtensionMcpDefinitionChannelRequest {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    generation: "",
+    gateway_connection_id: undefined,
+    host_kind: "",
+  };
+}
+
+export const ExtensionMcpDefinitionChannelRequest: MessageFns<ExtensionMcpDefinitionChannelRequest> = {
+  fromJSON(object: any): ExtensionMcpDefinitionChannelRequest {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      host_kind: isSet(object.host_kind) ? globalThis.String(object.host_kind) : "",
+    };
+  },
+
+  toJSON(message: ExtensionMcpDefinitionChannelRequest): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.host_kind !== "") {
+      obj.host_kind = message.host_kind;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionMcpDefinitionChannelRequest>, I>>(
+    base?: I,
+  ): ExtensionMcpDefinitionChannelRequest {
+    return ExtensionMcpDefinitionChannelRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionMcpDefinitionChannelRequest>, I>>(
+    object: I,
+  ): ExtensionMcpDefinitionChannelRequest {
+    const message = createBaseExtensionMcpDefinitionChannelRequest();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.generation = object.generation ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.host_kind = object.host_kind ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionMcpDefinitionChannelDTO(): ExtensionMcpDefinitionChannelDTO {
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    backend_id: "",
+    view_id: "",
+    workspace_ids: [],
+    generation: "",
+    gateway_connection_id: undefined,
+    host_kind: "",
+    client_id: "",
+    request_id: "",
+  };
+}
+
+export const ExtensionMcpDefinitionChannelDTO: MessageFns<ExtensionMcpDefinitionChannelDTO> = {
+  fromJSON(object: any): ExtensionMcpDefinitionChannelDTO {
+    return {
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+      view_id: isSet(object.view_id) ? globalThis.String(object.view_id) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      generation: isSet(object.generation) ? globalThis.String(object.generation) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      host_kind: isSet(object.host_kind) ? globalThis.String(object.host_kind) : "",
+      client_id: isSet(object.client_id) ? globalThis.String(object.client_id) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+    };
+  },
+
+  toJSON(message: ExtensionMcpDefinitionChannelDTO): unknown {
+    const obj: any = {};
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    if (message.view_id !== "") {
+      obj.view_id = message.view_id;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.generation !== "") {
+      obj.generation = message.generation;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.host_kind !== "") {
+      obj.host_kind = message.host_kind;
+    }
+    if (message.client_id !== "") {
+      obj.client_id = message.client_id;
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionMcpDefinitionChannelDTO>, I>>(
+    base?: I,
+  ): ExtensionMcpDefinitionChannelDTO {
+    return ExtensionMcpDefinitionChannelDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionMcpDefinitionChannelDTO>, I>>(
+    object: I,
+  ): ExtensionMcpDefinitionChannelDTO {
+    const message = createBaseExtensionMcpDefinitionChannelDTO();
+    message.protocol_version = object.protocol_version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    message.view_id = object.view_id ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.generation = object.generation ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.host_kind = object.host_kind ?? "";
+    message.client_id = object.client_id ?? "";
+    message.request_id = object.request_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderDefinitionDTO(): McpProviderDefinitionDTO {
+  return { definition_ref: "", label: "", version: undefined, transport: "" };
+}
+
+export const McpProviderDefinitionDTO: MessageFns<McpProviderDefinitionDTO> = {
+  fromJSON(object: any): McpProviderDefinitionDTO {
+    return {
+      definition_ref: isSet(object.definition_ref) ? globalThis.String(object.definition_ref) : "",
+      label: isSet(object.label) ? globalThis.String(object.label) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : undefined,
+      transport: isSet(object.transport) ? globalThis.String(object.transport) : "",
+    };
+  },
+
+  toJSON(message: McpProviderDefinitionDTO): unknown {
+    const obj: any = {};
+    if (message.definition_ref !== "") {
+      obj.definition_ref = message.definition_ref;
+    }
+    if (message.label !== "") {
+      obj.label = message.label;
+    }
+    if (message.version !== undefined) {
+      obj.version = message.version;
+    }
+    if (message.transport !== "") {
+      obj.transport = message.transport;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderDefinitionDTO>, I>>(base?: I): McpProviderDefinitionDTO {
+    return McpProviderDefinitionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderDefinitionDTO>, I>>(object: I): McpProviderDefinitionDTO {
+    const message = createBaseMcpProviderDefinitionDTO();
+    message.definition_ref = object.definition_ref ?? "";
+    message.label = object.label ?? "";
+    message.version = object.version ?? undefined;
+    message.transport = object.transport ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderSnapshotDTO(): McpProviderSnapshotDTO {
+  return {
+    kind: "",
+    extension_id: "",
+    extension_key: "",
+    collection_id: "",
+    provider_ref: "",
+    definitions: [],
+    error_code: undefined,
+  };
+}
+
+export const McpProviderSnapshotDTO: MessageFns<McpProviderSnapshotDTO> = {
+  fromJSON(object: any): McpProviderSnapshotDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      extension_id: isSet(object.extension_id) ? globalThis.String(object.extension_id) : "",
+      extension_key: isSet(object.extension_key) ? globalThis.String(object.extension_key) : "",
+      collection_id: isSet(object.collection_id) ? globalThis.String(object.collection_id) : "",
+      provider_ref: isSet(object.provider_ref) ? globalThis.String(object.provider_ref) : "",
+      definitions: globalThis.Array.isArray(object?.definitions)
+        ? object.definitions.map((e: any) => McpProviderDefinitionDTO.fromJSON(e))
+        : [],
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+    };
+  },
+
+  toJSON(message: McpProviderSnapshotDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.extension_id !== "") {
+      obj.extension_id = message.extension_id;
+    }
+    if (message.extension_key !== "") {
+      obj.extension_key = message.extension_key;
+    }
+    if (message.collection_id !== "") {
+      obj.collection_id = message.collection_id;
+    }
+    if (message.provider_ref !== "") {
+      obj.provider_ref = message.provider_ref;
+    }
+    if (message.definitions?.length) {
+      obj.definitions = message.definitions.map((e) => McpProviderDefinitionDTO.toJSON(e));
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderSnapshotDTO>, I>>(base?: I): McpProviderSnapshotDTO {
+    return McpProviderSnapshotDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderSnapshotDTO>, I>>(object: I): McpProviderSnapshotDTO {
+    const message = createBaseMcpProviderSnapshotDTO();
+    message.kind = object.kind ?? "";
+    message.extension_id = object.extension_id ?? "";
+    message.extension_key = object.extension_key ?? "";
+    message.collection_id = object.collection_id ?? "";
+    message.provider_ref = object.provider_ref ?? "";
+    message.definitions = object.definitions?.map((e) => McpProviderDefinitionDTO.fromPartial(e)) || [];
+    message.error_code = object.error_code ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpProviderInvalidateDTO(): McpProviderInvalidateDTO {
+  return { kind: "", provider_ref: "" };
+}
+
+export const McpProviderInvalidateDTO: MessageFns<McpProviderInvalidateDTO> = {
+  fromJSON(object: any): McpProviderInvalidateDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      provider_ref: isSet(object.provider_ref) ? globalThis.String(object.provider_ref) : "",
+    };
+  },
+
+  toJSON(message: McpProviderInvalidateDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.provider_ref !== "") {
+      obj.provider_ref = message.provider_ref;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderInvalidateDTO>, I>>(base?: I): McpProviderInvalidateDTO {
+    return McpProviderInvalidateDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderInvalidateDTO>, I>>(object: I): McpProviderInvalidateDTO {
+    const message = createBaseMcpProviderInvalidateDTO();
+    message.kind = object.kind ?? "";
+    message.provider_ref = object.provider_ref ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderStdioLaunchDTO(): McpProviderStdioLaunchDTO {
+  return { transport: "", command: "", args: [], env: {}, cwd: undefined, unset_env: [] };
+}
+
+export const McpProviderStdioLaunchDTO: MessageFns<McpProviderStdioLaunchDTO> = {
+  fromJSON(object: any): McpProviderStdioLaunchDTO {
+    return {
+      transport: isSet(object.transport) ? globalThis.String(object.transport) : "",
+      command: isSet(object.command) ? globalThis.String(object.command) : "",
+      args: globalThis.Array.isArray(object?.args)
+        ? object.args.map((e: any) => globalThis.String(e))
+        : [],
+      env: isObject(object.env)
+        ? (globalThis.Object.entries(object.env) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      cwd: isSet(object.cwd) ? globalThis.String(object.cwd) : undefined,
+      unset_env: globalThis.Array.isArray(object?.unset_env)
+        ? object.unset_env.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: McpProviderStdioLaunchDTO): unknown {
+    const obj: any = {};
+    if (message.transport !== "") {
+      obj.transport = message.transport;
+    }
+    if (message.command !== "") {
+      obj.command = message.command;
+    }
+    if (message.args?.length) {
+      obj.args = message.args;
+    }
+    if (message.env) {
+      const entries = globalThis.Object.entries(message.env) as [string, string][];
+      if (entries.length > 0) {
+        obj.env = {};
+        entries.forEach(([k, v]) => {
+          obj.env[k] = v;
+        });
+      }
+    }
+    if (message.cwd !== undefined) {
+      obj.cwd = message.cwd;
+    }
+    if (message.unset_env?.length) {
+      obj.unset_env = message.unset_env;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderStdioLaunchDTO>, I>>(base?: I): McpProviderStdioLaunchDTO {
+    return McpProviderStdioLaunchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderStdioLaunchDTO>, I>>(object: I): McpProviderStdioLaunchDTO {
+    const message = createBaseMcpProviderStdioLaunchDTO();
+    message.transport = object.transport ?? "";
+    message.command = object.command ?? "";
+    message.args = object.args?.map((e) => e) || [];
+    message.env = (globalThis.Object.entries(object.env ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    message.cwd = object.cwd ?? undefined;
+    message.unset_env = object.unset_env?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseMcpProviderStdioLaunchDTO_EnvEntry(): McpProviderStdioLaunchDTO_EnvEntry {
+  return { key: "", value: "" };
+}
+
+export const McpProviderStdioLaunchDTO_EnvEntry: MessageFns<McpProviderStdioLaunchDTO_EnvEntry> = {
+  fromJSON(object: any): McpProviderStdioLaunchDTO_EnvEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: McpProviderStdioLaunchDTO_EnvEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderStdioLaunchDTO_EnvEntry>, I>>(
+    base?: I,
+  ): McpProviderStdioLaunchDTO_EnvEntry {
+    return McpProviderStdioLaunchDTO_EnvEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderStdioLaunchDTO_EnvEntry>, I>>(
+    object: I,
+  ): McpProviderStdioLaunchDTO_EnvEntry {
+    const message = createBaseMcpProviderStdioLaunchDTO_EnvEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderHttpLaunchDTO(): McpProviderHttpLaunchDTO {
+  return { transport: "", url: "", headers: {} };
+}
+
+export const McpProviderHttpLaunchDTO: MessageFns<McpProviderHttpLaunchDTO> = {
+  fromJSON(object: any): McpProviderHttpLaunchDTO {
+    return {
+      transport: isSet(object.transport) ? globalThis.String(object.transport) : "",
+      url: isSet(object.url) ? globalThis.String(object.url) : "",
+      headers: isObject(object.headers)
+        ? (globalThis.Object.entries(object.headers) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+    };
+  },
+
+  toJSON(message: McpProviderHttpLaunchDTO): unknown {
+    const obj: any = {};
+    if (message.transport !== "") {
+      obj.transport = message.transport;
+    }
+    if (message.url !== "") {
+      obj.url = message.url;
+    }
+    if (message.headers) {
+      const entries = globalThis.Object.entries(message.headers) as [string, string][];
+      if (entries.length > 0) {
+        obj.headers = {};
+        entries.forEach(([k, v]) => {
+          obj.headers[k] = v;
+        });
+      }
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderHttpLaunchDTO>, I>>(base?: I): McpProviderHttpLaunchDTO {
+    return McpProviderHttpLaunchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderHttpLaunchDTO>, I>>(object: I): McpProviderHttpLaunchDTO {
+    const message = createBaseMcpProviderHttpLaunchDTO();
+    message.transport = object.transport ?? "";
+    message.url = object.url ?? "";
+    message.headers = (globalThis.Object.entries(object.headers ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseMcpProviderHttpLaunchDTO_HeadersEntry(): McpProviderHttpLaunchDTO_HeadersEntry {
+  return { key: "", value: "" };
+}
+
+export const McpProviderHttpLaunchDTO_HeadersEntry: MessageFns<McpProviderHttpLaunchDTO_HeadersEntry> = {
+  fromJSON(object: any): McpProviderHttpLaunchDTO_HeadersEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: McpProviderHttpLaunchDTO_HeadersEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderHttpLaunchDTO_HeadersEntry>, I>>(
+    base?: I,
+  ): McpProviderHttpLaunchDTO_HeadersEntry {
+    return McpProviderHttpLaunchDTO_HeadersEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderHttpLaunchDTO_HeadersEntry>, I>>(
+    object: I,
+  ): McpProviderHttpLaunchDTO_HeadersEntry {
+    const message = createBaseMcpProviderHttpLaunchDTO_HeadersEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderResolveDTO(): McpProviderResolveDTO {
+  return { kind: "", request_id: "", provider_ref: "", definition_ref: "" };
+}
+
+export const McpProviderResolveDTO: MessageFns<McpProviderResolveDTO> = {
+  fromJSON(object: any): McpProviderResolveDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      provider_ref: isSet(object.provider_ref) ? globalThis.String(object.provider_ref) : "",
+      definition_ref: isSet(object.definition_ref) ? globalThis.String(object.definition_ref) : "",
+    };
+  },
+
+  toJSON(message: McpProviderResolveDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.provider_ref !== "") {
+      obj.provider_ref = message.provider_ref;
+    }
+    if (message.definition_ref !== "") {
+      obj.definition_ref = message.definition_ref;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderResolveDTO>, I>>(base?: I): McpProviderResolveDTO {
+    return McpProviderResolveDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderResolveDTO>, I>>(object: I): McpProviderResolveDTO {
+    const message = createBaseMcpProviderResolveDTO();
+    message.kind = object.kind ?? "";
+    message.request_id = object.request_id ?? "";
+    message.provider_ref = object.provider_ref ?? "";
+    message.definition_ref = object.definition_ref ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderCancelDTO(): McpProviderCancelDTO {
+  return { kind: "", request_id: "" };
+}
+
+export const McpProviderCancelDTO: MessageFns<McpProviderCancelDTO> = {
+  fromJSON(object: any): McpProviderCancelDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+    };
+  },
+
+  toJSON(message: McpProviderCancelDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderCancelDTO>, I>>(base?: I): McpProviderCancelDTO {
+    return McpProviderCancelDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderCancelDTO>, I>>(object: I): McpProviderCancelDTO {
+    const message = createBaseMcpProviderCancelDTO();
+    message.kind = object.kind ?? "";
+    message.request_id = object.request_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderLaunchDTO(): McpProviderLaunchDTO {
+  return {
+    transport: "",
+    command: undefined,
+    args: [],
+    env: {},
+    cwd: undefined,
+    unset_env: [],
+    url: undefined,
+    headers: {},
+  };
+}
+
+export const McpProviderLaunchDTO: MessageFns<McpProviderLaunchDTO> = {
+  fromJSON(object: any): McpProviderLaunchDTO {
+    return {
+      transport: isSet(object.transport) ? globalThis.String(object.transport) : "",
+      command: isSet(object.command) ? globalThis.String(object.command) : undefined,
+      args: globalThis.Array.isArray(object?.args) ? object.args.map((e: any) => globalThis.String(e)) : [],
+      env: isObject(object.env)
+        ? (globalThis.Object.entries(object.env) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      cwd: isSet(object.cwd) ? globalThis.String(object.cwd) : undefined,
+      unset_env: globalThis.Array.isArray(object?.unset_env)
+        ? object.unset_env.map((e: any) => globalThis.String(e))
+        : [],
+      url: isSet(object.url) ? globalThis.String(object.url) : undefined,
+      headers: isObject(object.headers)
+        ? (globalThis.Object.entries(object.headers) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: globalThis.String(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+    };
+  },
+
+  toJSON(message: McpProviderLaunchDTO): unknown {
+    const obj: any = {};
+    if (message.transport !== "") {
+      obj.transport = message.transport;
+    }
+    if (message.command !== undefined) {
+      obj.command = message.command;
+    }
+    if (message.args?.length) {
+      obj.args = message.args;
+    }
+    if (message.env) {
+      const entries = globalThis.Object.entries(message.env) as [string, string][];
+      if (entries.length > 0) {
+        obj.env = {};
+        entries.forEach(([k, v]) => {
+          obj.env[k] = v;
+        });
+      }
+    }
+    if (message.cwd !== undefined) {
+      obj.cwd = message.cwd;
+    }
+    if (message.unset_env?.length) {
+      obj.unset_env = message.unset_env;
+    }
+    if (message.url !== undefined) {
+      obj.url = message.url;
+    }
+    if (message.headers) {
+      const entries = globalThis.Object.entries(message.headers) as [string, string][];
+      if (entries.length > 0) {
+        obj.headers = {};
+        entries.forEach(([k, v]) => {
+          obj.headers[k] = v;
+        });
+      }
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderLaunchDTO>, I>>(base?: I): McpProviderLaunchDTO {
+    return McpProviderLaunchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderLaunchDTO>, I>>(object: I): McpProviderLaunchDTO {
+    const message = createBaseMcpProviderLaunchDTO();
+    message.transport = object.transport ?? "";
+    message.command = object.command ?? undefined;
+    message.args = object.args?.map((e) => e) || [];
+    message.env = (globalThis.Object.entries(object.env ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    message.cwd = object.cwd ?? undefined;
+    message.unset_env = object.unset_env?.map((e) => e) || [];
+    message.url = object.url ?? undefined;
+    message.headers = (globalThis.Object.entries(object.headers ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseMcpProviderLaunchDTO_EnvEntry(): McpProviderLaunchDTO_EnvEntry {
+  return { key: "", value: "" };
+}
+
+export const McpProviderLaunchDTO_EnvEntry: MessageFns<McpProviderLaunchDTO_EnvEntry> = {
+  fromJSON(object: any): McpProviderLaunchDTO_EnvEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: McpProviderLaunchDTO_EnvEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderLaunchDTO_EnvEntry>, I>>(base?: I): McpProviderLaunchDTO_EnvEntry {
+    return McpProviderLaunchDTO_EnvEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderLaunchDTO_EnvEntry>, I>>(
+    object: I,
+  ): McpProviderLaunchDTO_EnvEntry {
+    const message = createBaseMcpProviderLaunchDTO_EnvEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderLaunchDTO_HeadersEntry(): McpProviderLaunchDTO_HeadersEntry {
+  return { key: "", value: "" };
+}
+
+export const McpProviderLaunchDTO_HeadersEntry: MessageFns<McpProviderLaunchDTO_HeadersEntry> = {
+  fromJSON(object: any): McpProviderLaunchDTO_HeadersEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: McpProviderLaunchDTO_HeadersEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderLaunchDTO_HeadersEntry>, I>>(
+    base?: I,
+  ): McpProviderLaunchDTO_HeadersEntry {
+    return McpProviderLaunchDTO_HeadersEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderLaunchDTO_HeadersEntry>, I>>(
+    object: I,
+  ): McpProviderLaunchDTO_HeadersEntry {
+    const message = createBaseMcpProviderLaunchDTO_HeadersEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpProviderResolvedDTO(): McpProviderResolvedDTO {
+  return { kind: "", request_id: "", launch: undefined, error_code: undefined };
+}
+
+export const McpProviderResolvedDTO: MessageFns<McpProviderResolvedDTO> = {
+  fromJSON(object: any): McpProviderResolvedDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      launch: isSet(object.launch) ? McpProviderLaunchDTO.fromJSON(object.launch) : undefined,
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+    };
+  },
+
+  toJSON(message: McpProviderResolvedDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.launch !== undefined) {
+      obj.launch = McpProviderLaunchDTO.toJSON(message.launch);
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpProviderResolvedDTO>, I>>(base?: I): McpProviderResolvedDTO {
+    return McpProviderResolvedDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpProviderResolvedDTO>, I>>(object: I): McpProviderResolvedDTO {
+    const message = createBaseMcpProviderResolvedDTO();
+    message.kind = object.kind ?? "";
+    message.request_id = object.request_id ?? "";
+    message.launch = (object.launch !== undefined && object.launch !== null)
+      ? McpProviderLaunchDTO.fromPartial(object.launch)
+      : undefined;
+    message.error_code = object.error_code ?? undefined;
+    return message;
+  },
+};
 
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
   return { uri: "", local_gateway_id: "", resource_gateway_id: undefined };
