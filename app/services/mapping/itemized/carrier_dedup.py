@@ -114,16 +114,18 @@ def superseded_tool_group_item_ids(
     superseded: set[str] = set()
     prefer_checkpoint: set[tuple[_ToolCarrierScope, str]] = set()
     prefer_stream: set[tuple[_ToolCarrierScope, str]] = set()
-    for key in checkpoint.keys() & stream.keys():
+    for key, checkpoint_group in checkpoint.items():
         calls = {(key[0], call_id) for call_id in key[1]}
-        last_call = max(positions[item.item_id] for item in checkpoint[key])
+        last_call = max(positions[item.item_id] for item in checkpoint_group)
         if all(checkpoint_results.get(call, -1) > last_call for call in calls):
-            superseded.update(item.item_id for item in stream[key])
+            # 前次装配可能已移除 stream 声明，迟到的同 scope 结果仍由
+            # 已闭合的 checkpoint 工具组替代，不能再次进入下一请求。
+            superseded.update(item.item_id for item in stream.get(key, ()))
             prefer_checkpoint.update(calls)
-        else:
+        elif key in stream:
             # 尚未闭合的 checkpoint shadow 不替代原声明；不能把较晚的
             # call 挪到结果之前，也不能为配对补造工具结果。
-            superseded.update(item.item_id for item in checkpoint[key])
+            superseded.update(item.item_id for item in checkpoint_group)
             prefer_stream.update(calls)
     for item in results:
         call = (_scope(item), _result_call_id(item))

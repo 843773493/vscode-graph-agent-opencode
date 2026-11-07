@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -258,6 +258,39 @@ def test_live_result_filtered_only_with_replacement_carrier(outcome: str):
         preserve_order=True,
     )
     assert any(type(message).__name__ == "ToolMessage" for message in messages)
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "unknown"])
+@pytest.mark.parametrize("late_result_first", [False, True])
+def test_late_result_filtered_after_stream_declaration_leaves_selection(
+    outcome: str, late_result_first: bool,
+):
+    """已选 checkpoint 工具组后晚到 stream 结果，不恢复已退出选集的声明。"""
+    live = _with_outcome(_live_tool_result(7), outcome)
+    confirmed = (_confirmed_reasoning(), _confirmed_tool_call(),
+                 _with_outcome(_request_tool_result(), outcome))
+    items = (live, *confirmed) if late_result_first else (*confirmed, live)
+    assert superseded_item_ids(items) == {live.item_id}
+    assistant, result = project_canonical_items(items, preserve_order=True)
+    assert isinstance(assistant, AIMessage) and isinstance(result, ToolMessage)
+    assert [call["id"] for call in assistant.tool_calls] == [result.tool_call_id] == [TOOL_CALL_ID]
+    assert result.id == "1b56a352-af40-4db3-adc2-0a77994e039e"
+    assert result.content == RESULT_CONTENT
+    assert result.response_metadata["tool_outcome"] == outcome
+
+
+@pytest.mark.parametrize("missing", ["declaration", "result", "ordered_result", "turn", "model_call"])
+def test_late_result_requires_complete_selected_checkpoint_group(missing: str):
+    """没有完整同归属 checkpoint 工具组时，不能吞掉唯一真实结果。"""
+    call, result, live = _confirmed_tool_call(), _request_tool_result(), _live_tool_result(7)
+    if missing == "turn":
+        result = replace(result, turn_id="other-turn")
+    elif missing == "model_call":
+        assert result.projection_identity is not None
+        result = replace(result, projection_identity=replace(result.projection_identity, model_call_id="other-model-call"))
+    confirmed = {"declaration": (result,), "result": (call,),
+                 "ordered_result": (result, call)}.get(missing, (call, result))
+    assert live.item_id not in superseded_item_ids((*confirmed, live))
 
 
 def test_other_turn_result_cannot_replace_original_terminal():
