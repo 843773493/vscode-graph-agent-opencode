@@ -305,7 +305,7 @@ async def test_inventory_reports_damaged_install_facts_without_empty_success(man
     assert profile.read_bytes() == original
 
 
-@pytest.mark.parametrize("failure", ["cancelled", "malformed", "error-object", "error-null"])
+@pytest.mark.parametrize("failure", ["cancelled", "malformed", "missing-code", "error-object", "error-null"])
 async def test_unknown_control_reply_reaps_original_process_and_never_replays_install(
     management_backends, vsix_factory, monkeypatch: pytest.MonkeyPatch, failure: str,
 ) -> None:
@@ -324,8 +324,10 @@ async def test_unknown_control_reply_reaps_original_process_and_never_replays_in
         received.set()
         if failure == "malformed":
             return {"result": {}}
+        if failure == "missing-code":
+            return {"error": "缺少错误码"}
         if failure in {"error-object", "error-null"}:
-            return {"error": {} if failure == "error-object" else None}
+            return {"error": {} if failure == "error-object" else None, "code": "Unknown"}
         await asyncio.Event().wait()
         return value
 
@@ -339,6 +341,9 @@ async def test_unknown_control_reply_reaps_original_process_and_never_replays_in
                 await operation
         elif failure == "malformed":
             with pytest.raises(ValidationError, match="inventory"):
+                await operation
+        elif failure == "missing-code":
+            with pytest.raises(ValueError, match="控制回执不完整"):
                 await operation
         else:
             with pytest.raises(TypeError, match="错误回执不是字符串"):
