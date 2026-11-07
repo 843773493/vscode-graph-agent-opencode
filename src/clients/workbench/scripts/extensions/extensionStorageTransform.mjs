@@ -6,12 +6,17 @@ export const extensionStorageSourcePaths = [
   'src/vs/workbench/api/common/extHostStorage.ts',
   'src/vs/workbench/api/browser/mainThreadSecretState.ts',
   'src/vs/workbench/api/common/extHostSecretState.ts',
+  'src/vs/workbench/api/common/extHostExtensionService.ts',
 ];
 
 /** Memento 继续由原 profile owner 保存；目标与稳定视图贯穿原写入和通知。 */
 export function transformExtensionStorage(root, path, source, replaceOnce, runtime) {
   const paths = extensionStorageSourcePaths.map(value => join(root, 'upstream', value));
-  const secretError = '目标 Node 扩展暂不支持 SecretStorage；不能访问工作台的秘密存储';
+  const secretError = '目标扩展暂不支持 SecretStorage；不能访问工作台的秘密存储';
+  if (path === paths[5] && runtime !== 'node') {
+    let contents = replaceOnce(source, 'new ExtHostStorage(this._extHostContext, this._logService)', 'new ExtHostStorage(this._extHostContext, this._logService, !!this._initData.isTargetExtensionHost)');
+    return replaceOnce(contents, 'new ExtHostSecretState(this._extHostContext)', 'new ExtHostSecretState(this._extHostContext, !!this._initData.isTargetExtensionHost)');
+  }
   if (path === paths[4] && runtime === 'node') {
     // TODO(6.6)：接入目标消费侧的秘密 owner；拒绝必须发生在值进入浏览器 RPC 之前。
     let contents = replaceOnce(source, 'ExtHostSecretStateShape, MainContext, MainThreadSecretStateShape', 'ExtHostSecretStateShape');
@@ -22,12 +27,22 @@ export function transformExtensionStorage(root, path, source, replaceOnce, runti
     }
     return contents;
   }
+  if (path === paths[4]) {
+    let contents = replaceOnce(source, 'constructor(mainContext: IExtHostRpcService)',
+      'constructor(mainContext: IExtHostRpcService, private readonly isTargetExtensionHost: boolean)');
+    // TODO(6.6)：目标 Web 没有秘密 owner；值在原公开 API 的 RPC 之前明确拒绝。
+    for (const [method, args] of [['getPassword', 'extensionId, key'], ['setPassword', 'extensionId, key, value'], ['deletePassword', 'extensionId, key'], ['getKeys', 'extensionId']]) {
+      contents = replaceOnce(contents, `return this._proxy.$${method}(${args});`,
+        `if (this.isTargetExtensionHost) return Promise.reject(new Error(${JSON.stringify(secretError)}));\n    return this._proxy.$${method}(${args});`);
+    }
+    return replaceOnce(contents, 'this._onDidChangePassword.fire(e);', 'if (!this.isTargetExtensionHost) this._onDidChangePassword.fire(e);');
+  }
   if (path === paths[3]) {
-    let contents = `import { ExtensionHostKind } from '../../services/extensions/common/extensionHostKind.js';\n` + source;
+    let contents = source;
     contents = replaceOnce(contents, 'private readonly _proxy: ExtHostSecretStateShape;', 'private readonly _proxy: ExtHostSecretStateShape;\n  private readonly _targetSecretsUnavailable: boolean;');
     contents = replaceOnce(contents, 'this._proxy = extHostContext.getProxy(ExtHostContext.ExtHostSecretState);', `this._proxy = extHostContext.getProxy(ExtHostContext.ExtHostSecretState);
     // TODO(6.6)：目标秘密尚未接线，不向 Node 广播 Web profile 的秘密键或借用其正文。
-    this._targetSecretsUnavailable = extHostContext.extensionHost.runningLocation.kind === ExtensionHostKind.Remote;
+    this._targetSecretsUnavailable = !!extHostContext.extensionHost.targetContext;
     if (this._targetSecretsUnavailable) return;`);
     for (const declaration of ['$getPassword(extensionId: string, key: string): Promise<string | undefined>', '$setPassword(extensionId: string, key: string, value: string): Promise<void>', '$deletePassword(extensionId: string, key: string): Promise<void>', '$getKeys(extensionId: string): Promise<string[]>']) {
       contents = replaceOnce(contents, `${declaration} {`, `${declaration} {\n    if (this._targetSecretsUnavailable) return Promise.reject(new Error(${JSON.stringify(secretError)}));`);
@@ -39,6 +54,7 @@ export function transformExtensionStorage(root, path, source, replaceOnce, runti
     contents = replaceOnce(contents, 'const EXTENSION_KEYS_ID_VERSION_REGEX', "const TARGET_EXTENSION_STATE_PREFIX = 'boxteam.extensionState/';\n\nconst EXTENSION_KEYS_ID_VERSION_REGEX");
     contents = replaceOnce(contents, 'export interface IExtensionStorageService {', `export interface IExtensionStorageScope {
   readonly installationTarget: ExtensionInstallationTarget;
+  readonly profileId: string;
   readonly workspaceId: string;
 }
 
@@ -50,7 +66,7 @@ export interface IExtensionStorageService {
   getExtensionStateKey(extension: IExtension | IGalleryExtension | string, global: boolean, scope?: IExtensionStorageScope): string {
     const id = this.getExtensionId(extension);
     if (!scope) return id;
-    return TARGET_EXTENSION_STATE_PREFIX + JSON.stringify([installationTargetKey(scope.installationTarget), global ? null : scope.workspaceId, id.toLowerCase()]);
+    return TARGET_EXTENSION_STATE_PREFIX + JSON.stringify([installationTargetKey(scope.installationTarget), scope.profileId, global ? null : scope.workspaceId, id.toLowerCase()]);
   }
 
 \tprivate getExtensionId(`);
@@ -67,9 +83,15 @@ export interface IExtensionStorageService {
     void extension; void keys;
     throw new Error('目标 Node 扩展暂不支持 setKeysForSync 跨设备状态同步');`);
   }
+  if (path === paths[2]) {
+    let contents = replaceOnce(source, 'private readonly _logService: ILogService\n', 'private readonly _logService: ILogService,\n    private readonly isTargetExtensionHost: boolean\n');
+    return replaceOnce(contents, 'this._proxy.$registerExtensionStorageKeysToSync(extension, keys);',
+      `if (this.isTargetExtensionHost) throw new Error('目标扩展暂不支持 setKeysForSync 跨设备状态同步');\n    this._proxy.$registerExtensionStorageKeysToSync(extension, keys);`);
+  }
   if (path !== paths[1]) return source;
   let contents = replaceOnce(source, 'IExtensionIdWithVersion, IExtensionStorageService', 'IExtensionIdWithVersion, IExtensionStorageScope, IExtensionStorageService');
-  contents = `import { ExtensionIdentifier } from '../../../platform/extensions/common/extensions.js';
+  contents = `import { targetProfileId, targetWorkspace } from ${JSON.stringify(join(root, 'src/extensions/targetContext.js'))};
+import { ExtensionIdentifier } from '../../../platform/extensions/common/extensions.js';
 import { ExtensionHostKind } from '../../services/extensions/common/extensionHostKind.js';\n` + contents;
   contents = replaceOnce(contents, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
   contents = contents.replaceAll('_sharedStorageKeysToWatch', '_storageKeysToWatch');
@@ -82,9 +104,9 @@ import { ExtensionHostKind } from '../../services/extensions/common/extensionHos
   return replaceOnce(contents, contents.slice(start, end), `
   private storageScope(extensionId: string): IExtensionStorageScope | undefined {
     if (this._disposed) throw new Error('扩展状态的宿主代际已经关闭');
-    const host = this.extHostContext.extensionHost, binding = host.binding;
-    if (!binding) {
-      if (host.runningLocation.kind === ExtensionHostKind.Remote) throw new Error('目标扩展状态缺少认证绑定');
+    const host = this.extHostContext.extensionHost, context = host.targetContext;
+    if (!context) {
+      if (host.runningLocation.kind === ExtensionHostKind.Remote || host.runningLocation.kind === ExtensionHostKind.LocalWebWorker && host.runningLocation.installationTarget) throw new Error('目标扩展状态缺少认证绑定');
       return undefined;
     }
     const description = host.extensions?.allExtensions.find(extension => ExtensionIdentifier.equals(extension.identifier, extensionId));
@@ -92,9 +114,9 @@ import { ExtensionHostKind } from '../../services/extensions/common/extensionHos
         (!(description.main || description.browser) || description.api !== 'none'))) {
       throw new Error('扩展状态不属于发起宿主：' + extensionId);
     }
-    const workspaceId = binding.initialization?.workspace?.id;
+    const binding = context.connection, workspaceId = targetWorkspace(context).id;
     if (!workspaceId) throw new Error('目标扩展状态缺少稳定工作区视图');
-    return { installationTarget: { kind: 'backend', gatewayId: binding.gateway_id, backendId: binding.backend_id }, workspaceId };
+    return { installationTarget: { kind: 'backend', gatewayId: binding.gateway_id, backendId: binding.backend_id }, profileId: targetProfileId(context), workspaceId };
   }
 
   async $initializeExtensionStorage(shared: boolean, extensionId: string): Promise<string | undefined> {
@@ -117,7 +139,7 @@ import { ExtensionHostKind } from '../../services/extensions/common/extensionHos
   }
 
   $registerExtensionStorageKeysToSync(extension: IExtensionIdWithVersion, keys: string[]): void {
-    if (this.storageScope(extension.id)) throw new Error('目标 Node 扩展暂不支持 setKeysForSync 跨设备状态同步');
+    if (this.storageScope(extension.id)) throw new Error('目标扩展暂不支持 setKeysForSync 跨设备状态同步');
     this._extensionStorageService.setKeysForSync(extension, keys);
   }
 `);

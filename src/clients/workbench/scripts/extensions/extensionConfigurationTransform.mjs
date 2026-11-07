@@ -83,7 +83,7 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
       'if (!this.disposed) proxy.$acceptConfigurationChanged(this._getConfigurationData(), e.change);');
     contents = replaceOnce(contents, 'target = target !== null && target !== undefined ? target : this.deriveConfigurationTarget(key, overrides);',
       `if (this.disposed) return Promise.reject(new Error('配置所属宿主代际已经关闭'));
-      if (this.extHostContext.extensionHost.binding && overrides.resource && !this._workspaceContextService.isInsideWorkspace(overrides.resource)) {
+      if (this.extHostContext.extensionHost.targetContext && overrides.resource && !this._workspaceContextService.isInsideWorkspace(overrides.resource)) {
         return Promise.reject(new Error('配置资源不属于发起宿主的工作区视图：' + overrides.resource.toString()));
       }
       target = target !== null && target !== undefined ? target : this.deriveConfigurationTarget(key, overrides);`);

@@ -1,5 +1,6 @@
 import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
 import { MutableDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
+import { Emitter } from '../upstream/src/vs/base/common/event.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -17,6 +18,17 @@ const selecting = new Map<ManagementScope, AbortController>();
 export const selectExtensionManagementTargetCommand = 'boxteam.extensions.selectTarget';
 export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
 const extensionTitle = new MutableDisposable();
+const extensionManagementChanged = new Emitter<void>();
+export const onDidChangeExtensionManagementTarget = extensionManagementChanged.event;
+
+/** 仅刷新当前管理视图；在途操作的目标由发起方冻结，不随此展示事件改投。 */
+export function refreshExtensionManagementTarget(target?: { gatewayId: string; backendId: string }): void {
+  if (target) {
+    const current = managementGateway('extensions');
+    if (current.gateway_id !== target.gatewayId || current.backend_id !== target.backendId) return;
+  }
+  extensionManagementChanged.fire();
+}
 
 function updateExtensionTitle(): void {
   const target = selections.get('extensions')?.target;
@@ -27,7 +39,7 @@ function updateExtensionTitle(): void {
   });
 }
 updateExtensionTitle();
-onGatewayUserSessionInvalidated(0, () => { selections.clear(); updateExtensionTitle(); });
+onGatewayUserSessionInvalidated(0, () => { selections.clear(); updateExtensionTitle(); extensionManagementChanged.fire(); });
 workspaceContext.subscribe(() => {
   let extensionChanged = false;
   for (const [scope, selection] of selections) {
@@ -36,7 +48,7 @@ workspaceContext.subscribe(() => {
       if (scope === 'extensions') extensionChanged = true;
     }
   }
-  if (extensionChanged) updateExtensionTitle();
+  if (extensionChanged) { updateExtensionTitle(); extensionManagementChanged.fire(); }
 });
 
 /** 各管理视图只保存自己的展示选择；原 Gateway 仍持有路由和安装事实。 */
@@ -114,7 +126,7 @@ for (const scope of ['extensions', 'settings'] as const) registerAction2(class e
         target = { ...target, backend_id: domain.backend_id };
       }
       selections.set(scope, { entryGatewayId: entry, target });
-      if (scope === 'extensions') updateExtensionTitle();
+      if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
     } finally {
       if (selecting.get(scope) === controller) selecting.delete(scope);
       releaseUser(); releaseContext(); cancellation.dispose(); controller.abort();

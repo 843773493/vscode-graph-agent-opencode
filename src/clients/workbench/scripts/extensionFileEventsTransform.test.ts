@@ -153,5 +153,5 @@ function makeHost(workspaceId: string, gatewayId: string) {
         configuration: { native_uri: `file://${nativeRoot}.code-workspace`, resource_uri: `boxteam://${gatewayId}/${workspaceId}/configuration` } } },
   };
   const transformer = new TargetUriTransformer(binding as never, () => []);
-  return { transformer, host: { binding, uriTransformer: transformer } as never };
+  return { transformer, host: { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer: transformer } as never };
 }

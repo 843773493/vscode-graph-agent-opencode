@@ -16,7 +16,7 @@ export function transformExtensionDocuments(root, path, source, replaceOnce) {
   private ownerKey(owner: string): string {
     if (this._disposed) throw new Error('诊断所属宿主代际已经关闭');
     // 集合名称仍是公开 API；原 MarkerService 的内部 owner 按原 extHostId 区分运行代际。
-    return this.extHostContext.extensionHost.binding ? JSON.stringify([this.extHostId, owner]) : owner;
+    return this.extHostContext.extensionHost.targetContext ? JSON.stringify([this.extHostId, owner]) : owner;
   }
 
   private assertResource(resource: URI): void {
@@ -26,7 +26,7 @@ export function transformExtensionDocuments(root, path, source, replaceOnce) {
   }
 
   private projectMarker(marker: IMarkerData): IMarkerData {
-    if (!this.extHostContext.extensionHost.binding) return marker;
+    if (!this.extHostContext.extensionHost.targetContext) return marker;
     const code = marker.code;
     // 只投影位置字段，保留普通诊断正文；不修改其它消费者仍在读取的权威 marker。
     return { ...marker,
@@ -56,7 +56,7 @@ export function transformExtensionDocuments(root, path, source, replaceOnce) {
         }
       }
     }`);
-    contents = replaceOnce(contents, 'if (marker.origin === undefined)', 'if (this.extHostContext.extensionHost.binding || marker.origin === undefined)');
+    contents = replaceOnce(contents, 'if (marker.origin === undefined)', 'if (this.extHostContext.extensionHost.targetContext || marker.origin === undefined)');
     return replaceOnce(contents, '$clear(owner: string): void {', '$clear(owner: string): void {\n    owner = this.ownerKey(owner);');
   }
   if (path === paths[1]) return replaceOnce(source, 'return !!model && shouldSynchronizeModel(model);', 'return !!model && this._modelTrackers.has(resource) && shouldSynchronizeModel(model);');

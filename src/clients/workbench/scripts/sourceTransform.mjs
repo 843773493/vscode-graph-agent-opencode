@@ -8,6 +8,7 @@ import { extensionHostStateSourcePaths, transformExtensionHostState } from './ex
 import { extensionInstanceSourcePaths, transformExtensionInstances } from './extensions/extensionInstanceTransform.mjs';
 import { extensionRunningSourcePaths, transformExtensionRunning } from './extensions/extensionRunningTransform.mjs';
 import { extensionBrowserSourcePaths, transformExtensionBrowser } from './extensions/extensionBrowserTransform.mjs';
+import { extensionManagementSourcePaths, transformExtensionManagement } from './extensions/extensionManagementTransform.mjs';
 import { extensionOwnerSourcePaths, transformExtensionOwner } from './extensions/extensionOwnerTransform.mjs';
 import { extensionStatusSourcePaths, transformExtensionStatus } from './extensions/extensionStatusTransform.mjs';
 import { extensionEnablementSourcePaths, transformExtensionEnablement } from './extensions/extensionEnablementTransform.mjs';
@@ -64,6 +65,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionInstanceSourcePaths,
   ...extensionRunningSourcePaths,
   ...extensionBrowserSourcePaths,
+  ...extensionManagementSourcePaths,
   ...extensionOwnerSourcePaths,
   ...extensionStatusSourcePaths,
   ...extensionEnablementSourcePaths,
@@ -103,6 +105,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionInstances(root, path, contents, replaceOnce);
     contents = transformExtensionRunning(root, path, contents, replaceOnce);
     contents = transformExtensionBrowser(root, path, contents, replaceOnce);
+    contents = transformExtensionManagement(root, path, contents, replaceOnce);
     contents = transformExtensionHostState(root, path, contents, replaceOnce);
     contents = transformExtensionOwner(root, path, contents, replaceOnce);
     contents = transformExtensionStatus(root, path, contents, replaceOnce);
@@ -300,37 +303,6 @@ const model = reference.object;`);
 \t\t\t\tthis._cache.delete(textModel.id);`;
       contents = replaceOnce(contents, cancel, `data.source.cancel();
 if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`);
-    }
-    if (path === join(upstream, 'src/vs/workbench/services/extensionManagement/browser/webExtensionsScannerService.ts')) {
-      // 直接位置和原gallery入口都消费已经算出的原manifest校验，不把无效版本写成已安装。
-      const rejectInvalid = `if (!extension.isValid) throw new Error(extension.validations.map(([, message]) => message).join('\\n'));`;
-      contents = replaceOnce(contents, `const extension = await this.toScannedExtension(webExtension, false);
-\t\tawait this.addToInstalledExtensions`, `const extension = await this.toScannedExtension(webExtension, false);
-${rejectInvalid}
-await this.addToInstalledExtensions`);
-      contents = replaceOnce(contents, `const extension = await this.toScannedExtension(webExtension, isBuiltin);
-
-\t\tif (isSystem)`, `const extension = await this.toScannedExtension(webExtension, isBuiltin);
-${rejectInvalid}
-if (isSystem)`);
-      // profile 的安装记录不可当可丢弃缓存：损坏／无权限时阻止后续写入，保留原件。
-      contents = replaceOnce(contents, 'let webExtensions: IWebExtension[] = [];',
-        'const isCache = file === this.systemExtensionsCacheResource || file === this.customBuiltinExtensionsCacheResource;\nlet webExtensions: IWebExtension[] = [];');
-      contents = replaceOnce(contents, `if (!e.location || !e.identifier || !e.version) {
-\t\t\t\t\t\tthis.logService.info('Ignoring invalid extension while scanning', storedWebExtensions);
-\t\t\t\t\t\tcontinue;
-\t\t\t\t\t}`, `if (!isUriComponents(e?.location) || !isString(e.identifier?.id) || !e.identifier.id || !isString(e.version) || !e.version) {
-if (!isCache) throw new Error('扩展记录缺少合法资源位置、身份或版本：' + file.toString());
-this.logService.info('Ignoring invalid extension while scanning', storedWebExtensions);
-continue;
-}`);
-      contents = replaceOnce(contents, `/* Ignore */
-\t\t\t\tif ((<FileOperationError>error).fileOperationResult !== FileOperationResult.FILE_NOT_FOUND) {
-\t\t\t\t\tthis.logService.error(error);
-\t\t\t\t}`, `if ((<FileOperationError>error).fileOperationResult !== FileOperationResult.FILE_NOT_FOUND) {
-this.logService.error(error);
-if (!isCache) throw error;
-}`);
     }
     if (path === join(upstream, 'src/vs/workbench/services/textfile/common/textEditorService.ts')) {
       contents = replaceOnce(contents, 'const textResourceEditorInput = input as IUntypedFileEditorInput;',

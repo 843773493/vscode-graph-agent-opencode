@@ -11,7 +11,7 @@ import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_gene
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
-import { extensionManagementTarget, managementGateway } from '../managementTarget.js';
+import { extensionManagementTarget, managementGateway, refreshExtensionManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
 
@@ -119,6 +119,7 @@ export async function installTargetVsix(accessor: ServicesAccessor, input: Insta
           }
           const outcome = result.installed.reused ? '复用已有版本，VSIX 正文未覆盖' : '已安装新制品';
           receipts.push(`${result.installed.id}@${result.installed.version} → ${label}（${result.installed.profile_id}；${outcome}）`);
+          refreshExtensionManagementTarget({ gatewayId: target.gateway_id, backendId: target.backend_id });
           check();
         }
       });

@@ -6,14 +6,19 @@ import { equalsIgnoreCase } from '../../upstream/src/vs/base/common/strings.js';
 import { URI, type UriComponents } from '../../upstream/src/vs/base/common/uri.js';
 import { type LanguageFilter, type LanguageSelector, score } from '../../upstream/src/vs/editor/common/languageSelector.js';
 import type { IExtensionHost } from '../../upstream/src/vs/workbench/services/extensions/common/extensions.js';
-import { TargetUriTransformer } from './targetUris.js';
+import { TargetUriTransformer, hostOwnsWorkspaceResource } from './targetUris.js';
+import { targetOperatingSystem } from './targetContext.js';
 
 /** 原注册表先按宿主候选评分；原 selector、glob 和独占排序仍由上游持有。 */
 export function hostLanguageFeatureScore(host: IExtensionHost, selector: LanguageSelector): typeof score | undefined {
-  if (!host.binding) return undefined;
+  if (!host.targetContext) return undefined;
+  if (host.targetContext.kind === 'web') return (_selector, resource, language, synchronized, notebookResource, notebookType) => {
+    if (!hostOwnsWorkspaceResource(host, resource) || notebookResource && !hostOwnsWorkspaceResource(host, notebookResource)) return 0;
+    return score(selector, resource, language, synchronized, notebookResource, notebookType);
+  };
   const transformer = host.uriTransformer;
   if (!(transformer instanceof TargetUriTransformer)) throw new Error('语言 Provider 缺少已绑定 URI transformer');
-  const windows = host.binding.initialization?.os === 'windows';
+  const windows = targetOperatingSystem(host.targetContext) === 'windows';
   const normalize = (path: string) => windows ? toSlashes(win32.normalize(path)) : posix.normalize(path);
   const nativePath = (uri: URI) => normalize(windows ? originalFSPath(uri) : uri.path);
   const project = (filter: string | LanguageFilter): string | LanguageFilter => {

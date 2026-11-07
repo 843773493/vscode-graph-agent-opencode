@@ -29,7 +29,7 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
     });`);
   contents = replaceOnce(contents, '\tdispose(): void {', '\tdispose(): void {\n    this._disposed = true;\n    this._tabGroupModel = [];');
   contents = replaceOnce(contents, 'private _generateTabId(editor: EditorInput, groupId: number) {', `private _generateTabId(editor: EditorInput, groupId: number) {
-    if (this.extHostContext.extensionHost.binding) {
+    if (this.extHostContext.extensionHost.targetContext) {
       // 目标标签 ID 只标识原 EditorInput，不夹带 MultiDiff source 或本机路径。
       let id = this._editorIds.get(editor);
       if (id === undefined) this._editorIds.set(editor, id = ++this._nextEditorId);
@@ -40,7 +40,7 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
   if (start < 0 || end < 0) throw new Error('原 MainThreadEditorTabs 模型更新边界已变化');
   contents = replaceOnce(contents, contents.slice(start, end), `
   private _acceptsEditor(editor: EditorInput): boolean {
-    if (!this.extHostContext.extensionHost.binding) return true;
+    if (!this.extHostContext.extensionHost.targetContext) return true;
     const owns = (uri: URI | undefined) => !!uri && hostOwnsWorkspaceResource(this.extHostContext.extensionHost, uri);
     if (editor instanceof MultiDiffEditorInput) {
       const resources = editor.resources.get() ?? [];
@@ -190,7 +190,7 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
   private _assertTab(tabId: string): TabInfo | undefined {
     this._assertRunning();
     const info = this._tabInfoLookup.get(tabId);
-    if (this.extHostContext.extensionHost.binding && (!info || !info.group.editors.includes(info.editorInput) || !this._acceptsEditor(info.editorInput))) {
+    if (this.extHostContext.extensionHost.targetContext && (!info || !info.group.editors.includes(info.editorInput) || !this._acceptsEditor(info.editorInput))) {
       throw new Error('标签不属于发起宿主的当前工作区视图：' + tabId);
     }
     return info;
@@ -219,11 +219,11 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
       results.push(await group.closeEditors(editors, { preserveFocus }));
       if (this._disposed && results.length < groups.size) throw new Error('标签宿主代际已经关闭；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');`);
   contents = replaceOnce(contents, 'const groupCloseResults: boolean[] = [];', `this._assertRunning();
-    if (this.extHostContext.extensionHost.binding && groupIds.some(id => !this._groupLookup.has(id))) throw new Error('编辑器组不属于发起宿主的当前标签模型');
+    if (this.extHostContext.extensionHost.targetContext && groupIds.some(id => !this._groupLookup.has(id))) throw new Error('编辑器组不属于发起宿主的当前标签模型');
     const groupCloseResults: boolean[] = [];`);
   contents = replaceOnce(contents, 'groupCloseResults.push(await group.closeAllEditors());', `this._assertRunning();
         const editors = group.editors.filter(editor => this._tabInfoLookup.has(this._generateTabId(editor, group.id)) && this._acceptsEditor(editor));
-        groupCloseResults.push(await (this.extHostContext.extensionHost.binding
+        groupCloseResults.push(await (this.extHostContext.extensionHost.targetContext
           ? group.closeEditors(editors, { preserveFocus }) : group.closeAllEditors()));
         if (this._disposed) {
           if (index + 1 < groupIds.length) throw new Error('标签宿主代际已经关闭；前序关闭结果=' + JSON.stringify(groupCloseResults) + '，未执行后继关闭');

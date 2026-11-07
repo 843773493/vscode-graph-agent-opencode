@@ -203,7 +203,7 @@ beforeAll(async () => {
     if (state.policy.brokenBody) return new Response('{"code":0,"data":', { headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId } });
     const profile = 'profile-' + body.gateway_id, version = body.gateway_id === 'gateway-a' ? '8.7.6' : '2.4.8';
     const result = { protocol_version: 1, gateway_id: body.gateway_id, backend_id: body.backend_id,
-      workspace_ids: body.workspace_ids, profile_scope: 'default', inventory: { profile_id: profile, extensions: [] },
+      workspace_ids: body.workspace_ids, profile_scope: 'default', inventory: { profile_id: profile, target_platform: 'linux-x64', extensions: [] },
       installed: { id: 'probe.from-receipt', version, profile_id: profile, reused: state.policy.reused ?? false } };
     if (state.policy.badReceipt === 'target') result.backend_id = backends['gateway-b'];
     if (state.policy.badReceipt === 'view') result.workspace_ids = ['workspace-a2'];
@@ -254,9 +254,9 @@ async function inBrowser(name, config, body, policy = {}) {
       const registry = lifetime.add(new m.ExtensionDescriptionRegistry({ readActivationEvents: () => [] }, [], true));
       const tracker = new m.ExtensionRunningLocationTracker(registry, {}, {}, {}, {}, {}), owner = new m.OriginalViewOwner(tracker);
       const views = [ { installationTarget: { kind: 'backend', gatewayId: 'gateway-a', backendId: '11111111-1111-4111-8111-111111111111' }, viewId: 'default', workspaceIds: ['workspace-a2', 'workspace-a1'],
-        capabilities: { installation_manage: !config.hostOnlyA, host_manage: !config.installOnlyA } },
+        capabilities: { installation_manage: !config.hostOnlyA, host_manage: !config.installOnlyA }, nodeRuntime: { channel_state: 'available' } },
         { installationTarget: { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' }, viewId: 'default', workspaceIds: ['workspace-b'],
-          capabilities: { installation_manage: !config.hostOnlyB, host_manage: true } } ];
+          capabilities: { installation_manage: !config.hostOnlyB, host_manage: true }, nodeRuntime: { channel_state: 'available' } } ];
       owner._setExtensionWorkspaceViews(config.noView ? views.slice(1) : config.noViewB ? views.slice(0, 1) : views);
       m.workspaceContext.publish({ gatewayId: 'gateway-a', workspaces: [], activeId: 'active-a1', settings: null, loading: false, error: null });
       const picks = [], dialogs = [], prompts = [], reports = [], gate = Promise.withResolvers(), registration = Promise.withResolvers();

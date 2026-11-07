@@ -52,6 +52,7 @@ export { BrowserWorkspacesService } from '${upstream}workbench/services/workspac
 export { getStoredWorkspaceFolder, toWorkspaceFolders } from '${upstream}platform/workspaces/common/workspaces.js';
 export { extUri } from '${upstream}base/common/resources.js';
 export { URI } from '${upstream}base/common/uri.js';
+export { DisposableStore } from '${upstream}base/common/lifecycle.js';
 export { Event, Emitter } from '${upstream}base/common/event.js';
 export { scanTargetExtensions } from './src/clients/workbench/src/extensions/inventory.js';
 export { workspaceFileUri, workspaceFileSource } from './src/clients/workbench/src/workspaceFiles.js';
@@ -228,14 +229,14 @@ test('相同设置声明在窗口只登记一次，schema及信任限制冲突�
   receipt.checks.push('原窗口相同configuration声明共享一次，schema／scope／默认值及信任限制冲突仍候选原子拒绝');
 });
 
-function tracker(registry) {
+function tracker(registry, readKinds = extension => extension.installationTarget.kind === 'backend' ? ['workspace'] : ['web']) {
   return new m.ExtensionRunningLocationTracker(registry, { pickExtensionHostKind: (_id, _kinds, local, remote) => remote ? 3 : local ? 2 : null }, {},
-    { getValue: () => ({}) }, { info() {}, warn() {} }, { getExtensionKind: extension => extension.installationTarget.kind === 'backend' ? ['workspace'] : ['web'] });
+    { getValue: () => ({}) }, { info() {}, warn() {}, error() {} }, { getExtensionKind: readKinds });
 }
 test('原 Tracker 与 host snapshot 按实例分组，A/B 同ID版本和更新互不覆盖', () => {
   const a = extension(targetA), b = extension(targetB, '2.0.0'), local = extension(web, '3.0.0');
   const registry = new m.ExtensionDescriptionRegistry(reader, [a, b, local], true), running = tracker(registry);
-  const views = [targetA, targetB].map((installationTarget, index) => ({ installationTarget, viewId: 'default', workspaceIds: ['workspace-' + index], capabilities: fullCapabilities }));
+  const views = [targetA, targetB].map((installationTarget, index) => ({ installationTarget, viewId: 'default', workspaceIds: ['workspace-' + index], capabilities: fullCapabilities, nodeRuntime: { channel_state: 'available' } }));
   running.setRemoteViews(views); running.initializeRunningLocation([local], [a, b]);
   const locations = running.remoteRunningLocations;
   expect(locations[0].equals(locations[1])).toBe(false);
@@ -252,6 +253,35 @@ test('原 Tracker 与 host snapshot 按实例分组，A/B 同ID版本和更新�
   expect(running.getHostExtensions(registry.getAllExtensionDescriptions(), locations[1])).toEqual([b]);
   expect(() => running.setRemoteViews(views)).toThrow('reload'); registry.dispose();
   receipt.checks.push('真实 Tracker 及 HostExtensions 唯一公开ID快照、实例更新只影响 A、集合变化要求reload');
+});
+
+test('原Tracker按manifest有序偏好分配目标Web/Node，无Node运行时仍分配browser且不混窗口affinity', () => {
+  const cases = [
+    { kinds: ['workspace', 'web'], node: true, expected: 3 },
+    { kinds: ['workspace', 'web'], node: false, expected: 2 },
+    { kinds: ['web', 'workspace'], node: true, expected: 2 },
+    { kinds: ['workspace'], node: false, expected: null },
+    { kinds: ['web'], node: false, expected: 2, main: undefined },
+    { kinds: ['workspace'], node: false, expected: null, browser: undefined },
+  ];
+  for (const value of cases) {
+    const item = extension(targetA, '1.0.0', { main: './node.js', browser: './browser.js', extensionKind: value.kinds,
+      ...('main' in value ? { main: value.main } : {}), ...('browser' in value ? { browser: value.browser } : {}) });
+    const registry = new m.ExtensionDescriptionRegistry(reader, [item], true), running = tracker(registry, extension => extension.extensionKind);
+    const view = { installationTarget: targetA, viewId: 'default', workspaceIds: value.node ? ['a1'] : [], capabilities: fullCapabilities,
+      ...(value.node ? { nodeRuntime: { channel_state: 'available' } } : {}), webHost: { fixtureAdmission: true } };
+    try {
+      running.setRemoteViews([view]); running.initializeRunningLocation([], [item]);
+      const location = running.getRunningLocation(item);
+      expect(location?.kind ?? null).toBe(value.expected);
+      if (value.expected === 2) {
+        expect(location.equals(running.targetWebRunningLocations[0])).toBe(true);
+        expect(location.equals(new m.LocalWebWorkerRunningLocation(0))).toBe(false);
+        expect(location.workspaceIds).toEqual(view.workspaceIds);
+      }
+    } finally { registry.dispose(); }
+  }
+  receipt.checks.push('原Tracker按manifest偏好和Node可用性单路分配，空根目标Web与窗口affinity位置严格区分');
 });
 
 test('原 enablement storage 保存目标与视图，A 禁用不改变 B 或原 Web profile 记录', async () => {
@@ -294,6 +324,8 @@ test('原 Workbench enablement 入口保留扫描无效、Node kind及同目标�
     await Promise.resolve();
     expect(service.getEnablementStates([a, b, local])).toEqual(Array(3).fill(m.EnablementState.EnabledGlobally));
     expect(service.getEnablementStates([{ ...a, isValid: false }])).toEqual([m.EnablementState.DisabledByInvalidExtension]);
+    expect(service.getEnablementStates([{ ...a, manifest: { ...a.manifest, main: undefined, browser: './web.js', extensionKind: ['web'] } }]))
+      .toEqual([m.EnablementState.EnabledGlobally]);
     expect(service.getEnablementStates([{ ...a, manifest: { ...a.manifest, main: undefined, browser: './web.js' } },
       { ...a, manifest: { ...a.manifest, extensionKind: ['ui'] } }])).toEqual(Array(2).fill(m.EnablementState.DisabledByExtensionKind));
     await service.setEnablement([a], m.EnablementState.DisabledWorkspace);
@@ -332,7 +364,7 @@ test('原文档状态计算器初始与增量只暴露所属视图，外部焦�
     environment: { app_root_uri: 'file:///host/app', global_storage_home_uri: 'file:///host/global', workspace_storage_home_uri: 'file:///host/workspace', profile_id: 'profile-target',
       remote_settings: { native_uri: 'file:///host/profile/settings.json', resource_uri: 'boxteam://gateway-a/gateway/gateway-a/resources/config/extension-host/backend-a/profiles/profile-target/settings' } },
     workspace: { folders: [{ workspace_id: 'a1', name: 'A1', resource_uri: 'root', native_uri: 'file:///work/a' }] } } };
-  const host = { runningLocation: new m.RemoteRunningLocation(targetA, 'default', ['a1']), binding, uriTransformer: new m.TargetUriTransformer(binding, () => []) };
+  const host = { runningLocation: new m.RemoteRunningLocation(targetA, 'default', ['a1']), binding, targetContext: { kind: 'node', connection: binding }, uriTransformer: new m.TargetUriTransformer(binding, () => []) };
   const computer = new m.MainThreadDocumentAndEditorStateComputer(delta => deltas.push(delta), uri => m.hostOwnsWorkspaceResource(host, uri), modelService,
     { listCodeEditors: () => editors, onCodeEditorAdd: m.Event.None, onCodeEditorRemove: m.Event.None }, editorService,
     { onDidPaneCompositeOpen: m.Event.None, onDidPaneCompositeClose: m.Event.None, getActivePaneComposite: () => undefined });
@@ -370,6 +402,8 @@ test('原 MainThreadDocuments 的 save/dirty/encoding 事件只发给已跟踪�
   receipt.checks.push('原 MainThreadDocuments 的 save/dirty/encoding 消费跟踪集合，不广播外部模型');
 });
 
+const scanLifetime = new m.DisposableStore();
+const scan = context => m.scanTargetExtensions(context, extension => extension.installationTarget.kind === 'backend' ? ['workspace'] : ['web'], scanLifetime);
 function context(owners) { return { getCompleteWorkspace: async () => ({ folders: [{ uri: m.URI.parse('boxteam-workspace:/') }, ...owners.map(owner => ({ uri: m.workspaceFileUri(owner, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId) }))] }) }; }
 const targetResolvePath = '/api/gateway/extension-targets/resolve';
 const hostResolvePath = '/api/gateway/extension-hosts/resolve';
@@ -380,7 +414,7 @@ function targetReply(payload, capabilities = fullCapabilities) {
 }
 function hostReply(payload) { return { ...payload, source: 'live', channel_state: 'available', runtime: { commit: pinnedUpstreamCommit } }; }
 function inventoryReply(payload) {
-  return { ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', extensions: [{ source: 'profile', extension_key: 'publisher.probe-1.0.0', is_valid: false,
+  return { ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', target_platform: 'linux-x64', extensions: [{ source: 'profile', extension_key: 'publisher.probe-1.0.0', is_valid: false,
     validations: [{ severity: 3, message: 'manifest invalid' }], description: JSON.parse(JSON.stringify(extension(targetB))) }] } };
 }
 const scannedRequests = () => requests.map(([path, options]) => ({ path, method: options.method, body: JSON.parse(options.body) }));
@@ -395,22 +429,22 @@ function scanResponse(path, options) {
 test('库存真实业务入口只发现明确根并核完整集合，包正文不能覆写target或invalid诊断', async () => {
   requests.length = 0;
   request = async (...args) => scanResponse(...args);
-  const snapshot = await m.scanTargetExtensions(context([ownerA('a1'), ownerA('a2')]));
+  const snapshot = await scan(context([ownerA('a1'), ownerA('a2')]));
   expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a1', 'a2'], capabilities: fullCapabilities }]);
   expect(snapshot.extensions[0].installationTarget).toEqual(targetA);
   expect(m.toExtension(snapshot.extensions[0])).toMatchObject({ isValid: false, validations: [[3, 'manifest invalid']], installationTarget: targetA });
-  expect(requests.map(([path]) => path)).toEqual([targetResolvePath, targetResolvePath, targetResolvePath, hostResolvePath, inventoryPath]);
+  expect(requests.map(([path]) => path)).toEqual([targetResolvePath, targetResolvePath, targetResolvePath, inventoryPath]);
   const complete = { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['a1', 'a2'] };
   expect(scannedRequests().slice(2)).toEqual([
-    ...[targetResolvePath, hostResolvePath].map(path => ({ path, method: 'POST', body: complete })),
+    { path: targetResolvePath, method: 'POST', body: complete },
     { path: inventoryPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId } },
   ]);
   receipt.scans.push({ name: '原库存及invalid诊断', requests: scannedRequests(), views: snapshot.views });
   const previous = request;
   request = async (...args) => args[0].endsWith('/inventory') ? { ...await previous(...args), backend_id: targetB.backendId } : previous(...args);
-  await expect(m.scanTargetExtensions(context([ownerA('a1')]))).rejects.toThrow('不匹配');
+  await expect(scan(context([ownerA('a1')]))).rejects.toThrow('不匹配');
   request = async () => { throw new Error('offline route'); };
-  await expect(m.scanTargetExtensions(context([ownerA('a1')]))).rejects.toThrow('offline route');
+  await expect(scan(context([ownerA('a1')]))).rejects.toThrow('offline route');
   receipt.checks.push('扫描真实入口取 envelope 目标、完整有序集合准入、保留invalid诊断、路由误指与离线不空回退');
 });
 
@@ -420,7 +454,7 @@ test('真实scanner仅安装目标不发现host或读取库存，原Tracker保�
     if (path !== targetResolvePath) throw new Error('仅安装权限不能进入宿主发现或库存入口');
     return targetReply(JSON.parse(options.body), installationOnly);
   };
-  const snapshot = await m.scanTargetExtensions(context([ownerA('a1')]));
+  const snapshot = await scan(context([ownerA('a1')]));
   expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a1'], capabilities: installationOnly }]);
   expect(snapshot.extensions).toEqual([]);
   expect(scannedRequests()).toEqual([{ path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a1'] } }]);
@@ -439,11 +473,14 @@ test('真实scanner混合两权限，完整组回执决定权限且保留根顺�
     const payload = JSON.parse(options.body);
     if (path === targetResolvePath) return targetReply(payload, payload.gateway_id === targetA.gatewayId
       ? payload.workspace_ids.length === 1 ? fullCapabilities : installationOnly : hostOnly);
-    return scanResponse(path, options);
+    const reply = scanResponse(path, options);
+    if (path === inventoryPath) { reply.inventory.extensions[0].is_valid = true; reply.inventory.extensions[0].validations = []; }
+    return reply;
   };
-  const snapshot = await m.scanTargetExtensions(context([ownerA('a2'), { gatewayId: targetB.gatewayId, workspaceId: 'b1' }, ownerA('a1')]));
+  const snapshot = await scan(context([ownerA('a2'), { gatewayId: targetB.gatewayId, workspaceId: 'b1' }, ownerA('a1')]));
   expect(snapshot.views).toEqual([{ installationTarget: targetA, viewId: 'default', workspaceIds: ['a2', 'a1'], capabilities: installationOnly },
-    { installationTarget: targetB, viewId: 'default', workspaceIds: ['b1'], capabilities: hostOnly }]);
+    { installationTarget: targetB, viewId: 'default', workspaceIds: ['b1'], capabilities: hostOnly, nodeRuntime: hostReply({ protocol_version: 1,
+      gateway_id: targetB.gatewayId, backend_id: targetB.backendId, workspace_ids: ['b1'] }) }]);
   expect(snapshot.extensions).toHaveLength(1); expect(snapshot.extensions[0].installationTarget).toEqual(targetB);
   const a = { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId, workspace_ids: ['a2', 'a1'] };
   const b = { protocol_version: 1, gateway_id: targetB.gatewayId, backend_id: targetB.backendId, workspace_ids: ['b1'] };
@@ -451,8 +488,9 @@ test('真实scanner混合两权限，完整组回执决定权限且保留根顺�
     { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a2'] } },
     { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetB.gatewayId, workspace_ids: ['b1'] } },
     { path: targetResolvePath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, workspace_ids: ['a1'] } },
-    { path: targetResolvePath, method: 'POST', body: a }, { path: hostResolvePath, method: 'POST', body: b },
+    { path: targetResolvePath, method: 'POST', body: a },
     { path: inventoryPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetB.gatewayId, backend_id: targetB.backendId } },
+    { path: hostResolvePath, method: 'POST', body: b },
   ]);
   const registry = new m.ExtensionDescriptionRegistry(reader, snapshot.extensions, true), running = tracker(registry);
   try {
@@ -481,7 +519,7 @@ for (const invalid of ['protocol', 'gateway', 'backend', 'order', 'source', 'cap
     if (invalid === 'denied') result.capabilities = { installation_manage: false, host_manage: false };
     return result;
   };
-  await expect(m.scanTargetExtensions(context([ownerA('a1'), ownerA('a2')]))).rejects.toThrow();
+  await expect(scan(context([ownerA('a1'), ownerA('a2')]))).rejects.toThrow();
   expect(requests.map(([path]) => path)).toEqual([targetResolvePath, targetResolvePath, targetResolvePath]);
   receipt.scans.push({ name: '拒绝完整组-' + invalid, requests: scannedRequests() });
 });
@@ -490,10 +528,10 @@ test('真实scanner前置目标授权拒绝保留原错误，不回退宿主发�
   requests.length = 0;
   const denied = new Error('extension targets forbidden: original-authorization-request');
   request = async () => { throw denied; };
-  await expect(m.scanTargetExtensions(context([ownerA('a1')]))).rejects.toBe(denied);
+  await expect(scan(context([ownerA('a1')]))).rejects.toBe(denied);
   expect(requests.map(([path]) => path)).toEqual([targetResolvePath]);
   requests.length = 0;
-  expect(await m.scanTargetExtensions(context([]))).toEqual({ views: [], extensions: [] }); expect(requests).toEqual([]);
+  expect(await scan(context([]))).toEqual({ views: [], extensions: [] }); expect(requests).toEqual([]);
   receipt.checks.push('目标授权失败保留原错误，不借宿主管理权回退；纯Web根不做目标请求');
 });
 
@@ -528,7 +566,7 @@ test('首次命令在宿主尚未绑定时从原 Registry 与 Tracker 选择目�
   const a = extension(targetA), b = extension(targetB, '2.0.0');
   const registry = new m.ExtensionDescriptionRegistry(reader, [a, b], true), running = tracker(registry);
   running.setRemoteViews([targetA, targetB].map((installationTarget, index) => ({ installationTarget,
-    viewId: 'default', workspaceIds: [index ? 'b1' : 'a1'], capabilities: fullCapabilities })));
+    viewId: 'default', workspaceIds: [index ? 'b1' : 'a1'], capabilities: fullCapabilities, nodeRuntime: { channel_state: 'available' } })));
   running.initializeRunningLocation([], [a, b]);
   let live = running.remoteRunningLocations.map(runningLocation => ({ runningLocation, extensions: null })), picks = 0;
   const hosts = [...live];

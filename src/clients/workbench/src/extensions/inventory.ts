@@ -1,10 +1,15 @@
 import { revive } from '../../upstream/src/vs/base/common/marshalling.js';
+import type { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
+import type { ExtensionKind } from '../../upstream/src/vs/platform/environment/common/environment.js';
 import { ExtensionIdentifier, IExtensionDescription, IBoundExtensionDescription, IExtensionWorkspaceView, bindExtensionDescription, installationTargetKey } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
 import type { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import type { ExtensionHostTargetDTO, ExtensionInstallationInventoryDTO, ExtensionTargetViewDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
+import { targetExecutionKind } from './targetContext.js';
+import { TargetWebHostConnection } from './webConnection.js';
+import { nativeInventoryDescriptions } from './nativeInventory.js';
 
 export interface TargetExtensionInventory {
   readonly views: readonly IExtensionWorkspaceView[];
@@ -12,11 +17,12 @@ export interface TargetExtensionInventory {
 }
 
 /** 只读取原窗口明确挂接的根；默认虚拟 Workbench 根继续只运行 Web 扩展。 */
-export async function scanTargetExtensions(context: IWorkspaceContextService): Promise<TargetExtensionInventory> {
+export async function scanTargetExtensions(context: IWorkspaceContextService,
+  readKinds: (extension: IExtensionDescription) => readonly ExtensionKind[], lifetime: DisposableStore): Promise<TargetExtensionInventory> {
   const workspace = await context.getCompleteWorkspace();
   const owners = workspace.folders.filter(folder => folder.uri.scheme === 'boxteam-file').map(folder => {
     const source = workspaceFileSource(folder.uri);
-    if (source.path !== source.root) throw new Error('Node 宿主只能挂接原工作区文件根');
+    if (source.path !== source.root) throw new Error('目标宿主只能挂接原工作区文件根');
     return source;
   });
   const groups = new Map<string, { target: ExtensionTargetViewDTO; workspaceIds: string[] }>();
@@ -28,7 +34,7 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
     assertInstallationTarget(target, payload);
     const key = installationTargetKey({ kind: 'backend', gatewayId: target.gateway_id, backendId: target.backend_id });
     const group = groups.get(key) ?? { target, workspaceIds: [] };
-    if (group.workspaceIds.includes(owner.workspaceId)) throw new Error('Node 宿主工作区集合重复');
+    if (group.workspaceIds.includes(owner.workspaceId)) throw new Error('目标宿主工作区集合重复');
     group.workspaceIds.push(owner.workspaceId);
     groups.set(key, group);
   }
@@ -42,38 +48,48 @@ export async function scanTargetExtensions(context: IWorkspaceContextService): P
       });
     assertInstallationTarget(resolvedTarget, request);
     const installationTarget = { kind: 'backend' as const, gatewayId: target.gateway_id, backendId: target.backend_id };
-    views.push({ installationTarget, viewId: 'default', workspaceIds, capabilities: resolvedTarget.capabilities });
+    const view: IExtensionWorkspaceView = { installationTarget, viewId: 'default', workspaceIds, capabilities: resolvedTarget.capabilities };
     // 安装目标不等同运行宿主；仅安装权限的窗口不得请求运行态或读取启动库存。
-    if (!resolvedTarget.capabilities.host_manage) continue;
-    const resolved = await gateway.request<ExtensionHostTargetDTO>('/api/gateway/extension-hosts/resolve', {
-      method: 'POST', body: JSON.stringify(request),
-    });
-    assertTarget(resolved, request);
+    if (!resolvedTarget.capabilities.host_manage) { views.push(view); continue; }
     const inventory = await gateway.request<ExtensionInstallationInventoryDTO>('/api/gateway/extension-installations/inventory', {
       method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: request.gateway_id, backend_id: request.backend_id }),
     });
-    if (inventory.protocol_version !== 1 || inventory.gateway_id !== request.gateway_id || inventory.backend_id !== request.backend_id
-      || inventory.profile_scope !== 'default'
-      || !inventory.inventory?.profile_id || !Array.isArray(inventory.inventory.extensions)) {
-      throw new Error('扩展库存响应的目标、默认 profile 或有序工作区视图不匹配');
+    const descriptions = nativeInventoryDescriptions(inventory, installationTarget, JSON.stringify(['default', workspaceIds]));
+    let nodeRuntime: ExtensionHostTargetDTO | undefined;
+    if (descriptions.some(extension => extension.isValid && extension.main && readKinds(extension).includes('workspace'))) {
+      nodeRuntime = await gateway.request<ExtensionHostTargetDTO>('/api/gateway/extension-hosts/resolve', {
+        method: 'POST', body: JSON.stringify(request),
+      });
+      assertTarget(nodeRuntime, request);
     }
-    for (const entry of inventory.inventory.extensions) {
-      const value = revive(entry.description) as IExtensionDescription | undefined;
-      const identifier = value?.identifier as { value?: unknown } | undefined;
-      if (entry.source !== 'profile' || !value || typeof value.publisher !== 'string' || typeof value.name !== 'string'
-        || typeof value.version !== 'string' || typeof identifier?.value !== 'string'
-        || !ExtensionIdentifier.equals(identifier.value, value.publisher + '.' + value.name)
-        || !URI.isUri(value.extensionLocation) || value.extensionLocation.scheme !== 'file'
-        || typeof entry.is_valid !== 'boolean' || !Array.isArray(entry.validations)) {
-        throw new Error('扩展库存包含非法原生描述或扫描诊断');
+    const browser = descriptions.filter(extension => extension.isValid
+      && targetExecutionKind(extension, readKinds(extension), nodeRuntime?.channel_state === 'available') === 'web');
+    let webHost: TargetWebHostConnection | undefined;
+    if (browser.length) {
+      webHost = lifetime.add(new TargetWebHostConnection({ ...request, view_id: view.viewId,
+        profile_id: inventory.inventory!.profile_id, extension_keys: browser.map(extension => extension.extensionKey!) }));
+      await webHost.connect();
+      const frozen = webHost.connection.inventory!;
+      for (const extension of browser) {
+        const entry = frozen.extensions.find(entry => entry.extension_key === extension.extensionKey);
+        if (!entry?.is_valid || entry.source !== 'profile') throw new Error('Web 宿主冻结发布缺少有效的 profile 描述');
+        const value = revive(entry.description) as IExtensionDescription | undefined;
+        if (!value || !ExtensionIdentifier.equals(value.identifier?.value, extension.identifier) || value.version !== extension.version
+          || value.publisher !== extension.publisher || value.name !== extension.name
+          || !URI.isUri(value.extensionLocation) || value.extensionLocation.scheme !== 'file') {
+          throw new Error('Web 宿主冻结发布与库存的精确扩展实例不匹配');
+        }
+        const index = descriptions.indexOf(extension);
+        descriptions[index] = bindExtensionDescription({ ...value, identifier: extension.identifier, extensionKey: entry.extension_key,
+          installationProfileId: extension.installationProfileId, gatewayConnectionId: extension.gatewayConnectionId,
+          isValid: true, enablementView: extension.enablementView,
+          validations: entry.validations.map(validation => [validation.severity, validation.message]),
+          extensionLocation: webHost.packageUri(entry.extension_key, extension.identifier.value),
+        }, installationTarget);
       }
-      extensions.push(bindExtensionDescription({ ...value,
-        identifier: new ExtensionIdentifier(identifier.value),
-        isValid: entry.is_valid,
-        enablementView: JSON.stringify(['default', workspaceIds]),
-        validations: entry.validations.map(validation => [validation.severity, validation.message]),
-      }, installationTarget));
     }
+    views.push({ ...view, nodeRuntime, webHost });
+    extensions.push(...descriptions);
   }
   return { views, extensions };
 }
@@ -95,7 +111,6 @@ function assertTarget(target: ExtensionHostTargetDTO, expected: { gateway_id: st
     || expected.backend_id && target.backend_id !== expected.backend_id || JSON.stringify(target.workspace_ids) !== JSON.stringify(expected.workspace_ids)) {
     throw new Error('Node 宿主发现响应没有匹配明确稳定目标');
   }
-  if (target.channel_state !== 'available' || !target.runtime) {
-    throw new Error('Node 宿主通道不可用：' + (target.reason ?? target.channel_state));
-  }
+  if (!['available', 'unavailable', 'draining'].includes(target.channel_state)
+    || target.channel_state === 'available' && !target.runtime) throw new Error('Node 宿主发现返回不一致的运行时状态');
 }

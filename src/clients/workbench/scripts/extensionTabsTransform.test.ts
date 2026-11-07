@@ -178,7 +178,7 @@ function makeHost(gatewayId: string, workspaceIds: string[]) {
       resource_uri: `boxteam://workspace/${id}/resources/files/root`, native_uri: `file:///target/${id}` })) },
   } };
   const uriTransformer = new TargetUriTransformer(binding as never, () => []);
-  return { host: { binding, uriTransformer }, roots: uriTransformer.folders.map(folder => folder.uri), uriTransformer };
+  return { host: { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer }, roots: uriTransformer.folders.map(folder => folder.uri), uriTransformer };
 }
 const hostA = makeHost('gateway-tabs', ['workspace-a1', 'workspace-a2']);
 const hostB = makeHost('gateway-tabs', ['workspace-b']);

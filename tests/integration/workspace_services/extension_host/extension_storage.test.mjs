@@ -70,13 +70,14 @@ async function openClient(context, options = {}) {
       const host = { runningLocation: { kind: web ? m.ExtensionHostKind.LocalWebWorker : m.ExtensionHostKind.Remote },
         extensions: new m.ExtensionHostExtensions(1, [description], apiNone ? [] : [description.identifier]),
         ...(web ? {} : { binding: { gateway_id: 'gateway_a', backend_id: backend, client_id: clientId, generation,
-          initialization: { workspace: { id: workspaceId } } } }) };
+          initialization: { environment: { profile_id: 'native-default' }, workspace: { id: workspaceId } } } }) };
+      if (!web) host.targetContext = { kind: 'node', connection: host.binding };
       let main;
       const ext = new m.ExtHostStorage({ getProxy: () => ({
         $initializeExtensionStorage: (...args) => main.$initializeExtensionStorage(...args),
         $setValue: (...args) => main.$setValue(...args),
         $registerExtensionStorageKeysToSync: (...args) => main.$registerExtensionStorageKeysToSync(...args),
-      }) }, log);
+      }) }, log, !web);
       main = new m.MainThreadStorage({ getProxy: () => ext, extensionHost: host }, owner, storage, {}, log);
       const global = new m.ExtensionGlobalMemento(description, ext), workspace = new m.ExtensionMemento('probe.state', false, ext);
       await Promise.all([global.whenReady, workspace.whenReady]);
@@ -139,7 +140,7 @@ test('原存储owner及Memento按目标/稳定视图区分正文和通知，保�
       await p.write('a', 'global', 'A-global'); await p.write('a', 'workspace', 'A-view');
       await p.write('b', 'global', 'B-global'); await p.write('b', 'workspace', 'B-view'); await p.write('web', 'global', 'Web');
       const first = Object.fromEntries([...p.clients.keys()].map(name => [name, p.read(name)]));
-      const c = p.clients.get('a'), scope = { installationTarget: { kind: 'backend', gatewayId: c.host.binding.gateway_id, backendId: c.host.binding.backend_id }, workspaceId: 'stable-view-a' };
+      const c = p.clients.get('a'), scope = { installationTarget: { kind: 'backend', gatewayId: c.host.binding.gateway_id, backendId: c.host.binding.backend_id }, profileId: 'native-default', workspaceId: 'stable-view-a' };
       const raw = p.owner.getExtensionState('probe.state', false, scope);
       const sync = { id: 'probe.state', version: '1.0.0' };
       let syncError;
@@ -158,7 +159,7 @@ test('原存储owner及Memento按目标/稳定视图区分正文和通知，保�
       'a-other-view': { global: 'A-global' }, b: { global: 'B-global', workspace: 'B-view' }, web: { global: 'Web' },
     });
     expect(result.raw).toEqual({ value: 'A-view' });
-    expect(result.syncError).toBe('目标 Node 扩展暂不支持 setKeysForSync 跨设备状态同步'); expect(result.webKeys).toBeUndefined();
+    expect(result.syncError).toBe('目标扩展暂不支持 setKeysForSync 跨设备状态同步'); expect(result.webKeys).toBeUndefined();
     expect(result.cleanup).toEqual({ currentWeb: ['current-web'], obsoleteWeb: undefined });
     expect(result.peer).toEqual({ global: 'A-global', workspace: 'peer-still-open' });
     expect(result.webRaw).toEqual({ value: 'Web' });
@@ -203,7 +204,7 @@ test('关闭代际、缺失认证及非所属扩展不能读写目标状态，�
       async function rejected(operation) { try { await operation(); } catch (error) { failures.push(error.message); return; } throw new Error('应拒绝的状态操作意外成功'); }
       await rejected(() => c.main.$initializeExtensionStorage(true, 'another.extension'));
       await rejected(() => c.main.$setValue(false, 'another.extension', { value: 'wrong' }));
-      delete c.host.binding;
+      delete c.host.binding; delete c.host.targetContext;
       await rejected(() => c.main.$setValue(true, 'probe.state', { value: 'unbound' }));
       p.close('a');
       await rejected(() => c.main.$setValue(true, 'probe.state', { value: 'closed' }));
@@ -236,9 +237,9 @@ test('目标秘密在Node公开入口及MainThread拒绝，不读取或广播Web
         const ext = new m.ExtHostSecretState({ getProxy: () => ({
           $getPassword: (...args) => main.$getPassword(...args), $setPassword: (...args) => main.$setPassword(...args),
           $deletePassword: (...args) => main.$deletePassword(...args), $getKeys: (...args) => main.$getKeys(...args),
-        }) });
+        }) }, kind === m.ExtensionHostKind.Remote);
         ext.onDidChangePassword(event => notices[name].push(event));
-        main = new m.MainThreadSecretState({ extensionHost: { runningLocation: { kind } }, getProxy: () => ext }, secrets, new m.NullLogService(), {});
+        main = new m.MainThreadSecretState({ extensionHost: { runningLocation: { kind }, targetContext: kind === m.ExtensionHostKind.Remote ? { kind: 'node' } : undefined }, getProxy: () => ext }, secrets, new m.NullLogService(), {});
         return { ext, main };
       };
       const web = make('web', m.ExtensionHostKind.LocalWebWorker), target = make('target', m.ExtensionHostKind.Remote);
@@ -257,7 +258,7 @@ test('目标秘密在Node公开入口及MainThread拒绝，不读取或广播Web
         return { webValue, webKeys, before, after, afterValue, nodeErrors, mainErrors, rpcCalls, notices, remaining: await web.ext.keys('probe.state') };
       } finally { target.main.dispose(); web.main.dispose(); changed.dispose(); }
     });
-    const unsupported = '目标 Node 扩展暂不支持 SecretStorage；不能访问工作台的秘密存储';
+    const unsupported = '目标扩展暂不支持 SecretStorage；不能访问工作台的秘密存储';
     expect(result.nodeErrors).toEqual(Array(4).fill(unsupported));
     expect(result.mainErrors).toEqual(Array(4).fill(unsupported));
     expect(result.rpcCalls).toBe(0); expect(result.after).toEqual(result.before);

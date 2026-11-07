@@ -8,11 +8,12 @@ import { requestGatewayResponse } from '../../../web/src/api/http.js';
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from '../../../web/src/sse/sseClient.js';
 import { SSE_IDLE_TIMEOUT_MS } from '../../../web/src/sse/sseIdleTimeout.js';
 import { validateExtensionConfigurationEventDTO } from '../../../../shared/sseRuntimeValidators.js';
-import type { ExtensionConfigurationEventDTO, ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO, ExtensionConfigurationViewRequest, ExtensionHostConnectionDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import type { ExtensionConfigurationEventDTO, ExtensionConfigurationReadDTO, ExtensionConfigurationStatDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway, GatewayRequestError } from '../agentApi.js';
+import { targetConfigurationRequest, targetSettings, targetWorkspace, type TargetExtensionContext } from './targetContext.js';
 
 interface Route {
-  binding: ExtensionHostConnectionDTO;
+  context: TargetExtensionContext;
   resources: readonly URI[];
   controller: AbortController;
   stream?: AbortController;
@@ -29,13 +30,11 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
   private readonly routes = new Set<Route>();
   private readonly watches = new Map<string, { resource: URI; count: number }>();
 
-  register(binding: ExtensionHostConnectionDTO): IDisposable {
-    const initialization = binding.initialization;
-    if (!initialization?.environment?.remote_settings || !initialization.workspace) throw new Error('目标配置缺少已认证初始化资源');
-    const resources = [initialization.environment.remote_settings, initialization.workspace.configuration].filter(value => !!value)
+  register(context: TargetExtensionContext): IDisposable {
+    const resources = [targetSettings(context), targetWorkspace(context).configuration].filter(value => !!value)
       .map(value => URI.parse(value.resource_uri));
     if (resources.some(uri => uri.scheme !== 'boxteam' || uri.query || uri.fragment)) throw new Error('目标配置不是规范资源 URI');
-    const route: Route = { binding, resources, controller: new AbortController() };
+    const route: Route = { context, resources, controller: new AbortController() };
     this.routes.add(route);
     this.updateWatches();
     return toDisposable(() => { this.routes.delete(route); route.controller.abort(); route.stream?.abort(); this.updateWatches(); });
@@ -47,17 +46,12 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
     if (!route) throw createFileSystemProviderError('配置资源未绑定可用的目标宿主：' + resource.toString(), FileSystemProviderErrorCode.Unavailable);
     return route;
   }
-  private requestBody(route: Route): ExtensionConfigurationViewRequest {
-    const { gateway_id, backend_id, view_id, generation, workspace_ids } = route.binding;
-    return { protocol_version: 1, gateway_id, backend_id, view_id, generation,
-      workspace_ids: [...workspace_ids] };
-  }
   private async request<T>(resource: URI, operation: string, extra: object = {}, directory = false): Promise<T> {
     const route = this.route(resource, directory);
     try {
       const result = await gateway.request<T>('/api/gateway/extension-configurations/' + operation, {
         method: 'POST', signal: route.controller.signal,
-        body: JSON.stringify({ ...this.requestBody(route), resource_uri: resource.toString(), ...extra }),
+        body: JSON.stringify({ ...targetConfigurationRequest(route.context), resource_uri: resource.toString(), ...extra }),
       });
       route.controller.signal.throwIfAborted();
       return result;
@@ -110,7 +104,7 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
   private async watchRoute(route: Route, watchSignal: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([route.controller.signal, watchSignal]);
     const response = await requestGatewayResponse(0, '/api/gateway/extension-configurations/events', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.requestBody(route)), signal,
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(targetConfigurationRequest(route.context)), signal,
     });
     const accept = (event: ExtensionConfigurationEventDTO) => {
       signal.throwIfAborted();
@@ -147,12 +141,12 @@ class TargetConfigurationFiles extends Disposable implements IFileSystemProvider
 }
 
 const providers = new WeakMap<IFileService, TargetConfigurationFiles>();
-export function registerTargetConfigurationFiles(files: IFileService, binding: ExtensionHostConnectionDTO): IDisposable {
+export function registerTargetConfigurationFiles(files: IFileService, context: TargetExtensionContext): IDisposable {
   let provider = providers.get(files);
   if (!provider) {
     provider = new TargetConfigurationFiles();
     files.registerProvider('boxteam', provider);
     providers.set(files, provider);
   }
-  return provider.register(binding);
+  return provider.register(context);
 }

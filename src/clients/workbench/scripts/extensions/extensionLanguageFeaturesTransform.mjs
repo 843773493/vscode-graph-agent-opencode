@@ -143,7 +143,7 @@ import type { score } from '../../../editor/common/languageSelector.js';\n` + so
     data?.forEach(code => reviveWorkspaceEditDto(code.edit, this._uriIdentService));`);
   contents = replaceOnce(contents, 'const provider: languages.CodeActionProvider = {', `const { lifetime, assertActive, invoke } = this._createProviderLifetime();
     const provider: languages.CodeActionProvider = {
-      lifecycleToken: this.extHostContext.extensionHost.binding ? lifetime.token : undefined,`);
+      lifecycleToken: this.extHostContext.extensionHost.targetContext ? lifetime.token : undefined,`);
   contents = replaceOnce(contents, `const listDto = await this._proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, context, token);
 \t\t\t\tif (!listDto) {
 \t\t\t\t\treturn undefined;
@@ -191,7 +191,7 @@ import type { score } from '../../../editor/common/languageSelector.js';\n` + so
         if (data?.edits) assertHostWorkspaceEdit(this.extHostContext.extensionHost, data);
         const result = reviveWorkspaceEditDto(data, this._uriIdentService);
         // 不可枚举的本地字段不会随公开命令结果进入 RPC；预览和 inline 保留原结果。
-        if (result && this.extHostContext.extensionHost.binding) Object.defineProperty(result, 'lifecycleToken', { value: lifetime.token });
+        if (result && this.extHostContext.extensionHost.targetContext) Object.defineProperty(result, 'lifecycleToken', { value: lifetime.token });
         return result;
       }),
       resolveRenameLocation: supportResolveLocation

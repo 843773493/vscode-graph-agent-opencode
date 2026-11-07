@@ -42,15 +42,20 @@ export async function captureCommandHost(service: IExtensionService, id: string,
   }
   if (activeResource?.scheme === 'boxteam-file') {
     const owner = workspaceFileSource(activeResource);
-    const matching = candidates.filter(host => host.runningLocation.kind === ExtensionHostKind.Remote
-      && host.runningLocation.installationTarget.gatewayId === owner.gatewayId && host.runningLocation.workspaceIds.includes(owner.workspaceId));
+    const matching = candidates.filter(host => {
+      const location = host.runningLocation;
+      if (location.kind !== ExtensionHostKind.Remote && location.kind !== ExtensionHostKind.LocalWebWorker) return false;
+      return location.installationTarget?.gatewayId === owner.gatewayId && !!location.workspaceIds?.includes(owner.workspaceId);
+    });
     if (matching.length) return chooseUnique(matching, id);
   }
   if (candidates.length < 2) return candidates[0];
-  const picked = await picker().pick(candidates.map(host => ({ host,
-    label: host.runningLocation.kind === ExtensionHostKind.Remote ? host.runningLocation.installationTarget.gatewayId + ' / ' + host.runningLocation.installationTarget.backendId : 'Web',
-    description: host.runningLocation.kind === ExtensionHostKind.Remote ? host.runningLocation.workspaceIds.join(', ') : undefined,
-  })), { placeHolder: '为命令 ' + id + ' 选择目标；本次调用将固定该宿主' });
+  const picked = await picker().pick(candidates.map(host => {
+    const location = host.runningLocation;
+    const target = location.kind === ExtensionHostKind.Remote || location.kind === ExtensionHostKind.LocalWebWorker ? location.installationTarget : undefined;
+    return { host, label: target ? target.gatewayId + ' / ' + target.backendId : 'Web',
+      description: target && location.kind !== ExtensionHostKind.LocalProcess ? location.workspaceIds!.join(', ') : undefined };
+  }), { placeHolder: '为命令 ' + id + ' 选择目标；本次调用将固定该宿主' });
   if (!picked) throw new Error('命令目标选择已取消');
   if (!service.getExtensionHosts().includes(picked.host)) throw new Error('选定的扩展宿主代际已经关闭');
   return picked.host;

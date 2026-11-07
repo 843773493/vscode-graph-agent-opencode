@@ -8,7 +8,9 @@ export const extensionInstanceSourcePaths = [
 /** 安装实例沿原描述 owner 贯穿；公开扩展 ID 和宿主内协议保持原值。 */
 export function transformExtensionInstances(root, path, source, replaceOnce) {
   if (path === join(root, 'upstream', extensionInstanceSourcePaths[0])) {
-    let contents = replaceOnce(source, 'export interface IExtension {', `
+    let contents = `import type { ITargetWebHostConnection } from ${JSON.stringify(join(root, 'src/extensions/targetContext.js'))};
+import type { ExtensionHostTargetDTO } from ${JSON.stringify(join(root, '../web/src/types/protocol_generated/boxteam/gateway/v2/public.js'))};\n` + source;
+    contents = replaceOnce(contents, 'export interface IExtension {', `
 export type ExtensionInstallationTarget =
   | { readonly kind: 'web'; readonly profileId: string }
   | { readonly kind: 'backend'; readonly gatewayId: string; readonly backendId: string };
@@ -23,6 +25,9 @@ export interface IExtensionWorkspaceView {
   readonly viewId: string;
   readonly workspaceIds: readonly string[];
   readonly capabilities: { readonly installation_manage: boolean; readonly host_manage: boolean };
+  readonly gatewayConnectionId?: string;
+  readonly nodeRuntime?: ExtensionHostTargetDTO;
+  readonly webHost?: ITargetWebHostConnection;
 }
 
 export type IBoundExtensionDescription = IExtensionDescription & IExtensionInstanceIdentifier;
@@ -56,10 +61,17 @@ export function requireExtensionTarget(extension: IExtensionDescription): IBound
 
 export interface IExtension {
   readonly installationTarget?: ExtensionInstallationTarget;
+  readonly extensionKey?: string;
+  readonly installationProfileId?: string;
+  readonly gatewayConnectionId?: string;
+  readonly nativeLocation?: URI;
   readonly enablementView?: string;`);
     return replaceOnce(contents, 'export interface IRelaxedExtensionDescription extends IRelaxedExtensionManifest {',
       `export interface IRelaxedExtensionDescription extends IRelaxedExtensionManifest {
   installationTarget?: ExtensionInstallationTarget;
+  extensionKey?: string;
+  installationProfileId?: string;
+  gatewayConnectionId?: string;
   enablementView?: string;
   isValid?: boolean;
   validations?: readonly [number, string][];`);

@@ -54,7 +54,10 @@ export function areSameEnablementIdentifiers(a: IExtensionIdentifier, b: IExtens
     // 已认证 Backend view 在 Node 侧由真实 file 根初始化，窗口投影 scheme 不使它成为虚拟文件系统。
     if (extension.installationTarget?.kind === 'backend') return false;`);
   contents = replaceOnce(contents, 'private _isDisabledByExtensionKind(extension: IExtension): boolean {', `private _isDisabledByExtensionKind(extension: IExtension): boolean {
-    if (extension.installationTarget?.kind === 'backend') return !extension.manifest.main || !this.extensionManifestPropertiesService.getExtensionKind(extension.manifest).includes('workspace');`);
+    if (extension.installationTarget?.kind === 'backend') {
+      const kinds = this.extensionManifestPropertiesService.getExtensionKind(extension.manifest);
+      return !(extension.manifest.main && kinds.includes('workspace') || extension.manifest.browser && kinds.includes('web'));
+    }`);
   contents = replaceOnce(contents, '(this.extensionManagementServerService.getExtensionManagementServer(e) === this.extensionManagementServerService.getExtensionManagementServer(extension) || ((e.manifest.main || e.manifest.browser) && e.manifest.api === \'none\'))', `(this._sameInstallation(e, extension) || (e.installationTarget?.kind !== 'backend' && ((e.manifest.main || e.manifest.browser) && e.manifest.api === 'none')))`);
   contents = replaceOnce(contents, '!result.includes(dependent) && dependent.manifest.extensionDependencies?', '!result.includes(dependent) && this._sameInstallation(dependent, extension) && dependent.manifest.extensionDependencies?');
   contents = contents.replaceAll('getExtensionDependencies(this.extensionsManager.extensions, extension)', 'getExtensionDependencies(this.extensionsManager.extensions.filter(candidate => this._sameInstallation(candidate, extension)), extension)');

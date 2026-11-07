@@ -15,32 +15,29 @@ import { ConfigurationCache } from '../../upstream/src/vs/workbench/services/con
 import { IBrowserWorkbenchEnvironmentService } from '../../upstream/src/vs/workbench/services/environment/browser/environmentService.js';
 import { IRemoteAgentService } from '../../upstream/src/vs/workbench/services/remote/common/remoteAgentService.js';
 import { IUserDataProfileService } from '../../upstream/src/vs/workbench/services/userDataProfile/common/userDataProfile.js';
-import type { ExtensionHostConnectionDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { registerTargetConfigurationFiles } from './configurationFiles.js';
-import { TargetUriTransformer } from './targetUris.js';
+import { TargetWorkspaceResources } from './targetUris.js';
+import { targetProfileId, targetSettings, targetWorkspace, type TargetExtensionContext } from './targetContext.js';
 
 /** 原 WorkspaceService 同时持有配置与 context；所有 MainThread customer 从同一 child 取得它。 */
-export async function targetConfigurationServices(parent: IInstantiationService, binding: ExtensionHostConnectionDTO,
-  transformer: TargetUriTransformer, lifetime: DisposableStore): Promise<IInstantiationService> {
-  const initialization = binding.initialization;
-  if (!initialization?.environment?.remote_settings || !initialization.workspace || !transformer.folders.length) {
-    throw new Error('目标宿主缺少完整配置初始化环境');
-  }
-  const workspace = initialization.workspace;
+export async function targetConfigurationServices(parent: IInstantiationService, context: TargetExtensionContext,
+  lifetime: DisposableStore): Promise<IInstantiationService> {
+  const workspace = targetWorkspace(context), settings = targetSettings(context), binding = context.connection;
+  const resources = new TargetWorkspaceResources(context);
   const owner = parent.invokeFunction(accessor => {
     const files = accessor.get(IFileService), environment = accessor.get(IBrowserWorkbenchEnvironmentService);
-    lifetime.add(registerTargetConfigurationFiles(files, binding));
+    lifetime.add(registerTargetConfigurationFiles(files, context));
     const cache = new ConfigurationCache(['boxteam', 'boxteam-file', 'vscode-userdata'], environment, files);
-    return lifetime.add(new WorkspaceService({ remoteAuthority: JSON.stringify([binding.gateway_id, binding.backend_id, initialization.environment!.profile_id]),
-      configurationCache: cache, remoteSettingsResource: URI.parse(initialization.environment!.remote_settings!.resource_uri),
-      resolveWorkspaceFolders: (folders, configuration) => transformer.workspaceFolders(folders, configuration),
+    return lifetime.add(new WorkspaceService({ remoteAuthority: JSON.stringify([binding.gateway_id, binding.backend_id, targetProfileId(context)]),
+      configurationCache: cache, remoteSettingsResource: URI.parse(settings.resource_uri),
+      resolveWorkspaceFolders: (folders, configuration) => resources.workspaceFolders(folders, configuration),
     }, environment, accessor.get(IUserDataProfileService), accessor.get(IUserDataProfilesService), files,
     accessor.get(IRemoteAgentService), accessor.get(IUriIdentityService), accessor.get(ILogService), accessor.get(IPolicyService)));
   });
   const child = parent.createChild(new ServiceCollection([IConfigurationService, owner], [IWorkspaceContextService, owner]), lifetime);
   owner.acquireInstantiationService(child);
   await owner.initialize(workspace.configuration ? { id: workspace.id, configPath: URI.parse(workspace.configuration.resource_uri) }
-    : { id: workspace.id, uri: transformer.folders[0].uri });
+    : resources.folders.length ? { id: workspace.id, uri: resources.folders[0].uri } : { id: workspace.id });
   const trust = child.invokeFunction(accessor => accessor.get(IWorkspaceTrustManagementService));
   owner.updateWorkspaceTrust(trust.isWorkspaceTrusted());
   lifetime.add(trust.onDidChangeTrust(trusted => owner.updateWorkspaceTrust(trusted)));

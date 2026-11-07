@@ -109,7 +109,7 @@ async function inBrowser(name, body, contextOptions = {}, argument) {
               remote_settings: { native_uri: 'file:///hosts/profile/settings.json', resource_uri: `boxteam://gateway-${label}/profile/default/settings` } },
             workspace: { id: `view-${label}`, folders: roots.map((native_uri, index) => ({ name: `root-${index}`, workspace_id: `${label.toLowerCase()}-${index}`,
               resource_uri: `boxteam://workspace/${label.toLowerCase()}-${index}/resources/files/root`, native_uri })) } } };
-        return { binding, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
+        return { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
       }
       const document = (host, path = 'src/main.ts', index = 0, language = 'typescript', synchronized = true) =>
         model(m.URI.joinPath(host.uriTransformer.folders[index].uri, path), language, synchronized);

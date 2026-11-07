@@ -44,7 +44,7 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 
 原 OutlineModelService 的旧版本最后消费者取消只释放自己的缓存条目，不能按模型 ID 删除后来建立的新版本；沿原 LRU／模型版本与引用生命周期，不新建分析缓存。
 
-原 WebExtensionsScannerService 区分可再生 system／custom 缓存与受保护的 profile 安装记录。前者保留原跳过坏项和扫描回退；后者损坏或拒绝读取时向上传递原错误，禁止以空列表覆盖原件。初次缺失仍走原安装链，不增加安装账本或缓存服务。
+浏览器 WebExtensionsScannerService 仅保留可再生 system／custom 缓存及其原扫描回退，用户 profile 安装读写统一归目标原生管理服务；目标库存损坏或读取失败向上传递原错误，不以空列表覆盖原件，不恢复浏览器权威安装链。
 
 `nodeHost.mjs`构建原宿主和目标管理两个独立进程入口，共用固定上游与冻结依赖闭包。管理入口只装配原生安装／profile／scanner服务，不启动整套Remote Agent或扩展代码；当前只发行空的内置扩展目录，不承诺Node内置扩展可用。`typecheckNode.mjs`从明确组件manifest解析真实运行依赖，与浏览器类型检查共用`typecheckProjection.mjs`投影实际转换源码；Node配置同时检查实际Extension Host与管理进程两个入口、原vscode／monaco／debug声明；Node类型版本与固定上游锁一致，不能用管理图代替整个宿主类型闭包或检查未转换上游。类型通过仍不代替真实API／目标产品验收。原安装器尚未创建任务时直接保留前置错误；原scanner的后台缓存校验消费dispose取消，其他错误仍走原unexpected-error处理，不加全局rejection吞噬。
 

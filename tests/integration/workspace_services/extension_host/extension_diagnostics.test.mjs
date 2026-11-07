@@ -37,7 +37,7 @@ function target(label, workspaceIds = [label.toLowerCase()]) {
       workspace: { id: 'view-' + label, folders: workspaceIds.map(workspace_id => ({ workspace_id, name: workspace_id,
         resource_uri: 'boxteam://workspace/' + workspace_id + '/resources/files/root', native_uri: 'file:///targets/' + label + '/' + workspace_id })) } } };
   const uriTransformer = new m.TargetUriTransformer(binding, () => []);
-  return { binding, uriTransformer, runningLocation: { kind: 3 },
+  return { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer, runningLocation: { kind: 3 },
     resource: m.URI.joinPath(uriTransformer.folders[0].uri, 'main.ts') };
 }
 const marker = (message, extra = {}) => ({ message, severity: 8, startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2, ...extra });

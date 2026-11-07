@@ -2,30 +2,47 @@ import { join } from 'node:path';
 import ts from 'typescript';
 
 export const extensionBrowserSourcePaths = ['src/vs/workbench/services/extensions/browser/extensionService.ts',
-  'src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts'];
+  'src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts',
+  'src/vs/workbench/services/extensions/browser/webWorkerExtensionHost.ts',
+  'src/vs/workbench/services/extensions/common/extensionHostProtocol.ts'];
 
 export function transformExtensionBrowser(root, path, source, replaceOnce) {
+  if (path === join(root, 'upstream', extensionBrowserSourcePaths[2])) {
+    let contents = replaceOnce(source, 'private readonly _onDidExit', 'protected readonly _onDidExit');
+    return replaceOnce(contents, 'private async _createExtHostInitData()', 'protected async _createExtHostInitData()');
+  }
+  if (path === join(root, 'upstream', extensionBrowserSourcePaths[3])) {
+    return replaceOnce(source, 'export interface IExtensionHostInitData {', 'export interface IExtensionHostInitData {\n  readonly isTargetExtensionHost?: boolean;');
+  }
   if (path === join(root, 'upstream', extensionBrowserSourcePaths[1])) return transformInstallationActions(root, path, source, replaceOnce);
   if (path !== join(root, 'upstream', extensionBrowserSourcePaths[0])) return source;
   let contents = `import { scanTargetExtensions } from ${JSON.stringify(join(root, 'src/extensions/inventory.js'))};
-import { TargetExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/targetHost.js'))};\n` + source;
+import { TargetExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/targetHost.js'))};
+import { TargetWebExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/webHost.js'))};
+import { DisposableStore } from '../../../../base/common/lifecycle.js';\n` + source;
+  contents = replaceOnce(contents, 'export class ExtensionService extends AbstractExtensionService implements IExtensionService {',
+    'export class ExtensionService extends AbstractExtensionService implements IExtensionService {\n  private readonly _targetExtensionLifetime = this._register(new DisposableStore());');
   contents = replaceOnce(contents, 'ExtensionIdentifier, IExtensionDescription', 'ExtensionIdentifier, ExtensionInstallationTarget, IExtension, bindExtensionDescription, IExtensionDescription');
   contents = replaceOnce(contents, "import { IRemoteExtensionHostDataProvider, IRemoteExtensionHostInitData, RemoteExtensionHost } from '../common/remoteExtensionHost.js';\n", '');
   contents = replaceOnce(contents, 'private async _scanWebExtensions(): Promise<IExtensionDescription[]> {', `private async _scanWebExtensions(): Promise<IExtensionDescription[]> {
     const target = { kind: 'web' as const, profileId: this._userDataProfileService.currentProfile.id };`);
   contents = replaceOnce(contents, '\t\t\t\t} catch (error) {\n\t\t\t\t\tthis._logService.error(error);\n\t\t\t\t}', '\t\t\t\t} catch (error) {\n\t\t\t\t\tthis._logService.error(error);\n          throw error;\n\t\t\t\t}');
+  contents = replaceOnce(contents, 'scanUserExtensions(this._userDataProfileService.currentProfile.extensionsResource, { skipInvalidExtensions: true })', 'scanCustomBuiltinExtensions({ skipInvalidExtensions: true })');
   contents = replaceOnce(contents, 'return dedupExtensions(system, user, [], development, this._logService);', 'return dedupExtensions(system, user, [], development, this._logService).map(extension => bindExtensionDescription(extension, target));');
   const resolveStart = contents.indexOf('\tprivate async _resolveExtensionsDefault(');
   const resolveEnd = contents.indexOf('\n\tprotected _resolveExtensions()', resolveStart);
   contents = replaceOnce(contents, contents.slice(resolveStart, resolveEnd), `
   private async _resolveExtensionsDefault(emitter: AsyncIterableEmitter<ResolvedExtensions>) {
-    const [localExtensions, inventory] = await Promise.all([this._scanWebExtensions(), scanTargetExtensions(this._workspaceContext)]);
+    const [localExtensions, inventory] = await Promise.all([this._scanWebExtensions(),
+      scanTargetExtensions(this._workspaceContext, extension => this._manifestProperties.getExtensionKind(extension), this._targetExtensionLifetime)]);
     this._setExtensionWorkspaceViews(inventory.views);
     emitter.emitOne(new RemoteExtensions(inventory.extensions));
     emitter.emitOne(new LocalExtensions(localExtensions));
   }
 `);
   contents = replaceOnce(contents, '@IWorkspaceContextService contextService: IWorkspaceContextService,', '@IWorkspaceContextService private readonly _workspaceContext: IWorkspaceContextService,');
+  contents = replaceOnce(contents, '@IExtensionManifestPropertiesService extensionManifestPropertiesService: IExtensionManifestPropertiesService,', '@IExtensionManifestPropertiesService private readonly _manifestProperties: IExtensionManifestPropertiesService,');
+  contents = replaceOnce(contents, '\n\t\t\textensionManifestPropertiesService,', '\n\t\t\t_manifestProperties,');
   contents = replaceOnce(contents, '\n\t\t\tcontextService,', '\n\t\t\t_workspaceContext,');
   contents = replaceOnce(contents, '\tprivate _initFetchFileSystem(): void {', `
   protected override _bindExtension(extension: IExtension): IExtension {
@@ -52,6 +69,16 @@ import { TargetExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/
       case ExtensionHostKind.Remote: {
         return this._instantiationService.createInstance(TargetExtensionHost, runningLocation, runningLocations, this._getExtensionRegistrySnapshotWhenReady);
       }`);
+  contents = replaceOnce(contents, 'return this._instantiationService.createInstance(WebWorkerExtensionHost, runningLocation, startup, this._createLocalExtensionHostDataProvider(runningLocations, runningLocation, isInitialStart));', `const provider = this._createLocalExtensionHostDataProvider(runningLocations, runningLocation, isInitialStart);
+        const view = runningLocation.installationTarget ? runningLocations.workspaceViews.find(view =>
+          installationTargetKey(view.installationTarget) === installationTargetKey(runningLocation.installationTarget!)) : undefined;
+        if (runningLocation.installationTarget) {
+          if (!view?.webHost) throw new Error('目标 Web Worker 缺少该视图的冻结发布资格');
+          return this._instantiationService.createInstance(TargetWebExtensionHost, runningLocation, startup, provider, view.webHost);
+        }
+        return this._instantiationService.createInstance(WebWorkerExtensionHost, runningLocation, startup, provider);`);
+  contents = replaceOnce(contents, 'ExtensionIdentifier, ExtensionInstallationTarget, IExtension, bindExtensionDescription, IExtensionDescription',
+    'ExtensionIdentifier, ExtensionInstallationTarget, IExtension, bindExtensionDescription, installationTargetKey, IExtensionDescription');
   const providerStart = contents.indexOf('\tprivate _createLocalExtensionHostDataProvider(');
   const factoryEnd = contents.indexOf('\n}\n\nexport class BrowserExtensionHostKindPicker', providerStart);
   contents = replaceOnce(contents, contents.slice(providerStart, factoryEnd), `

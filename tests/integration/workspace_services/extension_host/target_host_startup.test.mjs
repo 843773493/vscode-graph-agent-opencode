@@ -150,7 +150,10 @@ for (const close of ['disconnect', 'dispose']) {
 
   test(`${close}取消配置初始化，迟到服务不能发布或发送原初始化`, async () => scenario(async p => {
     const gate = deferred(), entered = deferred();
-    p.boundary.configure = (_parent, _binding, _transformer, lifetime) => { entered.resolve(lifetime); return gate.promise; };
+    p.boundary.configure = (_parent, targetContext, lifetime) => {
+      expect(targetContext.kind).toBe('node'); expect(targetContext.connection).toBe(p.host.binding);
+      entered.resolve(lifetime); return gate.promise;
+    };
     const started = p.start(), lifetime = await Promise.race([entered.promise, started.promise]);
     await p.host[close]();
     expect(m.isCancellationError((await started.outcome).error)).toBe(true);

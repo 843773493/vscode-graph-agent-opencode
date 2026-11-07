@@ -149,10 +149,10 @@ async function open() {
         'probe.value': folder.name + '-folder', '[typescript]': { 'probe.value': folder.name + '-language' },
       });
       let child;
-      try { child = await m.targetConfigurationServices(parent, binding, transformer, store); }
+      try { child = await m.targetConfigurationServices(parent, { kind: 'node', connection: binding }, store); }
       catch (error) { store.dispose(); throw error; }
       const owner = child.invokeFunction(accessor => accessor.get(m.IConfigurationService)), snapshots = [];
-      const main = store.add(child.createInstance(m.MainThreadConfiguration, { extensionHost: { binding }, getProxy: () => ({
+      const main = store.add(child.createInstance(m.MainThreadConfiguration, { extensionHost: { binding, targetContext: { kind: 'node', connection: binding } }, getProxy: () => ({
         $initializeConfiguration: data => snapshots.push(data), $acceptConfigurationChanged: data => snapshots.push(data),
       }) }));
       const host = { binding, transformer, child, owner, main, store, snapshots, config, remote };
@@ -223,7 +223,7 @@ test('原文件RPC核本host配置归属，共享profile关闭一代后仍可读
     const result = await page.evaluate(async () => {
       const p = globalThis.probe, a = await p.make('A'), b = await p.make('B'), c = await p.make('C', ['C1'], a);
       const main = a.store.add(a.child.createInstance(p.m.MainThreadFileSystem, {
-        extensionHost: { binding: a.binding, uriTransformer: a.transformer },
+        extensionHost: { binding: a.binding, targetContext: { kind: 'node', connection: a.binding }, uriTransformer: a.transformer },
         getProxy: () => ({ $acceptProviderInfos() {} }),
       }));
       const own = p.m.URI.parse(a.remote.resource_uri), foreign = p.m.URI.parse(b.remote.resource_uri);

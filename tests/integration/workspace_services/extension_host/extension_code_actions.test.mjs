@@ -98,7 +98,7 @@ async function inBrowser(name, body, argument) {
             profile_id: 'default', remote_settings: { native_uri: `file:///hosts/${label}/profile/settings.json`, resource_uri: `boxteam://gateway-actions/config/${label}/settings` } },
           workspace: { id: 'view-' + label, folders: roots.map(workspace_id => ({ workspace_id, name: workspace_id,
             resource_uri: `boxteam://workspace/${workspace_id}/resources/files/root`, native_uri: `file:///targets/${workspace_id}/project` })) } } };
-        return { binding, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
+        return { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
       }
       const nativeResources = host => host.uriTransformer?.folders.map(folder => m.URI.joinPath(folder.native, 'same.ts'))
         ?? [m.URI.file('/outside-web/actions.ts'), m.URI.parse('untitled:actions.ts')];

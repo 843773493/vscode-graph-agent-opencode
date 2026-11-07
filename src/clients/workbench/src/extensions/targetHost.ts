@@ -26,6 +26,7 @@ import { getGatewayToken } from '../../../web/src/api/http.js';
 import type { ExtensionHostConnectionDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { TargetUriTransformer } from './targetUris.js';
 import { targetConfigurationServices } from './configuration.js';
+import type { TargetExtensionContext } from './targetContext.js';
 
 /** 原 IExtensionHost 的目标侧传输；Gateway 只转发原 PersistentProtocol 字节。 */
 export class TargetExtensionHost extends Disposable implements IExtensionHost {
@@ -35,6 +36,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
   remoteOS: OperatingSystem | undefined;
   extensions: ExtensionHostExtensions | null = null;
   binding: ExtensionHostConnectionDTO | undefined;
+  targetContext: TargetExtensionContext | undefined;
   uriTransformer: TargetUriTransformer | undefined;
   customerInstantiationService: IInstantiationService | undefined;
   private readonly configurationLifetime = this._register(new DisposableStore());
@@ -109,6 +111,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
             throw new Error('Node 宿主绑定与请求目标、工作区集合或初始化环境不匹配');
           }
           this.binding = value;
+          this.targetContext = { kind: 'node', connection: value };
           this.remoteOS = initialization.os === 'windows' ? OperatingSystem.Windows : initialization.os === 'macos' ? OperatingSystem.Macintosh : OperatingSystem.Linux;
           this.uriTransformer = new TargetUriTransformer(value, () => this.extensions?.allExtensions ?? []);
           // 同一消息回调中交给原协议，避免 Ready 字节先于二进制监听器到达。
@@ -127,7 +130,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
       if (!this.closing) this.exited.fire([1, event && 'reason' in event ? event.reason : 'extension_host_channel_closed']);
     }));
     const configuration = await raceCancellationError(
-      targetConfigurationServices(this.instantiation, binding, this.uriTransformer!, this.configurationLifetime), this.startupCancellation.token);
+      targetConfigurationServices(this.instantiation, this.targetContext!, this.configurationLifetime), this.startupCancellation.token);
     if (this.closing) throw new CancellationError();
     if (this.configurationLifetime.isDisposed) throw new Error('Node 宿主在配置初始化时关闭');
     this.customerInstantiationService = configuration;
@@ -153,6 +156,7 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
     const initialization = binding.initialization!, environment = initialization.environment!, workspace = initialization.workspace!;
     return {
       commit: this.product.commit, version: this.product.version, quality: this.product.quality, date: this.product.date,
+      isTargetExtensionHost: true,
       parentPid: initialization.parent_pid,
       environment: { isExtensionDevelopmentDebug: false, appRoot: URI.parse(environment.app_root_uri), appName: this.product.nameLong,
         appHost: this.product.embedderIdentifier || 'web', appUriScheme: this.product.urlProtocol, appLanguage: language,

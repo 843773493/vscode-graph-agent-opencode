@@ -304,7 +304,7 @@ async function inBrowser(name, body, argument) {
           workspace: { id: 'view-' + label, configuration: { native_uri: `file:///hosts/${label}/view/workspace.code-workspace`,
             resource_uri: `boxteam://gateway-edits/config/${label}/view/workspace` }, folders: roots.map(workspace_id => ({ workspace_id,
             name: workspace_id, native_uri: `file:///targets/${workspace_id}/project`, resource_uri: `boxteam://workspace/${workspace_id}/resources/files/root` })) } } };
-        return { binding, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
+        return { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer: new m.TargetUriTransformer(binding, () => []), runningLocation: { kind: 3 } };
       }
       async function connect(host) {
         const calls = [], documents = new Map(), renameRequests = [], renameDtos = [], commandResults = [], toMain = new m.Emitter(), toHost = new m.Emitter();
