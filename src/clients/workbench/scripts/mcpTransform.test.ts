@@ -49,7 +49,7 @@ test('实际转换只注册一个项目 MCP 服务，原列表／详情继续注
   expect(source('mcp.contribution.ts').text).toContain('EditorPaneDescriptor.create(');
 });
 
-test.each(['AddConfigurationAction', 'InstallFromManifestAction', 'OpenUserMcpResourceCommand', 'OpenRemoteUserMcpResourceCommand', 'OpenWorkspaceMcpResourceCommand', 'OpenWorkspaceFolderMcpResourceCommand', 'SetOAuthClientSecret', 'RemoveStoredInput', 'EditStoredInput'])(
+test.each(['InstallFromManifestAction', 'OpenUserMcpResourceCommand', 'OpenRemoteUserMcpResourceCommand', 'OpenWorkspaceMcpResourceCommand', 'OpenWorkspaceFolderMcpResourceCommand', 'SetOAuthClientSecret', 'RemoveStoredInput', 'EditStoredInput'])(
   '原 %s 命令 run 实际拒绝，不能触达旧配置、安装或凭据 writer', async kind => {
     const body = methodBody('mcpCommands.ts', kind, 'run');
     const run = new Function('unavailableWorkspaceMcpWrite', `return (async () => ${body})();`) as (unavailable: () => Error) => Promise<never>;
@@ -59,6 +59,90 @@ test.each(['AddConfigurationAction', 'InstallFromManifestAction', 'OpenUserMcpRe
     expect(node.getText()).toContain('id: McpCommandIds.');
   },
 );
+
+test('原 Add Action 原样转交显式 URI，同一 seam 承接命令、Chat 和列表入口，旧 writer 不可达', async () => {
+  const calls: unknown[][] = [];
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`function run(accessor: object, configUri?: object | string) ${methodBody('mcpCommands.ts', 'AddConfigurationAction', 'run')}`);
+  const run = new Function('addWorkspaceMcpConfiguration', javascript + '\nreturn run;')(
+    async (...args: unknown[]) => { calls.push(args); },
+  ) as (accessor: object, configUri?: object | string) => Promise<void>;
+  const accessor = {}, folder = { scheme: 'boxteam-file', path: '/exact-root' };
+  await run(accessor);
+  await run(accessor, folder);
+  await run(accessor, 'file:///exact/.vscode/mcp.json');
+  expect(calls).toEqual([[accessor, undefined], [accessor, folder], [accessor, 'file:///exact/.vscode/mcp.json']]);
+  const imports = source('mcpCommands.ts').statements.filter(ts.isImportDeclaration).map(node => node.moduleSpecifier.getText());
+  expect(imports.some(value => value.includes('mcpCommandsAddConfiguration'))).toBe(false);
+  expect(source('mcpCommands.ts').text).not.toContain('createInstance(McpAddConfigurationCommand');
+});
+
+test('实际Add注册能从F1显示，不受已移除的Chat setup门控，也不提供未支持的旧文件菜单', () => {
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(declaration('mcpCommands.ts', 'AddConfigurationAction').getText().replace('export ', ''));
+  const Add = new Function('Action2', 'McpCommandIds', 'localize2', 'category', javascript + '\nreturn AddConfigurationAction;')(
+    class { constructor(readonly options: object) {} }, { AddConfiguration: 'original-add' },
+    (_key: string, text: string) => text, 'MCP',
+  ) as new () => { options: { id: string; f1: boolean; title: string; precondition?: object; menu?: object } };
+  const action = new Add();
+  expect(action.options).toMatchObject({ id: 'original-add', f1: true, title: 'Add Server...' });
+  expect(action.options.precondition).toBeUndefined(); expect(action.options.menu).toBeUndefined();
+});
+
+test('实际List注册能从F1进入原列表，ChatInput菜单仍保留原展示条件', () => {
+  const constructor = declaration('mcpCommands.ts', 'ListMcpServerCommand').members.find(ts.isConstructorDeclaration)!;
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class List extends Action2 { ${constructor.getText()} }`);
+  const chatHidden = {}, chatDisabled = {};
+  const expression = { and: (...values: unknown[]) => ({ and: values }), or: (...values: unknown[]) => ({ or: values }), equals: () => ({}) };
+  const List = new Function('Action2', 'McpCommandIds', 'localize2', 'Codicon', 'category', 'ContextKeyExpr',
+    'mcpAutoStartConfig', 'McpAutoStartValue', 'McpContextKeys', 'ChatContextKeys', 'ChatModeKind', 'MenuId', javascript + '\nreturn List;')(
+    class { constructor(readonly options: object) {} }, { ListServer: 'original-list' }, (_key: string, text: string) => text,
+    { server: {} }, 'MCP', expression, 'autostart', { Never: 'never' }, { hasUnknownTools: {}, hasServersWithErrors: {} },
+    { Setup: { hidden: { negate: () => chatHidden }, disabledInWorkspace: { negate: () => chatDisabled } },
+      chatModeKind: { isEqualTo: () => ({}) }, lockedToCodingAgent: { negate: () => ({}) } }, { Agent: 'agent' }, { ChatInput: 'chat-input' },
+  ) as new () => { options: { id: string; f1: boolean; title: string; precondition?: object; menu: { id: string; when: { and: unknown[] } }[] } };
+  const action = new List();
+  expect(action.options).toMatchObject({ id: 'original-list', f1: true, title: 'List Servers' });
+  expect(action.options.precondition).toBeUndefined();
+  expect(action.options.menu[0]!.id).toBe('chat-input');
+  expect(action.options.menu[0]!.when.and).toContainEqual({ and: [chatHidden, chatDisabled] });
+});
+
+test.each([false, true])('原列表恢复 Add 行并等待同一命令；有现存Server=%j时默认选择精确Server', async hasServer => {
+  class ProjectServer {
+    readonly collection = { order: 0, id: 'group', label: '原工作区' };
+    readonly definition = { id: 'existing-server', label: '原 Server' };
+    readonly enablement = { read: () => 0 };
+    readonly statusLabel = 'disabled';
+  }
+  const server = new ProjectServer();
+  class ProjectService {
+    readonly local = hasServer ? [server] : [];
+    readonly servers = { read: () => this.local };
+    async activateCollections() {}
+    observe() { return { dispose() {} }; }
+  }
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function run(services: object) ${methodBody('mcpCommands.ts', 'ListMcpServerCommand', '_runLocal')}`);
+  const run = new Function('WorkspaceMcpService', 'WorkspaceMcpServer', 'DisposableStore', 'autorun', 'groupBy', 'localize',
+    'ThemeIcon', 'Codicon', 'isContributionDisabled', 'McpConnectionState', 'McpCommandIds', javascript + '\nreturn run;')(
+    ProjectService, ProjectServer, DisposableStore, (callback: (reader: object) => void) => { callback({}); return { dispose() {} }; },
+    (items: typeof server[]) => items.length ? { group: items } : {}, (_key: string, text: string) => text,
+    { asClassName: () => 'add-icon' }, { add: {} }, () => false, { toString: () => 'unused' }, { AddConfiguration: 'original-add' },
+  ) as (services: object) => Promise<void>;
+  let accept = () => {}, initial: object[] = [], complete = () => {}, settled = false;
+  const commandCalls: unknown[][] = [];
+  const pick = { items: [] as { id: string }[], activeItems: [] as { id: string }[],
+    onDidAccept(callback: () => void) { accept = callback; return { dispose() {} }; },
+    onDidHide() { return { dispose() {} }; }, dispose() {},
+    show() { initial = [...this.activeItems]; this.activeItems = [this.items[0]!]; queueMicrotask(accept); },
+  };
+  const running = run({ mcpService: new ProjectService(), quickInput: { createQuickPick: () => pick },
+    commandService: { executeCommand: (...args: unknown[]) => { commandCalls.push(args); return new Promise<void>(resolve => { complete = resolve; }); } },
+  }).then(() => { settled = true; });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(pick.items[0]!.id).toBe('$add');
+  expect(initial).toEqual(hasServer ? [{ id: 'existing-server', label: '原 Server', description: 'disabled' }] : []);
+  expect(commandCalls).toEqual([['original-add']]); expect(settled).toBe(false);
+  complete(); await running; expect(settled).toBe(true);
+});
 
 test('原 Browse 与 BrowsePage 都交给同一个 MCP 查询 seam，不扩大为 All Sources 查询', async () => {
   const serviceId = Symbol('IMcpWorkbenchService');

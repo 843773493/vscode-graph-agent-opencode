@@ -10,6 +10,35 @@ import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { managementGateway, mcpManagementTarget, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { manageMcpArtifacts } from './artifacts.js';
+import type { URI } from '../../upstream/src/vs/base/common/uri.js';
+import { addMcpConfiguration } from './addConfiguration.js';
+import { mcpConfigurationErrorMessage } from './configuration.js';
+
+/** 原 Add 的全部调用方共用此 seam，错误进入原通知通道，目标和身份贯穿所有输入及提交。 */
+export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, configUri?: URI | string): Promise<void> {
+  const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
+  try {
+    const initial = workspaceContext.getSnapshot();
+    if (!initial.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
+    const selected = Object.freeze({ ...managementGateway('mcp') });
+    const controller = new AbortController();
+    const invalidate = () => controller.abort(new Error('Gateway 或用户身份已改变，请重新添加 MCP 配置'));
+    const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
+    const releaseContext = workspaceContext.subscribe(() => {
+      if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
+    });
+    const assertAccess = () => {
+      if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
+      controller.signal.throwIfAborted();
+    };
+    try {
+      const target = await mcpManagementTarget(selected, controller.signal);
+      assertAccess();
+      await addMcpConfiguration({ kind: 'backend', gateway_id: target.gateway_id, backend_id: target.backend_id,
+        gateway_connection_id: target.gateway_connection_id }, target.name, quickInput, notifications, assertAccess, controller.signal, configUri);
+    } finally { releaseUser(); releaseContext(); controller.abort(); }
+  } catch (cause) { notifications.error(mcpConfigurationErrorMessage(cause)); }
+}
 
 /** 原命令只操作明确选中对象；通配启动也冻结本次所选工作区的对象集合。 */
 export async function runWorkspaceMcpCommand(accessor: ServicesAccessor, id: unknown, action: 'start' | 'stop' | 'restart' | 'output', options?: { waitForLiveTools?: boolean }): Promise<void> {

@@ -56,7 +56,7 @@ export function transformMcp(root, path, source, replaceOnce) {
     for (const [name, next] of [
       ['McpAgentHostServerOptionsCommand', 'McpConfirmationServerOptionsCommand'],
       ['McpConfirmationServerOptionsCommand', 'McpServerOptionsCommand'],
-      ['AddConfigurationAction', 'InstallFromManifestAction'], ['InstallFromManifestAction', 'RemoveStoredInput'],
+      ['InstallFromManifestAction', 'RemoveStoredInput'],
       ['RemoveStoredInput', 'EditStoredInput'], ['EditStoredInput', 'SetOAuthClientSecret'],
       ['SetOAuthClientSecret', 'ShowConfiguration'], ['ShowConfiguration', 'ShowOutput'],
       ['OpenUserMcpResourceCommand', 'OpenRemoteUserMcpResourceCommand'],
@@ -72,6 +72,24 @@ export function transformMcp(root, path, source, replaceOnce) {
       if (begin < 0 || end < 0 || run < 0) throw new Error(`上游 MCP 命令 seam 缺失：${name}`);
       contents = replaceOnce(contents, original, original.slice(0, run) + '\n\toverride async run(): Promise<never> { throw unavailableWorkspaceMcpWrite(); }\n}\n\n');
     }
+    const addBegin = contents.indexOf('export class AddConfigurationAction extends Action2 {');
+    const addEnd = contents.indexOf('export class InstallFromManifestAction extends Action2 {', addBegin);
+    const originalAdd = contents.slice(addBegin, addEnd);
+    if (addBegin < 0 || addEnd < 0 || !originalAdd.includes('\n\tasync run(')) throw new Error('上游 MCP Add 命令 seam 缺失');
+    // 项目 MCP 不依赖原 Chat setup；旧文件菜单尚无精确 writer，不提供换来源的假动作。
+    contents = replaceOnce(contents, originalAdd, `export class AddConfigurationAction extends Action2 {
+  constructor() { super({ id: McpCommandIds.AddConfiguration, title: localize2('mcp.addConfiguration', 'Add Server...'), category, f1: true,
+    metadata: { description: localize2('mcp.addConfiguration.description', 'Adds a manual stdio or Streamable HTTP server to the selected workspace configuration') } }); }
+  override run(accessor: ServicesAccessor, configUri?: URI | string): Promise<void> { return addWorkspaceMcpConfiguration(accessor, configUri); }
+}
+
+`);
+    const listBegin = contents.indexOf('export class ListMcpServerCommand extends Action2 {');
+    const listRun = contents.indexOf('\n\toverride async run(', listBegin);
+    if (listBegin < 0 || listRun < 0) throw new Error('上游 MCP List 注册 seam 缺失');
+    const listRegistration = contents.slice(listBegin, listRun);
+    contents = replaceOnce(contents, listRegistration, replaceOnce(listRegistration,
+      '\t\t\tprecondition: ContextKeyExpr.and(ChatContextKeys.Setup.hidden.negate(), ChatContextKeys.Setup.disabledInWorkspace.negate()),\n', ''));
     contents = replaceSection(contents, '\tprivate async _runWithMode(', '\tprivate async _runLocal(', '', replaceOnce);
     contents = replaceSection(contents, '\tprivate async _runAgentHost(', 'interface IListMcpServerServices', '}\n\n', replaceOnce);
     contents = replaceSection(contents, "type AgentHostMcpServerLifecycleAction = 'start' | 'stop';", 'export class McpAgentHostServerOptionsCommand', '', replaceOnce);
@@ -81,8 +99,8 @@ export function transformMcp(root, path, source, replaceOnce) {
     contents = replaceOnce(contents, '\t\tconst store = new DisposableStore();\n\t\tconst pick = quickInput.createQuickPick<ItemType>', '\t\tawait mcpService.activateCollections();\n\t\tconst store = new DisposableStore();\n\t\tif (mcpService instanceof WorkspaceMcpService) store.add(mcpService.observe());\n\t\tconst pick = quickInput.createQuickPick<ItemType>');
     contents = replaceOnce(contents, '\t\tmcpService.activateCollections();\n\n\t\tstore.add(pick);', '\t\tstore.add(pick);');
     contents = replaceOnce(contents, 'mcpService.servers.read(reader).slice().sort(', 'mcpService.servers.read(reader).filter(server => !(mcpService instanceof WorkspaceMcpService) || mcpService.local.includes(server as WorkspaceMcpServer)).sort(');
-    contents = replaceOnce(contents, 'if (firstRun && pick.items.length > 3) {\n\t\t\t\tpick.activeItems = pick.items.slice(2, 3)', 'if (firstRun && pick.items.length > 1) {\n\t\t\t\tpick.activeItems = pick.items.slice(1, 2)');
-    contents = replaceOnce(contents, "\t\t} else if (picked.id === '$add') {\n\t\t\tcommandService.executeCommand(McpCommandIds.AddConfiguration);", '');
+    contents = replaceOnce(contents, 'if (firstRun && pick.items.length > 3)', 'if (firstRun && pick.items.length > 2)');
+    contents = replaceOnce(contents, 'commandService.executeCommand(McpCommandIds.AddConfiguration);', 'await commandService.executeCommand(McpCommandIds.AddConfiguration);');
     contents = replaceOnce(contents, 'commandService.executeCommand(McpCommandIds.ServerOptions, picked.id);', 'await commandService.executeCommand(McpCommandIds.ServerOptions, picked.id);');
     contents = replaceSection(contents, 'export class McpServerOptionsCommand extends Action2 {', 'export class MCPServerActionRendering', `export class McpServerOptionsCommand extends Action2 {
   constructor() { super({ id: McpCommandIds.ServerOptions, title: localize2('mcp.options', 'Server Options'), category, f1: false }); }
@@ -105,25 +123,23 @@ export function transformMcp(root, path, source, replaceOnce) {
     contents = replaceOnce(contents, "\t\tconst extensionsWorkbenchService = accessor.get(IExtensionsWorkbenchService);\n\t\tconst viewsService = accessor.get(IViewsService);\n\t\tawait extensionsWorkbenchService.openSearch('');\n\t\tawait viewsService.openView(InstalledMcpServersViewId, true);", "\t\tawait accessor.get(IMcpWorkbenchService).openSearch('');");
     contents = replaceOnce(contents, '\t\tawait accessor.get(ICommandService).executeCommand(\n\t\t\tAICustomizationManagementCommands.OpenMarketplace,\n\t\t\tAICustomizationManagementSection.McpServers,\n\t\t);', "\t\tawait accessor.get(IMcpWorkbenchService).openSearch('');");
     contents = replaceOnce(contents, "McpConnectionState.toString(server.connectionState.read(reader)),", "server instanceof WorkspaceMcpServer ? server.statusLabel : McpConnectionState.toString(server.connectionState.read(reader)),");
-    const addItem = "\t\t\t\t{ id: '$add', label: localize('mcp.addServer', 'Add Server'), description: localize('mcp.addServer.description', 'Add a new server configuration'), alwaysShow: true, iconClass: ThemeIcon.asClassName(Codicon.add) },\n";
-    contents = replaceOnce(contents, addItem, '');
     // 下线的写链与第二 client 依赖不进入本运行面；保留原列表和仍开放命令需要的导入。
     const commandImports = new Set([
-      'Codicon', 'groupBy', 'DisposableStore', 'autorun', 'ILocalizedString', 'localize', 'localize2',
+      'Codicon', 'ThemeIcon', 'URI', 'groupBy', 'DisposableStore', 'autorun', 'ILocalizedString', 'localize', 'localize2',
       'Action2', 'MenuId', 'MenuRegistry', 'ICommandService', 'ContextKeyExpr', 'IInstantiationService',
       'ServicesAccessor', 'ILogService', 'mcpAutoStartConfig', 'McpAutoStartValue', 'INotificationService',
-      'IQuickInputService', 'IQuickPickItem', 'IQuickPickSeparator', 'ActiveEditorContext', 'RemoteNameContext',
-      'ResourceContextKey', 'WorkbenchStateContext', 'WorkspaceFolderCountContext',
+      'IQuickInputService', 'IQuickPickItem', 'IQuickPickSeparator', 'RemoteNameContext',
+      'WorkbenchStateContext', 'WorkspaceFolderCountContext',
       'ChatContextKeys', 'ChatModeKind',
-      'isContributionDisabled', 'extensionsFilterSubMenu', 'TEXT_FILE_EDITOR_ID', 'McpCommandIds',
-      'mcpWorkspaceRootConfig', 'McpContextKeys', 'HasInstalledMcpServersContext', 'IMcpServer', 'IMcpService',
+      'isContributionDisabled', 'extensionsFilterSubMenu', 'McpCommandIds',
+      'McpContextKeys', 'HasInstalledMcpServersContext', 'IMcpServer', 'IMcpService',
       'IMcpWorkbenchService', 'InstalledMcpServersViewId', 'McpConnectionState', 'McpResourceQuickAccess', 'McpResourceQuickPick',
     ]);
     contents = contents.replace(/^import \{ ([^}]+) \} from ([^\n]+);$/gm, (_line, imports, module) => {
       const retained = imports.split(', ').filter(name => commandImports.has(name));
       return retained.length ? `import { ${retained.join(', ')} } from ${module};` : '';
     });
-    contents = `import { WorkspaceMcpService, unavailableWorkspaceMcpWrite } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};\nimport { showWorkspaceMcpOptions, runWorkspaceMcpCommand } from ${JSON.stringify(join(root, 'src/mcp/commands.js'))};\n` + serverImport + contents;
+    contents = `import { WorkspaceMcpService, unavailableWorkspaceMcpWrite } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};\nimport { addWorkspaceMcpConfiguration, showWorkspaceMcpOptions, runWorkspaceMcpCommand } from ${JSON.stringify(join(root, 'src/mcp/commands.js'))};\n` + serverImport + contents;
   }
   if (relative.endsWith('/mcpServerActions.ts')) {
     const installBegin = contents.indexOf('export class InstallAction extends McpServerAction {');
