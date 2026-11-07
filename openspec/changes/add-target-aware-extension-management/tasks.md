@@ -42,6 +42,9 @@
   - 2026-11-07 目标下载与停机交接切片：五个原制品下载 callSite 经本次安装独有的本机 capability 交目标 Python HTTPX，保留原代理／TLS、重定向、gzip、市场依赖规划和重试语义；其它 Gallery 查询仍由原服务处理。capability 绑定原 request_id 与安装域，回执结清即失效，未知回执保留到原串行队列 barrier 结清，不能重放。正式 Gateway runner 在关闭 listener 前停止准入并等待原安装，交接与实际管理进程退出共用120秒总期限，外层 Launcher／开发栈预算迁齐；慢浏览器或多工作区的既有收尾预算仍未统一，未宣称任意规模停机总上界。
   - 真实 Gateway／Backend／固定 Node／HTTP Gallery 的主下载、备用下载、默认签名拒绝、gzip正文断流四参数分别通过；最后一项在原错误断言修正后单独复验，按不变依赖复用前三项，不称最终四参整组全绿。核目标B实际Python传输与落盘字节、A库存和原件不变、原request_id、旧capability拒绝；正文中断沿原安装器三次主下载、零fallback后明确失败，库存不变且同PID后续安装成功。真实反例暴露原丢弃finally派生拒绝与gzip源错误不传播，分别交原安装任务观察和标准stream.pipeline处理，未新增重试。Node下载11项、完整138份转换源码类型、Python核心67项通过；净提交完整archive中的Python120项与Launcher58项通过，批次有重叠不相加。正式管理换代1项及Launcher／Workbench与三个Gateway包装器8项按不变依赖复用。核心Ruff／Pyright零诊断，扩大范围既有诊断按before原件对照，无新增。准确命令、指纹、失败归因及复用范围见 `out/tests/temp/2026/11/07/extension_target_cleanup/artifacts/python-download-verification-v1.json`；逐资源Node publication重核、真实运行引用／回收、SSH／Windows／Electron仍待完成，1.8／1.9保持未勾选。
 
+  - Windows 目标文件／下载补验：真实双 Gateway／Backend／原 Node 场景9项通过，覆盖冻结描述后零逐文件 Node 请求、更新／逻辑卸载后的旧版本读取与撤权、无 Node runtime 的独立／Web profile配置空根／多根，以及主下载、fallback、签名拒绝与gzip中断。首批另2项在Node启动时报CreateProcess267；正式generation目录实测277字符。唯一Node宿主启动cwd改用运行组件目录，generation继续持有日志／IPC；上游 `${appRoot}` 的cwd解析随之与原environment.app_root_uri一致，不再指向临时generation。未缩短fixture或改通用进程层。修复后Linux／Windows原生命周期与配置各7项通过，保留真实cwd、启动缺失／超时／取消、IPC与进程回收断言。
+  - Linux原IPC／Gateway／Relay完整宿主RPC三参数通过，内含双版本真实激活、原生／扩展fs、持久位置、断连、崩溃与Backend关闭；只迁齐两处过时测试：统一SecretStorage具体文案、精确允许已复用的纯MCP注册模块，仍拒绝其它renderer输入。Ruff、Linux／Windows生产及生命周期Pyright与Node语法通过。Windows完整RPC原件仍失败，缺watchdog／spdlog原生构建，现有VS状态isComplete=false；不将7项或Kerberos预构建通过当完整RPC。既有Spectre补装授权保留，未重复长安装或降低断言；后续具备匹配依赖后再补验。准确命令、源码指纹、原始失败及Windows收集核验见 `out/tests/temp/2026/11/08/windows_extension_io/artifacts/verification-v1.json`。本片不代表完整Workbench、真实SSH、发行或最终引用回收，1.9保持未勾选。
+
 ## 2. MCP 目录与目标安装
 
 - [x] 2.1 沿原 gallery 服务合同接入可配置 MCP 来源，验证实际协议、分页、取消及未配置／失败／无匹配；与 VSIX 来源分开，查询不下载、不启动或扩展来源范围。

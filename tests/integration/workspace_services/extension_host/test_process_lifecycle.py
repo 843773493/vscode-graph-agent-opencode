@@ -59,7 +59,7 @@ async def unconnected_host(node_host_runtime: tuple[str, str], process_context: 
     runtime.mkdir(parents=True, exist_ok=True)
     source, log = runtime / "no-ipc.mjs", process_context.artifacts_dir / "startup.raw"
     source.write_text("import { writeFileSync } from 'node:fs';\n"
-                      "writeFileSync('started', 'ready');\nconsole.log('waiting-for-ipc');\n"
+                      "writeFileSync('started', process.cwd());\nconsole.log('waiting-for-ipc');\n"
                       "setInterval(() => {}, 1000);\n", encoding="utf-8")
     with log.open("wb") as output:
         host = NodeExtensionHost(request.node.nodeid,
@@ -89,7 +89,7 @@ async def test_ipc_start_failure_and_cancellation_settle_the_original_process(
         connecting = asyncio.create_task(connect())
         try:
             async with asyncio.timeout(2):
-                while not (source.with_name("host") / "started").is_file():
+                while not source.with_name("started").is_file():
                     await asyncio.sleep(0.01)
         finally:
             connecting.cancel("用户取消宿主启动")
@@ -99,6 +99,8 @@ async def test_ipc_start_failure_and_cancellation_settle_the_original_process(
         with pytest.raises(RuntimeError if mode == "missing" else TimeoutError):
             await connect()
     assert host.child.state.exit_verified
+    if mode != "missing":
+        assert Path(source.with_name("started").read_text(encoding="utf-8")) == source.parent
     assert host.child.state.returncode == (1 if mode == "missing" or sys.platform == "win32" else -15)
     assert not list(source.with_name("host").glob("ipc-*"))
     assert (b'Cannot find module' if mode == "missing" else b'waiting-for-ipc') in log.read_bytes()

@@ -183,8 +183,9 @@ async function connect(label) {
     activate: identifier => extensionService.$activate(identifier, { startup: false, extensionId: identifier, activationEvent: 'api' }) };
 }
 
-test('构建原Node宿主时不引入renderer文件链，依赖跟随固定上游', () => {
-  assert.equal(metadata.inputs.some(path => path.includes('/clients/web/') || path.includes('/workbench/src/')), false);
+test('宿主构建仅复用纯MCP注册模块，不引入renderer文件链，依赖跟随固定上游', () => {
+  assert.deepEqual(metadata.inputs.filter(path => path.includes('/clients/web/') || path.includes('/workbench/src/')),
+    ['src/clients/workbench/src/mcp/providerRegistration.ts']);
   assert.equal(metadata.dependencies['@vscode/proxy-agent'], '0.45.0');
 });
 
@@ -381,7 +382,7 @@ test('真实双Node宿主各自激活同ID不同版本，原生与扩展fs访问
     const storage = await inspect('host-probe.storage'), initialization = host.receipt.initialization;
     host.receipt.storage = storage;
     assert.equal(storage.syncError, '目标 Node 扩展暂不支持 setKeysForSync 跨设备状态同步');
-    assert.deepEqual(storage.secretErrors, Array(4).fill('目标 Node 扩展暂不支持 SecretStorage；不能访问工作台的秘密存储'));
+    assert.deepEqual(storage.secretErrors, Array(4).fill('目标扩展暂不支持 SecretStorage；不能访问工作台的秘密存储'));
     assert.equal(storage.extensionUri, protocolTypes.URI.file(join(host.folder, 'extension')).toString());
     const expected = {
       globalStorageUri: protocolTypes.URI.joinPath(protocolTypes.URI.parse(initialization.environment.global_storage_home_uri), 'host-probe.node'),

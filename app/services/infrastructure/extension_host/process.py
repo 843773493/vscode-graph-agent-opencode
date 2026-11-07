@@ -105,8 +105,9 @@ class NodeExtensionHost:
             # 先断开原 IPC，原宿主可沿 renderer-closed 正常退出；其后才等待/终止进程组。
             cleanup.push_async_callback(close_connection)
             # 原生标准流直接写目标日志，不增加collector或在退出时丢弃未读尾部。
+            # generation 目录只持有日志／IPC；Windows CreateProcess 不接受超长 cwd，组件目录不随数据根嵌套。
             await self.child.start([str(self._runtime.executable), str(self._runtime.entrypoint), "--useHostProxy=false"],
-                                   env=environment, cwd=self._directory, stderr=-2, stdout=self._output)
+                                   env=environment, cwd=self._runtime.entrypoint.parent, stderr=-2, stdout=self._output)
             assert self.child.process is not None
             exited = asyncio.create_task(self.child.process.wait(), name=f"extension-exit:{self.child.state.instance_id}")
             done, _ = await asyncio.wait((accepted, exited), timeout=self._startup_timeout,
