@@ -27,4 +27,4 @@
 - SSH 与本地工作区的持久化权威来源仍由 Gateway registry 管理
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
-- `runner.py`是正式Gateway HTTP进程的唯一入口；从原ASGI lifespan state取得同一扩展管理owner，在Uvicorn关闭listener前等待quiesce。启动未完成不结清；结清失败保留原异常和非零退出，不创建第二管理owner。
+- 受管 HTTP 进程统一使用 `app.runtime.http_server`；原 Gateway lifespan 交付 `before_http_shutdown` 钩子，在 listener 关闭前结清原扩展管理队列，不再维护 Gateway 专用 runner。

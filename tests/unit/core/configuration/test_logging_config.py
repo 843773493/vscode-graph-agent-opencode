@@ -256,10 +256,8 @@ async def test_internal_http_control_requires_private_token_and_loopback(
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
-    from app.api.runtime_logging import (
-        runtime_logging_router,
-        verify_runtime_control_token,
-    )
+    from app.api.runtime_control import verify_runtime_control_token
+    from app.api.runtime_logging import runtime_logging_router
     from app.core.trace_middleware import TraceMiddleware
 
     configure_application_logging(service="backend", stream=io.StringIO())

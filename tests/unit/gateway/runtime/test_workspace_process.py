@@ -238,6 +238,7 @@ def test_workspace_backend_rounds_connection_drain_timeout_for_uvicorn(
     )
     managed.detach()
 
+    assert calls[0][calls[0].index("-m") + 1] == "app.runtime.http_server"
     assert calls[0][-4:] == [
         "--log-level",
         "warning",

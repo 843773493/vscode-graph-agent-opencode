@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import secrets
 from collections.abc import Callable
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api import runtime_control
 from app.core.logging_config import (
     RuntimeLoggingConflictError,
     apply_runtime_logging,
@@ -18,28 +17,10 @@ from app.core.trace_middleware import get_request_id
 from app.schemas.runtime_logging import RuntimeLoggingApply
 
 
-def verify_runtime_control_token(x_local_token: str | None = Header(default=None)) -> str:
-    expected = os.environ.get("BOXTEAM_RUNTIME_CONTROL_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=503, detail="此入口未配置本机运行时控制凭据")
-    if x_local_token is None or not secrets.compare_digest(
-        x_local_token.encode("utf-8"), expected.encode("utf-8"),
-    ):
-        raise HTTPException(status_code=401, detail="invalid runtime control token")
-    return x_local_token
-
-
-def _verify_local_control_request(request: Request) -> None:
-    if (request.client is None
-        or request.client.host not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
-        or "origin" in request.headers or "sec-fetch-site" in request.headers):
-        raise HTTPException(status_code=403, detail="运行时日志控制只接受本机管理通道")
-
-
 def runtime_logging_router(*, prefix: str, verify_token: Callable[..., str]) -> APIRouter:
     router = APIRouter(
         prefix=prefix, include_in_schema=False,
-        dependencies=[Depends(_verify_local_control_request), Depends(verify_token)],
+        dependencies=[Depends(runtime_control.verify_local_control_request), Depends(verify_token)],
     )
 
     @router.get("")

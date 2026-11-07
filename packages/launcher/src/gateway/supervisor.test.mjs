@@ -140,7 +140,7 @@ describe("gateway supervisor", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual([
       "-m",
-      "app.gateway.server.runner",
+      "app.runtime.http_server",
       "app.gateway.main:app",
       "--host",
       "127.0.0.1",

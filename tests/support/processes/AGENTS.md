@@ -35,4 +35,4 @@ processes/
 
 - Backend 显式传入 `boxteam_home` 时，配置安装与子进程环境使用同一绝对目录；联邦装具与 Gateway 共用该 owner 的 HOME，不能只改环境或只迁移 Gateway 控制面。
 
-- Gateway fixture统一启动`app.gateway.server.runner`，关闭时显式传150秒，为管理停机总期限120秒及普通HTTP连接drain留余量；慢浏览器与多工作区回收仍沿原独立期限，不承诺整组停机总上界。通用工作区terminate默认仍为10秒，覆盖参数须传到启动器和已捕获子进程等待。
+- Gateway fixture统一启动`app.runtime.http_server`，关闭时显式传150秒，为管理停机总期限120秒及普通HTTP连接drain留余量；慢浏览器与多工作区回收仍沿原独立期限，不承诺整组停机总上界。通用工作区terminate默认仍为10秒，覆盖参数须传到启动器和已捕获子进程等待。

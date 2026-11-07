@@ -129,7 +129,7 @@ def start_gateway_process(
     cmd = [
         str(python_executable),
         "-m",
-        "app.gateway.server.runner",
+        "app.runtime.http_server",
         asgi_app,
         "--host",
         "127.0.0.1",

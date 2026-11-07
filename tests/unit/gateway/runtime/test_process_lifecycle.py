@@ -352,3 +352,44 @@ def test_posix_service_identity_keeps_single_process_contract(managed_process_st
     managed.confirm_service_identity(4321)
     managed.confirm_service_identity(4321)
     assert managed.pid == 4321 and managed.is_alive()
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+def test_native_shutdown_transport_is_requested_once_and_still_waits_for_owned_exit(
+    monkeypatch: pytest.MonkeyPatch, managed_process_stub_factory, adopted: bool,
+) -> None:
+    calls: list[str] = []
+    if adopted:
+        handle = AdoptedManagedProcess(pid=4321, shutdown_request=lambda: calls.append("request"))
+        monkeypatch.setattr(AdoptedManagedProcess, "_close_target_is_alive", lambda self: "wait" not in calls)
+        def wait_closed(*_args, **_kwargs):
+            calls.append("wait")
+            return True
+        monkeypatch.setattr("app.gateway.runtime.process_lifecycle._wait_until_closed", wait_closed)
+    else:
+        process = managed_process_stub_factory(timeout_once=False)
+        handle = ManagedProcess(process, _LogFile(), shutdown_request=lambda: calls.append("request"))
+        monkeypatch.setattr(ManagedProcess, "_close_target_is_alive", lambda self: "wait" not in calls)
+        monkeypatch.setattr(ManagedProcess, "_wait_closed", lambda self, timeout: calls.append("wait"))
+    handle.request_terminate()
+    handle.close()
+    assert calls == ["request", "wait"]
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+def test_native_shutdown_rejection_is_not_converted_to_os_kill(
+    monkeypatch: pytest.MonkeyPatch, managed_process_stub_factory, adopted: bool,
+) -> None:
+    failure = RuntimeError("original-native-shutdown-rejected")
+    def reject():
+        raise failure
+    if adopted:
+        handle = AdoptedManagedProcess(pid=4321, shutdown_request=reject)
+        monkeypatch.setattr(AdoptedManagedProcess, "_close_target_is_alive", lambda self: True)
+    else:
+        handle = ManagedProcess(managed_process_stub_factory(timeout_once=False), _LogFile(), shutdown_request=reject)
+        monkeypatch.setattr(ManagedProcess, "_close_target_is_alive", lambda self: True)
+        monkeypatch.setattr(ManagedProcess, "_kill_group", lambda self: pytest.fail("未接受关闭请求，不得隐式强杀"))
+    with pytest.raises(RuntimeError) as caught:
+        handle.close()
+    assert caught.value is failure

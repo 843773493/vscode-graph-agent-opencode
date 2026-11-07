@@ -218,7 +218,7 @@ export function spawnGateway({
     runtime.pythonExecutable,
     [
       "-m",
-      "app.gateway.server.runner",
+      "app.runtime.http_server",
       "app.gateway.main:app",
       "--host",
       endpoint.host,

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TextIO
@@ -160,8 +161,8 @@ def _terminate_windows_process_tree(
             ) from error
 
 
-# TODO(windows-graceful-stop): 无窗口 Uvicorn 不响应 taskkill /T，当前只能在期限后
-# /F 回收并保留关闭失败；需为受管服务接通可验证的原生优雅关闭，不能把强杀伪报成功。
+# TODO(windows-graceful-stop): 未绑定原生关闭通道的无窗口服务不响应 taskkill /T，
+# 期限后 /F 回收仍须保留失败；Backend 已接原认证 HTTP，其它服务不能把强杀伪报成功。
 def _taskkill_process_tree(pid: int, *, force: bool) -> None:
     arguments = ["taskkill", "/T"]
     if force:
@@ -204,10 +205,14 @@ class ManagedProcessHandle(Protocol):
     def detach(self) -> None: ...
 
 
+# TODO: 原句柄目前只核操作系统进程退出；Backend 非零退出码及接管进程的 lifespan
+# 结果尚未统一上报。关闭 ACK 只表示接受请求，不证明应用清理成功。
 @dataclass(slots=True)
 class ManagedProcess:
     process: subprocess.Popen[str]
     log_file: object
+    shutdown_request: Callable[[], None] | None = field(default=None, repr=False)
+    _shutdown_requested: bool = field(default=False, init=False, repr=False)
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
     _leader_start_marker: ProcessStartMarker | None = field(
         default=None, init=False, repr=False
@@ -269,6 +274,11 @@ class ManagedProcess:
 
     def request_terminate(self) -> None:
         if not self._close_target_is_alive():
+            return
+        if self.shutdown_request is not None:
+            if not self._shutdown_requested:
+                self.shutdown_request()
+                self._shutdown_requested = True
             return
         try:
             self._terminate_group()
@@ -379,6 +389,8 @@ class AdoptedManagedProcess:
 
     pid: int
     log_ownership: ProcessLogOwnership | None = None
+    shutdown_request: Callable[[], None] | None = field(default=None, repr=False)
+    _shutdown_requested: bool = field(default=False, init=False, repr=False)
     close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
     _leader_start_marker: ProcessStartMarker | None = field(
         default=None, init=False, repr=False
@@ -418,6 +430,11 @@ class AdoptedManagedProcess:
 
     def request_terminate(self) -> None:
         if not self._close_target_is_alive():
+            return
+        if self.shutdown_request is not None:
+            if not self._shutdown_requested:
+                self.shutdown_request()
+                self._shutdown_requested = True
             return
         try:
             if os.name == "posix":

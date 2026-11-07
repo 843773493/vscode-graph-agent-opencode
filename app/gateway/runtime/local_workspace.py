@@ -7,6 +7,7 @@ import logging
 import os
 from collections.abc import Sequence
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
@@ -41,6 +42,7 @@ from app.gateway.runtime.workspace_process import (
     start_local_backend_process,
     start_local_node_service_process,
 )
+from app.schemas.runtime_control import RuntimeShutdownAccepted, RuntimeShutdownRequest
 
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
@@ -328,6 +330,23 @@ def _validate_group_health(
     return actual_pid
 
 
+def _request_backend_shutdown(base_url: str, payload: RuntimeShutdownRequest, token: str) -> None:
+    with httpx.Client(timeout=2, trust_env=False) as client:
+        response = client.post(f"{base_url.rstrip('/')}/api/internal/runtime/shutdown",
+            json=payload.model_dump(), headers={"X-Local-Token": token})
+        response.raise_for_status()
+        accepted = RuntimeShutdownAccepted.model_validate(response.json()["data"])
+    if accepted.process_id != payload.process_id or accepted.backend_generation != payload.backend_generation:
+        raise RuntimeError("Backend 未确认原进程及 generation 的关闭请求")
+
+
+def _bind_backend_shutdown(process: ManagedProcess | AdoptedManagedProcess, contract: ManagedBackendContract) -> None:
+    if os.name == "nt":
+        # PID 来自完整健康合同与原生进程身份核验；跨代接管仍使用同一 Backend HTTP 服务。
+        process.shutdown_request = partial(_request_backend_shutdown, contract.backend_url,
+            RuntimeShutdownRequest(process_id=process.pid, backend_generation=contract.generation), get_gateway_local_token())
+
+
 async def verify_managed_backend_group(
     contract: ManagedBackendContract, *, mounts: tuple[MountedWorkspace, ...], process: ManagedProcess | None = None,
     startup_contracts: dict[str, dict[str, object]] | None = None,
@@ -355,6 +374,7 @@ async def verify_managed_backend_group(
         raise RuntimeError("managed Backend 完整组没有成员")
     if process is not None:
         process.confirm_service_identity(process_id)
+        _bind_backend_shutdown(process, contract)
     return process_id
 
 
@@ -387,7 +407,9 @@ async def _adopt_workspace_backend(
     ownership = await _adopt_process_log(
         contract.backend_url, "backend", process_id, parsed.port, log_dir=log_dir,
     )
-    return AdoptedManagedProcess(pid=process_id, log_ownership=ownership)
+    process = AdoptedManagedProcess(pid=process_id, log_ownership=ownership)
+    _bind_backend_shutdown(process, contract)
+    return process
 
 
 async def _start_member_auxiliary_services(

@@ -18,7 +18,7 @@ from fastapi import (
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 
-from app.api.runtime_logging import verify_runtime_control_token
+from app.api.runtime_control import verify_runtime_control_token
 from app.container import WorkspaceContainerRegistry
 from app.core.trace_middleware import get_request_id
 from app.schemas.gateway.extension_host import (

@@ -25,6 +25,7 @@ from tests.support.processes.workspace import (
 
 _APP_SOURCE = '''\
 import asyncio
+import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -32,6 +33,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
+from app.api.runtime_control import router
+from app.core.trace_middleware import TraceMiddleware
 
 artifacts = Path(ARTIFACTS_PATH)
 mode = FAILURE_MODE
@@ -59,15 +62,17 @@ async def lifespan(app):
     app.state.extension_management = owner
     record("startup")
     try:
-        yield {"extension_management": owner}
+        yield {"extension_management": owner, "before_http_shutdown": owner.quiesce}
     finally:
         record("lifespan-exit")
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(TraceMiddleware)
+app.include_router(router)
 
 @app.get("/health")
 async def health():
-    return {"ready": True}
+    return {"ready": True, "process_id": os.getpid()}
 
 @app.post("/child")
 async def child():
@@ -116,13 +121,14 @@ def runner_process(request: pytest.FixtureRequest) -> Iterator[RunnerProcess]:
     port = integration_port_block_for_file(Path(__file__).resolve()).port(1)
     ensure_local_port_available(port, service_name="Gateway runner隔离进程")
     command = [
-        sys.executable, "-m", "app.gateway.server.runner", "runner_fixture:app",
+        sys.executable, "-m", "app.runtime.http_server", "runner_fixture:app",
         "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning",
         "--timeout-graceful-shutdown", "1",
     ]
     if control == "eof":
         command.append("--shutdown-on-stdin-eof")
-    environment = {**os.environ, "PYTHONPATH": str(Path.cwd().resolve())}
+    environment = {**os.environ, "PYTHONPATH": str(Path.cwd().resolve()),
+        "BOXTEAM_RUNTIME_CONTROL_TOKEN": "runner-control-token", "BOXTEAM_BACKEND_GENERATION": "runner-generation"}
     (artifacts / "command.json").write_text(json.dumps({"argv": command, "cwd": str(workspace)}, indent=2) + "\n")
     with (artifacts / "stdout.log").open("w", encoding="utf-8") as stdout, (
         artifacts / "stderr.log"
@@ -205,3 +211,36 @@ def test_runner_exits_nonzero_without_quiescing_failed_startup(runner_process: R
     assert runner.process.wait(timeout=5) == 3
     assert runner.events() == []
     assert "RuntimeError: original-startup-failure" in runner.stderr()
+
+
+@pytest.mark.parametrize("runner_process", [("normal", "eof")], indirect=True)
+def test_authenticated_shutdown_uses_original_runner_and_keeps_callback_until_quiesced(
+    runner_process: RunnerProcess,
+) -> None:
+    runner = runner_process
+    wait_for_http_ok(runner.url + "/health", runner.process, timeout_seconds=5)
+    headers = {"X-Local-Token": "runner-control-token"}
+    with httpx.Client(trust_env=False, timeout=2) as client:
+        service_pid = client.get(runner.url + "/health").raise_for_status().json()["process_id"]
+        payload = {"process_id": service_pid, "backend_generation": "runner-generation"}
+        for token in (None, "wrong-token"):
+            sent_headers = {} if token is None else {"X-Local-Token": token}
+            assert client.post(runner.url + "/api/internal/runtime/shutdown", json=payload,
+                headers=sent_headers).status_code == 401
+        for extra in ({"Origin": "http://localhost"}, {"Sec-Fetch-Site": "same-origin"}):
+            assert client.post(runner.url + "/api/internal/runtime/shutdown", json=payload,
+                headers=headers | extra).status_code == 403
+        for changed in ({"process_id": service_pid + 1}, {"backend_generation": "wrong-generation"}):
+            assert client.post(runner.url + "/api/internal/runtime/shutdown", json=payload | changed,
+                headers=headers).status_code == 409
+        assert runner.process.poll() is None and runner.events() == ["startup"]
+        response = client.post(runner.url + "/api/internal/runtime/shutdown", json=payload, headers=headers)
+        assert response.status_code == 200
+        assert response.headers["X-Request-ID"] == response.json()["request_id"]
+        assert response.json()["data"] == payload | {"accepted": True}
+        runner.wait_for_event("quiesce-enter")
+        assert runner.process.poll() is None
+        assert client.post(runner.url + "/callback").raise_for_status().json() == {"original_owner": True}
+        (runner.artifacts / "release").touch()
+    assert runner.process.wait(timeout=5) == 0
+    assert runner.events() == ["startup", "quiesce-enter", "callback", "quiesce-finish", "lifespan-exit"]

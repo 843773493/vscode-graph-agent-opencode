@@ -1,4 +1,4 @@
-"""Gateway 唯一 HTTP 进程入口；监听关闭前结清原扩展管理队列。"""
+"""受管 HTTP 进程唯一入口；原应用交付关闭前钩子，Uvicorn 负责排空与 lifespan。"""
 
 from __future__ import annotations
 
@@ -8,18 +8,24 @@ import os
 import socket
 import sys
 import threading
-from typing import TYPE_CHECKING, cast
+from collections.abc import Awaitable, Callable
+from typing import cast
 
 import uvicorn
 
-if TYPE_CHECKING:
-    from app.gateway.runtime.extension_management import GatewayExtensionManagement
 
-
-class GatewayServer(uvicorn.Server):
+class ManagedHTTPServer(uvicorn.Server):
     def __init__(self, config: uvicorn.Config, *, shutdown_on_stdin_eof: bool = False) -> None:
         super().__init__(config)
         self.shutdown_on_stdin_eof = shutdown_on_stdin_eof
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        # 原 ASGI lifespan state 会由 Uvicorn 交给各请求，不另建服务注册或进程 owner。
+        self.lifespan.state["request_process_shutdown"] = self.request_process_shutdown
+        await super().startup(sockets=sockets)
+
+    async def request_process_shutdown(self) -> None:
+        self.should_exit = True
 
     async def serve(self, sockets: list[socket.socket] | None = None) -> None:
         if not self.shutdown_on_stdin_eof:
@@ -56,7 +62,7 @@ class GatewayServer(uvicorn.Server):
                     loop.call_soon_threadsafe(request_shutdown, failure)
 
         # 普通 stdin 不接入 Proactor；daemon 避免信号退出时等待阻塞的 executor。
-        threading.Thread(target=watch_launcher, name="gateway-launcher-stdin", daemon=True).start()
+        threading.Thread(target=watch_launcher, name="managed-http-stdin", daemon=True).start()
         try:
             await super().serve(sockets=sockets)
         finally:
@@ -67,13 +73,12 @@ class GatewayServer(uvicorn.Server):
 
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
         if self.started:
-            # 句柄由原应用 lifespan 交付；此时 HTTP listener 仍接受已受理安装的回调。
-            owner = cast(
-                "GatewayExtensionManagement | None",
-                self.lifespan.state["extension_management"],
+            before_shutdown = cast(
+                Callable[[], Awaitable[None]] | None,
+                self.lifespan.state.get("before_http_shutdown"),
             )
-            if owner is not None:
-                await owner.quiesce()
+            if before_shutdown is not None:
+                await before_shutdown()
         await super().shutdown(sockets=sockets)
 
 
@@ -90,7 +95,7 @@ def main() -> None:
     parser.add_argument("--timeout-graceful-shutdown", type=int)
     parser.add_argument("--shutdown-on-stdin-eof", action="store_true")
     args = parser.parse_args()
-    server = GatewayServer(uvicorn.Config(
+    server = ManagedHTTPServer(uvicorn.Config(
         args.app,
         host=args.host,
         port=args.port,
