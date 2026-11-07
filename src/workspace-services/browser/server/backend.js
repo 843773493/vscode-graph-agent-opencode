@@ -1,5 +1,5 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
-import { handleRuntimeLoggingRequest } from "../../../shared/serverRuntimeLoggingControl.mjs";
+import { handleRuntimeLoggingRequest, handleRuntimeShutdownRequest } from "../../../shared/serverRuntimeControl.mjs";
 import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
 import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
 
@@ -241,6 +241,9 @@ async function main() {
     try {
       const { url, pathname } = normalizePathname(request);
       if (await handleRuntimeLoggingRequest(request, response, { pathname, service: "browser", readJson })) return;
+      if (await handleRuntimeShutdownRequest(request, response, { pathname, workspaceId, readJson, logger: workspaceLogger,
+        shutdown: () => shutdown("browser_manager_control", 0),
+      })) return;
       if (request.method === "GET" && pathname === "/health") {
         sendJson(response, 200, {
           ok: true,

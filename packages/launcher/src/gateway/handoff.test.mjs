@@ -15,7 +15,7 @@ async function observeHandoff(scenario, supervisorUrl, controlUrl, lifetimeUrl, 
   const { createGatewaySupervisorControl, gatewaySupervisorControlAddress, requestGatewaySupervisorControl } = await import(controlUrl);
   const { listenServer, closeServer } = await import(lifetimeUrl);
   const { createRuntimeLogger, loadRuntimeLogContract } = await import(loggingUrl);
-  const { runtimeLoggingControl } = await import(new URL("./serverRuntimeLoggingControl.mjs", loggingUrl));
+  const { runtimeLoggingControl } = await import(new URL("./serverRuntimeControl.mjs", loggingUrl));
   const contract = loadRuntimeLogContract(applicationRoot);
   const logger = createRuntimeLogger("launcher", "test", { write() {} }, contract);
   const boxteamHome = process.cwd();

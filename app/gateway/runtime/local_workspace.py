@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -42,7 +42,10 @@ from app.gateway.runtime.workspace_process import (
     start_local_backend_process,
     start_local_node_service_process,
 )
-from app.schemas.runtime_control import RuntimeShutdownAccepted, RuntimeShutdownRequest
+from app.schemas.runtime_control import (
+    RuntimeShutdownRequest,
+    WorkspaceServiceShutdownRequest,
+)
 
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
@@ -330,20 +333,22 @@ def _validate_group_health(
     return actual_pid
 
 
-def _request_backend_shutdown(base_url: str, payload: RuntimeShutdownRequest, token: str) -> None:
+def _request_runtime_shutdown(
+    url: str, payload: RuntimeShutdownRequest | WorkspaceServiceShutdownRequest, token: str,
+) -> None:
     with httpx.Client(timeout=2, trust_env=False) as client:
-        response = client.post(f"{base_url.rstrip('/')}/api/internal/runtime/shutdown",
+        response = client.post(url,
             json=payload.model_dump(), headers={"X-Local-Token": token})
         response.raise_for_status()
-        accepted = RuntimeShutdownAccepted.model_validate(response.json()["data"])
-    if accepted.process_id != payload.process_id or accepted.backend_generation != payload.backend_generation:
-        raise RuntimeError("Backend 未确认原进程及 generation 的关闭请求")
+        accepted = dict(response.json()["data"])
+    if accepted.pop("accepted") is not True or type(payload).model_validate(accepted) != payload:
+        raise RuntimeError("受管服务未确认原进程身份的关闭请求")
 
 
 def _bind_backend_shutdown(process: ManagedProcess | AdoptedManagedProcess, contract: ManagedBackendContract) -> None:
     if os.name == "nt":
         # PID 来自完整健康合同与原生进程身份核验；跨代接管仍使用同一 Backend HTTP 服务。
-        process.shutdown_request = partial(_request_backend_shutdown, contract.backend_url,
+        process.shutdown_request = partial(_request_runtime_shutdown, f"{contract.backend_url.rstrip('/')}/api/internal/runtime/shutdown",
             RuntimeShutdownRequest(process_id=process.pid, backend_generation=contract.generation), get_gateway_local_token())
 
 
@@ -427,6 +432,7 @@ async def _start_member_auxiliary_services(
             ("terminal_manager", mount.terminal_backend_url, "terminal"),
             ("browser_manager", mount.browser_backend_url, "browser"),
         ):
+            service = cast(Literal["terminal_manager", "browser_manager"], service)
             existing = runtime.processes.get(service)
             if existing is not None and not existing.is_alive():
                 runtime.close_process(service)
@@ -457,6 +463,11 @@ async def _start_member_auxiliary_services(
                 getattr(handle, "process", None),
                 request_timeout_seconds=request_timeout_seconds, poll_interval_seconds=poll_interval_seconds,
             )
+            if os.name == "nt":
+                cast(ManagedProcess | AdoptedManagedProcess, handle).shutdown_request = partial(_request_runtime_shutdown,
+                    f"{runtime.service_urls[service]}/internal/runtime/shutdown",
+                    WorkspaceServiceShutdownRequest(process_id=handle.pid, workspace_id=mount.workspace_id),
+                    get_gateway_local_token())
         return runtime
     except BaseException as error:
         for service in reversed(started):

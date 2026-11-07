@@ -235,8 +235,6 @@ console.log(JSON.stringify(await requestGatewayHandoff({boxteamHome:process.env.
         recovered = case.client.get(f"/api/v1/workspaces/{workspace['workspace_id']}/health").raise_for_status().json()
         assert recovered["process_id"] == backend["process_id"]
         evidence["retained"] = {"gateway": changed, "backend": recovered, "service": service}
-        # TODO: Windows Backend 已经认证 HTTP 完成 lifespan；Browser／Terminal 仍走 taskkill，
-        # 分别耗尽120／8秒后强制回收。保留完整验收及失败断言，后续迁齐原服务关闭入口。
         evidence["stop_command"] = case.stop()
         assert psutil.wait_procs([manager], timeout=10)[1] == []
         assert not service_file.exists()

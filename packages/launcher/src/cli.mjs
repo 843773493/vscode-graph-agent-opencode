@@ -154,13 +154,13 @@ export async function main(args) {
     { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
     { loadRuntimeLogContract, createRuntimeLogger, registerRuntimeLogSink },
-    { runtimeLoggingControl, verifyRuntimeLoggingToken },
+    { runtimeLoggingControl, verifyRuntimeControlToken },
   ] = await Promise.all([
     import("./instance-lock.mjs"),
     import("./logging/service-log.mjs"),
     import("./gateway/supervisor.mjs"),
     import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeLogging.mjs")).href),
-    import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeLoggingControl.mjs")).href),
+    import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeControl.mjs")).href),
   ]);
   const logContract = loadRuntimeLogContract(runtime.applicationRoot);
   const lock = acquireLauncherLock({
@@ -201,7 +201,7 @@ export async function main(args) {
       logger: launcherLogger,
       authorizeStop(payload) {
         const token = readFileSync(path.join(boxteamHome, "state", "gateway", "credentials", "local-token"), "utf8").trim();
-        verifyRuntimeLoggingToken(payload.token, token);
+        verifyRuntimeControlToken(payload.token, token);
         if (payload.pid !== lock.value.pid || payload.launcher_token !== lock.value.token) {
           throw new Error("停止请求的 Launcher 实例已变化");
         }

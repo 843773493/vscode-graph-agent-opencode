@@ -161,8 +161,8 @@ def _terminate_windows_process_tree(
             ) from error
 
 
-# TODO(windows-graceful-stop): 未绑定原生关闭通道的无窗口服务不响应 taskkill /T，
-# 期限后 /F 回收仍须保留失败；Backend 已接原认证 HTTP，其它服务不能把强杀伪报成功。
+# TODO(windows-graceful-stop): 未完成就绪／身份核验的无窗口服务仍走 taskkill /T，
+# 期限后 /F 回收须报告失败；已验证 Backend／Browser／Terminal 统一走原认证 HTTP。
 def _taskkill_process_tree(pid: int, *, force: bool) -> None:
     arguments = ["taskkill", "/T"]
     if force:

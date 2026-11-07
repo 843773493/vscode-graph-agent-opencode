@@ -35,7 +35,7 @@ const [root, home] = process.argv.slice(2);
 const { createGatewaySupervisorControl, gatewaySupervisorControlAddress } = await import(
   pathToFileURL(path.join(root, 'packages/launcher/src/gateway/control-channel.mjs')));
 const { runtimeLoggingControl } = await import(
-  pathToFileURL(path.join(root, 'src/shared/serverRuntimeLoggingControl.mjs')));
+  pathToFileURL(path.join(root, 'src/shared/serverRuntimeControl.mjs')));
 const { createRuntimeLogger, loadRuntimeLogContract } = await import(
   pathToFileURL(path.join(root, 'src/shared/serverRuntimeLogging.mjs')));
 const contract = loadRuntimeLogContract(root);

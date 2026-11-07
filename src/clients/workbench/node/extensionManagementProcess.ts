@@ -7,7 +7,7 @@ import { ExtensionGalleryInstallOptionsSchema, ExtensionMetadataPatchSchema } fr
 import { closeHttpServer } from '../../../shared/serverHttpShutdown.mjs';
 import { createJsonRequestReader } from '../../../shared/serverJsonRequest.mjs';
 import { createRuntimeLogger, runtimeLoggingState } from '../../../shared/serverRuntimeLogging.mjs';
-import { handleRuntimeLoggingRequest, verifyRuntimeLoggingToken } from '../../../shared/serverRuntimeLoggingControl.mjs';
+import { handleRuntimeLoggingRequest, verifyRuntimeControlToken } from '../../../shared/serverRuntimeControl.mjs';
 import { createExtensionManagement } from './extensionManagement.js';
 import { withExtensionDownloadTransport } from './extensionDownload.js';
 import { acquireProcessLock } from '../upstream/src/vs/platform/agentHost/node/copilot/localModelBridge/shim/processLock.js';
@@ -32,7 +32,7 @@ try {
     commit: product.commit, vscode_version: product.version, node_version: process.versions.node,
   };
   // 缺少原凭据立即失败，不能发布一个不可认证或无认证的服务。
-  verifyRuntimeLoggingToken(process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN, process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
+  verifyRuntimeControlToken(process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN, process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
   const management = await createExtensionManagement(directory, join(import.meta.dirname, 'builtin-extensions'));
   let queue = Promise.resolve();
   let stopping = false;
@@ -59,7 +59,7 @@ try {
       respond(response, { error: '扩展管理只接受本机管理通道' }, 403);
       return;
     }
-    verifyRuntimeLoggingToken(request.headers['x-local-token'], process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
+    verifyRuntimeControlToken(request.headers['x-local-token'], process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
     const pathname = request.url;
     if (await handleRuntimeLoggingRequest(request, response, { pathname, service: 'extension-management', readJson })) return;
     if (pathname === '/health' && request.method === 'GET') {

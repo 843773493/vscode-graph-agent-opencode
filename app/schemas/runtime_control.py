@@ -14,3 +14,10 @@ class RuntimeShutdownRequest(BaseModel):
 
 class RuntimeShutdownAccepted(RuntimeShutdownRequest):
     accepted: Literal[True]
+
+
+class WorkspaceServiceShutdownRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    process_id: int = Field(gt=0)
+    workspace_id: str = Field(min_length=1)
