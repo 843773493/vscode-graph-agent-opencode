@@ -35,6 +35,8 @@ export function useNavigationRuntime(
 ) {
   const [state, setState] = useState<AppState>(() => ({ ...cloneMaps(INITIAL_APP_STATE), apiPort: 0 }));
   useEffect(() => {
+    // 初始导航还没有身份，不能覆盖其它原生视图已经完成的 Gateway 初始化。
+    if (state.isBootstrapping && !state.browserViewScope) return;
     workspaceContext.publish({ gatewayId: state.browserViewScope ?? null, workspaces: state.gatewayWorkspaces, activeId: state.activeGatewayWorkspaceId,
       settings: state.uiSettingsLoaded ? state.uiSettings : null, loading: state.isBootstrapping || state.workspaceSwitching,
       error: state.gatewayError });

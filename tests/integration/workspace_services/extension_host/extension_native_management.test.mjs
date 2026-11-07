@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright';
+import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { build } from '../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
 import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform } from '../../../../src/clients/workbench/scripts/sourceTransform.mjs';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
@@ -9,7 +10,26 @@ import { TestRunContext } from '../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/workspace_services/extension_host/extension_native_management.test.mjs').prepare();
 const root = resolve('src/clients/workbench'), upstream = './src/clients/workbench/upstream/src/vs/';
 const bundle = join(run.artifactsDir, 'management.fixture.mjs');
+const navigationPath = join(root, 'src/react/useNavigationRuntime.ts');
+const navigationSource = ts.createSourceFile(navigationPath, await readFile(navigationPath, 'utf8'), ts.ScriptTarget.Latest, true);
+const navigation = navigationSource.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'useNavigationRuntime');
+// 运行导航的原发布 effect；目录、会话等其它 hook 不属于这个竞态的边界。
+const publication = navigation.body.statements.filter(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+  && node.expression.expression.getText(navigationSource) === 'useEffect' && node.getText(navigationSource).includes('workspaceContext.publish'));
+if (publication.length !== 1) throw new Error('导航快照发布 effect 的原接线已改变');
 await build({ stdin: { resolveDir: resolve('.'), contents: `
+import { useEffect, createElement } from './src/clients/web/node_modules/react/index.js';
+import { createRoot } from './src/clients/web/node_modules/react-dom/client.js';
+import { workspaceContext } from './src/clients/workbench/src/workspaceContext.js';
+export function navigationPublicationRoot() {
+  function Publication({ state, rendered }) {
+    ${publication[0].getText(navigationSource)}
+    useEffect(rendered, [state]);
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  return { render: state => new Promise(rendered => root.render(createElement(Publication, { state, rendered }))), unmount: () => root.unmount() };
+}
 export { WebExtensionManagementService, captureTargetInstallOptions } from './src/clients/workbench/src/extensions/nativeManagement.js';
 export { WebExtensionManagementService as OriginalManagementOwner } from '${upstream}workbench/services/extensionManagement/common/webExtensionManagementService.js';
 export { WebExtensionsScannerService } from '${upstream}workbench/services/extensionManagement/browser/webExtensionsScannerService.js';
@@ -112,6 +132,46 @@ test('唯一管理owner消费目标原生平台和current资源，旧scanner用�
     expect(value.readme).toEndWith('/docs/guide.txt'); expect(value.changelog).toEndWith('/notes/history.txt');
     expect(value.oldMethods).toEqual([]); expect(value.custom).toBe('function'); expect(value.ownerCount).toBe(1); expect(value.inventoryReads).toBe(1);
     checks.push('唯一owner、目标native平台、main-only市场准入、current管理资源与native运行位置、删除旧scanner用户写链');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('导航晚挂载不撤销已初始化Gateway的库存，真实身份变化仍撤销旧请求', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const { m, service, state, inventory } = globalThis.managementProbe;
+      const navigation = m.navigationPublicationRoot(), pending = [];
+      const initial = { browserViewScope: undefined, gatewayWorkspaces: [], activeGatewayWorkspaceId: null,
+        uiSettings: {}, uiSettingsLoaded: false, isBootstrapping: true, workspaceSwitching: false, gatewayError: null };
+      let entered;
+      const requested = new Promise(resolve => entered = resolve);
+      state.handlers.set('/api/gateway/extension-installations/inventory', (_body, options) => new Promise(resolve => {
+        pending.push({ resolve, signal: options.signal }); entered();
+      }));
+      const first = service.getInstalled(m.ExtensionType.User).then(value => ({ version: value[0].manifest.version }), error => ({ error: error.message }));
+      try {
+        await requested;
+        await navigation.render(initial);
+        const afterMount = { gatewayId: m.workspaceContext.getSnapshot().gatewayId, aborted: pending[0].signal.aborted };
+        const ready = { ...initial, browserViewScope: 'gateway-a', uiSettingsLoaded: true, isBootstrapping: false };
+        await navigation.render(ready);
+        pending[0].resolve(inventory('backend-a', '4.0.0'));
+        const firstResult = await first;
+        let nextEntered;
+        const nextRequested = new Promise(resolve => nextEntered = resolve);
+        entered = nextEntered;
+        const second = service.getInstalled(m.ExtensionType.User).then(() => '错误地成功', error => error.name);
+        await nextRequested;
+        await navigation.render({ ...ready, browserViewScope: 'gateway-b' });
+        const changed = { aborted: pending[1].signal.aborted, result: await second };
+        pending[1].resolve(inventory('backend-a', '5.0.0'));
+        return { afterMount, firstResult, changed };
+      } finally { navigation.unmount(); for (const item of pending) item.resolve(inventory('backend-a', '1.0.0')); }
+    });
+    expect(value.afterMount).toEqual({ gatewayId: 'gateway-a', aborted: false });
+    expect(value.firstResult).toEqual({ version: '4.0.0' });
+    expect(value.changed).toEqual({ aborted: true, result: 'Canceled' });
+    checks.push('原导航React发布effect晚挂载及初始化完成不抹去已核Gateway身份，真实身份变化仍取消原管理在途请求');
   } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
 });
 
