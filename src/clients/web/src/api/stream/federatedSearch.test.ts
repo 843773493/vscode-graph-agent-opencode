@@ -58,6 +58,7 @@ test.each([false, true])("真实读取失败保留请求身份与原始 cause：
   const error = await outcome;
   expect(error).toBeInstanceOf(SearchStreamReadError);
   expect(error).toMatchObject({ code: "stream_read_failed", requestId: "original-request", cause: failure });
+  expect(error.cause).toBe(failure);
   expect(error.message).toContain(failure.message);
   expect(backend.locked).toBe(false);
   expect(events).toEqual(scoped ? ["scope"] : []);

@@ -24,8 +24,8 @@ export class IncompleteSearchStreamError extends Error {
 export class SearchStreamReadError extends Error {
   readonly code = "stream_read_failed";
 
-  constructor(readonly requestId: string, cause: unknown) {
-    super(`搜索连接读取失败: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  constructor(readonly requestId: string, readonly cause: unknown) {
+    super(`搜索连接读取失败: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "SearchStreamReadError";
   }
 }
