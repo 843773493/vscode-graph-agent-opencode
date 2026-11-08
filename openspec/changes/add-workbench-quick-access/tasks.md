@@ -6,7 +6,8 @@
 
 - [x] 1.1 按 design 的具名 owner 对照现行 schema、查询入口与所有直接／间接消费者，确认目录使用 SQLite catalog、Thread 使用精确 SessionThread，不沿用物理目录重建条文。
   - 已核当前Provider注册、原API、Gateway／工具／React／Workbench消费者：目录沿SQLite locator与逻辑导航，folder不映射物理树；Thread经原Session读准入及控制库事务核不可变main_thread_id，消息／工具继续canonical owner。六组Provider相关生产源码与已接受收据逐文件SHA一致，复用原名称／正文／生命周期验收，并以16.6当前83项及真实双Backend调度检查承接调用链。准确归属及证据索引见 `out/tests/temp/2026/11/05/search_owner_inventory/artifacts/verification.json`；本项仅关闭盘点，不代替后续公开合同、跨平台文件身份或完整资源打开验收。
-- [ ] 1.2 为领域搜索新增的请求、命中、独立位置和分支状态补齐原 owner 的 typed 合同；涉及公开 API 时同步其 delta、OpenAPI 与生成客户端。Provider／联邦共享信封按第 16 组统一生命周期，领域 payload 不被通用对象 DTO 取代，不创建第二客户端。
+- [x] 1.2 为领域搜索新增的请求、命中、独立位置和分支状态补齐原 owner 的 typed 合同；涉及公开 API 时同步其 delta、OpenAPI 与生成客户端。Provider／联邦共享信封按第 16 组统一生命周期，领域 payload 不被通用对象 DTO 取代，不创建第二客户端。
+  - 2026-11-08 合同收口：现有请求／能力、7个具名领域页及联邦分支合同已迁齐；15个descriptor根及7个原入口／调度／客户端文件逐项核对，37项真实OpenAPI／嵌套候选漂移／绑定合同通过，生成一致性检查通过且未改写产物。两套客户端绑定及实际Web流31项／260断言通过。源文件指纹、命令和原始结果见 `out/tests/temp/2026/11/08/search_contract_closure/artifacts/verification-v5.json`；只关闭公开结构及唯一链路，不代替完整交互、Electron或1.4的全前端类型验收。
 - [x] 1.3 为文件、目录、消息、工具、请求和日志分别确定必要的查询预算、上限和覆盖说明，复用原 owner 配置／常量；索引技术各自决定，不强建全局索引。
   - design「领域查询预算与覆盖」逐项登记原声明：文件／目录、catalog、Thread、canonical消息／工具、请求、Trace、运行日志及联邦外层；明确1秒领域调度与15秒总准入分别生效、原导航参数与Provider上限区别，以及受限／错误／合法续点的覆盖语义。24份原owner／schema／调度源码只读清点及SHA见 `out/tests/temp/2026/11/05/search_budget_inventory/artifacts/verification.json`；无新生产参数、配置或查询链，不重复未变化的产品测试。本项只完成预算确定，不代替第15／16组剩余验收。
 - [ ] 1.4 完成共享签名和生成类型的真实检查，核真实序列化结果、Unicode 位置单位和错误归属，阻止只改 TS 声明但后端不提供数据的接入。
@@ -183,7 +184,8 @@
 本组是新增架构及迁移验收，勾选以各项实际证据为准，不撤销其它切片的已有证据。2026-11-03 独审补充的生命周期、缓存、配额、原版评分、资源比较和增量结算由本组未完成项继续追踪，不能用已有清点或局部实现证据宣称补充合同已落地。编号只定位职责与必要依赖，不设定整体实施顺序；领域 Provider 可按各自完整纵向链迁移，共享合同及其消费者须一并迁齐后验收。
 
 - [x] 16.1 清点 Gateway catalog 全范围查询／镜像匹配、旧 React 资源导航、Workbench 多目标分支、原文件 SearchService、Agent 工具及测试的全部直接／间接消费者，确定唯一两级调用链与删除清单。
-- [ ] 16.2 在原协议 owner 定义 Provider 能力、类型化领域命中联合及联邦范围／分支／增量／结束信封，同步 OpenAPI／proto／生成客户端与真实类型检查；只共享生命周期，不引入全局业务对象或索引库。
+- [x] 16.2 在原协议 owner 定义 Provider 能力、类型化领域命中联合及联邦范围／分支／增量／结束信封，同步 OpenAPI／proto／生成客户端与真实类型检查；只共享生命周期，不引入全局业务对象或索引库。
+  - 2026-11-08 合同收口：原proto及Pydantic保留同形公开结构与业务校验分工；7个领域页仍引用各owner类型，联邦scope／page／branch／end和diagnostics来源沿同一typed信封。当前Python合同／路由／调度类型零诊断、3套搜索生成绑定的真实TypeScript消费者检查通过，含错误输入必须拒绝的反向约束；Node／Web独立runtime的二进制往返及JSON位置／原诊断消费另通过。OpenAPI与生成检查、消费者31项均通过，238份相关输入前后指纹核对见同一 `verification-v5.json`。Web流另有已存在的ES2021 Error.cause TS2554，已核当前源码与HEAD相同，留在1.4，不声称全前端类型零错误。本片不改生产代码或生成产物，复用前轮真实Gateway／Backend上下文序列化和重启续页证据，不重复构建。
 - [x] 16.3 在工作区 SearchService 注册原 catalog／Thread／文件／消息／工具结果／请求／Trace Provider，按类别＋操作／模式唯一分派，支持能力／版本发现、精确 scope、选项拒绝及原分页／位置；冲突报错，缺 Provider 不永久等待。注册句柄可释放，禁止新准入、取消并等待在途安全结算后释放资源，不能切换 Provider 或发布迟到命中；原领域接口复用同一查询，不复制扫描器或强制 Searchable 基类。
 - [x] 16.4 在 Gateway 实现发起上下文、显式集合与 all 的范围解析，返回稳定集合／时间／顺序；无上下文、空集合、未知或越权 ID 明确拒绝，续页冻结范围，登记变动不静默增删目标，停止目标不启动。
 - [x] 16.5 复用 Gateway 控制面提供有界工作区名称／ID／导航发现，使“相关工作区 → 明确集合 → 会话树／Thread／正文”可由 UI／工具组合；直接集合及 all 查询不以项目名称相关性预筛。
