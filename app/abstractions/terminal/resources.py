@@ -11,6 +11,10 @@ from app.abstractions.workspace_resources import ResourceRequestError, ResourceT
 TerminalSnapshot = dict[str, object]
 
 
+class TerminalPluginDisabled(ValueError):
+    """当前配置未开启 Terminal，不能取得业务调用准入。"""
+
+
 class TerminalWorkingDirectories(Protocol):
     def admit_working_directory(self, target: Path) -> AbstractAsyncContextManager[str | None]:
         """保护目录准入，直到调用方发布持久进程占用；返回受管目录 URI。"""

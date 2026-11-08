@@ -14,14 +14,16 @@ import httpx
 import psutil
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    TerminalPluginService,
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux进程元数据与PTY；不代其它平台验收")
-TerminalService = tuple[str, str, Path, Path, TestRunContext, list[psutil.Process]]
+TerminalService = tuple[TerminalPluginService, Path, Path, TestRunContext, list[psutil.Process]]
 
 
 @pytest.fixture
@@ -104,13 +106,13 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
             env.setenv("NODE_OPTIONS", f"{os.environ.get('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
             env.setenv("BOXTEAM_TEST_TERMINAL_PROCESS_CONTROL", str(control))
             port = integration_backend_port + 63
-            backend = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=run.artifacts_dir)
+            backend = start_terminal_plugin_service(backend_port=port, workspace_root=str(root), artifacts_dir=run.artifacts_dir)
         tracked: list[psutil.Process] = []
         try:
-            yield f"http://127.0.0.1:{port}", load_or_create_workspace_id(root), root, control, run, tracked
+            yield backend, root, control, run, tracked
         finally:
             try:
-                terminate_process(backend)
+                stop_terminal_plugin_service(backend)
             finally:
                 for observed in tracked:
                     with suppress(psutil.NoSuchProcess):
@@ -123,11 +125,12 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
 async def test_native_process_failure_keeps_unknown_identity_and_management_retry(
     terminal_service: TerminalService, stage: str, fail_sink: bool,
 ) -> None:
-    url, workspace_id, root, control, run, observed_processes = terminal_service
+    plugin, root, control, run, observed_processes = terminal_service
+    workspace_id = plugin.workspace_id
     terminal_id = f"term_{uuid4().hex}"
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     marker = control / "fault.json"
-    async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client, AsyncExitStack() as cleanup:
+    async with httpx.AsyncClient(base_url=plugin.http_url, headers=headers, timeout=15, trust_env=False) as client, AsyncExitStack() as cleanup:
         created = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 7,
             "command": sys.executable, "args": ["-c", "import time; time.sleep(120)"],

@@ -30,7 +30,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
@@ -184,21 +183,12 @@ async def open_communication_triad(
                     title="显式歧义测试资源")
             reset_gateway_persistent_state(workspace_root=workspace)
             environment = (backend_environment or {}) | {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
-            terminal_url = None
             browser_url = None
             if name in resource_service_nodes:
-                terminal_port = ports.port(offset + 4)
                 browser_port = ports.port(offset + 5)
                 browser_frontend_port = ports.port(offset + 6)
-                for service_port in (terminal_port, browser_port, browser_frontend_port):
+                for service_port in (browser_port, browser_frontend_port):
                     ensure_local_port_available(service_port, service_name="会话信息正式辅助服务")
-                terminal = await asyncio.to_thread(
-                    start_terminal_backend, backend_port=terminal_port, workspace_root=str(workspace),
-                    artifacts_dir=context.artifacts_dir,
-                )
-                register_test_process(terminal, lambda process=terminal: terminate_process(process))
-                resources.push_async_callback(asyncio.to_thread, unregister_test_process, terminal)
-                resources.push_async_callback(asyncio.to_thread, terminate_process, terminal)
                 browser = await asyncio.to_thread(
                     start_browser_manager_processes, workspace_root=workspace,
                     artifacts_dir=context.artifacts_dir,
@@ -209,11 +199,9 @@ async def open_communication_triad(
                     register_test_process(process, lambda process=process: terminate_process(process))
                     resources.push_async_callback(asyncio.to_thread, unregister_test_process, process)
                 resources.push_async_callback(asyncio.to_thread, close_browser_manager_processes, browser)
-                terminal_url = f"http://127.0.0.1:{terminal_port}"
                 browser_url = f"http://127.0.0.1:{browser_port}"
             mount = MountedWorkspace(
-                    load_or_create_workspace_id(workspace), workspace.resolve(),
-                    terminal_backend_url=terminal_url, browser_backend_url=browser_url,
+                    load_or_create_workspace_id(workspace), workspace.resolve(), browser_backend_url=browser_url,
             )
             def start_owned_backend(workspace=workspace, offset=offset, environment=environment, mount=mount, name=name):
                 try:

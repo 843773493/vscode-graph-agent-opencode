@@ -555,7 +555,7 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(
     async def auxiliary_health() -> dict[str, dict[str, object]]:
         observations: dict[str, dict[str, object]] = {}
         for identity in ids:
-            for service in ("terminal-manager", "browser-manager"):
+            for service in ("browser-manager",):
                 response = await case.client.get(f"/api/gateway/workspaces/{identity}/{service}/health")
                 assert response.status_code == 200, response.text
                 body = response.json()
@@ -920,7 +920,7 @@ async def test_real_stopped_shared_delete_persists_remaining_contract_then_start
     assert str(nondefault_third_root.resolve()) not in json.dumps(published_owner)
     mount = MountedWorkspace(
         binding["workspace_id"], Path(binding["root_path"]),
-        binding["local_service_urls"]["terminal_manager"], binding["local_service_urls"]["browser_manager"],
+        binding["local_service_urls"]["browser_manager"],
     )
     assert health["workspace_id"] == third["workspace_id"] == mount.workspace_id
     assert mount.workspace_root == nondefault_third_root.resolve()

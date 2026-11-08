@@ -59,15 +59,15 @@ class StartupCase:
         port = 44000 + len(self.started) * 10
         runtimes = {}
         backend = ProcessProbe("backend")
-        terminal = ProcessProbe("terminal", failure=self.auxiliary_failure)
-        self.handles.append((backend, terminal))
+        browser = ProcessProbe("browser", failure=self.auxiliary_failure)
+        self.handles.append((backend, browser))
         owner.set_process(backend, adopted=self.backend_adopted)
         for index, member in enumerate(owner.contract.members):
-            terminal_url, browser_url = f"http://127.0.0.1:{port + index * 2 + 1}", f"http://127.0.0.1:{port + index * 2 + 2}"
+            browser_url = f"http://127.0.0.1:{port + index + 1}"
             runtime = WorkspaceRuntime(
-                service_urls={"workspace_api": f"http://127.0.0.1:{port}", "terminal_manager": terminal_url, "browser_manager": browser_url},
+                service_urls={"workspace_api": f"http://127.0.0.1:{port}", "browser_manager": browser_url},
                 backend_owner=owner, workspace_id=member.workspace_id,
-                processes={"terminal_manager": terminal} if index == 0 else {},
+                processes={"browser_manager": browser} if index == 0 else {},
             )
             if self.bad_fields:
                 runtime.service_urls.pop("browser_manager")
@@ -701,8 +701,8 @@ async def test_create_registry_closes_runtime_when_later_startup_fails(startup_c
         with pytest.raises(RuntimeError) as raised:
             await bootstrap.create_registry(preserve_existing_managed_runtimes=preserve_existing_managed_runtimes)
         assert raised.value is startup_error
-    backend, terminal = startup_case.handles[0]
-    assert terminal.events.count("close:terminal") == 1 and not terminal.detached
+    backend, browser = startup_case.handles[0]
+    assert browser.events.count("close:browser") == 1 and not browser.detached
     assert backend.detached is preserve_existing_managed_runtimes
     assert backend.closed is not preserve_existing_managed_runtimes
 
@@ -722,11 +722,11 @@ async def test_candidate_default_runtime_failure_detaches_adopted_processes(star
     if failure_point == "registry_publish":
         assert raised.value is error
     else:
-        assert "服务地址" in str(raised.value)
-    backend, terminal = startup_case.handles[0]
+        assert "Browser Manager 地址" in str(raised.value)
+    backend, browser = startup_case.handles[0]
     assert backend.detached and not backend.closed
-    assert terminal.closed and not terminal.detached
-    assert terminal.events.count("close:terminal") == 1
+    assert browser.closed and not browser.detached
+    assert browser.events.count("close:browser") == 1
 
 
 @pytest.mark.asyncio
@@ -815,13 +815,13 @@ async def test_default_publication_observer_error_defers_cleanup_to_startup_owne
                 preserve_existing_managed_runtimes=False,
             )
         assert raised.value is failure
-        backend, terminal = startup_case.handles[0]
+        backend, browser = startup_case.handles[0]
         assert graph.owner.process is backend and not backend.closed
-        assert not terminal.closed
+        assert not browser.closed
         assert not graph.owner.unpublished_runtimes
         assert registry.managed_runtime(target.workspace_id).backend_owner is graph.owner
     finally:
         registry.remove_commit_observer(observer)
         registry.close()
     assert backend.events.count("close:backend") == 1
-    assert terminal.events.count("close:terminal") == 1
+    assert browser.events.count("close:browser") == 1

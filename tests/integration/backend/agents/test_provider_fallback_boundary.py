@@ -33,7 +33,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     NativeHTTPState,
 )
@@ -79,10 +78,6 @@ async def fallback_backend(
     ports = integration_port_block_for_file(Path(request.node.path))
     terminal_port = ports.port(40)
     with ExitStack() as services:
-        terminal = start_terminal_backend(
-            backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=context.artifacts_dir,
-        )
-        services.callback(terminate_process, terminal)
         browser = start_browser_manager_processes(
             workspace_root=workspace, artifacts_dir=context.artifacts_dir,
             backend_port=ports.port(42), frontend_port=ports.port(43), backend_host="127.0.0.1",
@@ -90,7 +85,6 @@ async def fallback_backend(
         services.callback(close_browser_manager_processes, browser)
         monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{
             "workspace_id": workspace_id, "workspace_root": str(workspace),
-            "terminal_backend_url": f"http://127.0.0.1:{terminal_port}",
             "browser_backend_url": f"http://127.0.0.1:{ports.port(42)}",
             "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
         }]))

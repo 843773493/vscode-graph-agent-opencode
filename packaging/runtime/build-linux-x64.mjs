@@ -22,6 +22,7 @@ import {
 } from "./runtime-release-assets.mjs";
 import { downloadPinnedLinuxPython } from "./pinned-archive-download.mjs";
 import { copyApplicationSources } from "./application-sources.mjs";
+import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import {
   beginRuntimeBuild,
   publishRuntimeBuildResult,
@@ -235,6 +236,7 @@ async function main() {
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);
+  await packDeveloperTools(projectRoot, path.join(applicationRoot, "resources/plugins/developer-tools.zip"));
   // 内建 SQLite 不导出 C 符号；探针只使用连接注入的 SQLite extension API。
   run("cc", [
     "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror",

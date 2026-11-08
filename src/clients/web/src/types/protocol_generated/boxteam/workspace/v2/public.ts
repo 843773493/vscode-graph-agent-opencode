@@ -5,6 +5,7 @@
 // source: boxteam/workspace/v2/public.proto
 
 /* eslint-disable */
+import { PluginServiceReference } from "../../gateway/v2/service_plugin.js";
 import { AttachmentRef } from "./message.js";
 
 export const protobufPackage = "boxteam.workspace.v2";
@@ -2580,6 +2581,7 @@ export interface ResourceTransportGrantDTO {
   grant_token: string;
   expires_at: string;
   resource: WorkspaceResourceDTO | undefined;
+  service?: PluginServiceReference | undefined;
 }
 
 export interface BrowserResourceCreateRequest {
@@ -20317,7 +20319,14 @@ export const WorkspaceResourceCommandRequest: MessageFns<WorkspaceResourceComman
 };
 
 function createBaseResourceTransportGrantDTO(): ResourceTransportGrantDTO {
-  return { resource_id: "", owner_revision: 0, grant_token: "", expires_at: "", resource: undefined };
+  return {
+    resource_id: "",
+    owner_revision: 0,
+    grant_token: "",
+    expires_at: "",
+    resource: undefined,
+    service: undefined,
+  };
 }
 
 export const ResourceTransportGrantDTO: MessageFns<ResourceTransportGrantDTO> = {
@@ -20328,6 +20337,7 @@ export const ResourceTransportGrantDTO: MessageFns<ResourceTransportGrantDTO> = 
       grant_token: isSet(object.grant_token) ? globalThis.String(object.grant_token) : "",
       expires_at: isSet(object.expires_at) ? globalThis.String(object.expires_at) : "",
       resource: isSet(object.resource) ? WorkspaceResourceDTO.fromJSON(object.resource) : undefined,
+      service: isSet(object.service) ? PluginServiceReference.fromJSON(object.service) : undefined,
     };
   },
 
@@ -20348,6 +20358,9 @@ export const ResourceTransportGrantDTO: MessageFns<ResourceTransportGrantDTO> = 
     if (message.resource !== undefined) {
       obj.resource = WorkspaceResourceDTO.toJSON(message.resource);
     }
+    if (message.service !== undefined) {
+      obj.service = PluginServiceReference.toJSON(message.service);
+    }
     return obj;
   },
 
@@ -20362,6 +20375,9 @@ export const ResourceTransportGrantDTO: MessageFns<ResourceTransportGrantDTO> = 
     message.expires_at = object.expires_at ?? "";
     message.resource = (object.resource !== undefined && object.resource !== null)
       ? WorkspaceResourceDTO.fromPartial(object.resource)
+      : undefined;
+    message.service = (object.service !== undefined && object.service !== null)
+      ? PluginServiceReference.fromPartial(object.service)
       : undefined;
     return message;
   },

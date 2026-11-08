@@ -40,13 +40,6 @@ const {
 } = developmentLayout;
 const logContract = loadRuntimeLogContract(projectRoot);
 const webRoot = path.join(projectRoot, "src", "clients", "workbench");
-const terminalFrontendRoot = path.join(
-  projectRoot,
-  "src",
-  "workspace-services",
-  "terminal",
-  "client",
-);
 const browserFrontendRoot = path.join(
   projectRoot,
   "src",
@@ -419,7 +412,6 @@ async function main() {
   for (const [targetPath, label] of [
     [pythonBin, "Python 解释器"],
     [webRoot, "浏览器前端目录"],
-    [terminalFrontendRoot, "终端前端目录"],
     [browserFrontendRoot, "浏览器前端目录"],
     [launcherEntry, "BoxTeam Launcher"],
   ]) {
@@ -452,7 +444,6 @@ async function main() {
     BOXTEAM_DEV_LISTEN_HOST: listenHost,
     BOXTEAM_GATEWAY_PORT: String(ports.gateway),
     BOXTEAM_DEFAULT_BACKEND_PORT: String(ports.backend),
-    BOXTEAM_TERMINAL_FRONTEND_URL: `http://${host}:${ports.terminalFrontend}`,
     BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
   };
@@ -477,7 +468,6 @@ async function main() {
       {
         workspace_id: backendWorkspaceId,
         workspace_root: defaultWorkspaceRoot,
-        terminal_backend_url: null,
         browser_backend_url: null,
         config_candidate_ref: null,
         config_generation: null,
@@ -514,26 +504,6 @@ async function main() {
   } else {
     if (serviceMode === "all") {
       installNodeDebugFixture();
-      processes.push(
-        spawnProcess(
-          nodeBin,
-          [
-            "server.js",
-            "--host",
-            listenHost,
-            "--port",
-            String(ports.terminalFrontend),
-            "--backend-url",
-            "auto",
-            "--workspace-root",
-            defaultWorkspaceRoot,
-            "--asset-root",
-            projectRoot,
-          ],
-          terminalFrontendRoot,
-          environment,
-        ),
-      );
       processes.push(
         spawnProcess(
           nodeBin,
@@ -589,10 +559,6 @@ async function main() {
       gatewayReady = true;
       if (serviceMode === "all") {
         await Promise.all([
-          waitForHttpOk({
-            url: `http://${host}:${ports.terminalFrontend}/health`,
-            label: "terminal frontend",
-          }),
           waitForHttpOk({
             url: `http://${host}:${ports.browserFrontend}/health`,
             label: "browser frontend",

@@ -82,7 +82,6 @@ class RegistryRuntimeMixin:
             mounts.append(MountedWorkspace(
                 member.workspace_id,
                 self.local_workspace_root(member.workspace_id),
-                target.local_service_urls.get("terminal_manager"),
                 target.local_service_urls.get("browser_manager"),
             ))
         if len({mount.workspace_root for mount in mounts}) != len(mounts):
@@ -205,8 +204,8 @@ class RegistryRuntimeMixin:
                 staged_owners.pop(other.contract.owner_id, None)
             if not stopped:
                 runtime = published_runtimes[member.workspace_id]
-                if any(not runtime.service_urls.get(name) for name in ("terminal_manager", "browser_manager")):
-                    raise RuntimeError("Backend 完整 runtime 缺少辅助服务地址")
+                if not runtime.service_urls.get("browser_manager"):
+                    raise RuntimeError("Backend 完整 runtime 缺少 Browser Manager 地址")
                 if runtime.workspace_id != member.workspace_id:
                     raise RuntimeError("Backend runtime 与完整成员 UUID 不匹配")
                 runtime_urls[member.workspace_id] = {**runtime.service_urls, "workspace_api": contract.backend_url}
@@ -214,9 +213,7 @@ class RegistryRuntimeMixin:
             staged_targets[(self.gateway_id, member.workspace_id)] = replace(
                 target, backend_url=contract.backend_url,
                 local_service_urls=target.local_service_urls if stopped else {
-                    name: published_runtimes[member.workspace_id].service_urls[name]
-                    for name in ("terminal_manager", "browser_manager")
-                    if name in published_runtimes[member.workspace_id].service_urls
+                    "browser_manager": published_runtimes[member.workspace_id].service_urls["browser_manager"]
                 },
                 desired_running=not stopped, connection_error=None,
                 target_generation=f"target_generation_{uuid4().hex}",
@@ -586,7 +583,6 @@ class RegistryRuntimeMixin:
         self,
         *,
         preserve_browser_managers: bool = False,
-        preserve_terminal_managers: bool = False,
         preserve_workspace_backends: bool = False,
         detach_adopted_managed_processes: bool = False,
     ) -> None:
@@ -623,10 +619,6 @@ class RegistryRuntimeMixin:
         if preserve_browser_managers:
             for _, runtime in local_runtimes:
                 runtime.detach_process("browser_manager")
-        if preserve_terminal_managers:
-            for _, runtime in local_runtimes:
-                runtime.detach_process("terminal_manager")
-
         for runtime_id, runtime in (
             *local_runtimes,
             *remote_runtimes,

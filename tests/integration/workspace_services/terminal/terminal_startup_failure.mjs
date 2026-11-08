@@ -5,7 +5,6 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const projectRoot = process.env.BOXTEAM_TEST_PROJECT_ROOT;
 const controlRoot = process.env.BOXTEAM_TEST_TERMINAL_CONTROL;
 // 原诊断writer制造真实ENOTDIR；观察日志尝试，不接管状态写入或资源结算。
 if (path.basename(process.argv[1] || "") === "backend.js") {
@@ -19,10 +18,10 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
     }
     return write(chunk, ...args);
   };
-}
-const moduleUrl = relative => pathToFileURL(path.join(projectRoot, relative)).href;
-const { IsolatedPtyProcess } = await import(moduleUrl("src/workspace-services/terminal/server/processes/isolatedPtyProcess.js"));
-const { readProcessStat } = await import(moduleUrl("src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js"));
+const moduleUrl = relative => new URL(relative, pathToFileURL(process.argv[1])).href;
+// 注入实际执行包中的同一模块，不能修改仓库副本却让安装包实例绕过故障屏障。
+const { IsolatedPtyProcess } = await import(moduleUrl("./processes/isolatedPtyProcess.js"));
+const { readProcessStat } = await import(moduleUrl("./processes/terminalProcessLifecycle.js"));
 const start = IsolatedPtyProcess.prototype.start;
 
 IsolatedPtyProcess.prototype.start = async function (options) {
@@ -106,3 +105,4 @@ IsolatedPtyProcess.prototype.start = async function (options) {
   };
   return await pending;
 };
+}

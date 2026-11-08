@@ -27,11 +27,6 @@ from app.core.workspace_identity import load_or_create_workspace_id, read_worksp
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
-    terminal_ports,
-)
-from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.processes.workspace import (
@@ -72,33 +67,13 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
-def e2e_terminal_backend(
-    e2e_workspace_root_path: str,
-    e2e_backend_port: int,
-) -> Generator[subprocess.Popen[str], None, None]:
-    terminal_port, frontend_port = terminal_ports(e2e_backend_port)
-    process = start_terminal_backend(
-        backend_port=terminal_port,
-        frontend_port=frontend_port,
-        workspace_root=e2e_workspace_root_path,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
-    )
-    try:
-        yield process
-    finally:
-        terminate_process(process)
-
-
-@pytest.fixture(scope="module")
 def e2e_backend_process(
-    e2e_terminal_backend: subprocess.Popen[str],
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
     e2e_backend_port: int,
     is_debug: bool,
     e2e_model_stream_runtime_config_path: str | None,
 ) -> Generator[subprocess.Popen[str], None, None]:
-    del e2e_terminal_backend
     debugpy_port = (
         int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
     )
@@ -106,7 +81,6 @@ def e2e_backend_process(
     workspace_root = Path(e2e_workspace_root_path).resolve()
     startup_mount = MountedWorkspace(
         load_or_create_workspace_id(workspace_root), workspace_root,
-        terminal_backend_url=f"http://127.0.0.1:{terminal_ports(e2e_backend_port)[0]}",
     )
     if e2e_model_stream_runtime_config_path is not None:
         env_overrides["BOXTEAM_TEST_MODEL_STREAM_CONFIG"] = (

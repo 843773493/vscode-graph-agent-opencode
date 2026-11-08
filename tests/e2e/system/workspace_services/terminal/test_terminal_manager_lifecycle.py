@@ -25,8 +25,10 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
     wait_terminal_snapshot,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 
 
 class ProcessSnapshot(NamedTuple):
@@ -179,8 +181,7 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
 ):
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 70)
     root = create_terminal_scenario_workspace(e2e_workspace_root_path, "sigterm")
-    workspace_id = load_or_create_workspace_id(Path(root))
-    process = start_terminal_backend(
+    plugin = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=root,
         artifacts_dir=terminal_run_context.artifacts_dir,
@@ -191,7 +192,8 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
             backend_port=backend_port, workspace_root=root, title="sigterm preserve"
         )
         terminal_id = str(terminal["terminal_id"])
-        wait_terminal_process_metadata(backend_port, terminal_id, workspace_id)
+        wait_terminal_process_metadata(plugin, terminal_id)
+        workspace_id = plugin.workspace_id
         original = terminal_state_record(root, terminal_id)
         process.terminate()
         assert process.wait(timeout=10) == 128 + signal.SIGTERM
@@ -199,7 +201,7 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
         assert record["release_reason"] == "terminal_manager_sigterm"
         assert _registered_process_snapshot(original) is not None
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(plugin)
         if original is not None:
             _reap_registered_process(original)
 
@@ -212,8 +214,7 @@ def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recove
 ):
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 72)
     root = create_terminal_scenario_workspace(e2e_workspace_root_path, "startup")
-    workspace_id = load_or_create_workspace_id(Path(root))
-    process = start_terminal_backend(
+    plugin = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=root,
         artifacts_dir=terminal_run_context.artifacts_dir,
@@ -224,16 +225,17 @@ def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recove
             backend_port=backend_port, workspace_root=root, title="restart preserve"
         )
         terminal_id = str(terminal["terminal_id"])
-        wait_terminal_process_metadata(backend_port, terminal_id, workspace_id)
+        wait_terminal_process_metadata(plugin, terminal_id)
+        workspace_id = plugin.workspace_id
         original = terminal_state_record(root, terminal_id)
-        process.kill()
-        process.wait(timeout=10)
-        process = start_terminal_backend(
+        plugin.process.kill()
+        plugin.process.wait(timeout=10)
+        plugin = start_terminal_plugin_service(
             backend_port=backend_port,
             workspace_root=root,
             artifacts_dir=terminal_run_context.artifacts_dir,
         )
-        snapshot = wait_terminal_snapshot(backend_port, terminal_id, workspace_id)
+        snapshot = wait_terminal_snapshot(plugin, terminal_id)
         record = _assert_preserved_transport(root, original, workspace_id)
         assert snapshot["terminal_id"] == terminal_id
         assert snapshot["reconciliation_status"] == "reconcile_required"
@@ -241,6 +243,6 @@ def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recove
         assert record["last_input"] == original["last_input"]
         assert record["sequence"] == original["sequence"]
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(plugin)
         if original is not None:
             _reap_registered_process(original)

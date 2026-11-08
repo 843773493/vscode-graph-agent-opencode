@@ -12,6 +12,7 @@ import psutil
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import TerminalPluginService
 from tests.support.ports import TEST_FILE_PORT_BLOCK_SIZE
 from tests.support.workspaces import prepare_test_workspace
 
@@ -66,7 +67,7 @@ def prepare_empty_terminal_e2e_workspace(test_file: Path) -> str:
 
 def create_long_running_terminal(
     *,
-    backend_port: int,
+    plugin: TerminalPluginService,
     workspace_root: str,
     title: str,
 ) -> dict[str, object]:
@@ -81,9 +82,9 @@ def create_long_running_terminal(
         "args": ["-c", "trap '' TERM HUP INT; while true; do sleep 1; done"],
     }
     request = Request(
-        f"http://127.0.0.1:{backend_port}/api/terminals",
+        f"{plugin.http_url}/api/terminals",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json", "X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"},
+        headers={"content-type": "application/json", **plugin.headers},
         method="POST",
     )
     try:
@@ -97,17 +98,17 @@ def create_long_running_terminal(
         ) from error
 
 
-def get_terminal_snapshot(backend_port: int, terminal_id: str, workspace_id: str) -> dict[str, object]:
+def get_terminal_snapshot(plugin: TerminalPluginService, terminal_id: str) -> dict[str, object]:
     request = Request(
-        f"http://127.0.0.1:{backend_port}/api/terminals/{terminal_id}",
-        headers={"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"},
+        f"{plugin.http_url}/api/terminals/{terminal_id}",
+        headers=plugin.headers,
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))["data"]
 
 
 def wait_terminal_snapshot(
-    backend_port: int,
+    plugin: TerminalPluginService,
     terminal_id: str,
     workspace_id: str,
     *,
@@ -117,7 +118,7 @@ def wait_terminal_snapshot(
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            return get_terminal_snapshot(backend_port, terminal_id, workspace_id)
+            return get_terminal_snapshot(plugin, terminal_id)
         except HTTPError as error:
             if error.code != 404:
                 raise
@@ -126,10 +127,10 @@ def wait_terminal_snapshot(
     raise TimeoutError(f"终端快照未恢复: terminal_id={terminal_id}") from last_error
 
 
-def wait_terminal_process_metadata(backend_port: int, terminal_id: str, workspace_id: str) -> None:
+def wait_terminal_process_metadata(plugin: TerminalPluginService, terminal_id: str) -> None:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        snapshot = get_terminal_snapshot(backend_port, terminal_id, workspace_id)
+        snapshot = get_terminal_snapshot(plugin, terminal_id)
         if snapshot.get("process_session_id") and snapshot.get("process_start_time"):
             return
         time.sleep(0.1)

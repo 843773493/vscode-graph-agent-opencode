@@ -212,6 +212,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
       beginRuntimeBuild: () => "fixture-fingerprint",
       publishRuntimeBuildResult: () => { throw new Error("fixture不得进入构建发布"); },
     };
+    else if (specifier === "../../scripts/plugins/pack-developer-tools.mjs") exports = { async packDeveloperTools() {} };
     else if (specifier === "./application-sources.mjs") exports = { copyApplicationSources() {} };
     else if (specifier === "./windows-python-dependencies.mjs") exports = { installWindowsPythonDependencies() {} };
     else {

@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package boxteam.workspace.v2;
 
+import "boxteam/gateway/v2/service_plugin.proto";
 import "boxteam/workspace/v2/message.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
@@ -2540,6 +2541,7 @@ message ResourceTransportGrantDTO {
   string grant_token = 3;
   string expires_at = 4;
   WorkspaceResourceDTO resource = 5;
+  optional boxteam.gateway.v2.PluginServiceReference service = 6;
 }
 
 message BrowserResourceCreateRequest {

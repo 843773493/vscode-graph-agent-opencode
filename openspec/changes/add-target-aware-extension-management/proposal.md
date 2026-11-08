@@ -1,48 +1,47 @@
 ## Why
 
-同一工作台需要管理当前 Gateway 及远端 Gateway 下、一个后端承载的多个工作区。仅展示原版扩展／MCP 面板无法确定安装位置、执行宿主、工作区启用范围与配置归属，也不能让原版 MCP 运行时自动接入项目 Agent。
-
-用户在 Extensions 视图的标题工具栏选择目标 Gateway，默认本地；列表、搜索、详情和后续安装沿用该选择，不逐个插件重新询问目标。MCP 和设置需要切换目标时复用同一控件与交互规则，各管理视图保留自己的选择。每个 Gateway 是其管理环境的安装与配置入口；直接打开远端页面，或从本地页面经联邦访问它，使用同一份目标安装与配置事实。需要复用 Code OSS 的成熟界面与宿主机制，以及现有工作区 MCP owner、配置提交及联邦管理链路。
+当前 Workbench 已复用 Code OSS 的注册机制并接入多项业务能力，但自有插件尚不能统一声明贡献或注册 Provider；浏览器、终端与 MCP 也具有不同的托管边界。本变更借鉴 VS Code 的完整扩展架构，建立项目自有的声明、注册、调用与释放合同，首批只开放少量能力，运行进程统一由目标 Gateway 托管。
 
 ## What Changes
 
-- 在原 Extensions 视图容器的标题工具栏增加目标切换动作，默认本地；点击目标动作时复用原 Quick Input，原列表、搜索、详情及 Install／Update／Uninstall 操作消费视图已选目标，不逐项弹目标选择器。MCP／设置复用该控件与规则，仅在业务需要时补选工作区或来源层；不增加随焦点变化的工作台全局目标，也不将“此工作台／Web”列为另一安装目标。
-- 分开 VSIX 扩展市场与 MCP 服务目录，使用可配置且经真实验证的来源；本地 VSIX、手动 MCP 定义与目录安装进入各自同一管理链，不承诺所有第三方市场或扩展均可用。
-- Web／Node 扩展和 MCP 制品均由所选目标侧管理，多个前端共享该目标的安装包、版本和库存；工作区独立启用、参数、凭据与 MCP 连接。配置范围和运行实例保留为内部必要信息，不让用户重复选择三套目标，也不将共享包解释为共享进程或授权。
-- 原生目标 Gateway 通过既有受管进程机制连接每个安装域唯一、持续复用的 Node 扩展管理服务。该组件直接提供受本机认证保护的 HTTP 服务并自行持有安装域独占锁；Gateway 启动先核验接管已有实例，没有实例才启动。新旧 Gateway 换代只交接管理句柄，完整停机才排空并关闭服务；候选 Gateway 启动失败不得关闭旧版正在使用的实例。不新增代理进程或移交 Launcher。仅复用原 Code OSS 安装／更新／卸载、库存及必要的 profile／scanner 语义，不将该进程开放为 Python 的通用 Node 服务。多个 Backend 和客户端共用，不按请求启动 Node，也不随工作区切换、页面关闭或单个 Backend 重启而退出。Gateway 最终判权，Relay 只转送；实际 Node 扩展仍在 Backend 所持的独立 Extension Host 运行，Web 扩展仍在浏览器执行，MCP 安装与连接继续交原 owner。
-- VSIX 下载、目标文件读写、包资源字节读取、文件监听与日志收集优先复用目标侧现有 Python 服务；缺少能力时在原 Python owner 补齐，不借扩展管理 Node 新建通用文件、监听或环境服务。Code OSS 配置模型、scope 与 JSONC 编辑语义保留在原服务，配置文件 I/O 和通知迁齐 Python 链；Node 安装器自身必需的内部文件服务和监听保留为实现细节，不形成第二份对外服务或安装事实。
-- MCP 的新安装界面消费现有配置 owner、`McpCatalogOwner`、连接操作、OAuth 与调用监督；继续使用唯一目录／generation／租约，不再启动一套与项目 Agent 无关的 MCP 运行时。
-- Web 扩展从所选目标的同一安装记录加载，通过 Gateway 提供已授权的静态贡献与 browser 入口，在当前 Workbench 原 Web Extension Host 执行；Node 入口在该目标后端宿主执行。browser／main 只决定运行分派，不形成两套安装服务或独立的浏览器权威库存。Electron 仍只承担窗口、生命周期和固定 profile，复用同一 renderer，不增加原生文件系统 IPC 或 Electron 插件宿主。
-- `extension_host_manage` 统一覆盖目标 Web／Node 扩展运行，安装管理不代授执行；只读包资源允许安装管理或宿主管理任一权限，但不扩大可访问版本。已运行 Web 实例冻结目标及包版本，更新或逻辑卸载不截断其合法资源读取，直到实例关闭或运行授权撤销；新实例只使用当前安装版本，物理回收继续尊重原引用。
-- 将原版单 Remote running location 扩展为有明确目标及工作区视图的宿主路由，复用原扩展 API／RPC／贡献机制；明确同名命令、资源 Provider、终端、调试、Webview 和存储的归属，不靠切换全局 remoteAuthority 支持多目标。
-- 迁齐按扩展 ID 唯一索引的内部注册与激活链，支持同 ID 多目标实例；文档、编辑器、配置事件和运行态贡献按宿主视图投影，窗口级声明冲突明确诊断。
-- 复用现有配置来源层、schema、CAS、幂等提交、active／pending、用户级 source fan-out 和 restart 分类，在设置编辑器顶部使用相同目标控件并提供来源说明、表单与 JSONC 编辑。远端保存自己的配置，本地只保存连接登记与展示镜像；已打开的编辑内容不随其它视图切换目标。
-- 明确补齐现有配置 API 尚缺的来源正文／schema／source writer，以及远端配置读写能力；VSIX 设置独立沿原 Code OSS profile／remote user／workspace／folder／语言覆盖模型，不混入 Python 业务配置。
-- 新增目标侧实际 MCP 制品安装与普通敏感输入的私有引用链；保留动态 MCP definition Provider 的发现／resolve／变更／撤销生命周期，制品引用沿原连接代际监督结算。
-- 扩展／MCP 命令与管理对象接入 `add-workbench-quick-access` 的原 Registry、Command、Opener 和查询合同；注册能力后由标准入口消费，不另建项目插件 ABI、全局索引或设置事实源。
-- 明确兼容能力矩阵、安装／配置／运行的不同阶段、断线及重启恢复、同机多工作区隔离和真实 Web／Electron／远端验收。任务按职责组织，不定义全局串行实施顺序。
+- **BREAKING**：取消第三方 VS Code 插件兼容，删除项目接入的 VSIX 安装／扫描／卸载、Marketplace／Gallery、Web／Node Extension Host、扩展 API／RPC、动态 VSIX MCP Provider 及相关配置、构建、协议和测试链路。不得保留转换器、旧格式 fallback 或第二安装／运行体系。
+- 统一浏览器管理器、终端管理器、源码调试、MCP 以及需要创建进程的安装阶段为受管服务插件。Backend 始终通过 HTTP／流式通道访问 Gateway，再由目标原生 Gateway 路由到精确插件实例；不保存插件监听端口，不直接创建这些执行子进程。`python_exec`、持续任务条件脚本和视频预处理 ffmpeg 明确排除本次迁移，保留原调用方式、Backend 执行位置和现有进程管理，不接入 Gateway 或终端插件。
+- 自有包使用标准 `.zip` 归档，根目录包含 `plugin.jsonc`，不规定专用文件后缀；manifest、扩展合同与管理协议分别版本化。区分声明式贡献、运行期 Provider 与受管服务；纯声明插件无需运行入口，有运行代码时支持 Python／Node，不沿用 VSIX manifest 或 vscode API。
+- 统一“插件包 Plugin Package／插件 Plugin／贡献 Contribution／运行实例 Runtime Instance”。ZIP 是整体安装更新单位，plugins 是独立启停单位，贡献全部归插件；不保留根级运行入口或另一套模块／功能管理实体。同包插件独立实例，纯声明插件无进程。
+- 首批开放命令、菜单、快捷键、配置、受管服务、源码调试与 Skill 七类贡献，直接接入已有 Workbench Registry／业务服务；建立扩展点版本和支持状态、显式插件目标、开关驱动启停、取消／事件与注销释放合同。调试迁移已有 Node Inspector JavaScript 业务及20个工具，经标准 DAP 接原 Debug UI；不依赖 js-debug VSIX，不宣称已支持 Python 调试。搜索、树、编辑器、文件系统、语言、通用 Terminal／Task Provider 等仍未开放，不因上游有实现而伪报插件可用，不预写空 Provider。
+- UI 复用原插件管理视图，按“插件包 → 插件 → 运行实例”展示，支持当前 Gateway、当前工作区的开启／关闭／重启及新建工作区默认值；默认值只在创建时冻结初始化，不修改已有工作区。插件开启随所属范围运行，工具、命令和 Skill 不触发启动；包级批量开关逐项报告，不增加包级 enabled。
+- Gateway 复用原进程管理体系，支持每 Gateway 唯一实例和每工作区独立实例；实际 PTY、浏览器、stdio 子进程由所属服务持有。共享包、共享进程和共享业务资源分别表达，工作区状态和秘密不迁入 Gateway。
+- 使用一套简单默认生命周期：明确启动／停止、独立连接状态、崩溃报错、显式重启、新运行身份、写操作结果未知不重放。Backend 重启、页面关闭及 Tab 切换不停止插件；高级恢复和按服务定制生命周期以后按实际需求增加。
+- 沿 Gateway 原配置及日志热更新机制提供统一诊断、可开关的本地遥测与统计；关闭采集时停止对应开销，普通业务请求不附带安装审计、进程扫描或全量健康检查。
+- 原扩展管理 UI 的搜索、列表、详情、安装／更新／卸载、设置及标题目标选择直接消费自有插件模型。保留各视图目标和草稿归属，不伪造 VSIX 对象以继续调用旧服务。
+- 分发只预留项目自有公网目录／下载协议与可配置来源；当前无公网服务，未配置时明确显示不可用并且零外部查询。支持自有格式的本地包及显式开发目录；不回退到 VS Code、Open VSX 或 MCP 第三方目录。
+- MCP 继续使用标准 Streamable HTTP，stdio 服务在插件内托管；终端与浏览器的 HTTP／WebSocket／SSE 同样经过 Gateway，现有业务操作、资源 ID、输出顺序及结果归属保持。外部原生 HTTP MCP 通过 Gateway 路由，不强制创建本地包装进程。
+- 安装、插件运行、工作区插件启用及配置提交分别报告真实状态。复用唯一安装记录、工作区 MCP owner、配置来源／CAS／active／pending、联邦授权和 request_id；Agent 的会话、调用租约及历史由 Backend 原 owner 维护。
+- 版本切换采用固定流程：预校验、原来源 CAS 提交期望、撤准入、停旧核退出／启新、原 owner 顺序发布；预校验失败保留原状态，替换阶段失败停止推进并报告真实结果，不自动回滚、补偿或循环重试。MCP 仅沿 Backend 原 journal／claim／publication 协调，Gateway 不建第二候选状态机；UI 消费完整快照派生投影。卸载只核原实例、active／pending 绑定、模板／创建 intent 和读取／使用 lease，未知引用拒绝本次卸载，不建立全局巡检。未绑定参数限原配置登记容器保留且未生效，重绑定严格验证。人工工具确认仅回归原显式可选机制，普通会话及插件管理不新增审批入口、等待状态、轮询或执行恢复。
+- 按实际 default／agent-collaboration／debugging 注册组清点工具族，保留公开工具名、输入输出、调用资格和结果封存合同。Agent 暂停／断点／快照、Goal／任务调度、协作、文件／搜索、技能及 HTTP 查询继续由原业务 owner 负责；只迁移本次明确纳入的执行链，不把所有工具强制改为 MCP，不误删名为“扩展工具”的业务注册。
+- 插件通过 plugins[].contributes.skills 携带 SKILL.md、配套文档／示例和明确工具合同关联；复用原 Skill 来源、SkillCatalog、URI、skill_load 与上下文版本机制，不建立第二技能目录或逐工作区复制包。安装、插件开关、Skill 加载与工具准入分开，代码启动仅由插件开关／所属运行时恢复驱动；保留原调用信封及 tools.custom[].skills 关联，allowed-tools 不作为授权。浏览器／调试 Skill 随对应能力纵向迁移，Web 搜索／Gateway 上下文 Skill 保持原 owner；更新、撤权和卸载明确处理冻结版本及引用，不自动注入说明或执行包内脚本。
+- 快速访问消费自有插件的正式命令、状态及资源入口；Web 与 Electron 构建同一工作台，Electron 不承担插件进程或新增原生 IPC。
+- 明确插件包推荐布局、产品源码落点和运行数据归属：根清单显式声明各插件入口／贡献路径，内部目录不作为发现协议；扩展点合同目录集中维护，注册仍接原服务。Gateway 插件管理复用原 runtime，已安装包只读，实例日志及工作区业务数据沿原 owner 存储，自带包与下载包采用同一格式。
 
 ## Capabilities
 
 ### New Capabilities
 
-- `mcp-installation-management`: 目标感知的 MCP 目录发现、安装、版本、工作区启用、共享包引用与既有 Agent MCP owner 集成。
-- `multi-target-extension-hosts`: 原版扩展管理与 Web／多目标 Node 宿主、贡献路由、能力约束、存储隔离及生命周期。
-- `target-scoped-settings`: 同一工作台内按 Workbench、原生 Gateway、Workspace 来源层编辑设置，并展示真实来源、生效与冲突状态。
+- `multi-target-extension-hosts`：保留本 change 的能力目录标识，覆盖自有插件的声明／运行期注册／受管服务三层架构、首批能力、目标与生命周期、遥测及发行合同；不表示继续支持 VS Code Extension Host。
+- `mcp-installation-management`：自有插件来源及安装在 MCP 服务上的使用、工作区绑定与标准 MCP 接入，取消第三方目录／VSIX Provider 和 Backend 直接启动链路。
+- `target-scoped-settings`：复用设置 UI 编辑自有插件及既有 Gateway／Workspace 配置，保留明确目标、schema、来源、CAS、秘密引用和真实生效状态。
 
 ### Modified Capabilities
 
-- `configuration-domains`: 补明确选中来源文件的读取、无副作用预检与文件 CAS writer，保留原单工作区 SQLite 层物化及用户 source fan-out 语义。
-- `configuration-evolution`: 区分来源保存、层物化与 active／pending 生效，沿原候选、幂等提交及配置事件报告真实状态。
-- `remote-gateway-federation`: 登记默认拒绝且绑定认证主体的 configuration_read／configuration_write，覆盖实际披露与写入点，并与原生命周期权限分开。
-- `virtual-resource-addressing`: 为目标原 Code OSS profile settings 和稳定多根 workspace 文件登记两个具名 `config` URI 模板、精确文件／直接父级能力及认证宿主映射，不改变既有业务 ConfigSource 的单段逻辑名。
-
-现行 `mcp-connection-supervision`、`extension-connection-management` 和多工作区挂载的原业务状态机保持不变；私有输入引用、受管 launch binding 及安装／宿主管理合同仍须随对应实施切片按 task 1.6 补齐原 owner delta／schema／消费者。涉及原合同的其它变化须先明确规划，不借 UI 接入默改行为。
+- `configuration-domains`：保留来源编辑与 fan-out；明确 Gateway 的插件登记／诊断配置与 Workspace 服务参数的边界，移除 Backend managed stdio launch 配置。
+- `configuration-evolution`：保留来源保存、物化及 active／pending；新增受管实例热应用实际 revision 的可观察结果。
+- `mcp-connection-supervision`：进程托管归 Gateway／插件，工作区 MCP 连接、目录和执行资格仍归 Backend 原 owner，取消 Backend stdio 创建路径。
+- `remote-gateway-federation`：原生目标最终判权，安装／运行管理独立授权；统一 Backend、Relay 与流式插件路由，不扩大普通业务权限。
+- `virtual-resource-addressing`：撤销本 change 尚未发布的 extension-host profile／view 地址提案，设置继续使用既有配置资源合同；插件 Skill 及配套文件接原技能资源 owner，不恢复旧 VSIX 包根或自造 URI；不为进程或临时端口造业务 URI。
 
 ## Impact
 
-- Workbench：现有贡献及 sourceTransform、原扩展／MCP 管理服务、扩展宿主路由、设置编辑器和快速访问接入；不修改固定上游子模块或复制原版面板。
-- 后端：保留工作区 MCP、业务配置与 Node 扩展运行宿主 owner；VSIX 安装管理调用同一目标 Gateway 托管的原安装器，配置及资源文件 I/O／监听消费目标侧 Python 服务，移除 Backend 自行按请求启动管理 Node 及借 Node 提供通用文件能力的链路。
-- Gateway：作为统一目标入口，复用 registry、联邦管理授权、路由、生命周期和请求追踪，与 Backend／Browser／Terminal 一同管理 Node 安装组件的启动、就绪、日志和停止；安装事实继续由组件中的原 Code OSS 服务持有，Python 不维护另一份库存或 profile 成员。通用能力按既有 Python owner 归属提供；Gateway 不执行插件代码、不直接读写工作区业务数据，远端 Relay 不复制安装／配置事实，SSH 只承担既有连接与传输职责。
-- 协议与发行：增加明确目标、能力、安装操作及宿主通道合同，迁齐生成物及消费者。运行时组件、离线资源与版本需进入真实发行产物验证；不依赖开发服务器或源码目录。
-- 规划组织：一个独立 change 内拆分三个 capability，与快速访问变更双向关联；本次仅修订规划，保留已有实施证据，统一目标、Web 安装归属、Gateway 常驻安装器及 Python／Node 职责收口均按新要求验收，不将规划修改或旧链路的通过记录记为新架构已实现。
+- Gateway：复用 registry、进程句柄／组、接管、日志、联邦和配置设施；新增具名插件管理及业务代理，不运行 Agent 业务、不直接读取工作区 `.boxteam/`。
+- Backend／workspace-services：Terminal／Browser 客户端、源码调试和 MCP 会话统一访问 Gateway，服务内部保留原资源 owner；安装子进程按原规划迁入受管执行边界。Python 工具、条件脚本和 ffmpeg 保留现有实现；存储一致性内部原语和宿主系统打开操作同样不在本次迁移范围。
+- Workbench／发行：复用原注册表与 UI 服务承接自有贡献，不创建第二套命令／菜单／设置系统；迁齐旧体系的有效业务消费者后删除旧市场、用户扩展宿主和打包接线，保留原版编辑器与内置资源，不修改 reference_repo 或固定上游源码。
+- 本轮只修订 OpenSpec，不实施代码或修改用户环境。已有任务与验证原文在 tasks.md 历史区保留，不计作新架构已实现；后续迁移按纵向链和真实 release 基线执行。

@@ -14,6 +14,10 @@ ResourceKind = Literal["terminal", "browser"]
 ResourceSnapshot = dict[str, object]
 
 
+class ResourceAssociationMissing(ValueError):
+    """调用的精确 Thread 已不再关联该资源；原操作未派发。"""
+
+
 class ResourceRequestError(RuntimeError):
     """保留原请求错误；创建回执是尚待领域 owner 核验的传输数据。"""
 

@@ -16,10 +16,6 @@ from tests.harness.python.browser_manager import (
     start_browser_frontend_process,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_frontend import (
-    close_terminal_frontend_process,
-    start_terminal_frontend_process,
-)
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
@@ -60,14 +56,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway_port = port_block.port(20)
     browser_frontend_port = port_block.port(21)
-    terminal_frontend_port = port_block.port(22)
     with ExitStack() as lifetime:
-        terminal_frontend = start_terminal_frontend_process(
-            workspace_root=workspace_root,
-            artifacts_dir=artifacts,
-            frontend_port=terminal_frontend_port,
-        )
-        lifetime.callback(close_terminal_frontend_process, terminal_frontend)
         browser_frontend = start_browser_frontend_process(
             workspace_root=workspace_root,
             artifacts_dir=artifacts,
@@ -82,7 +71,6 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
             extra_env={
                 "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
-                "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{terminal_frontend_port}",
                 "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             },
         )

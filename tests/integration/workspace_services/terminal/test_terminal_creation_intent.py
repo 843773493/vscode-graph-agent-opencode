@@ -10,7 +10,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.harness.python.terminal_backend import (
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.integration.workspace_services.terminal.test_terminal_shutdown_signals import (
     TerminalService,
     wait_file,
@@ -23,15 +26,14 @@ from tests.integration.workspace_services.terminal.test_terminal_startup_cleanup
     process_identity,
     workload,
 )
-from tests.support.processes.workspace import terminate_process
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux PTY与Node硬退出；不代替Windows")
 
 
 async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_service: TerminalService) -> None:
-    run, process, url, workspace_id, control, root = terminal_service
+    run, plugin, url, workspace_id, control, root = terminal_service
     terminal_id = f"term_{uuid4().hex}"
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     payload = {"terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 7,
                "command": sys.executable, "args": ["-c", workload(control, ignore_sigterm=False)]}
     state_file = root / ".boxteam/terminal-manager/terminals.json"
@@ -51,15 +53,16 @@ async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_s
             for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time", "started_at"):
                 assert record[field] is None
             assert not creating.done()
-            process.kill()
-            assert await asyncio.to_thread(process.wait, timeout=5) == -9
+            plugin.process.kill()
+            assert await asyncio.to_thread(plugin.process.wait, timeout=5) == -9
             with pytest.raises(httpx.TransportError):
                 await creating
             # 复用原磁盘启动真正的新Manager，不补写意图、身份或停止证明。
             restarted = await asyncio.to_thread(
-                start_terminal_backend, backend_port=int(url.rsplit(":", 1)[1]), workspace_root=str(root),
+                start_terminal_plugin_service, backend_port=int(plugin.root_url.rsplit(":", 1)[1]), workspace_root=str(root),
                 artifacts_dir=run.artifacts_dir / "restarted",
             )
+            client.headers.update(restarted.headers)
             response = await client.get(f"/api/terminals/{terminal_id}")
             assert response.status_code == 200, response.text
             cold = response.json()["data"]
@@ -90,4 +93,4 @@ async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_s
                 creating.cancel()
                 await asyncio.gather(creating, return_exceptions=True)
             if restarted is not None:
-                await asyncio.to_thread(terminate_process, restarted)
+                await asyncio.to_thread(stop_terminal_plugin_service, restarted)

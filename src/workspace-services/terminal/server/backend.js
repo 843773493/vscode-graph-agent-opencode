@@ -1,11 +1,10 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
-import { handleRuntimeLoggingRequest, handleRuntimeShutdownRequest } from "../../../shared/serverRuntimeControl.mjs";
+import { verifyRuntimeControlToken } from "../../../shared/serverRuntimeControl.mjs";
+import { createPluginRuntimeManagement } from "../../../shared/serverPluginRuntime.mjs";
 import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
 import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
 
 import http from "node:http";
-import path from "node:path";
-import { existsSync, statSync } from "node:fs";
 import { WebSocket, WebSocketServer } from "ws";
 import { encodeTerminalServerMessage } from "../protocol/messages.js";
 import { parseTerminalClientMessage, rejectTerminalMessageType } from "./terminalInput.js";
@@ -14,26 +13,7 @@ import { validateWorkspaceId } from "./workspaceIdentity.js";
 
 const logger = createRuntimeLogger("terminal", "terminal.backend");
 
-const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 8012;
 const WEBSOCKET_HIGH_WATERMARK_BYTES = 512 * 1024;
-
-function parseArgs(argv) {
-  const args = new Map();
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!arg.startsWith("--")) {
-      continue;
-    }
-    const key = arg.slice(2);
-    const value = argv[index + 1]?.startsWith("--") ? "true" : argv[index + 1];
-    args.set(key, value ?? "true");
-    if (value && value !== "true") {
-      index += 1;
-    }
-  }
-  return args;
-}
 
 function sendJson(response, status, data) {
   const body = JSON.stringify(data);
@@ -59,27 +39,6 @@ function parsePositiveInt(value, fieldName) {
     throw new Error(`${fieldName} 必须是正整数`);
   }
   return numberValue;
-}
-
-function resolveRequiredWorkspaceRoot(args) {
-  const raw = args.has("workspace-root")
-    ? args.get("workspace-root")
-    : resolveWorkspaceRoot();
-  if (typeof raw !== "string" || raw.trim() === "" || raw === "true") {
-    throw new Error("--workspace-root 必须提供有效路径值");
-  }
-  const resolved = path.resolve(raw);
-  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
-    throw new Error(`--workspace-root 必须指向已存在的目录: ${resolved}`);
-  }
-  return resolved;
-}
-
-function resolveRequiredWorkspaceId(args) {
-  const configured = args.has("workspace-id")
-    ? args.get("workspace-id")
-    : process.env.BOXTEAM_WORKSPACE_ID;
-  return validateWorkspaceId(configured);
 }
 
 class WorkspaceAddressError extends Error {
@@ -114,16 +73,6 @@ function requestWorkspaceId(request, url, mountedWorkspaceId) {
   return selected;
 }
 
-function requireResourceOwner(request) {
-  const address = request.socket.remoteAddress;
-  if (!new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]).has(address)
-    || request.headers["x-boxteam-resource-owner"] !== "workspace-terminal"
-    || request.headers.origin !== undefined
-    || request.headers["sec-fetch-site"] !== undefined) {
-    throw new WorkspaceAddressError("Terminal 管理仅接受工作区 owner 的 loopback 通道", 403);
-  }
-}
-
 function wsClient(socket) {
   return {
     sendRaw(message) {
@@ -146,11 +95,25 @@ function wsClient(socket) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const host = args.get("host") || process.env.BOXTEAM_TERMINAL_HOST || DEFAULT_HOST;
-  const port = Number(args.get("port") || process.env.BOXTEAM_TERMINAL_BACKEND_PORT || DEFAULT_PORT);
-  const workspaceRoot = resolveRequiredWorkspaceRoot(args);
-  const workspaceId = resolveRequiredWorkspaceId(args);
+  const management = createPluginRuntimeManagement({
+    service: "terminal",
+    logger,
+    readJson: createJsonRequestReader(logger),
+    shutdown: () => shutdown("terminal_plugin_control", 0),
+  });
+  const { port, token, identity } = management;
+  if (identity.package_id !== "boxteam.developer-tools" || identity.plugin_id !== "terminal"
+    || identity.instance_scope !== "workspace" || identity.workspace_id === null
+    || identity.services.length !== 2
+    || !identity.services.some((service) => service.service_id === "http" && service.protocol === "http")
+    || !identity.services.some((service) => service.service_id === "socket" && service.protocol === "websocket")) {
+    throw new Error("Terminal 插件实例身份或服务声明与固定工作区合同不符");
+  }
+  const workspaceRoot = resolveWorkspaceRoot();
+  const workspaceId = validateWorkspaceId(process.env.BOXTEAM_WORKSPACE_ID);
+  if (workspaceId !== identity.workspace_id) {
+    throw new Error("Terminal 插件工作区与管理实例身份不一致");
+  }
   const workspaceLogger = logger.withContext({ workspace_id: workspaceId });
   const readJson = createJsonRequestReader(workspaceLogger);
   const manager = new TerminalManager({
@@ -162,34 +125,25 @@ async function main() {
   const server = http.createServer(async (request, response) => {
     try {
       const { url, pathname } = normalizePathname(request);
-      if (await handleRuntimeLoggingRequest(request, response, { pathname, service: "terminal", readJson })) return;
-      if (await handleRuntimeShutdownRequest(request, response, { pathname, workspaceId, readJson, logger: workspaceLogger,
-        shutdown: () => shutdown("terminal_manager_control", 0),
-      })) return;
+      if (await management.handleRequest(request, response, pathname)) return;
 
-      if (request.method === "GET" && pathname === "/health") {
-        sendJson(response, 200, {
-          ok: true,
-          process_id: process.pid,
-          workspace_id: workspaceId,
-          terminal_count: manager.terminalsById.size,
-        });
+      if (pathname !== "/services/http/api/terminals"
+        && !pathname.startsWith("/services/http/api/terminals/")) {
+        notFound(response);
         return;
       }
+      const businessPath = pathname.slice("/services/http".length);
+      verifyRuntimeControlToken(request.headers["x-local-token"], token);
+      requestWorkspaceId(request, url, workspaceId);
 
-      if (pathname.startsWith("/api/terminals")) {
-        requireResourceOwner(request);
-        requestWorkspaceId(request, url, workspaceId);
-      }
-
-      if (request.method === "GET" && pathname === "/api/terminals") {
+      if (request.method === "GET" && businessPath === "/api/terminals") {
         sendJson(response, 200, {
           data: manager.list(),
         });
         return;
       }
 
-      if (request.method === "POST" && pathname === "/api/terminals") {
+      if (request.method === "POST" && businessPath === "/api/terminals") {
         const payload = await readJson(request);
         for (const field of ["session_id", "source_thread_id", "source_thread", "retention_scope", "thread_associations"]) {
           if (Object.hasOwn(payload, field)) {
@@ -215,7 +169,7 @@ async function main() {
         return;
       }
 
-      const terminalMatch = pathname.match(/^\/api\/terminals\/([^/]+)(?:\/([^/]+))?$/);
+      const terminalMatch = businessPath.match(/^\/api\/terminals\/([^/]+)(?:\/([^/]+))?$/);
       if (terminalMatch) {
         const terminalId = terminalMatch[1];
         const action = terminalMatch[2] || "";
@@ -346,9 +300,10 @@ async function main() {
   server.on("upgrade", (request, socket, head) => {
     try {
       const { url, pathname } = normalizePathname(request);
-      if (pathname !== "/terminal") {
+      if (pathname !== "/services/socket/terminal") {
         throw new WorkspaceAddressError("未知终端 WebSocket 路径", 404);
       }
+      verifyRuntimeControlToken(request.headers["x-local-token"], token);
       requestWorkspaceId(request, url, workspaceId);
       wss.handleUpgrade(request, socket, head, (connection) => {
         wss.emit("connection", connection, request);
@@ -456,9 +411,8 @@ async function main() {
     });
   });
 
-  server.listen(port, host, () => {
-    workspaceLogger.info(`[terminal-backend] listening on http://${host}:${port}`);
-    workspaceLogger.info(`[terminal-backend] workspace ${workspaceRoot}`);
+  server.listen(port, "127.0.0.1", () => {
+    workspaceLogger.info(`[terminal-backend] plugin service listening on 127.0.0.1:${port}`);
     workspaceLogger.info(`[terminal-backend] workspace_id ${workspaceId}`);
   });
 

@@ -294,3 +294,21 @@ class RestartPluginRequest(_message.Message):
     revision: str
     workspace_id: str
     def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., plugin_id: _Optional[str] = ..., revision: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...
+
+class PluginServiceReference(_message.Message):
+    __slots__ = ("gateway_id", "package_id", "package_version", "plugin_id", "instance_id", "service_id", "workspace_id")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    package_id: str
+    package_version: str
+    plugin_id: str
+    instance_id: str
+    service_id: str
+    workspace_id: str
+    def __init__(self, gateway_id: _Optional[str] = ..., package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., plugin_id: _Optional[str] = ..., instance_id: _Optional[str] = ..., service_id: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...

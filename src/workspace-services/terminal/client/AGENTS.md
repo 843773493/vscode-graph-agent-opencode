@@ -2,9 +2,7 @@
 
 `src/workspace-services/terminal/client/` 存放独立终端 attach 网页。用户从主前端资源视图打开该页面后，可以连接指定终端、断开连接、输入命令并查看实时输出。
 
-`server.js`是Node静态资源入口；工作区UUID与权威身份文件核对只依赖`../server/workspaceIdentity.js`，不为校验加载TerminalManager、Session或PTY管理链。网页main.js不导入这个Node模块。
-
-监听地址是传给Node的主机值，URL中的主机则须按authority语法表示：显式IPv6地址在请求解析基址和启动日志中都通过既有`formatUrlHost()`加方括号；`auto`后端地址继续从HTTP Host解析。HTTP入口验证位于`tests/integration/harness/test_process_ownership.py`，只证明静态服务，不替代页面交互或PTY业务验收。
+页面与依赖由目标 Gateway 的 `/api/gateway/attach/terminal/` 直接提供，不再启动独立 Node 静态进程。页面必须带明确 Gateway、工作区和资源身份；业务操作沿原 Workspace owner API，交互 WebSocket 使用 transport grant 返回的精确插件实例服务引用。
 
 `main.js`从`./shared/commandText.js`读取唯一的命令文本过滤器；静态服务只公开该明确模块，不开放shared目录的任意文件。页面在输入边界沿用空值到空串的转换，原始输出、sequence及ACK合同不因展示过滤改变；后端提供display_buffer时直接消费该字段。
 

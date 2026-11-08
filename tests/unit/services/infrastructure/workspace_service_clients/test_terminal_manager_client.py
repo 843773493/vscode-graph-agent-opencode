@@ -6,6 +6,8 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+from app.schemas.gateway.service_plugin import PluginBinding, PluginServiceReference
+from app.services.infrastructure.config import build_config_snapshot
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.support.resource_owners.sessions import WORKSPACE_ID
@@ -13,9 +15,21 @@ from tests.support.resource_owners.sessions import WORKSPACE_ID
 TERMINAL_ID = "term_00000000400070008000000000000001"
 
 
+def test_terminal_client_rejects_another_plugin_binding() -> None:
+    with pytest.raises(ValueError, match="只能消费 boxteam.developer-tools/terminal"):
+        TerminalManagerClient(workspace_id=WORKSPACE_ID, binding=PluginBinding(
+            package_id="another.tools", package_version="0.1.0", plugin_id="terminal",
+            enabled=True, workspace_id=WORKSPACE_ID,
+        ))
+
+
 @pytest.fixture
-def terminal_manager_client() -> TerminalManagerClient:
-    return TerminalManagerClient(backend_url="http://terminal.test", workspace_id=WORKSPACE_ID)
+async def terminal_manager_client():
+    client = TerminalManagerClient(gateway_url="http://terminal.test", workspace_id=WORKSPACE_ID,
+        binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
+            plugin_id="terminal", enabled=True, workspace_id=WORKSPACE_ID))
+    yield client
+    await client.aclose()
 
 
 def _terminal_record(status: str = "running") -> dict[str, object]:
@@ -83,7 +97,11 @@ async def test_revision_and_one_use_grant_consume_internal_owner_transport(
 ) -> None:
     calls: list[tuple[str, str, object]] = []
 
-    async def request(method: str, path: str, payload: object = None) -> dict[str, object]:
+    async def request(method: str, path: str, payload: object = None, *, service=None) -> dict[str, object]:
+        if service is not None:
+            service.append(PluginServiceReference(gateway_id="gateway_test", package_id="boxteam.developer-tools",
+                package_version="0.1.0", plugin_id="terminal", instance_id="original", service_id="socket",
+                workspace_id=WORKSPACE_ID))
         calls.append((method, path, payload))
         return {"data": {"grant_token": "single-use", "owner_revision": 4}}
 
@@ -112,7 +130,8 @@ async def test_response_protocol_failures_preserve_diagnostics_and_fail_at_the_c
     caplog: pytest.LogCaptureFixture, operation: str, data: object, stage: str, resource_http,
 ) -> None:
     response = {"data": data}
-    resource_http(lambda request: httpx.Response(200, json=response))
+    resource_http(lambda request: httpx.Response(200, json=response, headers={
+        "X-BoxTeam-Plugin-Instance-Id": "original", "X-BoxTeam-Plugin-Gateway-Id": "gateway_test"}))
     with caplog.at_level(logging.ERROR), pytest.raises(TypeError) as caught:
         if operation == "list":
             await terminal_manager_client.list_resources()
@@ -131,24 +150,34 @@ async def test_response_protocol_failures_preserve_diagnostics_and_fail_at_the_c
 
 
 @pytest.mark.asyncio
-async def test_current_config_backend_and_explicit_workspace_owner_headers(resource_http) -> None:
+async def test_current_config_binding_routes_through_gateway_without_rediscovery(resource_http) -> None:
     config_service = Mock(spec=ConfigService)
-    config_service.get_terminal_backend_url.side_effect = ["http://terminal-a", "http://terminal-b"]
+    config_service.get_gateway_connection_url.return_value = "http://gateway.test"
+    config_service.get_gateway_connection_timeout_seconds.return_value = 10
+    def snapshot(version, enabled=True):
+        return build_config_snapshot({"plugins": {"runtime": {"entries": [{
+            "package_id": "boxteam.developer-tools", "plugin_id": "terminal",
+            "package_version": version, "enabled": enabled}]}}}, source_paths=())
+    config_service.get_snapshot.side_effect = [snapshot("0.1.0"), snapshot("0.2.0"), snapshot("0.2.0", False)]
     client = TerminalManagerClient(config_service=config_service, workspace_id=WORKSPACE_ID)
-    config_service.get_terminal_backend_url.assert_not_called()
     requests: list[httpx.Request] = []
-
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(200, json={"data": {}})
-
     resource_http(respond)
-    await client._json_request("GET", "/api/terminals")
-    await client._json_request("GET", "/api/terminals")
-    assert [str(request.url) for request in requests] == [
-        "http://terminal-a/api/terminals", "http://terminal-b/api/terminals",
-    ]
+    try:
+        await client._json_request("GET", "/api/terminals")
+        await client._json_request("GET", "/api/terminals")
+        with pytest.raises(ValueError, match="已关闭"):
+            await client._json_request("GET", "/api/terminals")
+    finally:
+        await client.aclose()
+    assert len(requests) == 2
+    assert [request.url.params["package_version"] for request in requests] == ["0.1.0", "0.2.0"]
     for request in requests:
+        assert request.url.host == "gateway.test"
+        assert request.url.path == "/api/gateway/service-plugins/boxteam.developer-tools/terminal/services/http/api/terminals"
         assert request.headers["x-boxteam-workspace-id"] == WORKSPACE_ID
         assert request.headers["x-boxteam-resource-owner"] == "workspace-terminal"
+        assert request.headers["x-local-token"]
         assert request.extensions["timeout"]["read"] == 10

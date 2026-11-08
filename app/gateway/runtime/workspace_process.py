@@ -282,25 +282,21 @@ def start_local_backend_process(
     return ManagedProcess(process=process, log_file=log_file)
 
 
-def start_local_node_service_process(
+def start_local_browser_service_process(
     *,
     project_root: Path,
     workspace_root: Path,
-    service: str,
     port: int,
     log_dir: Path,
     workspace_id: str,
     logging_startup: dict[str, object] | None = None,
 ) -> ManagedProcess:
-    if service not in {"terminal", "browser"}:
-        raise ValueError(f"不支持的本地辅助服务: {service}")
     try:
         validate_workspace_id(workspace_id)
     except RuntimeError as error:
         raise ValueError(str(error)) from error
-    backend_path = (
-        project_root / "src" / "workspace-services" / service / "server" / "backend.js"
-    )
+    service = "browser"
+    backend_path = project_root / "src" / "workspace-services" / service / "server" / "backend.js"
     if not backend_path.is_file():
         logger.error("辅助服务入口不存在: service=%s path=%s", service, backend_path)
         raise FileNotFoundError(

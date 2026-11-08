@@ -137,6 +137,7 @@ class WorkspaceLifespan:
             ("mcp_catalog.shutdown", container.mcp_catalog_owner.shutdown),
             ("workspace_service.stop", container.workspace_service.stop),
             ("context_transport.close", container.workspace_session_context_transport.aclose),
+            ("terminal_transport.close", container.terminal_manager_client.aclose),
             ("workspace_service.close", partial(run_sync_shielded, container.workspace_service.close)),
             ("workspace_source.close", container.workspace_source_owner.close),
             ("attachments.close_admission", container.attachment_blob_store.close_admission),

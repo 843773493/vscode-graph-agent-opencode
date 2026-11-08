@@ -79,7 +79,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import checkpoint_fixture
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -261,18 +260,11 @@ def context_auxiliary_services(
 ) -> Iterator[Callable[[Path], MountedWorkspace]]:
     """为 overview 的真实资源查询启动目标工作区专属辅助服务。"""
     port_block = integration_port_block_for_file(Path(request.node.fspath))
-    terminal_port, browser_port, browser_frontend_port = (
-        port_block.port(offset) for offset in (40, 42, 43)
-    )
+    browser_port, browser_frontend_port = (port_block.port(offset) for offset in (42, 43))
     with ExitStack() as lifetime:
         def start(workspace_root: Path) -> MountedWorkspace:
-            for port in (terminal_port, browser_port, browser_frontend_port):
+            for port in (browser_port, browser_frontend_port):
                 ensure_local_port_available(port, service_name="context 测试辅助服务")
-            terminal = start_terminal_backend(
-                backend_port=terminal_port, workspace_root=str(workspace_root),
-                artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
-            )
-            lifetime.callback(terminate_process, terminal)
             browser = start_browser_manager_processes(
                 workspace_root=workspace_root,
                 artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
@@ -283,7 +275,6 @@ def context_auxiliary_services(
             lifetime.callback(close_browser_manager_processes, browser)
             return MountedWorkspace(
                 load_or_create_workspace_id(workspace_root), workspace_root.resolve(),
-                terminal_backend_url=f"http://127.0.0.1:{terminal_port}",
                 browser_backend_url=f"http://127.0.0.1:{browser_port}",
             )
 

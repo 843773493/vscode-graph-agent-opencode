@@ -52,6 +52,7 @@ function sourceFixture(targetPlatform, scenario) {
     writeFileSync(file, bytes);
   }
   mkdirSync(path.join(root, "src/clients/workbench"), { recursive: true });
+  mkdirSync(path.join(root, "scripts/plugins"), { recursive: true });
   return root;
 }
 

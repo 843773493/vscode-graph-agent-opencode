@@ -169,3 +169,14 @@ message RestartPluginRequest {
   string revision = 6;
   optional string workspace_id = 7;
 }
+
+// 业务连接冻结的精确服务身份；不发布监听地址或管理凭据。
+message PluginServiceReference {
+  string gateway_id = 1;
+  string package_id = 2;
+  string package_version = 3;
+  string plugin_id = 4;
+  string instance_id = 5;
+  string service_id = 6;
+  optional string workspace_id = 7;
+}

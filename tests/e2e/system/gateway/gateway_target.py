@@ -354,7 +354,7 @@ def start_remote_gateway_via_ssh(
         raise ValueError(f"Gateway 端口无效: {remote_gateway_port}")
     clear_remote_listeners(
         target,
-        [remote_gateway_port, 8010, 8012, 8015],
+        [remote_gateway_port, 8010, 8015],
     )
     if target.platform == "windows":
         command = _windows_gateway_start_command(

@@ -13,8 +13,10 @@ import pytest
 
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -28,13 +30,12 @@ def terminal_backend(integration_backend_port: int) -> Iterator[tuple[TestRunCon
     workspace_id = load_or_create_workspace_id(run.workspace_root)
     port = integration_backend_port + 64
     with ExitStack() as lifetime:
-        process = start_terminal_backend(
+        service = start_terminal_plugin_service(
             backend_port=port, workspace_root=str(run.workspace_root), artifacts_dir=run.artifacts_dir,
         )
-        lifetime.callback(terminate_process, process)
+        lifetime.callback(stop_terminal_plugin_service, service)
         client = lifetime.enter_context(httpx.Client(
-            base_url=f"http://127.0.0.1:{port}", timeout=10,
-            headers={"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"},
+            base_url=service.http_url, timeout=10, headers=service.headers,
         ))
         try:
             yield run, client, workspace_id
@@ -112,7 +113,7 @@ def test_state_write_failure_keeps_native_details_in_logs_and_allows_explicit_re
         assert record["terminal_id"] == terminal_id
         assert record["cols"] == payload["cols"]
         assert str(run.workspace_root) not in json.dumps(record)
-    diagnostics = "\n".join(file.read_text() for file in run.artifacts_dir.glob("terminal-backend-*.stderr.log"))
+    diagnostics = "\n".join(file.read_text() for file in run.artifacts_dir.glob("terminal-plugin-*.stderr.log"))
     assert str(state_file) in diagnostics
     assert "[terminal-state-store] 写入终端状态失败" in diagnostics
     (run.artifacts_dir / f"state-write-failures-{time.time_ns()}.json").write_text(

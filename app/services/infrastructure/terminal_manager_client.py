@@ -3,50 +3,73 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+from urllib.parse import quote
 
 from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
-from app.abstractions.terminal.resources import TerminalRequestError
+from app.abstractions.terminal.resources import (
+    TerminalPluginDisabled,
+    TerminalRequestError,
+)
 from app.core.failures import mark_public_failure
+from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import validate_workspace_id
+from app.gateway.auth import get_gateway_local_token
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
 )
 from app.runtime.http_tls import auxiliary_service_tls_context
+from app.schemas.gateway.service_plugin import PluginBinding, PluginServiceReference
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings,
+)
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 
-DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
 DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS = 10
 logger = logging.getLogger(__name__)
 
 
 class TerminalManagerClient:
     def __init__(
-        self,
-        *,
-        backend_url: str | None = None,
-        workspace_id: str,
-        config_service: ConfigService | None = None,
+        self, *, workspace_id: str, config_service: ConfigService | None = None,
+        gateway_url: str | None = None, binding: PluginBinding | None = None,
     ) -> None:
-        configured_backend_url = backend_url
-        self._config_service = (
-            config_service if configured_backend_url is None else None
-        )
-        self._backend_url = (
-            configured_backend_url
-            or DEFAULT_TERMINAL_BACKEND_URL
-        ).rstrip("/")
         self._workspace_id = validate_workspace_id(workspace_id)
+        if binding is not None and (binding.package_id, binding.plugin_id) != ("boxteam.developer-tools", "terminal"):
+            raise ValueError("Terminal 客户端只能消费 boxteam.developer-tools/terminal 插件绑定")
+        self._config_service = config_service
+        self._connection = GatewayTransportConnection(
+            gateway_url=gateway_url or os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
+        )
+        self._explicit_binding = binding
+        self._binding: PluginBinding | None = None
+        self._revision: str | None = None
+        self._http_client: AsyncClient | None = None
 
-    @property
-    def backend_url(self) -> str:
-        return self._resolve_backend_url()
+    async def aclose(self) -> None:
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
-    def _resolve_backend_url(self) -> str:
-        if self._config_service is not None:
-            return self._config_service.get_terminal_backend_url().rstrip("/")
-        return self._backend_url
+    def _current_binding(self) -> PluginBinding:
+        if self._explicit_binding is not None:
+            binding = self._explicit_binding
+        else:
+            if self._config_service is None:
+                raise ValueError("Terminal 必须使用原工作区配置中的明确插件绑定")
+            snapshot = self._config_service.get_snapshot()
+            if self._revision != snapshot.revision:
+                bindings = workspace_plugin_bindings(snapshot.to_dict(), workspace_id=self._workspace_id)
+                self._binding = next((item for item in bindings if item.package_id == "boxteam.developer-tools"
+                    and item.plugin_id == "terminal"), None)
+                self._revision = snapshot.revision
+            binding = self._binding
+        if binding is None or not binding.enabled or binding.workspace_id != self._workspace_id:
+            raise TerminalPluginDisabled("当前工作区 Terminal 插件未绑定或已关闭")
+        return binding
 
     async def create_terminal(
         self,
@@ -72,8 +95,8 @@ class TerminalManagerClient:
         response = await self._json_request("POST", "/api/terminals", payload)
         return self._require_normalized_terminal_record(response)
 
-    async def get_resource(self, terminal_id: str) -> dict[str, object]:
-        response = await self._json_request("GET", f"/api/terminals/{terminal_id}")
+    async def get_resource(self, resource_id: str) -> dict[str, object]:
+        response = await self._json_request("GET", f"/api/terminals/{resource_id}")
         return self._require_normalized_terminal_record(response)
 
     async def list_resources(self) -> list[dict[str, object]]:
@@ -147,19 +170,19 @@ class TerminalManagerClient:
 
     async def stop_resource(
         self,
-        terminal_id: str,
+        resource_id: str,
         *,
         reason: str | None = None,
     ) -> dict[str, object]:
         response = await self._json_request(
             "POST",
-            f"/api/terminals/{terminal_id}/kill",
+            f"/api/terminals/{resource_id}/kill",
             None if reason is None else {"reason": reason},
         )
         return self._require_terminal_envelope(response)
 
-    async def delete_resource(self, terminal_id: str) -> dict[str, object]:
-        response = await self._json_request("DELETE", f"/api/terminals/{terminal_id}")
+    async def delete_resource(self, resource_id: str) -> dict[str, object]:
+        response = await self._json_request("DELETE", f"/api/terminals/{resource_id}")
         return self._require_terminal_envelope(response)
 
     async def cancel_creation(self, resource_id: str, *, owner_revision: int) -> dict[str, object]:
@@ -170,23 +193,26 @@ class TerminalManagerClient:
             raise self._protocol_error("cancel_creation.data", response)
         return data
 
-    async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool) -> None:
+    async def sync_owner_revision(self, resource_id: str, owner_revision: int, *, for_stop: bool) -> None:
         await self._json_request(
-            "POST", f"/api/terminals/{terminal_id}/owner-revision",
+            "POST", f"/api/terminals/{resource_id}/owner-revision",
             {"owner_revision": owner_revision, "for_stop": for_stop},
         )
 
     async def issue_transport_grant(
-        self, terminal_id: str, *, owner_revision: int, association: str | None,
+        self, resource_id: str, *, owner_revision: int, association: str | None,
     ) -> dict[str, object]:
+        service: list[PluginServiceReference] = []
         result = await self._json_request(
-            "POST", f"/api/terminals/{terminal_id}/transport-grant",
-            {"owner_revision": owner_revision, "association": association},
+            "POST", f"/api/terminals/{resource_id}/transport-grant",
+            {"owner_revision": owner_revision, "association": association}, service=service,
         )
         data = result.get("data")
         if not isinstance(data, dict):
             raise self._protocol_error("grant.data", result)
-        return data
+        if len(service) != 1:
+            raise self._protocol_error("grant.service", result)
+        return {**data, "service": service[0].model_dump(mode="json")}
 
     def _require_normalized_terminal_record(
         self, response: dict[str, object]
@@ -232,21 +258,28 @@ class TerminalManagerClient:
         method: str,
         path: str,
         payload: dict[str, object] | None = None,
+        *, service: list[PluginServiceReference] | None = None,
     ) -> dict[str, object]:
+        binding = self._current_binding()
+        base_path = (f"/api/gateway/service-plugins/{quote(binding.package_id, safe='')}/"
+                     f"{quote(binding.plugin_id, safe='')}/services/http")
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         try:
             # 单次传输共用总预算，取消时关闭 socket，不遗留线程池请求。
-            async with asyncio.timeout(DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS), AsyncClient(
-                timeout=DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS, trust_env=False, follow_redirects=True,
-                verify=auxiliary_service_tls_context(),
-            ) as client:
-                response = await client.request(
-                    method, f"{self._resolve_backend_url()}{path}", content=body,
-                    headers={
-                        "content-type": "application/json",
-                        "X-BoxTeam-Workspace-Id": self._workspace_id,
-                        "X-BoxTeam-Resource-Owner": "workspace-terminal",
-                    },
+            if self._http_client is None:
+                self._http_client = AsyncClient(timeout=DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS,
+                    trust_env=False, follow_redirects=False, verify=auxiliary_service_tls_context())
+            headers = {
+                "content-type": "application/json", "X-Local-Token": get_gateway_local_token(),
+                "X-BoxTeam-Workspace-Id": self._workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal",
+            }
+            if request_id := get_current_request_id():
+                headers["X-Request-ID"] = request_id
+            async with asyncio.timeout(DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS):
+                response = await self._http_client.request(
+                    method, self._connection.resolve_gateway_url() + base_path + path, content=body,
+                    params={"package_version": binding.package_version, "workspace_id": self._workspace_id},
+                    headers=headers,
                 )
                 response.raise_for_status()
                 response_body = response.content
@@ -271,6 +304,14 @@ class TerminalManagerClient:
             raise TimeoutError("终端管理器传输超时") from exc
         except RequestError as exc:
             raise ConnectionError("终端管理器传输失败；请查看工作区终端服务日志") from exc
+        if service is not None:
+            instance_id = response.headers.get("X-BoxTeam-Plugin-Instance-Id")
+            gateway_id = response.headers.get("X-BoxTeam-Plugin-Gateway-Id")
+            if not instance_id or not gateway_id:
+                raise self._protocol_error("grant.service", response_body)
+            service.append(PluginServiceReference(gateway_id=gateway_id, package_id=binding.package_id,
+                package_version=binding.package_version, plugin_id=binding.plugin_id,
+                instance_id=instance_id, service_id="socket", workspace_id=self._workspace_id))
         try:
             result = json.loads(response_body.decode("utf-8"))
         except ValueError as exc:

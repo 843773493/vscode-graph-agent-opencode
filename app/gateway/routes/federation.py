@@ -122,10 +122,7 @@ async def federation_workspaces(
 
     def services_for(workspace_id: str) -> list[str]:
         services = ["workspace_api"]
-        for service, public_name in (
-            ("terminal_manager", "terminal_manager"),
-            ("browser_manager", "browser_manager"),
-        ):
+        for service, public_name in (("browser_manager", "browser_manager"),):
             try:
                 registry.resolve_service_url(workspace_id, service)
             except (LookupError, RuntimeError):

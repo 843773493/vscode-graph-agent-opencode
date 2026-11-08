@@ -9,8 +9,8 @@ harness/
 └── python/
     ├── run_context.py        Python 输出路径、节点隔离、结果与资源清理
     ├── browser_manager.py    Browser 辅助服务及其前端的进程装具
-    ├── terminal_backend.py   Terminal 后端的进程装具
-    ├── terminal_frontend.py  Terminal attach 前端的进程装具
+    ├── terminal_backend.py   Terminal 插件 Gateway 的同步进程装具
+    ├── terminal_plugin.py    Terminal 插件 Gateway 与真实服务装配
     └── process_output.py     辅助服务共用的日志输出载体
 ```
 

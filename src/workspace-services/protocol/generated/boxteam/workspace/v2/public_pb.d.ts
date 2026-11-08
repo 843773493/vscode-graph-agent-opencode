@@ -6,6 +6,7 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
 import type { ListValue, Timestamp, Value } from "@bufbuild/protobuf/wkt";
 import type { AttachmentRef } from "./message_pb.js";
+import type { PluginServiceReference } from "../../gateway/v2/service_plugin_pb.js";
 
 /**
  * Describes the file boxteam/workspace/v2/public.proto.
@@ -11125,6 +11126,11 @@ export declare type ResourceTransportGrantDTO = Message<"boxteam.workspace.v2.Re
    * @generated from field: boxteam.workspace.v2.WorkspaceResourceDTO resource = 5;
    */
   resource?: WorkspaceResourceDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.PluginServiceReference service = 6;
+   */
+  service?: PluginServiceReference | undefined;
 };
 
 /**

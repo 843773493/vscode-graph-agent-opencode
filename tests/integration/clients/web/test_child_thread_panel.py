@@ -21,7 +21,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
@@ -68,23 +67,6 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
-def integration_terminal_backend(
-    integration_workspace_root_path: str,
-) -> Generator[subprocess.Popen[str], None, None]:
-    workspace_root = Path(integration_workspace_root_path).resolve()
-    terminal_port = integration_port_block_for_file(Path(__file__)).port(40)
-    terminal_process = start_terminal_backend(
-        backend_port=terminal_port,
-        workspace_root=str(workspace_root),
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
-    )
-    try:
-        yield terminal_process
-    finally:
-        terminate_process(terminal_process)
-
-
-@pytest.fixture(scope="module")
 def integration_browser_manager_processes(
     integration_workspace_root_path: str,
 ) -> Generator[BrowserManagerProcesses, None, None]:
@@ -106,16 +88,13 @@ def integration_browser_manager_processes(
 @pytest.fixture(scope="module")
 def integration_startup_mount(
     integration_workspace_root_path: str,
-    integration_terminal_backend: subprocess.Popen[str],
     integration_browser_manager_processes: BrowserManagerProcesses,
 ) -> MountedWorkspace:
-    del integration_terminal_backend
     workspace_root = Path(integration_workspace_root_path).resolve()
     ports = integration_port_block_for_file(Path(__file__))
     return MountedWorkspace(
         load_or_create_workspace_id(workspace_root),
         workspace_root,
-        terminal_backend_url=f"http://127.0.0.1:{ports.port(40)}",
         browser_backend_url=f"http://127.0.0.1:{integration_browser_manager_processes.backend_port}",
     )
 

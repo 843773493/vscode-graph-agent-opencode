@@ -23,15 +23,18 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 )
 from tests.harness.python.process_output import spawn_logged_process
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process, wait_for_http_ok
+from tests.harness.python.terminal_backend import (
+    TerminalPluginService,
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
 def terminal_mounts(
     request: pytest.FixtureRequest, e2e_backend_port: int
-) -> Iterator[list[tuple[str, int, Path]]]:
+) -> Iterator[list[tuple[str, TerminalPluginService, Path]]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     mounts = []
     with ExitStack() as lifetime:
@@ -44,49 +47,15 @@ def terminal_mounts(
                 template_items=(),
             )
             workspace_id = load_or_create_workspace_id(root)
-            backend_port, frontend_port = terminal_ports_with_offset(
+            backend_port, _frontend_port = terminal_ports_with_offset(
                 e2e_backend_port, 40 + index * 2
             )
-            process = start_terminal_backend(
+            service = start_terminal_plugin_service(
                 backend_port=backend_port, workspace_root=str(root),
                 artifacts_dir=context.artifacts_dir,
             )
-            lifetime.callback(terminate_process, process)
-            node = shutil.which("node")
-            assert node is not None
-            frontend, frontend_logs = spawn_logged_process(
-                [
-                    node,
-                    "server.js",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(frontend_port),
-                    "--backend-url",
-                    f"http://127.0.0.1:{backend_port}",
-                    "--workspace-root",
-                    str(root),
-                    "--workspace-id",
-                    workspace_id,
-                    "--asset-root",
-                    str(Path.cwd()),
-                ],
-                cwd=Path.cwd() / "src/workspace-services/terminal/client",
-                env=os.environ.copy(),
-                artifacts_dir=context.artifacts_dir,
-                log_name=f"terminal-{name}-frontend",
-            )
-            lifetime.callback(terminate_process, frontend)
-            try:
-                wait_for_http_ok(
-                    f"http://127.0.0.1:{frontend_port}/health", frontend,
-                    timeout_seconds=30,
-                )
-            except BaseException as error:
-                for path in frontend_logs:
-                    error.add_note(f"Terminal 测试进程日志：{path}")
-                raise
-            mounts.append((workspace_id, backend_port, root))
+            lifetime.callback(stop_terminal_plugin_service, service)
+            mounts.append((workspace_id, service, root))
         yield mounts
 
 
@@ -94,22 +63,16 @@ def terminal_mounts(
 async def test_two_terminal_mounts_require_identity_for_empty_lists_http_and_websocket(
     terminal_mounts,
 ):
-    (owner_a, port_a, root_a), (owner_b, port_b, root_b) = terminal_mounts
+    (owner_a, service_a, root_a), (owner_b, service_b, root_b) = terminal_mounts
     assert owner_a != owner_b
     async with (
         httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{port_a}",
-            headers={
-                "X-BoxTeam-Workspace-Id": owner_a,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service_a.http_url,
+            headers=service_a.headers,
         ) as client_a,
         httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{port_b}",
-            headers={
-                "X-BoxTeam-Workspace-Id": owner_b,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service_b.http_url,
+            headers=service_b.headers,
         ) as client_b,
     ):
         for identity, port in ((owner_a, port_a), (owner_b, port_b)):
@@ -128,12 +91,12 @@ async def test_two_terminal_mounts_require_identity_for_empty_lists_http_and_web
                 "/api/terminals", headers={"X-BoxTeam-Workspace-Id": header}
             )
             assert response.status_code == expected, response.text
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port_a}") as unscoped:
-            assert (await unscoped.get("/api/terminals")).status_code == 403
+        async with httpx.AsyncClient(base_url=service_a.http_url) as unscoped:
+            assert (await unscoped.get("/api/terminals")).status_code == 401
             assert (
                 await unscoped.get(
                     "/api/terminals",
-                    headers={"X-BoxTeam-Resource-Owner": "workspace-terminal"},
+                    headers={"X-Local-Token": service_a.token},
                 )
             ).status_code == 400
         assert (
@@ -203,13 +166,14 @@ async def test_two_terminal_mounts_require_identity_for_empty_lists_http_and_web
         ):
             with pytest.raises(InvalidStatus) as rejection:
                 async with websockets.connect(
-                    f"ws://127.0.0.1:{port_a}/terminal{suffix}"
+                    service_a.websocket_url + suffix,
+                    additional_headers={"X-Local-Token": service_a.token},
                 ):
                     raise AssertionError("非法身份不得完成 WS upgrade")
             assert rejection.value.response.status_code == status
-        for transport, port, owner, terminal_id in (
-            (client_a, port_a, owner_a, terminals[0]),
-            (client_b, port_b, owner_b, terminals[1]),
+        for transport, service, owner, terminal_id in (
+            (client_a, service_a, owner_a, terminals[0]),
+            (client_b, service_b, owner_b, terminals[1]),
         ):
             grant_response = await transport.post(
                 f"/api/terminals/{terminal_id}/transport-grant",
@@ -218,7 +182,8 @@ async def test_two_terminal_mounts_require_identity_for_empty_lists_http_and_web
             grant_response.raise_for_status()
             grant_token = grant_response.json()["data"]["grant_token"]
             async with websockets.connect(
-                f"ws://127.0.0.1:{port}/terminal?workspace_id={owner}"
+                service.websocket_url + f"?workspace_id={owner}",
+                additional_headers=service.headers,
             ) as socket:
                 await socket.send(
                     json.dumps(

@@ -43,7 +43,6 @@ def registry(tmp_path: Path) -> Iterator[GatewayWorkspaceRegistry]:
         runtime=WorkspaceRuntime(
             service_urls={
                 "workspace_api": "http://127.0.0.1:41100",
-                "terminal_manager": "http://127.0.0.1:41101/api",
                 "browser_manager": "http://127.0.0.1:41102/api",
             }
         ),
@@ -73,7 +72,7 @@ async def test_http_proxies_preserve_repeated_query_parameters(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         application.state.registry = registry
         application.state.http_client = client
-        application.state.attach_frontend_urls = {"terminal": "http://127.0.0.1:41102"}
+        application.state.attach_frontend_urls = {"browser": "http://127.0.0.1:41102"}
         request = Request(
             {
                 "type": "http",
@@ -89,14 +88,14 @@ async def test_http_proxies_preserve_repeated_query_parameters(
         if proxy_kind == "auxiliary":
             response = await proxy_auxiliary_http(
                 workspace_id=WORKSPACE_ID,
-                service_path="terminal-manager",
+                service_path="browser-manager",
                 path="health",
                 request=request,
                 auth=GatewayAuthContext(kind="local"),
             )
         else:
             response = await proxy_attach_frontend(
-                kind="terminal", path="index.html", request=request
+                kind="browser", path="index.html", request=request
             )
 
     assert response.status_code == 200
@@ -126,7 +125,7 @@ async def test_auxiliary_proxy_rejects_direct_resource_management_before_forward
         {
             "type": "http",
             "method": "GET",
-            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/evil",
+            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/browser-manager/evil",
             "query_string": b"",
             "headers": [(b"x-boxteam-target-gateway-id", registry.gateway_id.encode())],
             "app": application,
@@ -139,7 +138,7 @@ async def test_auxiliary_proxy_rejects_direct_resource_management_before_forward
         with pytest.raises(HTTPException) as captured:
             await proxy_auxiliary_http(
                 workspace_id=WORKSPACE_ID,
-                service_path="terminal-manager",
+                service_path="browser-manager",
                 # uvicorn 已把请求行里的 %2e%2e 解码为 ..，路由拿到的就是解码后的路径。
                 path="../../evil",
                 request=request,
@@ -234,7 +233,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
         {
             "type": "http",
             "method": "GET",
-            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/health",
+            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/browser-manager/health",
             "query_string": b"",
             "headers": [(b"x-boxteam-target-gateway-id", registry.gateway_id.encode())],
             "app": application,
@@ -248,7 +247,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
         with pytest.raises(HTTPException) as captured:
             await proxy_auxiliary_http(
                 workspace_id=WORKSPACE_ID,
-                service_path="terminal-manager",
+                service_path="browser-manager",
                 path="health",
                 request=request,
                 auth=GatewayAuthContext(kind="local"),
@@ -257,7 +256,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
     assert captured.value.status_code == 503
     assert captured.value.detail == str(original)
     assert captured.value.__cause__ is original
-    assert resolutions == [(workspace_key, "terminal_manager")]
+    assert resolutions == [(workspace_key, "browser_manager")]
     assert forwarded == []
     assert registry.route_reference_counts(workspace_key) == (0, 0)
 
@@ -288,7 +287,7 @@ def auxiliary_websocket(registry: GatewayWorkspaceRegistry) -> tuple[WebSocket, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("service", ["terminal_manager", "browser_manager"])
+@pytest.mark.parametrize("service", ["browser_manager"])
 @pytest.mark.parametrize("native", ["/private/用户/socket.pem", r"C:\私有\socket.pem", r"\\server\私有\socket.pem"])
 @pytest.mark.parametrize("phase,code", [("access", 1008), ("runtime", 1011), ("route", 1008), ("upstream", 1011), ("relay", 1011)])
 async def test_auxiliary_websocket_failures_keep_native_diagnostics_private(
@@ -349,7 +348,7 @@ async def test_auxiliary_websocket_failures_keep_native_diagnostics_private(
         monkeypatch.setattr("app.gateway.auxiliary_proxy.connect", lambda *_args, **_kwargs: Connect())
 
     await _proxy_auxiliary_websocket(
-        websocket=websocket, workspace_id=WORKSPACE_ID, service=service, socket_path="terminal",
+        websocket=websocket, workspace_id=WORKSPACE_ID, service=service, socket_path="browser",
     )
     if phase in {"access", "runtime"}:
         monkeypatch.setattr(registry, "resolve", resolve)
@@ -387,7 +386,7 @@ async def test_auxiliary_websocket_rejection_never_opens_upstream(
 
     monkeypatch.setattr("app.gateway.auxiliary_proxy.connect", unexpected_connect)
     await _proxy_auxiliary_websocket(
-        websocket=websocket, workspace_id=WORKSPACE_ID, service="terminal_manager", socket_path="terminal",
+        websocket=websocket, workspace_id=WORKSPACE_ID, service="browser_manager", socket_path="browser",
     )
     assert messages == [{"type": "websocket.close", "code": 1008, "reason": "auxiliary_websocket_access_failed"}]
     assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
@@ -413,7 +412,7 @@ async def test_auxiliary_websocket_cancellation_preserves_identity_and_reference
     monkeypatch.setattr("app.gateway.auxiliary_proxy.connect", lambda *_args, **_kwargs: Connect())
     with pytest.raises(asyncio.CancelledError) as captured:
         await _proxy_auxiliary_websocket(
-            websocket=websocket, workspace_id=WORKSPACE_ID, service="terminal_manager", socket_path="terminal",
+            websocket=websocket, workspace_id=WORKSPACE_ID, service="browser_manager", socket_path="browser",
         )
     assert captured.value is original
     assert messages == [{"type": "websocket.accept", "subprotocol": None, "headers": []}]

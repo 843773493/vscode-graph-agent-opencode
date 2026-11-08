@@ -26,6 +26,7 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import enable_terminal_plugin
 
 
 def _active_group_members(groups: set[int]) -> dict[int, tuple[int, str]]:
@@ -87,7 +88,7 @@ def shutdown_replay(integration_workspace_root_path: str) -> Iterator[ModelStrea
 
 @pytest.fixture
 def shutdown_environment(
-    integration_workspace_config_path: str, integration_workspace_root_path: str,
+    request: pytest.FixtureRequest, integration_workspace_config_path: str, integration_workspace_root_path: str,
     shutdown_cassette: ModelStreamCassette, model_protocol: str,
 ) -> Iterator[dict[str, str]]:
     config_path = Path(integration_workspace_config_path)
@@ -104,6 +105,9 @@ def shutdown_environment(
         "api_mode": target["api_mode"],
     })
     config["agents"]["default"]["model"]["fallback_providers"] = []
+    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        "url"
+    ] = f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(21)}"
     validate_config(config, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     with ExitStack() as lifetime:
         lifetime.callback(config_path.write_bytes, before)
@@ -158,11 +162,18 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
             target, = (item for item in data["items"]
                        if (item["gateway_id"], item["workspace_id"]) == (owner["gateway_id"], owner["workspace_id"]))
             assert target["connection_kind"] == "local"
+            terminal = await enable_terminal_plugin(
+                client, gateway_id=owner["gateway_id"], workspace_id=owner["workspace_id"],
+                artifacts_dir=output,
+            )
+            pids["terminal"] = int(terminal["instance"]["process_id"])
+            pid = pids["terminal"]
+            pid_instances[pid] = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
             client.headers.update({
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
             })
-            for service in ("workspace_api", "terminal_manager", "browser_manager"):
+            for service in ("workspace_api", "browser_manager"):
                 url = target["services"][service]["local_url"]
                 health = await client.get(
                     url + ("/api/v1/health" if service == "workspace_api" else "/health"),
@@ -225,9 +236,8 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
                 "resources": before, "pids": pids, "group_members": group_members,
             }, indent=2))
         # 默认 lifespan 关闭，不调用 restart-safe 或 preserve，也不主动删除资源。
-        gateway.process.terminate()
-        await asyncio.to_thread(gateway.process.wait, timeout=90)
-        assert gateway.process.returncode in {0, -15}
+        await asyncio.to_thread(close_gateway_process, gateway)
+        assert gateway.process.returncode == 0
         after = []
         for kind in ("terminal", "browser"):
             records = json.loads((workspace / ".boxteam" / f"{kind}-resources.json").read_text())["records"]

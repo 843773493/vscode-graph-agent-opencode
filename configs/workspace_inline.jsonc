@@ -644,9 +644,6 @@
       }
     },
     "auxiliary_services": {
-      "terminal_backend": {
-        "url": "http://127.0.0.1:8012" // TerminalManagerClient 默认地址已接入配置；显式参数和环境变量优先。
-      },
       "browser_backend": {
         "url": "http://127.0.0.1:8015" // BrowserManagerClient 默认地址已接入配置；显式参数和环境变量优先。
       }

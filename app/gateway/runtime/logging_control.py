@@ -110,7 +110,7 @@ def runtime_logging_processes(
         if target.connection_kind != "local" or not target.managed or not registry.has_runtime(target.workspace_id):
             continue
         runtime = registry.managed_runtime(target.workspace_id)
-        roles: dict[str, RuntimeLoggingHttpService] = {"terminal_manager": "terminal", "browser_manager": "browser"}
+        roles: dict[str, RuntimeLoggingHttpService] = {"browser_manager": "browser"}
         for name, role in roles.items():
             handle = runtime.processes.get(name)
             if handle is not None and handle.is_alive():

@@ -16,14 +16,16 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    TerminalPluginService,
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="本组核对Linux原生PTY及POSIX信号；不代替Windows SIGBREAK验收")
-TerminalService = tuple[TestRunContext, subprocess.Popen[str], str, str, Path, Path]
+TerminalService = tuple[TestRunContext, TerminalPluginService, str, str, Path, Path]
 
 
 @pytest.fixture
@@ -43,15 +45,15 @@ def terminal_service(
             env.setenv("NODE_OPTIONS", f"--import={(Path.cwd() / 'tests/integration/workspace_services/terminal/terminal_start_barrier.mjs').as_uri()}")
             env.setenv("BOXTEAM_TEST_PROJECT_ROOT", str(Path.cwd()))
             env.setenv("BOXTEAM_TEST_TERMINAL_CONTROL", str(control))
-            process = start_terminal_backend(
+            process = start_terminal_plugin_service(
                 backend_port=integration_backend_port + 66, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
         try:
-            yield run, process, f"http://127.0.0.1:{integration_backend_port + 66}", load_or_create_workspace_id(root), control, root
+            yield run, process, process.http_url, process.workspace_id, control, root
         finally:
             (control / "release").touch()
             try:
-                terminate_process(process)
+                stop_terminal_plugin_service(process)
             finally:
                 # Manager正常退出沿既有合同保留PTY；只回收本fixture记录的精确进程实例。
                 lifecycle = (Path.cwd() / "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js").as_uri()
@@ -83,7 +85,7 @@ async def wait_file(path: Path) -> str:
 async def wait_diagnostic(run: TestRunContext, process: subprocess.Popen[str], marker: str) -> str:
     async with asyncio.timeout(8):
         while True:
-            diagnostics = "\n".join(file.read_text() for file in run.artifacts_dir.glob("terminal-backend-*.stderr.log"))
+            diagnostics = "\n".join(file.read_text() for file in run.artifacts_dir.glob("terminal-plugin-*.stderr.log"))
             if marker in diagnostics:
                 return diagnostics
             assert process.poll() is None, diagnostics
@@ -94,11 +96,12 @@ async def wait_diagnostic(run: TestRunContext, process: subprocess.Popen[str], m
 async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager(
     terminal_service: TerminalService, signal_name: str,
 ) -> None:
-    run, process, url, workspace_id, control, root = terminal_service
+    run, plugin, url, workspace_id, control, root = terminal_service
+    process = plugin.process
     node = shutil.which("node")
     terminal_id, peer_id, queued_id, late_id = [f"term_{uuid4().hex}" for _ in range(4)]
     payload = {"workspace_id": workspace_id, "owner_revision": 3, "command": node, "args": ["-e", "setInterval(() => {}, 1000)"]}
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=20) as client:
         peer = await client.post("/api/terminals", json=payload | {"terminal_id": peer_id})
         assert peer.status_code == 200, peer.text
@@ -132,7 +135,7 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
             assert current.json()["data"]["pty_worker_pid"] == identity["worker_pid"]
             peer_current = await client.get(f"/api/terminals/{peer_id}")
             assert peer_current.json()["data"]["os_pid"] == peer.json()["data"]["os_pid"]
-            assert (await client.get("/health")).json()["terminal_count"] == 2
+            assert len((await client.get("/api/terminals")).json()["data"]) == 2
             assert state_file.read_bytes() == state_before
             assert not (control / "shutdowns.jsonl").exists()
             late = await client.post("/api/terminals", json=payload | {"terminal_id": late_id})
@@ -155,7 +158,7 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
             stops = [json.loads(line) for line in (control / "shutdowns.jsonl").read_text().splitlines()]
             assert len(stops) == 2 and all(stop["terminatePty"] is False for stop in stops)
             assert {stop["pid"] for stop in stops} == {identity["pid"], peer.json()["data"]["os_pid"]}
-            cold = start_terminal_backend(
+            cold = start_terminal_plugin_service(
                 backend_port=int(url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
             try:
@@ -164,7 +167,7 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
                 assert restored.json()["data"]["os_pid"] == identity["pid"]
                 assert restored.json()["data"]["pty_worker_pid"] is None
             finally:
-                terminate_process(cold)
+                stop_terminal_plugin_service(cold)
             run.write_result("passed", {"signal": signal_name, "wait_seconds": elapsed, "identity": identity,
                                        "scope": "真实PTY/HTTP/POSIX信号及冷Manager；就绪交付屏障，不含Gateway/Web、Windows或完整进程退出期限"})
         finally:
@@ -176,10 +179,9 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
 async def test_fatal_error_during_creation_wait_still_exits_one(
     terminal_service: TerminalService, fatal_kind: str, signal_first: bool,
 ) -> None:
-    run, process, url, workspace_id, control, _root = terminal_service
-    async with httpx.AsyncClient(base_url=url, timeout=20, headers={
-        "X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal",
-    }) as client:
+    run, plugin, url, workspace_id, control, _root = terminal_service
+    process = plugin.process
+    async with httpx.AsyncClient(base_url=url, timeout=20, headers=plugin.headers) as client:
         creation = asyncio.create_task(client.post("/api/terminals", json={
             "workspace_id": workspace_id, "terminal_id": f"term_{uuid4().hex}", "owner_revision": 3,
             "command": shutil.which("node"), "args": ["-e", "/* gated-terminal-start */ setInterval(() => {}, 1000)"],

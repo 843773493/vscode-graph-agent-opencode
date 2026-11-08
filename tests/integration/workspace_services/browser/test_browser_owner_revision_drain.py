@@ -25,8 +25,7 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -66,20 +65,22 @@ def browser_client(
 
 
 @pytest.fixture
-def owner_mount(
+async def owner_mount(
     browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
-    integration_backend_port: int,
-) -> MountedWorkspace:
+    integration_backend_port: int, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[MountedWorkspace]:
     client, root, run = browser_client
-    terminal_port = integration_backend_port + 62
-    terminal = start_terminal_backend(
-        backend_port=terminal_port, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
-    )
-    run.add_cleanup("Terminal进程", lambda: terminate_process(terminal))
-    return MountedWorkspace(
-        load_or_create_workspace_id(root), root, browser_backend_url=client.backend_url,
-        terminal_backend_url=f"http://127.0.0.1:{terminal_port}",
-    )
+    home = run.boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
+    # 需要资源 owner 的测试才装配 Terminal；直接 Browser 协议测试不额外起进程。
+    async with terminal_plugin_gateway_for_workspace(
+        workspace_root=root, artifacts_dir=run.artifacts_dir,
+        gateway_port=integration_backend_port + 62, boxteam_home=home,
+    ) as terminal:
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", terminal.gateway_url)
+        yield MountedWorkspace(
+            load_or_create_workspace_id(root), root, browser_backend_url=client.backend_url,
+        )
 
 
 @pytest.fixture

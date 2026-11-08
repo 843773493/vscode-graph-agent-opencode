@@ -48,7 +48,7 @@ def registry(tmp_path: Path) -> Iterator[GatewayWorkspaceRegistry]:
         root_path=str(tmp_path / "workspace"), backend_url="http://127.0.0.1:41001",
         connection_kind="local",
     ), runtime=WorkspaceRuntime(service_urls={
-        "workspace_api": "http://127.0.0.1:41001", "terminal_manager": "http://127.0.0.1:41002",
+        "workspace_api": "http://127.0.0.1:41001", "browser_manager": "http://127.0.0.1:41002",
     }), activate=False)
     try:
         yield registry
@@ -92,7 +92,7 @@ async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
         app.state.registry = registry
         app.state.http_client = client
         app.state.streaming_http_client = client
-        app.state.attach_frontend_urls = {"terminal": "http://127.0.0.1:41003"}
+        app.state.attach_frontend_urls = {"browser": "http://127.0.0.1:41003"}
         request = _make_request(app, method="GET", path="/api/v1/jobs/job_1", workspace_id=WORKSPACE_ID)
         request._body = b""
         with pytest.raises(HTTPException) as caught:
@@ -100,10 +100,10 @@ async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
                 await _proxy_workspace_request("jobs/job_1", request, auth=None, user_access=None, include_credentials=False)
             elif entry == "auxiliary":
                 await proxy_auxiliary_http(
-                    WORKSPACE_ID, "terminal-manager", "health", request, GatewayAuthContext(kind="local"),
+                    WORKSPACE_ID, "browser-manager", "health", request, GatewayAuthContext(kind="local"),
                 )
             else:
-                await proxy_attach_frontend("terminal", "index.html", request)
+                await proxy_attach_frontend("browser", "index.html", request)
 
     assert caught.value.status_code == status
     assert caught.value.__cause__ is failure and failure.__cause__ is cause
@@ -120,12 +120,12 @@ async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
     assert diagnostics[0].exc_info is not None and diagnostics[0].exc_info[1] is failure
     for expected in ("req_route_ref", "GET", f"stage={stage}", str(cause), str(failure)):
         assert expected in caplog.text
-    assert ("kind=terminal" if entry == "attach" else WORKSPACE_ID) in caplog.text
+    assert ("kind=browser" if entry == "attach" else WORKSPACE_ID) in caplog.text
 
 
 @pytest.mark.parametrize("path", [
-    "/api/v1/jobs/job_1", f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/health",
-    "/api/gateway/attach/terminal/index.html",
+    "/api/v1/jobs/job_1", f"/api/gateway/workspaces/{WORKSPACE_ID}/browser-manager/health",
+    "/api/gateway/attach/browser/index.html",
 ])
 @pytest.mark.parametrize("native_path", [
     "/private/proxy-native-marker/socket", r"C:\private\proxy-native-marker\socket",
@@ -157,7 +157,7 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
     app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
     app.dependency_overrides[verify_user_access_for_proxy] = lambda: access
     app.state.registry = registry
-    app.state.attach_frontend_urls = {"terminal": "http://127.0.0.1:41003"}
+    app.state.attach_frontend_urls = {"browser": "http://127.0.0.1:41003"}
     caplog.set_level(logging.ERROR)
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as transport:
         app.state.http_client = transport

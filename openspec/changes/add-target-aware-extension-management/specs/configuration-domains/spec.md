@@ -51,16 +51,54 @@ Gateway 与 Workspace 配置 owner SHALL 公布各来源层的读取与写入能
 - **WHEN** 提交的 v1 来源缺少连接 ID，原 loader 需要另外迁移并改写来源字节
 - **THEN** 预检和保存明确拒绝并提示沿原迁移入口处理或补齐 ID，不在文件保存后悄悄换成另一份正文；读取与原迁移入口行为保持
 
-### Requirement: 受管 MCP 启动配置必须精确引用已发布制品
+### Requirement: 受管服务配置必须分离目标登记与工作区业务输入
 
-Workspace stdio 配置 SHALL 允许 `managed_launch` 绑定稳定 Backend、installation、generation 及完整 artifact digest，并与显式 `command` 互斥。原 MCP parser SHALL 通过目标安装 owner 的唯一发布记录解析实际绝对 executable；不存在、目标不匹配或 generation／digest 不符时明确拒绝，不回落动态命令或同名制品。工作区 args／env 继续沿原 schema 解析，受管 Python 配置不得通过 PYTHONPATH／PYTHONHOME／PYTHONUSERBASE 替换锁定依赖。
+Gateway SHALL 持有自有插件来源、安装／服务登记、实例范围、诊断设置及生命周期配置，Workspace SHALL 继续持有 MCP 参数、工作区使用关系、私有输入及业务配置。两域保持原来源优先级、独立 CAS 和 active／pending；Gateway MUST NOT 读取工作区 `.boxteam/`、复制秘密或直接改写工作区来源。
 
-制品发布 MUST NOT 自动修改工作区来源或配置 active；启用仍经所选 workspace 的原 source preflight／文件及层／active CAS、候选准备和原 MCP publication。已有显式动态命令保持原合同，不自动追认为受管制品。
+插件启用关系 SHALL 复用原配置 owner，记录 package_id／plugin_id、确切包版本、固定 Gateway／workspace 范围和 enabled；无包级／单项贡献第二 enabled，纯声明插件不伪造运行进程。manifest schema 仅描述合法字段，用户值仍属上述原来源域；Workbench 中的贡献注册是可释放展示投影，不形成第二份可生效配置或跨窗口业务账本。
 
-#### Scenario: 已发布制品经来源 CAS 启用
-- **WHEN** 用户安装制品后，另行在目标工作区来源提交该制品的完整 managed_launch
-- **THEN** 发布后、配置提交前工作区来源字节和 MCP 目录保持原样；原 source writer 核对所有基线并沿原连接准备激活，实际 launch 使用该 generation 的绝对路径
+参数 SHALL 在原配置域正式登记的 package_id／plugin_id 参数容器中保存，与版本绑定分离；未绑定或未安装插件的残留保留原来源，明确未生效，不进入 effective／active／pending／热应用或占包引用。原 source writer 仍验证容器结构／JSON 类型；重新显式绑定按确切版本 schema 完整校验，失败不启用。容器外未知字段和已绑定插件非法值仍拒绝；卸载删除包 schema 投影，不留下影子 schema、参数账本或第二配置源。
 
-#### Scenario: 受管引用与显式命令冲突
-- **WHEN** stdio 配置同时包含 managed_launch 与 command，或引用另一 Backend／未发布 generation
-- **THEN** schema／parser 明确拒绝，不择一执行、不使用本机同名路径，也不改写为动态 uvx
+受管服务绑定 SHALL 引用明确 package_id／plugin_id、service_id、已发布包版本及 manifest 允许范围；workspace 绑定另核精确工作区。Backend stdio 的 managed_launch／command 创建链 SHALL 迁齐为 Gateway 服务连接并删除，不保留新旧配置运行时双读。完整工作区运行时恢复所需非秘密绑定 SHALL 由 Workspace 配置 owner 重新认证交付；未交付时 Gateway 等待，不用旧实例／库存推断启用状态，不越界读取文件。Backend 单独重启／Gateway 正常接管时已核实实例仍沿原合同保留。服务 ready 前所需工作区输入 SHALL 由原 owner 经认证准入交付，缺失时明确等待输入而非伪报就绪。安装发布不自动提交配置或运行插件。
+
+认证交付 SHALL 由原启动／配置变更通知或用户显式重试驱动；缺输入报告 waiting，认证失败报告 failed，普通状态读取不重新交付或启动插件，不加轮询、扫盘及配置修复流程。
+
+#### Scenario: 两个工作区绑定同一安装包
+- **WHEN** A1/A2 在各自来源 CAS 提交同一插件包的使用关系和不同私有引用
+- **THEN** 两者配置独立生效，Gateway 只管理合法登记与实例，工作区秘密仍由原 owner 保存；旧 command 不在 Backend 触发进程
+
+#### Scenario: Gateway 启动时工作区输入尚未交付
+- **WHEN** Gateway 已读取非秘密服务登记，但所需 workspace 输入尚未由其 owner 交付
+- **THEN** 原状态明确等待输入，Gateway 不读取工作区文件、不发布业务 ready；控制通道可先可用，等待输入不阻塞 Backend 初始化或其它已就绪服务，输入到位后才核实业务启动，Backend 后续重启不顺带关闭已运行服务
+
+### Requirement: 诊断热配置必须沿原 Gateway 配置域扩展
+
+日志 SHALL 继续使用 `logging.runtime`；新增本地遥测／统计 SHALL 分别归 `telemetry.runtime`、`statistics.runtime`，自有源归 `plugins.sources`，复用 Gateway JSONC 族、schema、原合并优先级与来源 writer，不增加插件配置副本。遥测／统计 enabled 默认 false，来源默认未配置；telemetry 的 sample_ratio 默认1且范围0–1，sample_buffer_limit 默认256且范围1–4096，statistics 的 collection_interval_ms 默认5000且范围1000–60000。schema SHALL 明确这些边界，允许原 Gateway 用户层合法覆盖，不接受 Workspace 覆盖。
+
+只有已登记为热应用的字段 SHALL 在运行时应用；实例范围、入口或版本变更须明确对应实例的重启／切换，不由客户端猜测或一律重启 Backend。未支持的诊断能力 SHALL 明确报告，不将保存成功当作实际生效。
+
+#### Scenario: 修改诊断开关不重启业务服务
+- **WHEN** 用户在 Gateway 来源关闭遥测及统计并提交合法候选
+- **THEN** 原 owner 以同一 revision 热应用并收集逐实例实际回执，成功实例停止额外采集，不更改工作区配置或为诊断开关重启 Backend
+
+### Requirement: 插件开关和新建工作区默认值必须分离
+
+当前 Gateway 的插件 enabled SHALL 归 Gateway 配置 owner，当前工作区的 enabled 归精确 Workspace owner；各有固定插件范围和包版本，不通过共享用户 Workspace 层 fan-out 修改其他工作区。开关和重启须获运行管理准入；同一来源写入同时遵守原配置写权限，不建立第二启用账本。实际状态单独报告，配置已保存不等于运行成功。
+
+Gateway 新建工作区模板 SHALL 使用 plugins.workspace_defaults.entries，默认空数组，数组沿原整体替换语义；条目只有 package_id、plugin_id、确切 package_version 和 enabled，键组合唯一，只能引用已安装支持的 workspace 插件，不保存参数或秘密。沿原 Gateway inline／user／user_local 合法覆盖和 CAS 提交；不接受 workspace 层覆盖，模板编辑核原配置写权限，不产生进程副作用。模板和已冻结未结清创建 intent 的版本均为原安装 owner 的使用引用，更新清理及卸载不得删除；模板修改不解除旧 intent 引用，创建完成交接给工作区绑定，取消／失败明确结清才释放，不新建账本。安装不自动改模板；引用版本计入使用冲突，未解除引用不能卸载。
+
+工作区创建 owner SHALL 在原创建 intent 冻结当时模板 revision 与条目，经原 Workspace writer 初始化该新工作区独立配置，再向 Gateway 交付已认证非秘密绑定；Gateway 不读写 .boxteam。原创建重试复用冻结输入，模板修改只影响之后新建工作区。已有工作区重新注册／挂接／启动不应用模板，不新增动态继承或第二创建账本。
+
+模板提交、创建冻结／引用交接与包删除 SHALL 复用原安装互斥边界，交接完成后由工作区绑定接替 intent 引用，不先释放后创建引用，也不等对方先释放造成循环。卸载仅检查原实例、active／pending 绑定、模板／未结清 intent 和未完成读取／使用 lease；来源无法确认则拒绝该次卸载并说明，不新增全局引用追踪或后台巡检，不为检查启动 Backend。
+
+#### Scenario: 当前工作区和以后新建默认值独立
+- **WHEN** A1／A2 已存在，用户仅关闭 A1 的插件，再修改新建默认值并创建 A3
+- **THEN** A1 按自身设置关闭，A2 不变，A3 取得创建时模板的独立设置；之后修改模板不改 A3，也不回写 A1
+
+#### Scenario: 创建重试保持模板冻结
+- **WHEN** 创建 intent 冻结模板 revision R 后中断，模板变为 R2，再重试原创建
+- **THEN** 同一创建继续使用 R，只有后续新 intent 使用 R2；即使模板移除 R，其版本仍受原 intent 引用保护，更新清理／卸载返回该引用冲突，完成或取消后按原 owner 交接／释放；挂接已有工作区不写模板值，Gateway 无工作区文件访问
+
+#### Scenario: 模板非法引用与版本卸载
+- **WHEN** 用户保存不存在／非 workspace 插件或重复键的模板，或卸载当前模板引用的版本
+- **THEN** 前者提交前拒绝且原模板保持，后者返回真实模板引用冲突，不自动安装、清空默认值或停其他插件

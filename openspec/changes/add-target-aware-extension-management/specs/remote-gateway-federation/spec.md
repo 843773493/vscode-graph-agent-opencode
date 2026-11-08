@@ -1,50 +1,50 @@
 ## ADDED Requirements
 
-### Requirement: MCP 候选规划与安装管理必须使用独立原生授权
+### Requirement: 自有插件安装与运行管理必须分别由原生目标授权
 
-原联邦 policy 与 Gateway schema SHALL 登记 `mcp_installation_manage`，覆盖 MCP 候选 manifest 读取、确切 variant 计划、消费前重验及后续制品安装管理。该管理能力 SHALL 默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin、configuration_read 和 configuration_write 均不得代授。此能力不隐式授予配置写入、进程重启或宿主管理。
+原联邦 policy 与 Gateway schema SHALL 登记 `service_plugin_installation_manage` 和 `service_plugin_runtime_manage`，均属于管理能力、默认拒绝，只有精确绑定已认证主体的显式 allow 生效。前者覆盖自有包来源／计划、安装／整体更新／卸载及对应管理记录；后者覆盖明确插件绑定的开启／关闭／重启、运行状态和管理通道，不提供按需启动授权流程。普通 discovery／read、配置读写、managed_workspace_admin 及另一项管理能力不得代授。
 
-安装域发现、候选原件、安装计划、重验、库存及安装操作 SHALL 使用明确 Gateway／Backend 的目标级管理入口，不依赖活动 workspace。两种 workspace API mount SHALL 只保留精确工作区的配置与私有输入，候选配置规划及候选私有输入另核 `mcp_installation_manage`；旧 workspace 安装入口明确拒绝，不转发到另一安装实现。Relay SHALL 透传冻结目标、显式连接、原请求、原错误与同一 request_id，由原生 Gateway 在访问 Backend 前及实际披露前核现行授权；本跳连接选择不得透传为下一跳选择。等待目标运行或读取响应期间撤权，不得继续准入或披露候选。无权限时 MUST NOT 请求 Backend、读取目录来源、下载制品、写配置或改投本地。
+实际插件业务调用 SHALL 继续核原工作区／资源权限与精确服务范围；运行管理权限不授予任意工作区文件、工具或秘密访问，安装权限也不自动启用／运行服务。已认证 Backend 的服务请求 SHALL 由原登记身份映射工作区，不信任未验证的调用方自报归属。旧 `extension_installation_manage`、`extension_host_manage` 和 `mcp_installation_manage` 的新体系消费者 SHALL 迁齐后物理删除；支持基线需要升级的授权经显式原 owner 迁移，不运行时互认／合并权限。
 
-#### Scenario: 普通能力与通配 allow 不能规划 MCP 安装
-- **WHEN** 远端主体只有发现、读取、配置或受管 Backend 管理能力，或安装 allow 未精确绑定该认证主体
-- **THEN** 目标级候选原件、安装计划、重验及两种 workspace mount 的候选配置请求均被原生 Gateway 拒绝，下游 Backend 与目录来源没有请求，Relay 不使用本机权限代授
+原生目标 SHALL 在实际资源准入和披露点最终判权，Relay 只传原请求、明确目标及同一 request_id，不借本机凭据代授，不读取／复制远端安装事实、工作区秘密或业务状态。长连接保留原授权与撤权边界；撤权不假报已经发生的副作用被回滚。
 
-#### Scenario: 候选请求等待或披露前撤销管理权限
-- **WHEN** 精确主体获准的候选请求正在等待 Backend 或等待完整响应，原生 Gateway 撤销 mcp_installation_manage
-- **THEN** 原生 Gateway 在下一准入或实际披露点拒绝，关闭已取得响应并结清本次路由引用，不返回冻结前的旧授权结果
+自有贡献清单、schema 和状态读取 SHALL 沿其原披露权限执行，不以 runtime 已启动或运行管理权限为前提；命令调用另核其声明的业务能力及实际资源 owner，未绑定合法权限的命令明确拒绝，不以可见菜单或插件安装资格放行。插件开启／关闭会持久修改 enabled，原生目标 SHALL 在配置提交及运行副作用前同时核验 service_plugin_runtime_manage 和 configuration_write，任缺其一均拒绝且不写来源；只重启当前绑定、不写配置时仅按运行管理及原业务边界核验。自动恢复只消费已提交配置和原受管身份，不伪造用户配置提交。已开启插件的普通业务调用不要求启停权限，也不触发启动。具名命令不是任意 shell 或 Gateway 管理能力的别名。
 
-### Requirement: 目标扩展安装与宿主管理使用独立联邦能力
+包内 Skill 的发现及配套资源读取 SHALL 沿原 Skill 来源和原生目标资源权限核验，启用范围限定到明确绑定；安装或运行管理资格不代授工作区 Skill／工具访问，读取 Skill 也不授予工具执行或进程启动。Relay 不复制目标技能目录，不将同名本地 Skill 当作远端副本；撤权后撤销对应的新读取／加载及观察准入，保留原会话已封存历史。
 
-原联邦 policy 与 Gateway schema SHALL 登记 `extension_installation_manage` 和 `extension_host_manage` 两项独立管理能力，且均归入管理员能力集合并默认拒绝。只有精确绑定已认证主体的显式 allow 生效；discovery、read、`managed_workspace_admin`、配置读写及另一项扩展管理能力均不得代授。`extension_installation_manage` 只授权明确目标上的 VSIX 制品安装、更新、移除及安装状态；`extension_host_manage` SHALL 统一授权该目标 Web／Node 扩展的运行准入、激活、运行状态、停止及适用的宿主生命周期／通道管理。Web 执行位置仍是当前浏览器，授权归安装目标，不以 Node 宿主可用作为 Web 运行前提。两种能力不得互相扩大制品写入与运行权限。
+#### Scenario: 安装管理与运行管理独立
+- **WHEN** 主体只有安装管理却请求启动／重启，或只有运行管理却请求安装／卸载，或只有配置能力访问两者
+- **THEN** 原生 Gateway 在进程和制品副作用前拒绝缺少的能力，Relay 不代授，旧管理能力也不隐式放行
 
-原默认 profile 的只读安装描述及包资源 SHALL 允许任一管理能力读取，包括入口脚本、静态贡献和相对资源；读取不授予运行或制品写入。资源 SHALL 属于明确目标、安装域、扩展及可访问版本：当前安装版本或仍合法运行的原实例冻结版本，不得凭任意历史版本地址访问保留包。原生 Gateway SHALL 在资源准入及实际披露时核现行授权和版本资格；旧实例须保有运行授权，关闭或运行撤权后不能借仍有的安装权限继续使用旧绑定。Relay 与浏览器缓存不得代授，也不新增第三项资源权限或授权账本。
+#### Scenario: 插件开关必须同时取得配置和运行管理授权
+- **WHEN** 主体只有 configuration_write 或只有 service_plugin_runtime_manage，尝试修改插件 enabled
+- **THEN** 原生目标在来源写入及进程动作前拒绝，enabled 和实例均不改变；仅重启不写配置另按运行管理授权执行
 
-共同目标发现 SHALL 从原生 Gateway 的原安装域登记及组件管理事实返回当前明确目标的稳定身份和两项管理能力判定；至少一项获准才访问其托管的目标管理服务，不以 Backend 活跃或工作区已挂接为前提，不披露未授权宿主运行态，也不由发现请求启动 Backend、宿主或管理进程。原生 Gateway SHALL 在请求准入及实际披露时重核权限、用户与路由，Relay 只转送结果，不合并本机或各分根的授权。客户端投影不代替后续请求的实时授权。
+#### Scenario: 业务请求不能伪造工作区
+- **WHEN** Backend 或用户请求 Gateway 插件业务路由，声明另一个没有访问资格的工作区或资源
+- **THEN** 原身份／资源 owner 拒绝，不因服务是 gateway 单实例而共享该工作区的终端、浏览器或 MCP 凭据
 
-扩展安装及库存 SHALL 交目标原生 Gateway 托管的唯一常驻 Node 安装服务，复用现有组件生命周期与受权通信；VSIX 下载、配置文件 I/O、包资源字节读取与外部监听 SHALL 交目标侧原 Python 服务。原 Code OSS 配置语义、安装事实及必要 profile 描述各沿原 owner，不把 Node 暴露为通用基础设施。Relay 不在本机为远端启动管理副本或代读目标文件；管理服务的启动归 Gateway 服务组，不由安装权限、资源读取或单个 Backend 生命周期触发。此职责划分不改变既有读写／运行权限，也不将 MCP 或工作区业务配置 owner 迁入 Gateway。
+#### Scenario: 经 Relay 调用插件命令不继承安装权限
+- **WHEN** A 的主体可查看或安装 B 的插件，但缺少该命令的业务能力，经命令面板向 B1 发起调用
+- **THEN** B 在实际命令执行前拒绝；A 不凭本机主体代授，菜单可见和 runtime 已 ready 也不造成业务副作用
 
-经 Relay 发起的请求 SHALL 保留明确目标和原始错误，并由目标原生 Gateway 在访问 Backend、制品或宿主进程前按当前策略最终判权。未获授权时 MUST 明确拒绝，不访问目标资源，也不改投本机或其他目标。
+#### Scenario: 远端插件关闭与普通调用权限分离
+- **WHEN** 主体可调用 B1 已开启插件的业务但无运行管理权限，另一个获准用户关闭该插件
+- **THEN** 关闭前业务按原权限可用，关闭后新调用明确不可用且零自动启动；关闭只影响 B1 精确插件，A／B2 和兄弟插件不变
 
-#### Scenario: 普通能力或通配规则不能管理目标扩展
-- **WHEN** 主体只有 discovery、read、`managed_workspace_admin`、配置能力，或管理 allow 没有精确绑定该认证主体
-- **THEN** 目标原生 Gateway 在任何 Backend、制品或宿主访问前拒绝请求，Relay 不以本机或其它能力代授
+### Requirement: 远端插件管理与业务通道必须抵达原生实例
 
-#### Scenario: 安装管理与宿主管理彼此隔离
-- **WHEN** 主体只有 `extension_installation_manage` 却请求激活 Web 扩展或启动、查询运行态、管理通道、停止 Node 宿主，或只有 `extension_host_manage` 却请求安装、更新或移除 VSIX
-- **THEN** 目标原生 Gateway 拒绝缺少的对应能力，另一项能力不代授
+A Gateway SHALL 沿既有认证联邦路由将目标 B 的插件管理、HTTP／SSE／WebSocket 请求转到 B 原生 Gateway，再由 B 解析原 package_id／plugin_id／service_id／workspace／instance_id。路由在请求／连接开始时冻结，在途连接不随活动工作区或 UI 目标变化改投；旧实例失效、路由撤销或断连 SHALL 保留原错误和结果未知，不自动重发写入。
 
-#### Scenario: 单项管理权限独立初始化窗口
-- **WHEN** 窗口明确挂接一个只有安装权限的目标与另一个只有宿主管理权限的目标
-- **THEN** 两者通过同一目标发现取得自己的身份和权限；安装目标可以读取库存与包资源，但不请求宿主运行态或激活 Web／Node 实例；运行目标可以只读原 profile 描述及包资源，并按能力运行已安装的 Web／Node 扩展，但不能通过安装入口写入制品；同屏其它目标不被改投或隐式授权
+B 的实例创建、进程日志与退出核实 SHALL 由 B 原进程 owner 执行。目标发现和安装库存不以 Backend 活跃或 workspace 已挂接为前提，也不隐式启动插件；无来源时只披露自有源未配置状态。Relay 不在 A 启动 B 的服务副本、不把下一跳连接选择当作本跳身份。
 
-#### Scenario: 只读包资源复用任一管理权限
-- **WHEN** 已认证主体分别只有安装权限、只有运行权限或两项均无，通过原生入口或 Relay 读取当前安装包的入口脚本及相对资源
-- **THEN** 前两种按同一资源 owner 和版本资格读取，均无权限时在目标资源披露前拒绝；安装权限不触发 Web 激活，运行权限不触发制品变更，Relay 不借本机权限或另一目标缓存代授
+#### Scenario: 从 A 管理 B 与直接访问 B 一致
+- **WHEN** 两个页面分别经 A 访问 B 和直接访问 B，读取并使用同一服务
+- **THEN** 两者观察 B 的同一安装和运行实例，操作均在 B 发生；B 离线不回退 A，切列表目标不改变已连接流
 
-#### Scenario: Web 运行撤权使旧实例资源资格失效
-- **WHEN** 主体的 Web v1 实例在更新后仍合法运行，原生 Gateway 撤销其 `extension_host_manage` 但保留 `extension_installation_manage`
-- **THEN** 原运行绑定失效并沿原生命周期关闭，后续旧实例资源请求被拒绝，不因仍有安装权限、旧 URL 或浏览器缓存延续运行；其它仍获准实例的资源读取不被撤销
+#### Scenario: 写入响应丢失不经 Relay 重放
+- **WHEN** B 已收到安装、终端命令或浏览器写操作但 A 未取得完整响应
+- **THEN** 保留原请求／操作身份及实际未知状态，已有查询合同可查原状态，Relay 不更换幂等身份或自动发送到新实例
 
 ### Requirement: 远端配置管理必须使用独立读写能力
 

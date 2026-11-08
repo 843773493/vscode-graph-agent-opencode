@@ -97,7 +97,7 @@ async def test_preferred_port_mismatch_rejects_without_stopping_adopted_backend(
         fail_if_started,
     )
     monkeypatch.setattr(
-        "app.gateway.runtime.local_workspace.start_local_node_service_process",
+        "app.gateway.runtime.local_workspace.start_local_browser_service_process",
         fail_if_started,
     )
 

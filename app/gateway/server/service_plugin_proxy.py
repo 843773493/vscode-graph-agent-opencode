@@ -25,6 +25,7 @@ from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from app.api.runtime_control import verify_local_control_request
 from app.core.async_channel import close_channel, run_channel
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
@@ -54,6 +55,7 @@ from app.schemas.gateway.service_plugin import PluginBinding
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+BINDING_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/services/{service_id}/{path:path}"
 SERVICE_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/instances/{instance_id}/services/{service_id}/{path:path}"
 
 
@@ -62,17 +64,23 @@ class _ServiceRoute:
     url: httpx.URL
     headers: dict[str, str]
     stopped: asyncio.Event
+    instance_id: str
+    gateway_id: str
 
 
 @contextmanager
 def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: PluginBinding, *,
-           instance_id: str, service_id: str, path: str, websocket: bool = False) -> Iterator[_ServiceRoute]:
+           instance_id: str | None, service_id: str, path: str, websocket: bool = False) -> Iterator[_ServiceRoute]:
     registry = connection.app.state.registry
-    gateway_id = parse_target_gateway_id(connection.headers.get(TARGET_GATEWAY_ID_HEADER)) or registry.gateway_id
+    header_gateway = parse_target_gateway_id(connection.headers.get(TARGET_GATEWAY_ID_HEADER))
+    query_gateway = parse_target_gateway_id(connection.query_params.get("target_gateway_id"))
+    if header_gateway and query_gateway and header_gateway != query_gateway:
+        raise ValueError("插件服务目标 Gateway 头部与查询冲突")
+    gateway_id = header_gateway or query_gateway or registry.gateway_id
     with management_gateway_route(connection, gateway_id=gateway_id,
         gateway_connection_id=connection.headers.get("X-BoxTeam-Gateway-Connection-Id"), auth=auth) as remote:
         query = [(key, value) for key, value in connection.query_params.multi_items()
-                 if key != "token"]
+                 if key not in {"token", "target_gateway_id"}]
         headers = {key: value for key, value in connection.headers.items()
                    if key.lower() in {"content-type", "content-encoding", "accept", "last-event-id", "mcp-session-id", "mcp-protocol-version"}}
         if remote is not None:
@@ -87,7 +95,7 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             registry.add_commit_observer(check_remote)
             try:
                 check_remote()
-                yield _ServiceRoute(url.copy_merge_params(tuple(query)), headers, retired)
+                yield _ServiceRoute(url.copy_merge_params(tuple(query)), headers, retired, instance_id or "", gateway_id)
             finally:
                 registry.remove_commit_observer(check_remote)
             return
@@ -97,14 +105,28 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             if target.connection_kind != "local":
                 raise LookupError("插件服务不属于原生工作区")
         owner = connection.app.state.service_plugins
+        selected_instance = instance_id
+        if selected_instance is None:
+            slot = owner.slots.get(owner.key(binding))
+            if slot is None or slot.receipt is None:
+                raise LookupError("插件绑定尚无可用实例")
+            selected_instance = slot.receipt.instance_id
         base_url, token, stopped = owner.service(binding, service_id=service_id,
-            instance_id=instance_id, websocket=websocket)
+            instance_id=selected_instance, websocket=websocket)
         headers.update({"X-Local-Token": token, "X-Request-ID": get_request_id(connection),
                         "X-BoxTeam-Gateway-Id": gateway_id})
         if binding.workspace_id is not None:
             headers["X-BoxTeam-Workspace-Id"] = binding.workspace_id
+        if binding.package_id == "boxteam.developer-tools" and binding.plugin_id == "terminal" and not websocket:
+            # PTY 管理只接受原生 Backend owner 通道；浏览器只持一次性 WS grant。
+            if auth.kind != "local" or not isinstance(connection, Request):
+                raise PermissionError("Terminal 管理必须经过原工作区资源 owner")
+            verify_local_control_request(connection)
+            if connection.headers.get("X-BoxTeam-Resource-Owner") != "workspace-terminal":
+                raise PermissionError("Terminal 管理缺少工作区资源 owner 身份")
+            headers["X-BoxTeam-Resource-Owner"] = "workspace-terminal"
         query = [(key, value) for key, value in query if key not in {"package_version", "workspace_id"}]
-        yield _ServiceRoute(build_upstream_url(base_url, (), path).copy_merge_params(tuple(query)), headers, stopped)
+        yield _ServiceRoute(build_upstream_url(base_url, (), path).copy_merge_params(tuple(query)), headers, stopped, selected_instance, gateway_id)
 
 
 async def _watch_access(connection: HTTPConnection, auth: GatewayAuthContext, stopped: asyncio.Event) -> None:
@@ -134,7 +156,11 @@ class _ServiceResponse(StreamingResponse):
                  route: _ServiceRoute, response: httpx.Response) -> None:
         super().__init__(body, status_code=response.status_code,
             headers=filter_hop_by_hop_headers((key, value) for key, value in response.headers.items()
-                if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS | {"set-cookie", "content-length", "content-encoding"}))
+                if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS | {
+                    "set-cookie", "content-length", "content-encoding", "x-boxteam-plugin-instance-id", "x-boxteam-plugin-gateway-id"}))
+        if route.instance_id:
+            self.headers["X-BoxTeam-Plugin-Instance-Id"] = route.instance_id
+            self.headers["X-BoxTeam-Plugin-Gateway-Id"] = route.gateway_id
         self.request, self.auth, self.route, self.body = request, auth, route, body
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -171,12 +197,14 @@ class _ServiceResponse(StreamingResponse):
             await self.body.aclose()
 
 
+@router.api_route(BINDING_PATH, methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    response_model=None, include_in_schema=False)
 @router.api_route(SERVICE_PATH, methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     response_model=None, include_in_schema=False)
-async def service_request(package_id: str, plugin_id: str, instance_id: str, service_id: str,
+async def service_request(package_id: str, plugin_id: str, service_id: str,
     path: str, package_version: str, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    workspace_id: CanonicalWorkspaceId | None = None,
+    instance_id: str | None = None, workspace_id: CanonicalWorkspaceId | None = None,
 ) -> StreamingResponse:
     require_federation_capability(request, auth, "send")
     require_federation_capability(request, auth, "read")

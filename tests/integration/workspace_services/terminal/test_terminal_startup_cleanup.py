@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import signal
-import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -16,10 +15,12 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    TerminalPluginService,
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="核对Linux原生PTY与/proc，不替代Windows验收")
@@ -46,7 +47,11 @@ class TerminalService:
     workspace_id: str
     control: Path
     root: Path
-    process: subprocess.Popen[str]
+    process: TerminalPluginService
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return self.process.headers
 
 
 @pytest.fixture
@@ -64,15 +69,15 @@ def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPa
             env.setenv("NODE_OPTIONS", f"--import={(Path.cwd() / 'tests/integration/workspace_services/terminal/terminal_startup_failure.mjs').as_uri()}")
             env.setenv("BOXTEAM_TEST_PROJECT_ROOT", str(Path.cwd()))
             env.setenv("BOXTEAM_TEST_TERMINAL_CONTROL", str(control))
-            process = start_terminal_backend(
+            process = start_terminal_plugin_service(
                 backend_port=integration_backend_port + 67, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
-        service = TerminalService(run, f"http://127.0.0.1:{integration_backend_port + 67}", load_or_create_workspace_id(root), control, root, process)
+        service = TerminalService(run, process.http_url, process.workspace_id, control, root, process)
         try:
             yield service
         finally:
             try:
-                terminate_process(service.process)
+                stop_terminal_plugin_service(service.process)
             finally:
                 # 失败收尾只停止本fixture观察到的精确实例，不替产品签回执或修改恢复状态。
                 identities: list[dict[str, int | str]] = []
@@ -126,7 +131,7 @@ async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(
     (service.control / "mode").write_text(mode)
     if fail_sink:
         (service.control / "fail-sink").touch()
-    headers = {"X-BoxTeam-Workspace-Id": service.workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = service.headers
     payload = {"workspace_id": service.workspace_id, "owner_revision": 7, "command": sys.executable}
     state_file = service.root / ".boxteam/terminal-manager/terminals.json"
     async with httpx.AsyncClient(base_url=service.url, headers=headers, timeout=15) as client:
@@ -210,7 +215,7 @@ async def test_cwd_rejection_keeps_not_created_receipt_and_same_target_retry(
     terminal_service: TerminalService, fail_sink: bool,
 ) -> None:
     service = terminal_service
-    headers = {"X-BoxTeam-Workspace-Id": service.workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = service.headers
     file = service.root / "not-a-directory.txt"
     file.write_text("不能因诊断故障改写原件", encoding="utf-8")
     state_file = service.root / ".boxteam/terminal-manager/terminals.json"
@@ -263,7 +268,7 @@ async def test_late_native_identity_and_verified_worker_receipt_settle_original_
     (service.control / "late-native-identity").touch()
     if lose_proof:
         (service.control / "drop-stop-proof").touch()
-    headers = {"X-BoxTeam-Workspace-Id": service.workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = service.headers
     async with httpx.AsyncClient(base_url=service.url, headers=headers, timeout=15, trust_env=False) as client:
         failed = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,

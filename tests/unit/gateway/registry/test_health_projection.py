@@ -294,7 +294,7 @@ def health_list_http() -> Callable[..., Awaitable[httpx.Response]]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("fault", "stage"), [
     ("backend", "backend_runtime_health"), ("workspace", "workspace_health"),
-    ("config", "config_status"), ("terminal_manager", "service_health"),
+    ("config", "config_status"),
     ("browser_manager", "service_health"),
 ])
 async def test_health_failure_facts_cross_http_persistence_and_cold_read(
@@ -308,7 +308,7 @@ async def test_health_failure_facts_cross_http_persistence_and_cold_read(
     original_assert_healthy = graph.owner.assert_healthy
     fault_enabled = True
     before = health_registry_state.load_workspace_registry()
-    bad_urls = {runtime.service_urls[fault] + "/health" for runtime in graph.runtimes.values()} if fault == "terminal_manager" or fault == "browser_manager" else set()
+    bad_urls = {runtime.service_urls[fault] + "/health" for runtime in graph.runtimes.values()} if fault == "browser_manager" else set()
 
     def assert_healthy() -> None:
         if fault == "backend" and fault_enabled:
@@ -338,7 +338,7 @@ async def test_health_failure_facts_cross_http_persistence_and_cold_read(
     items = listed.json()["data"]["items"]
     assert len(items) == 2
     for item in items:
-        detail = item["config_reload"]["error"] if fault == "config" else item["services"][fault if fault in {"terminal_manager", "browser_manager"} else "workspace_api"]["error"]
+        detail = item["config_reload"]["error"] if fault == "config" else item["services"][fault if fault == "browser_manager" else "workspace_api"]["error"]
         assert f"stage={stage}, error=RuntimeError" in detail
         assert ("diagnostic_sink_error=OSError" in detail) == (health_sink_error is not None)
         assert item["backend_generation"] == graph.owner.contract.generation

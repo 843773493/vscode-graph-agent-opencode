@@ -510,13 +510,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "terminal_backend": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8012" }
-          }
-        },
         "browser_backend": {
           "type": "object",
           "additionalProperties": false,

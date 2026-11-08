@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
+from app.schemas.gateway.service_plugin import PluginServiceReference
 from app.schemas.public_metadata import PublicResourceMetadata
 
 
@@ -75,6 +76,7 @@ class ResourceTransportGrantDTO(BaseModel):
     grant_token: str
     expires_at: str
     resource: WorkspaceResourceDTO
+    service: PluginServiceReference | None = None
 
 
 class BrowserResourceCreateRequest(BaseModel):

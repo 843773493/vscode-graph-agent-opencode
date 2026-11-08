@@ -11,6 +11,7 @@ from threading import Event
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
 
+from app.abstractions.workspace_resources import ResourceAssociationMissing
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.business.workspace_resources.records import (
     OwnedResourceRecord,
@@ -158,7 +159,7 @@ class ResourceOperations:
                     record = self._owner._require_owned_resource_record(resource_id)
                     self._owner._verified(record)
                     if self._thread not in record.thread_associations:
-                        raise ValueError(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
+                        raise ResourceAssociationMissing(f"外部资源 不属于当前精确 Thread 关联: {resource_id}")
                     if resource_id not in self._lease_refs:
                         await self._acquire_lease(record, creating=False)
                         self._assert_open()

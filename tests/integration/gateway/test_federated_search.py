@@ -21,7 +21,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
@@ -90,7 +89,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     credential.write_text(LOCAL_TOKEN_HEADERS["X-Local-Token"] + "\n", encoding="utf-8")
     credential.chmod(0o600)
     with ExitStack() as cleanup:
-        preferred_offsets = {"backend-0": 0, "backend-1": 1, "gateway": 20, "terminal": 40,
+        preferred_offsets = {"backend-0": 0, "backend-1": 1, "gateway": 20,
                              "browser-backend": 42, "browser-frontend": 43}
         fallback_offsets = [offset for offset in range(ports.end - ports.start + 1)
                             if offset not in preferred_offsets.values()]
@@ -110,16 +109,16 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{service_ports['gateway']}")
         fixture = Network(workspace, secondary, stopped, gateway_home, gateway_id, service_ports["gateway"],
                           service_ports["backend-0"], context.artifacts_dir, [])
-        # fork 来源会读取真实资源状态；辅助服务使用本装具独占的端口和生命周期。
-        terminal = start_terminal_backend(backend_port=service_ports["terminal"], workspace_root=str(workspace), artifacts_dir=fixture.artifacts)
-        cleanup.callback(terminate_process, terminal)
+        # fork 来源只读取真实查询状态；Browser 服务与 Gateway 共用其原装具。
         browser = start_browser_manager_processes(
             workspace_root=workspace, backend_port=service_ports["browser-backend"], frontend_port=service_ports["browser-frontend"],
             backend_host="127.0.0.1", artifacts_dir=fixture.artifacts,
         )
         cleanup.callback(close_browser_manager_processes, browser)
-        mount = MountedWorkspace(workspace_backend_id_for_root(workspace), workspace,
-                                 f"http://127.0.0.1:{service_ports['terminal']}", f"http://127.0.0.1:{service_ports['browser-backend']}")
+        mount = MountedWorkspace(
+            workspace_backend_id_for_root(workspace), workspace,
+            browser_backend_url=f"http://127.0.0.1:{service_ports['browser-backend']}",
+        )
         for index, root in enumerate((workspace, secondary)):
             backend = start_backend_process(workspace_root=str(root), port=service_ports[f"backend-{index}"], log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,

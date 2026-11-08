@@ -10,11 +10,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
@@ -44,7 +45,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 SERVICE_PATHS: dict[str, GatewayServiceName] = {
-    "terminal-manager": "terminal_manager",
     "browser-manager": "browser_manager",
 }
 
@@ -146,7 +146,7 @@ async def proxy_auxiliary_http(
         service == "browser_manager" and request.method == "GET"
         and re.fullmatch(r"api/browsers/[^/]+/(downloads|screenshots)/[^/]+", path.strip("/")) is not None
     )
-    if service in {"terminal_manager", "browser_manager"} and path.strip("/") != "health" and not artifact_read:
+    if service in {"browser_manager"} and path.strip("/") != "health" and not artifact_read:
         raise HTTPException(status_code=403, detail="资源管理请使用工作区 /api/v1/resources owner API")
     registry = _registry(request.app)
     try:
@@ -189,7 +189,7 @@ async def proxy_auxiliary_http(
             forwarded = client.build_request(
                 request.method,
                 target_url,
-                params=request.query_params.multi_items(),
+                params=tuple(request.query_params.multi_items()),
                 content=await request.body(),
                 headers=_proxy_request_headers(request, target, service),
             )
@@ -342,7 +342,7 @@ async def _proxy_auxiliary_websocket(
         # 按请求注入 Gateway 自身稳定身份，与两条 HTTP 代理同一来源；WebSocket 握手
         # 只转发这里显式写入的头部，客户端无法自带同名头，故无需额外剥离。
         upstream_headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
-        if service in {"terminal_manager", "browser_manager"} and target.connection_kind != "remote_gateway":
+        if service in {"browser_manager"} and target.connection_kind != "remote_gateway":
             upstream_headers["X-BoxTeam-Workspace-Id"] = target.workspace_id
         if target.connection_kind == "remote_gateway":
             connection_id = registry.remote_connection_for_target(target).connection_id
@@ -386,18 +386,6 @@ async def _proxy_auxiliary_websocket(
 
 
 @router.websocket(
-    "/api/gateway/workspaces/{workspace_id}/terminal-manager/terminal"
-)
-async def proxy_terminal_websocket(websocket: WebSocket, workspace_id: str) -> None:
-    await _proxy_auxiliary_websocket(
-        websocket=websocket,
-        workspace_id=workspace_id,
-        service="terminal_manager",
-        socket_path="terminal",
-    )
-
-
-@router.websocket(
     "/api/gateway/workspaces/{workspace_id}/browser-manager/browser"
 )
 async def proxy_browser_websocket(websocket: WebSocket, workspace_id: str) -> None:
@@ -409,7 +397,48 @@ async def proxy_browser_websocket(websocket: WebSocket, workspace_id: str) -> No
     )
 
 
+def _terminal_asset(path: str) -> FileResponse:
+    """Gateway 直接发布产品 attach 资产，不再启动第二个静态服务。"""
+    root = get_project_root()
+    client = root / "src/workspace-services/terminal/client"
+    fixed = {
+        "": client / "index.html", "index.html": client / "index.html",
+        "main.js": client / "main.js", "styles.css": client / "styles.css",
+        "terminalUserActions.js": client / "terminalUserActions.js",
+        "terminalShortcuts.js": client / "terminalShortcuts.js",
+        "shared/commandText.js": root / "src/workspace-services/terminal/shared/commandText.js",
+        "protocol/messages.js": root / "src/workspace-services/terminal/protocol/messages.js",
+        "vendor/xterm/xterm.css": root / "node_modules/@xterm/xterm/css/xterm.css",
+        "vendor/xterm/xterm.js": root / "node_modules/@xterm/xterm/lib/xterm.js",
+        "vendor/xterm/addon-fit.js": root / "node_modules/@xterm/addon-fit/lib/addon-fit.js",
+        "vendor/xterm/addon-search.js": root / "node_modules/@xterm/addon-search/lib/addon-search.js",
+        "vendor/codicon/codicon.css": root / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css",
+        "vendor/codicon/codicon.ttf": root / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf",
+    }
+    target = fixed.get(path)
+    if target is None:
+        if path.startswith("protocol/generated/"):
+            source = root / "src/workspace-services/protocol/generated"
+            relative = path.removeprefix("protocol/generated/")
+        elif path.startswith("@bufbuild/protobuf/"):
+            source = root / "node_modules/@bufbuild/protobuf/dist/esm"
+            relative = path.removeprefix("@bufbuild/protobuf/")
+            if not relative or "." not in relative.rsplit("/", 1)[-1]:
+                relative = relative.rstrip("/") + "/index.js"
+                relative = relative.lstrip("/")
+        else:
+            raise HTTPException(404, "未知 Terminal attach 资产")
+        target = (source / relative).resolve()
+        if not target.is_relative_to(source.resolve()) or target.suffix != ".js":
+            raise HTTPException(404, "Terminal attach 资产越界或类型不支持")
+    if not target.is_file():
+        raise HTTPException(404, f"Terminal attach 资产缺失: {path}")
+    return FileResponse(target)
+
+
 async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
+    if kind == "terminal":
+        return _terminal_asset(path)
     frontend_urls = getattr(request.app.state, "attach_frontend_urls", {})
     frontend_url = frontend_urls.get(kind)
     if not isinstance(frontend_url, str):
@@ -422,7 +451,7 @@ async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
     try:
         response = await client.get(
             target_url,
-            params=request.query_params.multi_items(),
+            params=tuple(request.query_params.multi_items()),
             headers=_proxy_request_headers(request),
         )
     except httpx.RequestError as error:

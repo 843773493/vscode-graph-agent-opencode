@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-`src/workspace-services/terminal/` 存放独立的持久终端管理进程及其浏览器 attach 页面。该目录服务于本地开发运行时，由 `scripts/launch/dev.mjs` 启动，不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端。
+`src/workspace-services/terminal/` 存放 Terminal 插件的服务实现、attach 页面与协议。Gateway 管理插件服务实例并直接发布 attach 页面资源；目录不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端。
 
 ```text
 terminal/
@@ -35,5 +35,5 @@ terminal/
 
 - 使用 ESM，通过 `import`/`export` 编写 Node.js 代码。
 - 终端错误必须显式返回或抛出，不要静默失败。
-- 后端默认监听 `127.0.0.1:8012`，前端默认监听 `127.0.0.1:8013`。
+- 插件服务由 Gateway 按安装与工作区绑定配置启动；页面静态资源由 Gateway 发布，不再单独启动 Terminal 前端服务。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

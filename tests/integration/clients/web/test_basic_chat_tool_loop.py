@@ -22,7 +22,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
 )
@@ -89,10 +88,6 @@ def browser_backend(
             "port": frontend_port,
             "probes": [{"port": candidate, "available": available} for candidate, available in frontend_probes],
         }, indent=2) + "\n", encoding="utf-8")
-        terminal = start_terminal_backend(
-            backend_port=port_block.port(2), workspace_root=str(workspace_root), artifacts_dir=context.artifacts_dir,
-        )
-        services.callback(terminate_process, terminal)
         browser = start_browser_manager_processes(
             workspace_root=workspace_root, artifacts_dir=context.artifacts_dir,
             backend_port=port_block.port(3), frontend_port=frontend_port, backend_host="127.0.0.1",
@@ -105,7 +100,6 @@ def browser_backend(
             asgi_app="tests.support.e2e_control.backend_app:app",
             startup_mount=MountedWorkspace(
                 load_or_create_workspace_id(workspace_root), workspace_root,
-                terminal_backend_url=f"http://127.0.0.1:{port_block.port(2)}",
                 browser_backend_url=f"http://127.0.0.1:{port_block.port(3)}",
             ),
             env_overrides={

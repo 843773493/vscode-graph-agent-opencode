@@ -152,3 +152,5 @@ out/tests/packaging/runtime/windows-python-dependencies/
 - Python、Chromium 和 Node 依赖必须从显式版本清单构建；BoxTeam 发布版本必须从根 `package.json` 读取。
 - staging 不得引用构建机仓库绝对路径。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+Terminal attach 页面及其明确使用的 xterm／codicon 静态文件由 application-sources 一并交付，不复制前端依赖树。Linux／Windows builder 复用 scripts/plugins/pack-developer-tools.mjs 生成标准 developer-tools.zip；该资产只供显式安装使用，普通启动或读取不安装、不启用。插件打包脚本参与构建输入指纹。

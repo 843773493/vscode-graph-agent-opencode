@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -24,9 +25,14 @@ from tests.e2e.system.gateway.gateway_docker import (
 from tests.e2e.system.gateway.gateway_target import (
     GatewaySshTarget,
     GatewayTargetE2EPaths,
+    _powershell_command,
+    _powershell_quote,
+    _remote_join,
+    _remote_python,
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
     read_remote_workspace_owner,
+    run_ssh_command,
     start_remote_gateway_via_ssh,
     stop_remote_gateway,
 )
@@ -36,16 +42,10 @@ from tests.harness.python.browser_manager import (
     close_browser_frontend_process,
     start_browser_frontend_process,
 )
-from tests.harness.python.terminal_frontend import (
-    TerminalFrontendProcess,
-    close_terminal_frontend_process,
-    start_terminal_frontend_process,
-)
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     reset_gateway_user_configuration,
@@ -86,6 +86,108 @@ async def _receive_terminal_output(websocket, expected_text: str) -> None:
         if message.get("type") == "output" and expected_text in str(message.get("data")):
             return
     raise TimeoutError(f"终端 WebSocket 未输出: {expected_text}")
+
+
+async def _wait_for_terminal_plugin(
+    client: httpx.AsyncClient, *, gateway_id: str, workspace_id: str,
+) -> dict[str, object]:
+    deadline = asyncio.get_running_loop().time() + 60
+    last: object = None
+    while asyncio.get_running_loop().time() < deadline:
+        response = await client.post("/api/gateway/service-plugins/status", json={"gateway_id": gateway_id})
+        if response.status_code == 200:
+            last = _gateway_response_data(response)
+            if isinstance(last, dict):
+                plugin = next((item for item in last.get("plugins", [])
+                    if item.get("binding", {}).get("package_id") == "boxteam.developer-tools"
+                    and item.get("binding", {}).get("plugin_id") == "terminal"
+                    and item.get("binding", {}).get("workspace_id") == workspace_id), None)
+                if isinstance(plugin, dict) and plugin.get("state") == "ready":
+                    return plugin
+        await asyncio.sleep(0.25)
+    raise TimeoutError(f"遠端 Terminal 插件未就緒: gateway_id={gateway_id}, workspace_id={workspace_id}, last={last}")
+
+
+async def _enable_remote_terminal_plugin(
+    client: httpx.AsyncClient, *, gateway_id: str, workspace_id: str,
+) -> None:
+    headers = {
+        "X-BoxTeam-Workspace-Id": workspace_id,
+        "X-BoxTeam-Target-Gateway-Id": gateway_id,
+    }
+    source_path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
+    document = _gateway_response_data(await client.get(source_path, headers=headers))
+    source = commentjson.loads(str(document["jsonc"]))
+    runtime = source.setdefault("plugins", {}).setdefault("runtime", {})
+    entries = runtime.setdefault("entries", [])
+    assert isinstance(entries, list), source
+    binding = {
+        "package_id": "boxteam.developer-tools",
+        "package_version": "0.1.0",
+        "plugin_id": "terminal",
+        "enabled": True,
+    }
+    runtime["entries"] = [
+        item for item in entries
+        if not (item.get("package_id") == binding["package_id"] and item.get("plugin_id") == binding["plugin_id"])
+    ] + [binding]
+    saved = _gateway_response_data(await client.put(source_path, headers=headers, json={
+        "gateway_id": gateway_id,
+        "workspace_id": workspace_id,
+        "source_key": "workspace_root_mutable_override",
+        "jsonc": json.dumps(source, ensure_ascii=False, indent=2),
+        "base_file_digest": document["file_digest"],
+        "base_layer_revision": document["layer_revision"],
+        "base_layer_digest": document["layer_digest"],
+        "expected_active_revision": document["active_revision"],
+        "expected_active_digest": document["active_digest"],
+        "idempotency_key": "docker-terminal-plugin-enable",
+    }))
+    assert saved["edit"]["state"] == "active", saved
+
+
+def _install_remote_terminal_plugin(
+    target: GatewaySshTarget, *, gateway_id: str, gateway_port: int, boxteam_home: str,
+) -> None:
+    script = """import hashlib, json, subprocess, sys
+from pathlib import Path
+from urllib.request import Request, urlopen
+
+gateway_id, repository, package_path, port, home = sys.argv[1:]
+Path(package_path).parent.mkdir(parents=True, exist_ok=True)
+subprocess.run(['bun', 'scripts/plugins/pack-developer-tools.mjs', '--out', package_path],
+    cwd=repository, check=True, timeout=60, capture_output=True, text=True)
+token = (Path(home) / 'state/gateway/credentials/local-token').read_text(encoding='utf-8').strip()
+payload = json.dumps({'gateway_id': gateway_id, 'path': package_path,
+    'expected_digest': hashlib.sha256(Path(package_path).read_bytes()).hexdigest()}).encode()
+request = Request(f'http://127.0.0.1:{port}/api/gateway/service-plugins/install', data=payload,
+    headers={'Content-Type': 'application/json', 'X-Local-Token': token})
+with urlopen(request, timeout=30) as response:
+    result = json.load(response)
+if result.get('code') != 0 or result.get('data', {}).get('manifest', {}).get('package_id') != 'boxteam.developer-tools':
+    raise RuntimeError(f'Terminal 插件远端安装失败: {result}')
+"""
+    package_path = _remote_join(
+        target, target.repository_path, "out", "tests", "e2e", "system", "gateway",
+        "test_gateway_browser_resource", "artifacts", "developer-tools.zip",
+    )
+    arguments = (
+        _remote_python(target), "-c", script, gateway_id, target.repository_path, package_path,
+        str(gateway_port), boxteam_home,
+    )
+    if target.platform == "windows":
+        command = _powershell_command(
+            "$ErrorActionPreference = 'Stop'; "
+            f"Set-Location -LiteralPath {_powershell_quote(target.repository_path)}; "
+            "& " + " ".join(_powershell_quote(value) for value in arguments)
+            + "; exit $LASTEXITCODE"
+        )
+    else:
+        command = (
+            f"cd {shlex.quote(target.repository_path)} && "
+            + shlex.join(arguments)
+        )
+    run_ssh_command(target, command, timeout=45)
 
 
 def _write_launcher_runtime_manifest(
@@ -292,7 +394,6 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             initial_gateway_pid = initial_health.get("process_id")
             assert isinstance(initial_gateway_pid, int), initial_health
             assert initial_health.get("development_restart_available") is True
-            await acquire_gateway_guest(client)
 
             initial_status = await _wait_for_gateway_data(
                 client,
@@ -586,14 +687,12 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
     local_workspace = Path(e2e_workspace_root_path).resolve()
     gateway_port = port_block.port(41)
     remote_gateway_port = port_block.port(43)
-    terminal_frontend_port = port_block.port(50)
     browser_frontend_port = port_block.port(51)
     tunnel_port_range = (port_block.port(60), port_block.port(75))
     remote_workspace_path = docker_e2e_paths.remote_workspace
     remote_boxteam_home = docker_e2e_paths.remote_boxteam_home
 
     gateway: GatewayProcess | None = None
-    terminal_frontend: TerminalFrontendProcess | None = None
     browser_frontend: BrowserFrontendProcess | None = None
     remote_gateway_pid: str | None = None
     docker_target: GatewaySshTarget | None = None
@@ -632,18 +731,12 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             ),
         )
         remote_gateway_declared = True
-        terminal_frontend = start_terminal_frontend_process(
-            workspace_root=local_workspace,
-            artifacts_dir=local_workspace.parent / "artifacts",
-            frontend_port=terminal_frontend_port,
-        )
         browser_frontend = start_browser_frontend_process(
             workspace_root=local_workspace,
             artifacts_dir=local_workspace.parent / "artifacts",
             frontend_port=browser_frontend_port,
         )
         gateway_env = {
-            "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{terminal_frontend_port}",
             "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             "BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE": str(
                 docker_target.known_hosts_path
@@ -676,14 +769,30 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 and item["gateway_id"] == remote_gateway_id
             )
             assert remote_workspace["status"] == "ready"
-            assert remote_workspace["services"]["terminal_manager"]["status"] == "ready"
             assert remote_workspace["services"]["browser_manager"]["status"] == "ready"
             assert remote_workspace["remote_gateways"]
             assert all(connection["gateway_id"] == remote_gateway_id for connection in remote_workspace["remote_gateways"])
 
+            _install_remote_terminal_plugin(
+                docker_target, gateway_id=remote_gateway_id, gateway_port=remote_gateway_port,
+                boxteam_home=remote_boxteam_home,
+            )
+            workspace_headers = {
+                "X-BoxTeam-Workspace-Id": workspace_id,
+                "X-BoxTeam-Target-Gateway-Id": remote_gateway_id,
+            }
+            await _enable_remote_terminal_plugin(
+                client, gateway_id=remote_gateway_id, workspace_id=workspace_id,
+            )
+            terminal_plugin = await _wait_for_terminal_plugin(
+                client, gateway_id=remote_gateway_id, workspace_id=workspace_id,
+            )
+            terminal_instance = terminal_plugin["instance"]
+            assert isinstance(terminal_instance, dict)
+
             session_response = await client.post(
                 "/api/v1/sessions",
-                headers=remote_headers,
+                headers=workspace_headers,
                 json={"title": "Docker Remote Auxiliary Services"},
             )
             assert session_response.status_code == 200, session_response.text
@@ -691,7 +800,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
             browser_response = await client.post(
                 "/api/v1/resources/browsers",
-                headers=remote_headers,
+                headers=workspace_headers,
                 json={
                     "session_id": session_id,
                     "title": "Remote Docker Browser",
@@ -704,7 +813,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
             terminal_response = await client.post(
                 "/api/v1/resources/terminals",
-                headers=remote_headers,
+                headers=workspace_headers,
                 json={
                     "session_id": session_id,
                     "retention_scope": "thread",
@@ -719,7 +828,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
             resources_response = await client.get(
                 f"/api/v1/sessions/{session_id}/resources",
-                headers=remote_headers,
+                headers=workspace_headers,
             )
             assert resources_response.status_code == 200, resources_response.text
             resources = resources_response.json()["data"]["items"]
@@ -740,7 +849,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             terminal_attach = await client.get(
                 "/api/gateway/attach/terminal/",
                 params={"workspaceId": workspace_id, "terminalId": terminal_id},
-                headers=remote_headers,
+                headers=workspace_headers,
             )
             assert browser_attach.status_code == 200
             assert "可附加浏览器" in browser_attach.text
@@ -770,14 +879,26 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             terminal_resource = terminal_response.json()["data"]
             grant_response = await client.post(
                 f"/api/v1/resources/{terminal_id}/transport-grant",
-                headers=remote_headers,
+                headers=workspace_headers,
                 json={"expected_revision": terminal_resource["owner_revision"], "thread": terminal_resource["source_thread"]},
             )
             grant_response.raise_for_status()
             grant_token = grant_response.json()["data"]["grant_token"]
+            terminal_service = grant_response.json()["data"]["service"]
+            assert terminal_service == {
+                "gateway_id": remote_gateway_id,
+                "package_id": "boxteam.developer-tools",
+                "package_version": "0.1.0",
+                "plugin_id": "terminal",
+                "instance_id": terminal_instance["instance_id"],
+                "service_id": "socket",
+                "workspace_id": workspace_id,
+            }
             terminal_ws_url = (
-                f"ws://127.0.0.1:{gateway.port}/api/gateway/workspaces/"
-                f"{workspace_id}/terminal-manager/terminal?token=local-dev-token"
+                f"ws://127.0.0.1:{gateway.port}/api/gateway/service-plugins/"
+                f"boxteam.developer-tools/terminal/instances/{terminal_service['instance_id']}"
+                f"/services/socket/terminal?package_version=0.1.0&workspace_id={workspace_id}"
+                f"&target_gateway_id={remote_gateway_id}&token=local-dev-token"
             )
             async with websockets.connect(terminal_ws_url, additional_headers=remote_headers) as websocket:
                 await websocket.send(
@@ -834,5 +955,3 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             stop_remote_gateway(docker_target, remote_gateway_pid)
         if browser_frontend is not None:
             close_browser_frontend_process(browser_frontend)
-        if terminal_frontend is not None:
-            close_terminal_frontend_process(terminal_frontend)

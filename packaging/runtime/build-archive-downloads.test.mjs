@@ -42,6 +42,7 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots) {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, content);
   }
+  mkdirSync(path.join(projectRoot, "scripts/plugins"), { recursive: true });
   process.env.BOXTEAM_PROJECT_ROOT = projectRoot;
   const target = mode === "linux" ? "linux-x64" : "windows-x64";
   const defaultDownloadRoot = path.join(projectRoot, "out/packaging", target, "downloads");
@@ -82,6 +83,8 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots) {
         calls.push([kind, root]);
         return path.join(root, `${kind}.archive`);
       }]));
+    } else if (specifier === "../../scripts/plugins/pack-developer-tools.mjs") {
+      exports = { async packDeveloperTools() { throw new Error("归档检查应在源码复制前结束"); } };
     } else if (specifier === "./runtime-build-result.mjs") {
       const owner = await import(new URL(specifier, scriptUrl));
       exports = {

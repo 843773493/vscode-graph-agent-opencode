@@ -45,7 +45,6 @@ def registry(tmp_path: Path, gateway_id: str) -> Iterator[GatewayWorkspaceRegist
             backend_url="http://127.0.0.1:41100", connection_kind="local",
         ),
         runtime=WorkspaceRuntime(service_urls={
-            "terminal_manager": "http://127.0.0.1:41101/api",
             "browser_manager": "http://127.0.0.1:41102/api",
         }),
         activate=False,
@@ -62,7 +61,7 @@ def registry(tmp_path: Path, gateway_id: str) -> Iterator[GatewayWorkspaceRegist
             gateway_id=REMOTE_GATEWAY_ID, workspace_id=REMOTE_WORKSPACE_ID, name="remote", root_path=None, backend_url="",
             connection_kind="remote_gateway", owner="remote_projection",
             remote_gateway_connection_ids=(connection.connection_id,),
-            remote_service_names=("terminal_manager", "browser_manager"),
+            remote_service_names=("browser_manager",),
         ),),
         runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://127.0.0.1:41104"}),
         activate=False,
@@ -205,7 +204,7 @@ async def test_auxiliary_rejects_target_gateway_before_route(
     if protocol == "http":
         with pytest.raises(HTTPException) as captured:
             await proxy_auxiliary_http(
-                workspace_id, "terminal-manager", "health", _request(application, headers),
+                workspace_id, "browser-manager", "health", _request(application, headers),
                 GatewayAuthContext(kind="local"),
             )
         if carrier in {"mismatch", "missing"}:
@@ -223,7 +222,7 @@ async def test_auxiliary_rejects_target_gateway_before_route(
         websocket, messages = _websocket(application, headers)
         await _proxy_auxiliary_websocket(
             websocket=websocket, workspace_id=workspace_id,
-            service="terminal_manager", socket_path="terminal",
+            service="browser_manager", socket_path="browser",
         )
         assert messages == [{"type": "websocket.close", "code": 1008, "reason": "auxiliary_websocket_access_failed"}]
     assert route_acquisitions == []
@@ -238,7 +237,7 @@ async def test_auxiliary_rejects_target_gateway_before_route(
     pytest.param(LOCAL_WORKSPACE_ID, True, id="local-explicit-owner"),
     pytest.param(REMOTE_WORKSPACE_ID, True, id="remote-explicit-owner"),
 ])
-@pytest.mark.parametrize("service", ["terminal_manager", "browser_manager"])
+@pytest.mark.parametrize("service", ["browser_manager"])
 async def test_auxiliary_forwards_authoritative_target_and_preserves_workspace_contract(
     application: FastAPI, gateway_id: str, registry: GatewayWorkspaceRegistry,
     credential: FederationCredential, http_client: httpx.AsyncClient,
@@ -253,7 +252,7 @@ async def test_auxiliary_forwards_authoritative_target_and_preserves_workspace_c
                "X-Request-ID": "req_forged_sender", "X-Local-Token": get_gateway_local_token()}
     if explicit:
         headers[TARGET_GATEWAY_ID_HEADER] = owner
-    service_path = "terminal-manager" if service == "terminal_manager" else "browser-manager"
+    service_path = "browser-manager"
     if protocol == "http":
         response = await proxy_auxiliary_http(
             workspace_id, service_path, "health", _request(application, headers),
@@ -271,7 +270,7 @@ async def test_auxiliary_forwards_authoritative_target_and_preserves_workspace_c
         assert route_acquisitions == [((owner, workspace_id), False)]
     else:
         websocket, messages = _websocket(application, headers)
-        socket_path = "terminal" if service == "terminal_manager" else "browser"
+        socket_path = "browser"
         await _proxy_auxiliary_websocket(
             websocket=websocket, workspace_id=workspace_id, service=service, socket_path=socket_path,
         )
@@ -282,7 +281,7 @@ async def test_auxiliary_forwards_authoritative_target_and_preserves_workspace_c
             assert url == f"ws://127.0.0.1:41104/api/gateway/workspaces/{REMOTE_WORKSPACE_ID}/{service_path}/{socket_path}"
             assert "X-BoxTeam-Workspace-Id" not in forwarded
         else:
-            port = 41101 if service == "terminal_manager" else 41102
+            port = 41102
             assert url == f"ws://127.0.0.1:{port}/api/{socket_path}"
             assert forwarded.get_list("X-BoxTeam-Workspace-Id") == [LOCAL_WORKSPACE_ID]
         assert "X-Request-ID" not in forwarded
@@ -318,7 +317,7 @@ async def test_correct_gateway_target_preserves_existing_access_boundaries(
     if protocol == "http":
         with pytest.raises(HTTPException) as captured:
             await proxy_auxiliary_http(
-                workspace_id, "terminal-manager", "api/terminals" if rejection == "management" else "health",
+                workspace_id, "browser-manager", "api/terminals" if rejection == "management" else "health",
                 _request(application, headers),
                 GatewayAuthContext(kind="federation" if rejection == "federation" else "local"),
             )
@@ -338,7 +337,7 @@ async def test_correct_gateway_target_preserves_existing_access_boundaries(
         websocket, messages = _websocket(application, headers, query_string=query_string)
         await _proxy_auxiliary_websocket(
             websocket=websocket, workspace_id=workspace_id,
-            service="terminal_manager", socket_path="terminal",
+            service="browser_manager", socket_path="browser",
         )
         assert messages == [{"type": "websocket.close", "code": 1008, "reason": "auxiliary_websocket_access_failed"}]
     assert route_acquisitions == []

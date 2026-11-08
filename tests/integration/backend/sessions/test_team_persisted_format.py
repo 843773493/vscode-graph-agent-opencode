@@ -41,7 +41,6 @@ async def team_runtime(
     # 本例不创建外部资源，后台监控也只能访问本测试端口块，不能触达开发服务。
     mount = MountedWorkspace(
         load_or_create_workspace_id(root), root,
-        terminal_backend_url=f"http://127.0.0.1:{integration_backend_port + 60}",
         browser_backend_url=f"http://127.0.0.1:{integration_backend_port + 62}",
     )
     async with workspace_tool_runtime(root, startup_mount=mount) as (container, session_id, invocation):

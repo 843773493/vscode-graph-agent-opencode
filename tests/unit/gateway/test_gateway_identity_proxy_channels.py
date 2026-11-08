@@ -166,7 +166,7 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
             connection_kind="local",
         ),
         runtime=WorkspaceRuntime(
-            service_urls={"terminal_manager": "http://127.0.0.1:41101/api"}
+            service_urls={"browser_manager": "http://127.0.0.1:41101/api"}
         ),
         activate=False,
     )
@@ -212,12 +212,12 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
         await _proxy_auxiliary_websocket(
             websocket=websocket,  # type: ignore[arg-type]
             workspace_id=workspace_id,
-            service="terminal_manager",
-            socket_path="terminal",
+            service="browser_manager",
+            socket_path="browser",
         )
 
     assert websocket.accepted
-    assert handshake["url"] == "ws://127.0.0.1:41101/api/terminal"
+    assert handshake["url"] == "ws://127.0.0.1:41101/api/browser"
     headers = handshake["headers"]
     assert isinstance(headers, dict)
     assert headers["X-BoxTeam-Gateway-Id"] == _gateway_id(tmp_path)

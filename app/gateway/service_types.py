@@ -6,7 +6,6 @@ from typing import Literal
 
 GatewayServiceName = Literal[
     "workspace_api",
-    "terminal_manager",
     "browser_manager",
 ]
 

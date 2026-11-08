@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from app.abstractions.workspace_resources import ResourceAssociationMissing
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.orchestration import terminal_steering_service as steering_module
@@ -207,6 +208,66 @@ def terminal_steering_service(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("availability", ["disabled", "starting"])
+async def test_unavailable_plugin_keeps_monitor_alive_and_resumes_after_enable(
+    terminal_client: _FakeTerminalClient,
+    session_orchestrator: _FakeSessionOrchestrator,
+    availability: str,
+) -> None:
+    from app.abstractions.terminal.resources import (
+        TerminalPluginDisabled,
+        TerminalRequestError,
+    )
+
+    observed = asyncio.Event()
+    original_sweep = terminal_client.sweep_orphans
+
+    async def scan_disabled():
+        observed.set()
+        return await original_sweep()
+
+    terminal_client.sweep_orphans = scan_disabled
+    terminal_client.sweep_error = (
+        TerminalPluginDisabled("未开启") if availability == "disabled"
+        else TerminalRequestError(method="GET", path="/api/terminals",
+            status=409, response_body=availability)
+    )
+    service = TerminalSteeringService(
+        terminal_client=terminal_client,
+        session_orchestrator=session_orchestrator,  # type: ignore[arg-type]
+        poll_interval_seconds=0.001,
+    )
+    await service.start()
+    try:
+        await asyncio.wait_for(observed.wait(), 1)
+        assert not session_orchestrator.calls
+        assert service._task is not None and not service._task.done()
+        terminal_client.sweep_error = None
+        async with asyncio.timeout(1):
+            while not session_orchestrator.calls:
+                await asyncio.sleep(0.001)
+        assert len(session_orchestrator.calls) == 1
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [403, 404, 500, 503])
+async def test_monitor_reports_non_transition_http_failures(
+    terminal_client: _FakeTerminalClient,
+    terminal_steering_service: TerminalSteeringService,
+    status: int,
+) -> None:
+    from app.abstractions.terminal.resources import TerminalRequestError
+
+    error = TerminalRequestError(method="GET", path="/api/terminals", status=status, response_body="失败")
+    terminal_client.sweep_error = error
+    with pytest.raises(TerminalRequestError) as failed:
+        await terminal_steering_service._run()
+    assert failed.value is error
+
+
+@pytest.mark.asyncio
 async def test_scan_dispatches_one_terminal_completion_message(
     terminal_client: _FakeTerminalClient,
     session_orchestrator: _FakeSessionOrchestrator,
@@ -223,6 +284,35 @@ async def test_scan_dispatches_one_terminal_completion_message(
         "terminal_execution_completed"
     )
     assert terminal_client.finished == [("term_completed", True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("released_at", ["claim", "finish"])
+async def test_released_thread_association_does_not_kill_completion_monitor(
+    terminal_client: _FakeTerminalClient,
+    session_orchestrator: _FakeSessionOrchestrator,
+    terminal_steering_service: TerminalSteeringService,
+    monkeypatch: pytest.MonkeyPatch,
+    released_at: str,
+) -> None:
+    original_operation = terminal_client.operation
+    entered = 0
+
+    @asynccontextmanager
+    async def released_operation(**arguments: object) -> AsyncIterator[_FakeTerminalClient]:
+        nonlocal entered
+        entered += 1
+        if entered == (1 if released_at == "claim" else 2):
+            terminal_client.terminals.clear()
+            raise ResourceAssociationMissing("原临时终端已由 write_stdin 完成回收")
+        async with original_operation(**arguments) as operation:
+            yield operation
+
+    monkeypatch.setattr(terminal_client, "operation", released_operation)
+    await terminal_steering_service.scan_once()
+    await terminal_steering_service.scan_once()
+    assert len(session_orchestrator.calls) == (0 if released_at == "claim" else 1)
+    assert not terminal_client.finished
 
 
 @pytest.mark.asyncio

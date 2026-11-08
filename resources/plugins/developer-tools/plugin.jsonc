@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "package_id": "boxteam.developer-tools",
+  "version": "0.1.0",
+  "name": "BoxTeam Developer Tools",
+  "description": "BoxTeam workspace developer tools.",
+  "extension_contract_version": 1,
+  "plugins": [
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "instance_scope": "workspace",
+      "requires": [
+        { "extension_point": "services", "version": 1 }
+      ],
+      "contributes": {
+        "services": [
+          { "service_id": "http", "service_type": "terminal", "protocol": "http" },
+          { "service_id": "socket", "service_type": "terminal", "protocol": "websocket" }
+        ]
+      },
+      "runtime": "node",
+      "entrypoint": ["src/workspace-services/terminal/server/backend.js"],
+      "management_protocol_version": 1
+    }
+  ]
+}

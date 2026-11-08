@@ -73,7 +73,6 @@ class RegistryDtosMixin:
                 if target.connection_kind == "remote_gateway":
                     for service in (
                         "workspace_api",
-                        "terminal_manager",
                         "browser_manager",
                     ):
                         try:
@@ -192,7 +191,6 @@ class RegistryDtosMixin:
                         )
                 health_paths: dict[GatewayServiceName, str] = {
                     "workspace_api": "/api/v1/health",
-                    "terminal_manager": "/health",
                     "browser_manager": "/health",
                 }
                 def service_dto(

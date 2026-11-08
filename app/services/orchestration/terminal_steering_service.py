@@ -8,6 +8,11 @@ from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.terminal.execution_monitor import (
     TerminalExecutionMonitorClientProtocol,
 )
+from app.abstractions.terminal.resources import (
+    TerminalPluginDisabled,
+    TerminalRequestError,
+)
+from app.abstractions.workspace_resources import ResourceAssociationMissing
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -77,8 +82,8 @@ class TerminalSteeringService:
                 continue
             try:
                 await self._dispatch_terminal(terminal_resource)
-            except (SessionDeletionPendingError, NotFoundError) as error:
-                logger.info("Terminal 来源 Session 已关闭准入，跳过完成通知: %s", error)
+            except (SessionDeletionPendingError, NotFoundError, ResourceAssociationMissing) as error:
+                logger.info("Terminal 来源 Session 或 Thread 关联已释放，跳过完成通知: %s", error)
             except (ConnectionError, TimeoutError, URLError, ResourceConflict) as error:
                 errors.append(error)
         if errors:
@@ -158,13 +163,19 @@ class TerminalSteeringService:
                 await self.scan_once()
             except asyncio.CancelledError:
                 raise
+            except TerminalPluginDisabled:
+                # 配置关闭是正常准入状态；保留原资源事实，等待用户显式开启后再观察。
+                pass
             except (
                 ConnectionError,
                 TimeoutError,
                 URLError,
+                TerminalRequestError,
                 ResourceConflict,
                 ExceptionGroup,
             ) as error:
+                if isinstance(error, TerminalRequestError) and error.status != 409:
+                    raise
                 # 关闭后没有下一轮；原扫描失败必须交回关闭方，不能按稍后重试结算成功。
                 if self._stop_requested:
                     raise
@@ -179,11 +190,12 @@ class TerminalSteeringService:
 
     @staticmethod
     def _is_candidate(terminal_resource: dict[str, object]) -> bool:
+        associations = terminal_resource.get("thread_associations")
         return (
             terminal_resource.get("status") in {"running", "completed"}
             and terminal_resource.get("reconciliation_status") == "verified"
-            and terminal_resource.get("source_thread")
-            in terminal_resource.get("thread_associations", [])
+            and isinstance(associations, list)
+            and terminal_resource.get("source_thread") in associations
             and terminal_resource.get("model_backgrounded") is True
             and terminal_resource.get("last_command_status") == "completed"
             and (

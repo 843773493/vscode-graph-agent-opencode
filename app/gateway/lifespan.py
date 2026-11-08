@@ -25,6 +25,7 @@ from app.core.path_utils import (
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import (
     GatewayConfigReloadService,
@@ -436,10 +437,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             await app.state.session_catalog_search_service.start()
             catalog_search_started = True
             app.state.attach_frontend_urls = {
-                "terminal": os.environ.get(
-                    "BOXTEAM_TERMINAL_FRONTEND_URL",
-                    "http://127.0.0.1:8013",
-                ).rstrip("/"),
                 "browser": os.environ.get(
                     "BOXTEAM_BROWSER_FRONTEND_URL",
                     "http://127.0.0.1:8016",
@@ -659,7 +656,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             await service_plugins.adopt()
             await service_plugins.apply(gateway_config_reload.config.payload, gateway_config_reload.config.revision)
             workspace_plugin_bindings.start()
-            yield {"before_http_shutdown": extension_management.quiesce if extension_management is not None else None}
+            async def before_http_shutdown() -> None:
+                if not should_preserve_for_handoff():
+                    # Backend 清理资源仍经 Gateway；监听与插件必须存活到实际退出。
+                    restore_tasks = [managed_runtime_restore_task]
+                    if active_runtime_restore_task is not None:
+                        restore_tasks.append(active_runtime_restore_task)
+                    for task in restore_tasks:
+                        task.cancel()
+                    await asyncio.gather(*restore_tasks, return_exceptions=True)
+                    await workspace_plugin_bindings.close()
+                    errors: list[Exception] = []
+                    async with registry.backend_topology_lock:
+                        for owner in registry.backend_owners():
+                            async with owner.lock:
+                                try:
+                                    await run_sync_shielded(owner.close)
+                                except Exception as error:  # noqa: BLE001 — 全部原 owner 退出后汇总清理失败。
+                                    errors.append(error)
+                    if errors:
+                        raise ExceptionGroup("Gateway 监听关闭前 Backend 未完成退出", errors)
+                if extension_management is not None:
+                    await extension_management.quiesce()
+
+            yield {"before_http_shutdown": before_http_shutdown}
         except BaseException as error:
             recovery_errors: list[Exception] = []
             if pending_consumer_result is not None and not pending_promotion_committed:
@@ -761,7 +781,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             try:
                 registry.close(
                     preserve_browser_managers=preserve_runtime_for_handoff,
-                    preserve_terminal_managers=preserve_runtime_for_handoff,
                     preserve_workspace_backends=preserve_runtime_for_handoff,
                 )
                 if (

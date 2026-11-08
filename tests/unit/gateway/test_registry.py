@@ -362,7 +362,7 @@ def test_external_local_workspace_resolves_backend_without_gateway_runtime(
         "http://127.0.0.1:30100"
     )
     with pytest.raises(LookupError, match="工作区运行时尚未连接"):
-        registry.resolve_service_url(WORKSPACE_ID, "terminal_manager")
+        registry.resolve_service_url(WORKSPACE_ID, "browser_manager")
 
 
 def test_registry_restricts_temporary_file_before_serializing(
@@ -916,7 +916,7 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
             ),
             runtime=WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"},
-                processes={"terminal_manager": process},
+                processes={"ssh_tunnel": process},
             ),
             activate=index == 0,
         )
@@ -935,7 +935,6 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
 def test_registry_can_detach_managed_services_for_gateway_restart(tmp_path: Path, managed_backend_factory, preserve_backend: bool) -> None:
     events: list[str] = []
     backend = ProcessProbe("backend", events)
-    terminal = ProcessProbe("terminal", events)
     browser = ProcessProbe("browser", events)
     registry = GatewayWorkspaceRegistry(gateway_id=LOCAL_GATEWAY, storage_path=tmp_path / "gateway.json")
     target = WorkspaceTarget(
@@ -947,11 +946,11 @@ def test_registry_can_detach_managed_services_for_gateway_restart(tmp_path: Path
     registry.upsert(target)
     graph = managed_backend_factory(
         (target,), backend_url=target.backend_url, process=backend,
-        auxiliary_processes={WORKSPACE_ID: {"terminal_manager": terminal, "browser_manager": browser}},
+        auxiliary_processes={WORKSPACE_ID: {"browser_manager": browser}},
     )
     graph.publish(registry)
-    registry.close(preserve_browser_managers=True, preserve_terminal_managers=True, preserve_workspace_backends=preserve_backend)
-    assert events == [f"{'detach' if preserve_backend else 'close'}:backend", "detach:browser", "detach:terminal"]
+    registry.close(preserve_browser_managers=True, preserve_workspace_backends=preserve_backend)
+    assert events == [f"{'detach' if preserve_backend else 'close'}:backend", "detach:browser"]
     assert graph.owner.process is None
     assert graph.runtimes[WORKSPACE_ID].processes == {}
 
@@ -999,17 +998,13 @@ def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
             managed=True,
-            local_service_urls={
-                "terminal_manager": "http://127.0.0.1:41001",
-                "browser_manager": "http://127.0.0.1:41002",
-            },
+            local_service_urls={"browser_manager": "http://127.0.0.1:41002"},
         )
     )
 
     restored = GatewayWorkspaceRegistry(gateway_id=LOCAL_GATEWAY, storage_path=storage_path)
 
     assert restored.resolve(WORKSPACE_ID).local_service_urls == {
-        "terminal_manager": "http://127.0.0.1:41001",
         "browser_manager": "http://127.0.0.1:41002",
     }
     assert restored.resolve(WORKSPACE_ID).desired_running is False
@@ -1112,7 +1107,7 @@ async def test_list_dtos_checks_workspace_health_concurrently(
     assert all(item.status == "ready" for item in result)
     assert result[0].services["workspace_api"].local_port == 8100
     assert result[0].services["workspace_api"].health_path == "/api/v1/health"
-    assert result[0].services["terminal_manager"].status == "unavailable"
+    assert result[0].services["browser_manager"].status == "unavailable"
     assert _ConcurrentHealthClient.peak_requests == 3
 
 

@@ -1,46 +1,54 @@
 ## Purpose
 
-定义同一工作台内面向当前 profile、本地及远端 Gateway、目标环境 Workspace 用户来源层和指定工作区的统一设置编辑体验，保留各域原有权威存储、合并优先级、提交并发控制和生效状态，避免跨目标配置误写或形成第二事实源。
+定义复用 Code OSS 设置交互来编辑项目自有插件、Gateway 和 Workspace 配置的统一体验，保持明确目标、原来源层和唯一写入 owner；不提供第三方 vscode 配置 API，不把插件服务状态、客户端展示态或工作区业务秘密混成一份配置。
 
 ## ADDED Requirements
 
 ### Requirement: 设置编辑必须持续展示并冻结明确目标
 
-设置入口 SHALL 使用原设置编辑器，在编辑器顶部复用扩展／MCP 的 Gateway 目标控件与交互规则；编辑器持有自己的当前目标，初次默认当前页面入口的本地 Gateway，从已有配置对象打开时保持对象目标。后续设置读取与保存 SHALL 沿用该目标，不逐设置项重选，也不被其它管理视图的目标选择或活动编辑器焦点改写。选定目标后，仅在需要时确定目标用户来源层、精确 workspace 或 runtime override，已有上下文直接带入，不将安装位置、运行宿主、配置范围做成三套必选目标。页面须持续展示目标、来源层和可写能力；切换编辑器或导航不改投未提交内容，用户主动切换设置目标时 SHALL 沿原 dirty 编辑处理保留或结清草稿，不能把旧草稿应用到新目标。默认值只读，只能在合法覆盖层修改；未知、不可访问或不合法的目标须拒绝。
+设置 UI SHALL 复用原设置编辑器交互，在顶部复用插件管理的 Gateway 目标动作，各视图独立保留选择，初次默认当前入口原生 Gateway。读取／保存 SHALL 绑定编辑对象的目标、插件贡献、必要服务及工作区／来源层，不被其它视图或编辑器焦点改写；纯声明插件不要求服务实例。目标切换 SHALL 沿原 dirty 编辑流程保留或结清草稿，不将旧草稿写入新目标；默认值只读，只在合法覆盖层修改。
 
-Web 与 Node 扩展的目标配置 SHALL 使用同一所选目标及合法 Code OSS scope，MUST NOT 因 browser 入口在客户端运行就把 B 的配置保存到 A 的 profile。纯窗口布局、主题选择等展示态继续由原 Workbench profile 维护，不构成另一个插件安装域。直接访问 B 页面与经 Relay 编辑 B SHALL 由同一目标 owner 提供对应配置。
+#### Scenario: 编辑 B 设置后切换其它管理视图目标
+- **WHEN** B 的设置编辑器有未提交内容，用户将插件列表目标切为 A，再回到设置保存
+- **THEN** 保存仍指向 B 原来源，界面持续显示归属；B 失效则明确失败，不改投 A 或重新逐项询问目标
 
-目标 Code OSS profile／view 配置 SHALL 保留原 Code OSS 配置模型、scope、语言覆盖和 JSONC 编辑语义，目标文件的 stat／read／write、稳定 view 文件物化及变化通知 SHALL 复用目标侧原 Python 文件与异步监听服务。多个 Backend 与客户端共享相同资源；必要 profile 定位仍取原安装 owner，不将配置读写交给常驻 Node 管理进程或新增配置副本。普通设置读取或保存不得启动 Node host 或另建监听进程。Workspace／Gateway 业务配置继续由各自原 source writer 提交，不移入 Code OSS profile，也不把扩展设置转换为业务 candidate。
+### Requirement: 插件设置必须来自自有 schema 并提交原配置 owner
 
-#### Scenario: 远端 Web 扩展设置由目标保存
-- **WHEN** 用户在 A 页面选择 B，为安装在 B 的 browser 扩展修改一个目标用户范围设置，再直接打开 B 页面读取
-- **THEN** 保存和读取均来自 B 的原配置 owner，切换为 Node 入口不会产生另一份同义配置；A 的业务配置及纯窗口展示态不被改写，目标不同的扩展不会按同名 key 借用值
+插件 manifest 的 `plugins[].contributes.configuration` SHALL 是配置 schema 的唯一包内来源，声明 package_id／plugin_id 命名空间和插件固定 gateway／workspace 范围、默认值、秘密输入及生效分类，字段进入原 Gateway 或精确 Workspace 配置命名空间，不读取 VSIX contributes.configuration、不提供 vscode getConfiguration／inspect／update 桥。纯 Workbench 主题／布局／快捷键仍归原窗口 profile；不能因 UI 相同就同步写插件业务配置。schema 注册与读取不要求 runtime 启动，运行期处理者不注册另一份有效配置。
 
-#### Scenario: 目标设置文件与外部修改复用 Python 服务
-- **WHEN** 用户保存目标 profile 或稳定多根 view 的设置，随后由目标机器上的外部编辑器修改该文件
-- **THEN** 保存经目标 Python 文件服务，变化经原进程内异步 watcher 更新同一 Code OSS 配置模型；原 scope、语言覆盖、注释、mtime／etag、dirty 和队列语义保持，不通过 Node 配置文件接口读写或新增有效配置事实
+已安装 schema 的查询结果及 UI 投影 SHALL 携带原生 Gateway、必要 workspace_id、package_id／plugin_id 和确切包版本，并在冻结的设置目标上下文解释。同一逻辑插件在不同目标使用不同版本时，不能压平成 Workbench 单例全局 schema 而互相覆盖字段／默认值；继续由原配置 owner 提供当前目标投影，不新建第二配置 registry。
 
-#### Scenario: 编辑远端设置期间切换会话
-- **WHEN** 用户在 B1 的 workspace 来源层编辑 MCP 参数，随后切到 A1 会话并保存
-- **THEN** 保存仍指向 B1 原来源层，界面持续显示 B1；B1 失效时明确失败，不写 A1 或用户默认层
+插件参数 SHALL 位于原配置 owner 正式登记的 package_id／plugin_id 参数容器，与引用确切版本的运行绑定分离。卸载前必须解除原 active／pending 绑定；未绑定或未安装插件的参数只在原来源保留并标为未生效，不参与 effective／active／pending 或热应用、不计包引用。无包 schema 时不提供参数表单，原 JSONC／source writer 仅按已登记容器结构和 JSON 类型支持查看、编辑与删除。重新显式绑定前 SHALL 按确切包版本 schema 完整校验参数，失败不启用；此有限容器外的未知字段及已绑定插件的非法参数仍拒绝，不保留影子 schema、孤儿参数账本或另一配置文件。
 
-#### Scenario: 其它管理视图切换目标不改写设置草稿
-- **WHEN** B 的设置编辑器已有未提交修改，用户将 Extensions 视图标题工具栏切为 A，再返回原设置编辑器保存
-- **THEN** 设置编辑器仍显示并保存 B 的原来源层，不重新询问每个设置项的目标；用户主动在设置编辑器切换目标时沿原 dirty 编辑处理保留或结清 B 草稿，不把它写入 A
+表单和 JSONC SHALL 共用原 source writer、预检、CAS、候选及 active／pending，原配置合并顺序保持，只有已登记字段可热应用；重启服务实例与重启 Backend 分别说明。没有稳定来源文件的对象不编造 profile／view 文件；旧用户 Extension Host 的 settings／多根 view 接口迁齐后删除，不保留第二有效配置。
 
-### Requirement: 设置目标发现只披露已登记且可路由的稳定身份
+#### Scenario: 同包两个 workspace 参数独立
+- **WHEN** A1/A2 使用同一包并在设置 UI 保存不同参数或删除一项覆盖
+- **THEN** 分别进入原 workspace 来源和 CAS，默认值由原合并规则暴露，不修改另一工作区、Gateway 或 Workbench 展示态
 
-设置编辑器 SHALL 通过配置专属目标发现 API 获取 Gateway 下当前可路由的稳定 Backend ID；该目录允许没有 workspace 上下文，并只返回 Gateway 身份及 Backend ID。目标身份只能来自现有 Gateway registry／Backend 路由登记且已确认的身份，未知身份不得猜测，离线或不可路由目标不进入结果，发现不得启动 Backend 或其它管理服务。
+#### Scenario: 纯声明配置插件停用
+- **WHEN** 无运行入口的插件贡献合法配置 schema，用户保存覆盖值后关闭该插件并继续编辑配置
+- **THEN** 已安装版本的 schema 保持可读，配置编辑及保存由原 owner 完成而无进程，不恢复命令／工具／Skill 新使用，未授权来源仍不可读取
 
-该发现 API SHALL 使用既有 `configuration_read` 授权。它只披露配置目标身份，不返回 VSIX 库存、扩展安装／宿主管理能力或其它扩展状态。远端 Gateway SHALL 由目标 Gateway 再次执行相同授权与发现；中继须在实际披露时确认原连接路由及请求身份仍有效。`configuration_read` 不授予配置写入、扩展管理或目标启动能力。
+#### Scenario: 整包卸载后保留配置来源
+- **WHEN** 用户已解除原 active／pending 绑定并结清其他引用，卸载曾贡献配置 schema 的插件包
+- **THEN** 释放对应 schema 投影，原参数容器中的保存值保留但未生效且不阻卸载；原 JSONC／source writer 仍可按登记容器结构编辑与删除，不依赖已删除包提供表单，不保留影子 schema 或放宽域外未知字段校验
 
-#### Scenario: 无 workspace 的设置编辑发现多个目标
-- **WHEN** 设置编辑器向 Gateway 请求目标列表，且当前没有挂接 workspace
-- **THEN** 只返回 registry 中身份已确认且通过现有 Backend 路由可达的 Backend ID；不启动离线 Backend，不从名称、URL 或工作区猜测身份，也不附带 VSIX 库存或安装权限
+#### Scenario: 参数残留重新绑定及域外错误
+- **WHEN** 用户保留未绑定插件的参数后显式绑定新版本，而残留不符合新 schema；或在参数容器外提交未知字段
+- **THEN** 前者按确切版本 schema 拒绝绑定且零启动，残留仍未生效；后者按原 schema 拒绝提交，不以允许保留残留为由接受任意未知配置
 
-#### Scenario: 远端配置读取权限控制目标披露
-- **WHEN** 中继 Gateway 请求发现远端 Gateway 的设置目标
-- **THEN** 远端仅在 `configuration_read` 仍授权且原连接未换代时披露 Backend ID；缺少权限或连接失效时不返回目录，普通 `read`、`discovery` 与 VSIX 管理能力不能代授
+#### Scenario: 同插件不同目标使用不同 schema 版本
+- **WHEN** A1 的插件 v1 与 B1 的同逻辑插件 v2 声明同名但类型或默认值不同的字段，用户在 B1 设置中查询和保存
+- **THEN** 查询、表单、校验及提交均使用 B1 v2 的合法 schema 与来源，结果保留目标及版本身份；A1 v1 不被覆盖，迟到 A1 结果不改变 B1 字段解释
+
+### Requirement: 设置发现与读取不得隐式启动插件或 Backend
+
+设置入口 SHALL 从原登记和配置 owner 发现合法目标、来源、已安装 schema 及可写能力，不以插件 ready／运行权限为前提，不为普通读取启动服务或 Backend。发现只披露配置权限允许的稳定身份；实际 Workspace 来源读取仍须其原 owner 可达，离线或缺少 writer 如实说明，不让 Gateway 越界读取工作区文件、不返回虚构完整配置或借安装权限代授配置读取。用户显式启动 Backend 是独立生命周期操作。
+
+#### Scenario: 只有配置权限且插件已停止
+- **WHEN** 用户打开已停止插件的合法 Gateway 配置来源，具有 configuration_read 而无服务运行权限
+- **THEN** 可读取已授权 schema／脱敏来源而不启动插件；写入仍独立核 configuration_write，不请求旧宿主 profile 或运行态
 
 ### Requirement: 设置归属必须复用原 owner 而非统一成新配置域
 
@@ -49,18 +57,6 @@ Workbench 展示设置、Gateway runtime 配置、Workspace 配置、会话设�
 #### Scenario: 布局与工作区默认 Agent 分别修改
 - **WHEN** 用户修改当前 profile 的布局，再修改 B1 的 default_agent
 - **THEN** 两者分别写原展示态和 B1 配置 owner，不互相产生对方的配置提交；既有会话继续遵守原 Agent 绑定规则
-
-### Requirement: 扩展设置必须保留原 Code OSS 配置域及视图语义
-
-VSIX 贡献设置 SHALL 进入原 configuration registry，保留 setting scope、默认值、policy、信任限制和语言覆盖，不写入 Gateway／Workspace 业务 JSONC。原 get／inspect／update／change 事件 SHALL 使用 host view 配置模型；Global 依原 USER 与 scope 定位所选目标的用户配置，纯窗口展示设置仍归当前 profile；browser／Node 入口不改变同一目标扩展配置的归属，Workspace 定位稳定 Code OSS view 配置，WorkspaceFolder 按显式 resource 定位挂接根的 `.vscode/settings.json`。单根沿原 folder 模型，multi-root 须有原服务持有的稳定 `.code-workspace` 配置资源；默认资源可物化在目标基础设施 profile 区，不能把 Workspace 写分摊成多个业务配置提交。
-
-原配置初始化及事件 SHALL 投影到所属目标／view，inspect 与设置 UI 对相同 resource／language 一致。省略参数沿原推导规则；无唯一 owner、资源不属 view 或不可写时明确拒绝，不跟随窗口焦点改投。窗口级 schema 的版本冲突须在启用阶段明确处理。
-
-系统 SHALL 在原配置服务边界按 host／view 构造或路由原 WorkspaceConfiguration／配置模型，共用 registry／scope／JSON editing 和已登记目标 FileService，不能轮换单窗口全局 workspace 或在 renderer 猜目标本地路径。
-
-#### Scenario: 多根扩展设置与业务配置分开写入
-- **WHEN** A view 挂接 A1/A2，扩展对同一键执行 resource／language 读取与 inspect，并分别更新 Global、Workspace、WorkspaceFolder，焦点随后切到 B1
-- **THEN** 更新分别进入原 profile／remote user、稳定 A view 及指定 A folder 配置，读取与事件仅反映合法视图；A1/A2 的 `.boxteam/workspace.jsonc` 和 B 配置不被改写，非法资源请求明确拒绝
 
 ### Requirement: 来源编辑必须补齐原配置 owner 的真实读写合同
 
@@ -74,7 +70,7 @@ VSIX 贡献设置 SHALL 进入原 configuration registry，保留 setting scope�
 
 ### Requirement: 有效设置必须揭示完整来源及遮蔽关系
 
-项目业务设置 SHALL 展示字段所属域、source layer、原来源资源、revision／digest、最终有效值、遮蔽关系、active／pending 和实际生效分类；Code OSS 设置沿原 inspect 模型，不伪造业务候选字段。合并顺序、对象合并及数组替换 SHALL 沿各自原配置合同，不由前端另算一套有效值。API 只物化来源层而未回写文件时必须如实表达；秘密值不得包含在普通诊断中。
+项目业务设置 SHALL 展示字段所属域、source layer、原来源资源、revision／digest、最终有效值、遮蔽关系、active／pending 和实际生效分类；Workbench 展示设置沿原配置模型；插件设置消费原业务 owner 的实际候选，不伪造 inspect 字段。合并顺序、对象合并及数组替换 SHALL 沿各自原配置合同，不由前端另算一套有效值。API 只物化来源层而未回写文件时必须如实表达；秘密值不得包含在普通诊断中。
 
 #### Scenario: 用户默认值被工作区覆盖
 - **WHEN** 同字段在 inline、user、user_local 与 B1 workspace 层分别存在
@@ -82,7 +78,7 @@ VSIX 贡献设置 SHALL 进入原 configuration registry，保留 setting scope�
 
 ### Requirement: 表单与 JSONC 必须共用原候选提交及并发合同
 
-项目业务配置的表单和 JSONC 编辑 SHALL 经相同 schema／预检、来源层和 active 基线、幂等提交及候选流程，不使用通用文件保存绕过配置 owner。Code OSS 设置 SHALL 使用原 configuration editing owner，不转换为业务候选。成功须以相应 owner 完整结果替换镜像，冲突／失败须重新读取并保留可处理的编辑内容，不能自动覆盖并发更改。删除覆盖只移除所选层键；格式及注释沿原 writer 处理。
+项目业务配置的表单和 JSONC 编辑 SHALL 经相同 schema／预检、来源层和 active 基线、幂等提交及候选流程，不使用通用文件保存绕过配置 owner。Workbench 展示设置 SHALL 使用原 configuration editing owner；自有插件配置使用其 Gateway／Workspace owner。成功须以相应 owner 完整结果替换镜像，冲突／失败须重新读取并保留可处理的编辑内容，不能自动覆盖并发更改。删除覆盖只移除所选层键；格式及注释沿原 writer 处理。
 
 #### Scenario: 表单与 JSONC 并发修改同层
 - **WHEN** 两个编辑器读取同一基线，一个先提交成功，另一个以旧基线保存
@@ -90,7 +86,7 @@ VSIX 贡献设置 SHALL 进入原 configuration registry，保留 setting scope�
 
 ### Requirement: 配置保存与运行生效必须分别展示
 
-项目业务设置 UI SHALL 显示原 owner 的候选／提交身份、已应用及延后路径、active／pending、错误与重启要求；Code OSS 设置及扩展使用其原有 reload／应用状态，不伪造统一候选。仅配置保存或 HTTP 成功 MUST NOT 作为资源已生效证明。重启、重试或丢弃 pending SHALL 使用原管理生命周期和基线，不重放已执行副作用；未登记字段不得被 UI 自行归类为可热应用。
+项目业务设置 UI SHALL 显示原 owner 的候选／提交身份、已应用及延后路径、active／pending、错误与重启要求；Workbench 展示设置保留原 reload／应用状态，服务插件展示实际热应用或实例重启要求。仅配置保存或 HTTP 成功 MUST NOT 作为资源已生效证明。重启、重试或丢弃 pending SHALL 使用原管理生命周期和基线，不重放已执行副作用；未登记字段不得被 UI 自行归类为可热应用。
 
 #### Scenario: 配置已保存但需要后端重启
 - **WHEN** 有效候选含无法安全热替换字段
@@ -126,7 +122,7 @@ pending retry／discard／resolve／失败记录 SHALL 核 configuration_write �
 
 ### Requirement: 设置入口必须复用原命令并保持运行面一致
 
-设置及来源详情 SHALL 接入原 Command／Quick Input／Opener 和既有资源寻址规则，扩展贡献的设置按实际 scope／目标提供；需要可重开资源时由统一寻址 owner 登记，不自造 URI 模板。Web 与 Electron SHALL 共用编辑及提交逻辑，原 profile 存储与后端业务事实分别恢复；不能靠清缓存、双写或新原生 IPC 迁移。
+设置及来源详情 SHALL 接入原 Command／Quick Input／Opener 和既有资源寻址规则，自有插件声明的设置按实际 scope／目标提供；需要可重开资源时由统一寻址 owner 登记，不自造 URI 模板。Web 与 Electron SHALL 共用编辑及提交逻辑，原 profile 存储与后端业务事实分别恢复；不能靠清缓存、双写或新原生 IPC 迁移。
 
 #### Scenario: 从命令打开设置并重启桌面产物
 - **WHEN** 用户从 `>` 打开 B1 的指定设置，编辑保存后重启打包 Electron
@@ -134,4 +130,12 @@ pending retry／discard／resolve／失败记录 SHALL 核 configuration_write �
 
 #### Scenario: 设置搜索保持目标和来源层
 - **WHEN** A/B 同一设置值及修改状态不同，用户在冻结 B 的编辑器用 @modified、@ext、@lang 查询后切焦点到 A
-- **THEN** 原过滤器仅消费 B 的合法 schema、扩展集合及来源层，保存仍指向 B；不支持语言／扩展维度的业务配置如实说明，迟到 A 结果不覆盖 B 查询
+- **THEN** 原过滤交互仅消费 B 的合法 schema、自有插件集合及来源层，保存仍指向 B；不支持语言／扩展维度的业务配置如实说明，迟到 A 结果不覆盖 B 查询
+
+### Requirement: 设置与插件开关必须展示固定范围及真实生效状态
+
+UI SHALL 以包下的插件为开关单位，分别编辑当前 Gateway、当前工作区或新建工作区模板，并在保存前后明确目标、插件、包版本、配置结果及实际运行状态。模板编辑不显示当前实例已启动，重启不重启 Backend／兄弟插件；关闭有代码插件与其贡献使用一个 enabled。停用后原 schema／配置／诊断可读，工具／Skill 新使用不可借设置读取恢复。
+
+#### Scenario: 关闭插件后查看配置
+- **WHEN** 用户关闭 A1 的浏览器插件，再编辑它的合法参数并查看新建工作区默认值
+- **THEN** 配置保留且按原 writer 保存，不启动浏览器、不改变其他插件或模板；模板有独立归属，关闭和 failed 真实状态不被保存成功覆盖

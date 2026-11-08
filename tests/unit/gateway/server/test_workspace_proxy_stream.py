@@ -620,7 +620,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
         runtime=WorkspaceRuntime(
             service_urls={
                 "workspace_api": "http://127.0.0.1:41001",
-                "terminal_manager": "http://127.0.0.1:41002",
+                "browser_manager": "http://127.0.0.1:41002",
             }
         ),
         activate=False,
@@ -642,7 +642,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
         {
             "type": "http",
             "method": "GET",
-            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/health",
+            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/browser-manager/health",
             "query_string": b"",
             "headers": [],
             "app": application,
@@ -661,7 +661,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
             await asyncio.wait_for(
                 proxy_auxiliary_http(
                     workspace_id=WORKSPACE_ID,
-                    service_path="terminal-manager",
+                    service_path="browser-manager",
                     path="health",
                     request=request,
                     auth=GatewayAuthContext(kind="local"),

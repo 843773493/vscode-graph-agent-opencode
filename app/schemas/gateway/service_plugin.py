@@ -192,6 +192,18 @@ class PluginInstanceView(_PluginValue):
         return self
 
 
+class PluginServiceReference(_PluginValue):
+    """一次业务连接冻结的服务身份，不含目标监听地址。"""
+
+    gateway_id: str = Field(min_length=1)
+    package_id: str = Field(min_length=1)
+    package_version: str = Field(min_length=1)
+    plugin_id: str = Field(min_length=1)
+    instance_id: str = Field(min_length=1)
+    service_id: str = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId | None = None
+
+
 class PluginInstanceStatus(PluginInstanceView):
     log_sink: dict[str, JsonValue] | None = None
 
@@ -256,6 +268,7 @@ __all__ = [
     "PluginRuntimeStatusDTO",
     "PluginScope",
     "PluginServiceContribution",
+    "PluginServiceReference",
     "PluginSkillContribution",
     "PluginSlotStatusDTO",
     "PluginSourceStatusDTO",

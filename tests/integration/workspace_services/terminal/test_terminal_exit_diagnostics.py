@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import suppress
@@ -16,14 +15,16 @@ import httpx
 import psutil
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    TerminalPluginService,
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux PTY父子及信号；不代替Windows验收")
-TerminalService = tuple[TestRunContext, subprocess.Popen[str], str, str, Path, Path, list[psutil.Process]]
+TerminalService = tuple[TestRunContext, TerminalPluginService, str, str, Path, Path, list[psutil.Process]]
 
 
 @pytest.fixture
@@ -111,15 +112,15 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
             env.setenv("NODE_OPTIONS", f"{os.environ.get('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
             env.setenv("BOXTEAM_TEST_PROJECT_ROOT", str(Path.cwd()))
             env.setenv("BOXTEAM_TEST_TERMINAL_EXIT_CONTROL", str(control))
-            process = start_terminal_backend(
+            process = start_terminal_plugin_service(
                 backend_port=integration_backend_port + 63, workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
         tracked: list[psutil.Process] = []
         try:
-            yield run, process, f"http://127.0.0.1:{integration_backend_port + 63}", load_or_create_workspace_id(root), root, control, tracked
+            yield run, process, process.http_url, process.workspace_id, root, control, tracked
         finally:
             try:
-                terminate_process(process)
+                stop_terminal_plugin_service(process)
             finally:
                 # 产品停止证明失败时才兜底回收本例已冻结创建时间的精确实例。
                 for observed in tracked:
@@ -139,7 +140,8 @@ def executing(process: psutil.Process) -> bool:
 async def test_worker_error_stops_real_tree_and_persists_before_diagnostic_failure_exit(
     terminal_service: TerminalService, fail_sink: bool,
 ) -> None:
-    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    run, plugin, url, workspace_id, root, control, tracked = terminal_service
+    backend = plugin.process
     terminal_id = f"term_{uuid4().hex}"
     workload = f"""
 import json, os, signal
@@ -153,7 +155,7 @@ Path({str(control / 'workload.pending')!r}).write_text(json.dumps({{'child_pid':
 Path({str(control / 'workload.pending')!r}).replace({str(control / 'workload.json')!r})
 while True: signal.pause()
 """
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
         created = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
@@ -206,16 +208,17 @@ while True: signal.pause()
         assert len(attempts) == (2 if fail_sink else 1)
         assert "受控Worker I/O失败" in attempts[0] and str(control / "private-pty") in attempts[0]
         if fail_sink:
-            diagnostics = "\n".join(file.read_text() for file in run.artifacts_dir.glob("terminal-backend-*.stderr.log"))
+            diagnostics = "\n".join(file.read_text() for file in run.artifacts_dir.glob("terminal-plugin-*.stderr.log"))
             assert "受控Worker I/O失败" in diagnostics and "ENOTDIR" in diagnostics
             # 独立重启只读原产品发布记录；不代填恢复状态或重发Worker故障。
-            cold = start_terminal_backend(backend_port=int(url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir)
+            cold = start_terminal_plugin_service(backend_port=int(plugin.root_url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir)
             try:
+                client.headers.update(cold.headers)
                 current = await client.get(f"/api/terminals/{terminal_id}")
                 assert current.status_code == 200, current.text
                 assert all(current.json()["data"][key] == value for key, value in record.items())
             finally:
-                terminate_process(cold)
+                stop_terminal_plugin_service(cold)
         run.write_result("passed", {"fail_sink": fail_sink, "identities": identities,
                                    "scope": "真实HTTP/Node/PTY父子及Worker错误、日志writer、冷Manager读取；不代Gateway/Web、Windows或未知停止接管"})
 
@@ -225,7 +228,8 @@ while True: signal.pause()
 async def test_unknown_exit_without_worker_can_retry_management_with_original_process_identity(
     terminal_service: TerminalService, cold: bool, action: str,
 ) -> None:
-    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    run, plugin, url, workspace_id, root, control, tracked = terminal_service
+    backend = plugin.process
     terminal_id = f"term_{uuid4().hex}"
     workload = f"""
 import json, os, signal
@@ -239,7 +243,7 @@ Path({str(control / 'workload.pending')!r}).write_text(json.dumps({{'child_pid':
 Path({str(control / 'workload.pending')!r}).replace({str(control / 'workload.json')!r})
 while True: signal.pause()
 """
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
         created = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
@@ -270,11 +274,13 @@ while True: signal.pause()
         diagnostics = [json.loads(line)["chunk"] for line in (control / "attempts.jsonl").read_text().splitlines()]
         assert len(diagnostics) == 2
         assert "受控首次停止失败" in diagnostics[1] and "EPERM" in diagnostics[1]
-        active_backend = backend
+        active_plugin = plugin
         if cold:
-            terminate_process(backend)
+            stop_terminal_plugin_service(plugin)
             assert executing(root_process) and executing(child)
-            active_backend = start_terminal_backend(backend_port=int(url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir)
+            active_plugin = start_terminal_plugin_service(backend_port=int(plugin.root_url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir)
+            client.headers.update(active_plugin.headers)
+            url = active_plugin.http_url
         try:
             observed = await client.get(f"/api/terminals/{terminal_id}")
             assert observed.status_code == 200, observed.text
@@ -308,14 +314,15 @@ while True: signal.pause()
                                        "scope": "原HTTP管理重试、真实PTY父子停止及冷Manager原身份核验；不代Python lease、Gateway/Web、Windows或无PID接管"})
         finally:
             if cold:
-                terminate_process(active_backend)
+                stop_terminal_plugin_service(active_plugin)
 
 
 @pytest.mark.parametrize("action", ["kill", "delete"])
 async def test_pty_exit_retains_unconfirmed_worker_for_management_retry(
     terminal_service: TerminalService, action: str,
 ) -> None:
-    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    run, plugin, url, workspace_id, root, control, tracked = terminal_service
+    backend = plugin.process
     terminal_id = f"term_{uuid4().hex}"
     (control / "retain-worker").touch()
     workload = f"""
@@ -323,7 +330,7 @@ import time
 from pathlib import Path
 while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
 """
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
         created = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
@@ -382,14 +389,15 @@ while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
 async def test_normal_pty_exit_confirms_original_worker_and_preserves_verified_state(
     terminal_service: TerminalService,
 ) -> None:
-    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    run, plugin, url, workspace_id, root, control, tracked = terminal_service
+    backend = plugin.process
     terminal_id = f"term_{uuid4().hex}"
     workload = f"""
 import time
 from pathlib import Path
 while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
 """
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
         created = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,

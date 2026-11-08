@@ -43,10 +43,8 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.processes.workspace import terminate_process
 from tests.support.trace import get_trace_payload
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
@@ -215,7 +213,6 @@ def integration_startup_mount(
     return MountedWorkspace(
         load_or_create_workspace_id(root), root,
         browser_backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-        terminal_backend_url=f"http://127.0.0.1:{browser_manager_processes[0] + 2}",
     )
 
 
@@ -240,8 +237,6 @@ def browser_manager_processes(
             frontend_port=frontend_port, backend_host="127.0.0.1",
         )
         lifetime.callback(close_browser_manager_processes, browser)
-        terminal = start_terminal_backend(backend_port=backend_port + 2, workspace_root=str(workspace), artifacts_dir=browser_manager_artifacts)
-        lifetime.callback(terminate_process, terminal)
         yield backend_port, frontend_port
 
 

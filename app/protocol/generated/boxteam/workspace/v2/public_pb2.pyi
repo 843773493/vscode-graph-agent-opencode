@@ -1,5 +1,6 @@
 import datetime
 
+from boxteam.gateway.v2 import service_plugin_pb2 as _service_plugin_pb2
 from boxteam.workspace.v2 import message_pb2 as _message_pb2
 from google.protobuf import struct_pb2 as _struct_pb2
 from google.protobuf import timestamp_pb2 as _timestamp_pb2
@@ -4266,18 +4267,20 @@ class WorkspaceResourceCommandRequest(_message.Message):
     def __init__(self, expected_revision: _Optional[int] = ..., thread: _Optional[_Union[ResourceThreadRef, _Mapping]] = ...) -> None: ...
 
 class ResourceTransportGrantDTO(_message.Message):
-    __slots__ = ("resource_id", "owner_revision", "grant_token", "expires_at", "resource")
+    __slots__ = ("resource_id", "owner_revision", "grant_token", "expires_at", "resource", "service")
     RESOURCE_ID_FIELD_NUMBER: _ClassVar[int]
     OWNER_REVISION_FIELD_NUMBER: _ClassVar[int]
     GRANT_TOKEN_FIELD_NUMBER: _ClassVar[int]
     EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_FIELD_NUMBER: _ClassVar[int]
     resource_id: str
     owner_revision: int
     grant_token: str
     expires_at: str
     resource: WorkspaceResourceDTO
-    def __init__(self, resource_id: _Optional[str] = ..., owner_revision: _Optional[int] = ..., grant_token: _Optional[str] = ..., expires_at: _Optional[str] = ..., resource: _Optional[_Union[WorkspaceResourceDTO, _Mapping]] = ...) -> None: ...
+    service: _service_plugin_pb2.PluginServiceReference
+    def __init__(self, resource_id: _Optional[str] = ..., owner_revision: _Optional[int] = ..., grant_token: _Optional[str] = ..., expires_at: _Optional[str] = ..., resource: _Optional[_Union[WorkspaceResourceDTO, _Mapping]] = ..., service: _Optional[_Union[_service_plugin_pb2.PluginServiceReference, _Mapping]] = ...) -> None: ...
 
 class BrowserResourceCreateRequest(_message.Message):
     __slots__ = ("session_id", "thread_id", "retention_scope", "title", "url", "viewport", "device_profile", "device_orientation")

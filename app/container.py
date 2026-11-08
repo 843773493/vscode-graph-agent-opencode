@@ -392,6 +392,7 @@ class AppContainer:
     workspace_session_context_transport: GatewaySessionContextClient
     session_resource_service: SessionResourceService
     terminal_resource_owner: TerminalResourceOwner
+    terminal_manager_client: TerminalManagerClient
     browser_resource_owner: BrowserResourceOwner
     context_compaction_service: ContextCompactionService
     session_service: SessionService
@@ -717,7 +718,6 @@ def _build_app_container(
     terminal_manager_client = TerminalManagerClient(
         config_service=config_service,
         workspace_id=workspace_id,
-        backend_url=startup_mount.terminal_backend_url if startup_mount is not None else None,
     )
     browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service,
         backend_url=startup_mount.browser_backend_url if startup_mount is not None else None)
@@ -1226,6 +1226,7 @@ def _build_app_container(
         session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
         terminal_resource_owner=terminal_resource_owner,
+        terminal_manager_client=terminal_manager_client,
         browser_resource_owner=browser_resource_owner,
         session_service=session_service,
         session_orchestrator=session_orchestrator,

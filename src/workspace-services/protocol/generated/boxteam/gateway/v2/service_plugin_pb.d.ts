@@ -753,3 +753,51 @@ export declare type RestartPluginRequest = Message<"boxteam.gateway.v2.RestartPl
  */
 export declare const RestartPluginRequestSchema: GenMessage<RestartPluginRequest>;
 
+/**
+ * 业务连接冻结的精确服务身份；不发布监听地址或管理凭据。
+ *
+ * @generated from message boxteam.gateway.v2.PluginServiceReference
+ */
+export declare type PluginServiceReference = Message<"boxteam.gateway.v2.PluginServiceReference"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string package_id = 2;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string package_version = 3;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: string plugin_id = 4;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string instance_id = 5;
+   */
+  instanceId: string;
+
+  /**
+   * @generated from field: string service_id = 6;
+   */
+  serviceId: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 7;
+   */
+  workspaceId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginServiceReference.
+ * Use `create(PluginServiceReferenceSchema)` to create a new message.
+ */
+export declare const PluginServiceReferenceSchema: GenMessage<PluginServiceReference>;
+

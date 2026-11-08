@@ -32,7 +32,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
@@ -99,13 +98,10 @@ def history_target(
         business_assertion="execution-history-storage-same-workload",
     ) as replay:
         workspace = Path(integration_workspace_root_path)
-        terminal = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=context.artifacts_dir)
-        services.callback(terminate_process, terminal)
         browser = start_browser_manager_processes(workspace_root=workspace, artifacts_dir=context.artifacts_dir,
                                                   backend_port=ports.port(3), frontend_port=ports.port(4), backend_host="127.0.0.1")
         services.callback(close_browser_manager_processes, browser)
         mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace,
-                                 terminal_backend_url=f"http://127.0.0.1:{terminal_port}",
                                  browser_backend_url=f"http://127.0.0.1:{ports.port(3)}")
         target = HistoryTarget(workspace, ports.port(0), ports.port(1), replay, mount)
         gateway = None

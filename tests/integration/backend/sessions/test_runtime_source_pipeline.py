@@ -56,6 +56,7 @@ from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
     submit_checkpoint_reminder,
 )
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
 from app.services.infrastructure.resource_platform.virtual_resources import (
     workspace_agent_spec_display_uri,
@@ -89,7 +90,11 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.harness.python.terminal_plugin import (
+    install_terminal_plugin_gateway_components,
+    prepare_terminal_plugin_configuration,
+    terminal_plugin_gateway_for_workspace,
+)
 from tests.integration.backend.sessions.test_session_generation_strategies import (
     _accepted_generation,
     _check_generation,
@@ -232,6 +237,7 @@ def _prepare_source_workspace(
 @asynccontextmanager
 async def _managed_gateway_skill_source(
     *, workspace: Path, workspace_id: str, boxteam_home: Path, port: int,
+    artifacts_dir: Path, terminal: bool = False,
 ):
     """为 managed 测试提供真实 owner、已登记本地 Workspace 和认证快照路由。"""
     gateway_root = boxteam_home / "state" / "gateway"
@@ -262,21 +268,31 @@ async def _managed_gateway_skill_source(
         log_config=None, lifespan="off",
     ))
     server_task: asyncio.Task[None] | None = None
-    try:
-        await owner.start()
-        server_task = asyncio.create_task(asyncio.to_thread(server.run))
-        async with asyncio.timeout(10):
-            while not server.started:
-                if server_task.done():
-                    await server_task
-                await asyncio.sleep(0.01)
-        yield gateway_id, owner
-    finally:
-        if server_task is not None:
-            server.should_exit = True
-            await asyncio.wait_for(server_task, timeout=10)
-        registry.close()
-        await owner.close()
+    async with AsyncExitStack() as components:
+        if terminal:
+            prepare_terminal_plugin_configuration(workspace, f"http://127.0.0.1:{port}")
+            plugins = await components.enter_async_context(install_terminal_plugin_gateway_components(
+                app=api, registry=registry, gateway_id=gateway_id,
+                boxteam_home=boxteam_home, workspace_root=lambda _workspace_id: workspace,
+                artifacts_dir=artifacts_dir / "terminal-plugin-package",
+            ))
+            config = ConfigService(workspace_root=workspace)
+            await plugins.apply_config_service(config)
+        try:
+            await owner.start()
+            server_task = asyncio.create_task(server.serve())
+            async with asyncio.timeout(10):
+                while not server.started:
+                    if server_task.done():
+                        await server_task
+                    await asyncio.sleep(0.01)
+            yield gateway_id, owner
+        finally:
+            if server_task is not None:
+                server.should_exit = True
+                await asyncio.wait_for(server_task, timeout=10)
+            registry.close()
+            await owner.close()
 
 
 @pytest.fixture
@@ -304,6 +320,8 @@ async def source_case(
                 _managed_gateway_skill_source(
                     workspace=workspace, workspace_id=workspace_id, boxteam_home=boxteam_home,
                     port=integration_port_block_for_file(Path(request.node.path)).port(11),
+                    artifacts_dir=context.artifacts_dir,
+                    terminal=options.get("terminal", False),
                 ),
             )
             monkeypatch.setenv(
@@ -313,7 +331,7 @@ async def source_case(
         else:
             monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
         mount_payload = {
-            "workspace_id": workspace_id, "workspace_root": str(workspace), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
+            "workspace_id": workspace_id, "workspace_root": str(workspace), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
         runtime_root = context.runtime_root_for_node(request.node.nodeid)
         artifacts_dir = context.artifacts_dir
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -330,11 +348,13 @@ async def source_case(
             identifier.bind_identifier_factory(ControlledIdentifiers(address))
             phase_observer.bind_phase_observer(ControlledPhases(address))
             monkeypatch.setattr(runner, "CanonicalItemSink", ObservedCanonicalItemSink)
-            if options.get("terminal"):
-                terminal_port = integration_port_block_for_file(Path(request.node.path)).port(40)
-                mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
-                process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=artifacts_dir)
-                services.callback(terminate_process, process)
+            if options.get("terminal") and not options.get("managed_gateway"):
+                terminal = await managed_services.enter_async_context(terminal_plugin_gateway_for_workspace(
+                    workspace_root=workspace, artifacts_dir=artifacts_dir,
+                    gateway_port=integration_port_block_for_file(Path(request.node.path)).port(40),
+                    boxteam_home=boxteam_home,
+                ))
+                monkeypatch.setenv("BOXTEAM_GATEWAY_URL", terminal.gateway_url)
             if options.get("browser"):
                 browser_port = integration_port_block_for_file(Path(request.node.path)).port(42)
                 mount_payload["browser_backend_url"] = f"http://127.0.0.1:{browser_port}"
@@ -2035,20 +2055,28 @@ async def restart_source_case(
             gateway_id, _ = await services.enter_async_context(_managed_gateway_skill_source(
                 workspace=workspace, workspace_id=load_or_create_workspace_id(workspace),
                 boxteam_home=context.boxteam_home, port=ports.port(11),
+                artifacts_dir=artifacts_dir,
+                terminal=params.get("native_services", False),
             ))
             monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(11)}")
         mount = None
         if params.get("native_services"):
-            terminal_port, browser_port = ports.port(40), ports.port(42)
-            terminal = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace), artifacts_dir=artifacts_dir)
-            services.callback(terminate_process, terminal)
+            browser_port = ports.port(42)
+            if not params.get("managed_gateway"):
+                home = context.boxteam_home_for_node(request.node.nodeid)
+                monkeypatch.setenv("BOXTEAM_HOME", str(home))
+                terminal = await services.enter_async_context(terminal_plugin_gateway_for_workspace(
+                    workspace_root=workspace, artifacts_dir=artifacts_dir,
+                    gateway_port=ports.port(40), boxteam_home=home,
+                ))
+                monkeypatch.setenv("BOXTEAM_GATEWAY_URL", terminal.gateway_url)
             browser = start_browser_manager_processes(
                 workspace_root=workspace, backend_port=browser_port, frontend_port=ports.port(43),
                 artifacts_dir=artifacts_dir, backend_host="127.0.0.1",
             )
             services.callback(close_browser_manager_processes, browser)
             mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace,
-                                     f"http://127.0.0.1:{terminal_port}", f"http://127.0.0.1:{browser_port}")
+                                     browser_backend_url=f"http://127.0.0.1:{browser_port}")
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="runtime-source-restart-0",

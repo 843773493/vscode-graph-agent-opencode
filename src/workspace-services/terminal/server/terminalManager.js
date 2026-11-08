@@ -33,15 +33,11 @@ export function matchesTerminalProcessIdentity(record, stat) {
 }
 
 export function resolveWorkspaceRoot() {
-  if (process.env.BOXTEAM_TERMINAL_WORKSPACE_ROOT) {
-    return path.resolve(process.env.BOXTEAM_TERMINAL_WORKSPACE_ROOT);
-  }
   if (process.env.WORKSPACE_ROOT) {
     return path.resolve(process.env.WORKSPACE_ROOT);
   }
   throw new Error(
-    "TerminalManager 启动必须显式提供 workspace root："
-      + "请传入 --workspace-root、BOXTEAM_TERMINAL_WORKSPACE_ROOT 或 WORKSPACE_ROOT。",
+    "Terminal 插件启动必须由 Gateway 提供 WORKSPACE_ROOT。",
   );
 }
 

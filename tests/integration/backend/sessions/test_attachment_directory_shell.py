@@ -19,10 +19,8 @@ import pytest
 
 from app.abstractions.terminal.resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.message import MessageCreateRequest
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.external_resource_leases import (
@@ -31,7 +29,7 @@ from app.services.infrastructure.external_resource_leases import (
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
 from tests.integration.test_terminal_owner_tool_invocation import (
     terminal_runtime as terminal_runtime,  # noqa: PLC0414
@@ -40,7 +38,6 @@ from tests.integration.test_terminal_owner_tool_invocation import (
     terminal_workspace_root_path as terminal_workspace_root_path,  # noqa: PLC0414
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import terminate_process
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,
@@ -433,18 +430,19 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
 ) -> None:
     root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    process = start_terminal_backend(
-        backend_port=port, workspace_root=str(root),
-        artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir,
-    )
-    mount = MountedWorkspace(load_or_create_workspace_id(root), root, terminal_backend_url=f"http://127.0.0.1:{port}")
+    run = TestRunContext.from_test_file(Path(request.node.path))
+    home = run.boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
     terminals: list[str] = []
     directories: list[Path] = []
     attachments: list[str] = []
     pids: list[int] = []
-    try:
+    async with terminal_plugin_gateway_for_workspace(
+        workspace_root=root, artifacts_dir=run.artifacts_dir, gateway_port=port, boxteam_home=home,
+    ) as plugin:
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
         # 第一代由真实上传/Shell创建目录和进程，提升后由原Session清理解除关联。
-        async with workspace_tool_runtime(root, startup_mount=mount) as (container, session_id, context):
+        async with workspace_tool_runtime(root) as (container, session_id, context):
             owner, store = container.terminal_resource_owner, container.attachment_blob_store
             execute = create_exec_command_tool(session_id, terminal_owner=owner, invocation_context=context)
             for index in range(2):
@@ -487,7 +485,7 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
 
         monkeypatch.setattr(TerminalManagerClient, "sync_owner_revision", pending_revision)
         # 服务图重新从原catalog/owner/lease文件恢复，不复制内存状态。
-        async with workspace_tool_runtime(root, startup_mount=mount) as (container, session_id, context):
+        async with workspace_tool_runtime(root) as (container, session_id, context):
             owner, store, leases = container.terminal_resource_owner, container.attachment_blob_store, container.external_resource_leases
             recovering = asyncio.create_task(owner.recover())
             try:
@@ -536,8 +534,7 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
             for directory, pid in zip(directories, pids, strict=True):
                 assert (directory / "derived/cold.py").is_file()
                 assert int((directory / "derived/shell.pid").read_text()) == pid
-    finally:
-        terminate_process(process)
+
 
 
 async def test_owner_terminal_commit_failure_keeps_real_workdir_until_durable_reconciliation(

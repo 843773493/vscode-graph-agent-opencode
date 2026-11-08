@@ -1,0 +1,11 @@
+{
+  "name": "boxteam-developer-tools-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bufbuild/protobuf": "2.14.0",
+    "node-pty": "1.1.0",
+    "ws": "8.18.3"
+  }
+}

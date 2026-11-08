@@ -232,7 +232,6 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
         runtime = WorkspaceRuntime(
             service_urls={
                 "workspace_api": backend_url,
-                "terminal_manager": "http://127.0.0.1:18012",
                 "browser_manager": "http://127.0.0.1:18015",
             },
             workspace_id=owner.contract.members[0].workspace_id,

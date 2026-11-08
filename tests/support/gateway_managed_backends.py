@@ -84,8 +84,7 @@ def backend_graph(
     runtimes = {}
     for index, target in enumerate(targets):
         services = {
-            "terminal_manager": target.local_service_urls.get("terminal_manager", f"http://127.0.0.1:{42001 + index * 2}"),
-            "browser_manager": target.local_service_urls.get("browser_manager", f"http://127.0.0.1:{42002 + index * 2}"),
+            "browser_manager": target.local_service_urls.get("browser_manager", f"http://127.0.0.1:{42001 + index}"),
         }
         members.append(ManagedBackendMember(target.workspace_id))
         runtimes[target.workspace_id] = WorkspaceRuntime(

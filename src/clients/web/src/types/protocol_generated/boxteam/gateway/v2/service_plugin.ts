@@ -176,6 +176,17 @@ export interface RestartPluginRequest {
   workspace_id?: string | undefined;
 }
 
+/** 业务连接冻结的精确服务身份；不发布监听地址或管理凭据。 */
+export interface PluginServiceReference {
+  gateway_id: string;
+  package_id: string;
+  package_version: string;
+  plugin_id: string;
+  instance_id: string;
+  service_id: string;
+  workspace_id?: string | undefined;
+}
+
 function createBasePluginExtensionRequirement(): PluginExtensionRequirement {
   return { extension_point: "", version: 0 };
 }
@@ -1311,6 +1322,73 @@ export const RestartPluginRequest: MessageFns<RestartPluginRequest> = {
     message.package_version = object.package_version ?? "";
     message.plugin_id = object.plugin_id ?? "";
     message.revision = object.revision ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginServiceReference(): PluginServiceReference {
+  return {
+    gateway_id: "",
+    package_id: "",
+    package_version: "",
+    plugin_id: "",
+    instance_id: "",
+    service_id: "",
+    workspace_id: undefined,
+  };
+}
+
+export const PluginServiceReference: MessageFns<PluginServiceReference> = {
+  fromJSON(object: any): PluginServiceReference {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : "",
+      service_id: isSet(object.service_id) ? globalThis.String(object.service_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+    };
+  },
+
+  toJSON(message: PluginServiceReference): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.instance_id !== "") {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.service_id !== "") {
+      obj.service_id = message.service_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginServiceReference>, I>>(base?: I): PluginServiceReference {
+    return PluginServiceReference.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginServiceReference>, I>>(object: I): PluginServiceReference {
+    const message = createBasePluginServiceReference();
+    message.gateway_id = object.gateway_id ?? "";
+    message.package_id = object.package_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.instance_id = object.instance_id ?? "";
+    message.service_id = object.service_id ?? "";
     message.workspace_id = object.workspace_id ?? undefined;
     return message;
   },

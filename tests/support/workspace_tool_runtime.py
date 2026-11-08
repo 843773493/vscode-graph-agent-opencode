@@ -127,4 +127,6 @@ async def workspace_tool_runtime(
                         thread_cleanup.callback(reset_current_turn_execution_scope, scope_token)
                         call_token = context.set_tool_call_id("workspace-real-tool")
                         thread_cleanup.callback(context.reset_tool_call_id, call_token)
+                        # 与 Workspace 关闭顺序一致：先停观察者，再清本装具的 Thread/Session 资源。
+                        thread_cleanup.push_async_callback(container.terminal_steering_service.shutdown)
                         yield container, session.session_id, context

@@ -9,6 +9,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.support.resource_owners.sessions import SESSION_A, WORKSPACE_ID
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
@@ -38,7 +39,9 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     })
     assert detached.status_code == 200, detached.text
     resource = detached.json()["data"]
-    transport = TerminalManagerClient(backend_url="http://terminal.test", workspace_id=WORKSPACE_ID)
+    transport = TerminalManagerClient(gateway_url="http://terminal.test", workspace_id=WORKSPACE_ID,
+        binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
+            plugin_id="terminal", enabled=True, workspace_id=WORKSPACE_ID))
     attempted: list[tuple[str, str]] = []
     diagnostic: object
     if failure == "data":
@@ -131,4 +134,4 @@ def test_transport_error_body_stays_in_diagnostics_after_owner_restart(
     assert pending.status == "reconcile_required"
     retry = terminal_resource_api_client.post(f"/api/v1/resources/{rid}/delete", json=command)
     assert retry.status_code == 409, retry.text
-    assert attempted == [("DELETE", f"http://terminal.test/api/terminals/{rid}")]
+    assert attempted == [("DELETE", f"http://terminal.test/api/gateway/service-plugins/boxteam.developer-tools/terminal/services/http/api/terminals/{rid}?package_version=0.1.0&workspace_id={WORKSPACE_ID}")]

@@ -62,7 +62,7 @@ def creation_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         owner.set_process(process)
         member = owner.contract.members[0]
         runtime = WorkspaceRuntime(
-            service_urls={"terminal_manager": "http://127.0.0.1:42001", "browser_manager": "http://127.0.0.1:42002"},
+            service_urls={"browser_manager": "http://127.0.0.1:42002"},
             backend_owner=owner, workspace_id=backend_id,
         )
         owner.unpublished_runtimes[member.workspace_id] = runtime
@@ -417,7 +417,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
         member = owner.contract.members[0]
         contract = replace(owner.contract, backend_url="http://127.0.0.1:42000")
         runtime = WorkspaceRuntime(
-            service_urls={"terminal_manager": "http://127.0.0.1:42001", "browser_manager": "http://127.0.0.1:42002"},
+            service_urls={"browser_manager": "http://127.0.0.1:42002"},
             backend_owner=owner, workspace_id=member.workspace_id,
         )
         owner.unpublished_runtimes[member.workspace_id] = runtime

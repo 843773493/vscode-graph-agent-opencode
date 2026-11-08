@@ -253,14 +253,9 @@ class RegistryRoutesMixin:
                 )
             if service == "workspace_api":
                 return gateway_url
-            service_path = (
-                "terminal-manager"
-                if service == "terminal_manager"
-                else "browser-manager"
-            )
             return (
                 f"{gateway_url}/api/gateway/workspaces/"
-                f"{target.workspace_id}/{service_path}"
+                f"{target.workspace_id}/browser-manager"
             )
         if (
             not target.managed

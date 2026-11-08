@@ -139,7 +139,7 @@ def test_posix_gateway_start_uses_platform_runtime_paths(
 
     assert process_id == "24680"
     assert captured["target"] == target
-    assert captured["ports"] == [24814, 8010, 8012, 8015]
+    assert captured["ports"] == [24814, 8010, 8015]
     assert captured["timeout"] == 20
     assert captured["readiness"] == {
         "target": target,

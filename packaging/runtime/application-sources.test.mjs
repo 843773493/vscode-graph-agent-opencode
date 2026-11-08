@@ -63,6 +63,7 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
     ["resources/模板目录/资源 文件.json", Buffer.from("资源 bytes")],
     ["resources/cache.pyc", Buffer.from("ignored resource bytecode")],
     ["src/shared/serverRuntimeLogging.mjs", Buffer.from("shared logging")],
+    ["src/workspace-services/terminal/client/index.html", Buffer.from("terminal attach")],
     ["src/workspace-services/terminal/server/终端 server.js", Buffer.from("terminal")],
     ["src/workspace-services/terminal/server/__pycache__/cached.pyc", Buffer.from("ignored")],
     ["src/workspace-services/terminal/protocol/终端 protocol.proto", Buffer.from("terminal protocol")],
@@ -70,6 +71,12 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
     ["src/workspace-services/browser/server/browser server.js", Buffer.from("browser")],
     ["src/workspace-services/browser/protocol/browser protocol.proto", Buffer.from("browser protocol")],
     ["src/workspace-services/protocol/shared protocol.proto", Buffer.from("shared protocol")],
+    ["node_modules/@xterm/xterm/css/xterm.css", Buffer.from("static asset 0")],
+    ["node_modules/@xterm/xterm/lib/xterm.js", Buffer.from("static asset 1")],
+    ["node_modules/@xterm/addon-fit/lib/addon-fit.js", Buffer.from("static asset 2")],
+    ["node_modules/@xterm/addon-search/lib/addon-search.js", Buffer.from("static asset 3")],
+    ["src/clients/web/node_modules/@vscode/codicons/dist/codicon.css", Buffer.from("static asset 4")],
+    ["src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf", Buffer.from("static asset 5")],
     ["pyproject.toml", Buffer.from("[project]\nname = 'fixture'\n")],
   ];
   mkdirSync(projectRoot, { recursive: true });
@@ -124,6 +131,7 @@ test("staging复制后可加载终端会话模块的真实相对依赖", () => {
   for (const relative of [
     "resources/logging",
     "src/shared",
+    "src/workspace-services/terminal/client",
     "src/workspace-services/terminal/server",
     "src/workspace-services/terminal/protocol",
     "src/workspace-services/terminal/shared",
@@ -135,6 +143,18 @@ test("staging复制后可加载终端会话模块的真实相对依赖", () => {
       { recursive: true },
     );
   }
+  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/xterm/css/xterm.css')), { recursive: true });
+  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/xterm/css/xterm.css'), path.join(projectRoot, 'node_modules/@xterm/xterm/css/xterm.css'));
+  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/xterm/lib/xterm.js')), { recursive: true });
+  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/xterm/lib/xterm.js'), path.join(projectRoot, 'node_modules/@xterm/xterm/lib/xterm.js'));
+  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/addon-fit/lib/addon-fit.js')), { recursive: true });
+  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/addon-fit/lib/addon-fit.js'), path.join(projectRoot, 'node_modules/@xterm/addon-fit/lib/addon-fit.js'));
+  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/addon-search/lib/addon-search.js')), { recursive: true });
+  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/addon-search/lib/addon-search.js'), path.join(projectRoot, 'node_modules/@xterm/addon-search/lib/addon-search.js'));
+  mkdirSync(path.dirname(path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.css')), { recursive: true });
+  cpSync(path.join(repositoryRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.css'), path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.css'));
+  mkdirSync(path.dirname(path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf')), { recursive: true });
+  cpSync(path.join(repositoryRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf'), path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf'));
   writeFileSync(path.join(projectRoot, "pyproject.toml"), "fixture\n");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);

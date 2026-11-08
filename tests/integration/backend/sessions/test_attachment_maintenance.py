@@ -61,7 +61,7 @@ def maintenance_roots(request: pytest.FixtureRequest, monkeypatch: pytest.Monkey
         )
         mounts.append({
             "workspace_id": load_or_create_workspace_id(root), "workspace_root": str(root),
-            "terminal_backend_url": None, "browser_backend_url": None,
+            "browser_backend_url": None,
             "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
         })
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))

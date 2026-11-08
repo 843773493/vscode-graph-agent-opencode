@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,7 +30,10 @@ from app.core.path_utils import catalog_provider_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
@@ -43,7 +46,6 @@ def _startup_mount(workspace: Path) -> MountedWorkspace:
     """子进程显式接入本装具启动的真实服务，不依赖产品默认端口。"""
     return MountedWorkspace(
         load_or_create_workspace_id(workspace), workspace,
-        terminal_backend_url=os.environ["BOXTEAM_TERMINAL_BACKEND_URL"],
         browser_backend_url=os.environ["BOXTEAM_BROWSER_BACKEND_URL"],
     )
 
@@ -93,10 +95,10 @@ def _assert_force_terminated(process: subprocess.Popen[str]) -> None:
 
 
 @pytest.fixture
-def resource_processes(
+async def resource_processes(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[Path, Path]]:
+) -> AsyncIterator[tuple[Path, Path]]:
     project = Path.cwd().resolve()
     workspace = Path(integration_workspace_root_path)
     runtime = TestRunContext.from_test_file(Path(request.node.path)).runtime_root_for_node(request.node.nodeid)
@@ -113,7 +115,7 @@ def resource_processes(
     monkeypatch.setenv("PYTHONPATH", str(project))
     monkeypatch.setenv("BOXTEAM_PROJECT_ROOT", str(project))
     with ExitStack() as stack:
-        for kind, offset in (("terminal", 40), ("browser", 42)):
+        for kind, offset in (("browser", 42),):
             port = ports.port(offset)
             monkeypatch.setenv(f"BOXTEAM_{kind.upper()}_BACKEND_URL", f"http://127.0.0.1:{port}")
             process = _spawn(
@@ -124,7 +126,15 @@ def resource_processes(
                 logs=runtime / f"{kind}-node",
             )
             _wait_ready(process, f"http://127.0.0.1:{port}/health")
-        yield workspace, runtime
+        home = TestRunContext.from_test_file(Path(request.node.path)).boxteam_home_for_node(request.node.nodeid)
+        monkeypatch.setenv("BOXTEAM_HOME", str(home))
+        async with terminal_plugin_gateway_for_workspace(
+            workspace_root=workspace,
+            artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir,
+            gateway_port=ports.port(40), boxteam_home=home,
+        ) as plugin:
+            monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
+            yield workspace, runtime
 
 
 async def _crash_worker(
@@ -149,7 +159,8 @@ async def _crash_worker(
             if happened:
                 await original_stop(resource_id, reason=reason)
             leases = owner._leases.leases_for_resource(rid)
-            assert len(leases) == 1 and leases[0].status == "active"
+            # 已进入真实 transport，原 owner 已将同一 operation 标记为派发中。
+            assert len(leases) == 1 and leases[0].status == "dispatching"
             _publish_barrier(barrier, {
                 "pid": os.getpid(), "rid": rid, "session_id": session_id,
                 "thread_id": context.thread_binding.thread_id,
@@ -265,6 +276,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                 result["cleanup_status"] = "deleted"
                 output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         finally:
+            await container.terminal_manager_client.aclose()
             container.workspace_activity_service.store.close()
             container.session_catalog.close()
 
@@ -351,6 +363,7 @@ async def _recover_orphan_worker(workspace: Path, barrier: Path, output: Path, k
                 assert rid not in {item["resource_id"] for item in await owner.list_resources()}
                 output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         finally:
+            await container.terminal_manager_client.aclose()
             container.workspace_activity_service.store.close()
             container.session_catalog.close()
 
@@ -358,7 +371,7 @@ async def _recover_orphan_worker(workspace: Path, barrier: Path, output: Path, k
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("happened", [True, False])
 @pytest.mark.parametrize("retention_scope", ["thread", "workspace"])
-def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not_replay(
+async def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not_replay(
     request: pytest.FixtureRequest,
     resource_processes: tuple[Path, Path],
     kind: ResourceKind,
@@ -378,7 +391,7 @@ def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not
         deadline = time.monotonic() + 45
         while not barrier.exists() and time.monotonic() < deadline:
             assert child.poll() is None, (runtime / "crash-worker.stderr.log").read_text()
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
         assert barrier.exists(), "未进入真实副作用/未知回执窗口"
         identity = json.loads(barrier.read_text())
         assert identity["pid"] == child.pid and identity["happened"] is happened
@@ -388,31 +401,41 @@ def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not
         assert record["status"] == "stopping"
         assert record["retention_scope"] == retention_scope
         ledger = json.loads((workspace / ".boxteam" / "resources.json").read_text())
-        assert next(item for item in ledger["leases"] if item["lease_id"] == identity["lease_id"])["status"] == "active"
+        assert next(item for item in ledger["leases"] if item["lease_id"] == identity["lease_id"])["status"] == "dispatching"
         child.kill()
-        _assert_force_terminated(child)
+        await asyncio.to_thread(_assert_force_terminated, child)
         # 恢复进程尚未启动：活实例已经有持久权威记录，不能靠重扫外部实例补造。
         killed_record = next(item for item in json.loads((workspace / ".boxteam" / f"{kind}-resources.json").read_text())["records"] if item["resource_id"] == identity["rid"])
         assert killed_record == record
         assert json.loads((workspace / ".boxteam" / "resources.json").read_text()) == ledger
-        backend = os.environ[f"BOXTEAM_{kind.upper()}_BACKEND_URL"]
-        with httpx.Client(timeout=5, trust_env=False) as client:
-            response = client.get(
-                f"{backend}/api/{kind}s/{identity['rid']}",
-                headers={
-                    "X-BoxTeam-Workspace-Id": load_or_create_workspace_id(workspace),
-                    "X-BoxTeam-Resource-Owner": f"workspace-{kind}",
-                },
+        if kind == "terminal":
+            terminal = TerminalManagerClient(
+                workspace_id=load_or_create_workspace_id(workspace),
+                config_service=ConfigService(workspace_root=workspace),
             )
-            response.raise_for_status()
-            observed = response.json()["data"]
+            try:
+                observed = await terminal.get_resource(identity["rid"])
+            finally:
+                await terminal.aclose()
+        else:
+            backend = os.environ["BOXTEAM_BROWSER_BACKEND_URL"]
+            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+                response = await client.get(
+                    f"{backend}/api/browsers/{identity['rid']}",
+                    headers={
+                        "X-BoxTeam-Workspace-Id": load_or_create_workspace_id(workspace),
+                        "X-BoxTeam-Resource-Owner": "workspace-browser",
+                    },
+                )
+                response.raise_for_status()
+                observed = response.json()["data"]
         assert observed[f"{kind}_id"] == killed_record["resource_id"]
         assert (observed["status"] in {"terminated", "closed"}) is happened
         recovered = _spawn(
             stack, [sys.executable, test_file, "recover", str(workspace), str(barrier), kind, str(result)],
             cwd=Path.cwd(), logs=runtime / "recovery-worker",
         )
-        assert recovered.wait(timeout=45) == 0, (runtime / "recovery-worker.stderr.log").read_text()
+        assert await asyncio.to_thread(recovered.wait, timeout=45) == 0, (runtime / "recovery-worker.stderr.log").read_text()
         receipt = json.loads(result.read_text())
         assert receipt["pid"] != identity["pid"]
         assert receipt["resource"]["resource_id"] == identity["rid"]
@@ -420,7 +443,12 @@ def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not
         assert receipt["recovery_side_effects"] == []
         assert receipt["cleanup_status"] == "deleted"
         if kind == "terminal":
-            native_pids = {observed["os_pid"], observed["pty_worker_pid"]} - {None}
+            native_pids: set[int] = set()
+            for field in ("os_pid", "pty_worker_pid"):
+                pid = observed[field]
+                assert pid is None or type(pid) is int, observed
+                if pid is not None:
+                    native_pids.add(pid)
             running_pids = {
                 process.info["pid"] for process in psutil.process_iter(attrs=["pid", "status"])
                 if process.info["status"] != psutil.STATUS_ZOMBIE
@@ -432,7 +460,7 @@ def test_force_termination_unknown_stop_new_process_preserves_owner_and_does_not
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("reattach", [True, False])
-def test_force_termination_restart_keeps_original_orphan_deadline_and_exact_reclaim_boundary(
+async def test_force_termination_restart_keeps_original_orphan_deadline_and_exact_reclaim_boundary(
     request: pytest.FixtureRequest,
     resource_processes: tuple[Path, Path],
     kind: ResourceKind,
@@ -450,17 +478,17 @@ def test_force_termination_restart_keeps_original_orphan_deadline_and_exact_recl
         deadline = time.monotonic() + 45
         while not barrier.exists() and time.monotonic() < deadline:
             assert child.poll() is None, (runtime / "orphan-worker.stderr.log").read_text()
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
         assert barrier.exists(), "未完成真实 detach 的持久化"
         identity = json.loads(barrier.read_text())
         assert identity["pid"] == child.pid
         child.kill()
-        _assert_force_terminated(child)
+        await asyncio.to_thread(_assert_force_terminated, child)
         recovered = _spawn(
             stack, [sys.executable, test_file, "recover-orphan", str(workspace), str(barrier), kind, str(output)],
             cwd=Path.cwd(), logs=runtime / "orphan-recovery-worker",
         )
-        assert recovered.wait(timeout=45) == 0, (runtime / "orphan-recovery-worker.stderr.log").read_text()
+        assert await asyncio.to_thread(recovered.wait, timeout=45) == 0, (runtime / "orphan-recovery-worker.stderr.log").read_text()
         receipt = json.loads(output.read_text())
         assert receipt["pid"] != identity["pid"]
         assert receipt["restored"]["reclaim_at"] == identity["reclaim_at"]

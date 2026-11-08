@@ -15,17 +15,19 @@ import psutil
 import pytest
 
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    TerminalPluginService,
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
 def terminal_service(
     request: pytest.FixtureRequest, integration_backend_port: int, monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[TerminalManagerClient, Path, Path, TestRunContext]]:
+) -> Iterator[tuple[TerminalPluginService, Path, Path, TestRunContext]]:
     with TestRunContext.from_test_file(Path(request.path)) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
         runtime.mkdir(parents=True, exist_ok=True)
@@ -61,30 +63,28 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
         monkeypatch.setenv("NODE_OPTIONS", f"{os.environ.get('NODE_OPTIONS', '')} --import={preload.as_uri()}".strip())
         monkeypatch.setenv("BOXTEAM_TEST_TERMINAL_STORAGE_CONTROL", str(control))
         port = integration_backend_port + 62
-        process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=run.artifacts_dir)
-        run.add_cleanup("Terminal进程", lambda: terminate_process(process))
-        yield TerminalManagerClient(workspace_id=load_or_create_workspace_id(root),
-                                    backend_url=f"http://127.0.0.1:{port}"), root, control, run
+        process = start_terminal_plugin_service(backend_port=port, workspace_root=str(root), artifacts_dir=run.artifacts_dir)
+        run.add_cleanup("Terminal 插件进程", lambda: stop_terminal_plugin_service(process))
+        yield process, root, control, run
 
 
 @pytest.mark.parametrize("fail_sink", [False, True], ids=["healthy-log", "failed-log"])
 async def test_resize_storage_failure_preserves_native_identity_and_same_size_retry(
-    terminal_service: tuple[TerminalManagerClient, Path, Path, TestRunContext], fail_sink: bool,
+    terminal_service: tuple[TerminalPluginService, Path, Path, TestRunContext], fail_sink: bool,
 ) -> None:
-    client, root, control, run = terminal_service
+    plugin, root, control, run = terminal_service
     terminal_id = f"term_{uuid4().hex}"
     state_dir = root / ".boxteam/terminal-manager"
     state_file = state_dir / "terminals.json"
     backup = control / "original-terminals.json"
-    headers = {"X-BoxTeam-Workspace-Id": load_or_create_workspace_id(root), "X-BoxTeam-Resource-Owner": "workspace-terminal"}
-    async with AsyncExitStack() as cleanup, httpx.AsyncClient(base_url=client.backend_url, headers=headers, timeout=15, trust_env=False) as http:
+    async with AsyncExitStack() as cleanup, httpx.AsyncClient(base_url=plugin.http_url, headers=plugin.headers, timeout=15, trust_env=False) as http:
         response = await http.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": load_or_create_workspace_id(root), "owner_revision": 1,
             "title": "状态存储诊断", "cwd": str(root), "command": sys.executable,
             "args": ["-c", "import time; time.sleep(120)"], "cols": 100, "rows": 30,
         })
         assert response.status_code == 200, response.text
-        cleanup.push_async_callback(client.delete_resource, terminal_id)
+        cleanup.push_async_callback(http.delete, f"/api/terminals/{terminal_id}")
 
         def repair_fault() -> None:
             (control / "fail-sink").unlink(missing_ok=True)
@@ -107,7 +107,7 @@ async def test_resize_storage_failure_preserves_native_identity_and_same_size_re
         failed = await http.post(f"/api/terminals/{terminal_id}/resize", json={"cols": 101, "rows": 35})
         assert failed.status_code == 500, failed.text
         payload = failed.json()
-        current = await client.get_resource(terminal_id)
+        current = (await http.get(f"/api/terminals/{terminal_id}")).json()["data"]
         attempts = [json.loads(line) for line in (control / "attempts.jsonl").read_text(encoding="utf-8").splitlines()]
         (run.artifacts_dir / "storage-failure.json").write_text(json.dumps({
             "failure": payload, "current": current, "original_records": json.loads(original_bytes),

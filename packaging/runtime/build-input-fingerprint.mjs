@@ -24,6 +24,7 @@ const FIXED_BUILD_INPUTS = Object.freeze([
   "packages/launcher",
   "packaging/runtime",
   "scripts/install/runtime-postinstall.mjs",
+  "scripts/plugins",
 ]);
 
 const GENERATED_DIRECTORY_NAMES = new Set([

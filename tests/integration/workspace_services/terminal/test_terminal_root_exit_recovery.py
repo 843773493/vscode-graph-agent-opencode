@@ -13,7 +13,10 @@ import httpx
 import psutil
 import pytest
 
-from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.harness.python.terminal_backend import (
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 from tests.integration.workspace_services.terminal.test_terminal_exit_diagnostics import (
     TerminalService,
     executing,
@@ -21,7 +24,6 @@ from tests.integration.workspace_services.terminal.test_terminal_exit_diagnostic
 from tests.integration.workspace_services.terminal.test_terminal_exit_diagnostics import (
     terminal_service as terminal_service,  # noqa: PLC0414 - 复用真实PTY及精确进程身份收尾。
 )
-from tests.support.processes.workspace import terminate_process
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux SID与/proc；不代替其它平台")
 
@@ -31,7 +33,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux SID
 async def test_missing_pty_root_still_verifies_original_session_descendants(
     terminal_service: TerminalService, cold: bool, action: str,
 ) -> None:
-    run, backend, url, workspace_id, root, control, tracked = terminal_service
+    run, plugin, url, workspace_id, root, control, tracked = terminal_service
     terminal_id = f"term_{uuid4().hex}"
     workload = f"""
 import json, os, signal, time
@@ -46,7 +48,7 @@ Path({str(control / 'workload.pending')!r}).replace({str(control / 'workload.jso
 while not Path({str(control / 'exit-root')!r}).exists(): time.sleep(0.02)
 os._exit(0)
 """
-    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"}
+    headers = plugin.headers
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
         created = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 4,
@@ -80,12 +82,14 @@ os._exit(0)
                 await asyncio.sleep(0.02)
         assert executing(child) and os.getsid(child.pid) == original["process_session_id"]
         before = state_file.read_bytes()
-        active_backend = backend
+        active_plugin = plugin
         if cold:
-            terminate_process(backend)
-            active_backend = start_terminal_backend(
-                backend_port=int(url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir,
+            stop_terminal_plugin_service(plugin)
+            active_backend = start_terminal_plugin_service(
+                backend_port=int(plugin.root_url.rsplit(":", 1)[1]), workspace_root=str(root), artifacts_dir=run.artifacts_dir,
             )
+            active_plugin = active_backend
+            client.headers.update(active_plugin.headers)
         try:
             observed = await client.get(f"/api/terminals/{terminal_id}")
             assert observed.status_code == 200, observed.text
@@ -117,4 +121,4 @@ os._exit(0)
                                        "scope": "Linux真实PTY根缺失及原SID后代停止；不代Windows、Python lease或无PID创建接管"})
         finally:
             if cold:
-                terminate_process(active_backend)
+                stop_terminal_plugin_service(active_plugin)

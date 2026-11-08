@@ -20,6 +20,7 @@ import httpx
 import psutil
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.env import get_project_root
 from app.core.file_permissions import restrict_private_path_access
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.gateway.plugins.packages import PluginPackageStore
@@ -209,6 +210,7 @@ class GatewayPluginRuntime:
         port = allocate_local_port()
         slot.state, slot.base_url, slot.token = "starting", f"http://127.0.0.1:{port}", token
         environment = _local_child_environment()
+        environment["BOXTEAM_PROJECT_ROOT"] = str(get_project_root())
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["BOXTEAM_RUNTIME_CONTROL_TOKEN"] = token
         environment["BOXTEAM_PLUGIN_PORT"] = str(port)

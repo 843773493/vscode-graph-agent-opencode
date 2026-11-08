@@ -40,7 +40,7 @@ from app.gateway.runtime.workspace_process import (
     GATEWAY_PROCESS_READY_TIMEOUT_SECONDS,
     resolve_backend_workspace_id,
     start_local_backend_process,
-    start_local_node_service_process,
+    start_local_browser_service_process,
 )
 from app.schemas.runtime_control import (
     RuntimeShutdownRequest,
@@ -242,10 +242,9 @@ def workspace_config_proof_expectation(
     }
 
 
-async def _adopt_local_node_service(
+async def _adopt_local_browser_service(
     *,
     service_url: str,
-    service_name: str,
     workspace_id: str,
     log_dir: Path,
 ) -> AdoptedManagedProcess | None:
@@ -253,47 +252,43 @@ async def _adopt_local_node_service(
     parsed = urlparse(service_url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
         raise ValueError(
-            f"持久化 {service_name} URL 必须是本机 HTTP 地址: {service_url}"
+            f"持久化 Browser Manager URL 必须是本机 HTTP 地址: {service_url}"
         )
     if parsed.port is None:
-        raise ValueError(f"持久化 {service_name} URL 缺少端口: {service_url}")
+        raise ValueError(f"持久化 Browser Manager URL 缺少端口: {service_url}")
     try:
         async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
             response = await client.get(f"{service_url.rstrip('/')}/health")
     except httpx.HTTPError:
         return None
     if response.status_code != 200:
-        logger.error("持久化 %s 健康检查失败: url=%s, status=%s, body=%s", service_name, service_url, response.status_code, response.text)
+        logger.error("持久化 Browser Manager 健康检查失败: url=%s, status=%s, body=%s", service_url, response.status_code, response.text)
         raise RuntimeError(
-            f"持久化 {service_name} 健康检查失败: "
+            "持久化 Browser Manager 健康检查失败: "
             f"url={service_url}, status={response.status_code}"
         )
     payload = response.json()
     if not isinstance(payload, dict):
-        raise TypeError(f"持久化 {service_name} 健康响应必须是 JSON 对象: {service_url}")
+        raise TypeError(f"持久化 Browser Manager 健康响应必须是 JSON 对象: {service_url}")
     if payload.get("workspace_id") != workspace_id:
-        logger.error("持久化 %s backend UUID 不匹配: expected=%s, actual=%r", service_name, workspace_id, payload.get("workspace_id"))
+        logger.error("持久化 Browser Manager backend UUID 不匹配: expected=%s, actual=%r", workspace_id, payload.get("workspace_id"))
         raise RuntimeError(
-            f"持久化 {service_name} backend UUID 不匹配: "
+            "持久化 Browser Manager backend UUID 不匹配: "
             f"url={service_url}, expected={workspace_id}"
         )
     process_id = payload.get("process_id")
     if isinstance(process_id, bool) or not isinstance(process_id, int):
         raise TypeError(
-            f"持久化 {service_name} 健康响应缺少 process_id: url={service_url}"
+            f"持久化 Browser Manager 健康响应缺少 process_id: url={service_url}"
         )
-    roles: dict[str, Literal["terminal", "browser"]] = {
-        "terminal_manager": "terminal", "browser_manager": "browser",
-    }
-    role = roles[service_name]
     ownership = await _adopt_process_log(
-        service_url, role, process_id, parsed.port, log_dir=log_dir,
+        service_url, "browser", process_id, parsed.port, log_dir=log_dir,
     )
     return AdoptedManagedProcess(pid=process_id, log_ownership=ownership)
 
 
 async def _adopt_process_log(
-    service_url: str, role: Literal["backend", "terminal", "browser"], process_id: int, port: int, *, log_dir: Path,
+    service_url: str, role: Literal["backend", "browser"], process_id: int, port: int, *, log_dir: Path,
 ) -> ProcessLogOwnership:
     """健康证明之后核对受认证进程的实际文件去向，不重开存活日志。"""
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
@@ -428,18 +423,15 @@ async def _start_member_auxiliary_services(
     runtime = runtime or WorkspaceRuntime(service_urls={}, workspace_id=mount.workspace_id)
     started: list[str] = []
     try:
-        for service, url, node_service in (
-            ("terminal_manager", mount.terminal_backend_url, "terminal"),
-            ("browser_manager", mount.browser_backend_url, "browser"),
-        ):
-            service = cast(Literal["terminal_manager", "browser_manager"], service)
+        for service, url in (("browser_manager", mount.browser_backend_url),):
+            service = cast(Literal["browser_manager"], service)
             existing = runtime.processes.get(service)
             if existing is not None and not existing.is_alive():
                 runtime.close_process(service)
                 existing = None
             if existing is None:
-                adopted = await _adopt_local_node_service(
-                    service_url=url, service_name=service, workspace_id=mount.workspace_id,
+                adopted = await _adopt_local_browser_service(
+                    service_url=url, workspace_id=mount.workspace_id,
                     log_dir=log_dir,
                 ) if url else None
                 # 同一 generation 的恢复必须保持原完整 manifest 的辅助服务地址。
@@ -449,9 +441,9 @@ async def _start_member_auxiliary_services(
                 if adopted is None and not is_local_port_available(port):
                     raise RuntimeError(f"辅助服务恢复端口已被占用: {service}, 127.0.0.1:{port}")
                 runtime.service_urls[service] = f"http://127.0.0.1:{port}"
-                handle = adopted or start_local_node_service_process(
+                handle = adopted or start_local_browser_service_process(
                     project_root=project_root, workspace_root=mount.workspace_root,
-                    service=node_service, port=port, log_dir=log_dir, workspace_id=mount.workspace_id,
+                    port=port, log_dir=log_dir, workspace_id=mount.workspace_id,
                     logging_startup=logging_startup,
                 )
                 runtime.set_process(service, handle, adopted=adopted is not None)
@@ -553,7 +545,6 @@ async def start_managed_backend_runtime(
             )
             mount = replace(
                 mount,
-                terminal_backend_url=runtime.service_urls["terminal_manager"],
                 browser_backend_url=runtime.service_urls["browser_manager"],
             )
             ready_mounts.append(mount)

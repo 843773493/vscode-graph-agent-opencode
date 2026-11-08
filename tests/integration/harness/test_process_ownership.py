@@ -18,7 +18,7 @@ from urllib.request import urlopen
 import psutil
 import pytest
 
-from tests.harness.python import browser_manager, terminal_backend, terminal_frontend
+from tests.harness.python import browser_manager, terminal_backend
 from tests.harness.python.browser_manager import (
     BrowserFrontendProcess,
     BrowserManagerProcesses,
@@ -28,11 +28,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.process_output import spawn_logged_process
-from tests.harness.python.terminal_frontend import (
-    TerminalFrontendProcess,
-    close_terminal_frontend_process,
-    start_terminal_frontend_process,
-)
 from tests.integration.gateway import (
     test_navigation_actor_scope_proxy as navigation_case,
 )
@@ -138,14 +133,12 @@ HTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()
 
     monkeypatch.setattr(browser_manager.subprocess, "Popen", LoudAuxiliaryProcess)
     monkeypatch.setattr(browser_manager, "wait_for_http_ok", short_readiness)
-    monkeypatch.setattr(terminal_frontend, "wait_for_http_ok", short_readiness)
-    monkeypatch.setattr(terminal_backend, "wait_for_http_ok", short_readiness)
     yield created
     for process in created:
         browser_manager.terminate_process(process)
 
 
-@pytest.mark.parametrize("process_kind", ["manager", "frontend", "terminal-frontend", "terminal-backend"])
+@pytest.mark.parametrize("process_kind", ["manager", "frontend"])
 def test_large_startup_output_does_not_block_auxiliary_fixture(
     process_kind: str,
     loud_auxiliary_processes: list[subprocess.Popen[str]],
@@ -170,18 +163,6 @@ def test_large_startup_output_does_not_block_auxiliary_fixture(
                 artifacts_dir=artifacts,
             )
             lifetime.callback(close_browser_frontend_process, frontend)
-        elif process_kind == "terminal-frontend":
-            terminal = start_terminal_frontend_process(
-                workspace_root=workspace, frontend_port=ports.port(65),
-                artifacts_dir=artifacts,
-            )
-            lifetime.callback(close_terminal_frontend_process, terminal)
-        else:
-            backend = terminal_backend.start_terminal_backend(
-                workspace_root=str(workspace), backend_port=ports.port(65),
-                artifacts_dir=artifacts,
-            )
-            lifetime.callback(terminal_backend.terminate_process, backend)
         expected_process_count = 2 if process_kind == "manager" else 1
         assert len(loud_auxiliary_processes) == expected_process_count
         assert all(process.poll() is None for process in loud_auxiliary_processes)
@@ -219,7 +200,7 @@ def frontend_loopback_address(request: pytest.FixtureRequest) -> tuple[str, int]
         return host, int(probe.getsockname()[1])
 
 
-@pytest.mark.parametrize("resource", ["browser", "terminal"])
+@pytest.mark.parametrize("resource", ["browser"])
 def test_auxiliary_frontend_serves_explicit_loopback_host(
     resource: str,
     frontend_loopback_address: tuple[str, int],
@@ -234,7 +215,7 @@ def test_auxiliary_frontend_serves_explicit_loopback_host(
         (workspace / ".boxteam/workspace-identity.json").read_text(encoding="utf-8"),
     )["workspace_id"]
     host, port = frontend_loopback_address
-    # 使用真实静态入口与完整fixture工作区；不启动Browser/Terminal业务后端。
+    # 使用真实 Browser 静态入口与完整 fixture 工作区；不启动 Browser 业务后端。
     process, logs = spawn_logged_process(
         [node, str(root / "src/workspace-services" / resource / "client/server.js"),
          "--host", host, "--port", str(port), "--backend-url", "auto",
@@ -253,7 +234,7 @@ def test_auxiliary_frontend_serves_explicit_loopback_host(
     assert health == {"ok": True, "backend_url": "auto", "workspace_id": workspace_id}
     with urlopen(f"{base_url}/config.js", timeout=1) as response:
         config = response.read().decode("utf-8")
-    backend_port = 8015 if resource == "browser" else 8012
+    backend_port = 8015
     assert f'"http://{url_host}:{backend_port}"' in config
     assert json.dumps(workspace_id) in config
     with urlopen(f"{base_url}/", timeout=1) as response:
@@ -399,7 +380,7 @@ def test_process_scope_start_failure_preserves_replacement_port_owner(
 
 
 @pytest.mark.parametrize(
-    "occupied_start", ["backend", "frontend", "frontend-only", "terminal-frontend"]
+    "occupied_start", ["backend", "frontend", "frontend-only"]
 )
 def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
     process_lifetime: ExitStack,
@@ -421,13 +402,7 @@ def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
     )
 
     with pytest.raises(RuntimeError, match="测试端口已被占用"):
-        if occupied_start == "terminal-frontend":
-            start_terminal_frontend_process(
-                workspace_root=tmp_path,
-                artifacts_dir=tmp_path / "artifacts",
-                frontend_port=frontend_port,
-            )
-        elif occupied_start == "frontend-only":
+        if occupied_start == "frontend-only":
             start_browser_frontend_process(
                 workspace_root=tmp_path,
                 artifacts_dir=tmp_path / "artifacts",
@@ -446,7 +421,7 @@ def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
         pass
 
 
-@pytest.mark.parametrize("service", ["browser-manager", "browser-frontend", "terminal-frontend"])
+@pytest.mark.parametrize("service", ["browser-manager", "browser-frontend"])
 def test_auxiliary_close_terminates_owned_processes_only(
     process_lifetime: ExitStack,
     service: str,
@@ -460,13 +435,7 @@ def test_auxiliary_close_terminates_owned_processes_only(
     owned_backend = _start_idle_process(process_lifetime)
     owned_frontend = _start_idle_process(process_lifetime)
 
-    if service == "terminal-frontend":
-        close_terminal_frontend_process(
-            TerminalFrontendProcess(process=owned_frontend, port=frontend_port)
-        )
-        assert owned_frontend.poll() is not None
-        assert owned_backend.poll() is None
-    elif service == "browser-frontend":
+    if service == "browser-frontend":
         close_browser_frontend_process(
             BrowserFrontendProcess(process=owned_frontend, port=frontend_port)
         )
@@ -550,7 +519,10 @@ def test_backend_start_preserves_existing_port_owner(
     )
     with pytest.raises(RuntimeError, match="测试端口已被占用"):
         if service == "terminal":
-            terminal_backend.start_terminal_backend(backend_port=port, workspace_root=str(tmp_path), artifacts_dir=tmp_path / "artifacts")
+            terminal_backend.start_terminal_plugin_service(
+                backend_port=port, workspace_root=str(tmp_path),
+                artifacts_dir=tmp_path / "artifacts",
+            )
         elif service == "navigation-scope":
             navigation_case._start_navigation_scope_backend(workspace_root=tmp_path, port=port)
         else:

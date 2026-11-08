@@ -23,8 +23,10 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
     wait_process_gone,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import terminate_process
+from tests.harness.python.terminal_backend import (
+    start_terminal_plugin_service,
+    stop_terminal_plugin_service,
+)
 
 
 async def _transport_grant(client: httpx.AsyncClient, terminal_id: str) -> str:
@@ -78,18 +80,15 @@ async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
         e2e_workspace_root_path, "utf8_output"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             response = await client.post(
@@ -110,7 +109,7 @@ async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
             response.raise_for_status()
             terminal_id = str(response.json()["data"]["terminal_id"])
             async with websockets.connect(
-                f"ws://127.0.0.1:{backend_port}/terminal?workspace_id={workspace_id}"
+                service.websocket_url + f"?workspace_id={workspace_id}", additional_headers=service.headers
             ) as websocket:
                 await websocket.send(json.dumps({
                     "type": "attach", "terminalId": terminal_id,
@@ -144,7 +143,7 @@ async def test_utf8_output_replay_and_snapshot_respect_byte_limits(
             assert tail.endswith("\r\nUTF8_READY\r\n")
             (await client.delete(f"/api/terminals/{terminal_id}")).raise_for_status()
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -158,18 +157,15 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
         e2e_workspace_root_path, "worker_isolation"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             response = await client.post(
@@ -227,7 +223,7 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
             assert survivor["status"] == "running"
             (await client.delete(f"/api/terminals/{survivor_id}")).raise_for_status()
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -241,7 +237,7 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
         e2e_workspace_root_path, "failed_start"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
@@ -249,11 +245,8 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
     try:
         initial_children = _direct_child_pids(process.pid)
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             response = await client.post(
@@ -281,7 +274,7 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
             assert _direct_child_pids(process.pid) == initial_children
             (await client.get("/health")).raise_for_status()
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -295,18 +288,15 @@ async def test_websocket_attach_messages_are_processed_in_order(
         e2e_workspace_root_path, "ordered_attach"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             terminal_ids = []
@@ -325,7 +315,7 @@ async def test_websocket_attach_messages_are_processed_in_order(
                 terminal_ids.append(str(response.json()["data"]["terminal_id"]))
 
             async with websockets.connect(
-                f"ws://127.0.0.1:{backend_port}/terminal?workspace_id={workspace_id}"
+                service.websocket_url + f"?workspace_id={workspace_id}", additional_headers=service.headers
             ) as websocket:
                 for terminal_id in terminal_ids:
                     await websocket.send(
@@ -365,7 +355,7 @@ async def test_websocket_attach_messages_are_processed_in_order(
                     await client.delete(f"/api/terminals/{terminal_id}")
                 ).raise_for_status()
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -379,18 +369,15 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
         e2e_workspace_root_path, "websocket_reconnect"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             response = await client.post(
@@ -407,9 +394,7 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
             terminal = response.json()["data"]
             terminal_id = str(terminal["terminal_id"])
             initial_sequence = int(terminal["sequence"])
-            websocket_url = (
-                f"ws://127.0.0.1:{backend_port}/terminal?workspace_id={workspace_id}"
-            )
+            websocket_url = service.websocket_url + f"?workspace_id={workspace_id}"
 
             async with websockets.connect(websocket_url) as websocket:
                 await websocket.send(
@@ -471,7 +456,7 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
             delete_response = await client.delete(f"/api/terminals/{terminal_id}")
             delete_response.raise_for_status()
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -488,7 +473,7 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
         e2e_workspace_root_path, "manager_sigkill"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
@@ -498,11 +483,8 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
     descendant_pid = 0
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             response = await client.post(
@@ -553,7 +535,7 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
         wait_process_gone(shell_pid)
         wait_process_gone(descendant_pid)
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -567,18 +549,15 @@ async def test_concurrent_kill_and_delete_share_one_release(
         e2e_workspace_root_path, "concurrent_release"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=10,
         ) as client:
             response = await client.post(
@@ -609,7 +588,7 @@ async def test_concurrent_kill_and_delete_share_one_release(
             wait_process_gone(shell_pid)
             (await client.get("/health")).raise_for_status()
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -626,18 +605,15 @@ async def test_normal_shell_exit_reaps_term_resistant_descendant(
         e2e_workspace_root_path, "normal_exit_cleanup"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=10,
         ) as client:
             response = await client.post(
@@ -686,7 +662,7 @@ async def test_normal_shell_exit_reaps_term_resistant_descendant(
             wait_process_gone(descendant_pid)
             wait_process_gone(worker_pid)
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -704,18 +680,15 @@ async def test_pre_ready_exit_reaps_term_resistant_descendant(
     )
     child_pid_file = Path(workspace_root) / "pre-ready-child.pid"
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=10,
         ) as client:
             command = (
@@ -742,7 +715,7 @@ async def test_pre_ready_exit_reaps_term_resistant_descendant(
             wait_process_gone(descendant_pid)
             assert (await client.get("/api/terminals")).json()["data"] == []
     finally:
-        terminate_process(process)
+        stop_terminal_plugin_service(service)
 
 
 @pytest.mark.asyncio
@@ -756,7 +729,7 @@ async def test_shutdown_persist_failure_still_exits_manager(
         e2e_workspace_root_path, "shutdown_failure"
     )
     workspace_id = load_or_create_workspace_id(Path(workspace_root))
-    process = start_terminal_backend(
+    service = start_terminal_plugin_service(
         backend_port=backend_port,
         workspace_root=workspace_root,
         artifacts_dir=terminal_run_context.artifacts_dir,
@@ -765,11 +738,8 @@ async def test_shutdown_persist_failure_still_exits_manager(
     backup_path = Path(workspace_root) / ".boxteam" / "terminal-manager-backup"
     try:
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Resource-Owner": "workspace-terminal",
-            },
+            base_url=service.http_url,
+            headers=service.headers,
             timeout=5,
         ) as client:
             response = await client.post(
@@ -793,4 +763,4 @@ async def test_shutdown_persist_failure_still_exits_manager(
             manager_path.unlink()
         if backup_path.exists():
             backup_path.rename(manager_path)
-        terminate_process(process)
+        stop_terminal_plugin_service(service)

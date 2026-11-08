@@ -5,12 +5,8 @@ import { encodeTerminalClientMessage } from "./protocol/messages.js";
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
 const workspaceId = params.get("workspaceId");
-const gatewayMode = Boolean(workspaceId);
-const nativeWorkspaceId = window.BOXTEAM_WORKSPACE_ID;
-const backendBaseUrl = workspaceId
-  ? `${window.location.origin}/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/terminal-manager`
-  : window.BOXTEAM_TERMINAL_BACKEND_URL || "http://127.0.0.1:8012";
-const ownerApiBase = gatewayMode ? window.location.origin : window.BOXTEAM_WORKSPACE_BACKEND_URL;
+const targetGatewayId = params.get("target_gateway_id");
+const ownerApiBase = window.location.origin;
 let ownerResource = null;
 let grantLoading = false;
 let lastActionError = null;
@@ -102,41 +98,34 @@ function setAttachButtonMode(mode) {
   }
 }
 
-function backendWsUrl() {
-  const url = new URL(backendBaseUrl);
+function backendWsUrl(service) {
+  if (!service || service.workspace_id !== workspaceId || service.gateway_id !== targetGatewayId
+    || !service.package_id || !service.plugin_id || !service.package_version || !service.instance_id
+    || service.service_id !== "socket") {
+    throw new Error("Terminal 传输授权缺少原目标的精确插件服务身份");
+  }
+  const parts = [service.package_id, service.plugin_id].map(encodeURIComponent);
+  const url = new URL(`/api/gateway/service-plugins/${parts.join("/")}/instances/${encodeURIComponent(service.instance_id)}/services/socket/terminal`, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = `${url.pathname.replace(/\/$/, "")}/terminal`;
-  url.search = gatewayMode
-    ? `?token=${encodeURIComponent(gatewayToken)}`
-    : `?workspace_id=${encodeURIComponent(nativeWorkspaceId)}`;
+  url.searchParams.set("token", gatewayToken);
+  url.searchParams.set("workspace_id", workspaceId);
+  url.searchParams.set("target_gateway_id", service.gateway_id);
+  url.searchParams.set("package_version", service.package_version);
   return url.toString();
 }
 
 async function initializeGatewayAuth() {
-  if (!gatewayMode) {
-    if (typeof nativeWorkspaceId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(nativeWorkspaceId)) {
-      throw new Error("终端前端缺少受控工作区 UUID");
-    }
-    if (typeof ownerApiBase !== "string" || !ownerApiBase || !window.BOXTEAM_WORKSPACE_API_TOKEN) {
-      throw new Error("独立终端必须显式配置工作区 owner API 地址与凭据，或从 Gateway 打开终端");
-    }
-    backendRequestHeaders = {
-      "X-BoxTeam-Workspace-Id": nativeWorkspaceId,
-      "X-Local-Token": window.BOXTEAM_WORKSPACE_API_TOKEN,
-    };
-    return;
-  }
+  if (!workspaceId || !targetGatewayId) throw new Error("请从明确 Gateway 和工作区的终端资源入口打开");
   const response = await fetch(`${window.location.origin}/api/gateway/auth/local-credential`);
-  if (!response.ok) {
-    throw new Error(`获取 Gateway 本地凭据失败: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`获取 Gateway 本地凭据失败: ${response.status}`);
   const payload = await response.json();
   const token = payload.data?.token;
-  if (typeof token !== "string" || !token) {
-    throw new Error("Gateway 本地凭据响应缺少 token");
-  }
+  if (typeof token !== "string" || !token) throw new Error("Gateway 本地凭据响应缺少 token");
   gatewayToken = token;
-  backendRequestHeaders = { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId };
+  backendRequestHeaders = {
+    "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId,
+    "X-BoxTeam-Target-Gateway-Id": targetGatewayId,
+  };
 }
 
 function setStatus(message, error = false) {
@@ -423,7 +412,7 @@ async function attach() {
     return;
   } finally { grantLoading = false; }
   if (!desiredAttached) return;
-  const currentSocket = new WebSocket(backendWsUrl());
+  const currentSocket = new WebSocket(backendWsUrl(grant.service));
   socket = currentSocket;
   setAttachButtonMode("attaching");
   setStatus("正在连接终端...");

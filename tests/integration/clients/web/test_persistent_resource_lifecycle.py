@@ -18,10 +18,6 @@ from tests.harness.python.browser_manager import (
     start_browser_frontend_process,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_frontend import (
-    close_terminal_frontend_process,
-    start_terminal_frontend_process,
-)
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建装具
 )
@@ -34,6 +30,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import enable_terminal_plugin
 
 
 @pytest.mark.asyncio
@@ -61,10 +58,6 @@ async def test_persistent_resources_through_real_workbench(
         replay = lifetime.enter_context(model_stream_replay(
             runtime, runtime_root=runtime, business_assertion="persistent-resource-lifecycle",
         ))
-        terminal = start_terminal_frontend_process(
-            workspace_root=workspace, artifacts_dir=artifacts, frontend_port=ports.port(41),
-        )
-        lifetime.callback(close_terminal_frontend_process, terminal)
         browser = start_browser_frontend_process(
             workspace_root=workspace, artifacts_dir=artifacts, frontend_port=ports.port(43),
         )
@@ -75,7 +68,6 @@ async def test_persistent_resources_through_real_workbench(
             extra_env=temporary_environment | replay.environment | {
                 "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
                 "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10)),
-                "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{terminal.port}",
                 "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser.port}",
             },
             asgi_app="tests.support.e2e_control.gateway_app:app",
@@ -89,6 +81,10 @@ async def test_persistent_resources_through_real_workbench(
             owner = reply.json()["data"]["active_workspace"]
             workspace_id = owner["workspace_id"]
             gateway_id = owner["gateway_id"]
+            await enable_terminal_plugin(
+                client, gateway_id=gateway_id, workspace_id=workspace_id,
+                artifacts_dir=artifacts / "terminal-plugin",
+            )
         environment = os.environ | temporary_environment | replay.environment | {
             "BOXTEAM_BROWSER_BASE_URL": base_url, "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
             "BOXTEAM_BROWSER_GATEWAY_ID": gateway_id,

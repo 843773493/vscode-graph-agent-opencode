@@ -363,14 +363,13 @@ def logging_application(
     graph = managed_backend_factory(
         targets, backend_url="http://127.0.0.1:42000", process=ProcessProbe(pid=21),
         auxiliary_processes={target.workspace_id: {
-            "terminal_manager": ProcessProbe(pid=22 + index * 2),
-            "browser_manager": ProcessProbe(pid=23 + index * 2),
+            "browser_manager": ProcessProbe(pid=22 + index),
         } for index, target in enumerate(targets)},
     )
     graph.publish(registry)
     # 即使地址在本机，未受管的外部 Backend 也不参加日志控制。
     registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID, workspace_id='00000000-0000-4000-8000-000000000003', name='external', root_path=str(config.path.parent / 'external'), backend_url='http://127.0.0.1:49999', connection_kind='local'))
-    roles: tuple[tuple[int, RuntimeLoggingService], ...] = ((20, "launcher"), (21, "backend"), (22, "terminal"), (23, "browser"), (24, "terminal"), (25, "browser"))
+    roles: tuple[tuple[int, RuntimeLoggingService], ...] = ((20, "launcher"), (21, "backend"), (22, "browser"), (23, "browser"))
     states = {pid: RuntimeLoggingStatus(
         service=role, pid=pid, runtime_instance_id=f"instance-{pid}",
         applied_revision=config.service.config.revision, level="info", pretty=True, log_sink=None,

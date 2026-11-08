@@ -19,14 +19,10 @@ import pytest
 
 from app.abstractions.terminal.resources import TerminalRequestError
 from app.agents.tools.terminal import create_exec_command_tool, create_write_stdin_tool
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.resource_uri import resource_display_uri
-from app.core.workspace_identity import load_or_create_workspace_id
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import terminate_process
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,
@@ -81,14 +77,18 @@ async def terminal_runtime(
             shell.chmod(0o700)
             monkeypatch.setenv("SHELL", "./startup-shell")
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir)
+    run = TestRunContext.from_test_file(Path(request.node.path))
+    home = run.boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
     try:
-        async with workspace_tool_runtime(root, startup_mount=MountedWorkspace(
-            load_or_create_workspace_id(root), root, terminal_backend_url=f"http://127.0.0.1:{port}",
-        )) as runtime:
-            yield runtime
+        async with terminal_plugin_gateway_for_workspace(
+            workspace_root=root, artifacts_dir=run.artifacts_dir,
+            gateway_port=port, boxteam_home=home,
+        ) as plugin:
+            monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
+            async with workspace_tool_runtime(root) as runtime:
+                yield runtime
     finally:
-        terminate_process(process)
         # 失败的候选也必须回收本例子进程；按原生启动标记核身份，不能杀复用 PID。
         for marker in root.glob("startup-*.stat"):
             original = marker.read_text()
@@ -109,10 +109,7 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
     container, _session_id, _context = terminal_runtime
     owner = container.terminal_resource_owner
     root = owner.workspace_root
-    port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    client = TerminalManagerClient(
-        backend_url=f"http://127.0.0.1:{port}", workspace_id=owner.workspace_id,
-    )
+    client = container.terminal_manager_client
     not_directory = root / "not-a-terminal-directory.txt"
     not_directory.write_text("原件不能被终端创建改写", encoding="utf-8")
     cases = [
@@ -159,8 +156,9 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
     assert rejected_record.thread_associations == []
     assert owner._leases.leases_for_resource(rejected_record.resource_id) == []
     assert await owner.list_resources() == []
-    logs = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostic = "\n".join(path.read_text() for path in logs.glob("terminal-backend-*.stderr.log"))
+    run = TestRunContext.from_test_file(Path(request.node.path))
+    logs = run.boxteam_home_for_node(request.node.nodeid) / "state/logs"
+    diagnostic = "\n".join(path.read_text() for path in logs.rglob("*.log"))
     assert str(not_directory) in diagnostic
     assert "ENOENT" in diagnostic
     assert re.search(r"service=terminal pid=\d+ runtime_instance_id=[0-9a-f-]+ logger=terminal\.", diagnostic)
@@ -458,6 +456,7 @@ async def test_real_tool_acceptance_owner_lease_pty_and_final_receipt(
 async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allows_cleanup(
     request: pytest.FixtureRequest,
     terminal_workspace_root_path: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.container import WorkspaceContainerRegistry
     from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
@@ -466,20 +465,14 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
 
     root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    process = start_terminal_backend(backend_port=port, workspace_root=str(root), artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir)
     child = dedent(r"""
         import asyncio, json, os, sys
         from pathlib import Path
         from app.core.turn_execution_scope import get_current_turn_execution_scope
         from tests.support.workspace_tool_runtime import workspace_tool_runtime
-        from app.core.mounted_workspaces import MountedWorkspace
-        from app.core.workspace_identity import load_or_create_workspace_id
-
         async def crash():
             root = Path(sys.argv[1])
-            async with workspace_tool_runtime(root, startup_mount=MountedWorkspace(
-                load_or_create_workspace_id(root), root, terminal_backend_url=sys.argv[2],
-            )) as (container, session_id, context):
+            async with workspace_tool_runtime(root) as (container, session_id, context):
                 owner = container.terminal_resource_owner
                 scope = get_current_turn_execution_scope()
                 async with owner.operation(
@@ -497,9 +490,15 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
                     os._exit(71)
         asyncio.run(crash())
     """)
-    try:
+    run = TestRunContext.from_test_file(Path(request.node.path))
+    home = run.boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
+    async with terminal_plugin_gateway_for_workspace(
+        workspace_root=root, artifacts_dir=run.artifacts_dir, gateway_port=port, boxteam_home=home,
+    ) as plugin:
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
         crashed = await asyncio.to_thread(
-            subprocess.run, ["uv", "run", "python", "-c", child, str(root), f"http://127.0.0.1:{port}"],
+            subprocess.run, ["uv", "run", "--no-sync", "python", "-c", child, str(root)],
             capture_output=True, text=True, timeout=45, check=False,
         )
         assert crashed.returncode == 71, crashed.stderr
@@ -509,7 +508,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
         workspace_id = load_or_create_workspace_id(root)
         with (
             WorkspaceContainerRegistry(
-                mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, root, terminal_backend_url=f"http://127.0.0.1:{port}")]),
+                mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, root)]),
                 project_root=Path.cwd(),
             ) as registry,
             catalog_provider_scope(registry),
@@ -525,10 +524,10 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
                 assert (await owner.get_resource(identity["rid"]))["status"] == "deleted"
                 assert owner._leases.leases_for_resource(identity["rid"]) == []
             finally:
+                await container.terminal_manager_client.aclose()
                 container.workspace_activity_service.store.close()
                 container.session_catalog.close()
-    finally:
-        terminate_process(process)
+
 
 
 @pytest.mark.asyncio

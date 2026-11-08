@@ -29,6 +29,7 @@ import {
   downloadPinnedWindowsNode,
 } from "./pinned-archive-download.mjs";
 import { copyApplicationSources } from "./application-sources.mjs";
+import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import {
   beginRuntimeBuild,
   publishRuntimeBuildResult,
@@ -480,6 +481,7 @@ async function main() {
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);
+  await packDeveloperTools(projectRoot, path.join(applicationRoot, "resources/plugins/developer-tools.zip"));
   installWindowsPythonDependencies({
     pythonExecutable, outputRoot, runtimePackageRoot, crossBuild, run,
   });

@@ -46,7 +46,7 @@ from app.gateway.runtime.controller import (
     reconnect_gateway_workspace,
 )
 from app.gateway.runtime.local_workspace import (
-    _adopt_local_node_service,
+    _adopt_local_browser_service,
     _adopt_workspace_backend,
     rebuild_managed_backend_runtime,
     start_managed_backend_runtime,
@@ -103,9 +103,9 @@ class ProcessBoundary:
             self.failed_urls.pop(url, None)
         return handle
 
-    def start_node(self, **options: object) -> ProcessProbe:
-        handle = ProcessProbe(name=str(options["service"]))
-        self.nodes.append((str(options["service"]), handle))
+    def start_browser(self, **options: object) -> ProcessProbe:
+        handle = ProcessProbe(name="browser")
+        self.nodes.append(("browser", handle))
         return handle
 
     async def health(self, url: str, workspace_id: str, *_: object, **__: object) -> dict[str, object]:
@@ -144,14 +144,14 @@ def process_boundary(monkeypatch: pytest.MonkeyPatch) -> ProcessBoundary:
     monkeypatch.setattr(local_workspace, "allocate_local_port", boundary.allocate)
     monkeypatch.setattr(local_workspace, "is_local_port_available", lambda _port: True)
     monkeypatch.setattr(local_workspace, "start_local_backend_process", boundary.start_backend)
-    monkeypatch.setattr(local_workspace, "start_local_node_service_process", boundary.start_node)
+    monkeypatch.setattr(local_workspace, "start_local_browser_service_process", boundary.start_browser)
     monkeypatch.setattr(local_workspace, "wait_for_workspace_health", boundary.health)
 
     async def no_adoption(**_: object) -> None:
         return None
 
     monkeypatch.setattr(local_workspace, "_adopt_workspace_backend", no_adoption)
-    monkeypatch.setattr(local_workspace, "_adopt_local_node_service", no_adoption)
+    monkeypatch.setattr(local_workspace, "_adopt_local_browser_service", no_adoption)
     return boundary
 
 
@@ -164,7 +164,7 @@ def single_workspace_graph(tmp_path: Path, managed_backend_factory, process_boun
     )
     graph = managed_backend_factory(
         (target,), backend_url=target.backend_url, process=ProcessProbe("old"),
-        auxiliary_processes={"00000000-0000-4000-8000-000000000001": {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")}},
+        auxiliary_processes={"00000000-0000-4000-8000-000000000001": {"browser_manager": ProcessProbe("browser")}},
     )
     registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID,
         storage_path=tmp_path / "single-workspace-registry.json"
@@ -208,7 +208,7 @@ def workspace_runtime_controller_case(tmp_path: Path, managed_backend_factory, p
         registry.upsert(target, activate=False)
     graph = managed_backend_factory(
         tuple(targets), backend_url=targets[0].backend_url, process=ProcessProbe("old"),
-        auxiliary_processes={target.workspace_id: {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")} for target in targets},
+        auxiliary_processes={target.workspace_id: {"browser_manager": ProcessProbe("browser")} for target in targets},
     )
     graph.publish(registry)
     process_boundary.register(graph, registry)
@@ -805,17 +805,17 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_closes_owned_handles(
+async def test_managed_runtime_rejects_browser_wrong_uuid_before_backend_and_closes_owned_handles(
     single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
     single_workspace_graph.owner.close()
     runtime = single_workspace_graph.runtimes["00000000-0000-4000-8000-000000000001"]
-    adopted = runtime.processes["terminal_manager"]
+    adopted = runtime.processes["browser_manager"]
     runtime.processes.clear()
-    async def adopt(**_):
-        return adopted
     async def wrong_uuid(*_, **__):
         raise RuntimeError("backend UUID 不匹配")
-    monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
+    async def adopt_browser(**_: object) -> ProcessProbe:
+        return adopted
+    monkeypatch.setattr(local_workspace, "_adopt_local_browser_service", adopt_browser)
     monkeypatch.setattr(local_workspace, "wait_for_workspace_health", wrong_uuid)
     with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
         await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
@@ -826,10 +826,10 @@ async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_cl
 @pytest.mark.asyncio
 async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_processes(single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
     single_workspace_graph.owner.close()
-    adopted = ProcessProbe("adopted-terminal")
-    async def adopt(*, service_name, **_):
-        return adopted if service_name == "terminal_manager" else None
-    monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
+    adopted = ProcessProbe("adopted-browser")
+    async def adopt(**_):
+        return adopted
+    monkeypatch.setattr(local_workspace, "_adopt_local_browser_service", adopt)
     error = RuntimeError("候选 health 失败")
     process_boundary.backend_outcomes[:] = [error]
     with pytest.raises(RuntimeError) as raised:
@@ -840,7 +840,7 @@ async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_p
     assert raised.value is error
     assert adopted.detached and not adopted.closed
     assert process_boundary.handles[0].closed
-    assert process_boundary.nodes[0][1].closed
+    assert not process_boundary.nodes
     assert single_workspace_graph.owner.process is None
 
 
@@ -934,12 +934,12 @@ async def test_backend_restart_failure_keeps_old_generation(single_workspace_gra
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("service,port", [("terminal_manager", 42001), ("browser_manager", 42002)])
-async def test_gateway_adopts_matching_node_manager(local_http, service, port, tmp_path, monkeypatch, windows_process_tree_stub) -> None:
+async def test_gateway_adopts_matching_browser_manager(local_http, tmp_path, monkeypatch, windows_process_tree_stub) -> None:
     requests = []
+    port = 42002
     windows_process_tree_stub.add_process(43210, parent_pid=None, starttime=1.0)
     ownership = SimpleNamespace(process_tree_identity=lambda pid: (pid, 1.0, 1.0))
-    role = service.removesuffix("_manager")
+    role = "browser"
     logging_state = {
         "service": role, "pid": 43210, "runtime_instance_id": "node-instance",
         "applied_revision": None, "level": "info", "pretty": True, "log_sink": None,
@@ -957,7 +957,7 @@ async def test_gateway_adopts_matching_node_manager(local_http, service, port, t
             return httpx.Response(200, json={"data": logging_state})
         return httpx.Response(200, json={"workspace_id": UUID_A, "process_id": 43210})
     local_http(response)
-    adopted = await _adopt_local_node_service(service_url=f"http://127.0.0.1:{port}", service_name=service, workspace_id=UUID_A, log_dir=tmp_path / "logs")
+    adopted = await _adopt_local_browser_service(service_url=f"http://127.0.0.1:{port}", workspace_id=UUID_A, log_dir=tmp_path / "logs")
     assert adopted.pid == 43210 and adopted.log_ownership is ownership
     assert requests[1].url.path == "/internal/runtime-logging"
     assert requests[0].url.path == "/health"
@@ -966,16 +966,15 @@ async def test_gateway_adopts_matching_node_manager(local_http, service, port, t
 @pytest.mark.asyncio
 async def test_gateway_rejects_persisted_browser_manager_url_without_port(tmp_path) -> None:
     with pytest.raises(ValueError, match="缺少端口"):
-        await _adopt_local_node_service(service_url="http://127.0.0.1", service_name="browser_manager", workspace_id=UUID_A, log_dir=tmp_path / "logs")
+        await _adopt_local_browser_service(service_url="http://127.0.0.1", workspace_id=UUID_A, log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("service", ["terminal_manager", "browser_manager"])
 @pytest.mark.parametrize("identity", [UUID_B, None, "not-a-uuid"])
-async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_http, service, identity, tmp_path) -> None:
+async def test_gateway_rejects_mismatched_browser_manager_without_adoption(local_http, identity, tmp_path) -> None:
     local_http(lambda _: httpx.Response(200, json={"workspace_id": identity, "process_id": 43211}))
     with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
-        await _adopt_local_node_service(service_url="http://127.0.0.1:42001", service_name=service, workspace_id=UUID_A, log_dir=tmp_path / "logs")
+        await _adopt_local_browser_service(service_url="http://127.0.0.1:42002", workspace_id=UUID_A, log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio
@@ -1036,13 +1035,13 @@ async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(single_
     single_workspace_graph.owner.close()
     previous = single_workspace_graph.owner.contract
     backend = ProcessProbe("persisted-backend")
-    auxiliaries = {service: ProcessProbe(service) for service in ("terminal_manager", "browser_manager")}
+    auxiliaries = {"browser_manager": ProcessProbe("browser")}
     async def adopt_backend_handle(**_):
         return backend
-    async def adopt_node(*, service_name, **_):
-        return auxiliaries[service_name]
+    async def adopt_browser(**_):
+        return auxiliaries["browser_manager"]
     monkeypatch.setattr(local_workspace, "_adopt_workspace_backend", adopt_backend_handle)
-    monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt_node)
+    monkeypatch.setattr(local_workspace, "_adopt_local_browser_service", adopt_browser)
     contract, runtimes = await start_managed_backend_runtime(
         owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs", adopt_existing_backend=adopt_backend,
     )
@@ -1066,18 +1065,18 @@ async def test_managed_runtime_replaces_default_backend_when_adoption_is_disable
     await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
                                         preferred_backend_port=8010, adopt_existing_backend=False)
     assert stale.closed and process_boundary.starts[0]["port"] == 8010
-    assert [service for service, _ in process_boundary.nodes] == ["terminal", "browser"]
+    assert [service for service, _ in process_boundary.nodes] == ["browser"]
 
 
 @pytest.mark.asyncio
 async def test_managed_runtime_reuses_browser_without_starting_replacement(single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
     single_workspace_graph.owner.close()
     adopted = ProcessProbe("browser")
-    async def adopt(*, service_name, **_):
-        return adopted if service_name == "browser_manager" else None
-    monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
+    async def adopt(**_):
+        return adopted
+    monkeypatch.setattr(local_workspace, "_adopt_local_browser_service", adopt)
     _, runtimes = await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
-    assert [service for service, _ in process_boundary.nodes] == ["terminal"]
+    assert not process_boundary.nodes
     assert process_boundary.starts[0]["mounts"][0].browser_backend_url == runtimes["00000000-0000-4000-8000-000000000001"].service_urls["browser_manager"]
     assert runtimes["00000000-0000-4000-8000-000000000001"].processes["browser_manager"] is adopted
 
@@ -1265,7 +1264,7 @@ async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent
     assert result.status == "started" and len(process_boundary.starts) == 1
     assert all(registry.resolve(member_id).desired_running for member_id in graph.owner.contract.workspace_ids)
     assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
-    assert set(runtime.processes) == {"terminal_manager", "browser_manager"}
+    assert set(runtime.processes) == {"browser_manager"}
 
 
 @pytest.mark.asyncio
@@ -1437,7 +1436,7 @@ async def test_exit_failure_recovers_complete_old_group(workspace_runtime_contro
     assert graph.owner.contract == old_contract and graph.owner.error is None
     assert len(process_boundary.starts) == 1 and graph.owner.process is process_boundary.handles[-1]
     assert all(registry.backend_owner(identity) is graph.owner and registry.resolve(identity).desired_running for identity in old_contract.workspace_ids)
-    assert all(set(registry.managed_runtime(identity).processes) == {"terminal_manager", "browser_manager"} for identity in old_contract.workspace_ids)
+    assert all(set(registry.managed_runtime(identity).processes) == {"browser_manager"} for identity in old_contract.workspace_ids)
     assert GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path).backend_owner("00000000-0000-4000-8000-000000000001").contract == old_contract
 
 

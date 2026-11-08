@@ -20,16 +20,8 @@ from tests.e2e.system.workspace_services.terminal.terminal_history_fixture impor
 )
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     prepare_empty_terminal_e2e_workspace,
-    terminal_ports,
 )
-from tests.harness.python.process_output import spawn_logged_process
-from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
-from tests.support.processes.workspace import (
-    ensure_local_port_available,
-    terminate_process,
-    wait_for_http_ok,
-)
+from tests.harness.python.terminal_plugin import TerminalPluginGateway
 from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
@@ -47,89 +39,23 @@ async def _recv_ws_type(websocket, expected_type: str) -> dict[str, object]:
     raise TimeoutError(f"未收到 WebSocket 消息: {expected_type}")
 
 
+def _terminal_api_url(gateway: TerminalPluginGateway, suffix: str) -> str:
+    return (
+        f"{gateway.http_service_url}{suffix}?"
+        + urlencode({"package_version": "0.1.0", "workspace_id": gateway.workspace_id})
+    )
+
+
 @pytest.fixture(scope="module")
 def e2e_workspace_root_path() -> str:
     return prepare_empty_terminal_e2e_workspace(Path(__file__))
 
 
-@pytest.fixture(scope="module", autouse=True)
-def terminal_manager_env(
-    e2e_workspace_root_path: str, e2e_backend_port: int
-) -> Generator[tuple[int, int], None, None]:
-    backend_port, frontend_port = terminal_ports(e2e_backend_port)
-    workspace_root = str(Path(e2e_workspace_root_path).resolve())
-    updates = {
-        "WORKSPACE_ROOT": workspace_root,
-        "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(Path(workspace_root)),
-        "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{frontend_port}",
-    }
-    previous = {key: os.environ.get(key) for key in updates}
-    os.environ.update(updates)
-    try:
-        yield backend_port, frontend_port
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
-@pytest.fixture(scope="module")
-def e2e_startup_mount(
-    terminal_manager_processes: tuple[int, int], e2e_workspace_root_path: str,
-) -> MountedWorkspace:
-    root = Path(e2e_workspace_root_path).resolve()
-    return MountedWorkspace(
-        load_or_create_workspace_id(root), root,
-        terminal_backend_url=f"http://127.0.0.1:{terminal_manager_processes[0]}",
+def _terminal_api_url(gateway: TerminalPluginGateway, suffix: str) -> str:
+    return (
+        f"{gateway.http_service_url}{suffix}?"
+        + urlencode({"package_version": "0.1.0", "workspace_id": gateway.workspace_id})
     )
-
-
-@pytest.fixture(scope="module")
-def terminal_manager_processes(
-    terminal_manager_env: tuple[int, int], e2e_workspace_root_path: str
-) -> Generator[tuple[int, int], None, None]:
-    backend_port, frontend_port = terminal_manager_env
-    ensure_local_port_available(frontend_port, service_name="终端管理器前端")
-    project_root = Path.cwd().resolve()
-    node_bin = shutil.which("node")
-    if node_bin is None:
-        raise RuntimeError("未找到 node，无法启动终端 e2e 进程")
-    artifacts_dir = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    with ExitStack() as lifetime:
-        backend_process = start_terminal_backend(
-            backend_port=backend_port, workspace_root=e2e_workspace_root_path,
-            artifacts_dir=artifacts_dir,
-        )
-        lifetime.callback(terminate_process, backend_process)
-        frontend_process, frontend_logs = spawn_logged_process(
-            [
-                node_bin,
-                "server.js",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(frontend_port),
-                "--backend-url",
-                f"http://127.0.0.1:{backend_port}",
-            ],
-            cwd=project_root / "src/workspace-services/terminal/client",
-            env=os.environ.copy(),
-            artifacts_dir=artifacts_dir,
-            log_name="terminal-frontend",
-        )
-        lifetime.callback(terminate_process, frontend_process)
-        try:
-            wait_for_http_ok(
-                f"http://127.0.0.1:{frontend_port}/health", frontend_process,
-                timeout_seconds=30,
-            )
-        except BaseException as error:
-            for path in frontend_logs:
-                error.add_note(f"Terminal 测试进程日志：{path}")
-            raise
-        yield backend_port, frontend_port
 
 
 async def _create_resource(
@@ -178,10 +104,10 @@ async def _grant(client: httpx.AsyncClient, resource: dict[str, object]) -> str:
 
 @pytest.mark.asyncio
 async def test_workspace_owner_resource_grant_attach_and_exact_detach_delete(
-    terminal_manager_processes: tuple[int, int],
+    terminal_plugin_gateway: TerminalPluginGateway,
     client: httpx.AsyncClient,
 ) -> None:
-    backend_port, frontend_port = terminal_manager_processes
+    gateway = terminal_plugin_gateway
     resource = await _create_resource(client, "Persistent Terminal Resource Test")
     terminal_id = resource["resource_id"]
     source = resource["source_thread"]
@@ -209,7 +135,8 @@ async def test_workspace_owner_resource_grant_attach_and_exact_detach_delete(
 
     grant = await _grant(client, resource)
     async with websockets.connect(
-        f"ws://127.0.0.1:{backend_port}/terminal?workspace_id={os.environ['BOXTEAM_WORKSPACE_ID']}"
+        gateway.websocket_url,
+        additional_headers=gateway.workspace_headers,
     ) as websocket:
         await websocket.send(
             json.dumps(
@@ -250,11 +177,6 @@ async def test_workspace_owner_resource_grant_attach_and_exact_detach_delete(
         await websocket.send(json.dumps({"type": "detach"}))
         await _recv_ws_type(websocket, "detached")
 
-    frontend = await client.get(
-        f"http://127.0.0.1:{frontend_port}/?terminalId={terminal_id}"
-    )
-    frontend.raise_for_status()
-    assert "持久终端" in frontend.text
     promoted = await client.post(
         f"/api/v1/resources/{terminal_id}/promote",
         json={"expected_revision": resource["owner_revision"]},
@@ -307,23 +229,20 @@ async def test_workspace_owner_resource_grant_attach_and_exact_detach_delete(
 
 @pytest.mark.asyncio
 async def test_terminal_resize_does_not_create_fake_newlines_or_input(
-    terminal_manager_processes: tuple[int, int],
+    terminal_plugin_gateway: TerminalPluginGateway,
     client: httpx.AsyncClient,
 ) -> None:
-    backend_port, _frontend_port = terminal_manager_processes
+    gateway = terminal_plugin_gateway
     resource = await _create_resource(client, "Terminal Resize Regression")
     terminal_id = resource["resource_id"]
     async with httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{backend_port}",
-        headers={
-            "X-BoxTeam-Workspace-Id": os.environ["BOXTEAM_WORKSPACE_ID"],
-            "X-BoxTeam-Resource-Owner": "workspace-terminal",
-        },
+        base_url=gateway.gateway_url,
+        headers=gateway.workspace_headers,
         timeout=5,
     ) as transport:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            candidate = (await transport.get(f"/api/terminals/{terminal_id}")).json()[
+            candidate = (await transport.get(_terminal_api_url(gateway, f"/api/terminals/{terminal_id}"))).json()[
                 "data"
             ]
             if str(candidate["buffer"]).endswith("$ "):
@@ -333,7 +252,8 @@ async def test_terminal_resize_does_not_create_fake_newlines_or_input(
             raise AssertionError("交互式 shell 未在期限内进入 prompt")
         grant = await _grant(client, resource)
         async with websockets.connect(
-            f"ws://127.0.0.1:{backend_port}/terminal?workspace_id={os.environ['BOXTEAM_WORKSPACE_ID']}"
+            gateway.websocket_url,
+            additional_headers=gateway.workspace_headers,
         ) as websocket:
             await websocket.send(
                 json.dumps(
@@ -348,7 +268,7 @@ async def test_terminal_resize_does_not_create_fake_newlines_or_input(
             )
             await _recv_ws_type(websocket, "attached")
             await asyncio.sleep(0.1)
-            before = (await transport.get(f"/api/terminals/{terminal_id}")).json()[
+            before = (await transport.get(_terminal_api_url(gateway, f"/api/terminals/{terminal_id}"))).json()[
                 "data"
             ]
             for _ in range(12):
@@ -356,7 +276,7 @@ async def test_terminal_resize_does_not_create_fake_newlines_or_input(
                     json.dumps({"type": "resize", "cols": 80, "rows": 24})
                 )
             await asyncio.sleep(0.15)
-            unchanged = (await transport.get(f"/api/terminals/{terminal_id}")).json()[
+            unchanged = (await transport.get(_terminal_api_url(gateway, f"/api/terminals/{terminal_id}"))).json()[
                 "data"
             ]
             assert unchanged["sequence"] == before["sequence"]
@@ -369,7 +289,7 @@ async def test_terminal_resize_does_not_create_fake_newlines_or_input(
                     json.dumps({"type": "resize", "cols": cols, "rows": 24})
                 )
             await asyncio.sleep(0.2)
-        resized = (await transport.get(f"/api/terminals/{terminal_id}")).json()["data"]
+        resized = (await transport.get(_terminal_api_url(gateway, f"/api/terminals/{terminal_id}"))).json()["data"]
         assert resized["last_input"] is None and resized["last_input_source"] is None
         assert "\r\x1b[K\r" in resized["display_buffer"]
         assert "\r\n\x1b[K\r\n" not in resized["display_buffer"]
@@ -393,11 +313,11 @@ async def test_terminal_resize_does_not_create_fake_newlines_or_input(
 
 @pytest.mark.asyncio
 async def test_historical_terminal_checkpoint_does_not_create_resource_owner(
-    terminal_manager_processes: tuple[int, int],
+    terminal_plugin_gateway: TerminalPluginGateway,
     client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ) -> None:
-    del terminal_manager_processes
+    del terminal_plugin_gateway
     response = await client.post(
         "/api/v1/sessions", json={"title": "Historical Terminal Resource Test"}
     )
@@ -419,10 +339,10 @@ async def test_historical_terminal_checkpoint_does_not_create_resource_owner(
 
 @pytest.mark.asyncio
 async def test_workspace_terminal_survives_source_session_delete(
-    terminal_manager_processes: tuple[int, int],
+    terminal_plugin_gateway: TerminalPluginGateway,
     client: httpx.AsyncClient,
 ) -> None:
-    del terminal_manager_processes
+    del terminal_plugin_gateway
     resource = await _create_resource(
         client, "Workspace terminal survives source", scope="workspace"
     )

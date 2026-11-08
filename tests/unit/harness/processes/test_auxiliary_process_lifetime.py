@@ -14,15 +14,10 @@ import pytest
 from tests.harness.python import (
     browser_manager,
     process_output,
-    terminal_backend,
-    terminal_frontend,
 )
 from tests.harness.python.browser_manager import (
     BrowserManagerProcesses,
     close_browser_manager_processes,
-)
-from tests.integration.clients.web import (
-    test_manual_browser_connection as manual_browser_case,
 )
 
 
@@ -31,9 +26,7 @@ class AuxiliaryLogStartup:
     start: Callable[
         [],
         browser_manager.BrowserManagerProcesses
-        | browser_manager.BrowserFrontendProcess
-        | terminal_frontend.TerminalFrontendProcess
-        | subprocess.Popen[str],
+        | browser_manager.BrowserFrontendProcess,
     ]
     close: Callable[..., None]
     spawn: Mock
@@ -44,7 +37,7 @@ class AuxiliaryLogStartup:
     artifacts_dir: Path
 
 
-@pytest.fixture(params=["manager", "frontend", "terminal-frontend", "terminal-backend"])
+@pytest.fixture(params=["manager", "frontend"])
 def auxiliary_log_startup(
     request: pytest.FixtureRequest,
     tmp_path: Path,
@@ -56,12 +49,7 @@ def auxiliary_log_startup(
     spawn = Mock(side_effect=processes)
     ready = Mock()
     terminate = Mock()
-    module = {
-        "manager": browser_manager,
-        "frontend": browser_manager,
-        "terminal-frontend": terminal_frontend,
-        "terminal-backend": terminal_backend,
-    }[request.param]
+    module = browser_manager
     monkeypatch.setattr(module, "ensure_local_port_available", Mock())
     monkeypatch.setattr(module.shutil, "which", lambda _name: "node")
     monkeypatch.setattr(module, "load_or_create_workspace_id", lambda _root: "fixture-id")
@@ -84,22 +72,6 @@ def auxiliary_log_startup(
             artifacts_dir=artifacts_dir,
         )
         close = browser_manager.close_browser_frontend_process
-        process_count = 1
-    elif request.param == "terminal-frontend":
-        start = partial(
-            terminal_frontend.start_terminal_frontend_process,
-            workspace_root=workspace_root, frontend_port=18041,
-            artifacts_dir=artifacts_dir,
-        )
-        close = terminal_frontend.close_terminal_frontend_process
-        process_count = 1
-    else:
-        start = partial(
-            terminal_backend.start_terminal_backend,
-            workspace_root=str(workspace_root), backend_port=18041,
-            artifacts_dir=artifacts_dir,
-        )
-        close = terminal_backend.terminate_process
         process_count = 1
     return AuxiliaryLogStartup(
         start, close, spawn, ready, terminate, process_count, workspace_root, artifacts_dir,
@@ -293,96 +265,3 @@ def test_browser_manager_close_reports_all_owned_cleanup_errors(
         "模拟清理失败 1",
         "模拟清理失败 2",
     ]
-
-
-@pytest.fixture
-def terminal_frontend_startup(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock]:
-    process = Mock(spec=subprocess.Popen)
-    terminate = Mock()
-    monkeypatch.setattr(terminal_frontend, "ensure_local_port_available", Mock())
-    monkeypatch.setattr(terminal_frontend.shutil, "which", lambda _name: "node")
-    monkeypatch.setattr(
-        terminal_frontend, "load_or_create_workspace_id", lambda _root: "workspace-fixture",
-    )
-    monkeypatch.setattr(terminal_frontend.subprocess, "Popen", Mock(return_value=process))
-    monkeypatch.setattr(terminal_frontend, "terminate_process", terminate)
-    return process, terminate
-
-
-@pytest.mark.parametrize(
-    "startup_error", [RuntimeError("模拟就绪失败"), KeyboardInterrupt("模拟启动中断")],
-)
-def test_terminal_readiness_failure_terminates_owned_process(
-    terminal_frontend_startup: tuple[Mock, Mock],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    startup_error: BaseException,
-) -> None:
-    process, terminate = terminal_frontend_startup
-    monkeypatch.setattr(
-        terminal_frontend, "wait_for_http_ok", Mock(side_effect=startup_error),
-    )
-
-    with pytest.raises(type(startup_error)) as failure:
-        terminal_frontend.start_terminal_frontend_process(
-            workspace_root=tmp_path, frontend_port=18042,
-            artifacts_dir=tmp_path / "artifacts",
-        )
-
-    assert failure.value is startup_error
-    terminate.assert_called_once_with(process)
-
-
-def test_terminal_cleanup_failure_preserves_startup_error(
-    terminal_frontend_startup: tuple[Mock, Mock],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    process, terminate = terminal_frontend_startup
-    startup_error = KeyboardInterrupt("模拟启动中断")
-    cleanup_error = RuntimeError("模拟清理失败")
-    monkeypatch.setattr(
-        terminal_frontend, "wait_for_http_ok", Mock(side_effect=startup_error),
-    )
-    terminate.side_effect = cleanup_error
-
-    with pytest.raises(BaseExceptionGroup) as failure:
-        terminal_frontend.start_terminal_frontend_process(
-            workspace_root=tmp_path, frontend_port=18042,
-            artifacts_dir=tmp_path / "artifacts",
-        )
-
-    assert failure.value.exceptions == (startup_error, cleanup_error)
-    terminate.assert_called_once_with(process)
-
-
-async def test_manual_browser_startup_failure_closes_terminal_frontend(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request = Mock(spec=pytest.FixtureRequest)
-    request.node.fspath = Path(manual_browser_case.__file__)
-    request.node.path = Path(__file__)
-    terminal = Mock(spec=terminal_frontend.TerminalFrontendProcess)
-    close_terminal = Mock()
-    startup_error = RuntimeError("模拟 Browser 前端启动失败")
-    monkeypatch.setattr(manual_browser_case.shutil, "which", lambda _name: "chromium")
-    monkeypatch.setattr(manual_browser_case.subprocess, "run", Mock(
-        side_effect=AssertionError("生命周期单测不得执行外部命令或构建工作台"),
-    ))
-    monkeypatch.setattr(
-        manual_browser_case, "start_terminal_frontend_process", Mock(return_value=terminal),
-    )
-    monkeypatch.setattr(manual_browser_case, "close_terminal_frontend_process", close_terminal)
-    monkeypatch.setattr(
-        manual_browser_case, "start_browser_frontend_process", Mock(side_effect=startup_error),
-    )
-
-    with pytest.raises(RuntimeError) as failure:
-        await manual_browser_case.test_manual_browser_creation_attaches_and_accepts_first_navigation(
-            request=request, integration_workspace_root_path=str(tmp_path / "workspace"),
-            web_workbench_assets=tmp_path / "unused-workbench-assets",
-        )
-
-    assert failure.value is startup_error
-    close_terminal.assert_called_once_with(terminal)

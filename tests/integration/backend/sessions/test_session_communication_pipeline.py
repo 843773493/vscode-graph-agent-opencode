@@ -32,7 +32,6 @@ from tests.harness.python.browser_manager import (
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
 from tests.support.communication.federation import (
     CommunicationNode,
@@ -55,6 +54,7 @@ from tests.support.processes.workspace import (
     start_backend_process,
     terminate_process,
 )
+from tests.support.terminal_plugin import enable_terminal_plugin
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -218,11 +218,6 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
         environment.update({**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
         mount = None
         if getattr(request, "param", {}).get("resources", False):
-            terminal = await asyncio.to_thread(
-                start_terminal_backend, backend_port=ports.port(2),
-                workspace_root=str(workspace), artifacts_dir=context.artifacts_dir,
-            )
-            services.callback(terminate_process, terminal)
             browser = await asyncio.to_thread(
                 start_browser_manager_processes, workspace_root=workspace,
                 artifacts_dir=context.artifacts_dir, backend_port=ports.port(3),
@@ -231,7 +226,6 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
             services.callback(close_browser_manager_processes, browser)
             mount = MountedWorkspace(
                 load_or_create_workspace_id(workspace), workspace,
-                terminal_backend_url=f"http://127.0.0.1:{ports.port(2)}",
                 browser_backend_url=f"http://127.0.0.1:{ports.port(3)}",
             )
         backend = await asyncio.to_thread(
@@ -254,7 +248,11 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
                 await acquire_gateway_guest(client)
                 health = await client.get("/api/gateway/health")
                 assert health.status_code == 200, health.text
-                case = CommunicationCase(client, replay, workspace, artifacts, backend, gateway, health.json()["data"]["gateway_id"], environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
+                gateway_id = health.json()["data"]["gateway_id"]
+                if getattr(request, "param", {}).get("resources", False):
+                    await enable_terminal_plugin(client, gateway_id=gateway_id,
+                        workspace_id=load_or_create_workspace_id(workspace), artifacts_dir=artifacts)
+                case = CommunicationCase(client, replay, workspace, artifacts, backend, gateway, gateway_id, environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
                 case.startup_mount = mount
                 try:
                     yield case
