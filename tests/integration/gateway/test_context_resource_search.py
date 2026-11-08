@@ -7,6 +7,7 @@ import httpx
 import pytest
 from pydantic import TypeAdapter
 
+from app.abstractions.session_context import SessionContextSearchPatternError
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
@@ -15,6 +16,7 @@ from app.core.trace_middleware import (
 )
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
+    SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
 from app.schemas.search_federation import (
@@ -26,6 +28,7 @@ from app.schemas.search_federation import (
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
+    session_resource_uri,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
@@ -69,6 +72,48 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
                                             local_token_supplier=lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"])
     original_client = case.client
     actual: dict[str, object] = {}
+    query = {"category": "context", "operation": "content", "query": "scope-proof🧪", "match_mode": "literal", "limit": 1,
+             "context": {"case_sensitive": True, "max_chars": 16384}}
+
+    async def search(payload: dict, request_id: str) -> list[FederatedSearchEventDTO]:
+        events = [event async for event in transport.resource_search.search(FederatedSearchRequest.model_validate(payload), request_id=request_id)]
+        actual[request_id] = [event.model_dump(mode="json") for event in events]
+        return events
+
+    async def gateway_context_search(payload: dict, request_id: str) -> GatewayContextSearchResultDTO:
+        gateway_token = set_current_gateway_id(gateway_id)
+        request_token = set_current_request_id(request_id)
+        try:
+            result = await transport.search_gateway_context(GatewayContextSearchRequest.model_validate({
+                "source_gateway_id": gateway_id,
+                "resource_target": {"gateway_id": gateway_id,
+                    "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
+                    "uri": gateway_session_inventory_uri(gateway_id), "scope": "gateway"},
+                "resource_search": payload,
+            }))
+        finally:
+            reset_current_request_id(request_token)
+            reset_current_gateway_id(gateway_token)
+        actual[request_id] = result.model_dump(mode="json")
+        assert {event.request_id for event in result.events} == {request_id}
+        return result
+
+    expected_error = {
+        "owner": "session_context_query", "code": "invalid_regex", "reason": "invalid_search_pattern",
+        "message": "query 不是有效正则表达式: unterminated character set at position 0",
+    }
+
+    def require_pattern_failure(events: list[FederatedSearchEventDTO], request_id: str) -> None:
+        assert {event.request_id for event in events} == {request_id}
+        assert not any(event.type == "page" for event in events)
+        terminal, = [event.branch for event in events if event.type == "branch"]
+        assert terminal is not None and terminal.state == "failed" and terminal.code == expected_error["code"]
+        assert terminal.error_owner == expected_error["owner"] and terminal.reason == expected_error["reason"]
+        assert terminal.message == expected_error["message"] and terminal.http_status == 400 and not terminal.retryable
+        assert terminal.cursor is None and terminal.returned_results == 0
+        assert events[-1].summary is not None and events[-1].summary.state == "incomplete"
+        assert events[-1].summary.branches == [terminal] and events[-1].summary.returned_results == 0
+
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
             await acquire_gateway_guest(ui)
@@ -80,6 +125,54 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
             })
+            empty_request = {
+                "resource_identity": str(workspace_session_inventory_identity(owner["workspace_id"])),
+                "uri": workspace_session_inventory_uri(owner["workspace_id"]),
+                "scope": "workspace", "query": "[", "match_mode": "regex",
+            }
+            empty = await ui.post("/api/v1/context/search", json={**empty_request, "query": r"never.*"})
+            assert empty.status_code == 200, empty.text
+            assert empty.json()["data"]["total_matches"] == 0 and empty.json()["data"]["matches"] == []
+            actual["empty_inventory"] = empty.json()
+            invalid_query = {**query, "query": "[", "match_mode": "regex"}
+            for endpoint, payload in (("/api/v1/context/search", empty_request),
+                                      ("/api/v1/search", {"workspace_id": owner["workspace_id"], **invalid_query})):
+                for client_name, client in (("backend", original_client), ("gateway", ui)):
+                    request_id = f"req_invalid_regex_{client_name}_{'context' if endpoint.endswith('context/search') else 'provider'}"
+                    rejected = await client.post(endpoint, json=payload,
+                        headers={"X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": request_id})
+                    actual[request_id] = {"status": rejected.status_code, "headers": dict(rejected.headers), "body": rejected.json()}
+                    assert rejected.status_code == 400, rejected.text
+                    assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == request_id
+                    assert rejected.json()["detail"] == expected_error
+            failed = await search({"scope": {"mode": "origin", "origin": owner}, "queries": [invalid_query]}, "req_invalid_regex_sse")
+            require_pattern_failure(failed, "req_invalid_regex_sse")
+            failed_json = await gateway_context_search({"scope": {"mode": "all"}, "queries": [invalid_query]}, "req_invalid_regex_json")
+            require_pattern_failure(failed_json.events, "req_invalid_regex_json")
+
+            exact_request = {**empty_request, "uri": workspace_session_inventory_uri(owner["workspace_id"], gateway_authority=gateway_id)}
+            exact_target = {"gateway_id": gateway_id, **{key: exact_request[key] for key in ("resource_identity", "uri", "scope")}}
+            relay_id = "req_invalid_regex_exact_relay"
+            relay = await ui.post("/api/gateway/federation/relay", headers={"X-Request-ID": relay_id}, json={
+                "operation": "read", "resource_target": exact_target,
+                "body": {"source_gateway_id": gateway_id, "resource_target": exact_target, "search": exact_request},
+            })
+            actual[relay_id] = {"status": relay.status_code, "headers": dict(relay.headers), "body": relay.json()}
+            assert relay.status_code == 409, relay.text
+            assert relay.headers["X-Request-ID"] == relay.json()["request_id"] == relay_id
+            assert relay.json()["detail"]["code"] == "federation-target-owner-rejected"
+            assert relay.json()["detail"]["detail"] == expected_error
+            gateway_token = set_current_gateway_id(gateway_id)
+            request_token = set_current_request_id("req_invalid_regex_exact_client")
+            try:
+                with pytest.raises(SessionContextSearchPatternError) as caught:
+                    await transport.search_resource_context(SessionContextSearchRequest.model_validate(exact_request))
+                assert caught.value.detail() == expected_error
+                assert "request_id=req_invalid_regex_exact_client" in caught.value.__notes__[0]
+                actual["exact_client_error"] = {"detail": caught.value.detail(), "notes": caught.value.__notes__}
+            finally:
+                reset_current_request_id(request_token)
+                reset_current_gateway_id(gateway_token)
             case.client = ui
             session_id = await create_session(ui, "Context Search Execution")
             await case.plan(session_id, [{"content": "assistant scope-proof🧪 done"}])
@@ -88,31 +181,34 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         assert isinstance(accepted["job_id"], str)
         await _job(case, accepted["job_id"])
         assert not transport._http_client.cookies
-        query = {"category": "context", "operation": "content", "query": "scope-proof🧪", "match_mode": "literal", "limit": 1,
-                 "context": {"case_sensitive": True, "max_chars": 16384}}
 
-        async def search(payload: dict, request_id: str) -> list[FederatedSearchEventDTO]:
-            events = [event async for event in transport.resource_search.search(FederatedSearchRequest.model_validate(payload), request_id=request_id)]
-            actual[request_id] = [event.model_dump(mode="json") for event in events]
-            return events
-
-        async def gateway_context_search(payload: dict, request_id: str) -> GatewayContextSearchResultDTO:
-            gateway_token = set_current_gateway_id(gateway_id)
-            request_token = set_current_request_id(request_id)
-            try:
-                result = await transport.search_gateway_context(GatewayContextSearchRequest.model_validate({
-                    "source_gateway_id": gateway_id,
-                    "resource_target": {"gateway_id": gateway_id,
-                        "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
-                        "uri": gateway_session_inventory_uri(gateway_id), "scope": "gateway"},
-                    "resource_search": payload,
-                }))
-            finally:
-                reset_current_request_id(request_token)
-                reset_current_gateway_id(gateway_token)
-            actual[request_id] = result.model_dump(mode="json")
-            assert {event.request_id for event in result.events} == {request_id}
-            return result
+        regex_query = {**query, "query": r"scope-proof🧪 (user input|done)$", "match_mode": "regex", "limit": 20}
+        regex_sse = await search({"scope": {"mode": "origin", "origin": owner}, "queries": [regex_query]}, "req_context_valid_regex_sse")
+        regex_page, = [event.page for event in regex_sse if event.type == "page"]
+        assert regex_page is not None and regex_page.context is not None and regex_page.context.total_matches == 2
+        regex_json = await gateway_context_search({"scope": {"mode": "all"}, "queries": [regex_query]}, "req_context_valid_regex_json")
+        regex_json_page, = [event.page for event in regex_json.events if event.type == "page"]
+        assert regex_json_page is not None and regex_json_page.context == regex_page.context
+        assert regex_sse[-1].summary is not None and regex_sse[-1].summary.state == "complete"
+        assert regex_json.events[-1].summary is not None and regex_json.events[-1].summary.state == "complete"
+        gateway_token = set_current_gateway_id(gateway_id)
+        request_token = set_current_request_id("req_context_valid_regex_exact")
+        try:
+            regex_exact = await transport.search_resource_context(SessionContextSearchRequest.model_validate({
+                **exact_request, "query": regex_query["query"], "case_sensitive": True, "max_results": 20,
+            }))
+            actual["valid_regex_exact"] = regex_exact.model_dump(mode="json")
+            # 同 Gateway 的精确 relay 沿原简称，集合和命中都保持原 Workspace／Session 归属。
+            expected_exact = regex_page.context.model_copy(update={
+                "uri": workspace_session_inventory_uri(owner["workspace_id"]),
+                "matches": [match.model_copy(update={"uri": session_resource_uri(owner["workspace_id"], session_id)})
+                            for match in regex_page.context.matches],
+            })
+            assert regex_exact.returned_chars == len(regex_exact.model_dump_json())
+            assert regex_exact.model_dump(exclude={"returned_chars"}) == expected_exact.model_dump(exclude={"returned_chars"})
+        finally:
+            reset_current_request_id(request_token)
+            reset_current_gateway_id(gateway_token)
 
         gateway_first = await gateway_context_search({"scope": {"mode": "all"}, "queries": [query]}, "req_gateway_context_first")
         gateway_page, = [event.page for event in gateway_first.events if event.type == "page"]
@@ -247,8 +343,34 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         assert len(case.requests()) == 5
         actual["gateway_tool"] = gateway_tool.model_dump(mode="json")
         actual["gateway_final_wire"] = gateway_wire
-        case.write_actual("context-search", actual)
+
+        # 精确资源经真实工具入口走 relay，原拒绝不能升级为 Agent 内部失败。
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
+            await acquire_gateway_guest(ui)
+            ui.headers.update({"X-BoxTeam-Workspace-Id": owner["workspace_id"], "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"]})
+            invalid_caller = await create_session(ui, "Invalid Context Regex Caller")
+            invalid_calls = await case.plan(invalid_caller, [
+                _tool_reply("invoke_extension_tool", {"tool_name": "search_context", "arguments": exact_request}, "call_invalid_context_regex"),
+                {"content": "CONTEXT_REGEX_REJECTED"},
+            ])
+            case.client = ui
+            ui.headers["X-Request-ID"] = "req_invalid_regex_tool"
+            invalid_execution = await _send(case, invalid_caller, "报告上下文查询参数错误。")
+        case.client = original_client
+        assert isinstance(invalid_execution["job_id"], str)
+        await _job(case, invalid_execution["job_id"])
+        invalid_result = case.tool_result(invalid_calls[0] + ":tool-call:call_invalid_context_regex")
+        assert {key: invalid_result[key] for key in expected_error} == expected_error
+        assert invalid_result["request_id"] == "req_invalid_regex_tool"
+        invalid_wire = case.request(invalid_calls[1])
+        invalid_messages = [message for message in invalid_wire["messages"] if message["role"] == "tool"]
+        assert len(invalid_messages) == 1 and invalid_messages[0]["name"] == "invoke_extension_tool"
+        assert TypeAdapter(dict[str, str]).validate_json(invalid_messages[0]["content"]) == invalid_result
+        assert len(case.requests()) == 7
+        actual["invalid_tool"] = invalid_result
+        actual["invalid_tool_final_wire"] = invalid_wire
     finally:
+        case.write_actual("context-search", actual)
         case.client = original_client
         await transport.aclose()
         await asyncio.to_thread(close_gateway_process, gateway)

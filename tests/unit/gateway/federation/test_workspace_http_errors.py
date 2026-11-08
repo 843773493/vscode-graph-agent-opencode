@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 import pytest
 
+from app.abstractions.session_context import SessionContextSearchPatternError
 from app.core.session_control_communication_ledger.observations import (
     OBSERVATION_ERROR_CODES,
     observation_error_code,
@@ -237,6 +238,8 @@ async def test_workspace_named_rejection_requires_original_request_identity(
     ("/api/v1/resources/navigation", 403, "unshared", "target_not_resolvable", {}),
     ("/api/v1/context/read", 400, {"code": "unsupported_view"}, FEDERATION_TARGET_OWNER_REJECTED, {"owner": "resource_uri_resolver", "code": "unsupported_view"}),
     ("/api/v1/context/search", 409, {"code": "snapshot_changed"}, FEDERATION_TARGET_OWNER_REJECTED, {"owner": "context_revision", "code": "snapshot_changed"}),
+    ("/api/v1/context/search", 400, SessionContextSearchPatternError("原正则解析器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
+     SessionContextSearchPatternError("原正则解析器拒绝").detail()),
     (f"/api/v1/sessions/{TARGET_SESSION}/communication-observations", 409, {"code": "read-snapshot-invalid"}, FEDERATION_TARGET_OWNER_REJECTED, {"owner": "communication_observation", "code": "read-snapshot-invalid"}),
 ])
 @pytest.mark.parametrize("identity", ["valid", "body_drift", "header_drift", "body_missing"])
@@ -258,3 +261,20 @@ async def test_workspace_semantic_rejection_requires_original_request_identity(
     else:
         assert caught.value.code == FEDERATION_SESSION_MAIN_UNAVAILABLE and caught.value.detail == {}
         assert "request_id 漂移" in caught.value.message
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner", "another_owner"), ("code", "another_code"), ("reason", "another_reason"),
+])
+async def test_context_pattern_rejection_does_not_upgrade_unregistered_owner_detail(
+    http_context: _HTTPContext, field: str, value: str,
+) -> None:
+    http_context.status = 400
+    http_context.data = {"request_id": REQUEST_ID, "detail": {
+        **SessionContextSearchPatternError("原解析错误").detail(), field: value,
+    }}
+    with pytest.raises(FederationError) as caught:
+        await http_context.port._request(
+            workspace_id=WORKSPACE_ID, method="POST", path="/api/v1/context/search", origin="gateway_source", body={},
+        )
+    assert caught.value.code == FEDERATION_SESSION_MAIN_UNAVAILABLE and caught.value.detail == {}

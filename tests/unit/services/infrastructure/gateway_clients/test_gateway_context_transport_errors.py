@@ -8,7 +8,10 @@ from collections.abc import Awaitable, Callable
 import httpx
 import pytest
 
-from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.abstractions.session_context import (
+    SessionContextSearchPatternError,
+    WorkspaceSessionContextAccessError,
+)
 from app.schemas.internal_v2.session_context import SessionContextSearchRequest
 from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
 from app.services.infrastructure.gateway_client_common import (
@@ -178,3 +181,41 @@ async def test_context_error_codes_require_matching_response_identity(
         assert ", code=" not in public and ", owner=" not in public and "owner_code=" not in public
     assert "private" not in public and "stage=http_response, status=409" in public
     assert any(responses[0].text[:2000] in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize("context_operation,expects_pattern", [
+    ("read", False), ("search", True), ("fork", False), ("inventory", False),
+], indirect=["context_operation"])
+@pytest.mark.parametrize("mutation", ["valid", "body_id", "header_id", "owner", "code", "reason", "message", "status"])
+async def test_context_pattern_error_rehydrates_only_original_owner_and_request(
+    context_operation: Callable[[], Awaitable[object]], monkeypatch: pytest.MonkeyPatch, mutation: str, expects_pattern: bool,
+) -> None:
+    original = SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0")
+    requests: list[httpx.Request] = []
+
+    async def respond(_client, method, url, **kwargs):
+        request_id = kwargs["headers"].get("X-Request-ID")
+        detail: dict[str, object] = {**original.detail()}
+        if mutation in {"owner", "code", "reason"}:
+            detail[mutation] = "unregistered"
+        elif mutation == "message":
+            detail["message"] = {"private": "/private/context"}
+        request = httpx.Request(method, url, headers=kwargs["headers"])
+        requests.append(request)
+        return httpx.Response(500 if mutation == "status" else 409,
+            request=request,
+            json={"request_id": "other" if mutation == "body_id" else request_id,
+                  "detail": {"code": "federation-target-owner-rejected", "detail": detail}},
+            headers={"X-Request-ID": "other" if mutation == "header_id" else request_id} if request_id is not None else {})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    expected_exception = (SessionContextSearchPatternError if mutation == "valid" and expects_pattern
+                          else RuntimeError if mutation == "status" else WorkspaceSessionContextAccessError)
+    with pytest.raises(expected_exception) as caught:
+        await context_operation()
+    assert type(caught.value) is expected_exception
+    if isinstance(caught.value, SessionContextSearchPatternError):
+        assert caught.value.detail() == original.detail()
+        assert f"request_id={requests[0].headers['X-Request-ID']}" in caught.value.__notes__[0]
+    else:
+        assert "query 不是有效正则表达式" not in str(caught.value) and "/private/context" not in str(caught.value)

@@ -6,7 +6,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
-from app.abstractions.session_context import SessionContextRevisionChangedError
+from app.abstractions.session_context import (
+    SessionContextRevisionChangedError,
+    SessionContextSearchPatternError,
+)
 from app.api.deps import (
     get_request_id,
     get_workspace_search_service,
@@ -97,6 +100,8 @@ async def search_workspace(
         raise
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
+    except SessionContextSearchPatternError as error:
+        raise HTTPException(status_code=400, detail=error.detail()) from error
     except (CatalogCursorError, ThreadSearchCursorError, ThreadCatalogRevisionChangedError) as error:
         raise HTTPException(status_code=409, detail=error.detail()) from error
     except WorkspaceMessageSearchCursorError as error:

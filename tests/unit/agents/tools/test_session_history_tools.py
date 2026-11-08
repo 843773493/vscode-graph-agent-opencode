@@ -6,12 +6,16 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
-from app.abstractions.session_context import SessionContextRevisionChangedError
+from app.abstractions.session_context import (
+    SessionContextRevisionChangedError,
+    SessionContextSearchPatternError,
+)
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
@@ -25,7 +29,12 @@ from app.core import failures
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
-from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
 from app.schemas.internal_v2.session_context import (
     SessionContextReadResultDTO,
     SessionContextSearchResultDTO,
@@ -123,6 +132,30 @@ async def test_local_search_keeps_current_workspace_query(history_context):
     result = json.loads(await create_search_context_tool(history_context).ainvoke({**_session_input(), "query": "ALPHA"}))
     assert result["revision"] == "local-search"
     assert history_context.session_context_query_service.calls[0][0] == "search"
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("enveloped", [False, True])
+async def test_invalid_regex_tool_keeps_typed_error_and_original_request_identity(
+    history_context, monkeypatch: pytest.MonkeyPatch, remote: bool, enveloped: bool,
+) -> None:
+    error = SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0")
+    query = AsyncMock(side_effect=error)
+    service = history_context.workspace_session_context_client if remote else history_context.session_context_query_service
+    monkeypatch.setattr(service, "search_resource_context" if remote else "search_context", query)
+    target = create_search_context_tool(history_context)
+    tool = (create_extension_tool_invoker_tool([target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]))
+            if enveloped else target)
+    arguments = {**_session_input(REMOTE_WORKSPACE if remote else WORKSPACE_ID), "query": "[", "match_mode": "regex"}
+    token = set_current_request_id("req_invalid_context_regex")
+    try:
+        result = await tool.ainvoke({"type": "tool_call", "id": "invalid_regex", "name": tool.name,
+                                    "args": {"tool_name": target.name, "arguments": arguments} if enveloped else arguments})
+    finally:
+        reset_current_request_id(token)
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert json.loads(result.text) == {**error.detail(), "request_id": "req_invalid_context_regex"}
+    query.assert_awaited_once()
 
 
 async def test_gateway_inventory_requires_current_gateway_identity(history_context):

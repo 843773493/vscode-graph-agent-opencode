@@ -6,14 +6,23 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api import search, session_navigation, session_turns
-from app.api.deps import get_workspace_search_service, verify_local_token
+from app.abstractions.session_context import SessionContextSearchPatternError
+from app.api import context, search, session_navigation, session_turns
+from app.api.deps import (
+    get_session_context_query_service,
+    get_workspace_search_service,
+    verify_local_token,
+)
 from app.core.session_control_thread_catalog.search import (
     ThreadCatalogRevisionChangedError,
 )
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.search import SearchProviderCapabilityDTO
 from app.services.business.search.service import WorkspaceSearchService
+from app.services.business.session_context_resource import (
+    workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
+)
 from app.services.business.session_navigation.thread_search import (
     ThreadSearchCursorError,
 )
@@ -35,13 +44,33 @@ def search_api():
     application.add_middleware(TraceMiddleware)
     application.add_exception_handler(HTTPException, workspace_app.exception_handlers[HTTPException])
     application.include_router(search.router, prefix="/api/v1")
+    application.include_router(context.router, prefix="/api/v1")
     application.include_router(session_navigation.router, prefix="/api/v1")
     application.include_router(session_turns.router, prefix="/api/v1")
     application.dependency_overrides[verify_local_token] = lambda: "test-search-token"
     application.dependency_overrides[get_workspace_search_service] = lambda: service
+    application.dependency_overrides[get_session_context_query_service] = lambda: Mock(search_context=query)
     with TestClient(application, raise_server_exceptions=False,
                     headers={"X-BoxTeam-Gateway-Id": "gateway_" + "a" * 32, "X-Request-ID": "req-search-failure"}) as client:
         yield client, query
+
+
+@pytest.mark.parametrize("endpoint", ["/api/v1/context/search", "/api/v1/search"])
+def test_invalid_context_regex_keeps_same_owner_detail_on_both_routes(search_api, endpoint):
+    client, query = search_api
+    error = SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0")
+    query.side_effect = error
+    payload = {"query": "[", "match_mode": "regex"}
+    if endpoint == "/api/v1/search":
+        payload.update(workspace_id="ws", category="context", operation="content")
+    else:
+        payload.update(resource_identity=str(workspace_session_inventory_identity("ws")),
+                       uri=workspace_session_inventory_uri("ws"), scope="workspace")
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 400
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req-search-failure"
+    assert response.json()["detail"] == error.detail()
+    query.assert_awaited_once()
 
 
 @pytest.mark.parametrize("category,error,status,code", [

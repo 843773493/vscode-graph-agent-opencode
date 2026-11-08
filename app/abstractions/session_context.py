@@ -42,6 +42,17 @@ class WorkspaceSessionContextAccessError(RuntimeError):
     """模型可通过修正目标标识或提醒用户来处理的跨工作区访问错误。"""
 
 
+class SessionContextSearchPatternError(ValueError):
+    """原上下文查询 owner 在读取前拒绝非法正则。"""
+
+    owner = "session_context_query"
+    code = "invalid_regex"
+    reason = "invalid_search_pattern"
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": self.owner, "code": self.code, "reason": self.reason, "message": str(self)}
+
+
 class SessionContextRevisionChangedError(RuntimeError):
     """后续读取所绑定的上下文 revision 已发生变化。"""
 

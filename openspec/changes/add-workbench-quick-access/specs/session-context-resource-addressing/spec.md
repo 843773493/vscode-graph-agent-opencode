@@ -30,6 +30,17 @@ Gateway 资源地址解析 SHALL 在保留原 `uri`、文件根及定位字段�
 - **WHEN** 沿原范围续查，或把旧 cursor 用于不同来源／查询／版本
 - **THEN** 前者保留原 owner 的分页结果，后者按原合同明确拒绝，不悄悄重查或换成普通消息搜索
 
+### Requirement: 上下文非法正则由原查询 owner 在读取前拒绝
+
+上下文查询 owner SHALL 在读取候选、会话或正文前编译显式正则，零候选工作区同样拒绝非法表达式。直接上下文 HTTP 与统一搜索 HTTP SHALL 返回 400，保留 `owner=session_context_query`、`code=invalid_regex`、`reason=invalid_search_pattern` 和正则解析器的详细错误；联邦搜索分支 SHALL 保留相同归属、代码、原因及原 request_id，并明确不可重试，不将输入错误改写为 `owner_rejected` 或目标不可达。
+
+精确资源的上下文 relay SHALL 以原 owner detail 传递该拒绝；客户端仅在原 request_id、owner、code 和 reason 均匹配时接受该具名错误。Agent 工具 SHALL 返回错误状态与结构化原诊断，不依赖自然语言判断错误类别。合法正则、原 cursor 与 revision 冲突合同不变。
+
+#### Scenario: 空上下文库存仍拒绝非法正则
+
+- **WHEN** 没有会话的工作区收到非法正则查询
+- **THEN** 原 owner 在开始读取库存前拒绝；直接 HTTP、联邦 SSE 和 Gateway inventory JSON relay 均保留原诊断及请求身份，不交付结果页或提供无效输入重试
+
 ### Requirement: Gateway 上下文搜索采用唯一分支合同
 
 Gateway inventory 范围的 `search_context` SHALL 经既有上下文 `read` grant 传递类型化 `GatewayContextSearchRequest`，在目标 Gateway 调用与普通资源搜索相同的范围解析、调度、期限和输出准入；跨 Gateway 时保留原 origin、目标、通道及授权约束，不转投发起 Gateway 或活动工作区。该授权只接受 `context/content`，MUST NOT 据此执行文件、消息或其它类别查询。

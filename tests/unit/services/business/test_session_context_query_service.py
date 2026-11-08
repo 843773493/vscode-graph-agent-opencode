@@ -3,11 +3,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -16,6 +17,7 @@ from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
     SessionContextHistoryProjection,
     SessionContextRevisionChangedError,
+    SessionContextSearchPatternError,
 )
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
@@ -692,6 +694,38 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes(
                 revision=first.revision,
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_empty_inventory_rejects_invalid_regex_before_any_candidate_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookup = _FakeSessionLookup()
+    lookup.sessions.clear()
+    read_inventory = AsyncMock(wraps=lookup.list)
+    monkeypatch.setattr(lookup, "list", read_inventory)
+    source = _FakeMessageSource()
+    source.records.clear()
+    service = SessionContextQueryService(
+        message_source=source, session_lookup=lookup,
+        assembly_source=create_autospec(SessionContextAssemblySourceProtocol, spec_set=True),
+        workspace_id=BACKEND_WORKSPACE_ID,
+    )
+
+    with pytest.raises(SessionContextSearchPatternError) as caught:
+        await service.search_context(_workspace_inventory_search_request(query="[", match_mode="regex"))
+    assert caught.value.detail() == {
+        "owner": "session_context_query", "code": "invalid_regex", "reason": "invalid_search_pattern",
+        "message": "query 不是有效正则表达式: unterminated character set at position 0",
+    }
+    assert isinstance(caught.value.__cause__, re.error)
+    read_inventory.assert_not_awaited()
+    assert source.context_state_owners == []
+
+    empty = await service.search_context(_workspace_inventory_search_request(query=r"never.*", match_mode="regex"))
+    assert empty.total_matches == 0 and empty.matches == [] and not empty.truncated
+    read_inventory.assert_awaited_once()
+    assert source.context_state_owners == []
 
 
 @pytest.mark.asyncio

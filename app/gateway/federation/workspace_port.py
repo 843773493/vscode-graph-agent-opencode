@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import httpx
 from pydantic import ValidationError
 
+from app.abstractions.session_context import SessionContextSearchPatternError
 from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_request_id,
@@ -262,6 +263,11 @@ class WorkspaceSessionMainPort:
                 if isinstance(payload, dict):
                     if path == "/api/v1/resources/navigation" and isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
                         raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标文件操作失败", detail=detail)
+                    if (path == "/api/v1/context/search" and response.status_code == 400
+                            and isinstance(detail, dict) and detail.get("owner") == SessionContextSearchPatternError.owner
+                            and detail.get("code") == SessionContextSearchPatternError.code
+                            and detail.get("reason") == SessionContextSearchPatternError.reason):
+                        raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝上下文查询", detail=detail)
                     code = detail.get("code") if isinstance(detail, dict) else None
                     if isinstance(code, str) and (
                         code in RESOURCE_URI_RESOLVE_REASON_CODES or code == "snapshot_changed"

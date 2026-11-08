@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable
 from typing import Literal, TypeVar
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.session_context import (
     SessionContextRevisionChangedError,
+    SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
 from app.agents.custom_tools import CustomToolFactoryContext
@@ -15,7 +17,11 @@ from app.core.failures import report_failure
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
-from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
+from app.core.trace_middleware import (
+    get_current_gateway_id,
+    get_current_request_id,
+    require_current_gateway_id,
+)
 from app.gateway.federation.grants import ContextGrantTarget
 from app.schemas.gateway.search import GatewaySearchScopeRequest
 from app.schemas.internal_v2.search import WorkspaceContextSearchOptionsDTO
@@ -137,6 +143,11 @@ def _validate_target_identity(
 async def _result_json(operation: Awaitable[ResultModel]) -> str:
     try:
         result = await operation
+    except SessionContextSearchPatternError as error:
+        detail = error.detail()
+        if request_id := get_current_request_id():
+            detail["request_id"] = request_id
+        raise ToolException(json.dumps(detail, ensure_ascii=False)) from error
     except (WorkspaceSessionContextAccessError, SessionContextRevisionChangedError, RemoteObservationError) as error:
         raise ToolException(str(error)) from error
     return result.model_dump_json()

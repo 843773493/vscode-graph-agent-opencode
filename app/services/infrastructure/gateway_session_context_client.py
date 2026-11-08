@@ -7,7 +7,10 @@ from typing import TypeVar
 import httpx
 from pydantic import BaseModel
 
-from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.abstractions.session_context import (
+    SessionContextSearchPatternError,
+    WorkspaceSessionContextAccessError,
+)
 from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_request_id,
@@ -177,7 +180,8 @@ class GatewaySessionContextClient:
         json_body: dict[str, object] | None = None,
     ) -> ResponseDTO:
         response, request_id = await self._send_request(method, path, json_body=json_body)
-        self._raise_http_error(response, method=method, path=path, request_id=request_id)
+        self._raise_http_error(response, method=method, path=path, request_id=request_id,
+                               context_search=response_type is SessionContextSearchResultDTO)
         try:
             return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
         except (KeyError, TypeError, ValueError) as error:
@@ -251,9 +255,16 @@ class GatewaySessionContextClient:
 
     @staticmethod
     def _raise_http_error(
-        response: httpx.Response, *, method: str, path: str, request_id: str | None,
+        response: httpx.Response, *, method: str, path: str, request_id: str | None, context_search: bool = False,
     ) -> None:
         if not response.is_success:
+            try:
+                payload = response.json()
+            except ValueError:
+                # 非 JSON 拒绝仍按原 HTTP status 抛错，不把正文升级为错误协议。
+                payload = None
+            identity_valid = (request_id is not None and isinstance(payload, dict)
+                              and payload.get("request_id") == request_id and response.headers.get("X-Request-ID") == request_id)
             message = (
                 "Gateway 上下文查询失败: "
                 f"method={method}, path={path}, request_id={request_id}, "
@@ -261,21 +272,28 @@ class GatewaySessionContextClient:
             )
             if response.status_code == 404:
                 message += "; Gateway 工作区不存在或目标资源不可访问"
-            message += GatewaySessionContextClient._http_error_codes(response, request_id=request_id)
+            if identity_valid:
+                message += GatewaySessionContextClient._http_error_codes(payload)
             logger.error("%s；原始响应=%s", message, response.text[:2000])
+            federation = payload.get("detail") if isinstance(payload, dict) else None
+            detail = federation.get("detail") if isinstance(federation, dict) else None
+            original_message = detail.get("message") if isinstance(detail, dict) else None
+            if (context_search and response.status_code == 409 and identity_valid
+                    and isinstance(federation, dict) and federation.get("code") == FEDERATION_TARGET_OWNER_REJECTED
+                    and isinstance(detail, dict) and detail.get("owner") == SessionContextSearchPatternError.owner
+                    and detail.get("code") == SessionContextSearchPatternError.code
+                    and detail.get("reason") == SessionContextSearchPatternError.reason and isinstance(original_message, str)):
+                error = SessionContextSearchPatternError(original_message)
+                error.add_note(message)
+                raise error
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)
 
     @staticmethod
-    def _http_error_codes(response: httpx.Response, *, request_id: str | None) -> str:
+    def _http_error_codes(payload: object) -> str:
         """只投影原 owner 登记的拒绝码，任意 message/detail 留在原始日志。"""
-        try:
-            payload = response.json()
-        except ValueError:
-            # 非 JSON 拒绝仍按原 HTTP status 抛错，不把正文升级为错误协议。
-            return ""
-        if request_id is None or not isinstance(payload, dict) or payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
+        if not isinstance(payload, dict):
             return ""
         detail = payload.get("detail")
         if not isinstance(detail, dict):

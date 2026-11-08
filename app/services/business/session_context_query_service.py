@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
     SessionContextMessageSourceProtocol,
+    SessionContextSearchPatternError,
     SessionInformationSourceProtocol,
     SessionLookupProtocol,
 )
@@ -214,6 +215,7 @@ class SessionContextQueryService:
             scope=request.scope,
         )
         self._require_workspace_resource(resource)
+        expression = self._compile_search_expression(request)
         async with AsyncExitStack() as admission:
             if resource.session_id is not None:
                 await admission.enter_async_context(self._session_lookup.session_read_admission(resource.session_id))
@@ -242,7 +244,6 @@ class SessionContextQueryService:
             )
             if char_offset != 0:
                 raise ValueError("search cursor 不支持 item 内字符偏移")
-            expression = self._compile_search_expression(request)
             found: list[tuple[_SearchCandidate, re.Match[str]]] = []
             for candidate in candidates:
                 match = expression.search(candidate.text)
@@ -720,7 +721,7 @@ class SessionContextQueryService:
         try:
             return re.compile(pattern, flags)
         except re.error as error:
-            raise ValueError(f"query 不是有效正则表达式: {error}") from error
+            raise SessionContextSearchPatternError(f"query 不是有效正则表达式: {error}") from error
 
     async def _list_sessions(self, workspace_id: str | None) -> list[SessionDTO]:
         result = await self._session_lookup.list(
