@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getWorkspaceRawFileBlob } from "../../../api";
+import { onGatewayUserSessionInvalidated } from "../../../api/http";
 import {
   resolveWorkspaceMarkdownTarget,
   type WorkspaceMarkdownTarget,
@@ -53,6 +54,17 @@ function WorkspaceFileMarkdownImage({
     if (!isWithinPreloadMargin) return;
     const controller = new AbortController();
     let objectUrl: string | null = null;
+    const releaseObjectUrl = () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    };
+    // 下载完成后仍由展示组件持有身份订阅，撤销已显示和等待浏览器解码的图片。
+    const releaseIdentity = onGatewayUserSessionInvalidated(apiPort, () => {
+      controller.abort();
+      releaseObjectUrl();
+      setResolvedSrc(null);
+      setError("Gateway 或用户身份已改变，请重新打开图片");
+    });
     void getWorkspaceRawFileBlob(
       apiPort,
       target.path,
@@ -69,8 +81,9 @@ function WorkspaceFileMarkdownImage({
     });
 
     return () => {
+      releaseIdentity();
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      releaseObjectUrl();
     };
   }, [apiPort, isWithinPreloadMargin, target.fragment, target.path, workspaceId]);
 

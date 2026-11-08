@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../../api";
 import WorkspaceMarkdownImage from "./WorkspaceMarkdownImage";
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
+import { invalidateGatewayUserSession } from "../../../api/http";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -223,3 +224,57 @@ test("外部 Markdown 图片使用浏览器原生懒加载，不请求工作区�
   expect(getBlob).not.toHaveBeenCalled();
   act(() => renderer.unmount());
 });
+
+for (const pending of [false, true]) {
+  test(`身份失效撤销${pending ? "在途" : "已显示"}工作区图片，旧结果不能恢复展示`, async () => {
+    const observers = installIntersectionObserver();
+    const response = deferred<Blob>();
+    const getBlob = spyOn(api, "getWorkspaceRawFileBlob").mockImplementation(async () => (
+      pending ? await response.promise : new Blob(["image"])
+    ));
+    const createUrl = spyOn(URL, "createObjectURL").mockReturnValue("blob:identity-image");
+    const revokeUrl = spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    restoreFns.push(() => getBlob.mockRestore(), () => createUrl.mockRestore(), () => revokeUrl.mockRestore());
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(markdownImage("./identity.png", "身份图片"), {
+        createNodeMock: element => element.type === "span" ? {} : null,
+      });
+    });
+    // 失败也释放真实组件的订阅，避免污染下一场景。
+    restoreFns.unshift(() => act(() => renderer.unmount()));
+    act(() => observers[0]!.intersect());
+    await flush();
+    expect(renderer.root.findAllByType("img")).toHaveLength(pending ? 0 : 1);
+    expect(getBlob).toHaveBeenCalledTimes(1);
+    const signal = getBlob.mock.calls[0]?.[3];
+
+    act(() => invalidateGatewayUserSession(8015));
+    expect(signal?.aborted).toBe(false);
+    expect(revokeUrl).not.toHaveBeenCalled();
+
+    act(() => invalidateGatewayUserSession(8014));
+    expect(signal?.aborted).toBe(true);
+    expect(renderer.root.findAllByType("img")).toHaveLength(0);
+    expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("身份已改变");
+    expect(revokeUrl.mock.calls).toEqual(pending ? [] : [["blob:identity-image"]]);
+    response.resolve(new Blob(["late image"]));
+    await flush();
+    expect(createUrl).toHaveBeenCalledTimes(pending ? 0 : 1);
+    expect(renderer.root.findAllByType("img")).toHaveLength(0);
+    expect(getBlob).toHaveBeenCalledTimes(1);
+
+    // 新 input 按原请求链读取；旧 input 的释放不能撤销它。
+    getBlob.mockResolvedValue(new Blob(["new identity image"]));
+    act(() => renderer.update(markdownImage("./next.png", "新身份图片")));
+    act(() => observers[1]!.intersect());
+    await flush();
+    expect(renderer.root.findByType("img").props.alt).toBe("新身份图片");
+    expect(getBlob.mock.calls[1]?.[3]?.aborted).toBe(false);
+    act(() => renderer.unmount());
+    const released = revokeUrl.mock.calls.length;
+    act(() => invalidateGatewayUserSession(8014));
+    expect(revokeUrl).toHaveBeenCalledTimes(released);
+    expect(createUrl.mock.calls.length).toBe(released);
+  });
+}

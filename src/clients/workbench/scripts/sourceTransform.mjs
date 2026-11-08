@@ -314,6 +314,35 @@ ${entry}`);
 ${entry}`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts')) {
+      contents = `import { onGatewayUserSessionInvalidated } from ${JSON.stringify(resolve(root, '../web/src/api/http.js'))};\n` + contents;
+      // 身份撤销沿原 input 释放 watcher、解码与 URL；旧 input 不能自动重读或恢复旧图。
+      const watch = 'this._inputDisposables.add(this._fileService.onDidFilesChange(onDidFilesChange));';
+      contents = replaceOnce(contents, watch, `${watch}
+if (input.resource.scheme === 'boxteam-file') {
+  this._inputDisposables.add(toDisposable(onGatewayUserSessionInvalidated(0, () => {
+    this._inputDisposables.clear();
+    this._loadId++;
+    this._viewer?.clear();
+    this._objectUrl.clear();
+    this._fileSize = undefined;
+    this._setMessage(localize('imagePreview.identityChanged', "Gateway 或用户身份已改变，请重新打开图片"));
+    this._onDidChangeImageInfo.fire();
+  })));
+}`);
+      const read = 'const content = await this._fileService.readFile(input.resource, undefined, token);';
+      contents = replaceOnce(contents, read, `if (!this._isCurrentLoad(loadId, input) || token.isCancellationRequested) return;
+${read}`);
+      // 待解码 URL 也归原 input；成功显示后再转交原 MutableDisposable，不另建引用账本。
+      const createUrl = 'const url = URL.createObjectURL(blob);';
+      contents = replaceOnce(contents, createUrl, `${createUrl}
+const objectUrl = this._inputDisposables.add(toDisposable(() => URL.revokeObjectURL(url)));`);
+      const decoded = `if (!this._isCurrentLoad(loadId, input)) {
+\t\t\tURL.revokeObjectURL(url);`;
+      contents = replaceOnce(contents, decoded, `this._inputDisposables.deleteAndLeak(objectUrl);
+if (!this._isCurrentLoad(loadId, input)) {
+  objectUrl.dispose();`);
+      contents = replaceOnce(contents, 'this._objectUrl.value = toDisposable(() => URL.revokeObjectURL(url));',
+        'this._objectUrl.value = objectUrl;');
       // 业务文件删除及读取失败不能继续把旧图当作当前成功；其余原生文件沿原版行为。
       contents = replaceOnce(contents, 'if (e.contains(input.resource, FileChangeType.UPDATED, FileChangeType.ADDED)) {',
         "if (e.contains(input.resource, FileChangeType.UPDATED, FileChangeType.ADDED) || input.resource.scheme === 'boxteam-file' && e.contains(input.resource, FileChangeType.DELETED)) {");
