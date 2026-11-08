@@ -102,6 +102,7 @@
   - 2026-11-07 并行调用检查点继承：只对 manifest 声明了 projection_group 的消息扩展完整组；共享模型调用语义组的独立 stream items 按精确 anchor 继承，保留归属和完整组校验，不修改 canonical 正文或 owner。真实 accumulator／Saver 的同步、异步、冷重开和损坏组拒绝3项通过，相关历史／工具归属89项及消息组／状态版本集成37项通过；原并行双工具 Workbench 产品场景随手动配置验收通过，没有改成逐轮调用。Ruff通过，Pyright两条诊断与完整HEAD归档逐条相同、无新增，独立只读审查通过；源码指纹、准确命令、首轮测试数据未形成显式组的失败原件和修正后结果见 `out/tests/temp/2026/11/07/checkpoint_stream_group/artifacts/`。不据此关闭3.3或平台矩阵。
 - [x] 3.4 支持受验证 VSIX 动态 definition Provider，保留来源实例／host generation／collection／原定义、provide／启动前 resolve／change／dispose／取消语义，仍明确选择 workspace 并交项目 owner 启用；验跨目标同 ID、离线、迟到 resolve、配置 unavailable，拒绝 A 本机动态定义到 B 执行，静态可迁移模板须重新校验且不搬秘密，不在 Extension Host 另启项目 Agent MCP client。
 - [ ] 3.5 在本地 A1/A2 与远端 B1 的真实 Thread 调用独有测试工具，核同名 server、凭据、授权等待、原 tool_call_id 和实际目标；包安装成功不能替代 Agent 真调用。
+  - 2026-11-08 远端受管私有 env 恢复补验：复用真实 localhost SSH triad 与标准 wheel 来源，A 经联邦发现 B 的稳定安装域、发布制品、写私有版本并经原提案／source CAS 启用；B 原生查询核同一目标及操作。真实产品单项最终1 passed／80.49秒，核 B 重启后稳定 Backend 身份不变、连接换代、同一 Session／Thread 再次真实调用、原 tool_call_id／私有摘要／制品 venv、六次封存请求与 canonical 引用；A/C 无该服务、凭据或 B 制品，普通产物无私有原值。新增测试 Ruff／Pyright 零诊断，独立只读审查通过；未改产品源码或另建服务／模型回放，不重复无关前端构建。准确命令、完整源码指纹、原件及首次／最终增强断言版边界见 `out/tests/temp/2026/11/08/mcp_remote_private_env/artifacts/verification-v1.json`。本片是 localhost SSH 联邦验收，不代替独立远端主机、Windows／Electron 或完整同名服务并行矩阵，3.2／3.5继续未勾选。
 
 ## 4. 原版扩展管理与 Web 宿主
 
