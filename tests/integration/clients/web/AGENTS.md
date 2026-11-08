@@ -35,6 +35,7 @@ web/
 
 ## 规范
 
+- `target_tabs_product.mjs` 经正式 Workbench、双 Gateway／Backend 和两个真实 Node 宿主检查公开 TabGroups 投影、身份、MultiDiff、移动及关闭；页面与 Chromium 关闭后继续核原管理服务身份及显式 Relay 库存归属。SSH 仍是具名 loopback 装具；未开放的 `$moveTab` 与 `goToFileUri` 只由定向转换测试覆盖，不冒充公开产品入口。
 - 完整产品页面场景必须通过真实 Gateway 访问；局部组件 harness 必须明确标识为 Integration。
 - 完整 Workbench 页面使用 Gateway 默认根 URL，不依赖测试专用的 Agent 查询参数；独立 MCP 授权仍使用既有授权路由。
 - 服务替身和页面路由拦截必须显式记录，不能伪造成功状态。

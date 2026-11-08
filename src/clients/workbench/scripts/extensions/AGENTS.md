@@ -30,7 +30,7 @@ Notebook 未完整绑定前，公开 API、原 MainThread RPC、初始同步、�
 
 配置转换复用原 WorkspaceService、scope 合并及 ConfigurationEditing；显式目标 settings 不等待窗口 RemoteAgent。原文件夹 parser 保留 raw／名称并按目标平台解析，结果须匹配已认证的有序根；所有 MainThread customer 共用该 host 的配置／context child。配置读取的目标不可用错误不能吞成空配置。
 
-标签投影只维护原 MainThreadEditorTabs 模型及索引；完整 EditorInput 的全部资源决定可见性，不把混合 MultiDiff 拆成可单独关闭的假标签。增量使用本宿主数组索引，结构重同步保留 Tab 对象身份；关闭混合组仅关闭当前宿主的完整输入，真实非空组不得移除。初始化、observable 和异步关闭遵守同一代际，错误不通过全量重建掩盖。
+标签投影只维护原 MainThreadEditorTabs 模型及索引；完整 EditorInput 的全部资源决定可见性，不把混合 MultiDiff 拆成可单独关闭的假标签。增量使用本宿主数组索引，结构重同步保留 Tab 对象身份；异步后继关闭及建组重入后的移动核原组与 Tab DTO 身份，同 ID 新组不得接收旧请求。关闭混合组仅关闭当前宿主的完整输入，真实非空组或同 ID 替代组不得移除。初始化、observable 和异步关闭遵守同一代际；MultiDiff 监听只跟随当前同 ID 组仍持有的原输入，错误不通过全量重建掩盖。
 
 语言 Provider 在原 LanguageFeatureRegistry 的每个注册项绑定固定评分回调；归属在原排序和 exclusive 选择前生效，Node 候选与 RelativePattern 只在评分时投向目标原生域，目标 Web 保持 typed URI；继续复用原 score／glob。共享注册表的缓存仍按原模型失效，不按当前焦点切换评分器；窗口内置 Web 原评分与 Provider 的 RPC／取消链保持。
 

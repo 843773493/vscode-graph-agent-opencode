@@ -15,6 +15,7 @@ from urllib.request import url2pathname
 from zipfile import ZipFile
 
 import commentjson
+import psutil
 import pytest
 
 from app.core.resource_uri import resource_display_uri
@@ -388,3 +389,171 @@ exports.activate = context => {
     assert browser["remoteValue"] == browser["uiValue"] == "from-B-worker"
     assert browser["a"]["writes"] and all(write["gateway_id"] == gateway_b and write["backend_id"] == targets["b"]["backend_id"]
         and "generation" not in write for write in browser["a"]["writes"])
+
+
+async def test_target_node_tabgroups_multidiff_move_and_scoped_close(
+    target_gateway_network: TargetGatewayNetwork, vsix_factory,
+) -> None:
+    network = target_gateway_network
+    local, remote = network.clients
+    gateway_a, gateway_b = network.gateway_ids
+    context = network.context
+    receipts: list[dict[str, object]] = []
+
+    def exchange(client, method: str, path: str, body: dict[str, object] | None = None):
+        response = client.request(method, path, json=body)
+        payload = response.json()
+        receipts.append({"method": method, "path": path, "url": str(response.request.url), "request": body,
+            "status": response.status_code, "header_request_id": response.headers.get("X-Request-ID"), "body": payload})
+        with (context.artifacts_dir / "tabs-http-receipts.jsonl").open("a", encoding="utf-8") as log:
+            log.write(json.dumps(receipts[-1], ensure_ascii=False) + "\n")
+        assert response.is_success, response.text
+        assert payload["request_id"] == response.headers["X-Request-ID"]
+        return payload["data"]
+
+    source = exchange(remote, "GET", "/api/gateway/config/sources/gateway_mutable_override")
+    config = commentjson.loads(source["jsonc"])
+    config.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": [
+        {"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway(gateway_a)}
+        for capability in ("extension_installation_manage", "extension_host_manage", "configuration_read")]}
+    exchange(remote, "PUT", "/api/gateway/config/sources/gateway_mutable_override", {
+        "gateway_id": gateway_b, "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
+        "base_file_digest": source["file_digest"], "base_layer_revision": source["layer_revision"],
+        "base_layer_digest": source["layer_digest"], "expected_active_revision": source["active_revision"],
+        "expected_active_digest": source["active_digest"], "idempotency_key": "tabs-product-policy"})
+    topology = json.loads((context.artifacts_dir / "topology.json").read_text(encoding="utf-8"))
+    registered = exchange(local, "POST", "/api/gateway/remote-gateways", {"name": "Tabs Target B", "host": "127.0.0.1", "port": 22,
+        "username": "tabs-target", "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3]})
+    connection_id, = [connection["gateway_connection_id"] for item in registered["items"] if item["gateway_id"] == gateway_b
+        for connection in item["remote_gateways"] if connection["gateway_id"] == gateway_b]
+    targets, services, installations, management_directories = {}, {}, {}, {}
+    identity_fields = ("backend_id", "process_id", "runtime_instance_id", "base_url", "commit", "vscode_version", "node_version")
+    for label, client, gateway_id, workspace, home in zip(("a", "b"), network.clients, network.gateway_ids,
+        network.workspace_roots, network.gateway_homes, strict=True):
+        directory = exchange(client, "POST", "/api/gateway/extension-targets", {"protocol_version": 1, "gateway_id": gateway_id})
+        target, = directory["targets"]
+        targets[label] = {"gateway_id": gateway_id, "backend_id": target["backend_id"]}
+        package = vsix_factory(workspace, "1.0.0", "tabs-product", manifest_overrides={
+            "name": "tabs-" + label, "displayName": "真实目标标签 " + label.upper(), "main": "./tabs.js",
+            "activationEvents": ["onCommand:boxteam.tabs." + label + ".read"],
+            "contributes": {"commands": [{"command": "boxteam.tabs." + label + ".read", "title": "读取目标标签 " + label.upper()}]},
+        })
+        with ZipFile(package, "a") as archive:
+            archive.writestr("extension/tabs.js", "const label = " + json.dumps(label) + ";\n" + r"""
+const vscode = require('vscode');
+exports.activate = context => {
+  const ids = new WeakMap(), events = [];
+  let next = 0;
+  const id = value => { if (!ids.has(value)) ids.set(value, ++next); return ids.get(value); };
+  const input = value => value instanceof vscode.TabInputTextMultiDiff
+    ? { kind: 'multiDiff', textDiffs: value.textDiffs.map(pair => ({ original: pair.original.toString(true), modified: pair.modified.toString(true) })) }
+    : value instanceof vscode.TabInputText ? { kind: 'text', uri: value.uri.toString(true) } : { kind: 'other' };
+  const tab = value => ({ identity: id(value), label: value.label, active: value.isActive, dirty: value.isDirty, input: input(value.input) });
+  const group = value => ({ identity: id(value), column: value.viewColumn, active: value.isActive,
+    activeTab: value.activeTab ? value.activeTab.label : null, tabs: value.tabs.map(tab) });
+  const read = () => ({ label, pid: process.pid, node: process.versions.node, extensionId: context.extension.id,
+    folders: vscode.workspace.workspaceFolders.map(folder => folder.uri.toString(true)),
+    groups: vscode.window.tabGroups.all.map(group), events: [...events] });
+  const register = (name, callback) => context.subscriptions.push(vscode.commands.registerCommand('boxteam.tabs.' + label + '.' + name, callback));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => events.push({ kind: 'tabs',
+    opened: event.opened.map(tab), closed: event.closed.map(tab), changed: event.changed.map(tab) })),
+  vscode.window.tabGroups.onDidChangeTabGroups(event => events.push({ kind: 'groups',
+    opened: event.opened.map(group), closed: event.closed.map(group), changed: event.changed.map(group) })));
+  register('read', read);
+  const resource = name => vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'tabs-' + label + '-' + name + '.ts');
+  register('prepare', async () => {
+    for (const name of ['first', 'second', 'old1', 'new1', 'old2', 'new2']) {
+      await vscode.workspace.fs.writeFile(resource(name), Buffer.from('export const value = ' + JSON.stringify(label + '-' + name) + ';\n'));
+    }
+    return read();
+  });
+  register('open', async ({ name, column = 1 }) => {
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(resource(name)), { viewColumn: column, preview: false });
+    return read();
+  });
+  register('changes', async () => {
+    await vscode.commands.executeCommand('vscode.changes', 'Tabs Own ' + label.toUpperCase(),
+      [1, 2].map(index => [resource('new' + index), resource('old' + index), resource('new' + index)]));
+  });
+  register('close', async ({ name, wholeGroup = false }) => {
+    const owner = vscode.window.tabGroups.all.find(group => group.tabs.some(tab => tab.label === name));
+    if (!owner) throw new Error('目标标签不存在：' + name);
+    const target = wholeGroup ? owner : owner.tabs.find(tab => tab.label === name);
+    return { closed: await vscode.window.tabGroups.close(target, true), snapshot: read() };
+  });
+};
+""")
+        installed = exchange(client, "POST", "/api/gateway/extension-installations/install", {
+            "protocol_version": 1, **targets[label], "workspace_ids": [network.workspace_id],
+            "source_uri": resource_display_uri(scope="workspace", scope_id=network.workspace_id, kind="files",
+                tail_segments=("root", package.name), gateway_authority=gateway_id)})
+        assert installed["installed"]["id"] == "boxteam-probe.tabs-" + label
+        installations[label] = installed["inventory"]
+        directory = home / "state/backend/extension-management" / target["backend_id"]
+        management_directories[label] = directory
+        record = json.loads((directory / "service.json").read_text(encoding="utf-8"))
+        process = psutil.Process(record["process_id"])
+        assert record["backend_id"] == target["backend_id"] and process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        services[label] = {"identity": {key: record[key] for key in identity_fields}, "created_at": process.create_time()}
+        extension, = installed["inventory"]["extensions"]
+        package_directory = directory / "extensions" / extension["extension_key"]
+        assert Path(extension["description"]["extensionLocation"]["fsPath"]).resolve() == package_directory.resolve()
+        assert json.loads((package_directory / "package.json").read_text(encoding="utf-8"))["name"] == "tabs-" + label
+    (context.artifacts_dir / "tabs-preparation.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (context.artifacts_dir / "tabs-management-before-browser.json").write_text(json.dumps({"services": services,
+        "inventories": installations, "gateway_connection_id": connection_id}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "目标 TabGroups 验收需要真实 Chromium"
+    output = context.artifacts_dir / "target-tabs-browser.json"
+    supervisor = Path.cwd() / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "150", "--",
+        "bun", "tests/integration/clients/web/target_tabs_product.mjs"]
+    paths = ["tests/integration/clients/web/test_empty_target_web.py", "tests/integration/clients/web/target_tabs_product.mjs",
+        "src/clients/workbench/scripts/extensions/extensionTabsTransform.mjs", "src/clients/workbench/src/extensions/targetUris.ts",
+        "src/clients/workbench/src/extensions/targetContext.ts", "src/clients/workbench/scripts/sourceTransform.mjs"]
+    before = {path: hashlib.sha256((Path.cwd() / path).read_bytes()).hexdigest() for path in paths}
+    runtime = context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"])
+    with chromium_temporary_environment(runtime / "chromium-tmp") as temporary:
+        result = await asyncio.to_thread(subprocess.run, command, cwd=Path.cwd(), capture_output=True, text=True, timeout=165, check=False,
+            env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+                "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_TABS_PRODUCT": json.dumps({
+                    "base_url": str(local.base_url).rstrip("/"), "targets": targets, "workspace_id": network.workspace_id,
+                    "native_roots": {label: root.as_uri() for label, root in zip(("a", "b"), network.workspace_roots, strict=True)}})})
+    (context.artifacts_dir / "tabs-browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
+    (context.artifacts_dir / "tabs-browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
+    after = {path: hashlib.sha256((Path.cwd() / path).read_bytes()).hexdigest() for path in paths}
+    (context.artifacts_dir / "tabs-browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode,
+        "before": before, "after": after}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    assert before == after
+    assert result.returncode == 0, result.stdout + result.stderr
+    browser = json.loads(output.read_text(encoding="utf-8"))
+    assert browser["phase"] == "complete" and browser["pageErrors"] == []
+    assert len(browser["bindings"]) == 2 and {binding["gateway_id"] for binding in browser["bindings"]} == {gateway_a, gateway_b}
+    assert all(binding["workspace_ids"] == [network.workspace_id] for binding in browser["bindings"])
+    assert browser["mixedRetained"] and browser["foreignRetained"] and browser["identityPreserved"]
+    assert browser["cleanupCompleted"] is True
+
+    after_inventory, after_services = {}, {}
+    for label, client in zip(("a", "b"), network.clients, strict=True):
+        current = exchange(client, "POST", "/api/gateway/extension-installations/inventory", {"protocol_version": 1, **targets[label]})
+        assert current["gateway_id"] == targets[label]["gateway_id"] and current["backend_id"] == targets[label]["backend_id"]
+        assert current["inventory"] == installations[label]
+        assert [entry["description"]["id"] for entry in current["inventory"]["extensions"]] == ["boxteam-probe.tabs-" + label]
+        after_inventory[label] = current
+    relayed = exchange(local, "POST", "/api/gateway/extension-installations/inventory", {
+        "protocol_version": 1, **targets["b"], "gateway_connection_id": connection_id})
+    assert relayed == after_inventory["b"] and relayed != after_inventory["a"]
+    for label, directory in management_directories.items():
+        record = json.loads((directory / "service.json").read_text(encoding="utf-8"))
+        process = psutil.Process(record["process_id"])
+        after_services[label] = {"identity": {key: record[key] for key in identity_fields}, "created_at": process.create_time()}
+        assert process.is_running() and process.status() != psutil.STATUS_ZOMBIE and after_services[label] == services[label]
+        assert (directory / "extensions" / ("boxteam-probe.tabs-" + label + "-1.0.0") / "package.json").is_file()
+        foreign = "b" if label == "a" else "a"
+        assert not (directory / "extensions" / ("boxteam-probe.tabs-" + foreign + "-1.0.0")).exists()
+    (context.artifacts_dir / "tabs-management-after-browser.json").write_text(json.dumps({
+        "browser_cleanup_completed": browser["cleanupCompleted"], "original_services": services, "services_after": after_services,
+        "direct_inventory": after_inventory, "relayed_inventory": relayed, "gateway_connection_id": connection_id,
+        "boundary": "完整页面及Chromium沿原TestRunContext关闭后，原Gateway公开库存经原组件提供；A显式Relay读取B并核各原包目录。SSH为具名loopback装具。",
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
