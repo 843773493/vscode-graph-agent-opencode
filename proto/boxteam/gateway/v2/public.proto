@@ -1164,6 +1164,8 @@ message ExtensionConfigurationViewDTO {
   string profile_id = 6;
   ExtensionWebHostContextDTO context = 7;
   repeated ExtensionConfigurationContributionDTO extensions = 8;
+  // 目标 Gateway 在准备回执时核定的写入授权；实际保存仍重新判权。
+  bool configuration_write_allowed = 9;
 }
 
 message ExtensionConfigurationViewRequest {

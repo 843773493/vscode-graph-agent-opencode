@@ -5017,6 +5017,13 @@ export declare type ExtensionConfigurationViewDTO = Message<"boxteam.gateway.v2.
    * @generated from field: repeated boxteam.gateway.v2.ExtensionConfigurationContributionDTO extensions = 8;
    */
   extensions: ExtensionConfigurationContributionDTO[];
+
+  /**
+   * 目标 Gateway 在准备回执时核定的写入授权；实际保存仍重新判权。
+   *
+   * @generated from field: bool configuration_write_allowed = 9;
+   */
+  configurationWriteAllowed: boolean;
 };
 
 /**

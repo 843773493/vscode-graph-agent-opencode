@@ -72,6 +72,7 @@ class ExtensionConfigurationViewDTO(_ExtensionHostViewRequest):
     profile_id: str = Field(min_length=1)
     context: ExtensionWebHostContextDTO
     extensions: list[ExtensionConfigurationContributionDTO]
+    configuration_write_allowed: bool
 
     @model_validator(mode="after")
     def context_matches_target(self) -> ExtensionConfigurationViewDTO:

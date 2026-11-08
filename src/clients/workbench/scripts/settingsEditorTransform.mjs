@@ -221,6 +221,7 @@ import { EditorInput } from '../../../common/editor/editorInput.js';
 import { SideBySideEditorInput } from '../../../common/editor/sideBySideEditorInput.js';
 import { FileEditorInput } from '../../files/browser/editors/fileEditorInput.js';
 import { ITargetSettingsContext } from ${scope};
+import { SettingsContextHeader } from ${JSON.stringify(resolve(root, 'src/settings/header.js'))};
 import { captureSettingsLocation, prepareSettingsContext, rebindSettingsFiles, settingsEditorIdentity } from ${editor};
 import { selectSettingsManagementTargetCommand, type ManagementTarget } from ${JSON.stringify(resolve(root, 'src/managementTarget.js'))};
 ` + contents;
@@ -233,7 +234,8 @@ export class SettingsEditor2 extends EditorPane {`);
     contents = replaceOnce(contents, '\tprivate pendingSettingUpdate: { key: string; value: unknown; languageFilter: string | undefined } | null = null;', `  private readonly pendingSettingUpdates = new Map<string, PendingSettingsUpdate>();
   private pendingSettingWrite: Promise<void> | undefined;
   private settingsWriterInput: SettingsEditor2Input | undefined;
-  private settingsTargetSelection = 0;`);
+  private settingsTargetSelection = 0;
+  private settingsContextHeader: SettingsContextHeader | undefined;`);
     contents = replaceOnce(contents, '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,', `\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
     @ITargetSettingsContext private readonly targetSettingsContext: ITargetSettingsContext,
     @ICommandService private readonly commandService: ICommandService,
@@ -264,11 +266,19 @@ export class SettingsEditor2 extends EditorPane {`);
           { name: extension.name, displayName: extension.display_name ?? undefined }])) : undefined)`);
     contents = replaceOnce(contents, '\t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,', `    const target = this.targetSettingsContext.target;
     const targetButton = this._register(new Button(headerControlsContainer, defaultButtonStyles));
-    targetButton.label = target ? '目标：' + target.location.name + ' · ' + target.location.backend_id : '选择设置目标';
-    targetButton.element.title = target ? target.location.gateway_id + ' · profile ' + target.location.profile_id : '选择 Gateway 和配置域';
+    targetButton.label = target ? '目标：' + target.location.name + ' · ' + target.location.backend_id : '目标：本地 · 当前工作台';
+    targetButton.element.title = target ? target.location.gateway_id + ' · profile ' + target.location.profile_id : '当前工作台 profile；选择 Gateway 和配置域';
     this._register(targetButton.onDidClick(() => this.switchSettingsGateway().catch(error => this.notificationService.error(error))));
+    this.settingsContextHeader = this._register(this.instantiationService.createInstance(SettingsContextHeader,
+      DOM.append(headerControlsContainer, DOM.$('div')), () => { if (this.dimension) this.layoutSplitView(this.dimension); }));
 
 \t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,`);
+    contents = replaceOnce(contents, '\t\treturn cachedState ?? null;', `    this.settingsContextHeader?.update(this.settingsTargetsWidget.settingsTarget, this.viewState.languageFilter);
+\t\treturn cachedState ?? null;`);
+    contents = replaceOnce(contents, '\tprivate async onConfigUpdate(keys?: ReadonlySet<string>, forceRefresh = false, triggerSearch = false): Promise<void> {', `\tprivate async onConfigUpdate(keys?: ReadonlySet<string>, forceRefresh = false, triggerSearch = false): Promise<void> {
+    this.settingsContextHeader?.update(this.settingsTargetsWidget.settingsTarget, this.viewState.languageFilter);`);
+    contents = replaceOnce(contents, 'dimension.height - (72 + 11 + 14 /* header height + editor padding */)',
+      'dimension.height - (this.headerContainer.offsetHeight + 11 + 14 /* 顶部实际高度与原编辑器留白 */)');
     contents = replaceOnce(contents, '{ enableRemoteSettings: true }', '{ enableRemoteSettings: true, beforeTargetChange: () => this.flushSettingsUpdates() }');
     contents = replaceOnce(contents, '\tprivate async openSettingsFile(options?: ISettingsEditorOptions): Promise<IEditorPane | undefined> {', '\tprivate async openSettingsFile(options?: ISettingsEditorOptions): Promise<IEditorPane | undefined> {\n    await this.flushSettingsUpdates();');
     contents = section(contents, '\tprivate onDidChangeSetting(key:', '\tprivate updateTreeScrollSync()', `  private onDidChangeSetting(key: string, value: unknown, type: SettingValueType | SettingValueType[], manualReset: boolean, scope: ConfigurationScope | undefined): void {

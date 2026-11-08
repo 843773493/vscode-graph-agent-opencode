@@ -284,7 +284,8 @@ class NodeExtensionHostOwner:
             context = await self._configuration_context(request, environment, initialize=True)
             self._check_configuration_target(request, client_id)
         return ExtensionConfigurationViewDTO(**request.model_dump(exclude={"gateway_connection_id"}),
-            profile_id=environment.profile_id, context=context, extensions=extensions)
+            profile_id=environment.profile_id, context=context, extensions=extensions,
+            configuration_write_allowed=True)
 
     async def configuration_files(self, request: ExtensionConfigurationViewRequest | ExtensionConfigurationProfileViewRequest, *, client_id: str) -> ExtensionConfigurationFiles:
         if isinstance(request, ExtensionConfigurationProfileViewRequest):

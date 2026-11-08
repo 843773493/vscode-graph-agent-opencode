@@ -55,20 +55,31 @@ try {
   await command('workbench.action.openSettings2');
   const editor = page.locator('.settings-editor:visible');
   await expect(editor).toBeVisible();
+  await expect(editor.locator('.settings-context-label')).toContainText('写入授权：当前工作台管理');
+  await expect(editor.locator('.settings-context-label')).toContainText('打开上下文：当前工作台');
   expect(result.preparations).toHaveLength(0);
   // 在窗口运行清单已初始化后经产品入口安装，设置不能借已运行扩展的贡献补全 schema。
   const installed = await api('/api/gateway/extension-installations/install', 'POST', JSON.parse(required('BOXTEAM_BROWSER_SETTINGS_INSTALL')));
   expect(installed.installed.id).toBe('boxteam-probe.target-inventory');
   await phase('choose-target');
-  await editor.getByRole('button', { name: '选择设置目标', exact: true }).click();
+  await editor.getByRole('button', { name: '目标：本地 · 当前工作台', exact: true }).click();
   const picker = page.locator('.quick-input-widget:visible');
   await expect(picker).toBeVisible();
   await picker.locator('.monaco-list-row').filter({ hasText: '本地' }).first().click();
-  await expect(editor.getByRole('button', { name: /^目标：本地/ })).toBeVisible({ timeout: 20_000 });
+  await expect(editor.locator('.settings-context-label')).toContainText('范围：目标用户', { timeout: 20_000 });
+  await expect(editor.locator('.settings-context-label')).toContainText('写入授权：已授权（打开时）');
+  await expect(editor.locator('.settings-context-label')).toContainText('打开上下文：未关联工作区');
   await Promise.all(pending);
   expect(result.preparations.length).toBeGreaterThan(0);
   result.binding = result.preparations.at(-1);
+  const targetButtonName = '目标：本地 · ' + result.binding.backend_id;
+  await expect(editor.getByRole('button', { name: targetButtonName, exact: true })).toBeVisible();
+  expect(result.binding.configuration_write_allowed).toBe(true);
+  expect(await editor.locator('.settings-context-label').getAttribute('title')).toContain('Gateway ' + result.binding.gateway_id);
   expect(result.binding.extensions.map(extension => extension.extension_id)).toContain('boxteam-probe.target-inventory');
+  result.headerSnapshot = { text: await editor.locator('.settings-context-label').innerText(),
+    tooltip: await editor.locator('.settings-context-label').getAttribute('title'), bounds: await editor.locator('.settings-context-label').boundingBox() };
+  await editor.screenshot({ path: output.replace(/\.json$/, '.header.png') });
   const read = async () => {
     const { protocol_version, gateway_id, backend_id, profile_id, view_id, workspace_ids } = result.binding;
     const value = await api('/api/gateway/extension-configurations/read', 'POST', { protocol_version, gateway_id, backend_id, profile_id, view_id, workspace_ids,
@@ -95,12 +106,14 @@ try {
     && Buffer.from(response.request().postDataJSON().content_base64, 'base64').toString('utf8').includes('http://target.invalid:8080'));
   await value.fill('http://target.invalid:8080');
   await editor.getByText('当前工作台 profile', { exact: true }).click();
+  await expect(editor.locator('.settings-context-label')).toContainText('写入授权：当前工作台管理');
   const savedResponse = await saved;
   expect(savedResponse.status()).toBe(200);
   const savedReceipt = await savedResponse.json();
   expect(savedReceipt.request_id).toBe(savedResponse.headers()['x-request-id']);
   await expect.poll(async () => (await read())['http.proxy']).toBe('http://target.invalid:8080');
   await editor.getByText('目标 profile · 本地', { exact: true }).click();
+  await expect(editor.locator('.settings-context-label')).toContainText('写入授权：已授权（打开时）');
   await expect(value).toHaveValue('http://target.invalid:8080');
   await phase('json-retention');
   await command('settings.switchToJSON');
@@ -109,18 +122,18 @@ try {
   await text.click(); await page.keyboard.press('Control+A');
   await page.keyboard.insertText('// 目标原配置注释\n{"http.proxy":"http://target.invalid:8080","http.proxyStrictSSL":false}\n');
   await command('workbench.action.closeOtherEditors');
-  await expect(page.locator('.settings-editor').getByRole('button', { name: /^目标：本地/, includeHidden: true })).toHaveCount(0);
+  await expect(page.locator('.settings-editor').getByRole('button', { name: targetButtonName, exact: true, includeHidden: true })).toHaveCount(0);
   await command('workbench.action.files.save');
   await expect.poll(read).toEqual({ 'http.proxy': 'http://target.invalid:8080', 'http.proxyStrictSSL': false });
   result.jsonSavedAfterClosingSettingsUI = true;
   await phase('json-to-ui');
   await command('_workbench.openUserSettingsEditor');
-  await expect(editor.getByRole('button', { name: /^目标：本地/ })).toBeVisible();
+  await expect(editor.getByRole('button', { name: targetButtonName, exact: true })).toBeVisible();
   result.jsonReturnedToTargetUI = true;
   // 原ModalEditorPart明确不持久化输入；通过原命令移入主编辑器后验证序列化恢复。
   await command('workbench.action.moveModalEditorToMain');
   await expect(page.locator('.monaco-modal-editor-block')).toHaveCount(0);
-  await expect(editor.getByRole('button', { name: /^目标：本地/ })).toBeVisible();
+  await expect(editor.getByRole('button', { name: targetButtonName, exact: true })).toBeVisible();
   await phase('restore-main-editor');
   // 走原Reload Window生命周期，由产品等待存储提交；不由测试预写或主动flush存储。
   await Promise.all([
@@ -128,7 +141,11 @@ try {
     page.evaluate(() => { void globalThis.workbench.commands.executeCommand('workbench.action.reloadWindow'); }),
   ]);
   await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
-  await expect(editor.getByRole('button', { name: /^目标：本地/ })).toBeVisible({ timeout: 20_000 });
+  await expect(editor.getByRole('button', { name: targetButtonName, exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(editor.locator('.settings-context-label')).toContainText('范围：目标用户');
+  await expect(editor.locator('.settings-context-label')).toContainText('写入授权：已授权（打开时）');
+  await expect(editor.locator('.settings-context-label')).toContainText('打开上下文：未关联工作区');
+  expect(await editor.locator('.settings-context-label').getAttribute('title')).toContain('保存时会重新校验');
   await expect.poll(read).toEqual({ 'http.proxy': 'http://target.invalid:8080', 'http.proxyStrictSSL': false });
   result.restoredTarget = true;
   await Promise.all(pending);

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { Delayer } from '../../../../src/clients/workbench/upstream/src/vs/base/common/async.js';
 import { CancellationToken } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
-import { CancellationError, isCancellationError } from '../../../../src/clients/workbench/upstream/src/vs/base/common/errors.js';
+import { CancellationError, getErrorMessage, isCancellationError } from '../../../../src/clients/workbench/upstream/src/vs/base/common/errors.js';
 import { Emitter, Event } from '../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { Disposable, DisposableStore, MutableDisposable, dispose, toDisposable } from '../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 import { Schemas } from '../../../../src/clients/workbench/upstream/src/vs/base/common/network.js';
@@ -16,6 +16,7 @@ import { URI } from '../../../../src/clients/workbench/upstream/src/vs/base/comm
 import { ConfigurationTarget, IConfigurationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configuration.js';
 import { ConfigurationScope, Extensions } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configurationRegistry.js';
 import { IFileService } from '../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
+import { ILogService } from '../../../../src/clients/workbench/upstream/src/vs/platform/log/common/log.js';
 import { IContextKeyService } from '../../../../src/clients/workbench/upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { ConfirmResult } from '../../../../src/clients/workbench/upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { createDecorator, IInstantiationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -27,6 +28,8 @@ import { EditorModel } from '../../../../src/clients/workbench/upstream/src/vs/w
 import { IPreferencesService, SettingMatchType, SettingValueType, validateSettingsEditorOptions } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ITextEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textEditorService.js';
 import { ITextFileService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textfiles.js';
+import { IFilesConfigurationService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
+import { ITargetSettingsContext } from '../../../../src/clients/workbench/src/settings/scope.js';
 import { IEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
 import * as preferences from '../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/preferences/common/preferences.js';
 import { pinnedUpstreamCommit, sourceTransform } from '../../../../src/clients/workbench/scripts/sourceTransform.mjs';
@@ -41,7 +44,7 @@ await writeFile(join(run.artifactsDir, 'test-source.mjs'), testSource);
 fingerprints.push({ path: 'tests/integration/clients/web/settings_editor_target.test.mjs',
   original: createHash('sha256').update(testSource).digest('hex') });
 const selectedEditorMembers = ['pendingSettingUpdates', 'pendingSettingWrite', 'settingsWriterInput', 'settingsTargetSelection', 'switchSettingsGateway', 'shouldSettingUpdateFast',
-  'setInput', '_setOptions', 'clearInput', 'onDidChangeSetting', 'notifySettingsDirty',
+  'setInput', '_setOptions', 'clearInput', 'restoreCachedState', 'onConfigUpdate', 'onDidSettingsTargetChange', 'onDidChangeSetting', 'notifySettingsDirty',
   'discardSettingsUpdates', 'flushSettingsUpdates', 'updateChangedSetting'];
 
 async function source(relative, local = false) {
@@ -147,6 +150,10 @@ const { parseQuery } = evaluate(queryParsed, ['tagRegex', 'extensionRegex', 'fea
   ...preferences, isFalsyOrWhitespace,
 });
 const switching = {};
+const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts', true), ['SettingsContextHeader'], {
+  Disposable, URI, isEqual, getErrorMessage, ConfigurationTarget,
+  ITargetSettingsContext, IPreferencesService, IWorkspaceContextService, IFileService, IFilesConfigurationService, ITextFileService, ILogService,
+});
 const { SettingsEditor2 } = evaluate(await source('workbench/contrib/preferences/browser/settingsEditor2.ts'), ['SettingsEditor2'], {
   EditorPane, SettingsEditor2Input, Settings2EditorModel, SettingValueType, ConfigurationTarget,
   URI, parseQuery, isCancellationError, MODIFIED_SETTING_TAG: preferences.MODIFIED_SETTING_TAG,
@@ -162,6 +169,35 @@ await Promise.all(['sourceTransform.mjs', 'settingsEditorTransform.mjs', 'settin
 function location(overrides = {}) {
   return { version: 1, gateway_id: 'gateway-A', backend_id: 'backend-A', profile_id: 'profile-A', view_id: 'view-A',
     workspace_ids: ['workspace-A', 'workspace-B'], name: 'Target A', gateway_connection_id: 'route-A', ...overrides };
+}
+
+function headerFixture({ allowed = true, multiRoot = true, window = false, resolveResource } = {}) {
+  const lifetime = new DisposableStore(), calls = [], logs = [], models = new Map(), rendered = [];
+  const events = Object.fromEntries(['readonly', 'provider', 'registration', 'resolve', 'modelReadonly', 'remove', 'operation', 'save', 'files']
+    .map(name => [name, lifetime.add(new Emitter())]));
+  const profile = URI.parse('boxteam://gateway-A/config/profile'), workspaceFile = URI.parse('boxteam://gateway-A/config/view');
+  const local = URI.parse('vscode-userdata:/User/settings.json'), folder = URI.parse('boxteam-file://gateway-A/workspace-A/root');
+  const resources = { [ConfigurationTarget.USER_REMOTE]: profile, [ConfigurationTarget.USER_LOCAL]: local,
+    [ConfigurationTarget.APPLICATION]: local, [ConfigurationTarget.WORKSPACE]: multiRoot ? workspaceFile : folder.with({ path: folder.path + '/.vscode/settings.json' }),
+    [ConfigurationTarget.WORKSPACE_FOLDER]: folder.with({ path: folder.path + '/.vscode/settings.json' }) };
+  const target = window ? undefined : { location: location({ workspace_ids: ['workspace-Z', 'workspace-A'] }),
+    configuration: { kind: 'settings', connection: { configuration_write_allowed: allowed } } };
+  const state = { readonly: false, workspace: { name: 'Frozen view', configuration: multiRoot ? workspaceFile : undefined } };
+  const element = { style: {}, textContent: '', title: '', offsetHeight: 20 };
+  const services = new ServiceCollection(
+    [ITargetSettingsContext, { target }],
+    [IPreferencesService, { getEditableSettingsURI(scope, resource) { calls.push({ scope, resource }); return resolveResource
+      ? resolveResource(scope, resource) : Promise.resolve(resources[scope]); } }],
+    [IWorkspaceContextService, { getWorkspace: () => state.workspace, getWorkspaceFolder: () => ({ name: 'Frozen folder' }) }],
+    [IFileService, { onDidChangeFileSystemProviderCapabilities: events.provider.event,
+      onDidChangeFileSystemProviderRegistrations: events.registration.event, onDidRunOperation: events.operation.event, onDidFilesChange: events.files.event }],
+    [IFilesConfigurationService, { isReadonly: (_resource, stat) => state.readonly || !!stat?.readonly, onDidChangeReadonly: events.readonly.event }],
+    [ITextFileService, { files: { get: resource => models.get(resource.toString()), onDidResolve: events.resolve.event,
+      onDidChangeReadonly: events.modelReadonly.event, onDidRemove: events.remove.event, onDidSave: events.save.event } }],
+    [ILogService, { error: error => logs.push(error) }]);
+  const di = lifetime.add(new InstantiationService(services));
+  const header = lifetime.add(di.createInstance(SettingsContextHeader, element, () => rendered.push(element.textContent)));
+  return { header, element, target, state, events, profile, local, folder, calls, logs, models, rendered, close: () => lifetime.dispose() };
 }
 
 function fixture() {
@@ -276,6 +312,107 @@ function scenario(name, callback) {
   registered.push(name);
   test(name, async () => { executed.push(name); await callback(); passed.push(name); });
 }
+
+scenario('原配置更新和历史恢复入口展示冻结上下文及准备时授权，不依赖目标变化事件', async () => {
+  const f = headerFixture({ allowed: false });
+  try {
+    const pane = { settingsContextHeader: f.header, settingsTargetsWidget: { settingsTarget: ConfigurationTarget.USER_REMOTE }, viewState: {} };
+    await SettingsEditor2.prototype.onConfigUpdate.call(pane);
+    expect(f.element.textContent).toContain('范围：目标用户 · 写入授权：未授权（打开时）');
+    expect(f.element.textContent).toContain('打开上下文：2 个工作区');
+    expect(f.element.title).toContain('Gateway gateway-A\nBackend backend-A\nprofile profile-A\nview view-A\n工作区（打开时的顺序）：\n1. workspace-Z\n2. workspace-A');
+    expect(f.element.title).toContain(f.profile.toString());
+    const input = {}, cleared = [];
+    Object.assign(pane, { input, group: {}, searchWidget: { getValue: () => '', setValue() {} },
+      editorMemento: { loadEditorState: () => ({ target: ConfigurationTarget.USER_LOCAL }), clearEditorState: owner => cleared.push(owner) } });
+    SettingsEditor2.prototype.restoreCachedState.call(pane);
+    await Promise.resolve();
+    expect(cleared).toEqual([input]);
+    expect(f.element.textContent).toContain('范围：当前工作台用户 · 写入授权：当前工作台管理');
+    expect(f.element.title).toContain(f.local.toString());
+    expect(f.element.title).toContain('1. workspace-Z\n2. workspace-A');
+  } finally { f.close(); }
+});
+
+scenario('多根 view 使用配置授权，folder及单根workspace明确沿原文件服务且不借用授权快照', async () => {
+  const f = headerFixture(), single = headerFixture({ multiRoot: false, allowed: false });
+  try {
+    const pane = { settingsContextHeader: f.header, settingsTargetsWidget: {}, viewState: {} };
+    pane.onConfigUpdate = () => {
+      pane.settingsTargetsWidget.settingsTarget = pane.viewState.settingsTarget;
+      return SettingsEditor2.prototype.onConfigUpdate.call(pane);
+    };
+    SettingsEditor2.prototype.onDidSettingsTargetChange.call(pane, ConfigurationTarget.WORKSPACE);
+    await Promise.resolve();
+    expect(f.element.textContent).toContain('范围：工作区 · Frozen view · 写入授权：已授权（打开时）');
+    SettingsEditor2.prototype.onDidSettingsTargetChange.call(pane, f.folder);
+    await Promise.resolve();
+    expect(f.element.textContent).toContain('范围：文件夹 · Frozen folder · 写入授权：保存时检查');
+    expect(f.element.textContent).not.toContain('已授权');
+    single.header.update(ConfigurationTarget.WORKSPACE);
+    await Promise.resolve();
+    expect(single.element.textContent).toContain('写入授权：保存时检查');
+    expect(single.element.textContent).not.toContain('未授权');
+  } finally { f.close(); single.close(); }
+});
+
+scenario('配置变化与语言切换只重绘原状态，不重新prepare、stat或解析同一来源', async () => {
+  const f = headerFixture();
+  try {
+    const pane = { settingsContextHeader: f.header, settingsTargetsWidget: { settingsTarget: ConfigurationTarget.USER_REMOTE }, viewState: {} };
+    await SettingsEditor2.prototype.onConfigUpdate.call(pane);
+    for (let index = 0; index < 10; index++) await SettingsEditor2.prototype.onConfigUpdate.call(pane, new Set(['editor.tabSize']));
+    pane.viewState.languageFilter = 'typescript';
+    await SettingsEditor2.prototype.onConfigUpdate.call(pane);
+    expect(f.calls).toHaveLength(1);
+    expect(f.element.textContent).toContain('范围：目标用户 · 语言 typescript');
+    expect(f.element.textContent).toContain('文件：保存时检查');
+    expect(f.element.textContent).not.toContain('可写');
+  } finally { f.close(); }
+});
+
+scenario('原服务已取得的只读、锁定及外部失效更新同一展示，不解析或保存文件', async () => {
+  const f = headerFixture({ window: true });
+  try {
+    f.header.update(ConfigurationTarget.USER_LOCAL);
+    await Promise.resolve();
+    expect(f.element.textContent).toContain('打开上下文：当前工作台');
+    f.state.readonly = { value: '原文件服务的只读原因' }; f.events.readonly.fire();
+    expect(f.element.textContent).toContain('文件：只读'); expect(f.element.title).toContain('原文件服务的只读原因');
+    f.state.readonly = false;
+    f.models.set(f.local.toString(), { resource: f.local, isReadonly: () => true });
+    f.events.resolve.fire({ model: f.models.get(f.local.toString()) });
+    expect(f.element.textContent).toContain('文件：只读');
+    f.models.clear(); f.events.remove.fire(f.local);
+    f.events.operation.fire({ target: { resource: f.local, readonly: false, locked: true } });
+    expect(f.element.textContent).toContain('文件：锁定');
+    f.events.save.fire({ model: { resource: f.local }, stat: { resource: f.local, readonly: true, locked: false } });
+    expect(f.element.textContent).toContain('文件：只读');
+    f.events.files.fire({ contains: resource => isEqual(resource, f.local) });
+    expect(f.element.textContent).toContain('文件：保存时检查');
+    expect(f.calls).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+scenario('来源异步解析乱序或关闭后不覆盖新来源，当前失败保留原错误与上下文', async () => {
+  const gates = [], f = headerFixture({ resolveResource: () => { const gate = Promise.withResolvers(); gates.push(gate); return gate.promise; } });
+  try {
+    f.header.update(ConfigurationTarget.USER_REMOTE);
+    f.header.update(ConfigurationTarget.USER_LOCAL);
+    gates[1].resolve(f.local); await Promise.resolve();
+    const selected = f.element.title;
+    gates[0].resolve(f.profile); await Promise.resolve();
+    expect(f.element.title).toBe(selected);
+    f.header.update(ConfigurationTarget.WORKSPACE);
+    const error = new Error('原目标来源不可访问'); gates[2].reject(error); await Promise.resolve();
+    expect(f.element.textContent).toContain('不可用：原目标来源不可访问');
+    expect(f.element.textContent).toContain('打开上下文：2 个工作区'); expect(f.logs).toEqual([error]);
+    f.header.update(ConfigurationTarget.USER_REMOTE);
+    f.close(); const rendered = f.rendered.length;
+    gates[3].resolve(f.profile); await Promise.resolve();
+    expect(f.rendered).toHaveLength(rendered);
+  } finally { f.close(); }
+});
 
 scenario('原 Settings 输入按稳定 owner/profile/有序 view 匹配，名称与连接路由不参与身份', () => {
   const f = fixture();

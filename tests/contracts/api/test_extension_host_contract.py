@@ -159,7 +159,10 @@ def test_initialization_rejects_view_and_locator_mismatch(host_binding: Extensio
 
 
 @pytest.mark.parametrize("host_bound", [False, True])
-def test_configuration_proto_preserves_distinct_settings_and_host_ownership(host_binding: ExtensionHostConnectionDTO, host_bound: bool) -> None:
+@pytest.mark.parametrize("write_allowed", [False, True])
+def test_configuration_proto_preserves_distinct_settings_and_host_ownership(
+    host_binding: ExtensionHostConnectionDTO, host_bound: bool, write_allowed: bool,
+) -> None:
     for model in (ExtensionConfigurationTargetRequest, ExtensionConfigurationContributionDTO, ExtensionConfigurationViewDTO, ExtensionConfigurationViewRequest,
                   ExtensionConfigurationFileRequest,
     ExtensionConfigurationProfileFileRequest,
@@ -174,7 +177,8 @@ def test_configuration_proto_preserves_distinct_settings_and_host_ownership(host
         configuration_defaults={"[typescript]": {"editor.tabSize": 3}},
         capabilities={"untrustedWorkspaces": {"supported": "limited", "restrictedConfigurations": ["fixture.value"]}},
         enabled_api_proposals=[])
-    view = ExtensionConfigurationViewDTO(**target, profile_id=host_binding.initialization.environment.profile_id, context=context, extensions=[extension])
+    view = ExtensionConfigurationViewDTO(**target, profile_id=host_binding.initialization.environment.profile_id,
+        context=context, extensions=[extension], configuration_write_allowed=write_allowed)
     binding = {"generation": host_binding.generation} if host_bound else {"profile_id": view.profile_id}
     request_type = ExtensionConfigurationFileRequest if host_bound else ExtensionConfigurationProfileFileRequest
     request = request_type.model_validate({**target, **binding, "resource_uri": context.remote_settings.resource_uri})

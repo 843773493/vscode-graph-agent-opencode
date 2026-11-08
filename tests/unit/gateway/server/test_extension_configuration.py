@@ -241,14 +241,24 @@ def test_standalone_settings_require_configuration_permissions_without_host_perm
 
 
 @pytest.mark.parametrize("root_count", [0, 2])
-def test_settings_prepare_returns_frozen_target_context_without_host_generation(configuration_proxy, root_count):
+@pytest.mark.parametrize("mode", ["read-only", "read-write", "revoked", "relay-read-only"])
+def test_settings_prepare_returns_frozen_target_context_without_host_generation(configuration_proxy, root_count, mode):
     h, calls, handlers, payload = configuration_proxy
     payload.pop("generation")
     payload.pop("resource_uri")
     payload["workspace_ids"] = h.request.workspace_ids[:root_count]
+    if mode == "relay-read-only":
+        h.registry.upsert_remote_gateway(RemoteGatewayConnection(connection_id="settings-write-peer", name="peer",
+            host="remote.test", port=22, username="unit", private_key_path=None, ssh_config_host=None,
+            remote_gateway_port=8014, remote_gateway_id=PEER, protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="manual"), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}))
+        FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+            connection_id="settings-write-peer", peer_gateway_id=PEER)
+        payload["gateway_id"] = PEER
     initialization = h.initialization(ExtensionHostOpenRequest(**{**payload, "workspace_ids": h.request.workspace_ids}))
     workspace = initialization.workspace.model_copy(update={"folders": [], "configuration": None}) if not root_count else initialization.workspace
-    result = {**payload, "profile_id": initialization.environment.profile_id, "extensions": [{
+    result = {**payload, "profile_id": initialization.environment.profile_id,
+        "configuration_write_allowed": mode != "relay-read-only", "extensions": [{
         "extension_id": "fixture.settings", "name": "settings", "publisher": "fixture", "display_name": "设置探针",
         "configuration": {"properties": {"fixture.setting": {"type": "string", "default": "schema-value"}}},
         "configuration_defaults": None, "capabilities": None, "enabled_api_proposals": [],
@@ -257,17 +267,23 @@ def test_settings_prepare_returns_frozen_target_context_without_host_generation(
         "workspace": workspace.model_dump()}}
 
     def reply(request: httpx.Request) -> httpx.Response:
+        if mode == "revoked":
+            h.policy.publish({"rules": [{"capability": "configuration_read", "effect": "allow",
+                "principal_ref": principal_ref_for_gateway(PEER)}]})
         return httpx.Response(200, headers={"X-Request-ID": request.headers["X-Request-ID"]},
             json={"request_id": request.headers["X-Request-ID"], "data": result})
 
     handlers[0] = reply
-    h.policy.publish({"rules": [{"capability": "configuration_read", "effect": "allow",
-        "principal_ref": principal_ref_for_gateway(PEER)}]})
+    capabilities = ["configuration_read"] + (["configuration_write"] if mode != "read-only" else [])
+    h.policy.publish({"rules": [{"capability": capability, "effect": "allow",
+        "principal_ref": principal_ref_for_gateway(PEER)} for capability in capabilities]})
     response = h.client.post("/api/gateway/extension-configurations/prepare", json=payload,
-        headers={"X-BoxTeam-Federation-Token": h.federation_token, extension_host.CLIENT_HEADER: "settings-client", "X-Request-ID": "settings-prepare"})
+        headers={**({"X-Local-Token": h.token} if mode == "relay-read-only" else {"X-BoxTeam-Federation-Token": h.federation_token}),
+            extension_host.CLIENT_HEADER: "settings-client", "X-Request-ID": "settings-prepare"})
     assert response.status_code == 200, response.text
-    assert response.json()["data"] == result
-    assert calls[0].url.path == "/api/internal/extension-configurations/prepare"
+    assert response.json()["data"] == {**result, "configuration_write_allowed": mode == "read-write"}
+    prefix = "api/gateway" if mode == "relay-read-only" else "api/internal"
+    assert calls[0].url.path == f"/{prefix}/extension-configurations/prepare"
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "settings-prepare"
     result["view_id"] = "wrong-view"
     rejected = h.client.post("/api/gateway/extension-configurations/prepare", json=payload,

@@ -1181,6 +1181,8 @@ export interface ExtensionConfigurationViewDTO {
   profile_id: string;
   context: ExtensionWebHostContextDTO | undefined;
   extensions: ExtensionConfigurationContributionDTO[];
+  /** 目标 Gateway 在准备回执时核定的写入授权；实际保存仍重新判权。 */
+  configuration_write_allowed: boolean;
 }
 
 export interface ExtensionConfigurationViewRequest {
@@ -9545,6 +9547,7 @@ function createBaseExtensionConfigurationViewDTO(): ExtensionConfigurationViewDT
     profile_id: "",
     context: undefined,
     extensions: [],
+    configuration_write_allowed: false,
   };
 }
 
@@ -9563,6 +9566,9 @@ export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationVie
       extensions: globalThis.Array.isArray(object?.extensions)
         ? object.extensions.map((e: any) => ExtensionConfigurationContributionDTO.fromJSON(e))
         : [],
+      configuration_write_allowed: isSet(object.configuration_write_allowed)
+        ? globalThis.Boolean(object.configuration_write_allowed)
+        : false,
     };
   },
 
@@ -9592,6 +9598,9 @@ export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationVie
     if (message.extensions?.length) {
       obj.extensions = message.extensions.map((e) => ExtensionConfigurationContributionDTO.toJSON(e));
     }
+    if (message.configuration_write_allowed !== false) {
+      obj.configuration_write_allowed = message.configuration_write_allowed;
+    }
     return obj;
   },
 
@@ -9612,6 +9621,7 @@ export const ExtensionConfigurationViewDTO: MessageFns<ExtensionConfigurationVie
       ? ExtensionWebHostContextDTO.fromPartial(object.context)
       : undefined;
     message.extensions = object.extensions?.map((e) => ExtensionConfigurationContributionDTO.fromPartial(e)) || [];
+    message.configuration_write_allowed = object.configuration_write_allowed ?? false;
     return message;
   },
 };

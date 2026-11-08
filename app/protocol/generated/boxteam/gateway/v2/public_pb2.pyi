@@ -1963,7 +1963,7 @@ class ExtensionConfigurationContributionDTO(_message.Message):
     def __init__(self, extension_id: _Optional[str] = ..., name: _Optional[str] = ..., publisher: _Optional[str] = ..., display_name: _Optional[str] = ..., configuration: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., configuration_defaults: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., capabilities: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., enabled_api_proposals: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ExtensionConfigurationViewDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "context", "extensions")
+    __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "profile_id", "context", "extensions", "configuration_write_allowed")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -1972,6 +1972,7 @@ class ExtensionConfigurationViewDTO(_message.Message):
     PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_FIELD_NUMBER: _ClassVar[int]
     EXTENSIONS_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_WRITE_ALLOWED_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     backend_id: str
@@ -1980,7 +1981,8 @@ class ExtensionConfigurationViewDTO(_message.Message):
     profile_id: str
     context: ExtensionWebHostContextDTO
     extensions: _containers.RepeatedCompositeFieldContainer[ExtensionConfigurationContributionDTO]
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., context: _Optional[_Union[ExtensionWebHostContextDTO, _Mapping]] = ..., extensions: _Optional[_Iterable[_Union[ExtensionConfigurationContributionDTO, _Mapping]]] = ...) -> None: ...
+    configuration_write_allowed: bool
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., view_id: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., profile_id: _Optional[str] = ..., context: _Optional[_Union[ExtensionWebHostContextDTO, _Mapping]] = ..., extensions: _Optional[_Iterable[_Union[ExtensionConfigurationContributionDTO, _Mapping]]] = ..., configuration_write_allowed: _Optional[bool] = ...) -> None: ...
 
 class ExtensionConfigurationViewRequest(_message.Message):
     __slots__ = ("protocol_version", "gateway_id", "backend_id", "view_id", "workspace_ids", "generation", "gateway_connection_id")

@@ -17,7 +17,10 @@ from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.control.user_access import UserAccessContext
-from app.gateway.federation.policy import require_federation_capability
+from app.gateway.federation.policy import (
+    federation_capability_allowed,
+    require_federation_capability,
+)
 from app.gateway.proxy_upstream import (
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     UpstreamResponseBody,
@@ -176,6 +179,13 @@ async def _file_request(payload: ExtensionConfigurationTargetRequest, request: R
                 or result.data.model_dump(include=set(ExtensionConfigurationTargetRequest.model_fields) - {"gateway_connection_id"})
                 != payload.model_dump(exclude={"gateway_connection_id"})):
                 raise ValueError("配置准备回执不属于原目标视图")
+            if isinstance(result.data, ExtensionConfigurationViewDTO):
+                # Backend 只提供文件能力；原生 Gateway 在披露时收窄主体授权。
+                # Relay 保留目标的拒绝，不能用本机访问权限代授远端写入。
+                result = result.model_copy(update={"data": result.data.model_copy(update={
+                    "configuration_write_allowed": result.data.configuration_write_allowed
+                    and federation_capability_allowed(request, auth, "configuration_write"),
+                })})
             return result
     except PermissionError as error:
         raise HTTPException(403, str(error)) from error
