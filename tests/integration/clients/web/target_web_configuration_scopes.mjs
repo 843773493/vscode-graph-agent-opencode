@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { parse } from 'jsonc-parser';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
@@ -12,12 +12,13 @@ assert(fixture.gateway_id && fixture.backend_id && fixture.workspace_ids.length 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/test_settings_editor_target.py').prepare();
 const result = { phase: 'initialize', pageErrors: [], consoleErrors: [], nodeChannels: [], bindings: [],
   receipts: [], writes: [], snapshots: [], rejectedResources: [],
-  boundary: '正式 Workbench、真实 Gateway 及同 Backend 双根；原 API 安装纯 browser 扩展，经原挂接命令激活真实 Web Worker。配置更新经公开 getConfiguration/update、原 renderer writer 和目标 Python 文件服务；外改仅在产品实际写出稳定 .code-workspace 后模拟。无模型调用，不代替 Node、Relay、Windows、Electron 或完整 dirty/etag/并发验收。' };
+  boundary: '正式 Workbench、真实 Gateway 及同 Backend 双根；原 API 安装纯 browser 扩展，经原挂接命令激活真实 Web Worker。配置更新经公开 getConfiguration/update、原 renderer writer 和目标 Python 文件服务；原设置 UI 打开同一稳定 view 的 JSON，真实键盘制造 dirty、原保存处理外改冲突，公开并发更新验证原队列。外改仅在产品实际写出 .code-workspace 后模拟；无模型调用，不代替 Node、Relay、Windows、Electron 或全部竞态验收。' };
 const pending = [];
 let page, failure;
 const save = () => writeFile(output, JSON.stringify(result, null, 2) + '\n');
 const phase = async value => { result.phase = value; await save(); };
 const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+const action = (id, ...args) => page.evaluate(async ({ id, args }) => { await globalThis.workbench.commands.executeCommand(id, ...args); }, { id, args });
 const read = (options = {}) => command('boxteam.webScopes.read', options);
 const update = options => command('boxteam.webScopes.update', options);
 async function snapshot(name) {
@@ -42,6 +43,17 @@ async function ready() {
   await expect(page.locator('.monaco-workbench')).toBeVisible({ timeout: 30_000 });
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand, null, { timeout: 30_000 });
 }
+function captureResponse(response) {
+  const path = new URL(response.url()).pathname;
+  if (!path.startsWith('/api/gateway/extension-configurations/') || path.endsWith('/events')) return;
+  pending.push(response.json().then(body => {
+    const receipt = { path, status: response.status(), requestId: response.headers()['x-request-id'],
+      request: response.request().postDataJSON(), body };
+    assert(body.request_id); assert.equal(receipt.requestId, body.request_id);
+    result.receipts.push(receipt);
+    if (path.endsWith('/write')) result.writes.push(receipt);
+  }));
+}
 
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
@@ -62,17 +74,7 @@ try {
       if (binding.context) result.bindings.push(binding);
     });
   });
-  page.on('response', response => {
-    const path = new URL(response.url()).pathname;
-    if (!path.startsWith('/api/gateway/extension-configurations/') || path.endsWith('/events')) return;
-    pending.push(response.json().then(body => {
-      const receipt = { path, status: response.status(), requestId: response.headers()['x-request-id'],
-        request: response.request().postDataJSON(), body };
-      assert(body.request_id); assert.equal(receipt.requestId, body.request_id);
-      result.receipts.push(receipt);
-      if (path.endsWith('/write')) result.writes.push(receipt);
-    }));
-  });
+  page.on('response', captureResponse);
   const base = process.env.BOXTEAM_BROWSER_BASE_URL;
   await page.goto(new URL('/api/gateway/health', base).href);
   await api('/api/gateway/users/guest', 'POST', { tracking: { source: 'web-configuration-scopes' } });
@@ -172,6 +174,100 @@ try {
     assert.equal(receipt.request.view_id, result.binding.view_id);
     assert.equal(receipt.request.generation, result.binding.generation);
   }
+
+  await phase('original-settings-json-preserves-dirty-model');
+  await action('workbench.action.openSettings2');
+  const settings = page.locator('.settings-editor:visible');
+  await expect(settings).toBeVisible();
+  // 原 Web profile 默认 afterDelay；通过产品命令关闭，才能真实制造未保存正文。
+  await action('workbench.action.toggleAutoSave');
+  await action('settings.action.search');
+  await page.keyboard.insertText('@id:files.autoSave');
+  const autoSave = settings.locator('[data-key="files.autoSave"] select');
+  await expect(autoSave).toBeVisible();
+  await expect(autoSave.locator('option:checked')).toHaveText('off');
+  result.autoSaveDisabledViaProduct = true;
+  await settings.getByRole('button', { name: '目标：本地 · 当前工作台', exact: true }).click();
+  await expect(picker).toBeVisible();
+  await picker.locator('.monaco-list-row').filter({ hasText: '本地' }).first().click();
+  await expect(settings.getByRole('button', { name: '目标：本地 · ' + fixture.backend_id, exact: true })).toBeVisible();
+  // 原 SettingsTargetsWidget 顺序为本地、远端、workspace、folder；不依赖动态 view 显示名。
+  const scopes = settings.locator('.settings-tabs-widget .action-item');
+  await expect(scopes).toHaveCount(4);
+  await scopes.nth(2).click();
+  await action('settings.switchToJSON');
+  await action('workbench.action.moveModalEditorToMain');
+  await expect(page.locator('.monaco-modal-editor-block')).toHaveCount(0);
+  const text = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
+  await expect(text).toContainText('external-view');
+  const activeTab = page.locator('.tabs-container .tab.active:visible').last();
+  await text.click(); await page.keyboard.press('Control+Home');
+  await page.keyboard.insertText('// 用户尚未保存的配置草稿\n');
+  await expect(text).toContainText('用户尚未保存的配置草稿');
+  await expect(activeTab).toHaveClass(/\bdirty\b/);
+  await Promise.all(pending);
+  const beforeDirtyWrite = result.writes.length, diskBeforeDirty = await readFile(native, 'utf8');
+  await assert.rejects(update({ key: 'value', value: 'must-not-replace-draft', target: 'Workspace' }), error => {
+    result.dirtyRejection = String(error); return /file has unsaved changes/.test(String(error));
+  });
+  await Promise.all(pending);
+  assert.equal(result.writes.length, beforeDirtyWrite);
+  assert.equal(await readFile(native, 'utf8'), diskBeforeDirty);
+  await expect(text).toContainText('用户尚未保存的配置草稿');
+  await expect(text).toContainText('external-view');
+  await expect(activeTab).toHaveClass(/\bdirty\b/);
+
+  await phase('original-file-save-rejects-newer-disk-content');
+  const originalStat = await stat(native);
+  const newer = parse(diskBeforeDirty); newer.settings['webScopeProbe.value'] = 'external-newer-than-draft';
+  const newerBody = JSON.stringify(newer, null, 2) + '\n';
+  await writeFile(native, newerBody);
+  const newerStat = await stat(native);
+  assert(newerStat.mtimeMs > originalStat.mtimeMs);
+  await expect.poll(async () => (await read({ folder: 1 })).value, { timeout: 15_000 }).toBe('external-newer-than-draft');
+  await expect(text).toContainText('用户尚未保存的配置草稿');
+  await expect(text).toContainText('external-view');
+  await action('workbench.action.files.save');
+  const conflict = page.locator('.notification-list-item-message').filter({ hasText: 'The content of the file is newer' });
+  await expect(conflict).toBeVisible();
+  result.saveConflict = { message: await conflict.innerText(), originalMtime: originalStat.mtimeMs, newerMtime: newerStat.mtimeMs };
+  await Promise.all(pending);
+  assert.equal(result.writes.length, beforeDirtyWrite);
+  assert.equal(await readFile(native, 'utf8'), newerBody);
+  await expect(text).toContainText('用户尚未保存的配置草稿');
+  await expect(activeTab).toHaveClass(/\bdirty\b/);
+  // 明确放弃本次未保存草稿，沿原 revert 读取新正文，不向模型注入基线或忽略 etag。
+  await action('workbench.action.files.revert');
+  await expect(text).toContainText('external-newer-than-draft');
+  await expect(text).not.toContainText('用户尚未保存的配置草稿');
+  await expect(activeTab).not.toHaveClass(/\bdirty\b/);
+  assert.equal(await readFile(native, 'utf8'), newerBody);
+
+  await phase('concurrent-public-updates-use-original-write-queue');
+  await Promise.all([
+    update({ key: 'value', value: 'queued-view', target: 'Workspace' }),
+    update({ key: 'inferred', value: 'queued-inferred', target: 'Workspace' }),
+  ]);
+  const queued = await snapshot('concurrent-writes');
+  assert.equal(queued.first.value, 'inferred-folder'); assert.equal(queued.second.value, 'queued-view');
+  assert.equal(queued.first.inferred, 'queued-inferred'); assert.equal(queued.second.inferred, 'queued-inferred');
+  assert.equal(queued.first.activation, initial.first.activation); assert.equal(queued.second.activation, initial.first.activation);
+  const queuedDisk = parse(await readFile(native, 'utf8'));
+  assert.equal(queuedDisk.settings['webScopeProbe.value'], 'queued-view');
+  assert.equal(queuedDisk.settings['webScopeProbe.inferred'], 'queued-inferred');
+  await expect(text).toContainText('queued-view'); await expect(text).toContainText('queued-inferred');
+  await expect(activeTab).not.toHaveClass(/\bdirty\b/);
+  await Promise.all(pending);
+  result.concurrentWrites = result.writes.slice(beforeDirtyWrite);
+  assert.equal(result.concurrentWrites.length, 2);
+  for (const receipt of result.concurrentWrites) {
+    assert.equal(receipt.status, 200); assert.equal(receipt.request.gateway_id, fixture.gateway_id);
+    assert.equal(receipt.request.backend_id, fixture.backend_id); assert.equal(receipt.request.view_id, result.binding.view_id);
+    assert.equal(receipt.request.resource_uri, result.binding.context.workspace.configuration.resource_uri);
+  }
+  const finalContent = parse(Buffer.from(result.concurrentWrites.at(-1).request.content_base64, 'base64').toString('utf8'));
+  assert.equal(finalContent.settings['webScopeProbe.value'], 'queued-view');
+  assert.equal(finalContent.settings['webScopeProbe.inferred'], 'queued-inferred');
   assert.deepEqual(result.nodeChannels, []); assert.deepEqual(result.pageErrors, []);
   await phase('complete');
 } catch (error) {
@@ -185,6 +281,7 @@ try {
     if (errors.length) failure = new AggregateError([failure, ...errors], '配置作用域验收及诊断失败');
   }
 } finally {
+  page?.off('response', captureResponse);
   const collected = await Promise.allSettled(pending);
   const errors = collected.filter(value => value.status === 'rejected').map(value => value.reason);
   if (errors.length) failure = new AggregateError([...(failure ? [failure] : []), ...errors], '配置响应校验失败');

@@ -193,8 +193,12 @@ exports.activate = context => {
     workspace_file = Path(url2pathname(workspace_uri.path)).resolve()
     assert workspace_file.is_relative_to(case.boxteam_home.resolve())
     saved = commentjson.loads(workspace_file.read_text())
-    assert saved["settings"]["webScopeProbe.value"] == "external-view"
-    assert saved["settings"]["webScopeProbe.inferred"] == "inferred-view"
+    assert saved["settings"]["webScopeProbe.value"] == "queued-view"
+    assert saved["settings"]["webScopeProbe.inferred"] == "queued-inferred"
+    assert "file has unsaved changes" in browser["dirtyRejection"]
+    assert "The content of the file is newer" in browser["saveConflict"]["message"]
+    assert browser["saveConflict"]["newerMtime"] > browser["saveConflict"]["originalMtime"]
+    assert len(browser["concurrentWrites"]) == 2
     assert len(saved["folders"]) == 2
     first_settings = commentjson.loads((case.roots[0] / ".vscode/settings.json").read_text())
     assert first_settings["webScopeProbe.value"] == "inferred-folder"
