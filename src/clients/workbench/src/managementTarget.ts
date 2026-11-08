@@ -1,5 +1,6 @@
-import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
-import { MutableDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
+import { raceCancellationError } from '../upstream/src/vs/base/common/async.js';
+import { CancellationToken, CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
+import { DisposableStore, MutableDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { Emitter } from '../upstream/src/vs/base/common/event.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -16,6 +17,13 @@ type ManagementScope = 'extensions' | 'settings' | 'mcp';
 export type ManagementTarget = GatewayManagementTargetDTO & { backend_id?: string };
 const selections = new Map<ManagementScope, { entryGatewayId: string; target: ManagementTarget }>();
 const selecting = new Map<ManagementScope, AbortController>();
+interface ExtensionDomainRead {
+  entryGatewayId: string | null;
+  controller: AbortController;
+  result: Promise<ExtensionTargetListDTO['targets']>;
+  consumers: number;
+}
+const extensionDomainReads = new Map<string, ExtensionDomainRead>();
 export const selectExtensionManagementTargetCommand = 'boxteam.extensions.selectTarget';
 export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
 export const selectMcpManagementTargetCommand = 'boxteam.mcp.selectTarget';
@@ -60,9 +68,11 @@ function updateMcpTitle(): void {
 updateExtensionTitle();
 updateMcpTitle();
 onGatewayUserSessionInvalidated(0, () => {
+  invalidateExtensionDomainReads();
   selections.clear(); updateExtensionTitle(); updateMcpTitle(); extensionManagementChanged.fire(); mcpManagementChanged.fire();
 });
 workspaceContext.subscribe(() => {
+  invalidateExtensionDomainReads(workspaceContext.getSnapshot().gatewayId);
   let extensionChanged = false, mcpChanged = false;
   for (const [scope, selection] of selections) {
     if (selection.entryGatewayId !== workspaceContext.getSnapshot().gatewayId) {
@@ -85,16 +95,53 @@ export function managementGateway(scope: ManagementScope, explicitGatewayId?: st
   return { gateway_id: id, name: id === entry ? '本地' : id, connection_kind: id === entry ? 'local' : 'remote_gateway' };
 }
 
+function invalidateExtensionDomainReads(entryGatewayId?: string | null): void {
+  for (const [key, read] of extensionDomainReads) {
+    if (entryGatewayId !== undefined && read.entryGatewayId === entryGatewayId) continue;
+    extensionDomainReads.delete(key);
+    read.controller.abort(new Error('页面 Gateway 或用户身份已改变，本次扩展安装域读取已撤销'));
+  }
+}
+
 async function extensionDomains(target: ManagementTarget, signal: AbortSignal) {
-  const result = await gateway.request<ExtensionTargetListDTO>('/api/gateway/extension-targets', {
-    method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
-      gateway_connection_id: target.gateway_connection_id }), signal,
-  });
   signal.throwIfAborted();
-  if (result.protocol_version !== 1 || result.gateway_id !== target.gateway_id || result.source !== 'live'
-    || result.targets.some(domain => domain.gateway_id !== target.gateway_id || !domain.backend_id)) throw new Error('扩展安装域发现返回了不同目标');
-  if (!result.targets.length) throw new Error('所选 Gateway 没有可用的扩展安装域，请显式启动目标安装服务');
-  return result.targets;
+  const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
+  const key = JSON.stringify([entryGatewayId, target.gateway_id, target.gateway_connection_id ?? null]);
+  let read = extensionDomainReads.get(key);
+  if (!read) {
+    const controller = new AbortController();
+    read = { entryGatewayId, controller, consumers: 0,
+      result: gateway.request<ExtensionTargetListDTO>('/api/gateway/extension-targets', {
+        method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
+          gateway_connection_id: target.gateway_connection_id }), signal: controller.signal,
+      }).then(result => {
+        controller.signal.throwIfAborted();
+        if (result.protocol_version !== 1 || result.gateway_id !== target.gateway_id || result.source !== 'live'
+          || result.targets.some(domain => domain.gateway_id !== target.gateway_id || !domain.backend_id)) throw new Error('扩展安装域发现返回了不同目标');
+        if (!result.targets.length) throw new Error('所选 Gateway 没有可用的扩展安装域，请显式启动目标安装服务');
+        return result.targets;
+      }),
+    };
+    extensionDomainReads.set(key, read);
+    const pending = read;
+    const release = () => { if (extensionDomainReads.get(key) === pending) extensionDomainReads.delete(key); };
+    void pending.result.then(release, release);
+  }
+  read.consumers++;
+  const lifetime = new DisposableStore();
+  try {
+    // 各消费者独立取消；身份失效也须立即拒绝不理会 abort 的底层传输。
+    const combined = AbortSignal.any([signal, read.controller.signal]);
+    const domains = await raceCancellationError(read.result, CancellationToken.fromAbortSignal(combined, lifetime));
+    combined.throwIfAborted();
+    return domains;
+  } finally {
+    lifetime.dispose();
+    if (--read.consumers === 0) {
+      if (extensionDomainReads.get(key) === read) extensionDomainReads.delete(key);
+      read.controller.abort();
+    }
+  }
 }
 
 /** 默认单域可直接使用；多域只在标题目标动作中补选，安装命令不逐项弹窗。 */

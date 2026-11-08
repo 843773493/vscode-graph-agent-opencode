@@ -60,7 +60,7 @@ export { Event, Emitter } from '${upstream}base/common/event.js';
 export { extUri } from '${upstream}base/common/resources.js';
 export { URI } from '${upstream}base/common/uri.js';
 export { workspaceContext } from './src/clients/workbench/src/workspaceContext.js';
-export { managementGateway, onDidChangeExtensionManagementTarget } from './src/clients/workbench/src/managementTarget.js';
+export { extensionManagementTarget, managementGateway, onDidChangeExtensionManagementTarget } from './src/clients/workbench/src/managementTarget.js';
 export { invalidateGatewayUserSession } from './src/clients/web/src/api/http.js';
 export const workbenchParameters = ${JSON.stringify(workbenchParameters)};
 ` }, outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
@@ -325,6 +325,152 @@ test('原管理启动读取等待Gateway初始化，失败保留原因且关闭�
     expect(value.error).toBe('Gateway初始化实际失败'); expect(value.failedRequests).toBe(0);
     expect(value.closed).toBe('扩展管理服务已关闭'); expect(value.closedRequests).toBe(0);
     checks.push('原管理启动库存与平台等待已有Gateway初始化，真实初始化错误保留，关闭后零请求');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原管理并发启动只共享在途安装域读取，成功或失败后明确重新发现', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const { m, service, state } = globalThis.managementProbe, pending = [];
+      const entered = Promise.withResolvers();
+      const directory = (body, backend = 'backend-a') => ({ protocol_version: 1, gateway_id: body.gateway_id, source: 'live',
+        targets: [{ gateway_id: body.gateway_id, backend_id: backend, capabilities: { installation_manage: true, host_manage: true } }] });
+      state.handlers.set('/api/gateway/extension-targets', (body, options) => {
+        const response = Promise.withResolvers(); pending.push({ ...response, body, signal: options.signal }); entered.resolve(); return response.promise;
+      });
+      m.invalidateGatewayUserSession(0);
+      const installed = service.getInstalled(m.ExtensionType.User), platform = service.getTargetPlatform();
+      await entered.promise; await Promise.resolve();
+      const startupReads = pending.length;
+      for (const request of pending) request.resolve(directory(request.body));
+      const startup = { version: (await installed)[0].manifest.version, platform: await platform };
+      const target = { gateway_id: 'gateway-a', name: '本地', connection_kind: 'local' };
+      const next = m.extensionManagementTarget(target, new AbortController().signal);
+      const afterSuccessReads = pending.length;
+      pending.at(-1).resolve(directory(pending.at(-1).body, 'backend-b'));
+      const afterSuccess = (await next).backend_id, failures = [];
+      for (const mode of ['http', 'receipt', 'empty', 'permission']) {
+        const count = pending.length;
+        const results = [0, 1].map(() => m.extensionManagementTarget(target, new AbortController().signal)
+          .then(() => '错误地成功', error => error.message));
+        const shared = pending.slice(count);
+        for (const request of shared) {
+          const reply = directory(request.body);
+          if (mode === 'http') request.reject(new Error('目录原始HTTP失败'));
+          else {
+            if (mode === 'receipt') reply.gateway_id = 'wrong-gateway';
+            if (mode === 'empty') reply.targets = [];
+            if (mode === 'permission') reply.targets[0].capabilities.installation_manage = false;
+            request.resolve(reply);
+          }
+        }
+        const errors = await Promise.all(results), retryCount = pending.length;
+        const retry = m.extensionManagementTarget(target, new AbortController().signal);
+        const retryReads = pending.length - retryCount;
+        pending.at(-1).resolve(directory(pending.at(-1).body));
+        failures.push({ mode, reads: shared.length, errors, retryReads, retry: (await retry).backend_id });
+      }
+      return { startupReads, startup, afterSuccessReads, afterSuccess, failures };
+    });
+    expect(value.startupReads).toBe(1); expect(value.startup).toEqual({ version: '1.0.0', platform: 'linux-x64' });
+    expect(value.afterSuccessReads).toBe(2); expect(value.afterSuccess).toBe('backend-b');
+    const messages = ['目录原始HTTP失败', '扩展安装域发现返回了不同目标', '所选 Gateway 没有可用的扩展安装域，请显式启动目标安装服务', '所选目标未授权扩展安装管理'];
+    value.failures.forEach((failure, index) => {
+      expect(failure.reads).toBe(1); expect(failure.errors).toEqual([messages[index], messages[index]]);
+      expect(failure.retryReads).toBe(1); expect(failure.retry).toBe('backend-a');
+    });
+    checks.push('真实getInstalled/getTargetPlatform并发启动共享一次目录，成功与HTTP/回执/空域/权限失败后均重新读取');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('安装域读取按目标及显式连接分开，单消费者取消保留同伴且最后退出淘汰旧请求', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const { m, state } = globalThis.managementProbe, pending = [];
+      const directory = (request, backend) => ({ protocol_version: 1, gateway_id: request.body.gateway_id, source: 'live',
+        targets: [{ gateway_id: request.body.gateway_id, backend_id: backend, capabilities: { installation_manage: true, host_manage: true } }] });
+      state.handlers.set('/api/gateway/extension-targets', (body, options) => {
+        const response = Promise.withResolvers(); pending.push({ ...response, body, signal: options.signal }); return response.promise;
+      });
+      const targets = [['gateway-a', undefined], ['gateway-b', undefined], ['gateway-b', 'relay-one'], ['gateway-b', 'relay-two']]
+        .map(([gateway_id, gateway_connection_id]) => ({ gateway_id, gateway_connection_id, name: gateway_id, connection_kind: 'remote_gateway' }));
+      const isolated = targets.flatMap(target => [0, 1].map(() => m.extensionManagementTarget(target, new AbortController().signal)));
+      const isolationReads = pending.map(request => [request.body.gateway_id, request.body.gateway_connection_id ?? null]);
+      for (const request of pending) request.resolve(directory(request, request.body.gateway_connection_id ?? request.body.gateway_id));
+      const resolved = (await Promise.all(isolated)).map(target => [target.gateway_id, target.gateway_connection_id ?? null, target.backend_id]);
+      const start = pending.length, first = new AbortController(), second = new AbortController(), outcomes = [];
+      const canceled = [first, second].map((controller, index) => m.extensionManagementTarget(targets[0], controller.signal)
+        .then(() => outcomes[index] = '错误地成功', error => outcomes[index] = error.name));
+      first.abort(); await new Promise(resolve => setTimeout(resolve, 0));
+      const single = { outcome: outcomes[0], peerPending: outcomes[1] === undefined, sharedAborted: pending[start].signal.aborted };
+      second.abort(); await new Promise(resolve => setTimeout(resolve, 0));
+      const last = { outcomes: [...outcomes], sharedAborted: pending[start].signal.aborted }, old = pending.slice(start);
+      let freshCompleted = false;
+      const fresh = m.extensionManagementTarget(targets[0], new AbortController().signal).then(target => { freshCompleted = true; return target; });
+      for (const request of old) request.resolve(directory(request, 'old-domain'));
+      await Promise.all(canceled); await new Promise(resolve => setTimeout(resolve, 0));
+      const oldDidNotCompleteFresh = !freshCompleted;
+      const joined = m.extensionManagementTarget(targets[0], new AbortController().signal), reads = pending.length - start;
+      for (const request of pending.slice(start + old.length)) request.resolve(directory(request, 'fresh-domain'));
+      return { isolationReads, resolved, single, last, oldDidNotCompleteFresh, reads,
+        fresh: (await Promise.all([fresh, joined])).map(target => target.backend_id) };
+    });
+    expect(value.isolationReads).toEqual([['gateway-a', null], ['gateway-b', null], ['gateway-b', 'relay-one'], ['gateway-b', 'relay-two']]);
+    expect(value.resolved).toEqual([['gateway-a', null, 'gateway-a'], ['gateway-a', null, 'gateway-a'],
+      ['gateway-b', null, 'gateway-b'], ['gateway-b', null, 'gateway-b'], ['gateway-b', 'relay-one', 'relay-one'], ['gateway-b', 'relay-one', 'relay-one'],
+      ['gateway-b', 'relay-two', 'relay-two'], ['gateway-b', 'relay-two', 'relay-two']]);
+    expect(value.single).toEqual({ outcome: 'Canceled', peerPending: true, sharedAborted: false });
+    expect(value.last).toEqual({ outcomes: ['Canceled', 'Canceled'], sharedAborted: true });
+    expect(value.oldDidNotCompleteFresh).toBe(true); expect(value.reads).toBe(2); expect(value.fresh).toEqual(['fresh-domain', 'fresh-domain']);
+    checks.push('同身份同连接共享，跨Gateway或显式connection独立；单取消不影响同伴，最后取消及旧迟到不妨碍明确新读');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('用户与入口Gateway失效立即撤销目录等待，忽略abort的旧回执不复用或删除新读', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const { m, state } = globalThis.managementProbe, results = [];
+      const target = { gateway_id: 'gateway-a', name: '本地', connection_kind: 'local' };
+      for (const identity of ['user', 'entry-gateway']) {
+        const pending = [], outcomes = [];
+        const directory = backend => ({ protocol_version: 1, gateway_id: target.gateway_id, source: 'live',
+          targets: [{ gateway_id: target.gateway_id, backend_id: backend, capabilities: { installation_manage: true, host_manage: true } }] });
+        // 故意忽略abort且不结算传输，先核原身份事件本身能立即拒绝等待者。
+        state.handlers.set('/api/gateway/extension-targets', (_body, options) => {
+          const response = Promise.withResolvers(); pending.push({ ...response, signal: options.signal }); return response.promise;
+        });
+        const old = [0, 1].map(index => m.extensionManagementTarget(target, new AbortController().signal)
+          .then(() => outcomes[index] = '错误地成功', error => outcomes[index] = error.name));
+        const oldReads = pending.length;
+        if (identity === 'user') m.invalidateGatewayUserSession(0);
+        else {
+          const snapshot = m.workspaceContext.getSnapshot();
+          m.workspaceContext.publish({ ...snapshot, gatewayId: 'gateway-b' }); m.workspaceContext.publish(snapshot);
+        }
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const immediate = [...outcomes], oldAborted = pending.slice(0, oldReads).every(request => request.signal.aborted);
+        let freshCompleted = false;
+        const fresh = m.extensionManagementTarget(target, new AbortController().signal).then(target => { freshCompleted = true; return target; });
+        const freshActive = !pending.at(-1).signal.aborted;
+        for (const request of pending.slice(0, oldReads)) request.resolve(directory('old-domain'));
+        await Promise.all(old); await new Promise(resolve => setTimeout(resolve, 0));
+        const oldDidNotCompleteFresh = !freshCompleted;
+        const joined = m.extensionManagementTarget(target, new AbortController().signal), readsAfterOldSettled = pending.length;
+        for (const request of pending.slice(oldReads)) request.resolve(directory('fresh-domain'));
+        results.push({ identity, oldReads, immediate, oldAborted, freshActive, oldDidNotCompleteFresh, readsAfterOldSettled,
+          fresh: (await Promise.all([fresh, joined])).map(target => target.backend_id) });
+      }
+      return results;
+    });
+    for (const result of value) {
+      expect(result.oldReads).toBe(1); expect(result.immediate).toEqual(['Canceled', 'Canceled']);
+      expect(result.oldAborted).toBe(true); expect(result.freshActive).toBe(true); expect(result.oldDidNotCompleteFresh).toBe(true);
+      expect(result.readsAfterOldSettled).toBe(2); expect(result.fresh).toEqual(['fresh-domain', 'fresh-domain']);
+    }
+    checks.push('真实用户及入口Gateway失效事件立即拒绝永不结算的旧目录等待，返回同目标的新身份不复用旧读且迟到清理有精确身份guard');
   } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
 });
 
