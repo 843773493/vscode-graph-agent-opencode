@@ -12,14 +12,21 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
     return super.provide(picker, token, options);
   }
 
-  protected override _getPicks(filter: string, disposables: DisposableStore, token: CancellationToken, options?: SearchInvocationOptions): Promise<ISymbolQuickPickItem[]> {
+  protected override async _getPicks(filter: string, disposables: DisposableStore, token: CancellationToken, options?: SearchInvocationOptions): Promise<ISymbolQuickPickItem[]> {
     if (!options?.searchOwners && !options?.searchOwner && !options?.searchOwnerError) return super._getPicks(filter, disposables, token);
     try {
       if (options.searchOwnerError && !options.searchOwners) throw new Error(options.searchOwnerError);
       const providers = workspaceSymbolProviders(options.searchOwners ?? (options.searchOwner ? [options.searchOwner] : []));
-      return this.getSymbolPicks(filter, { providers }, token);
+      // TODO：分支重试和增量发布仍须接入原 Picker；本批先保留成功结果并披露原失败。
+      const failures: ISymbolQuickPickItem[] = [];
+      const picks = await this.getSymbolPicks(filter, { providers, onProviderError(provider, error) {
+        const target = provider.extensionHost?.targetContext?.connection;
+        failures.push({ label: `工作区符号不可用：${String(error)}`,
+          description: target ? `${target.gateway_id} / ${target.backend_id}` : undefined });
+      } }, token);
+      return token.isCancellationRequested ? [] : [...picks, ...failures];
     } catch (error) {
-      return Promise.resolve([{ label: `工作区符号不可用：${String(error)}` }]);
+      return token.isCancellationRequested ? [] : [{ label: `工作区符号不可用：${String(error)}` }];
     }
   }
 }

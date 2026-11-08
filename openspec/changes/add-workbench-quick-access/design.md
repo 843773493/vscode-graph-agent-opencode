@@ -323,7 +323,7 @@ Command Center 的 `workbench.action.quickOpenWithModes` 以 `includeHelp: true`
 
 全局仍只有一套 SearchViewModelWorkbenchService 和 ReplaceService，项目搜索服务通过原 singleton 登记机制在 Workbench 创建前成为唯一实现；登记顺序须在原 RemoteSearchService 之后，验证最终 ServiceCollection 中仅该描述符生效，不能只依赖模块导入的偶然顺序。不能在 child 另建搜索视图模型，使原菜单、替换、无障碍动作读取另一份结果。`%` 转搜索视图时，使用原 `replaceSearchModel`，同时接续查询模型内的明确范围；后续修改查询仍使用该范围，不跟随导航或其它编辑器改投。Search Editor 遵守 `search.mode`，范围按下节逐 input 保存，不只验证首次结果转交。
 
-`#` 同样在原登记处选择原符号 Provider 的项目子类，保留原 descriptor、Picker 及生命周期。现有全局符号服务没有业务目录参数，因此带明确业务工作区或发起身份错误的查询，在调用任何全局符号 Provider 之前显示未启用或原错误；不能查询后再过滤。未绑定业务范围的原生符号调用沿原服务，文本文件内符号仍使用该精确模型。后续只有具备查询前限定完整业务根的真实符号服务，才开放对应业务工作区符号结果。
+`#` 同样在原登记处选择原符号 Provider 的项目子类，保留原 descriptor、Picker 及生命周期。Provider 无目录参数，因此在调用前按原宿主绑定选定完整业务视图；只选择其中部分根或没有合法 Provider 时明确拒绝，不先查询后过滤。选中 Provider 的错误沿原 getWorkspaceSymbols 可选回调交给本次 Picker，成功项仍由原聚合／去重／排序与接受逻辑处理，错误项带原 Provider 目标和具体原因；异步查询须 await，取消后不发布迟到错误。未传失败回调的原窗口查询、Anything 与公开符号命令保持原行为。文本文件内符号仍使用精确模型；符号分支增量发布和单分支重试继续 TODO，不能把此局部失败披露当作完整流式搜索验收。
 
 原 SearchService 的 `getOpenEditorResults` 用 `fsPath` 匹配，不能隔离不同 authority 下的同路径文件。项目唯一搜索服务继承原 RemoteSearchService，只对带明确业务根的文件正文查询重写公开 `textSearchSplitSyncAsync` 组合：本地未保存模型按完整 owner／资源身份和所选根过滤，后端命中由同一文件 Provider 按完整资源身份和显式路由提供，不能送入仅以path找浏览器handle的LocalFileSearchWorkerClient；同一文件本地模型优先，既不自动保存也不覆盖用户编辑；原生容器查询继续使用原逻辑。其它 file／text／cache 方法沿用原服务；业务范围不新增语义／AI搜索；该分支即使被原版自动语义设置调用，也必须明确不支持且不向其它根或模型发请求，不静默启用后台AI或改写用户全局配置。语言能力按实际服务提供，不能伪造结果。不能调用基类 split 后只过滤返回的 syncResults：它在返回前已向 onProgress 发出本地命中。业务分支在扫描模型和发送每次进度前就按完整 owner限定。仅在返回结果后过滤无法满足“不得查询其它工作区”的合同，查询根、`extraFileResources`、本地模型及符号来源都须在发起前限制。
 

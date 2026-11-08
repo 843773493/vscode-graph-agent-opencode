@@ -320,6 +320,19 @@ try {
   result.attached.nodeDiagnostics = await runtimeDiagnostics(page, result.attached, fixture.targets.a,
     'boxteam.empty.nodeDiagnostics', 'node', 'caller');
   result.attached.notebooks = await notebooks(page, 'boxteam.empty.nodeNotebooks');
+  await phase('scoped-symbol-provider-failure');
+  result.attached.webSymbols = await command(page, 'boxteam.empty.inspect', 'activate-original-symbol-provider');
+  expect(result.attached.webSymbols.folders).toHaveLength(1);
+  await command(page, 'workbench.action.quickOpen', '#ScopedSymbolProbe');
+  const symbols = page.locator('.quick-input-widget:visible');
+  await expect(symbols.locator('.monaco-list-row').filter({ hasText: '目标 Web 原 Provider' })).toBeVisible();
+  const symbolFailure = symbols.locator('.monaco-list-row').filter({ hasText: '目标 Node 符号故障探针' });
+  await expect(symbolFailure).toBeVisible();
+  await expect(symbolFailure).toContainText(fixture.targets.a.gateway_id);
+  await expect(symbolFailure).toContainText(fixture.targets.a.backend_id);
+  result.attached.symbolFailure = { success: await symbols.locator('.monaco-list-row').filter({ hasText: '目标 Web 原 Provider' }).innerText(),
+    failure: await symbolFailure.innerText() };
+  await symbols.locator('input').press('Escape');
   expect(result.attached.runtimeDiagnostics.targets[0].hosts.map(host => host.kind).sort()).toEqual(['node', 'web']);
   expect(result.attached.nodeDiagnostics.targets[0].hosts[0].processApi.state).toBe('partial');
   expect(result.attached.nodeDiagnostics.targets[0].nodeChannel.state).toBe('available');

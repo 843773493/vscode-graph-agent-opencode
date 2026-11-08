@@ -12,8 +12,9 @@ export function transformExtensionWorkspaceSymbols(root, path, source, replaceOn
   if (path === paths[0]) {
     let contents = `import type { IExtensionHost } from '../../../services/extensions/common/extensions.js';\n` + source;
     contents = replaceOnce(contents, 'export interface IWorkspaceSymbolProvider {', 'export interface IWorkspaceSymbolProvider {\n  readonly extensionHost?: IExtensionHost;');
-    contents = replaceOnce(contents, 'token: CancellationToken = CancellationToken.None): Promise<WorkspaceSymbolItem[]> {', 'token: CancellationToken = CancellationToken.None, providers: readonly IWorkspaceSymbolProvider[] = WorkspaceSymbolProviderRegistry.all()): Promise<WorkspaceSymbolItem[]> {');
-    return replaceOnce(contents, 'const promises = WorkspaceSymbolProviderRegistry.all().map(async provider => {', 'const promises = providers.map(async provider => {');
+    contents = replaceOnce(contents, 'token: CancellationToken = CancellationToken.None): Promise<WorkspaceSymbolItem[]> {', 'token: CancellationToken = CancellationToken.None, providers: readonly IWorkspaceSymbolProvider[] = WorkspaceSymbolProviderRegistry.all(), onProviderError?: (provider: IWorkspaceSymbolProvider, error: unknown) => void): Promise<WorkspaceSymbolItem[]> {');
+    contents = replaceOnce(contents, 'const promises = WorkspaceSymbolProviderRegistry.all().map(async provider => {', 'const promises = providers.map(async provider => {');
+    return replaceOnce(contents, 'onUnexpectedExternalError(err);', 'if (onProviderError) onProviderError(provider, err);\n      else onUnexpectedExternalError(err);');
   }
   if (path === paths[1]) {
     let contents = `import { hostOwnsWorkspaceResource } from ${JSON.stringify(join(root, 'src/extensions/targetUris.js'))};\n` + source;
@@ -58,8 +59,8 @@ import { workspaceSymbolProvidersForHost } from ${JSON.stringify(join(root, 'src
     return replaceOnce(contents, 'const result = await getWorkspaceSymbols(query);', 'const result = await getWorkspaceSymbols(query, undefined, workspaceSymbolProvidersForHost(unpackCommandSource([source]).source));');
   }
   if (path === paths[3]) {
-    let contents = source.replaceAll('skipLocal?: boolean; skipSorting?: boolean', 'skipLocal?: boolean; skipSorting?: boolean; providers?: readonly IWorkspaceSymbolProvider[]');
-    return replaceOnce(contents, 'getWorkspaceSymbols(symbolQuery.original, token)', 'getWorkspaceSymbols(symbolQuery.original, token, options?.providers)');
+    let contents = source.replaceAll('skipLocal?: boolean; skipSorting?: boolean', 'skipLocal?: boolean; skipSorting?: boolean; providers?: readonly IWorkspaceSymbolProvider[]; onProviderError?: (provider: IWorkspaceSymbolProvider, error: unknown) => void');
+    return replaceOnce(contents, 'getWorkspaceSymbols(symbolQuery.original, token)', 'getWorkspaceSymbols(symbolQuery.original, token, options?.providers, options?.onProviderError)');
   }
   return source;
 }

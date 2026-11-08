@@ -54,3 +54,5 @@
 - `extension_notebook_versions.test.mjs` 在 Browser／Node 两种实际转换下运行原 NotebookController／NotebookDocuments、文档 delta／change 和 WorkspaceEdit 转换器，覆盖直接 apply、CodeAction、Rename、文件 waitUntil 与 Notebook 保存回调前冻结，及关闭／未知资源／同 URI 宿主隔离。回执、扩展回调和命令登记为具名边界，不替代 Gateway、真实 Node 进程、Notebook 目标同步或真实编辑；通过独立 `integration-extension-notebook-versions` 矩阵运行。
 
 - `extension_notebook_scope.test.mjs` 对两种运行面动态枚举原公开 Notebook API，运行实际转换的主线程 owner，核零窗口订阅／初始正文／RPC操作、内部保存及通用编辑拒绝；内置宿主与纯值构造保持。认证标记、窗口服务及扩展回调为具名边界，不代替真实 Gateway／Worker／Node 进程。旧版本生产和原 BulkEdit 版本检查继续独立验证，不能将内部能力表述为已支持目标 Notebook。
+
+- `workspace_symbol_failures.test.mjs` 运行原符号聚合、Registry、MainThread／RPC、SymbolsQuickAccessProvider 与原 Picker 生命周期，核明确范围的部分／全部失败、同一错误与 Provider、接受归属、异步转换拒绝及取消后零发布；原无范围／公开命令的宽容语义保持。窗口控件、认证绑定、扩展回调及字节输送为具名边界，不代替真实 Gateway／Worker／Node 或分支增量／重试验收。

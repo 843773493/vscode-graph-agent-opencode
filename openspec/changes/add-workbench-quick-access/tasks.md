@@ -989,3 +989,10 @@
 - 文件引用与导航沿目标文件 owner 逐段取得真实大小写，保留 logical symlink 入口；新 canonical_uri 表达 owner 内规范 URI，原 uri 继续承担请求回执与跨 Gateway 引用。编辑器准入、直接 resolver、搜索 dirty overlay 和冷恢复共用规范身份，不增加逐文件 HTTP 或第二身份表。
 - 冷恢复复用原 WorkingCopyBackup、Pane／Memento 与已有 Provider SHA 保存基线：先写规范备份再移除旧键，目标备份冲突保留双方；不以当前磁盘重建草稿基线。Linux 正式 Workbench／真实 Gateway 页面通过，验证多入口同模型、owner／逻辑链接隔离、刷新后草稿／sticky／光标保留、保存200及外改后原SHA冲突409，pageErrors为空。
 - 后端 owner／导航／URI 合同268项、Provider53项／988断言、实际转换57份源码类型检查及协议生成一致性通过。Windows owner真实HTTP／大小写敏感目录等4项通过，正式构建79个扩展成功；Windows页面尚在Gateway启动阶段因既有受管PID与真实Backend PID不同而拒绝，未执行交互。391项公开合同通过，4项既有MCP roots／Skill descriptor fixture失败保留原件。完整命令、源码指纹和原始收据见 `out/tests/temp/2026/11/06/file_canonical_identity/artifacts/canonical-manifest.json`。Windows页面、Electron及16.19整项继续未完成。
+
+
+### 2026-11-08：明确范围符号搜索保留部分成功并披露原失败（10.2 局部）
+
+- 沿原 getWorkspaceSymbols 的可选错误回调向同次 `#` Picker 交原 Provider／原错误；成功结果继续原聚合、去重、排序与接受，失败行取固定宿主的 Gateway／Backend。业务入口改为 await 捕获原异步转换拒绝，取消后不发布迟到候选或失败。不改原无范围窗口查询、Anything 或公开符号命令的宽容语义，不复制聚合器或引入符号索引。
+- 独立原 owner 组件7项／64断言、原符号隔离回归7项／91断言通过；实际Browser181份／Node190份转换源码类型、Ruff／Pyright通过。正式79扩展Workbench构建与真实双Gateway／Backend页面1 passed／125.85秒：由产品入口激活真实Web／Node扩展，原`#`面板同时展示Web成功符号与Node受控失败，原目标身份及原因可见；安装、配置、冷恢复、Notebook明确拒绝和原生文件读取断言保持，pageErrors为零。原console／网络错误分类保留，不称控制台无错。
+- 原组件的认证、控件及扩展回调为具名边界；真实页面SSH仍为既有loopback装具，未验Windows／真实SSH／Electron。符号分支增量发布、单分支明确重试和默认列表includeSymbols仍为TODO；本片不扩大既有任务完成范围。独立审查无阻断，owned进程与六端口均回收；准确命令、指纹、原始输出、构建与适用边界见 `out/tests/temp/2026/11/08/workspace_symbol_failures/artifacts/verification-v1.json`。

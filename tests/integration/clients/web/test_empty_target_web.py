@@ -111,6 +111,14 @@ function registerNotebookProbe(context, id) {
 const vscode = require('vscode');
 exports.activate = context => {
   registerNotebookProbe(context, 'boxteam.empty.webNotebooks');
+  context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider({
+    provideWorkspaceSymbols(query) {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (query !== 'ScopedSymbolProbe' || !folder) return [];
+      return [new vscode.SymbolInformation('ScopedSymbolProbe', vscode.SymbolKind.Function, '目标 Web 原 Provider',
+        new vscode.Location(vscode.Uri.joinPath(folder.uri, 'scope-symbol.ts'), new vscode.Position(0, 0)))];
+    }
+  }));
   const activation = crypto.randomUUID();
   context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.runtimeDiagnostics',
     () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
@@ -126,6 +134,7 @@ exports.activate = context => {
     for label, client, gateway_id, workspace, version in zip(
         ("a", "b"), network.clients, network.gateway_ids, network.workspace_roots, ("1.0.0", "2.0.0"), strict=True,
     ):
+        (workspace / "scope-symbol.ts").write_text("export function ScopedSymbolProbe() {}\n", encoding="utf-8")
         directory = exchange(client, "POST", "/api/gateway/extension-targets", {"protocol_version": 1, "gateway_id": gateway_id})
         target, = directory["targets"]
         targets[label] = {"gateway_id": gateway_id, "backend_id": target["backend_id"]}
@@ -177,6 +186,12 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
 const vscode = require('vscode');
 exports.activate = context => {
 registerNotebookProbe(context, 'boxteam.empty.nodeNotebooks');
+context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider({
+  async provideWorkspaceSymbols(query) {
+    if (query === 'ScopedSymbolProbe') throw new Error('目标 Node 符号故障探针');
+    return [];
+  }
+}));
 context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid', () => ({
   mode: 'node', version: context.extension.packageJSON.version, platform: process.platform,
   nativeContent: require('node:fs').readFileSync(require('node:path').join(__dirname, 'native.txt'), 'utf8'),
@@ -222,6 +237,8 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
         "src/clients/workbench/src/extensions/contribution.ts",
         "src/clients/workbench/src/extensions/targetUris.ts", "src/clients/workbench/scripts/sourceTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionNotebookTransform.mjs",
+        "src/clients/workbench/scripts/extensions/extensionWorkspaceSymbolsTransform.mjs",
+        "src/clients/workbench/src/search/symbolsQuickAccess.ts",
         "src/clients/workbench/scripts/extensions/extensionEnablementTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionStatusTransform.mjs", "tests/integration/clients/web/test_empty_target_web.py",
         "tests/integration/clients/web/empty_target_web.mjs"]
