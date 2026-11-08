@@ -527,7 +527,7 @@ async def start_managed_backend_runtime(
     if adopted is not None:
         owner.set_process(adopted, adopted=True)
         if not adopt_existing_backend:
-            owner.close(timeout_seconds=connection_drain_timeout_seconds)
+            owner.close()
             adopted = None
     port = urlparse(previous.backend_url).port if adopted is not None else preferred_backend_port or allocate_local_port()
     if port is None:
@@ -595,7 +595,7 @@ async def start_managed_backend_runtime(
                     owner.detach()
                 for runtime in owner.unpublished_runtimes.values():
                     runtime.detach_adopted_processes()
-            owner.close(timeout_seconds=connection_drain_timeout_seconds)
+            owner.close()
         except BaseException as cleanup_error:  # noqa: BLE001 — 保持原启动失败，未清句柄仍归唯一 owner。
             error.add_note(f"Backend 完整组清理失败: {cleanup_error!r}")
         raise
@@ -611,7 +611,7 @@ async def rebuild_managed_backend_runtime(
     """关闭旧进程后在同一 owner 上启动候选；完整恢复由组控制器统一执行。"""
     desired_contract = replace(owner.contract, members=desired_members, backend_url="")
     await validate_managed_backend_bindings(registry.resolve_backend_mounts(desired_contract), project_root)
-    owner.close(timeout_seconds=connection_drain_timeout_seconds)
+    owner.close()
     return await start_managed_backend_runtime(
         owner=owner, registry=registry, mount_contract=desired_contract,
         project_root=project_root, log_dir=log_dir, reusable_runtimes=runtimes,

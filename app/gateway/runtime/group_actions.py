@@ -160,7 +160,7 @@ class ManagedBackendGroupActions:
                     try:
                         # start 的目录/身份校验也由唯一 owner 结算，不由创建入口补写状态。
                         await validate_managed_backend_bindings(self._registry.resolve_backend_mounts(old_contract), self._project_root)
-                        owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
+                        owner.close()
                         contract, runtimes = await start_managed_backend_runtime(
                             owner=owner, registry=self._registry, project_root=self._project_root, log_dir=self._log_dir,
                             reusable_runtimes=previous_runtimes, **self._startup_options(),
@@ -171,7 +171,7 @@ class ManagedBackendGroupActions:
                             # 发布已提交时只报告观察者错误，不能关闭已公布的完整组。
                             raise
                         try:
-                            owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
+                            owner.close()
                         except BaseException as cleanup_error:  # noqa: BLE001 — 未关闭句柄留在唯一 owner 供重试。
                             start_error.add_note(f"启动发布失败清理错误: {cleanup_error}")
                         try:
@@ -209,7 +209,7 @@ class ManagedBackendGroupActions:
                     try:
                         if forced:
                             await self._invalidate_and_drain_group_routes(affected)
-                        owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
+                        owner.close()
                         self._registry.publish_backend_runtime(
                             owner, candidate_contract, None if desired_ids else {},
                             removed_target_id=workspace_id if remove_target else None,
@@ -263,7 +263,7 @@ class ManagedBackendGroupActions:
                     old_runtimes = {member_id: self._registry.managed_runtime(member_id) for member_id in old_contract.workspace_ids}
                     try:
                         if not desired_ids:
-                            owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
+                            owner.close()
                             self._registry.publish_backend_runtime(
                                 owner, None, {}, removed_target_id=workspace_id if remove_target else None,
                             )
@@ -289,7 +289,7 @@ class ManagedBackendGroupActions:
                             raise
                         # 候选未公布时恢复原完整拓扑；配置提交结果由配置 owner 保持权威。
                         try:
-                            owner.close(timeout_seconds=self._connection_drain_timeout_seconds)
+                            owner.close()
                             restored_contract, restored = await start_managed_backend_runtime(
                                 owner=owner, registry=self._registry, mount_contract=old_contract, reusable_runtimes=old_runtimes,
                                 preferred_backend_port=urlparse(old_contract.backend_url).port,

@@ -872,6 +872,35 @@ async def test_backend_restart_preserves_terminal_and_browser(single_workspace_g
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("http_drain_seconds", [0.25, 2])
+async def test_backend_restart_keeps_process_exit_budget_separate_from_http_drain(
+    single_workspace_graph, process_boundary, tmp_path, single_workspace_registry,
+    monkeypatch: pytest.MonkeyPatch, http_drain_seconds: float,
+) -> None:
+    owner = single_workspace_graph.owner
+    original = owner.process
+    waits: list[float] = []
+
+    def finish_process(*, timeout_seconds: float = 8) -> None:
+        waits.append(timeout_seconds)
+        # Windows实测：lifespan已完成，解释器仍需约2秒才能真正退出。
+        if timeout_seconds <= 2:
+            raise TimeoutError("解释器退出仍在进行")
+        original.alive = False
+        original.closed = True
+
+    monkeypatch.setattr(original, "close", finish_process)
+    await rebuild_managed_backend_runtime(
+        owner=owner, registry=single_workspace_registry, desired_members=owner.contract.members,
+        runtimes=single_workspace_graph.runtimes, project_root=tmp_path, log_dir=tmp_path / "logs",
+        connection_drain_timeout_seconds=http_drain_seconds,
+    )
+    assert waits == [8]
+    assert original.closed and owner.process is process_boundary.handles[0]
+    assert process_boundary.starts[0]["connection_drain_timeout_seconds"] == http_drain_seconds
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["health", "config-proof"])
 async def test_backend_restart_failure_keeps_old_generation(single_workspace_graph, process_boundary, tmp_path, failure, single_workspace_registry) -> None:
     old_contract = single_workspace_graph.owner.contract

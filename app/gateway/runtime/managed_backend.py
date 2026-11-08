@@ -91,6 +91,7 @@ class ManagedBackendOwner:
         self.error = None
 
     def close(self, *, timeout_seconds: float = 8) -> None:
+        # 本期限等待整个进程退出；不能用仅供HTTP连接排空的期限替代。
         # 失败时保留同一句柄与全部辅助服务，下一次仍从这个关闭边界重试。
         if self.process is not None:
             self.process.close(timeout_seconds=timeout_seconds)

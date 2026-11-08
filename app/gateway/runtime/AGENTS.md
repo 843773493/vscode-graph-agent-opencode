@@ -50,6 +50,7 @@ runtime/
 - Workspace API、Terminal、Browser 和 SSH tunnel 必须使用明确名称管理。
 - 关闭过程先优雅终止，超时后终止完整进程组，并暴露清理错误。
 - 后端重启不得无必要地重启 Terminal 或 Browser。
+- `connection_drain_timeout_seconds` 只约束HTTP连接排空和相应路由等待；进程退出沿 `ManagedBackendOwner.close()` 的既有8秒期限核验，包含lifespan、解释器收尾与已确认后代，不能以HTTP排空期限缩短它。超时仍明确失败并保留原句柄，不把ACK或lifespan完成当作进程已退出。
 - 扩展管理组件随原生Gateway服务组启动、核就绪与关闭，复用原安装目录和Code OSS服务；Backend与页面关闭不关闭它。请求取消须收完原回执再释放串行准入，传输失败拒绝继续发送和自动重放；实际子进程退出核验后才释放日志和安装域锁，未知写入结果不称成功排空。
 - 包读取在同一安装串行准入中先取Node精确发布描述，再由目标Python核包路径、符号链接及大小并读取；Node不收包内路径或返回正文，读取取消须等实际文件操作结清后才放行后续安装。
 - 下载只接受当前安装请求的临时能力和原request_id；回调使用当前Gateway的实际listener，不能固定旧代地址。Node仍拥有Gallery依赖规划、fallback及发布，Python仅传原状态、头与压缩正文，不写安装目录、不新增下载账本或重放策略；代理认证只交代理，原本机凭据不传原站。

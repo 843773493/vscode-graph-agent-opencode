@@ -130,7 +130,7 @@ async def _restore_managed_local_runtimes(
                 continue
             contract: ManagedBackendContract | None = None
             try:
-                owner.close(timeout_seconds=resolved.gateway_process_connection_drain_timeout_seconds)
+                owner.close()
                 reusable = {member_id: registry.managed_runtime(member_id) for member_id in ids if registry.has_runtime(member_id)}
                 contract, runtimes = await start_managed_backend_runtime(
                     owner=owner, registry=registry, project_root=get_project_root(), log_dir=get_runtime_log_root(),
