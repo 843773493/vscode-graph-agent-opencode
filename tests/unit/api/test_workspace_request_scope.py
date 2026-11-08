@@ -7,7 +7,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
+from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketDenialResponse
 
 from app import container as container_module
 from app.api.deps import get_workspace_container, workspace_container_scope
@@ -123,6 +125,20 @@ async def test_concurrent_requests_keep_workspace_context_through_child_tasks(
         async def path_scope_probe(workspace_id: str) -> dict[str, str]:
             return {"workspace_id": get_workspace_id(), "path_id": workspace_id}
 
+        @app.websocket(
+            "/workspaces/{workspace_id}/scope",
+            dependencies=[Depends(workspace_container_scope)],
+        )
+        async def websocket_scope_probe(websocket: WebSocket) -> None:
+            await websocket.accept()
+
+            async def read_child_context() -> dict[str, str]:
+                await asyncio.sleep(0)
+                return {"workspace_id": get_workspace_id(), "root": str(get_workspace_root())}
+
+            await websocket.send_json(await asyncio.create_task(read_child_context()))
+            await websocket.close()
+
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://workspace.test",
@@ -156,3 +172,20 @@ async def test_concurrent_requests_keep_workspace_context_through_child_tasks(
 
         assert path_and_header_mismatch.status_code == 400
         assert missing_identity.status_code == 400
+
+        with TestClient(app) as websocket_client:
+            for workspace_id, root in zip(workspace_ids, roots, strict=True):
+                with websocket_client.websocket_connect(
+                    f"/workspaces/{workspace_id}/scope",
+                    headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                ) as websocket:
+                    assert websocket.receive_json() == {"workspace_id": workspace_id, "root": str(root)}
+            with (
+                pytest.raises(WebSocketDenialResponse) as denied,
+                websocket_client.websocket_connect(
+                    f"/workspaces/{workspace_ids[0]}/scope",
+                    headers={"X-BoxTeam-Workspace-Id": workspace_ids[1]},
+                ),
+            ):
+                pytest.fail("归属冲突的 WebSocket 不得进入路由")
+            assert denied.value.status_code == 400

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated, Protocol, TypeVar, cast
 
 from fastapi import Depends, Header, HTTPException, Request
+from starlette.requests import HTTPConnection
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.path_utils import SessionCatalogComponents, workspace_context
@@ -168,7 +169,7 @@ def get_workspace_resource_owner(
 
 
 def _require_service(
-    request: Request,
+    request: HTTPConnection,
     attribute: str,
     expected_type: type[T],
     message: str,
@@ -189,7 +190,7 @@ def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
     return x_local_token
 
 
-def get_workspace_container(request: Request) -> _AppContainerProtocol:
+def get_workspace_container(request: HTTPConnection) -> _AppContainerProtocol:
     """从显式 path UUID 或 Gateway 内部头取得唯一 workspace 服务图。"""
 
     path_workspace_id = request.path_params.get("workspace_id")
@@ -230,9 +231,9 @@ def get_workspace_container(request: Request) -> _AppContainerProtocol:
 
 
 async def workspace_container_scope(
-    request: Request,
+    request: HTTPConnection,
 ) -> AsyncIterator[_AppContainerProtocol]:
-    """在整个请求期间绑定按显式 ID 解析出的工作区根目录上下文。"""
+    """在 HTTP 或 WebSocket 连接期间绑定显式工作区上下文。"""
 
     container = get_workspace_container(request)
     with workspace_context(
@@ -243,7 +244,7 @@ async def workspace_container_scope(
         yield container
 
 
-def _get_container(request: Request) -> _AppContainerProtocol:
+def _get_container(request: HTTPConnection) -> _AppContainerProtocol:
     return get_workspace_container(request)
 
 
@@ -278,7 +279,7 @@ def get_workspace_activity_service(request: Request) -> WorkspaceActivityService
     return _require_service(request, "workspace_activity_service", WorkspaceActivityService, "Workspace 活动事件服务尚未在应用启动阶段初始化")
 
 
-def get_node_debug_service(request: Request) -> NodeDebugService:
+def get_node_debug_service(request: HTTPConnection) -> NodeDebugService:
     return _require_service(request, "node_debug_service", NodeDebugService, "NodeDebugService 尚未在应用启动阶段初始化")
 
 
