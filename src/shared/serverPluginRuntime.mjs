@@ -6,6 +6,7 @@ import {
   verifyRuntimeControlToken,
 } from "./serverRuntimeControl.mjs";
 import { runtimeLoggingState } from "./serverRuntimeLogging.mjs";
+import { createPluginCommands } from "./serverPluginCommands.mjs";
 
 function invalidEnvironment(name, detail) {
   throw new TypeError(`${name} ${detail}`);
@@ -92,6 +93,7 @@ export function createPluginRuntimeManagement(options) {
     throw new TypeError("插件服务名必须是非空字符串");
   }
   if (typeof options.shutdown !== "function") throw new TypeError("插件必须提供原服务关闭函数");
+  const commands = createPluginCommands(environment.identity, options.commands);
 
   return Object.freeze({
     ...environment,
@@ -99,10 +101,15 @@ export function createPluginRuntimeManagement(options) {
       if (await handleRuntimeLoggingRequest(request, response, {
         pathname, service: options.service, readJson: options.readJson, token: environment.token,
       })) return true;
-      if (pathname !== "/internal/plugin/status" && pathname !== "/internal/plugin/shutdown") return false;
+      if (pathname !== "/internal/plugin/status" && pathname !== "/internal/plugin/shutdown"
+          && !["/internal/plugin/commands", "/internal/plugin/commands/call", "/internal/plugin/commands/cancel"].includes(pathname)) return false;
 
       verifyLocalRuntimeControlRequest(request);
       verifyRuntimeControlToken(request.headers["x-local-token"], environment.token);
+      if (pathname.startsWith("/internal/plugin/commands")) {
+        await commands.handle(request, response, pathname, options.readJson, options.logger);
+        return true;
+      }
       if (pathname === "/internal/plugin/status") {
         if (request.method !== "GET") {
           throw Object.assign(new Error("插件状态只接受 GET"), { statusCode: 405 });
@@ -111,7 +118,7 @@ export function createPluginRuntimeManagement(options) {
           ...environment.identity,
           status: "ready",
           process_id: process.pid,
-          capabilities: ["status", "shutdown"],
+          capabilities: ["status", "shutdown", ...(commands.registrations.commands.length ? ["commands"] : [])],
           log_sink: runtimeLoggingState(options.service).log_sink,
         });
         return true;

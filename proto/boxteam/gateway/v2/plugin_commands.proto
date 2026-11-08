@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package boxteam.gateway.v2;
+
+import "google/protobuf/struct.proto";
+
+// 运行实例仅注册清单内的具名处理者；不是任意方法调用协议。
+message PluginCommandRegistration {
+  string command_id = 1;
+  string handler = 2;
+  string registration_id = 3;
+}
+
+message PluginCommandRegistrationsDTO {
+  string instance_id = 1;
+  repeated PluginCommandRegistration commands = 2;
+}
+
+message PluginCommandInstanceRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string package_id = 3;
+  string package_version = 4;
+  string plugin_id = 5;
+  optional string workspace_id = 6;
+  string instance_id = 7;
+}
+
+message PluginCommandCallRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string package_id = 3;
+  string package_version = 4;
+  string plugin_id = 5;
+  optional string workspace_id = 6;
+  string instance_id = 7;
+  string registration_id = 8;
+  string command_id = 9;
+  string call_id = 10;
+  google.protobuf.Struct arguments = 11;
+  int32 remaining_ms = 12;
+  optional string session_id = 13;
+  optional string thread_id = 14;
+}
+
+message PluginCommandCancelRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string package_id = 3;
+  string package_version = 4;
+  string plugin_id = 5;
+  optional string workspace_id = 6;
+  string instance_id = 7;
+  string registration_id = 8;
+  string command_id = 9;
+  string call_id = 10;
+}
+
+message PluginCommandCancelDTO {
+  string instance_id = 1;
+  string call_id = 2;
+  bool accepted = 3;
+}
+
+message PluginCommandEventDTO {
+  string instance_id = 1;
+  string registration_id = 2;
+  string command_id = 3;
+  string call_id = 4;
+  string request_id = 5;
+  int32 sequence = 6;
+  string kind = 7;
+  optional double completed = 8;
+  optional double total = 9;
+  optional string message = 10;
+  google.protobuf.Value result = 11;
+  optional string error_code = 12;
+}

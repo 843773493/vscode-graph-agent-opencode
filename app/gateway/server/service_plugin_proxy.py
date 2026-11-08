@@ -34,6 +34,7 @@ from app.gateway.auxiliary_proxy import (
     _relay_upstream_to_client,
 )
 from app.gateway.federation.policy import (
+    Capability,
     FederationPolicyStore,
     require_federation_capability,
 )
@@ -66,6 +67,7 @@ class _ServiceRoute:
     stopped: asyncio.Event
     instance_id: str
     gateway_id: str
+    remote: bool = False
 
 
 @contextmanager
@@ -95,7 +97,7 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             registry.add_commit_observer(check_remote)
             try:
                 check_remote()
-                yield _ServiceRoute(url.copy_merge_params(tuple(query)), headers, retired, instance_id or "", gateway_id)
+                yield _ServiceRoute(url.copy_merge_params(tuple(query)), headers, retired, instance_id or "", gateway_id, True)
             finally:
                 registry.remove_commit_observer(check_remote)
             return
@@ -129,7 +131,8 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
         yield _ServiceRoute(build_upstream_url(base_url, (), path).copy_merge_params(tuple(query)), headers, stopped, selected_instance, gateway_id)
 
 
-async def _watch_access(connection: HTTPConnection, auth: GatewayAuthContext, stopped: asyncio.Event) -> None:
+async def _watch_access(connection: HTTPConnection, auth: GatewayAuthContext, stopped: asyncio.Event,
+                        capabilities: tuple[Capability, ...] = ("send", "read")) -> None:
     """每次策略发布核准入；帧转发只传字节，不新增逐帧网络检查。"""
     async def retired() -> None:
         await stopped.wait()
@@ -138,8 +141,8 @@ async def _watch_access(connection: HTTPConnection, auth: GatewayAuthContext, st
         store: FederationPolicyStore = connection.app.state.federation_policy_store
         while True:
             changed = store.changed
-            require_federation_capability(connection, auth, "send")
-            require_federation_capability(connection, auth, "read")
+            for capability in capabilities:
+                require_federation_capability(connection, auth, capability)
             await changed.wait()
 
     if auth.kind == "local":
@@ -153,15 +156,20 @@ class _ServiceResponse(StreamingResponse):
     """整个 HTTP 响应随原实例／授权退役，空闲 SSE 也能立即结束。"""
 
     def __init__(self, body: UpstreamResponseBody, *, request: Request, auth: GatewayAuthContext,
-                 route: _ServiceRoute, response: httpx.Response) -> None:
+                 route: _ServiceRoute, response: httpx.Response,
+                 capabilities: tuple[Capability, ...] = ("send", "read")) -> None:
         super().__init__(body, status_code=response.status_code,
             headers=filter_hop_by_hop_headers((key, value) for key, value in response.headers.items()
                 if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS | {
-                    "set-cookie", "content-length", "content-encoding", "x-boxteam-plugin-instance-id", "x-boxteam-plugin-gateway-id"}))
+                    "set-cookie", "content-length", "content-encoding"}))
+        if route.remote and (response.headers.get("X-BoxTeam-Plugin-Instance-Id") != route.instance_id
+            or response.headers.get("X-BoxTeam-Plugin-Gateway-Id") != route.gateway_id):
+            raise ValueError("远端插件响应不属于原实例")
         if route.instance_id:
             self.headers["X-BoxTeam-Plugin-Instance-Id"] = route.instance_id
             self.headers["X-BoxTeam-Plugin-Gateway-Id"] = route.gateway_id
         self.request, self.auth, self.route, self.body = request, auth, route, body
+        self.capabilities = capabilities
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         started, completed = False, False
@@ -178,7 +186,7 @@ class _ServiceResponse(StreamingResponse):
         async def watch() -> None:
             nonlocal revoked
             try:
-                await _watch_access(self.request, self.auth, self.route.stopped)
+                await _watch_access(self.request, self.auth, self.route.stopped, self.capabilities)
             except LookupError as error:
                 revoked = HTTPException(409, str(error))
             except HTTPException as error:

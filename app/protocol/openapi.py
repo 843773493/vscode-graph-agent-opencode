@@ -6,8 +6,11 @@ from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pool import Default, DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
+from app.protocol.generated.boxteam.gateway.v2 import (
+    plugin_commands_pb2,
+    service_plugin_pb2,
+)
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
-from app.protocol.generated.boxteam.gateway.v2 import service_plugin_pb2
 from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
@@ -39,6 +42,15 @@ from app.schemas.gateway.mcp_definitions import (
     McpProviderResolveDTO,
     McpProviderSnapshotDTO,
     McpProviderStdioLaunchDTO,
+)
+from app.schemas.gateway.plugin_commands import (
+    PluginCommandCallRequest,
+    PluginCommandCancelDTO,
+    PluginCommandCancelRequest,
+    PluginCommandEventDTO,
+    PluginCommandInstanceRequest,
+    PluginCommandRegistration,
+    PluginCommandRegistrationsDTO,
 )
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
@@ -229,6 +241,12 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     )
 }
 
+GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
+    name: f"{plugin_commands_pb2.DESCRIPTOR.package}.{name}"
+    for name in ("PluginCommandCallRequest", "PluginCommandCancelRequest", "PluginCommandCancelDTO",
+                 "PluginCommandInstanceRequest", "PluginCommandRegistrationsDTO")
+}
+
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "ExtensionConfigurationEventDTO": gateway_public_pb2.DESCRIPTOR.message_types_by_name["ExtensionConfigurationEventDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
@@ -294,6 +312,9 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
         PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
         PluginSkillSourceDTO, GatewaySkillSourceEntryDTO, GatewaySkillSourcesDTO,
+        PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,
+        PluginCommandInstanceRequest, PluginCommandRegistration, PluginCommandRegistrationsDTO,
+        PluginCommandEventDTO,
     ):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)

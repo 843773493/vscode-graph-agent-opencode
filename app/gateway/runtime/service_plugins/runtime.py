@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import httpx
 import psutil
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.env import get_project_root
@@ -35,6 +36,10 @@ from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime.workspace_process import (
     _local_child_environment,
     resolve_python_executable,
+)
+from app.schemas.gateway.plugin_commands import (
+    PluginCommandRegistration,
+    PluginCommandRegistrationsDTO,
 )
 from app.schemas.gateway.service_plugin import (
     PluginBinding,
@@ -86,6 +91,13 @@ class PluginSlot:
     error: str | None = None
     state: str = "stopped"
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
+    commands: dict[str, PluginCommandRegistration] = field(default_factory=dict)
+    command_validators: dict[str, tuple[Draft202012Validator, Draft202012Validator]] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.command_validators = {command.id: (Draft202012Validator(command.arguments_schema),
+                                              Draft202012Validator(command.result_schema))
+                                   for command in self.declaration.contributes.commands}
 
     def describe(self) -> dict[str, object]:
         if self.process is not None and self.state == "ready" and not self.process.is_alive():
@@ -233,6 +245,9 @@ class GatewayPluginRuntime:
             "instance_scope": slot.declaration.instance_scope,
             "instance_id": instance_id, "management_protocol_version": 1, "extension_contract_version": 1,
             "services": [service.model_dump() for service in slot.declaration.contributes.services]})
+        environment["BOXTEAM_PLUGIN_COMMANDS"] = json.dumps([
+            command.model_dump(mode="json") for command in slot.declaration.contributes.commands
+        ])
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])
         root = self.packages.package_root(slot.binding.package_id, slot.binding.package_version)
         working_directory = self.directory / instance_id
@@ -267,6 +282,7 @@ class GatewayPluginRuntime:
                 response.raise_for_status()
                 receipt = PluginInstanceStatus.model_validate(response.json())
                 self._check_receipt(slot, receipt, instance_id)
+                slot.commands = await self._command_registrations(slot, instance_id, slot.base_url, token)
                 slot.process.confirm_service_identity(receipt.process_id)
                 slot.receipt, slot.state = receipt, "ready"
                 record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +317,7 @@ class GatewayPluginRuntime:
         response.raise_for_status()
         receipt = PluginInstanceStatus.model_validate(response.json())
         self._check_receipt(slot, receipt, record.instance_id)
+        slot.commands = await self._command_registrations(slot, record.instance_id, record.base_url, record.token)
         if receipt.process_id != record.process_id:
             raise ValueError("插件回执 PID 与原创建进程不符")
         ownership = self.logs.adopt("service-plugin", receipt.instance_id,
@@ -308,6 +325,20 @@ class GatewayPluginRuntime:
         slot.process = AdoptedManagedProcess(receipt.process_id, ownership)
         slot.receipt, slot.base_url, slot.token, slot.state = receipt, record.base_url, record.token, "ready"
         return True
+
+    async def _command_registrations(self, slot: PluginSlot, instance_id: str, base_url: str,
+                                     token: str) -> dict[str, PluginCommandRegistration]:
+        if not slot.declaration.contributes.commands:
+            return {}
+        response = await self.client.get(base_url + "/internal/plugin/commands", headers={"X-Local-Token": token})
+        response.raise_for_status()
+        registered = PluginCommandRegistrationsDTO.model_validate(response.json())
+        expected = {command.id: command.handler for command in slot.declaration.contributes.commands}
+        if (registered.instance_id != instance_id or len(registered.commands) != len(expected)
+            or {item.command_id: item.handler for item in registered.commands} != expected
+            or len({item.registration_id for item in registered.commands}) != len(expected)):
+            raise ValueError("插件命令实际注册与精确清单或实例不符")
+        return {item.command_id: item for item in registered.commands}
 
     async def adopt(self) -> None:
         """只恢复原 owner 交付的进程句柄，之后按当前配置处理停用或移除。"""

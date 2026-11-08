@@ -3,6 +3,7 @@ import type {
   PluginInstanceStatus as GeneratedPluginInstanceStatus,
   PluginServiceContribution,
 } from "../clients/web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js";
+import type { PluginCommandCallRequest } from "../clients/web/src/types/protocol_generated/boxteam/gateway/v2/plugin_commands.js";
 
 export type PluginServiceDeclaration = PluginServiceContribution;
 export type PluginRuntimeIdentity = Omit<Pick<GeneratedPluginInstanceStatus,
@@ -32,4 +33,10 @@ export function createPluginRuntimeManagement(options: {
   logger: { error(...values: unknown[]): void };
   readJson: (request: AsyncIterable<Uint8Array>) => Promise<unknown>;
   shutdown: () => void | Promise<void>;
+  commands?: Readonly<Record<string, (arguments_: Record<string, unknown>, context: {
+    call: Readonly<PluginCommandCallRequest>;
+    requestId: string;
+    signal: AbortSignal;
+    progress(completed: number, total?: number, message?: string): Promise<void>;
+  }) => Promise<unknown>>>;
 }): PluginRuntimeManagement;

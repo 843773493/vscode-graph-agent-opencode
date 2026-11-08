@@ -14,8 +14,7 @@ def test_plugin_manifest_structure_is_checked_against_candidate_descriptor(
 ) -> None:
     descriptor_bundle = FileDescriptorSet()
     descriptor_bundle.CopyFrom(http_descriptor_bundle)
-    file = descriptor_bundle.file.add()
-    service_plugin_pb2.DESCRIPTOR.CopyToProto(file)
+    file = next(file for file in descriptor_bundle.file if file.name == service_plugin_pb2.DESCRIPTOR.name)
     message = next(message for message in file.message_type if message.name == "PluginPackageManifest")
     message.field.add(name="undeclared_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
     pool = descriptor_pool_from_set(descriptor_bundle.SerializeToString())

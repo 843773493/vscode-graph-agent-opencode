@@ -208,6 +208,10 @@ def test_install_accepts_typed_plugin_contributions(tmp_path: Path) -> None:
         (lambda manifest: manifest["plugins"][0]["contributes"].update({
             "commands": [{"id": "browser.open", "title": "Open", "handler": "open", "arguments_schema": {"type": "not-a-schema-type"}, "result_schema": {}}],
         }) or manifest["plugins"][0]["requires"].append({"extension_point": "commands", "version": 1}), "不是有效 JSON Schema"),
+        (lambda manifest: manifest["plugins"][0]["contributes"].update({
+            "commands": [{"id": "browser.open", "title": "Open", "handler": "open", "arguments_schema": {}, "result_schema": {},
+                          "required_capabilities": ["unknown_permission"]}],
+        }) or manifest["plugins"][0]["requires"].append({"extension_point": "commands", "version": 1}), "未知业务权限"),
     ],
 )
 def test_install_rejects_invalid_contribution_contracts(

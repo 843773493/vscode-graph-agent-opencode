@@ -21,6 +21,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from app.core.atomic_fs import fsync_directory, fsync_file
+from app.gateway.federation.policy import CAPABILITIES
 from app.gateway.plugins.dependencies import (
     has_python_lock,
     prepare_dependencies,
@@ -310,6 +311,9 @@ def _declared_file(path: str, available: set[str], label: str) -> str | None:
 
 
 def _validate_contribution_schemas(plugin: ServicePluginManifest) -> None:
+    for command in plugin.contributes.commands:
+        if unknown := set(command.required_capabilities) - set(CAPABILITIES):
+            raise ValueError(f"命令 {command.id} 声明了未知业务权限: {sorted(unknown)}")
     schemas = [
         (f"command {command.id} arguments_schema", command.arguments_schema)
         for command in plugin.contributes.commands
