@@ -16,8 +16,14 @@ export function composerDraftScopeKey(
   return threadId === undefined ? sessionKey : `${sessionKey}::thread:${encodeURIComponent(threadId)}`;
 }
 
+function parseComposerDraft(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value !== "string") throw new Error("Composer 草稿格式无法识别，原记录已保留，拒绝覆盖或删除");
+  return value;
+}
+
 export async function readComposerDraft(scopeKey: string | null): Promise<string> {
-  return scopeKey ? await readBrowserView<string>(`draft:${scopeKey}`) ?? "" : "";
+  return scopeKey ? parseComposerDraft(await readBrowserView<unknown>(`draft:${scopeKey}`)) : "";
 }
 
 /** 超限时界面继续持有输入，同时由调用方明确提示尚未保存。 */
@@ -28,7 +34,11 @@ export function composerDraftExceedsLimit(content: string): boolean {
 export async function writeComposerDraft(scopeKey: string | null, content: string): Promise<void> {
   if (!scopeKey) return;
   if (composerDraftExceedsLimit(content)) throw new Error(`Composer 草稿长度不能超过 ${MAX_COMPOSER_DRAFT_LENGTH} 个字符`);
-  await updateBrowserView<string>(`draft:${scopeKey}`, () => content || undefined);
+  await updateBrowserView<unknown>(`draft:${scopeKey}`, current => {
+    // 格式检查和修改在原事务内完成，读取后才出现的未知记录也不能被覆盖。
+    parseComposerDraft(current);
+    return content || undefined;
+  });
 }
 
 /** 一次性迁移旧 localStorage；保留完整原件，只有明确属于当前身份的草稿才移入本地视图。 */
