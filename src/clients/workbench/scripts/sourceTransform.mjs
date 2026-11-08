@@ -26,6 +26,7 @@ import { nativeManagementSourcePaths, transformNativeManagement } from './native
 import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './settingsEditorScopeTransform.mjs';
 import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEditorTransform.mjs';
 import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
+import { extensionTerminalSourcePaths, transformExtensionTerminal } from './extensions/extensionTerminalTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -81,6 +82,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionLanguageFeaturesSourcePaths,
   ...extensionWorkspaceSymbolsSourcePaths,
   ...extensionStorageSourcePaths,
+  ...extensionTerminalSourcePaths,
   ...extensionConfigurationSourcePaths, ...configurationContributionSourcePaths, ...configurationRegistrySourcePaths,
   ...extensionFileEventsSourcePaths,
   ...settingsEditorScopeSourcePaths,
@@ -126,6 +128,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionEnablement(root, path, contents, replaceOnce);
     contents = transformExtensionDocuments(root, path, contents, replaceOnce);
     contents = transformExtensionStorage(root, path, contents, replaceOnce, runtime);
+    contents = transformExtensionTerminal(root, path, contents, replaceOnce);
     contents = transformMcpProviders(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
       // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。

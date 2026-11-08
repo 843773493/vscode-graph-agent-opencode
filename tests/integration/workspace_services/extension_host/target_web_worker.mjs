@@ -122,7 +122,7 @@ try {
       notify('MainThreadLogger', ['$registerLogger', '$deregisterLogger', '$flush', '$log', '$createLogger', '$setVisibility']);
       notify('MainThreadTelemetry', ['$publicLog2', '$publicLog']);
       notify('MainThreadConsole', ['$logExtensionHostMessage']);
-      notify('MainThreadTerminalService', ['$registerProcessSupport']);
+      notify('MainThreadTerminalService', ['$registerProcessSupport', '$createTerminal', '$startSendingDataEvents', '$setEnvironmentVariableCollection']);
       notify('MainThreadSearch', ['$registerTextSearchProvider']);
       notify('MainThreadTask', ['$registerSupportedExecutions', '$registerTaskSystem']);
       notify('MainThreadDebugService', ['$registerDebugTypes']);
@@ -182,10 +182,12 @@ try {
       profile_id: value.profile_id, view_id: value.view_id, generation: value.generation, workspace_ids: value.workspace_ids }));
     return { firstA, firstB, afterA, afterB, emptyResult, upgradedOldA, uninstalledOldA, stillB, style, newAdmission, closedA,
       upgraded: upgrade.installed.version, uninstalled: uninstall.uninstalled.version, errors, secretCalls: calls.filter(call => call.actor === 'MainThreadSecretState'),
+      terminalCalls: calls.filter(call => call.actor === 'MainThreadTerminalService'),
       bindings, typedRoots: folderUris.map(uri => uri.toString(true)), iframeCount: document.querySelectorAll('iframe.web-worker-ext-host-iframe').length };
   }, spec);
   await writeFile(join(spec.artifacts, 'worker-result.json'), JSON.stringify(result, null, 2));
   assert.equal(result.firstA.version, '1.0.0'); assert.equal(result.firstB.version, '2.0.0');
+  assert.deepEqual(result.terminalCalls, []);
   assert.equal(result.firstA.chunk, '1.0.0'); assert.equal(result.firstB.chunk, '2.0.0');
   assert.deepEqual(result.firstA.folders, [result.typedRoots[0]]); assert.deepEqual(result.firstB.folders, [result.typedRoots[1]]);
   assert.equal(result.firstA.setting, 'A-remote'); assert.equal(result.firstB.setting, 'B-remote');
@@ -200,6 +202,8 @@ try {
     assert.match(value.storageUri, /^vscode-userdata:/); assert.match(value.globalStorageUri, /^vscode-userdata:/);
     assert.equal(value.errors.length, 5); assert.equal(value.errors.filter(error => error.includes('SecretStorage')).length, 4);
     assert.equal(value.errors.filter(error => error.includes('setKeysForSync')).length, 1);
+    assert.equal(value.terminalErrors.length, 5);
+    assert.equal(value.terminalErrors.every(message => message?.includes('目标终端服务')), true);
     assert.equal(value.extensionUri.includes('token'), false);
   }
   assert.notEqual(result.firstA.globalStorageUri, result.firstB.globalStorageUri);

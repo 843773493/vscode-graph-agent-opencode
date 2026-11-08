@@ -85,7 +85,9 @@ async function connect(label) {
   notify('MainThreadLogger', ['$registerLogger', '$deregisterLogger']);
   notify('MainThreadTelemetry', ['$publicLog2', '$publicLog']);
   notify('MainThreadConsole', ['$logExtensionHostMessage']);
-  notify('MainThreadTerminalService', ['$registerProcessSupport']);
+  const terminalCalls = [];
+  register('MainThreadTerminalService', Object.fromEntries(['$registerProcessSupport', '$createTerminal', '$startSendingDataEvents', '$setEnvironmentVariableCollection']
+    .map(name => [name, (...args) => terminalCalls.push({ name, args })])));
   notify('MainThreadSearch', ['$registerTextSearchProvider']);
   notify('MainThreadTask', ['$registerSupportedExecutions', '$registerTaskSystem']);
   notify('MainThreadDebugService', ['$registerDebugTypes']);
@@ -111,7 +113,7 @@ async function connect(label) {
   await service.$startExtensionHost(delta(1));
   assert.equal(await service.$activate(extension.identifier,
     { startup: false, extensionId: extension.identifier, activationEvent: '*' }), true);
-  return { extension, target: binding.target, service,
+  return { extension, target: binding.target, service, terminalCalls,
     inspect: () => rpc.getProxy(m.ExtHostContext.ExtHostCommands).$executeContributedCommand('runtime.inspect'),
     async stop() { protocol.send(m.VSBuffer.wrap(Uint8Array.of(3))); assert.deepEqual(await exit, [false]); },
   };
@@ -125,6 +127,12 @@ try {
   assert.equal(secondState.hasManagementToken, false);
   assert.equal(firstState.hasReferenceCapability, false);
   assert.equal(secondState.hasReferenceCapability, false);
+  for (const [host, state] of [[first, firstState], [second, secondState]]) {
+    assert.equal(state.terminalErrors.length, 8);
+    assert.equal(state.terminalErrors.every(message => message?.includes('目标终端服务')), true);
+    assert.deepEqual(host.terminalCalls, []);
+  }
+  receipts.push({ terminalErrors: firstState.terminalErrors, terminalCalls: first.terminalCalls });
   const updated = await control('update');
   const third = await connect('third');
   assert.equal((await third.inspect()).version, '2.0.0');

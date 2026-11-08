@@ -46,6 +46,10 @@ exports.activate = context => {
     ids: vscode.extensions.all.map(extension => extension.id),
     hasManagementToken: process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN !== undefined,
     hasReferenceCapability: process.env.BOXTEAM_EXTENSION_HOST_REFERENCE !== undefined,
+    terminalErrors: [() => vscode.window.createTerminal('wrong-window'), () => vscode.window.createTerminal({name:'wrong-window'}),
+      () => vscode.window.createTerminal({name:'pty', pty:{}}), () => vscode.window.terminals, () => vscode.window.activeTerminal,
+      () => vscode.window.onDidWriteTerminalData(() => {}), () => vscode.env.shell, () => context.environmentVariableCollection]
+      .map(operation => { try { operation(); return null; } catch (error) { return error.message; } }),
   })));
 };
 """)

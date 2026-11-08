@@ -20,6 +20,8 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 
 目标 SecretStorage 尚未接入消费侧 owner，目标 Node／Web 入口均在秘密进入浏览器 RPC 前拒绝；主线程不读写或向目标宿主广播窗口秘密。窗口内置 Web 原秘密 API 保持，明确拒绝不等同目标能力已实现。
 
+目标终端尚未接入时，由原 ExtHost 公开 API／创建 owner 和两个 MainThread 终端 owner 明确拒绝；目标宿主不订阅窗口终端、不登记窗口进程能力、不取得或修改窗口环境集合。Node／Worker 初始化消费同一已认证目标标记，内置窗口宿主保持原行为；后续接线须沿同一终端链替换拒绝，不增加本地 fallback。
+
 诊断继续由原 MainThreadDiagnostics／MarkerService 持有；目标 collection 的内部 owner 使用原 extHostId 区分，清空及释放只撤本代。事件按 workspace view 投影并过滤外部关联位置，保留普通正文及合法文档链接；写入先核整批资源，不能部分发布后报错。窗口内置 Web 保留原 owner 与窗口事件语义。
 
 配置转换复用原 WorkspaceService、scope 合并及 ConfigurationEditing；显式目标 settings 不等待窗口 RemoteAgent。原文件夹 parser 保留 raw／名称并按目标平台解析，结果须匹配已认证的有序根；所有 MainThread customer 共用该 host 的配置／context child。配置读取的目标不可用错误不能吞成空配置。

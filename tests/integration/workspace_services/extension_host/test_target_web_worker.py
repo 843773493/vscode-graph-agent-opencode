@@ -59,6 +59,9 @@ exports.activate = async context => {
       await context.workspaceState.update('value', value);
     }
     const errors = [];
+    const terminalErrors = [() => vscode.window.createTerminal({name:'wrong-window'}), () => vscode.window.terminals,
+      () => vscode.window.onDidOpenTerminal(() => {}), () => vscode.env.shell, () => context.environmentVariableCollection]
+      .map(operation => { try { operation(); return null; } catch (error) { return error.message; } });
     for (const operation of [() => context.secrets.get('key'), () => context.secrets.store('key', 'value'),
       () => context.secrets.delete('key'), () => context.secrets.keys(), () => context.globalState.setKeysForSync(['value'])]) {
       try { await operation(); } catch (error) { errors.push(error.message); }
@@ -66,7 +69,7 @@ exports.activate = async context => {
     return { version: context.extension.packageJSON.version, extensionUri: context.extensionUri.toString(true),
       chunk: chunk.marker, style: chunk.style, marker: await (await fetch(vscode.Uri.joinPath(context.extensionUri, 'dist', 'marker.txt').toString(true))).text(),
       folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
-      setting: vscode.workspace.getConfiguration('probe').get('remote'), before, errors,
+      setting: vscode.workspace.getConfiguration('probe').get('remote'), before, errors, terminalErrors,
       globalStorageUri: context.globalStorageUri.toString(true), storageUri: context.storageUri?.toString(true),
       logUri: context.logUri.toString(true) };
   }));

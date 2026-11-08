@@ -272,6 +272,8 @@ Rename 的调用前文本版本快照与 CodeAction 共用原 ExtHost 文档 own
 
 capability discovery 只读取版本与实际已支持服务，不启动 Agent。兼容矩阵与实际运行结果可查询；缺少必要能力的扩展不得显示为已可用。宿主启动、扩展激活、命令执行与业务结果分别验收。安装包可复用，但 host 运行态不跨目标／客户端共享；持久 storage key 不含临时客户端会话或 endpoint，以保持重启恢复。
 
+目标终端尚未接入期间，目标安装的 Web／Node 扩展从原公开终端 API、shell 与环境集合入口明确取得不支持错误；内部调试路径调用原终端创建服务也在构造本地 Terminal 对象前拒绝。原 MainThreadTerminalService 与独立的 MainThreadTerminalShellIntegration 不向目标宿主初始化或订阅窗口终端，所有入站终端 RPC 同样拒绝。原目标终端服务初始化不向窗口登记进程能力；窗口内置 Web 宿主继续沿原行为。本边界不表示目标终端、任务、调试或完整机器可查询能力矩阵已经实现，后续目标终端接入沿原 owner 替换这些拒绝。
+
 `globalStorageUri`、`storageUri`、`logUri` 与 `extensionUri` 也属于 URI／存储闭包：Node host 取得的是目标本机可用路径，包目录与可写状态目录分开；工作台资源访问仍走原受权通道。Memento 的共享持久数据沿原 storage owner 及变更事件同步，同身份客户端并发沿原写入语义，不虚构逐字段事务合并；运行回调与瞬时活动态不随持久存储共享。 原 Workbench profile／IndexedDB 继续持有 Memento 正文，ExtensionStorageService 统一按稳定安装目标及 workspace view 生成键，MainThreadStorage 的通知还原原公开 extension ID；不另建目标状态库。目标 Node 的 `setKeysForSync` 跨设备同步尚未迁齐原同步消费者，当前从原公开 API 明确拒绝并登记 TODO，不保存无人消费的同步声明；Web 原同步与清理保持。目标侧秘密 owner 尚未接通，Node SecretStorage 在秘密进入浏览器 RPC 前明确拒绝，MainThreadSecretState 也不读写或广播 Web profile 的秘密；完整目标秘密支持仍是 TODO，不以浏览器同名扩展的秘密库代替。
 
 ### D9. 设置只有一个编辑入口，各域仍持有自己的权威
