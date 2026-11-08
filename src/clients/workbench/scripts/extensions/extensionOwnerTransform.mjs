@@ -13,11 +13,25 @@ export const extensionOwnerSourcePaths = [
   'src/vs/workbench/api/browser/mainThreadFileSystem.ts',
   'src/vs/workbench/services/extensions/common/extensionsRegistry.ts',
   'src/vs/workbench/services/themes/common/iconExtensionPoint.ts',
+  'src/vs/workbench/services/extensions/common/rpcProtocol.ts',
 ];
 
 /** 原协调 owner 继续持有唯一窗口 registry；宿主只消费从它派生的合法快照。 */
 export function transformExtensionOwner(root, path, source, replaceOnce) {
   const paths = extensionOwnerSourcePaths.map(value => join(root, 'upstream', value));
+  if (path === paths[12]) {
+    // URI 归属拒绝也必须沿原请求 Promise 回复；转换在 token 附加前完成。
+    const transform = '\t\t\t\tif (this._uriTransformer) {\n\t\t\t\t\targs = transformIncomingURIs(args, this._uriTransformer);\n\t\t\t\t}\n';
+    if (source.split(transform).length !== 3) throw new Error('原 RPC 两类请求的 URI 转换点已变化');
+    let contents = source.replaceAll(transform, '');
+    contents = replaceOnce(contents, 'args.push(cancellationTokenSource.token);\n\t\t\tpromise = this._invokeHandler(rpcId, method, args);',
+      'promise = this._invokeHandler(rpcId, method, args, cancellationTokenSource.token);');
+    return replaceOnce(contents, `private _invokeHandler(rpcId: number, methodName: string, args: any[]): Promise<any> {
+\t\ttry {`, `private _invokeHandler(rpcId: number, methodName: string, args: any[], token?: CancellationToken): Promise<any> {
+\t\ttry {
+      if (this._uriTransformer) args = transformIncomingURIs(args, this._uriTransformer);
+      if (token) args.push(token);`);
+  }
   if (path === paths[11]) return replaceOnce(source, 'iconRegistry.deregisterIcon(id);', `iconRegistry.deregisterIcon(id);
           const defaultIcon = extensionValue[id].default;
           if (typeof defaultIcon === 'object' && typeof defaultIcon.fontPath === 'string') {

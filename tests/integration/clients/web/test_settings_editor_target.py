@@ -110,8 +110,9 @@ async def test_settings_editor_saves_target_json_and_restores_same_profile(insta
         and write["profile_id"] == binding["profile_id"] for write in browser["writes"])
 
 
-async def test_target_browser_configuration_scopes_use_original_multiroot_writer(
-    shared_backend_case: SharedBackendCase, vsix_factory,
+@pytest.mark.parametrize("runtime_kind", ["web", "node"])
+async def test_target_configuration_scopes_use_original_multiroot_writer(
+    shared_backend_case: SharedBackendCase, vsix_factory, runtime_kind: str,
 ) -> None:
     case = shared_backend_case
     primary, secondary, joined = await _join_group(case)
@@ -119,18 +120,20 @@ async def test_target_browser_configuration_scopes_use_original_multiroot_writer
     targets = await case.data("POST", "/api/gateway/extension-targets", json={"protocol_version": 1, "gateway_id": gateway_id})
     target, = targets["targets"]
     originals = [(root / ".boxteam/workspace.jsonc").read_bytes() for root in case.roots]
-    package = vsix_factory(case.roots[0], "1.0.0", "web-configuration-scopes", manifest_overrides={
-        "name": "web-configuration-scopes", "browser": "./browser.js", "extensionKind": ["web"],
-        "activationEvents": ["onCommand:boxteam.webScopes.read"], "contributes": {
-            "commands": [{"command": "boxteam.webScopes.read", "title": "读取多根 Web 配置"}],
-            "configuration": {"title": "Web 作用域验收", "properties": {
-                "webScopeProbe.value": {"type": "string", "default": "default-value", "scope": "resource"},
-                "webScopeProbe.language": {"type": "string", "default": "default-language", "scope": "language-overridable"},
-                "webScopeProbe.inferred": {"type": "string", "default": "default-inferred", "scope": "resource"},
-                "webScopeProbe.window": {"type": "string", "default": "default-window", "scope": "window"}}},
-            "configurationDefaults": {"[typescript]": {"webScopeProbe.language": "default-typescript"}}}}, omit=("main",))
+    package = vsix_factory(case.roots[0], "1.0.0", "configuration-scopes", manifest_overrides={
+        "name": "configuration-scopes",
+        ("browser" if runtime_kind == "web" else "main"): "./probe.js",
+        "extensionKind": ["web" if runtime_kind == "web" else "workspace"],
+        "activationEvents": ["onCommand:boxteam.scopes.read"], "contributes": {
+            "commands": [{"command": "boxteam.scopes.read", "title": "读取多根目标配置"}],
+            "configuration": {"title": "目标作用域验收", "properties": {
+                "scopeProbe.value": {"type": "string", "default": "default-value", "scope": "resource"},
+                "scopeProbe.language": {"type": "string", "default": "default-language", "scope": "language-overridable"},
+                "scopeProbe.inferred": {"type": "string", "default": "default-inferred", "scope": "resource"},
+                "scopeProbe.window": {"type": "string", "default": "default-window", "scope": "window"}}},
+            "configurationDefaults": {"[typescript]": {"scopeProbe.language": "default-typescript"}}}}, omit=("main",) if runtime_kind == "web" else ())
     with ZipFile(package, "a") as archive:
-        archive.writestr("extension/browser.js", """
+        archive.writestr("extension/probe.js", """
 const vscode = require('vscode');
 exports.activate = context => {
   const events = [];
@@ -140,7 +143,7 @@ exports.activate = context => {
       : vscode.workspace.workspaceFolders[options.folder].uri;
     return options.language ? { uri, languageId: options.language } : uri;
   };
-  const configuration = options => vscode.workspace.getConfiguration('webScopeProbe', scope(options));
+  const configuration = options => vscode.workspace.getConfiguration('scopeProbe', scope(options));
   const read = (options = {}) => {
     const config = configuration(options);
     return JSON.parse(JSON.stringify({ activation, value: config.get('value'), language: config.get('language'),
@@ -149,15 +152,16 @@ exports.activate = context => {
       folders: vscode.workspace.workspaceFolders.map(folder => folder.uri.toString(true)),
       workspaceFile: vscode.workspace.workspaceFile?.toString(true),
       worker: typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope,
+      pid: typeof process !== 'undefined' && process.versions?.node ? process.pid : null,
     }, (_key, value) => value === undefined ? null : value));
   };
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-    if (event.affectsConfiguration('webScopeProbe')) events.push({
+    if (event.affectsConfiguration('scopeProbe')) events.push({
       first: read({folder: 0}).value, second: read({folder: 1}).value,
       language: read({folder: 0, language: 'typescript'}).language,
     });
-  }), vscode.commands.registerCommand('boxteam.webScopes.read', read),
-  vscode.commands.registerCommand('boxteam.webScopes.update', async options => {
+  }), vscode.commands.registerCommand('boxteam.scopes.read', read),
+  vscode.commands.registerCommand('boxteam.scopes.update', async options => {
     const target = options.target === undefined ? undefined : vscode.ConfigurationTarget[options.target];
     await configuration(options).update(options.key, options.value, target, options.overrideInLanguage);
     return read(options);
@@ -168,41 +172,48 @@ exports.activate = context => {
         "protocol_version": 1, "gateway_id": gateway_id, "backend_id": target["backend_id"], "workspace_ids": [primary],
         "source_uri": resource_display_uri(scope="workspace", scope_id=primary, kind="files",
             tail_segments=("root", package.name), gateway_authority=gateway_id)})
-    assert installed["installed"]["id"] == "boxteam-probe.web-configuration-scopes"
+    assert installed["installed"]["id"] == "boxteam-probe.configuration-scopes"
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
-    assert chromium, "Web 多根配置验收需要真实 Chromium"
-    output = case.context.artifacts_dir / "web-configuration-scopes.json"
+    assert chromium, "目标多根配置验收需要真实 Chromium"
+    output = case.context.artifacts_dir / "configuration-scopes.json"
     supervisor = Path.cwd() / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
-        "bun", "tests/integration/clients/web/target_web_configuration_scopes.mjs"]
+        "bun", "tests/integration/clients/web/target_configuration_scopes.mjs"]
     with chromium_temporary_environment(case.context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"]) / "chromium-tmp") as temporary:
         result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=195, check=False,
             env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                 "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url).rstrip("/"), "BOXTEAM_BROWSER_RESULT_PATH": str(output),
-                "BOXTEAM_WEB_CONFIGURATION_SCOPES": json.dumps({"gateway_id": gateway_id, "backend_id": target["backend_id"],
-                    "workspace_ids": [primary, secondary]})})
+                "BOXTEAM_CONFIGURATION_SCOPES": json.dumps({"gateway_id": gateway_id, "backend_id": target["backend_id"],
+                    "runtime_kind": runtime_kind, "workspace_ids": [primary, secondary]})})
     (case.context.artifacts_dir / "scopes-browser.stdout.raw").write_text(result.stdout)
     (case.context.artifacts_dir / "scopes-browser.stderr.raw").write_text(result.stderr)
     (case.context.artifacts_dir / "scopes-browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}, indent=2))
     assert result.returncode == 0, result.stdout + result.stderr
     browser = json.loads(output.read_text())
     assert browser["phase"] == "complete" and browser["pageErrors"] == []
-    assert browser["nodeChannels"] == [] and browser["binding"]["workspace_ids"] == [primary, secondary]
-    workspace_uri = urlsplit(browser["binding"]["context"]["workspace"]["configuration"]["native_uri"])
+    assert browser["binding"]["workspace_ids"] == [primary, secondary]
+    workspace = browser["binding"]["context" if runtime_kind == "web" else "initialization"]["workspace"]
+    if runtime_kind == "web":
+        assert browser["nodeChannels"] == [] and browser["hostRuntime"]["worker"]
+        assert browser["hostRuntime"]["pid"] is None
+    else:
+        assert browser["nodeChannels"] and not browser["hostRuntime"]["worker"]
+        assert browser["hostRuntime"]["pid"] > 0
+    workspace_uri = urlsplit(workspace["configuration"]["native_uri"])
     assert workspace_uri.scheme == "file" and not workspace_uri.netloc
     workspace_file = Path(url2pathname(workspace_uri.path)).resolve()
     assert workspace_file.is_relative_to(case.boxteam_home.resolve())
     saved = commentjson.loads(workspace_file.read_text())
-    assert saved["settings"]["webScopeProbe.value"] == "queued-view"
-    assert saved["settings"]["webScopeProbe.inferred"] == "queued-inferred"
+    assert saved["settings"]["scopeProbe.value"] == "queued-view"
+    assert saved["settings"]["scopeProbe.inferred"] == "queued-inferred"
     assert "file has unsaved changes" in browser["dirtyRejection"]
     assert "The content of the file is newer" in browser["saveConflict"]["message"]
     assert browser["saveConflict"]["newerMtime"] > browser["saveConflict"]["originalMtime"]
     assert len(browser["concurrentWrites"]) == 2
     assert len(saved["folders"]) == 2
     first_settings = commentjson.loads((case.roots[0] / ".vscode/settings.json").read_text())
-    assert first_settings["webScopeProbe.value"] == "inferred-folder"
-    assert first_settings["[typescript]"]["webScopeProbe.language"] == "folder-typescript"
+    assert first_settings["scopeProbe.value"] == "inferred-folder"
+    assert first_settings["[typescript]"]["scopeProbe.language"] == "folder-typescript"
     assert not (case.roots[1] / ".vscode/settings.json").exists()
     assert all((root / ".boxteam/workspace.jsonc").read_bytes() == original
         for root, original in zip(case.roots, originals, strict=True))

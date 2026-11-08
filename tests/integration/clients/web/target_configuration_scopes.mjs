@@ -5,22 +5,26 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
-const fixture = JSON.parse(process.env.BOXTEAM_WEB_CONFIGURATION_SCOPES);
+const fixture = JSON.parse(process.env.BOXTEAM_CONFIGURATION_SCOPES);
 const output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
+assert(['web', 'node'].includes(fixture.runtime_kind));
+const isWeb = fixture.runtime_kind === 'web';
+const workspaceOf = binding => isWeb ? binding.context.workspace : binding.initialization.workspace;
 assert(fixture.gateway_id && fixture.backend_id && fixture.workspace_ids.length === 2 && output,
   '必须显式提供双根目标与正式产物目录');
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/test_settings_editor_target.py').prepare();
 const result = { phase: 'initialize', pageErrors: [], consoleErrors: [], nodeChannels: [], bindings: [],
   receipts: [], writes: [], snapshots: [], rejectedResources: [],
-  boundary: '正式 Workbench、真实 Gateway 及同 Backend 双根；原 API 安装纯 browser 扩展，经原挂接命令激活真实 Web Worker。配置更新经公开 getConfiguration/update、原 renderer writer 和目标 Python 文件服务；原设置 UI 打开同一稳定 view 的 JSON，真实键盘制造 dirty、原保存处理外改冲突，公开并发更新验证原队列。外改仅在产品实际写出 .code-workspace 后模拟；无模型调用，不代替 Node、Relay、Windows、Electron 或全部竞态验收。' };
+  runtimeKind: fixture.runtime_kind,
+  boundary: '正式 Workbench、真实 Gateway 及同 Backend 双根；原 API 安装所选 Web／Node 扩展，经原挂接命令激活真实 Worker／Node 进程。配置更新经公开 getConfiguration/update、原 renderer writer 和目标 Python 文件服务；原设置 UI 打开同一稳定 view 的 JSON，真实键盘制造 dirty、原保存处理外改冲突，公开并发更新验证原队列。外改仅在产品实际写出 .code-workspace 后模拟；无模型调用，不代替 Relay、Windows、Electron 或全部竞态验收。' };
 const pending = [];
 let page, failure;
 const save = () => writeFile(output, JSON.stringify(result, null, 2) + '\n');
 const phase = async value => { result.phase = value; await save(); };
 const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
 const action = (id, ...args) => page.evaluate(async ({ id, args }) => { await globalThis.workbench.commands.executeCommand(id, ...args); }, { id, args });
-const read = (options = {}) => command('boxteam.webScopes.read', options);
-const update = options => command('boxteam.webScopes.update', options);
+const read = (options = {}) => command('boxteam.scopes.read', options);
+const update = options => command('boxteam.scopes.update', options);
 async function snapshot(name) {
   const first = await read({ folder: 0 }), second = await read({ folder: 1 }),
     language = await read({ folder: 0, language: 'typescript' });
@@ -67,17 +71,17 @@ try {
   page.on('websocket', socket => {
     const path = new URL(socket.url()).pathname;
     if (path === '/api/gateway/extension-hosts/channel') result.nodeChannels.push(path);
-    if (path !== '/api/gateway/extension-web-hosts/channel') return;
+    if (path !== (isWeb ? '/api/gateway/extension-web-hosts/channel' : '/api/gateway/extension-hosts/channel')) return;
     socket.on('framereceived', ({ payload }) => {
       if (typeof payload !== 'string') return;
       const binding = JSON.parse(payload);
-      if (binding.context) result.bindings.push(binding);
+      if (isWeb ? binding.context : binding.initialization?.workspace) result.bindings.push(binding);
     });
   });
   page.on('response', captureResponse);
   const base = process.env.BOXTEAM_BROWSER_BASE_URL;
   await page.goto(new URL('/api/gateway/health', base).href);
-  await api('/api/gateway/users/guest', 'POST', { tracking: { source: 'web-configuration-scopes' } });
+  await api('/api/gateway/users/guest', 'POST', { tracking: { source: 'configuration-scopes' } });
   await page.goto(base, { waitUntil: 'domcontentloaded' }); await ready();
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces');
   assert.equal(health.gateway_id, fixture.gateway_id);
@@ -97,8 +101,8 @@ try {
   await attaching.catch(error => { if (!String(error).includes('Execution context was destroyed')) throw error; });
   await navigation; await ready();
   await expect.poll(async () => {
-    try { return (await read()).worker; }
-    catch (error) { if (!String(error).includes("command 'boxteam.webScopes.read' not found")) throw error; }
+    try { return (await read()).worker === isWeb; }
+    catch (error) { if (!String(error).includes("command 'boxteam.scopes.read' not found")) throw error; }
   }, { timeout: 30_000 }).toBe(true);
   result.binding = result.bindings.find(binding => binding.workspace_ids.length === 2);
   assert(result.binding); assert.equal(result.binding.gateway_id, fixture.gateway_id);
@@ -106,6 +110,9 @@ try {
   assert.deepEqual(result.binding.workspace_ids, fixture.workspace_ids);
   assert(result.binding.generation && result.binding.request_id);
   const initial = await snapshot('defaults');
+  result.hostRuntime = { worker: initial.first.worker, pid: initial.first.pid };
+  if (isWeb) assert.equal(initial.first.pid, null);
+  else assert(Number.isInteger(initial.first.pid) && initial.first.pid > 0);
   assert.equal(initial.first.value, 'default-value'); assert.equal(initial.second.value, 'default-value');
   assert.equal(initial.first.language, 'default-language'); assert.equal(initial.language.language, 'default-typescript');
   assert.equal(initial.first.inspect.defaultValue, 'default-value');
@@ -138,12 +145,12 @@ try {
   assert.equal(inferred.language.languageInspect.workspaceFolderLanguageValue, 'folder-typescript');
   assert.equal((await read({ folder: 1, language: 'typescript' })).language, 'default-typescript');
 
-  await phase('external-edit-updates-same-worker-model');
-  const native = new URL(result.binding.context.workspace.configuration.native_uri);
+  await phase('external-edit-updates-same-host-model');
+  const native = new URL(workspaceOf(result.binding).configuration.native_uri);
   const content = parse(await readFile(native, 'utf8'));
-  assert.equal(content.settings['webScopeProbe.value'], 'workspace-value');
-  assert.equal(content.settings['webScopeProbe.inferred'], 'inferred-view');
-  content.settings['webScopeProbe.value'] = 'external-view';
+  assert.equal(content.settings['scopeProbe.value'], 'workspace-value');
+  assert.equal(content.settings['scopeProbe.inferred'], 'inferred-view');
+  content.settings['scopeProbe.value'] = 'external-view';
   // 仅模拟用户外部编辑：关键文件及先前设置都已由产品原 writer 生成。
   await writeFile(native, JSON.stringify(content, null, 2) + '\n');
   await expect.poll(async () => (await read({ folder: 1 })).value, { timeout: 15_000 }).toBe('external-view');
@@ -151,17 +158,20 @@ try {
   assert.equal(external.first.value, 'inferred-folder');
   assert(external.first.events.some(event => event.first === 'inferred-folder' && event.second === 'external-view'));
   assert(result.snapshots.every(entry => [entry.first, entry.second, entry.language]
-    .every(value => value.activation === initial.first.activation && value.worker)));
+    .every(value => value.activation === initial.first.activation && value.worker === isWeb && value.pid === initial.first.pid)));
 
   await phase('reject-foreign-resources-without-profile-fallback');
   await Promise.all(pending);
   const writes = result.writes.length;
-  const foreignGateway = new URL(initial.first.folders[0]); foreignGateway.hostname = 'gateway_0123456789abcdef0123456789abcdef';
-  const foreignWorkspace = new URL(initial.first.folders[0]);
-  foreignWorkspace.pathname = foreignWorkspace.pathname.replace('/' + fixture.workspace_ids[0] + '/', '/non-member-workspace/');
-  for (const uri of [foreignGateway.href, foreignWorkspace.href, 'file:///tmp/outside-target-view.ts']) {
+  const foreignMachine = new URL(initial.first.folders[0]);
+  foreignMachine.hostname = 'gateway_0123456789abcdef0123456789abcdef';
+  const foreignRoot = new URL(initial.first.folders[0]);
+  foreignRoot.pathname = isWeb ? foreignRoot.pathname.replace('/' + fixture.workspace_ids[0] + '/', '/non-member-workspace/')
+    : foreignRoot.pathname.replace(/\/[^/]+\/?$/, '/outside-bound-view/');
+  const rejection = isWeb ? /配置资源不属于发起宿主/ : /Node 返回的文件超出已绑定工作区／扩展／存储位置/;
+  for (const uri of [foreignMachine.href, foreignRoot.href, 'file:///tmp/outside-target-view.ts']) {
     await assert.rejects(update({ uri, key: 'value', value: 'must-not-write', target: 'Global' }),
-      error => { result.rejectedResources.push({ uri, error: String(error) }); return /配置资源不属于发起宿主/.test(String(error)); });
+      error => { result.rejectedResources.push({ uri, error: String(error) }); return rejection.test(String(error)); });
   }
   await Promise.all(pending); assert.equal(result.writes.length, writes);
   const afterRejected = await snapshot('after-rejection');
@@ -219,7 +229,7 @@ try {
 
   await phase('original-file-save-rejects-newer-disk-content');
   const originalStat = await stat(native);
-  const newer = parse(diskBeforeDirty); newer.settings['webScopeProbe.value'] = 'external-newer-than-draft';
+  const newer = parse(diskBeforeDirty); newer.settings['scopeProbe.value'] = 'external-newer-than-draft';
   const newerBody = JSON.stringify(newer, null, 2) + '\n';
   await writeFile(native, newerBody);
   const newerStat = await stat(native);
@@ -253,8 +263,8 @@ try {
   assert.equal(queued.first.inferred, 'queued-inferred'); assert.equal(queued.second.inferred, 'queued-inferred');
   assert.equal(queued.first.activation, initial.first.activation); assert.equal(queued.second.activation, initial.first.activation);
   const queuedDisk = parse(await readFile(native, 'utf8'));
-  assert.equal(queuedDisk.settings['webScopeProbe.value'], 'queued-view');
-  assert.equal(queuedDisk.settings['webScopeProbe.inferred'], 'queued-inferred');
+  assert.equal(queuedDisk.settings['scopeProbe.value'], 'queued-view');
+  assert.equal(queuedDisk.settings['scopeProbe.inferred'], 'queued-inferred');
   await expect(text).toContainText('queued-view'); await expect(text).toContainText('queued-inferred');
   await expect(activeTab).not.toHaveClass(/\bdirty\b/);
   await Promise.all(pending);
@@ -263,12 +273,14 @@ try {
   for (const receipt of result.concurrentWrites) {
     assert.equal(receipt.status, 200); assert.equal(receipt.request.gateway_id, fixture.gateway_id);
     assert.equal(receipt.request.backend_id, fixture.backend_id); assert.equal(receipt.request.view_id, result.binding.view_id);
-    assert.equal(receipt.request.resource_uri, result.binding.context.workspace.configuration.resource_uri);
+    assert.equal(receipt.request.resource_uri, workspaceOf(result.binding).configuration.resource_uri);
   }
   const finalContent = parse(Buffer.from(result.concurrentWrites.at(-1).request.content_base64, 'base64').toString('utf8'));
-  assert.equal(finalContent.settings['webScopeProbe.value'], 'queued-view');
-  assert.equal(finalContent.settings['webScopeProbe.inferred'], 'queued-inferred');
-  assert.deepEqual(result.nodeChannels, []); assert.deepEqual(result.pageErrors, []);
+  assert.equal(finalContent.settings['scopeProbe.value'], 'queued-view');
+  assert.equal(finalContent.settings['scopeProbe.inferred'], 'queued-inferred');
+  if (isWeb) assert.deepEqual(result.nodeChannels, []);
+  else assert(result.nodeChannels.length > 0);
+  assert.deepEqual(result.pageErrors, []);
   await phase('complete');
 } catch (error) {
   failure = error; result.error = String(error.stack ?? error);
