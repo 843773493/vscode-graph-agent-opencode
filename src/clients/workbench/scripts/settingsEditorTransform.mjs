@@ -239,8 +239,70 @@ export class SettingsEditor2 extends EditorPane {`);
   private settingsWriterInput: SettingsEditor2Input | undefined;
   private readonly settingsTargetSelection = this._register(new MutableDisposable<DisposableStore>());
   private settingsContextHeader: SettingsContextHeader | undefined;`);
-    contents = replaceOnce(contents, '\t\tthis.inSettingsEditorContextKey.set(true);', '\t\tthis.settingsTargetSelection.clear();\n\t\tthis.inSettingsEditorContextKey.set(true);');
-    contents = replaceOnce(contents, '\t\tthis.inSettingsEditorContextKey.set(false);', '\t\tthis.settingsTargetSelection.clear();\n\t\tthis.inSettingsEditorContextKey.set(false);');
+    // 三种搜索共用原查询取消源；输入去抖、scope 变化及 Pane 释放不能留下独立 AI 任务。
+    contents = replaceOnce(contents, 'CancelablePromise, createCancelablePromise, Delayer, raceTimeout', 'Delayer, raceTimeout');
+    contents = replaceOnce(contents, '\tprivate aiSearchPromise: CancelablePromise<void> | null = null;\n', '');
+    contents = replaceOnce(contents, '\t\tthis.inSettingsEditorContextKey.set(true);', '\t\tthis.settingsTargetSelection.clear();\n    this.cancelSettingsSearch();\n\t\tthis.inSettingsEditorContextKey.set(true);');
+    contents = replaceOnce(contents, '\t\tthis.inSettingsEditorContextKey.set(false);', '\t\tthis.settingsTargetSelection.clear();\n    this.cancelSettingsSearch();\n\t\tthis.inSettingsEditorContextKey.set(false);');
+    contents = replaceOnce(contents, '\tprivate async onSearchInputChanged(expandResults: boolean): Promise<void> {', `  private cancelSettingsSearch(): void {
+    this.searchInProgress?.dispose(true);
+    this.searchInProgress = null;
+    this.searchDelayer.cancel();
+    this.searchInputDelayer.cancel();
+    this.disableAiSearchToggle();
+  }
+
+  override dispose(): void {
+    this.cancelSettingsSearch();
+    super.dispose();
+  }
+
+\tprivate async onSearchInputChanged(expandResults: boolean): Promise<void> {`);
+    contents = replaceOnce(contents, '\t\t\tconst searchVal = this.searchWidget.getValue();', '\t\t\tthis.cancelSettingsSearch();\n\t\t\tconst searchVal = this.searchWidget.getValue();');
+    contents = replaceOnce(contents, 'this.searchInputDelayer.trigger(() => this.onSearchInputChanged(true));', `this.searchInputDelayer.trigger(() => this.onSearchInputChanged(true)).catch(error => {
+        if (!isCancellationError(error)) this.logService.error(error);
+      });`);
+    contents = replaceOnce(contents, '\tprivate async triggerSearch(query: string, expandResults: boolean): Promise<void> {', `\tprivate async triggerSearch(query: string, expandResults: boolean): Promise<void> {
+    this.cancelSettingsSearch();
+    const search = this.searchInProgress = new CancellationTokenSource();
+    const token = search.token;`);
+    contents = replaceOnce(contents, '\t\tconst showAdvanced = this.canShowAdvancedSettings();', '\t\ttry {\n\t\tconst showAdvanced = this.canShowAdvancedSettings();');
+    contents = replaceOnce(contents, '\t\tthis.settingsTargetsWidget.updateLanguageFilterIndicators(this.viewState.languageFilter);', '\t\tif (token.isCancellationRequested) return;\n\t\tthis.settingsTargetsWidget.updateLanguageFilterIndicators(this.viewState.languageFilter);');
+    contents = replaceOnce(contents, 'await this.triggerFilterPreferences(query, expandResults, progressRunner);', 'await this.triggerFilterPreferences(query, expandResults, token);\n      if (token.isCancellationRequested) return;');
+    contents = replaceOnce(contents, `\t\t\tthis.searchDelayer.cancel();
+\t\t\tif (this.searchInProgress) {
+\t\t\t\tthis.searchInProgress.dispose(true);
+\t\t\t\tthis.searchInProgress = null;
+\t\t\t}
+`, '');
+    contents = replaceOnce(contents, '\t\t\tprogressRunner.done();\n\t\t}\n\t}\n\n\t/**\n\t * Return a fake SearchResultModel', `\t\t}
+    } catch (error) {
+      if (!isCancellationError(error)) throw error;
+    } finally { progressRunner.done(); }
+\t}
+
+\t/**
+\t * Return a fake SearchResultModel`);
+    contents = replaceOnce(contents, `\tprivate async triggerFilterPreferences(query: string, expandResults: boolean, progressRunner: IProgressRunner): Promise<void> {
+\t\tif (this.searchInProgress) {
+\t\t\tthis.searchInProgress.dispose(true);
+\t\t\tthis.searchInProgress = null;
+\t\t}
+
+\t\tconst searchInProgress = this.searchInProgress = new CancellationTokenSource();`, '\tprivate async triggerFilterPreferences(query: string, expandResults: boolean, token: CancellationToken): Promise<void> {');
+    contents = contents.replaceAll('searchInProgress.token', 'token');
+    contents = replaceOnce(contents, '\t\t\tthis.disableAiSearchToggle();\n', '');
+    contents = replaceOnce(contents, 'this.onDidFinishSearch(expandResults, progressRunner);', 'this.onDidFinishSearch(expandResults, undefined);');
+    contents = replaceOnce(contents, `\t\t\tif (this.aiSearchPromise) {
+\t\t\t\tthis.aiSearchPromise.cancel();
+\t\t\t}
+
+`, '');
+    contents = replaceOnce(contents, '\t\t\t\tthis.aiSearchPromise = createCancelablePromise(token => {\n\t\t\t\t\treturn this.doAiSearch(query, token).then((results) => {', '\t\t\t\tvoid this.doAiSearch(query, token).then((results) => {');
+    contents = replaceOnce(contents, 'if (results && this.showAiResultsAction) {', 'if (!token.isCancellationRequested && results && this.showAiResultsAction) {');
+    contents = replaceOnce(contents, '\t\t\t\t\t});\n\t\t\t\t});\n\t\t\t}\n\n\t\t\tthis.onDidFinishSearch', '\t\t\t\t\t});\n\t\t\t}\n\n\t\t\tthis.onDidFinishSearch');
+    contents = replaceOnce(contents, '\tprivate onDidSettingsTargetChange(target: SettingsTarget): void {', '\tprivate onDidSettingsTargetChange(target: SettingsTarget): void {\n    this.cancelSettingsSearch();');
+    contents = replaceOnce(contents, '\t\tthis.onConfigUpdate(undefined, true);\n\t}\n\n\tprivate onDidDismissExtensionSetting', '\t\tthis.onConfigUpdate(undefined, true, true);\n\t}\n\n\tprivate onDidDismissExtensionSetting');
     contents = replaceOnce(contents, '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,', `\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
     @ITargetSettingsContext private readonly targetSettingsContext: ITargetSettingsContext,
     @ICommandService private readonly commandService: ICommandService,

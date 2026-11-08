@@ -3,18 +3,24 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
+import * as arrays from '../../../../src/clients/workbench/upstream/src/vs/base/common/arrays.js';
 import { Delayer } from '../../../../src/clients/workbench/upstream/src/vs/base/common/async.js';
-import { CancellationToken } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { CancellationError, getErrorMessage, isCancellationError } from '../../../../src/clients/workbench/upstream/src/vs/base/common/errors.js';
 import { Emitter, Event } from '../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
+import * as filters from '../../../../src/clients/workbench/upstream/src/vs/base/common/filters.js';
 import { Disposable, DisposableStore, MutableDisposable, dispose, toDisposable } from '../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 import { Schemas } from '../../../../src/clients/workbench/upstream/src/vs/base/common/network.js';
 import * as platform from '../../../../src/clients/workbench/upstream/src/vs/base/common/platform.js';
 import { isEqual } from '../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
-import { isFalsyOrWhitespace } from '../../../../src/clients/workbench/upstream/src/vs/base/common/strings.js';
+import * as strings from '../../../../src/clients/workbench/upstream/src/vs/base/common/strings.js';
+import { StopWatch } from '../../../../src/clients/workbench/upstream/src/vs/base/common/stopwatch.js';
+import { TfIdfCalculator } from '../../../../src/clients/workbench/upstream/src/vs/base/common/tfIdf.js';
+import { isUndefinedOrNull } from '../../../../src/clients/workbench/upstream/src/vs/base/common/types.js';
 import { URI } from '../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configuration.js';
-import { ConfigurationScope, Extensions } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configurationRegistry.js';
+import { ConfigurationScope, EditPresentationTypes, Extensions } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configurationRegistry.js';
+import { ILanguageService } from '../../../../src/clients/workbench/upstream/src/vs/editor/common/languages/language.js';
 import { IFileService } from '../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
 import { ILogService } from '../../../../src/clients/workbench/upstream/src/vs/platform/log/common/log.js';
 import { IContextKeyService } from '../../../../src/clients/workbench/upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -23,9 +29,18 @@ import { createDecorator, IInstantiationService } from '../../../../src/clients/
 import { InstantiationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/serviceCollection.js';
 import { Registry } from '../../../../src/clients/workbench/upstream/src/vs/platform/registry/common/platform.js';
+import { IProductService } from '../../../../src/clients/workbench/upstream/src/vs/platform/product/common/productService.js';
+import { USER_LOCAL_AND_REMOTE_SETTINGS } from '../../../../src/clients/workbench/upstream/src/vs/platform/request/common/request.js';
 import { IWorkspaceContextService } from '../../../../src/clients/workbench/upstream/src/vs/platform/workspace/common/workspace.js';
 import { EditorModel } from '../../../../src/clients/workbench/upstream/src/vs/workbench/common/editor/editorModel.js';
-import { IPreferencesService, SettingMatchType, SettingValueType, validateSettingsEditorOptions } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/preferences/common/preferences.js';
+import { ALWAYS_SHOW_ADVANCED_SETTINGS_SETTING, IPreferencesService, SettingKeyMatchTypes, SettingMatchType, SettingValueType, validateSettingsEditorOptions } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/preferences/common/preferences.js';
+import { IAiSettingsSearchService, AiSettingsSearchResultKind } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/aiSettingsSearch/common/aiSettingsSearch.js';
+import { AiSettingsSearchService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/aiSettingsSearch/common/aiSettingsSearchService.js';
+import { APPLICATION_SCOPES, FOLDER_SCOPES, LOCAL_MACHINE_SCOPES, REMOTE_MACHINE_SCOPES, WORKSPACE_SCOPES, IWorkbenchConfigurationService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/configuration/common/configuration.js';
+import { IExperimentalSettingsService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/configuration/common/experimentalSettings.js';
+import { IManagedSettingsPresentationService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/configuration/common/managedSettingsPresentation.js';
+import { IWorkbenchEnvironmentService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/environment/common/environmentService.js';
+import { IUserDataProfileService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/userDataProfile/common/userDataProfile.js';
 import { ITextEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textEditorService.js';
 import { ITextFileService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textfiles.js';
 import { IFilesConfigurationService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
@@ -41,13 +56,18 @@ const run = await TestRunContext.fromTestFile('tests/integration/clients/web/set
 const root = resolve('src/clients/workbench'), upstream = join(root, 'upstream/src/vs');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
 const sources = new Map(), fingerprints = [], registered = [], executed = [], passed = [];
+const { isFalsyOrWhitespace, escapeRegExpCharacters } = strings;
 const testSource = await readFile(import.meta.path, 'utf8');
 await writeFile(join(run.artifactsDir, 'test-source.mjs'), testSource);
 fingerprints.push({ path: 'tests/integration/clients/web/settings_editor_target.test.mjs',
   original: createHash('sha256').update(testSource).digest('hex') });
 const selectedEditorMembers = ['pendingSettingUpdates', 'pendingSettingWrite', 'settingsWriterInput', 'settingsTargetSelection', 'switchSettingsGateway', 'shouldSettingUpdateFast',
   'setInput', '_setOptions', 'clearInput', 'restoreCachedState', 'onConfigUpdate', 'onDidSettingsTargetChange', 'onDidChangeSetting', 'notifySettingsDirty',
-  'discardSettingsUpdates', 'flushSettingsUpdates', 'updateChangedSetting'];
+  'discardSettingsUpdates', 'flushSettingsUpdates', 'updateChangedSetting',
+  'searchInProgress', 'searchDelayer', 'searchInputDelayer', '_searchResultModel', 'settingsTreeModel', 'currentSettingsModel', 'searchResultModel',
+  'onSearchInputChanged', 'triggerSearch', 'triggerFilterPreferences', 'onDidFinishSearch', 'doLocalSearch', 'doRemoteSearch', 'doAiSearch',
+  'getLLMRankedResults', 'searchWithProvider', '_searchPreferencesModel', 'createFilterModel', 'canShowAdvancedSettings', 'shouldShowSetting',
+  'parseSettingFromJSON', 'disableAiSearchToggle', 'logSearchPerformance', 'onDidToggleAiSearch', 'cancelSettingsSearch', 'dispose'];
 
 async function source(relative, local = false) {
   const key = `${local ? 'local:' : ''}${relative}`;
@@ -90,6 +110,7 @@ const { EditorInput } = evaluate(await source('workbench/common/editor/editorInp
   ...common, Emitter, DisposableStore, URI, isEqual,
 });
 const modelsParsed = await source('workbench/services/preferences/common/preferencesModels.ts');
+const { nullRange } = evaluate(modelsParsed, ['nullRange'], {});
 const { AbstractSettingsModel } = evaluate(modelsParsed, ['AbstractSettingsModel'], { EditorModel, SettingMatchType });
 const { Settings2EditorModel, SettingsEditorModel } = evaluate(modelsParsed, ['Settings2EditorModel', 'SettingsEditorModel'], {
   AbstractSettingsModel, Emitter, IConfigurationService, ConfigurationTarget, Registry, Extensions,
@@ -154,12 +175,32 @@ const queryParsed = await source('workbench/contrib/preferences/browser/settings
 const { parseQuery } = evaluate(queryParsed, ['tagRegex', 'extensionRegex', 'featureRegex', 'idRegex', 'languageRegex', 'parseQuery'], {
   ...preferences, isFalsyOrWhitespace,
 });
+const treeDeclarationNames = queryParsed.statements.flatMap(node => ts.isVariableStatement(node)
+  ? node.declarationList.declarations.map(declaration => declaration.name.getText(queryParsed))
+  : (ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isEnumDeclaration(node)) && node.name ? [node.name.text] : []);
+const tree = evaluate(queryParsed, treeDeclarationNames, {
+  ...preferences, Disposable, Emitter, URI, arrays, Registry, Extensions, SettingMatchType, SettingValueType,
+  ConfigurationTarget, ConfigurationScope, EditPresentationTypes, APPLICATION_SCOPES, FOLDER_SCOPES,
+  LOCAL_MACHINE_SCOPES, REMOTE_MACHINE_SCOPES, WORKSPACE_SCOPES, USER_LOCAL_AND_REMOTE_SETTINGS,
+  IWorkbenchConfigurationService, IWorkbenchEnvironmentService, ILanguageService, IUserDataProfileService, IProductService,
+  IExperimentalSettingsService, IManagedSettingsPresentationService, ITargetSettingsContext,
+  escapeRegExpCharacters, isFalsyOrWhitespace, isUndefinedOrNull, localize: (_key, text) => text,
+});
+const searchClasses = evaluate(await source('workbench/contrib/preferences/browser/preferencesSearch.ts'),
+  ['PreferencesSearchService', 'LocalSearchProvider', 'SettingMatches', 'SettingsRecordProvider', 'EmbeddingsSearchProvider',
+    'TfIdfSearchProvider', 'RemoteSearchProvider', 'AiSearchProvider', 'cleanFilter'], {
+    ...preferences, ...filters, distinct: arrays.distinct, CancellationToken, Disposable, strings, TfIdfCalculator,
+    IConfigurationService, IInstantiationService, IAiSettingsSearchService, SettingKeyMatchTypes, SettingMatchType,
+    nullRange,
+  });
 const switching = {};
 const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts', true), ['SettingsContextHeader'], {
   Disposable, URI, isEqual, getErrorMessage, ConfigurationTarget,
   ITargetSettingsContext, IPreferencesService, IWorkspaceContextService, IFileService, IFilesConfigurationService, ITextFileService, ILogService,
 });
 const { SettingsEditor2 } = evaluate(await source('workbench/contrib/preferences/browser/settingsEditor2.ts'), ['SettingsEditor2'], {
+  ...preferences, ...tree, CancellationTokenSource, StopWatch, SettingMatchType, ALWAYS_SHOW_ADVANCED_SETTINGS_SETTING,
+  SHOW_AI_RESULTS_ENABLED_LABEL: 'Show AI-recommended results', SHOW_AI_RESULTS_DISABLED_LABEL: 'No AI results available at this time...',
   EditorPane, SettingsEditor2Input, Settings2EditorModel, SettingValueType, ConfigurationTarget,
   URI, parseQuery, isCancellationError, MODIFIED_SETTING_TAG: preferences.MODIFIED_SETTING_TAG,
   validateSettingsEditorOptions, platform, DisposableStore, MutableDisposable, CancellationToken, SideBySideEditorInput, FileEditorInput,
@@ -171,6 +212,7 @@ const { SettingsEditor2 } = evaluate(await source('workbench/contrib/preferences
 }, selectedEditorMembers);
 await Promise.all(['sourceTransform.mjs', 'settingsEditorTransform.mjs', 'settingsEditorScopeTransform.mjs', 'settingsTreeScopeTransform.mjs']
   .map(name => source(`scripts/${name}`, true)));
+await source('workbench/services/aiSettingsSearch/common/aiSettingsSearchService.ts');
 
 function location(overrides = {}) {
   return { version: 1, gateway_id: 'gateway-A', backend_id: 'backend-A', profile_id: 'profile-A', view_id: 'view-A',
@@ -263,6 +305,8 @@ function fixture() {
       pane.settingFastUpdateDelayer = pane._register(new Delayer(60_000));
       pane.settingSlowUpdateDelayer = pane._register(new Delayer(60_000));
       pane.updatedConfigSchemaDelayer = pane._register(new Delayer(60_000));
+      pane.searchDelayer = pane._register(new Delayer(0));
+      pane.searchInputDelayer = pane._register(new Delayer(0));
       let query = '';
       pane.searchWidget = { getValue: () => query, setValue: value => { query = value; } };
       pane.settingsTargetsWidget = { settingsTarget: ConfigurationTarget.USER_REMOTE,
@@ -284,6 +328,67 @@ function fixture() {
         } };
     },
     close() { dispose(owned.reverse()); },
+  };
+}
+
+async function searchFixture() {
+  const f = fixture(), input = f.input(), e = await f.editor(input, 'search-group-A'), { pane, group } = e;
+  const configuration = group.configuration.service, requests = [], countEvents = [], traces = [];
+  configuration.getValue = key => key ? false : ({ workbench: { settings: { enableNaturalLanguageSearch: true } } });
+  configuration.inspect = (key, overrides) => {
+    group.configuration.inspected.push({ key, overrides });
+    return { defaultValue: false, userRemoteValue: true };
+  };
+  configuration.isSettingAppliedForAllProfiles = () => true;
+  const ai = new AiSettingsSearchService();
+  // AI provider 是受控异步外部边界，搜索和结果映射仍经原服务、provider 与树模型。
+  const registration = ai.registerSettingsSearchProvider({ searchSettings(query, options, token) { requests.push({ query, options, token }); } });
+  const lifetime = pane._register(new DisposableStore()), di = group.di.createChild(new ServiceCollection(
+    [IAiSettingsSearchService, ai], [ITargetSettingsContext, { target: { location: location(), configuration: {} } }],
+    [IWorkbenchConfigurationService, configuration], [IWorkbenchEnvironmentService, { isSessionsWindow: false }],
+    [ILanguageService, { getLanguageName: () => 'JavaScript', isRegisteredLanguageId: () => true }],
+    [IUserDataProfileService, { currentProfile: { isDefault: false, useDefaultFlags: { settings: false } } }],
+    [IProductService, {}], [IExperimentalSettingsService, { hasAssignment: () => false }],
+    [IManagedSettingsPresentationService, { getValue: () => undefined }],
+  ), lifetime);
+  pane.instantiationService = di;
+  pane.preferencesSearchService = lifetime.add(di.createInstance(searchClasses.PreferencesSearchService));
+  const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 10 };
+  pane.defaultSettingsEditorModel.setAdditionalGroups([{ id: 'sample', title: 'Sample', sections: [{
+    settings: ['sample.alpha', 'sample.beta'].map(key => ({ key, scope: ConfigurationScope.LANGUAGE_OVERRIDABLE, type: 'boolean',
+      description: ['A configurable sample setting.'], descriptionRanges: [range], range, keyRange: range, valueRange: range,
+      extensionInfo: { id: 'sample.extension', displayName: 'Sample' }, value: false })),
+  }] }]);
+  pane.settingsTreeModel.value = di.createInstance(tree.SettingsTreeModel, pane.viewState, true);
+  pane.settingsTreeModel.value.update({ id: 'initial-settings-model', label: '', settings: [] });
+  pane.rootElement = { classList: { toggle() {} } };
+  pane.settingsTargetsWidget.updateLanguageFilterIndicators = () => {};
+  pane.searchWidget.addToHistory = () => {};
+  pane.updateSearchPlaceholder = () => {};
+  pane.saveSearchHistory = () => {};
+  pane.workspaceTrustManagementService = { isWorkspaceTrusted: () => true };
+  pane.editorProgressService = { show: () => ({ done() {} }) };
+  pane.tocTree = { setFocus() {}, setSelection() {}, expandAll() {}, collapseAll() {} };
+  pane.tocTreeModel = {};
+  pane.settingsTree = {};
+  pane.toggleTocBySearchBehaviorType = () => {};
+  pane.layoutSplitView = () => {};
+  pane.refreshTree = () => {};
+  pane.telemetryService = { publicLog2() {} };
+  pane.logService.trace = (...args) => traces.push(args);
+  pane.renderResultCountMessages = aiAvailable => countEvents.push({ aiAvailable, query: pane.viewState.query });
+  pane.showAiResultsAction = { enabled: false, checked: false };
+  pane.searchInputActionBar = { hasAction: () => true };
+  pane.aiResultsAvailable = { value: false, set(value) { this.value = value; } };
+  return { ...e, input, requests, countEvents, traces,
+    query(value) { pane.searchWidget.setValue(value); return pane.onSearchInputChanged(true); },
+    async release() {
+      const { query } = requests[0];
+      ai.handleSearchResult({ query, kind: AiSettingsSearchResultKind.EMBEDDED, settings: ['sample.alpha'] });
+      ai.handleSearchResult({ query, kind: AiSettingsSearchResultKind.LLM_RANKED, settings: ['sample.alpha'] });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    },
+    close() { f.close(); registration.dispose(); ai.dispose(); },
   };
 }
 
@@ -319,6 +424,72 @@ function scenario(name, callback) {
   test(name, async () => { executed.push(name); await callback(); passed.push(name); });
 }
 
+scenario('纯 @modified 查询撤销旧文字 AI 搜索，迟到结果不能替换当前过滤来源', async () => {
+  const f = await searchFixture();
+  try {
+    await f.query('make the editor calm');
+    expect(f.requests).toHaveLength(1);
+    const token = f.requests[0].token, previous = f.pane.searchResultModel;
+    expect(token.isCancellationRequested).toBe(false);
+    await f.query('@modified');
+    const current = f.pane.searchResultModel;
+    expect(current).not.toBe(previous);
+    expect(current.root.children.map(child => child.setting.key)).toEqual(['sample.alpha', 'sample.beta']);
+    expect(token.isCancellationRequested).toBe(true);
+    const counts = [...f.countEvents];
+    await f.release();
+    expect(f.pane.searchResultModel).toBe(current);
+    expect(current.getRawResults()[tree.SearchResultIdx.Embeddings]).toBeUndefined();
+    expect(current.getRawResults()[tree.SearchResultIdx.AiSelected]).toBeUndefined();
+    expect(f.pane.showAiResultsAction.enabled).toBe(false);
+    expect(f.pane.aiResultsAvailable.value).toBe(false);
+    expect(f.countEvents).toEqual(counts);
+    expect(f.traces).toEqual([]);
+    expect(f.group.configuration.inspected.some(call => call.key === 'sample.alpha')).toBe(true);
+  } finally { f.close(); }
+});
+
+for (const lifecycle of ['clearInput', 'dispose']) scenario(`原 ${lifecycle} 撤销在途 AI 搜索，迟到结果不重建或发布设置模型`, async () => {
+  const f = await searchFixture();
+  try {
+    await f.query('make the editor calm');
+    expect(f.requests).toHaveLength(1);
+    const token = f.requests[0].token, counts = [...f.countEvents];
+    f.pane[lifecycle]();
+    if (lifecycle === 'dispose') f.group.lifetime.dispose();
+    const current = f.pane.searchResultModel;
+    expect(token.isCancellationRequested).toBe(true);
+    await f.release();
+    expect(f.pane.searchResultModel).toBe(current);
+    expect(f.pane.searchResultModel?.getRawResults()[tree.SearchResultIdx.Embeddings]).toBeUndefined();
+    expect(f.pane.searchResultModel?.getRawResults()[tree.SearchResultIdx.AiSelected]).toBeUndefined();
+    expect(f.pane.showAiResultsAction.enabled).toBe(false);
+    expect(f.pane.aiResultsAvailable.value).toBe(false);
+    expect(f.countEvents).toEqual(counts);
+    expect(f.traces).toEqual([]);
+  } finally { f.close(); }
+});
+
+scenario('来源层切换撤销在途 AI 搜索，并要求按新来源重跑当前查询', async () => {
+  const f = await searchFixture();
+  try {
+    await f.query('make the editor calm');
+    expect(f.requests).toHaveLength(1);
+    const token = f.requests[0].token, current = f.pane.searchResultModel, counts = [...f.countEvents];
+    f.pane.onDidSettingsTargetChange(ConfigurationTarget.WORKSPACE);
+    expect(token.isCancellationRequested).toBe(true);
+    expect(f.pane.viewState.settingsTarget).toBe(ConfigurationTarget.WORKSPACE);
+    expect(f.refreshes.at(-1)).toEqual([undefined, true, true]);
+    await f.release();
+    expect(f.pane.searchResultModel).toBe(current);
+    expect(current.getRawResults()[tree.SearchResultIdx.Embeddings]).toBeUndefined();
+    expect(current.getRawResults()[tree.SearchResultIdx.AiSelected]).toBeUndefined();
+    expect(f.pane.showAiResultsAction.enabled).toBe(false);
+    expect(f.countEvents).toEqual(counts);
+    expect(f.traces).toEqual([]);
+  } finally { f.close(); }
+});
+
 scenario('原配置更新和历史恢复入口展示冻结上下文及准备时授权，不依赖目标变化事件', async () => {
   const f = headerFixture({ allowed: false });
   try {
@@ -341,9 +512,11 @@ scenario('原配置更新和历史恢复入口展示冻结上下文及准备时�
 });
 
 scenario('多根 view 使用配置授权，folder及单根workspace明确沿原文件服务且不借用授权快照', async () => {
-  const f = headerFixture(), single = headerFixture({ multiRoot: false, allowed: false });
+  const f = headerFixture(), single = headerFixture({ multiRoot: false, allowed: false }), lifetime = new DisposableStore();
   try {
-    const pane = { settingsContextHeader: f.header, settingsTargetsWidget: {}, viewState: {} };
+    const pane = { settingsContextHeader: f.header, settingsTargetsWidget: {}, viewState: {}, searchInProgress: null,
+      searchDelayer: lifetime.add(new Delayer(0)), searchInputDelayer: lifetime.add(new Delayer(0)),
+      cancelSettingsSearch: SettingsEditor2.prototype.cancelSettingsSearch, disableAiSearchToggle: SettingsEditor2.prototype.disableAiSearchToggle };
     pane.onConfigUpdate = () => {
       pane.settingsTargetsWidget.settingsTarget = pane.viewState.settingsTarget;
       return SettingsEditor2.prototype.onConfigUpdate.call(pane);
@@ -359,7 +532,7 @@ scenario('多根 view 使用配置授权，folder及单根workspace明确沿原�
     await Promise.resolve();
     expect(single.element.textContent).toContain('写入授权：保存时检查');
     expect(single.element.textContent).not.toContain('未授权');
-  } finally { f.close(); single.close(); }
+  } finally { lifetime.dispose(); f.close(); single.close(); }
 });
 
 scenario('配置变化与语言切换只重绘原状态，不重新prepare、stat或解析同一来源', async () => {
@@ -1083,7 +1256,7 @@ scenario('原 JSON contribution dispose 后迟到模型立即释放，不创建�
 afterAll(async () => {
   await writeFile(join(run.artifactsDir, 'source-fingerprints.json'), `${JSON.stringify({ pinnedUpstreamCommit, fingerprints, selectedEditorMembers }, null, 2)}\n`);
   await run.writeResult(!executed.length ? 'skipped' : executed.length === passed.length ? 'passed' : 'failed', {
-    boundary: 'Integration：执行完整 sourceTransform 后原 SettingsEditor2Input、serializer、原 Settings2EditorModel/SettingsEditorModel、原 PreferencesService.createSettings2EditorModel、原 prepareSettingsPane、完整 SettingsEditorContribution，以及 AST 选取的 SettingsEditor2 队列/原 setInput/clearInput/updateChangedSetting；使用原 EditorInput/EditorPane/Delayer/InstantiationService/DisposableStore。仅 Composite、配置传输与装配、默认设置数据、文本/代码编辑器、context key 服务、UI 渲染/扩展发现/遥测出口为具名边界；未经过真实 Gateway、配置 HTTP、schema 发现或浏览器页面。',
+    boundary: 'Integration：执行完整 sourceTransform 后原 SettingsEditor2Input、serializer、原 Settings2EditorModel/SettingsEditorModel、原 PreferencesService.createSettings2EditorModel、原 prepareSettingsPane、完整 SettingsEditorContribution，以及 AST 选取的 SettingsEditor2 队列/原 setInput/clearInput/updateChangedSetting/完整搜索链。搜索经过原 PreferencesSearchService/Local/TF-IDF/AI provider、原 AiSettingsSearchService 与完整 SettingsTreeModels；使用原 EditorInput/EditorPane/Delayer/InstantiationService/DisposableStore。仅 Composite、配置传输与装配、默认设置数据、异步 AI provider 返回的 setting keys、文本/代码编辑器、context key 服务、UI 渲染/扩展发现/遥测出口为具名边界；未经过真实 Gateway、配置 HTTP、schema 发现、真实 AI Provider 或浏览器页面。',
     registered, executed, passed, filtered: registered.filter(name => !executed.includes(name)),
   });
   await run.close();

@@ -96,6 +96,26 @@ try {
   await command('workbench.action.files.save');
   await expect.poll(read).toEqual({ 'schemaProbe.independent': 'schema-saved' });
   result.independentSchemaSaved = true;
+  // 纯过滤与来源切换沿当前设置 Pane，不由测试构造搜索结果或改配置模型。
+  const search = async query => {
+    await command('settings.action.search');
+    await page.keyboard.press('Control+A');
+    await page.keyboard.insertText(query);
+    await expect(editor.locator('.settings-header .view-lines')).toContainText(query);
+  };
+  await search('@modified @ext:boxteam-probe.target-inventory');
+  await expect(independent).toBeVisible();
+  await expect(independent).toHaveValue('schema-saved');
+  await editor.getByText('当前工作台 profile', { exact: true }).click();
+  await expect(independent).toHaveCount(0);
+  await editor.getByText('目标 profile · 本地', { exact: true }).click();
+  await expect(independent).toBeVisible();
+  await expect(independent).toHaveValue('schema-saved');
+  await search('@lang:typescript @id:editor.tabSize');
+  const tabSize = editor.locator('[data-key="editor.tabSize"] .setting-item-control input');
+  await expect(tabSize).toBeVisible();
+  await expect(tabSize).toHaveValue('5');
+  result.searchFilters = { modifiedExtension: true, sourceSwitch: true, languageDefault: 5 };
   await command('settings.action.search');
   await page.keyboard.press('Control+A');
   await page.keyboard.insertText('@id:http.proxy');
