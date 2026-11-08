@@ -31,6 +31,9 @@ from app.services.infrastructure.config.state import (
     prepare_config_for_persistence,
     redact_config_payload,
 )
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_entries,
+)
 from app.services.infrastructure.config_service.config_agent_tools import (
     ConfigAgentToolsMixin,
 )
@@ -121,6 +124,18 @@ class ConfigSourceLayersMixin:
             else:
                 require_settled_config_migration(path)
                 payload = parse_stable_config_file(read_stable_config_file(path))
+            if (
+                payload is not None
+                and config_key in {
+                    "workspace_mutable_override",
+                    "workspace_local_mutable_override",
+                }
+                and workspace_plugin_entries(payload)
+            ):
+                raise ValueError(
+                    "plugins.runtime.entries 只能写入明确工作区的配置来源；"
+                    f"拒绝在 {config_key} 中配置 Workspace 插件绑定"
+                )
             if not import_sources and payload is not None:
                 require_current_workspace_config(payload, partial=True)
                 prepare_config_for_persistence(payload)

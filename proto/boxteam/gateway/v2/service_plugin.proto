@@ -124,6 +124,14 @@ message PluginSlotStatusDTO {
 message PluginRuntimeStatusDTO {
   repeated PluginSlotStatusDTO plugins = 1;
   repeated PluginBinding configured_bindings = 2;
+  repeated WorkspacePluginConfigurationDTO workspace_configurations = 3;
+}
+
+message WorkspacePluginConfigurationDTO {
+  string workspace_id = 1;
+  string state = 2;
+  optional string revision = 3;
+  optional string error = 4;
 }
 
 message PluginUninstallResultDTO {
@@ -159,4 +167,5 @@ message RestartPluginRequest {
   string package_version = 4;
   string plugin_id = 5;
   string revision = 6;
+  optional string workspace_id = 7;
 }

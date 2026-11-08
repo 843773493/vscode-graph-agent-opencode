@@ -68,6 +68,36 @@ def _base_config() -> dict[str, object]:
     }
 
 
+def test_user_config_cannot_fan_out_workspace_plugin_bindings(tmp_path: Path) -> None:
+    user_config = tmp_path / "workspace.jsonc"
+    user_config.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "runtime": {
+                        "entries": [
+                            {
+                                "package_id": "sample",
+                                "plugin_id": "sample-tool",
+                                "package_version": "1.0.0",
+                                "enabled": True,
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=user_config,
+    )
+
+    with pytest.raises(ValueError, match="只能写入明确工作区的配置来源"):
+        service._get_effective_config()
+
+
 @pytest.mark.asyncio
 async def test_config_sources_endpoint_exposes_layers_and_schema(
     tmp_path: Path,

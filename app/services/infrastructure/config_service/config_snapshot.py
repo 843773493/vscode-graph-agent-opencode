@@ -7,7 +7,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from app.core.config_sources import (
     ConfigSource,
@@ -16,6 +16,7 @@ from app.core.config_sources import (
 from app.core.path_utils import (
     get_workspace_config_path,
 )
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.services.infrastructure.config import (
     ConfigReloadStatus,
     ConfigSnapshot,
@@ -30,6 +31,9 @@ from app.services.infrastructure.config.state import (
     prepare_config_for_persistence,
     restore_environment_secret_references,
 )
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings_for_root,
+)
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
 )
@@ -43,6 +47,7 @@ if TYPE_CHECKING:
         InstructionFileInputs,
     )
     from app.services.infrastructure.config.store import ConfigSnapshotStore
+    from app.services.infrastructure.config_service import ConfigService
 
 
 class ConfigSnapshotMixin:
@@ -65,6 +70,7 @@ class ConfigSnapshotMixin:
         schema = self._load_schema(schema_path)
         if validate_schema:
             validate_config_payload(config, schema=schema)
+        workspace_plugin_bindings_for_root(config, workspace_root=cast("ConfigService", self)._workspace_root)
         validate_skill_sources(config["resources"]["skill_sources"].get("sources", []))
         # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
         # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
@@ -404,6 +410,28 @@ class ConfigSnapshotMixin:
 
     def get_snapshot(self) -> ConfigSnapshot:
         return self._require_snapshot()
+
+    def get_workspace_plugin_binding_snapshot(self) -> tuple[list[PluginBinding], list[PluginBinding]]:
+        """返回 active 绑定与仍未结清候选引用，不把 pending 当作启用事实。"""
+        service = cast("ConfigService", self)
+        snapshot = self._require_snapshot()
+        active = workspace_plugin_bindings_for_root(
+            snapshot.to_dict(), workspace_root=service._workspace_root,
+        )
+        referenced = {
+            (binding.package_id, binding.plugin_id, binding.package_version, binding.workspace_id): binding
+            for binding in active
+        }
+        if service._workspace_state_store is not None:
+            for pending in service._workspace_state_store.list_pending_config_candidates(
+                config_domain=service._CONFIG_DOMAIN,
+            ):
+                for binding in workspace_plugin_bindings_for_root(
+                    pending.payload, workspace_root=service._workspace_root,
+                ):
+                    key = (binding.package_id, binding.plugin_id, binding.package_version, binding.workspace_id)
+                    referenced[key] = binding
+        return active, list(referenced.values())
 
     def get_revision(self) -> str:
         return self._require_snapshot().revision

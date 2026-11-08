@@ -28,6 +28,31 @@ if TYPE_CHECKING:
 
 
 class WorkspaceStateStorePendingMixin:
+    def list_pending_config_candidates(
+        self, *, config_domain: str,
+    ) -> tuple[ConfigPendingCandidateRecord, ...]:
+        """读取仍可能提交的候选，供配置 owner 计算外部使用引用。"""
+        store = cast("WorkspaceStateStore", self)
+        connection = store._database.connection()
+        try:
+            rows = connection.execute(
+                "SELECT candidate_id FROM config_pending_candidate "
+                "WHERE config_domain=? AND state NOT IN ('active','discarded','rejected') "
+                "ORDER BY pending_revision",
+                (config_domain,),
+            ).fetchall()
+        finally:
+            connection.close()
+        candidates = []
+        for row in rows:
+            candidate = store.get_pending_config_candidate(
+                config_domain=config_domain, candidate_id=str(row[0]),
+            )
+            if candidate is None:
+                raise RuntimeError("已登记的 pending candidate 读取时消失")
+            candidates.append(candidate)
+        return tuple(candidates)
+
     def list_unfinished_source_edit_candidates(self, *, config_domain: str, candidate_digest: str) -> tuple[ConfigPendingCandidateRecord, ...]:
         store = cast("WorkspaceStateStore", self)
         connection = store._database.connection()

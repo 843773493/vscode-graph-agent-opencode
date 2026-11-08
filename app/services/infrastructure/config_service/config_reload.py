@@ -9,8 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import httpx
+
 from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeScope
+from app.core.trace_middleware import get_current_request_id
+from app.gateway.auth import get_gateway_local_token
+from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
     ConfigRestartRequiredError,
@@ -33,6 +38,9 @@ from app.services.infrastructure.config.state import (
     new_config_id,
     prepare_config_for_persistence,
     redact_config_payload,
+)
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings_for_root,
 )
 from app.services.infrastructure.config_service.config_service_common import (
     ConfigCandidateApplier,
@@ -63,6 +71,7 @@ class ConfigReloadMixin:
         _shadow_lifecycle: ConfigShadowLifecycleAdapter
         _apply_recovery_task: asyncio.Task[None] | None
         _workspace_state_store: WorkspaceStateStore | None
+        _workspace_root: Path | None
         _CONFIG_DOMAIN: str
 
     def validate_candidate(
@@ -287,6 +296,11 @@ class ConfigReloadMixin:
                     publish_shadow()
 
             try:
+                await self._validate_gateway_workspace_plugin_bindings(
+                    previous=previous,
+                    candidate=candidate,
+                    candidate_id=pending.candidate_id,
+                )
                 await self._shadow_lifecycle.apply_candidate(
                     candidate.to_dict(),
                     expected_generation=self._shadow_lifecycle.generation,
@@ -296,6 +310,16 @@ class ConfigReloadMixin:
             except BaseException as error:
                 # 提交后的激活或旧 scope 清理失败不能重写已应用的持久事实。
                 if committed:
+                    try:
+                        await self._notify_workspace_plugin_binding_change(
+                            previous=previous, candidate=candidate,
+                            candidate_id=pending.candidate_id,
+                        )
+                    except BaseException as notification_error:  # noqa: BLE001
+                        raise BaseExceptionGroup(
+                            "Workspace 配置已提交，但激活收尾和插件刷新通知均失败",
+                            [error, notification_error],
+                        ) from None
                     raise
                 journal = (
                     self._workspace_state_store.get_config_apply_journal(apply_id=claim.apply_id)
@@ -333,6 +357,11 @@ class ConfigReloadMixin:
                         last_error=error_detail,
                     )
                 raise
+            else:
+                await self._notify_workspace_plugin_binding_change(
+                    previous=previous, candidate=candidate,
+                    candidate_id=pending.candidate_id,
+                )
             finally:
                 if claim_renewal_task is not None:
                     claim_renewal_task.cancel()
@@ -353,6 +382,94 @@ class ConfigReloadMixin:
         finally:
             if self._watcher is not None:
                 self._update_config_watch_paths(self._watcher)
+
+    async def _validate_gateway_workspace_plugin_bindings(
+        self,
+        *,
+        previous: ConfigSnapshot,
+        candidate: ConfigSnapshot,
+        candidate_id: str,
+    ) -> None:
+        previous_bindings = workspace_plugin_bindings_for_root(
+            previous.to_dict(), workspace_root=self._workspace_root,
+        )
+        bindings = workspace_plugin_bindings_for_root(
+            candidate.to_dict(), workspace_root=self._workspace_root,
+        )
+        if not bindings or bindings == previous_bindings:
+            return
+        if self._workspace_state_store is None:
+            raise ConfigConflictError(
+                "Workspace 插件绑定变更必须先持久化配置 candidate"
+            )
+        workspace_id = bindings[0].workspace_id
+        if not workspace_id or any(
+            binding.workspace_id != workspace_id for binding in bindings
+        ):
+            raise ConfigConflictError("Workspace 插件绑定缺少唯一真实 workspace_id")
+
+        service = cast("ConfigService", self)
+        gateway_url = service.get_gateway_connection_url().rstrip("/")
+        request_id = get_current_request_id() or f"config-{candidate_id}"
+        async with httpx.AsyncClient(
+            timeout=service.get_gateway_connection_timeout_seconds(),
+            trust_env=False,
+        ) as client:
+            response = await client.post(
+                f"{gateway_url}/api/internal/service-plugins/workspaces/{workspace_id}/validate",
+                json=[binding.model_dump(mode="json") for binding in bindings],
+                headers={
+                    "X-Local-Token": get_gateway_local_token(),
+                    "X-Request-ID": request_id,
+                },
+            )
+            if response.status_code == 409:
+                raise ConfigConflictError(
+                    "Gateway 拒绝 Workspace 插件绑定 candidate (HTTP 409)"
+                )
+            response.raise_for_status()
+        result = APIResponse[bool].model_validate_json(response.content)
+        if (
+            result.code != 0
+            or result.request_id != request_id
+            or result.data is not True
+        ):
+            raise ConfigConflictError(
+                "Gateway Workspace 插件绑定校验回执无效或拒绝 candidate"
+            )
+
+    async def _notify_gateway_workspace_plugins(
+        self, *, workspace_id: str | None, candidate_id: str,
+    ) -> None:
+        if not workspace_id:
+            raise RuntimeError("Workspace 插件绑定提交缺少真实 workspace_id")
+        service = cast("ConfigService", self)
+        gateway_url = service.get_gateway_connection_url().rstrip("/")
+        token = get_gateway_local_token()
+        request_id = get_current_request_id() or f"config-{candidate_id}"
+        timeout = service.get_gateway_connection_timeout_seconds()
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            response = await client.post(
+                f"{gateway_url}/api/internal/service-plugins/workspaces/{workspace_id}/refresh",
+                headers={"X-Local-Token": token, "X-Request-ID": request_id},
+            )
+            response.raise_for_status()
+
+    async def _notify_workspace_plugin_binding_change(
+        self, *, previous: ConfigSnapshot, candidate: ConfigSnapshot,
+        candidate_id: str,
+    ) -> None:
+        previous_bindings = workspace_plugin_bindings_for_root(
+            previous.to_dict(), workspace_root=self._workspace_root,
+        )
+        candidate_bindings = workspace_plugin_bindings_for_root(
+            candidate.to_dict(), workspace_root=self._workspace_root,
+        )
+        if previous_bindings != candidate_bindings:
+            await self._notify_gateway_workspace_plugins(
+                workspace_id=(previous_bindings or candidate_bindings)[0].workspace_id,
+                candidate_id=candidate_id,
+            )
 
     def _prepare_candidate(
         self,

@@ -44,6 +44,9 @@ from app.services.infrastructure.config.state import (
     changed_json_paths,
     prepare_config_for_persistence,
 )
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings_for_root,
+)
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
 )
@@ -231,6 +234,7 @@ class ConfigSourceEditMixin:
 
     async def save_source_edit(
         self, *, source_key: str, gateway_id: str, request: ConfigSourceEditRequest,
+        service_plugin_runtime_manage: bool = True,
     ) -> ConfigSourceDocumentDTO:
         service = cast("ConfigService", self)
         path, _, store = self._source_target(source_key)
@@ -264,6 +268,15 @@ class ConfigSourceEditMixin:
                         return False
                 elif claim is not None:
                     raise ConfigConflictError("已有配置 apply claim，禁止接受另一来源 intent")
+                current_bindings = workspace_plugin_bindings_for_root(
+                    service._require_snapshot().to_dict(),
+                    workspace_root=service._workspace_root,
+                )
+                candidate_bindings = workspace_plugin_bindings_for_root(
+                    candidate.to_dict(), workspace_root=service._workspace_root,
+                )
+                if not service_plugin_runtime_manage and current_bindings != candidate_bindings:
+                    raise PermissionError("当前 Gateway 未授权修改 Workspace 插件运行绑定")
                 file = self._check_source_edit(source_key, gateway_id, request, accepted)
                 if accepted is None:
                     service._prepare_candidate(service._require_snapshot(), candidate, idempotency_key=request.idempotency_key, source_edit=intent)

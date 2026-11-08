@@ -78,36 +78,46 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeStateResultDTO:
-        return await self._managed_group_action(workspace_id, "start", request_id=request_id, group_request=group_request)
+        result = await self._managed_group_action(workspace_id, "start", request_id=request_id, group_request=group_request)
+        await self._reconcile_registry_dependents()
+        return result
 
     async def stop_managed_backend(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeStateResultDTO:
-        return await self._managed_group_action(workspace_id, "stop", request_id=request_id, group_request=group_request)
+        result = await self._managed_group_action(workspace_id, "stop", request_id=request_id, group_request=group_request)
+        await self._reconcile_registry_dependents()
+        return result
 
     async def safe_restart_managed_backend(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
         authorize_configuration_write: Callable[[], None] | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
-        return await self._managed_group_action(workspace_id, "restart-safe", request_id=request_id, group_request=group_request, authorize_configuration_write=authorize_configuration_write)
+        result = await self._managed_group_action(workspace_id, "restart-safe", request_id=request_id, group_request=group_request, authorize_configuration_write=authorize_configuration_write)
+        await self._reconcile_registry_dependents()
+        return result
 
     async def force_restart_managed_backend(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
         authorize_configuration_write: Callable[[], None] | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
-        return await self._managed_group_action(workspace_id, "restart-force", request_id=request_id, group_request=group_request, authorize_configuration_write=authorize_configuration_write)
+        result = await self._managed_group_action(workspace_id, "restart-force", request_id=request_id, group_request=group_request, authorize_configuration_write=authorize_configuration_write)
+        await self._reconcile_registry_dependents()
+        return result
 
     async def remove_managed_workspace(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None, force: bool = False,
     ) -> GatewayRuntimeRestartResultDTO:
-        return await self._managed_group_action(
+        result = await self._managed_group_action(
             workspace_id, "restart-force" if force else "restart-safe",
             request_id=request_id, group_request=group_request, remove_target=True,
         )
+        await self._reconcile_registry_dependents()
+        return result
 
     def update_health_controller_config(
         self,

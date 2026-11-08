@@ -36,6 +36,8 @@
     { "pattern": "/resources/skill_sources/gateway_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
     { "pattern": "/mcp/servers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -226,6 +228,9 @@
     },
     "runtime": {
       "$ref": "#/$defs/runtimeConfig"
+    },
+    "plugins": {
+      "$ref": "#/$defs/workspacePluginsConfig"
     }
   },
   "$defs": {
@@ -325,6 +330,36 @@
         "workspace": { "$ref": "#/$defs/workspaceRuntimeConfig" },
         "events": { "$ref": "#/$defs/eventsRuntimeConfig" },
         "debug": { "$ref": "#/$defs/debugRuntimeConfig" }
+      }
+    },
+
+    "workspacePluginsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtime": { "$ref": "#/$defs/workspacePluginRuntimeConfig" }
+      }
+    },
+
+    "workspacePluginRuntimeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["package_id", "plugin_id", "package_version", "enabled"],
+            "properties": {
+              "package_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+              "plugin_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+              "package_version": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
       }
     },
 

@@ -191,7 +191,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert installed_content() == original_content, "运行、导入本地模块和重启不能修改已安装包"
         crash_path = (f"/api/gateway/service-plugins/probe.tools/python/instances/"
             f"{python_new['instance']['instance_id']}/services/echo/crash?package_version=1.0.0")
-        assert client.post(crash_path).status_code == 500
+        assert client.post(crash_path).status_code == 502
         assert states()["python"]["state"] == "failed"
         assert not psutil.pid_exists(python_new["instance"]["process_id"])
         assert states()["python"]["binding"]["enabled"] is True

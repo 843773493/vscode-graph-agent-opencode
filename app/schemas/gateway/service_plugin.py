@@ -49,6 +49,7 @@ class PluginVersionRequest(PluginTarget):
 class RestartPluginRequest(PluginVersionRequest):
     plugin_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     revision: str = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId | None = None
 
 
 class PluginServiceContribution(_PluginValue):
@@ -221,9 +222,17 @@ class PluginSlotStatusDTO(_PluginValue):
     instance: PluginInstanceView | None = None
 
 
+class WorkspacePluginConfigurationDTO(_PluginValue):
+    workspace_id: CanonicalWorkspaceId
+    state: Literal["waiting", "ready", "stopped", "failed"]
+    revision: str | None = None
+    error: str | None = None
+
+
 class PluginRuntimeStatusDTO(_PluginValue):
     plugins: list[PluginSlotStatusDTO]
     configured_bindings: list[PluginBinding]
+    workspace_configurations: list[WorkspacePluginConfigurationDTO] = Field(default_factory=list)
 
 
 class PluginUninstallResultDTO(_PluginValue):
@@ -256,4 +265,5 @@ __all__ = [
     "PluginVersionRequest",
     "RestartPluginRequest",
     "ServicePluginManifest",
+    "WorkspacePluginConfigurationDTO",
 ]

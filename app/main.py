@@ -32,6 +32,7 @@ from app.api.runtime_control import router as runtime_control_router
 from app.api.runtime_control import verify_runtime_control_token
 from app.api.runtime_logging import runtime_logging_router
 from app.api.search import router as search_router
+from app.api.service_plugins import router as service_plugins_router
 from app.api.session_activity import router as session_activity_router
 from app.api.session_navigation import router as session_navigation_router
 from app.api.session_turns import router as session_turns_router
@@ -215,6 +216,7 @@ app.add_exception_handler(RequestValidationError, request_validation_error_respo
 app.include_router(mcp_installation_router, prefix="/api/v1")
 app.include_router(extension_host_router)
 app.include_router(runtime_control_router)
+app.include_router(service_plugins_router)
 app.include_router(extension_configuration_router)
 app.include_router(runtime_logging_router(
     prefix="/api/v1/internal/runtime-logging", verify_token=verify_runtime_control_token,

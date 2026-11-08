@@ -37,6 +37,8 @@ _EXPECTED_GATEWAY_DROPPED_HEADERS = frozenset(
         "x-boxteam-target-gateway-id",
         "x-boxteam-navigation-actor",
         "x-boxteam-resource-owner",
+        "x-boxteam-gateway-connection-id",
+        "x-boxteam-extension-client-id",
     }
 )
 
@@ -153,6 +155,7 @@ def test_gateway_proxy_headers_drop_hop_and_credential_headers() -> None:
                 (b"x-local-token", b"attacker"),
                 (b"x-boxteam-workspace-id", b"gw_attacker"),
                 (b"cookie", b"session=1"),
+                (b"x-boxteam-service-plugin-runtime-manage", b"true"),
                 (b"x-end-to-end", b"kept"),
             ],
         }
@@ -164,6 +167,7 @@ def test_gateway_proxy_headers_drop_hop_and_credential_headers() -> None:
     assert headers["x-end-to-end"] == "kept"
     assert "connection" not in {key.lower() for key in headers}
     assert "cookie" not in {key.lower() for key in headers}
+    assert "x-boxteam-service-plugin-runtime-manage" not in {key.lower() for key in headers}
     assert headers["X-Local-Token"] == "local-dev-token"
     assert "X-BoxTeam-Workspace-Id" not in headers
 
@@ -178,6 +182,7 @@ def test_gateway_proxy_dropped_header_set_is_exactly_the_shared_contract() -> No
     assert PROXY_ONLY_DROPPED_HEADERS == GATEWAY_PROXY_DROPPED_HEADERS | {
         "x-boxteam-history-loading",
         "x-boxteam-backend-workspace-id",
+        "x-boxteam-service-plugin-runtime-manage",
         "cookie",
     }
 

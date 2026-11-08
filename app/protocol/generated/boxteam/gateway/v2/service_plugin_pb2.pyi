@@ -212,12 +212,26 @@ class PluginSlotStatusDTO(_message.Message):
     def __init__(self, binding: _Optional[_Union[PluginBinding, _Mapping]] = ..., revision: _Optional[str] = ..., state: _Optional[str] = ..., error: _Optional[str] = ..., declarative: _Optional[bool] = ..., instance: _Optional[_Union[PluginInstanceView, _Mapping]] = ..., gateway_id: _Optional[str] = ..., instance_scope: _Optional[str] = ...) -> None: ...
 
 class PluginRuntimeStatusDTO(_message.Message):
-    __slots__ = ("plugins", "configured_bindings")
+    __slots__ = ("plugins", "configured_bindings", "workspace_configurations")
     PLUGINS_FIELD_NUMBER: _ClassVar[int]
     CONFIGURED_BINDINGS_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_CONFIGURATIONS_FIELD_NUMBER: _ClassVar[int]
     plugins: _containers.RepeatedCompositeFieldContainer[PluginSlotStatusDTO]
     configured_bindings: _containers.RepeatedCompositeFieldContainer[PluginBinding]
-    def __init__(self, plugins: _Optional[_Iterable[_Union[PluginSlotStatusDTO, _Mapping]]] = ..., configured_bindings: _Optional[_Iterable[_Union[PluginBinding, _Mapping]]] = ...) -> None: ...
+    workspace_configurations: _containers.RepeatedCompositeFieldContainer[WorkspacePluginConfigurationDTO]
+    def __init__(self, plugins: _Optional[_Iterable[_Union[PluginSlotStatusDTO, _Mapping]]] = ..., configured_bindings: _Optional[_Iterable[_Union[PluginBinding, _Mapping]]] = ..., workspace_configurations: _Optional[_Iterable[_Union[WorkspacePluginConfigurationDTO, _Mapping]]] = ...) -> None: ...
+
+class WorkspacePluginConfigurationDTO(_message.Message):
+    __slots__ = ("workspace_id", "state", "revision", "error")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    state: str
+    revision: str
+    error: str
+    def __init__(self, workspace_id: _Optional[str] = ..., state: _Optional[str] = ..., revision: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class PluginUninstallResultDTO(_message.Message):
     __slots__ = ("package_id", "package_version", "uninstalled")
@@ -264,17 +278,19 @@ class PluginVersionRequest(_message.Message):
     def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., package_id: _Optional[str] = ..., package_version: _Optional[str] = ...) -> None: ...
 
 class RestartPluginRequest(_message.Message):
-    __slots__ = ("gateway_id", "gateway_connection_id", "package_id", "package_version", "plugin_id", "revision")
+    __slots__ = ("gateway_id", "gateway_connection_id", "package_id", "package_version", "plugin_id", "revision", "workspace_id")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
     PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
     PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     gateway_connection_id: str
     package_id: str
     package_version: str
     plugin_id: str
     revision: str
-    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., plugin_id: _Optional[str] = ..., revision: _Optional[str] = ...) -> None: ...
+    workspace_id: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., plugin_id: _Optional[str] = ..., revision: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...

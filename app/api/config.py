@@ -39,6 +39,17 @@ from app.services.infrastructure.config_service import ConfigService
 router = APIRouter(prefix="/config", tags=["config"])
 
 
+def _service_plugin_runtime_manage(request: Request) -> bool:
+    value = request.headers.get("x-boxteam-service-plugin-runtime-manage")
+    if value is None:
+        return True
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise HTTPException(status_code=400, detail="插件运行绑定授权头必须为 true 或 false")
+
+
 @router.get("", response_model=APIResponse[ConfigDTO], summary="获取配置")
 async def get_config(
     _: str = Depends(verify_local_token),
@@ -141,15 +152,19 @@ async def preflight_config_source(
 async def save_config_source(
     source_key: str,
     payload: ConfigSourceEditRequest,
+    request: Request,
     config_service: Annotated[ConfigService, Depends(get_config_service)],
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
 ):
     try:
         result = await config_service.save_source_edit(source_key=source_key,
-            gateway_id=require_current_gateway_id("配置来源保存"), request=payload)
+            gateway_id=require_current_gateway_id("配置来源保存"), request=payload,
+            service_plugin_runtime_manage=_service_plugin_runtime_manage(request))
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except (ValueError, TypeError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)

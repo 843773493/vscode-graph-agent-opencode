@@ -9,14 +9,17 @@ from pathlib import Path
 from threading import Event
 from typing import NoReturn
 
+import httpx
 import jsonschema
 import pytest
 from watchfiles import Change
 
+import app.services.infrastructure.config_service.config_reload as config_reload_module
 import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
 from app.core.lifecycle import LifetimeScope
 from app.core.mounted_workspaces import MountedWorkspace
+from app.core.path_utils import get_workspace_config_path
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
@@ -1843,6 +1846,121 @@ async def test_candidate_applier_failure_prevents_snapshot_commit(
     assert status.healthy is False
     assert status.reason == "apply_failed"
     assert status.restart_required is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway_accepts", [True, False])
+async def test_plugin_binding_candidate_is_validated_after_pending_and_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gateway_accepts: bool,
+) -> None:
+    config = _base_config()
+    user_config_path = _write_workspace_config(tmp_path, config)
+    workspace_root = tmp_path / "workspace"
+    store = WorkspaceStateStore(workspace_root=workspace_root)
+    load_or_create_workspace_id(workspace_root)
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=user_config_path,
+        workspace_root=workspace_root,
+        workspace_state_store=store,
+    )
+    service.validate_workspace_config()
+    previous_active = store.get_active_config_snapshot("workspace")
+    assert previous_active is not None
+    workspace_config_path = get_workspace_config_path(workspace_root)
+    workspace_config_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_config_path.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "runtime": {
+                        "entries": [
+                            {
+                                "package_id": "sample",
+                                "plugin_id": "sample-tool",
+                                "package_version": "1.0.0",
+                                "enabled": True,
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    requests: list[httpx.Request] = []
+    original_client = httpx.AsyncClient
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/validate"):
+            pending = store.get_pending_config_candidate(config_domain="workspace")
+            active = store.get_active_config_snapshot("workspace")
+            assert pending is not None
+            assert pending.state == "applying"
+            assert active is not None
+            assert active.active_revision == previous_active.active_revision
+            assert json.loads(request.content) == [
+                {
+                    "package_id": "sample",
+                    "plugin_id": "sample-tool",
+                    "package_version": "1.0.0",
+                    "workspace_id": load_or_create_workspace_id(workspace_root),
+                    "enabled": True,
+                }
+            ]
+            if not gateway_accepts:
+                return httpx.Response(409, json={"detail": "未安装指定 Workspace 插件"})
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": True,
+                    "request_id": request.headers["X-Request-ID"],
+                },
+            )
+        assert request.url.path.endswith("/refresh")
+        return httpx.Response(
+            200,
+            json={"data": {}, "request_id": request.headers["X-Request-ID"]},
+        )
+
+    monkeypatch.setattr(
+        config_reload_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            **kwargs,
+            transport=httpx.MockTransport(respond),
+        ),
+    )
+    monkeypatch.setattr(config_reload_module, "get_gateway_local_token", lambda: "local-token")
+    try:
+        active = store.get_active_config_snapshot("workspace")
+        assert active is not None
+        if gateway_accepts:
+            assert await service.reload()
+            active = store.get_active_config_snapshot("workspace")
+            assert active is not None
+            assert active.active_revision != previous_active.active_revision
+            assert [request.url.path.rsplit("/", 1)[-1] for request in requests] == [
+                "validate",
+                "refresh",
+            ]
+        else:
+            with pytest.raises(ConfigConflictError, match="Gateway 拒绝"):
+                await service.reload()
+            pending = store.get_pending_config_candidate(config_domain="workspace")
+            active = store.get_active_config_snapshot("workspace")
+            assert pending is not None and pending.state == "conflict"
+            assert active is not None
+            assert active.active_revision == previous_active.active_revision
+            assert [request.url.path.rsplit("/", 1)[-1] for request in requests] == [
+                "validate",
+            ]
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio

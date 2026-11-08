@@ -549,6 +549,11 @@ export declare type PluginRuntimeStatusDTO = Message<"boxteam.gateway.v2.PluginR
    * @generated from field: repeated boxteam.gateway.v2.PluginBinding configured_bindings = 2;
    */
   configuredBindings: PluginBinding[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.WorkspacePluginConfigurationDTO workspace_configurations = 3;
+   */
+  workspaceConfigurations: WorkspacePluginConfigurationDTO[];
 };
 
 /**
@@ -556,6 +561,37 @@ export declare type PluginRuntimeStatusDTO = Message<"boxteam.gateway.v2.PluginR
  * Use `create(PluginRuntimeStatusDTOSchema)` to create a new message.
  */
 export declare const PluginRuntimeStatusDTOSchema: GenMessage<PluginRuntimeStatusDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.WorkspacePluginConfigurationDTO
+ */
+export declare type WorkspacePluginConfigurationDTO = Message<"boxteam.gateway.v2.WorkspacePluginConfigurationDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string state = 2;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string revision = 3;
+   */
+  revision?: string | undefined;
+
+  /**
+   * @generated from field: optional string error = 4;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.WorkspacePluginConfigurationDTO.
+ * Use `create(WorkspacePluginConfigurationDTOSchema)` to create a new message.
+ */
+export declare const WorkspacePluginConfigurationDTOSchema: GenMessage<WorkspacePluginConfigurationDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.PluginUninstallResultDTO
@@ -704,6 +740,11 @@ export declare type RestartPluginRequest = Message<"boxteam.gateway.v2.RestartPl
    * @generated from field: string revision = 6;
    */
   revision: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 7;
+   */
+  workspaceId?: string | undefined;
 };
 
 /**

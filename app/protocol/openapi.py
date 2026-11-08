@@ -60,6 +60,7 @@ from app.schemas.gateway.service_plugin import (
     PluginVersionRequest,
     RestartPluginRequest,
     ServicePluginManifest,
+    WorkspacePluginConfigurationDTO,
 )
 
 # HTTP 根登记完整消息名，在发布时从本次 descriptor 解析；新增消息不依赖旧生成绑定。
@@ -279,7 +280,7 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         ServicePluginManifest, PluginPackageManifest, PluginBinding, PluginInstanceStatus, PluginTarget,
         InstallPluginRequest, PluginVersionRequest, RestartPluginRequest,
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
-        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO,
+        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
     ):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)

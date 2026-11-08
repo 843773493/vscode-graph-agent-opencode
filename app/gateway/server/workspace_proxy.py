@@ -68,6 +68,7 @@ HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
 # 工作区 API 代理在逐跳头部之外还要剥离会话加载策略与浏览器 Cookie；Gateway 凭据
 # 与目标选择头部共用代理的同一份集合。
 PROXY_ONLY_DROPPED_HEADERS = GATEWAY_PROXY_DROPPED_HEADERS | {
+    "x-boxteam-service-plugin-runtime-manage",
     HISTORY_LOADING_HEADER,
     "x-boxteam-backend-workspace-id",
     "cookie",
@@ -545,6 +546,11 @@ async def _proxy_workspace_request(
                 navigation_actor=navigation_actor,
                 target_gateway_id=target_gateway_id,
             )
+            if configuration_request and target.connection_kind == "local":
+                assert auth is not None  # 配置准入已在取得路由前核验。
+                headers["X-BoxTeam-Service-Plugin-Runtime-Manage"] = (
+                    "true" if federation_capability_allowed(request, auth, "service_plugin_runtime_manage") else "false"
+                )
             if request_body is not None:
                 # typed 请求已由路由 owner 重写，长度必须属于重写后的 UTF-8 字节。
                 _set_authoritative_header(headers, "Content-Length", str(len(request_body)))

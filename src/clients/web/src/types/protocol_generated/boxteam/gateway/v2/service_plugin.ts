@@ -130,6 +130,14 @@ export interface PluginSlotStatusDTO {
 export interface PluginRuntimeStatusDTO {
   plugins: PluginSlotStatusDTO[];
   configured_bindings: PluginBinding[];
+  workspace_configurations: WorkspacePluginConfigurationDTO[];
+}
+
+export interface WorkspacePluginConfigurationDTO {
+  workspace_id: string;
+  state: string;
+  revision?: string | undefined;
+  error?: string | undefined;
 }
 
 export interface PluginUninstallResultDTO {
@@ -165,6 +173,7 @@ export interface RestartPluginRequest {
   package_version: string;
   plugin_id: string;
   revision: string;
+  workspace_id?: string | undefined;
 }
 
 function createBasePluginExtensionRequirement(): PluginExtensionRequirement {
@@ -965,7 +974,7 @@ export const PluginSlotStatusDTO: MessageFns<PluginSlotStatusDTO> = {
 };
 
 function createBasePluginRuntimeStatusDTO(): PluginRuntimeStatusDTO {
-  return { plugins: [], configured_bindings: [] };
+  return { plugins: [], configured_bindings: [], workspace_configurations: [] };
 }
 
 export const PluginRuntimeStatusDTO: MessageFns<PluginRuntimeStatusDTO> = {
@@ -976,6 +985,9 @@ export const PluginRuntimeStatusDTO: MessageFns<PluginRuntimeStatusDTO> = {
         : [],
       configured_bindings: globalThis.Array.isArray(object?.configured_bindings)
         ? object.configured_bindings.map((e: any) => PluginBinding.fromJSON(e))
+        : [],
+      workspace_configurations: globalThis.Array.isArray(object?.workspace_configurations)
+        ? object.workspace_configurations.map((e: any) => WorkspacePluginConfigurationDTO.fromJSON(e))
         : [],
     };
   },
@@ -988,6 +1000,11 @@ export const PluginRuntimeStatusDTO: MessageFns<PluginRuntimeStatusDTO> = {
     if (message.configured_bindings?.length) {
       obj.configured_bindings = message.configured_bindings.map((e) => PluginBinding.toJSON(e));
     }
+    if (message.workspace_configurations?.length) {
+      obj.workspace_configurations = message.workspace_configurations.map((e) =>
+        WorkspacePluginConfigurationDTO.toJSON(e)
+      );
+    }
     return obj;
   },
 
@@ -998,6 +1015,54 @@ export const PluginRuntimeStatusDTO: MessageFns<PluginRuntimeStatusDTO> = {
     const message = createBasePluginRuntimeStatusDTO();
     message.plugins = object.plugins?.map((e) => PluginSlotStatusDTO.fromPartial(e)) || [];
     message.configured_bindings = object.configured_bindings?.map((e) => PluginBinding.fromPartial(e)) || [];
+    message.workspace_configurations =
+      object.workspace_configurations?.map((e) => WorkspacePluginConfigurationDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseWorkspacePluginConfigurationDTO(): WorkspacePluginConfigurationDTO {
+  return { workspace_id: "", state: "", revision: undefined, error: undefined };
+}
+
+export const WorkspacePluginConfigurationDTO: MessageFns<WorkspacePluginConfigurationDTO> = {
+  fromJSON(object: any): WorkspacePluginConfigurationDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspacePluginConfigurationDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspacePluginConfigurationDTO>, I>>(base?: I): WorkspacePluginConfigurationDTO {
+    return WorkspacePluginConfigurationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspacePluginConfigurationDTO>, I>>(
+    object: I,
+  ): WorkspacePluginConfigurationDTO {
+    const message = createBaseWorkspacePluginConfigurationDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.state = object.state ?? "";
+    message.revision = object.revision ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
@@ -1190,6 +1255,7 @@ function createBaseRestartPluginRequest(): RestartPluginRequest {
     package_version: "",
     plugin_id: "",
     revision: "",
+    workspace_id: undefined,
   };
 }
 
@@ -1204,6 +1270,7 @@ export const RestartPluginRequest: MessageFns<RestartPluginRequest> = {
       package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
       plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
     };
   },
 
@@ -1227,6 +1294,9 @@ export const RestartPluginRequest: MessageFns<RestartPluginRequest> = {
     if (message.revision !== "") {
       obj.revision = message.revision;
     }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
     return obj;
   },
 
@@ -1241,6 +1311,7 @@ export const RestartPluginRequest: MessageFns<RestartPluginRequest> = {
     message.package_version = object.package_version ?? "";
     message.plugin_id = object.plugin_id ?? "";
     message.revision = object.revision ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
     return message;
   },
 };

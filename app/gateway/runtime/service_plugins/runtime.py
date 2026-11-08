@@ -98,8 +98,9 @@ class GatewayPluginRuntime:
     """配置只在原 owner 持有；这里仅保有当前绑定投影和实际进程句柄。"""
 
     def __init__(self, *, home: Path, gateway_id: str, packages: PluginPackageStore,
-                 settings: Callable[[], dict[str, object]]) -> None:
+                 settings: Callable[[], dict[str, object]], workspace_root: Callable[[str], Path]) -> None:
         self.gateway_id, self.packages, self.settings = gateway_id, packages, settings
+        self.workspace_root = workspace_root
         self.directory = home / "state/gateway/service-plugins"
         self.logs = ProcessLogStore(home / "state/logs")
         self.slots: dict[Slot, PluginSlot] = {}
@@ -125,10 +126,17 @@ class GatewayPluginRuntime:
             self.declaration(binding)
 
     async def apply(self, payload: dict[str, object], revision: str) -> None:
-        bindings = {self.key(binding): binding for binding in gateway_plugin_bindings(payload)}
+        await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None)
+
+    async def apply_scope(self, entries: list[PluginBinding], *, revision: str, workspace_id: str | None) -> None:
+        bindings = {self.key(binding): binding for binding in entries}
+        if len(bindings) != len(entries) or any(binding.workspace_id != workspace_id for binding in entries):
+            raise ValueError("插件绑定必须唯一且属于当前配置 owner 的范围")
+        for binding in entries:
+            self.declaration(binding)
         # 配置已经提交；启动失败只改实际回执，不回滚 enabled。
         for key, slot in tuple(self.slots.items()):
-            if slot.binding.workspace_id is None and key not in bindings:
+            if slot.binding.workspace_id == workspace_id and key not in bindings:
                 async with self._locks.setdefault(key, asyncio.Lock()):
                     try:
                         await self._stop(key, slot)
@@ -144,7 +152,8 @@ class GatewayPluginRuntime:
         key = self.key(binding)
         async with self._locks.setdefault(key, asyncio.Lock()):
             previous = self.slots.get(key)
-            if restart and (previous is None or previous.revision != revision or previous.binding != binding):
+            # revision 已由原配置 owner 核验；无关配置提交不要求给插件重复交接。
+            if restart and (previous is None or previous.binding != binding):
                 raise ValueError("重启基线已失效，请读取原绑定")
             if previous is not None and previous.binding == binding and not restart:
                 previous.revision = revision
@@ -202,6 +211,9 @@ class GatewayPluginRuntime:
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["BOXTEAM_RUNTIME_CONTROL_TOKEN"] = token
         environment["BOXTEAM_PLUGIN_PORT"] = str(port)
+        if slot.binding.workspace_id is not None:
+            environment["WORKSPACE_ROOT"] = str(self.workspace_root(slot.binding.workspace_id))
+            environment["BOXTEAM_WORKSPACE_ID"] = slot.binding.workspace_id
         environment["BOXTEAM_PLUGIN_INSTANCE"] = json.dumps({
             **slot.binding.model_dump(exclude={"enabled"}), "gateway_id": self.gateway_id,
             "instance_scope": slot.declaration.instance_scope,
@@ -377,10 +389,10 @@ class GatewayPluginRuntime:
 @asynccontextmanager
 async def plugin_runtime_lifespan(*, home: Path, gateway_id: str,
     payload: Callable[[], dict[str, object]], revision: Callable[[], str],
-    preserve: Callable[[], bool],
+    preserve: Callable[[], bool], workspace_root: Callable[[str], Path],
 ) -> AsyncIterator[GatewayPluginRuntime]:
     packages = PluginPackageStore(home / "plugins/packages")
-    owner = GatewayPluginRuntime(home=home, gateway_id=gateway_id, packages=packages,
+    owner = GatewayPluginRuntime(home=home, gateway_id=gateway_id, packages=packages, workspace_root=workspace_root,
         settings=lambda: {"logging": {"revision": revision(),
             **cast(dict[str, dict[str, object]], payload()["logging"])["runtime"]}})
     try:

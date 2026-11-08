@@ -58,6 +58,7 @@ from app.gateway.federation.workspace_port import (
     WorkspaceCatalogPort,
     WorkspaceSessionMainPort,
 )
+from app.gateway.plugins.workspaces import WorkspacePluginBindings
 from app.gateway.routes._shared import (
     _gateway_root,
     _wait_for_managed_runtime_restore_tasks,
@@ -229,6 +230,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         ) as extension_management,
         plugin_runtime_lifespan(
             home=get_boxteam_home(), gateway_id=gateway_id,
+            workspace_root=registry.local_workspace_root,
             payload=lambda: gateway_config_reload.config.payload,
             revision=lambda: gateway_config_reload.config.revision,
             preserve=should_preserve_for_handoff,
@@ -238,6 +240,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         app.state.http_client = http_client
         app.state.extension_management = extension_management
         app.state.service_plugins = service_plugins
+        workspace_plugin_bindings = WorkspacePluginBindings(registry, service_plugins)
+        app.state.workspace_plugin_bindings = workspace_plugin_bindings
         app.state.workspace_navigation_store = WorkspaceNavigationStore(
             storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
         )
@@ -292,11 +296,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         )
         await app.state.port_forward_manager.reconcile_workspaces()
         await app.state.port_forward_manager.restore()
+        async def reconcile_runtime_dependents() -> None:
+            await app.state.port_forward_manager.reconcile_workspaces()
+            await workspace_plugin_bindings.reconcile()
+
         app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(
             registry=registry,
             project_root=get_project_root(),
             log_dir=get_runtime_log_root(),
-            on_registry_reconciled=(app.state.port_forward_manager.reconcile_workspaces),
+            on_registry_reconciled=reconcile_runtime_dependents,
             health_request_timeout_seconds=(
                 gateway_config.gateway_process_health_request_timeout_seconds
             ),
@@ -650,6 +658,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 pending_consumer_result = None
             await service_plugins.adopt()
             await service_plugins.apply(gateway_config_reload.config.payload, gateway_config_reload.config.revision)
+            workspace_plugin_bindings.start()
             yield {"before_http_shutdown": extension_management.quiesce if extension_management is not None else None}
         except BaseException as error:
             recovery_errors: list[Exception] = []
@@ -730,6 +739,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 await app.state.session_catalog_search_service.stop()
             logger.info("Gateway 正在关闭 HTTP 连接池")
             shutdown_errors: list[Exception] = []
+            try:
+                await workspace_plugin_bindings.close()
+            except Exception as error:
+                shutdown_errors.append(error)
+                logger.exception("Gateway 关闭 Workspace 插件交接失败")
             try:
                 await app.state.federation_channel_owner.stop()
             except Exception as error:

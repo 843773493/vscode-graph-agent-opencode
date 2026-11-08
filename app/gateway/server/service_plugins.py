@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import zipfile
 from pathlib import Path
 from typing import Annotated
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
+from app.api.runtime_control import verify_local_control_request
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
@@ -20,7 +22,11 @@ from app.gateway.auth import (
     verify_gateway_token,
 )
 from app.gateway.federation.policy import require_federation_capability
-from app.gateway.proxy_upstream import UpstreamResponseBody, build_upstream_url
+from app.gateway.proxy_upstream import (
+    UpstreamResponseBody,
+    build_upstream_url,
+    send_upstream_request,
+)
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
     gateway_plugin_bindings,
@@ -29,6 +35,7 @@ from app.gateway.server.management_routes import (
     check_management_route,
     management_gateway_route,
 )
+from app.schemas.canonical_params import CanonicalWorkspaceId
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
     InstallPluginRequest,
@@ -40,10 +47,44 @@ from app.schemas.gateway.service_plugin import (
     PluginUninstallResultDTO,
     PluginVersionRequest,
     RestartPluginRequest,
+    WorkspacePluginConfigurationDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+@router.post("/api/internal/service-plugins/workspaces/{workspace_id}/refresh", include_in_schema=False,
+    dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
+async def refresh_workspace(workspace_id: CanonicalWorkspaceId, request: Request) -> APIResponse[WorkspacePluginConfigurationDTO]:
+    try:
+        state = request.app.state.workspace_plugin_bindings.request_refresh(workspace_id)
+    except (ValueError, LookupError) as error:
+        raise HTTPException(409, str(error)) from error
+    return APIResponse(data=state, request_id=get_request_id(request))
+
+
+@router.post("/api/internal/service-plugins/workspaces/{workspace_id}/validate", include_in_schema=False,
+    dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
+async def validate_workspace_bindings(workspace_id: CanonicalWorkspaceId, bindings: list[PluginBinding],
+    request: Request,
+) -> APIResponse[bool]:
+    # Workspace 已登记原 pending 引用；与卸载串行核安装存在后才允许发布 active。
+    registry = request.app.state.registry
+    try:
+        async with registry.backend_topology_lock:
+            target = registry.resolve((registry.gateway_id, workspace_id))
+            if target.connection_kind != "local":
+                raise ValueError("插件绑定验证必须属于原生工作区")
+            keys = {(binding.package_id, binding.plugin_id) for binding in bindings}
+            if len(keys) != len(bindings) or any(binding.workspace_id != workspace_id for binding in bindings):
+                raise ValueError("插件绑定必须唯一且属于认证交付的工作区")
+            for binding in bindings:
+                request.app.state.service_plugins.declaration(binding)
+    except (ValueError, LookupError, FileNotFoundError) as error:
+        raise HTTPException(409, str(error)) from error
+    return APIResponse(data=True, request_id=get_request_id(request))
 
 
 def plugin_owner(request: Request) -> GatewayPluginRuntime:
@@ -123,10 +164,18 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
         return APIResponse[PluginUninstallResultDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     try:
-        async with request.app.state.gateway_config_reload.mutation_guard():
+        async with request.app.state.gateway_config_reload.mutation_guard(), request.app.state.registry.backend_topology_lock:
             require_federation_capability(request, auth, "service_plugin_installation_manage")
             bindings = gateway_plugin_bindings(request.app.state.gateway_config_reload.config.payload)
             references = owner.references(payload.package_id, payload.package_version)
+            coordinator = request.app.state.workspace_plugin_bindings
+            package = owner.packages.get(payload.package_id, payload.package_version)
+            workspace_bindings = (await coordinator.read_references()
+                if any(plugin.instance_scope == "workspace" for plugin in package.manifest.plugins)
+                else coordinator.referenced_bindings())
+            references.extend(f"workspace-configuration:{binding.workspace_id}:{binding.plugin_id}"
+                for binding in workspace_bindings
+                if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             references.extend(f"configuration:{binding.plugin_id}" for binding in bindings
                 if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             pending = request.app.state.gateway_state.get_pending_config_candidate(config_domain="gateway")
@@ -136,7 +185,7 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
                     if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             await run_sync_shielded(owner.packages.uninstall, payload.package_id, payload.package_version,
                 references=references)
-    except (ValueError, RuntimeError) as error:
+    except (ValueError, RuntimeError, LookupError, httpx.HTTPError) as error:
         raise HTTPException(409, str(error)) from error
     data = PluginUninstallResultDTO(package_id=payload.package_id, package_version=payload.package_version,
         uninstalled=True)
@@ -156,7 +205,10 @@ async def status(payload: PluginTarget, request: Request,
     require_federation_capability(request, auth, "service_plugin_runtime_manage")
     data = PluginRuntimeStatusDTO.model_validate({"plugins": [slot.describe() for slot in owner.slots.values()],
         "configured_bindings": [binding.model_dump(mode="json") for binding in gateway_plugin_bindings(
-            request.app.state.gateway_config_reload.config.payload)]})
+            request.app.state.gateway_config_reload.config.payload)]
+            + [binding.model_dump(mode="json") for binding in request.app.state.workspace_plugin_bindings.configured_bindings()],
+        "workspace_configurations": [state.model_dump(mode="json")
+            for state in request.app.state.workspace_plugin_bindings.states.values()]})
     return APIResponse[PluginRuntimeStatusDTO](data=data, request_id=get_request_id(request))
 
 
@@ -172,15 +224,25 @@ async def restart(payload: RestartPluginRequest, request: Request,
         return APIResponse[PluginSlotStatusDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_runtime_manage")
     binding = PluginBinding(package_id=payload.package_id, plugin_id=payload.plugin_id,
-        package_version=payload.package_version, enabled=True)
+        package_version=payload.package_version, enabled=True, workspace_id=payload.workspace_id)
     try:
+        if payload.workspace_id is not None:
+            async with request.app.state.registry.backend_topology_lock:
+                coordinator = request.app.state.workspace_plugin_bindings
+                target = request.app.state.registry.resolve((payload.gateway_id, payload.workspace_id))
+                snapshot = await coordinator.read(target)
+                if payload.revision != snapshot.revision or binding not in snapshot.bindings:
+                    raise ValueError("工作区原配置已停用或版本／revision 已变化，拒绝重启")
+                require_federation_capability(request, auth, "service_plugin_runtime_manage")
+                result = await owner.apply_binding(binding, revision=payload.revision, restart=True)
+            return APIResponse(data=PluginSlotStatusDTO.model_validate(result), request_id=get_request_id(request))
         async with request.app.state.gateway_config_reload.mutation_guard():
             require_federation_capability(request, auth, "service_plugin_runtime_manage")
             config = request.app.state.gateway_config_reload.config
             if payload.revision != config.revision or binding not in gateway_plugin_bindings(config.payload):
                 raise ValueError("原配置绑定已停用或版本／revision 已变化，拒绝重启")
             result = await owner.apply_binding(binding, revision=payload.revision, restart=True)
-    except ValueError as error:
+    except (ValueError, LookupError) as error:
         raise HTTPException(409, str(error)) from error
     data = PluginSlotStatusDTO.model_validate(result)
     return APIResponse[PluginSlotStatusDTO](data=data, request_id=get_request_id(request))
@@ -192,23 +254,39 @@ async def restart(payload: RestartPluginRequest, request: Request,
 async def service_request(package_id: str, plugin_id: str, instance_id: str, service_id: str,
     path: str, package_version: str, request: Request,
     owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
+    workspace_id: CanonicalWorkspaceId | None = None,
 ) -> StreamingResponse:
-    # TODO：接原 Workspace 认证绑定与联邦业务权限后开放 workspace／Relay。
+    # TODO：接原联邦业务权限；本机业务不要求安装／启停管理权限。
     binding = PluginBinding(package_id=package_id, plugin_id=plugin_id,
-        package_version=package_version, enabled=True)
-    if any(part in {"..", "."} for part in path.split("/")):
-        raise HTTPException(422, "服务路径不能越过具名服务")
+        package_version=package_version, enabled=True, workspace_id=workspace_id)
     try:
         base_url, token = owner.service(binding, service_id=service_id, instance_id=instance_id)
     except LookupError as error:
         raise HTTPException(409, str(error)) from error
-    query = [(key, value) for key, value in request.query_params.multi_items() if key != "package_version"]
+    query = [(key, value) for key, value in request.query_params.multi_items()
+        if key not in {"package_version", "workspace_id"}]
     headers = {"X-Local-Token": token, "X-Request-ID": get_request_id(request)}
+    if workspace_id is not None:
+        headers["X-BoxTeam-Workspace-Id"] = workspace_id
     if request.headers.get("content-type"):
         headers["Content-Type"] = request.headers["content-type"]
-    upstream = owner.client.build_request(request.method, build_upstream_url(base_url, (), path),
+    try:
+        url = build_upstream_url(base_url, (), path)
+    except ValueError as error:
+        raise HTTPException(422, "服务路径不能越过具名服务") from error
+    upstream = owner.client.build_request(request.method, url,
         params=tuple(query), content=request.stream(), headers=headers, timeout=None)
-    response = await owner.client.send(upstream, stream=True)
+    try:
+        response = await send_upstream_request(owner.client, upstream)
+    except httpx.RequestError as error:
+        logger.exception("插件上游请求失败: request_id=%s instance_id=%s service_id=%s",
+            get_request_id(request), instance_id, service_id)
+        raise HTTPException(502, f"插件上游连接失败: instance_id={instance_id}, service_id={service_id}, "
+            f"error_type={type(error).__name__}；请查看 Gateway 服务日志") from error
+    except TimeoutError as error:
+        logger.exception("插件上游响应头超时: request_id=%s instance_id=%s service_id=%s",
+            get_request_id(request), instance_id, service_id)
+        raise HTTPException(504, f"插件上游响应头超时: instance_id={instance_id}, service_id={service_id}") from error
     body = UpstreamResponseBody(response)
     return StreamingResponse(body, status_code=response.status_code,
         headers={key: value for key, value in response.headers.items()
