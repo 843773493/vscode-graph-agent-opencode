@@ -25,6 +25,18 @@ class PluginServiceContribution(_message.Message):
     protocol: str
     def __init__(self, service_id: _Optional[str] = ..., service_type: _Optional[str] = ..., protocol: _Optional[str] = ...) -> None: ...
 
+class PluginToolBinding(_message.Message):
+    __slots__ = ("tool_id", "contract_version", "schema_hash", "service_id")
+    TOOL_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_HASH_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_ID_FIELD_NUMBER: _ClassVar[int]
+    tool_id: str
+    contract_version: int
+    schema_hash: str
+    service_id: str
+    def __init__(self, tool_id: _Optional[str] = ..., contract_version: _Optional[int] = ..., schema_hash: _Optional[str] = ..., service_id: _Optional[str] = ...) -> None: ...
+
 class PluginSkillContribution(_message.Message):
     __slots__ = ("id", "path", "tool_bindings")
     ID_FIELD_NUMBER: _ClassVar[int]
@@ -32,8 +44,78 @@ class PluginSkillContribution(_message.Message):
     TOOL_BINDINGS_FIELD_NUMBER: _ClassVar[int]
     id: str
     path: str
-    tool_bindings: _containers.RepeatedCompositeFieldContainer[_struct_pb2.Struct]
-    def __init__(self, id: _Optional[str] = ..., path: _Optional[str] = ..., tool_bindings: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ...) -> None: ...
+    tool_bindings: _containers.RepeatedCompositeFieldContainer[PluginToolBinding]
+    def __init__(self, id: _Optional[str] = ..., path: _Optional[str] = ..., tool_bindings: _Optional[_Iterable[_Union[PluginToolBinding, _Mapping]]] = ...) -> None: ...
+
+class PluginCommandContribution(_message.Message):
+    __slots__ = ("id", "title", "category", "handler", "arguments_schema", "result_schema", "required_capabilities", "enablement")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    TITLE_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    HANDLER_FIELD_NUMBER: _ClassVar[int]
+    ARGUMENTS_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    RESULT_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    REQUIRED_CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    ENABLEMENT_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    title: str
+    category: str
+    handler: str
+    arguments_schema: _struct_pb2.Struct
+    result_schema: _struct_pb2.Struct
+    required_capabilities: _containers.RepeatedScalarFieldContainer[str]
+    enablement: str
+    def __init__(self, id: _Optional[str] = ..., title: _Optional[str] = ..., category: _Optional[str] = ..., handler: _Optional[str] = ..., arguments_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., result_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., required_capabilities: _Optional[_Iterable[str]] = ..., enablement: _Optional[str] = ...) -> None: ...
+
+class PluginMenuContribution(_message.Message):
+    __slots__ = ("id", "location", "command_id", "group", "order", "when")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    LOCATION_FIELD_NUMBER: _ClassVar[int]
+    COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
+    GROUP_FIELD_NUMBER: _ClassVar[int]
+    ORDER_FIELD_NUMBER: _ClassVar[int]
+    WHEN_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    location: str
+    command_id: str
+    group: str
+    order: int
+    when: str
+    def __init__(self, id: _Optional[str] = ..., location: _Optional[str] = ..., command_id: _Optional[str] = ..., group: _Optional[str] = ..., order: _Optional[int] = ..., when: _Optional[str] = ...) -> None: ...
+
+class PluginKeybindingContribution(_message.Message):
+    __slots__ = ("id", "command_id", "key", "mac", "linux", "win", "when")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    MAC_FIELD_NUMBER: _ClassVar[int]
+    LINUX_FIELD_NUMBER: _ClassVar[int]
+    WIN_FIELD_NUMBER: _ClassVar[int]
+    WHEN_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    command_id: str
+    key: str
+    mac: str
+    linux: str
+    win: str
+    when: str
+    def __init__(self, id: _Optional[str] = ..., command_id: _Optional[str] = ..., key: _Optional[str] = ..., mac: _Optional[str] = ..., linux: _Optional[str] = ..., win: _Optional[str] = ..., when: _Optional[str] = ...) -> None: ...
+
+class PluginDebuggerContribution(_message.Message):
+    __slots__ = ("type", "label", "configuration_schema", "service_id", "dap_version", "capabilities")
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_ID_FIELD_NUMBER: _ClassVar[int]
+    DAP_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    type: str
+    label: str
+    configuration_schema: _struct_pb2.Struct
+    service_id: str
+    dap_version: int
+    capabilities: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, type: _Optional[str] = ..., label: _Optional[str] = ..., configuration_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., service_id: _Optional[str] = ..., dap_version: _Optional[int] = ..., capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class PluginContributions(_message.Message):
     __slots__ = ("commands", "menus", "keybindings", "configuration", "services", "debuggers", "skills")
@@ -44,14 +126,14 @@ class PluginContributions(_message.Message):
     SERVICES_FIELD_NUMBER: _ClassVar[int]
     DEBUGGERS_FIELD_NUMBER: _ClassVar[int]
     SKILLS_FIELD_NUMBER: _ClassVar[int]
-    commands: _containers.RepeatedCompositeFieldContainer[_struct_pb2.Struct]
-    menus: _containers.RepeatedCompositeFieldContainer[_struct_pb2.Struct]
-    keybindings: _containers.RepeatedCompositeFieldContainer[_struct_pb2.Struct]
+    commands: _containers.RepeatedCompositeFieldContainer[PluginCommandContribution]
+    menus: _containers.RepeatedCompositeFieldContainer[PluginMenuContribution]
+    keybindings: _containers.RepeatedCompositeFieldContainer[PluginKeybindingContribution]
     configuration: _struct_pb2.Struct
     services: _containers.RepeatedCompositeFieldContainer[PluginServiceContribution]
-    debuggers: _containers.RepeatedCompositeFieldContainer[_struct_pb2.Struct]
+    debuggers: _containers.RepeatedCompositeFieldContainer[PluginDebuggerContribution]
     skills: _containers.RepeatedCompositeFieldContainer[PluginSkillContribution]
-    def __init__(self, commands: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ..., menus: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ..., keybindings: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ..., configuration: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., services: _Optional[_Iterable[_Union[PluginServiceContribution, _Mapping]]] = ..., debuggers: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ..., skills: _Optional[_Iterable[_Union[PluginSkillContribution, _Mapping]]] = ...) -> None: ...
+    def __init__(self, commands: _Optional[_Iterable[_Union[PluginCommandContribution, _Mapping]]] = ..., menus: _Optional[_Iterable[_Union[PluginMenuContribution, _Mapping]]] = ..., keybindings: _Optional[_Iterable[_Union[PluginKeybindingContribution, _Mapping]]] = ..., configuration: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., services: _Optional[_Iterable[_Union[PluginServiceContribution, _Mapping]]] = ..., debuggers: _Optional[_Iterable[_Union[PluginDebuggerContribution, _Mapping]]] = ..., skills: _Optional[_Iterable[_Union[PluginSkillContribution, _Mapping]]] = ...) -> None: ...
 
 class ServicePluginManifest(_message.Message):
     __slots__ = ("id", "name", "instance_scope", "requires", "contributes", "runtime", "entrypoint", "management_protocol_version")

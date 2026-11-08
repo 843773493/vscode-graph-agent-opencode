@@ -24,8 +24,8 @@ class _PluginValue(BaseModel):
 class PluginExtensionRequirement(_PluginValue):
     """插件要求的扩展点合同版本。"""
 
-    extension_point: ExtensionPoint
-    version: Literal[1]
+    extension_point: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    version: int = Field(gt=0)
 
 
 class PluginTarget(_PluginValue):
@@ -72,10 +72,17 @@ class PluginServiceContribution(_PluginValue):
         return self
 
 
+class PluginToolBinding(_PluginValue):
+    tool_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    contract_version: int = Field(gt=0)
+    schema_hash: str | None = Field(default=None, pattern=r"^sha256:[a-f0-9]{64}$")
+    service_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 class PluginSkillContribution(_PluginValue):
     id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     path: str = Field(min_length=1)
-    tool_bindings: list[dict[str, JsonValue]] = Field(default_factory=list)
+    tool_bindings: list[PluginToolBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def skill_path_is_relative(self) -> PluginSkillContribution:
@@ -86,15 +93,60 @@ class PluginSkillContribution(_PluginValue):
         return self
 
 
+class PluginCommandContribution(_PluginValue):
+    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    title: str = Field(min_length=1)
+    category: str | None = None
+    handler: str = Field(min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
+    arguments_schema: dict[str, JsonValue]
+    result_schema: dict[str, JsonValue]
+    required_capabilities: list[str] = Field(default_factory=list)
+    enablement: str | None = None
+
+
+class PluginMenuContribution(_PluginValue):
+    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    location: str = Field(min_length=1)
+    command_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    group: str | None = None
+    order: int | None = None
+    when: str | None = None
+
+
+class PluginKeybindingContribution(_PluginValue):
+    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    command_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    key: str | None = Field(default=None, min_length=1)
+    mac: str | None = Field(default=None, min_length=1)
+    linux: str | None = Field(default=None, min_length=1)
+    win: str | None = Field(default=None, min_length=1)
+    when: str | None = None
+
+    @model_validator(mode="after")
+    def has_key_for_a_platform(self) -> PluginKeybindingContribution:
+        if not any((self.key, self.mac, self.linux, self.win)):
+            raise ValueError("快捷键至少要声明 key 或一个平台键位")
+        return self
+
+
+class PluginDebuggerContribution(_PluginValue):
+    type: str = Field(min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    label: str = Field(min_length=1)
+    configuration_schema: dict[str, JsonValue]
+    service_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    dap_version: int = Field(gt=0)
+    capabilities: list[str] = Field(default_factory=list)
+
+
 class PluginContributions(_PluginValue):
     """首批开放贡献；具体扩展点数据由对应业务 owner 继续校验。"""
 
-    commands: list[dict[str, JsonValue]] = Field(default_factory=list)
-    menus: list[dict[str, JsonValue]] = Field(default_factory=list)
-    keybindings: list[dict[str, JsonValue]] = Field(default_factory=list)
+    commands: list[PluginCommandContribution] = Field(default_factory=list)
+    menus: list[PluginMenuContribution] = Field(default_factory=list)
+    keybindings: list[PluginKeybindingContribution] = Field(default_factory=list)
     configuration: dict[str, JsonValue] | None = None
     services: list[PluginServiceContribution] = Field(default_factory=list)
-    debuggers: list[dict[str, JsonValue]] = Field(default_factory=list)
+    debuggers: list[PluginDebuggerContribution] = Field(default_factory=list)
     skills: list[PluginSkillContribution] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -102,6 +154,15 @@ class PluginContributions(_PluginValue):
         if not any((self.commands, self.menus, self.keybindings, self.configuration is not None,
                     self.services, self.debuggers, self.skills)):
             raise ValueError("插件必须声明至少一种已开放贡献")
+        return self
+
+    @model_validator(mode="after")
+    def contribution_ids_are_unique(self) -> PluginContributions:
+        for point, field in (("commands", "id"), ("menus", "id"), ("keybindings", "id"),
+                             ("services", "service_id"), ("debuggers", "type"), ("skills", "id")):
+            ids = [getattr(item, field) for item in getattr(self, point)]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{point} 中贡献标识不得重复")
         return self
 
 
@@ -117,6 +178,12 @@ class ServicePluginManifest(_PluginValue):
 
     @model_validator(mode="after")
     def runtime_fields_match(self) -> ServicePluginManifest:
+        from app.gateway.plugins.extension_points import (
+            PRODUCT_APPROVED_SKILL_TOOL_IDS,
+            validate_extension_requirements,
+        )
+
+        validate_extension_requirements(self.requires)
         requirements = {item.extension_point: item.version for item in self.requires}
         if len(requirements) != len(self.requires):
             raise ValueError("requires 中扩展点不得重复")
@@ -127,6 +194,24 @@ class ServicePluginManifest(_PluginValue):
         }
         if set(requirements) != contribution_points:
             raise ValueError("requires 必须与实际声明的七类贡献逐项一致")
+        command_ids = {item.id for item in self.contributes.commands}
+        references = [item.command_id for item in self.contributes.menus]
+        references.extend(item.command_id for item in self.contributes.keybindings)
+        if unknown := sorted(set(references) - command_ids):
+            raise ValueError("菜单和快捷键只能引用本插件命令: " + ", ".join(unknown))
+        service_ids = {item.service_id for item in self.contributes.services}
+        debugger_services = {item.service_id for item in self.contributes.debuggers}
+        if unknown_services := sorted(debugger_services - service_ids):
+            raise ValueError("调试器必须引用本插件导出的服务: " + ", ".join(unknown_services))
+        for skill in self.contributes.skills:
+            for binding in skill.tool_bindings:
+                if binding.service_id is None:
+                    if binding.tool_id not in PRODUCT_APPROVED_SKILL_TOOL_IDS:
+                        raise ValueError(
+                            f"Skill 工具没有服务来源，也未列入产品批准集合: {binding.tool_id}"
+                        )
+                elif binding.service_id not in service_ids:
+                    raise ValueError(f"Skill 工具关联引用了本插件未导出的服务: {binding.service_id}")
         if self.runtime is None:
             if self.entrypoint is not None or self.management_protocol_version is not None:
                 raise ValueError("纯声明插件不能声明 entrypoint 或管理协议版本")
@@ -258,11 +343,15 @@ __all__ = [
     "InstallPluginRequest",
     "InstalledPluginPackageDTO",
     "PluginBinding",
+    "PluginCommandContribution",
     "PluginContributions",
+    "PluginDebuggerContribution",
     "PluginExtensionRequirement",
     "PluginInstanceStatus",
     "PluginInstanceView",
     "PluginInventoryResultDTO",
+    "PluginKeybindingContribution",
+    "PluginMenuContribution",
     "PluginPackageManifest",
     "PluginRuntime",
     "PluginRuntimeStatusDTO",
@@ -274,6 +363,7 @@ __all__ = [
     "PluginSourceStatusDTO",
     "PluginState",
     "PluginTarget",
+    "PluginToolBinding",
     "PluginUninstallResultDTO",
     "PluginVersionRequest",
     "RestartPluginRequest",

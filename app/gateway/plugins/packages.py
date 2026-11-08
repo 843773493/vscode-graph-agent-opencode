@@ -17,6 +17,8 @@ from typing import Literal
 
 import commentjson
 import portalocker
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from app.core.atomic_fs import fsync_directory, fsync_file
 from app.gateway.plugins.dependencies import (
@@ -24,7 +26,10 @@ from app.gateway.plugins.dependencies import (
     prepare_dependencies,
     validate_dependency_inputs,
 )
-from app.schemas.gateway.service_plugin import PluginPackageManifest
+from app.schemas.gateway.service_plugin import (
+    PluginPackageManifest,
+    ServicePluginManifest,
+)
 
 _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 _MAX_EXPANDED_BYTES = 512 * 1024 * 1024
@@ -274,6 +279,7 @@ def _parse_manifest(raw: bytes) -> PluginPackageManifest:
 def _validate_package_files(manifest: PluginPackageManifest, names: Iterable[str], read_file: Callable[[str], bytes]) -> None:
     available = set(names)
     for plugin in manifest.plugins:
+        _validate_contribution_schemas(plugin)
         if plugin.runtime is not None:
             entrypoint = plugin.entrypoint
             if entrypoint is None or _declared_file(entrypoint[0], available, f"插件入口: {plugin.id}") is None:
@@ -301,6 +307,28 @@ def _declared_file(path: str, available: set[str], label: str) -> str | None:
     if path not in available:
         return None
     return path
+
+
+def _validate_contribution_schemas(plugin: ServicePluginManifest) -> None:
+    schemas = [
+        (f"command {command.id} arguments_schema", command.arguments_schema)
+        for command in plugin.contributes.commands
+    ]
+    schemas.extend(
+        (f"command {command.id} result_schema", command.result_schema)
+        for command in plugin.contributes.commands
+    )
+    schemas.extend(
+        (f"debugger {debugger.type} configuration_schema", debugger.configuration_schema)
+        for debugger in plugin.contributes.debuggers
+    )
+    if plugin.contributes.configuration is not None:
+        schemas.append(("configuration", plugin.contributes.configuration))
+    for label, schema in schemas:
+        try:
+            Draft202012Validator.check_schema(schema)
+        except SchemaError as error:
+            raise ValueError(f"插件 {plugin.id} 的 {label} 不是有效 JSON Schema: {error}") from error
 
 
 def _validate_skill_frontmatter(manifest: PluginPackageManifest, read_file: Callable[[str], bytes]) -> None:

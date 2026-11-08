@@ -23,19 +23,65 @@ export interface PluginServiceContribution {
   protocol: string;
 }
 
+export interface PluginToolBinding {
+  tool_id: string;
+  contract_version: number;
+  schema_hash?: string | undefined;
+  service_id?: string | undefined;
+}
+
 export interface PluginSkillContribution {
   id: string;
   path: string;
-  tool_bindings: { [key: string]: any }[];
+  tool_bindings: PluginToolBinding[];
+}
+
+export interface PluginCommandContribution {
+  id: string;
+  title: string;
+  category?: string | undefined;
+  handler: string;
+  arguments_schema: { [key: string]: any } | undefined;
+  result_schema: { [key: string]: any } | undefined;
+  required_capabilities: string[];
+  enablement?: string | undefined;
+}
+
+export interface PluginMenuContribution {
+  id: string;
+  location: string;
+  command_id: string;
+  group?: string | undefined;
+  order?: number | undefined;
+  when?: string | undefined;
+}
+
+export interface PluginKeybindingContribution {
+  id: string;
+  command_id: string;
+  key?: string | undefined;
+  mac?: string | undefined;
+  linux?: string | undefined;
+  win?: string | undefined;
+  when?: string | undefined;
+}
+
+export interface PluginDebuggerContribution {
+  type: string;
+  label: string;
+  configuration_schema: { [key: string]: any } | undefined;
+  service_id: string;
+  dap_version: number;
+  capabilities: string[];
 }
 
 export interface PluginContributions {
-  commands: { [key: string]: any }[];
-  menus: { [key: string]: any }[];
-  keybindings: { [key: string]: any }[];
+  commands: PluginCommandContribution[];
+  menus: PluginMenuContribution[];
+  keybindings: PluginKeybindingContribution[];
   configuration?: { [key: string]: any } | undefined;
   services: PluginServiceContribution[];
-  debuggers: { [key: string]: any }[];
+  debuggers: PluginDebuggerContribution[];
   skills: PluginSkillContribution[];
 }
 
@@ -260,6 +306,50 @@ export const PluginServiceContribution: MessageFns<PluginServiceContribution> = 
   },
 };
 
+function createBasePluginToolBinding(): PluginToolBinding {
+  return { tool_id: "", contract_version: 0, schema_hash: undefined, service_id: undefined };
+}
+
+export const PluginToolBinding: MessageFns<PluginToolBinding> = {
+  fromJSON(object: any): PluginToolBinding {
+    return {
+      tool_id: isSet(object.tool_id) ? globalThis.String(object.tool_id) : "",
+      contract_version: isSet(object.contract_version) ? globalThis.Number(object.contract_version) : 0,
+      schema_hash: isSet(object.schema_hash) ? globalThis.String(object.schema_hash) : undefined,
+      service_id: isSet(object.service_id) ? globalThis.String(object.service_id) : undefined,
+    };
+  },
+
+  toJSON(message: PluginToolBinding): unknown {
+    const obj: any = {};
+    if (message.tool_id !== "") {
+      obj.tool_id = message.tool_id;
+    }
+    if (message.contract_version !== 0) {
+      obj.contract_version = Math.round(message.contract_version);
+    }
+    if (message.schema_hash !== undefined) {
+      obj.schema_hash = message.schema_hash;
+    }
+    if (message.service_id !== undefined) {
+      obj.service_id = message.service_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginToolBinding>, I>>(base?: I): PluginToolBinding {
+    return PluginToolBinding.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginToolBinding>, I>>(object: I): PluginToolBinding {
+    const message = createBasePluginToolBinding();
+    message.tool_id = object.tool_id ?? "";
+    message.contract_version = object.contract_version ?? 0;
+    message.schema_hash = object.schema_hash ?? undefined;
+    message.service_id = object.service_id ?? undefined;
+    return message;
+  },
+};
+
 function createBasePluginSkillContribution(): PluginSkillContribution {
   return { id: "", path: "", tool_bindings: [] };
 }
@@ -269,7 +359,9 @@ export const PluginSkillContribution: MessageFns<PluginSkillContribution> = {
     return {
       id: isSet(object.id) ? globalThis.String(object.id) : "",
       path: isSet(object.path) ? globalThis.String(object.path) : "",
-      tool_bindings: globalThis.Array.isArray(object?.tool_bindings) ? [...object.tool_bindings] : [],
+      tool_bindings: globalThis.Array.isArray(object?.tool_bindings)
+        ? object.tool_bindings.map((e: any) => PluginToolBinding.fromJSON(e))
+        : [],
     };
   },
 
@@ -282,7 +374,7 @@ export const PluginSkillContribution: MessageFns<PluginSkillContribution> = {
       obj.path = message.path;
     }
     if (message.tool_bindings?.length) {
-      obj.tool_bindings = message.tool_bindings;
+      obj.tool_bindings = message.tool_bindings.map((e) => PluginToolBinding.toJSON(e));
     }
     return obj;
   },
@@ -294,7 +386,251 @@ export const PluginSkillContribution: MessageFns<PluginSkillContribution> = {
     const message = createBasePluginSkillContribution();
     message.id = object.id ?? "";
     message.path = object.path ?? "";
-    message.tool_bindings = object.tool_bindings?.map((e) => e) || [];
+    message.tool_bindings = object.tool_bindings?.map((e) => PluginToolBinding.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBasePluginCommandContribution(): PluginCommandContribution {
+  return {
+    id: "",
+    title: "",
+    category: undefined,
+    handler: "",
+    arguments_schema: undefined,
+    result_schema: undefined,
+    required_capabilities: [],
+    enablement: undefined,
+  };
+}
+
+export const PluginCommandContribution: MessageFns<PluginCommandContribution> = {
+  fromJSON(object: any): PluginCommandContribution {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      category: isSet(object.category) ? globalThis.String(object.category) : undefined,
+      handler: isSet(object.handler) ? globalThis.String(object.handler) : "",
+      arguments_schema: isObject(object.arguments_schema) ? object.arguments_schema : undefined,
+      result_schema: isObject(object.result_schema) ? object.result_schema : undefined,
+      required_capabilities: globalThis.Array.isArray(object?.required_capabilities)
+        ? object.required_capabilities.map((e: any) => globalThis.String(e))
+        : [],
+      enablement: isSet(object.enablement) ? globalThis.String(object.enablement) : undefined,
+    };
+  },
+
+  toJSON(message: PluginCommandContribution): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.category !== undefined) {
+      obj.category = message.category;
+    }
+    if (message.handler !== "") {
+      obj.handler = message.handler;
+    }
+    if (message.arguments_schema !== undefined) {
+      obj.arguments_schema = message.arguments_schema;
+    }
+    if (message.result_schema !== undefined) {
+      obj.result_schema = message.result_schema;
+    }
+    if (message.required_capabilities?.length) {
+      obj.required_capabilities = message.required_capabilities;
+    }
+    if (message.enablement !== undefined) {
+      obj.enablement = message.enablement;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginCommandContribution>, I>>(base?: I): PluginCommandContribution {
+    return PluginCommandContribution.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginCommandContribution>, I>>(object: I): PluginCommandContribution {
+    const message = createBasePluginCommandContribution();
+    message.id = object.id ?? "";
+    message.title = object.title ?? "";
+    message.category = object.category ?? undefined;
+    message.handler = object.handler ?? "";
+    message.arguments_schema = object.arguments_schema ?? undefined;
+    message.result_schema = object.result_schema ?? undefined;
+    message.required_capabilities = object.required_capabilities?.map((e) => e) || [];
+    message.enablement = object.enablement ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginMenuContribution(): PluginMenuContribution {
+  return { id: "", location: "", command_id: "", group: undefined, order: undefined, when: undefined };
+}
+
+export const PluginMenuContribution: MessageFns<PluginMenuContribution> = {
+  fromJSON(object: any): PluginMenuContribution {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      location: isSet(object.location) ? globalThis.String(object.location) : "",
+      command_id: isSet(object.command_id) ? globalThis.String(object.command_id) : "",
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
+      order: isSet(object.order) ? globalThis.Number(object.order) : undefined,
+      when: isSet(object.when) ? globalThis.String(object.when) : undefined,
+    };
+  },
+
+  toJSON(message: PluginMenuContribution): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.location !== "") {
+      obj.location = message.location;
+    }
+    if (message.command_id !== "") {
+      obj.command_id = message.command_id;
+    }
+    if (message.group !== undefined) {
+      obj.group = message.group;
+    }
+    if (message.order !== undefined) {
+      obj.order = Math.round(message.order);
+    }
+    if (message.when !== undefined) {
+      obj.when = message.when;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginMenuContribution>, I>>(base?: I): PluginMenuContribution {
+    return PluginMenuContribution.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginMenuContribution>, I>>(object: I): PluginMenuContribution {
+    const message = createBasePluginMenuContribution();
+    message.id = object.id ?? "";
+    message.location = object.location ?? "";
+    message.command_id = object.command_id ?? "";
+    message.group = object.group ?? undefined;
+    message.order = object.order ?? undefined;
+    message.when = object.when ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginKeybindingContribution(): PluginKeybindingContribution {
+  return { id: "", command_id: "", key: undefined, mac: undefined, linux: undefined, win: undefined, when: undefined };
+}
+
+export const PluginKeybindingContribution: MessageFns<PluginKeybindingContribution> = {
+  fromJSON(object: any): PluginKeybindingContribution {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      command_id: isSet(object.command_id) ? globalThis.String(object.command_id) : "",
+      key: isSet(object.key) ? globalThis.String(object.key) : undefined,
+      mac: isSet(object.mac) ? globalThis.String(object.mac) : undefined,
+      linux: isSet(object.linux) ? globalThis.String(object.linux) : undefined,
+      win: isSet(object.win) ? globalThis.String(object.win) : undefined,
+      when: isSet(object.when) ? globalThis.String(object.when) : undefined,
+    };
+  },
+
+  toJSON(message: PluginKeybindingContribution): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.command_id !== "") {
+      obj.command_id = message.command_id;
+    }
+    if (message.key !== undefined) {
+      obj.key = message.key;
+    }
+    if (message.mac !== undefined) {
+      obj.mac = message.mac;
+    }
+    if (message.linux !== undefined) {
+      obj.linux = message.linux;
+    }
+    if (message.win !== undefined) {
+      obj.win = message.win;
+    }
+    if (message.when !== undefined) {
+      obj.when = message.when;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginKeybindingContribution>, I>>(base?: I): PluginKeybindingContribution {
+    return PluginKeybindingContribution.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginKeybindingContribution>, I>>(object: I): PluginKeybindingContribution {
+    const message = createBasePluginKeybindingContribution();
+    message.id = object.id ?? "";
+    message.command_id = object.command_id ?? "";
+    message.key = object.key ?? undefined;
+    message.mac = object.mac ?? undefined;
+    message.linux = object.linux ?? undefined;
+    message.win = object.win ?? undefined;
+    message.when = object.when ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginDebuggerContribution(): PluginDebuggerContribution {
+  return { type: "", label: "", configuration_schema: undefined, service_id: "", dap_version: 0, capabilities: [] };
+}
+
+export const PluginDebuggerContribution: MessageFns<PluginDebuggerContribution> = {
+  fromJSON(object: any): PluginDebuggerContribution {
+    return {
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+      label: isSet(object.label) ? globalThis.String(object.label) : "",
+      configuration_schema: isObject(object.configuration_schema) ? object.configuration_schema : undefined,
+      service_id: isSet(object.service_id) ? globalThis.String(object.service_id) : "",
+      dap_version: isSet(object.dap_version) ? globalThis.Number(object.dap_version) : 0,
+      capabilities: globalThis.Array.isArray(object?.capabilities)
+        ? object.capabilities.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PluginDebuggerContribution): unknown {
+    const obj: any = {};
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    if (message.label !== "") {
+      obj.label = message.label;
+    }
+    if (message.configuration_schema !== undefined) {
+      obj.configuration_schema = message.configuration_schema;
+    }
+    if (message.service_id !== "") {
+      obj.service_id = message.service_id;
+    }
+    if (message.dap_version !== 0) {
+      obj.dap_version = Math.round(message.dap_version);
+    }
+    if (message.capabilities?.length) {
+      obj.capabilities = message.capabilities;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginDebuggerContribution>, I>>(base?: I): PluginDebuggerContribution {
+    return PluginDebuggerContribution.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginDebuggerContribution>, I>>(object: I): PluginDebuggerContribution {
+    const message = createBasePluginDebuggerContribution();
+    message.type = object.type ?? "";
+    message.label = object.label ?? "";
+    message.configuration_schema = object.configuration_schema ?? undefined;
+    message.service_id = object.service_id ?? "";
+    message.dap_version = object.dap_version ?? 0;
+    message.capabilities = object.capabilities?.map((e) => e) || [];
     return message;
   },
 };
@@ -314,14 +650,22 @@ function createBasePluginContributions(): PluginContributions {
 export const PluginContributions: MessageFns<PluginContributions> = {
   fromJSON(object: any): PluginContributions {
     return {
-      commands: globalThis.Array.isArray(object?.commands) ? [...object.commands] : [],
-      menus: globalThis.Array.isArray(object?.menus) ? [...object.menus] : [],
-      keybindings: globalThis.Array.isArray(object?.keybindings) ? [...object.keybindings] : [],
+      commands: globalThis.Array.isArray(object?.commands)
+        ? object.commands.map((e: any) => PluginCommandContribution.fromJSON(e))
+        : [],
+      menus: globalThis.Array.isArray(object?.menus)
+        ? object.menus.map((e: any) => PluginMenuContribution.fromJSON(e))
+        : [],
+      keybindings: globalThis.Array.isArray(object?.keybindings)
+        ? object.keybindings.map((e: any) => PluginKeybindingContribution.fromJSON(e))
+        : [],
       configuration: isObject(object.configuration) ? object.configuration : undefined,
       services: globalThis.Array.isArray(object?.services)
         ? object.services.map((e: any) => PluginServiceContribution.fromJSON(e))
         : [],
-      debuggers: globalThis.Array.isArray(object?.debuggers) ? [...object.debuggers] : [],
+      debuggers: globalThis.Array.isArray(object?.debuggers)
+        ? object.debuggers.map((e: any) => PluginDebuggerContribution.fromJSON(e))
+        : [],
       skills: globalThis.Array.isArray(object?.skills)
         ? object.skills.map((e: any) => PluginSkillContribution.fromJSON(e))
         : [],
@@ -331,13 +675,13 @@ export const PluginContributions: MessageFns<PluginContributions> = {
   toJSON(message: PluginContributions): unknown {
     const obj: any = {};
     if (message.commands?.length) {
-      obj.commands = message.commands;
+      obj.commands = message.commands.map((e) => PluginCommandContribution.toJSON(e));
     }
     if (message.menus?.length) {
-      obj.menus = message.menus;
+      obj.menus = message.menus.map((e) => PluginMenuContribution.toJSON(e));
     }
     if (message.keybindings?.length) {
-      obj.keybindings = message.keybindings;
+      obj.keybindings = message.keybindings.map((e) => PluginKeybindingContribution.toJSON(e));
     }
     if (message.configuration !== undefined) {
       obj.configuration = message.configuration;
@@ -346,7 +690,7 @@ export const PluginContributions: MessageFns<PluginContributions> = {
       obj.services = message.services.map((e) => PluginServiceContribution.toJSON(e));
     }
     if (message.debuggers?.length) {
-      obj.debuggers = message.debuggers;
+      obj.debuggers = message.debuggers.map((e) => PluginDebuggerContribution.toJSON(e));
     }
     if (message.skills?.length) {
       obj.skills = message.skills.map((e) => PluginSkillContribution.toJSON(e));
@@ -359,12 +703,12 @@ export const PluginContributions: MessageFns<PluginContributions> = {
   },
   fromPartial<I extends Exact<DeepPartial<PluginContributions>, I>>(object: I): PluginContributions {
     const message = createBasePluginContributions();
-    message.commands = object.commands?.map((e) => e) || [];
-    message.menus = object.menus?.map((e) => e) || [];
-    message.keybindings = object.keybindings?.map((e) => e) || [];
+    message.commands = object.commands?.map((e) => PluginCommandContribution.fromPartial(e)) || [];
+    message.menus = object.menus?.map((e) => PluginMenuContribution.fromPartial(e)) || [];
+    message.keybindings = object.keybindings?.map((e) => PluginKeybindingContribution.fromPartial(e)) || [];
     message.configuration = object.configuration ?? undefined;
     message.services = object.services?.map((e) => PluginServiceContribution.fromPartial(e)) || [];
-    message.debuggers = object.debuggers?.map((e) => e) || [];
+    message.debuggers = object.debuggers?.map((e) => PluginDebuggerContribution.fromPartial(e)) || [];
     message.skills = object.skills?.map((e) => PluginSkillContribution.fromPartial(e)) || [];
     return message;
   },

@@ -17,19 +17,65 @@ message PluginServiceContribution {
   string protocol = 3;
 }
 
+message PluginToolBinding {
+  string tool_id = 1;
+  int32 contract_version = 2;
+  optional string schema_hash = 3;
+  optional string service_id = 4;
+}
+
 message PluginSkillContribution {
   string id = 1;
   string path = 2;
-  repeated google.protobuf.Struct tool_bindings = 3;
+  repeated PluginToolBinding tool_bindings = 3;
+}
+
+message PluginCommandContribution {
+  string id = 1;
+  string title = 2;
+  optional string category = 3;
+  string handler = 4;
+  google.protobuf.Struct arguments_schema = 5;
+  google.protobuf.Struct result_schema = 6;
+  repeated string required_capabilities = 7;
+  optional string enablement = 8;
+}
+
+message PluginMenuContribution {
+  string id = 1;
+  string location = 2;
+  string command_id = 3;
+  optional string group = 4;
+  optional int32 order = 5;
+  optional string when = 6;
+}
+
+message PluginKeybindingContribution {
+  string id = 1;
+  string command_id = 2;
+  optional string key = 3;
+  optional string mac = 4;
+  optional string linux = 5;
+  optional string win = 6;
+  optional string when = 7;
+}
+
+message PluginDebuggerContribution {
+  string type = 1;
+  string label = 2;
+  google.protobuf.Struct configuration_schema = 3;
+  string service_id = 4;
+  int32 dap_version = 5;
+  repeated string capabilities = 6;
 }
 
 message PluginContributions {
-  repeated google.protobuf.Struct commands = 1;
-  repeated google.protobuf.Struct menus = 2;
-  repeated google.protobuf.Struct keybindings = 3;
+  repeated PluginCommandContribution commands = 1;
+  repeated PluginMenuContribution menus = 2;
+  repeated PluginKeybindingContribution keybindings = 3;
   optional google.protobuf.Struct configuration = 4;
   repeated PluginServiceContribution services = 5;
-  repeated google.protobuf.Struct debuggers = 6;
+  repeated PluginDebuggerContribution debuggers = 6;
   repeated PluginSkillContribution skills = 7;
 }
 

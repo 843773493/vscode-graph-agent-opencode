@@ -61,6 +61,37 @@ export declare type PluginServiceContribution = Message<"boxteam.gateway.v2.Plug
 export declare const PluginServiceContributionSchema: GenMessage<PluginServiceContribution>;
 
 /**
+ * @generated from message boxteam.gateway.v2.PluginToolBinding
+ */
+export declare type PluginToolBinding = Message<"boxteam.gateway.v2.PluginToolBinding"> & {
+  /**
+   * @generated from field: string tool_id = 1;
+   */
+  toolId: string;
+
+  /**
+   * @generated from field: int32 contract_version = 2;
+   */
+  contractVersion: number;
+
+  /**
+   * @generated from field: optional string schema_hash = 3;
+   */
+  schemaHash?: string | undefined;
+
+  /**
+   * @generated from field: optional string service_id = 4;
+   */
+  serviceId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginToolBinding.
+ * Use `create(PluginToolBindingSchema)` to create a new message.
+ */
+export declare const PluginToolBindingSchema: GenMessage<PluginToolBinding>;
+
+/**
  * @generated from message boxteam.gateway.v2.PluginSkillContribution
  */
 export declare type PluginSkillContribution = Message<"boxteam.gateway.v2.PluginSkillContribution"> & {
@@ -75,9 +106,9 @@ export declare type PluginSkillContribution = Message<"boxteam.gateway.v2.Plugin
   path: string;
 
   /**
-   * @generated from field: repeated google.protobuf.Struct tool_bindings = 3;
+   * @generated from field: repeated boxteam.gateway.v2.PluginToolBinding tool_bindings = 3;
    */
-  toolBindings: JsonObject[];
+  toolBindings: PluginToolBinding[];
 };
 
 /**
@@ -87,23 +118,202 @@ export declare type PluginSkillContribution = Message<"boxteam.gateway.v2.Plugin
 export declare const PluginSkillContributionSchema: GenMessage<PluginSkillContribution>;
 
 /**
+ * @generated from message boxteam.gateway.v2.PluginCommandContribution
+ */
+export declare type PluginCommandContribution = Message<"boxteam.gateway.v2.PluginCommandContribution"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string title = 2;
+   */
+  title: string;
+
+  /**
+   * @generated from field: optional string category = 3;
+   */
+  category?: string | undefined;
+
+  /**
+   * @generated from field: string handler = 4;
+   */
+  handler: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct arguments_schema = 5;
+   */
+  argumentsSchema?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct result_schema = 6;
+   */
+  resultSchema?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated string required_capabilities = 7;
+   */
+  requiredCapabilities: string[];
+
+  /**
+   * @generated from field: optional string enablement = 8;
+   */
+  enablement?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginCommandContribution.
+ * Use `create(PluginCommandContributionSchema)` to create a new message.
+ */
+export declare const PluginCommandContributionSchema: GenMessage<PluginCommandContribution>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginMenuContribution
+ */
+export declare type PluginMenuContribution = Message<"boxteam.gateway.v2.PluginMenuContribution"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string location = 2;
+   */
+  location: string;
+
+  /**
+   * @generated from field: string command_id = 3;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: optional string group = 4;
+   */
+  group?: string | undefined;
+
+  /**
+   * @generated from field: optional int32 order = 5;
+   */
+  order?: number | undefined;
+
+  /**
+   * @generated from field: optional string when = 6;
+   */
+  when?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginMenuContribution.
+ * Use `create(PluginMenuContributionSchema)` to create a new message.
+ */
+export declare const PluginMenuContributionSchema: GenMessage<PluginMenuContribution>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginKeybindingContribution
+ */
+export declare type PluginKeybindingContribution = Message<"boxteam.gateway.v2.PluginKeybindingContribution"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string command_id = 2;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: optional string key = 3;
+   */
+  key?: string | undefined;
+
+  /**
+   * @generated from field: optional string mac = 4;
+   */
+  mac?: string | undefined;
+
+  /**
+   * @generated from field: optional string linux = 5;
+   */
+  linux?: string | undefined;
+
+  /**
+   * @generated from field: optional string win = 6;
+   */
+  win?: string | undefined;
+
+  /**
+   * @generated from field: optional string when = 7;
+   */
+  when?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginKeybindingContribution.
+ * Use `create(PluginKeybindingContributionSchema)` to create a new message.
+ */
+export declare const PluginKeybindingContributionSchema: GenMessage<PluginKeybindingContribution>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginDebuggerContribution
+ */
+export declare type PluginDebuggerContribution = Message<"boxteam.gateway.v2.PluginDebuggerContribution"> & {
+  /**
+   * @generated from field: string type = 1;
+   */
+  type: string;
+
+  /**
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct configuration_schema = 3;
+   */
+  configurationSchema?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string service_id = 4;
+   */
+  serviceId: string;
+
+  /**
+   * @generated from field: int32 dap_version = 5;
+   */
+  dapVersion: number;
+
+  /**
+   * @generated from field: repeated string capabilities = 6;
+   */
+  capabilities: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginDebuggerContribution.
+ * Use `create(PluginDebuggerContributionSchema)` to create a new message.
+ */
+export declare const PluginDebuggerContributionSchema: GenMessage<PluginDebuggerContribution>;
+
+/**
  * @generated from message boxteam.gateway.v2.PluginContributions
  */
 export declare type PluginContributions = Message<"boxteam.gateway.v2.PluginContributions"> & {
   /**
-   * @generated from field: repeated google.protobuf.Struct commands = 1;
+   * @generated from field: repeated boxteam.gateway.v2.PluginCommandContribution commands = 1;
    */
-  commands: JsonObject[];
+  commands: PluginCommandContribution[];
 
   /**
-   * @generated from field: repeated google.protobuf.Struct menus = 2;
+   * @generated from field: repeated boxteam.gateway.v2.PluginMenuContribution menus = 2;
    */
-  menus: JsonObject[];
+  menus: PluginMenuContribution[];
 
   /**
-   * @generated from field: repeated google.protobuf.Struct keybindings = 3;
+   * @generated from field: repeated boxteam.gateway.v2.PluginKeybindingContribution keybindings = 3;
    */
-  keybindings: JsonObject[];
+  keybindings: PluginKeybindingContribution[];
 
   /**
    * @generated from field: optional google.protobuf.Struct configuration = 4;
@@ -116,9 +326,9 @@ export declare type PluginContributions = Message<"boxteam.gateway.v2.PluginCont
   services: PluginServiceContribution[];
 
   /**
-   * @generated from field: repeated google.protobuf.Struct debuggers = 6;
+   * @generated from field: repeated boxteam.gateway.v2.PluginDebuggerContribution debuggers = 6;
    */
-  debuggers: JsonObject[];
+  debuggers: PluginDebuggerContribution[];
 
   /**
    * @generated from field: repeated boxteam.gateway.v2.PluginSkillContribution skills = 7;
