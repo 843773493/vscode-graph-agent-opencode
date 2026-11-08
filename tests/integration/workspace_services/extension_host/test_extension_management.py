@@ -21,6 +21,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import httpx
+import psutil
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import JsonValue
@@ -56,6 +57,7 @@ from app.schemas.gateway.extension_configuration import (
     ExtensionConfigurationViewRequest,
     ExtensionConfigurationWriteOptions,
 )
+from app.schemas.gateway.extension_web import ExtensionWebHostOpenRequest
 from app.services.infrastructure.extension_host import owner as owner_module
 from app.services.infrastructure.extension_host.configuration import native_path
 from app.services.infrastructure.extension_host.management import (
@@ -235,20 +237,130 @@ async def _restart_gateway_management(case: ManagementBackends, *, domain: int =
 @pytest.fixture
 def vsix_factory():
     def create(directory: Path, version: str, content: str, *, engine: str = "^1.0.0",
-               manifest_overrides: dict[str, object] | None = None, omit: tuple[str, ...] = ()) -> Path:
+               manifest_overrides: dict[str, object] | None = None, omit: tuple[str, ...] = (),
+               uninstall_script: str | None = None) -> Path:
         vsix = directory / f"probe-{version}-{uuid4()}.vsix"
         manifest: dict[str, object] = {"name": "target-inventory", "publisher": "boxteam-probe", "version": version,
             "engines": {"vscode": engine}, "main": "./extension.js", "extensionKind": ["workspace"],
             "activationEvents": ["onCommand:boxteam.inventory"],
             "contributes": {"commands": [{"command": "boxteam.inventory", "title": "库存测试"}]}}
         manifest.update(manifest_overrides or {})
+        if uninstall_script is not None:
+            manifest["scripts"] = {"vscode:uninstall": "node ./uninstall.js"}
         for key in omit:
             manifest.pop(key)
         with ZipFile(vsix, "w") as archive:
             archive.writestr("extension/package.json", json.dumps(manifest))
             archive.writestr("extension/extension.js", f"exports.activate = () => {json.dumps(content)};\n")
+            if uninstall_script is not None:
+                archive.writestr("extension/uninstall.js", uninstall_script)
         return vsix
     return create
+
+
+@pytest.mark.parametrize("hook", ["success", "missing", "failure", "timeout"])
+async def test_native_cleanup_distinguishes_old_versions_from_final_uninstall(
+    management_backends: ManagementBackends, vsix_factory, hook: str,
+) -> None:
+    case = management_backends
+    domain, peer_domain = case.domains
+    registry = _backend(case.workspace / "cleanup", case)
+    peer_registry = _backend(case.workspace / "peer", case, domain=1)
+    first, peer = registry.extension_hosts.management, peer_registry.extension_hosts.management
+    extension_id = "boxteam-probe.target-inventory"
+    hook_result = case.context.artifacts_dir / f"uninstall-{hook}.jsonl"
+    peer_result = case.context.artifacts_dir / f"uninstall-peer-{hook}.jsonl"
+
+    def script(version: str, result: Path, behavior: str) -> str:
+        # 由真实卸载子进程记录自身；不在测试中伪造 hook 回执或预置删除标记。
+        return (
+            "const fs = require('node:fs');\n"
+            f"fs.appendFileSync({json.dumps(str(result))}, JSON.stringify({{"
+            f"version: {json.dumps(version)}, pid: process.pid, parentPid: process.ppid,"
+            "controlCredentialPresent: process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN !== undefined,"
+            "argv: process.argv.slice(2)}) + '\\n');\n"
+            "console.log('uninstall-probe-started');\n"
+            + {"success": "", "failure": "console.error('uninstall-probe-failed'); process.exitCode = 23;",
+               "timeout": "setInterval(() => {}, 1000);"}[behavior]
+        )
+
+    original = await first.install(vsix_factory(case.workspace, "1.0.0", "original",
+        manifest_overrides={"browser": "./extension.js"}, uninstall_script=script("1.0.0", hook_result, "success")))
+    peer_installed = await peer.install(vsix_factory(case.workspace, "9.0.0", "peer",
+        uninstall_script=script("9.0.0", peer_result, "success")))
+    environment, peer_environment = await first.environment(), await peer.environment()
+    storage = native_path(environment.global_storage_home_uri) / extension_id
+    peer_storage = native_path(peer_environment.global_storage_home_uri) / extension_id
+    preserved = [peer_storage / "saved.json", storage.parent / "unrelated.extension/saved.json",
+        native_path(environment.workspace_storage_home_uri) / "preserved/saved.json"]
+    for path in [storage / "saved.json", *preserved]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'{"persisted":true}\n')
+    installation = domain.owner.directory / "extensions"
+    original_package = installation / original.inventory.extensions[0].extension_key
+    binding = ExtensionWebHostOpenRequest(protocol_version=1, gateway_id=domain.gateway_id,
+        backend_id=registry.extension_hosts.backend_id, view_id="cleanup-before-update", workspace_ids=[],
+        profile_id=original.installed.profile_id, extension_keys=[original.inventory.extensions[0].extension_key])
+    async with registry.extension_hosts.connect_web(binding, client_id="cleanup-probe"):
+        current = await first.install(vsix_factory(case.workspace, "2.0.0", "current",
+            manifest_overrides={"browser": "./extension.js"},
+            uninstall_script=None if hook == "missing" else script("2.0.0", hook_result, hook)))
+        assert json.loads((installation / ".obsolete").read_text())[original_package.name] is True
+        assert original_package.is_dir() and not hook_result.exists()
+    # 正常宿主关闭不等于卸载；完整停机只回收旧包，仍安装的 v2 共享存储保持。
+    assert (storage / "saved.json").read_bytes() == b'{"persisted":true}\n'
+    await registry.close_extension_hosts()
+    registry.close()
+    await _restart_gateway_management(case)
+    current_package = installation / current.inventory.extensions[0].extension_key
+    assert not original_package.exists() and current_package.is_dir()
+    assert not hook_result.exists() and (storage / "saved.json").read_bytes() == b'{"persisted":true}\n'
+    assert await peer.inventory() == peer_installed.inventory and not peer_result.exists()
+
+    registry = _backend(case.workspace / "cleanup", case)
+    first = registry.extension_hosts.management
+    binding = binding.model_copy(update={"view_id": "cleanup-before-uninstall",
+        "extension_keys": [current.inventory.extensions[0].extension_key]})
+    assert domain.owner.instance is not None
+    management_pid = domain.owner.instance.process_id
+    async with registry.extension_hosts.connect_web(binding, client_id="cleanup-probe"):
+        removed = await first.uninstall(profile_id=current.installed.profile_id,
+            extension_id=extension_id, version="2.0.0")
+        assert removed.inventory.extensions == []
+        async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
+            blocked = await client.post(f"{domain.owner.instance.base_url}/shutdown",
+                headers={"X-Local-Token": case.token})
+        assert blocked.status_code == 409 and blocked.json()["code"] == "RuntimeReferencesActive"
+        assert current_package.is_dir() and storage.is_dir() and not hook_result.exists()
+        domain.owner.assert_healthy()
+    assert current_package.is_dir() and storage.is_dir() and not hook_result.exists()
+    await registry.close_extension_hosts()
+    registry.close()
+    await domain.owner.close()
+    assert domain.owner.drained and not current_package.exists() and not storage.exists()
+    assert all(path.read_bytes() == b'{"persisted":true}\n' for path in preserved)
+    assert await peer.inventory() == peer_installed.inventory and not peer_result.exists()
+    assert peer_domain.owner.process is not None and peer_domain.owner.process.is_alive()
+    records = [] if hook == "missing" else [json.loads(line) for line in hook_result.read_text().splitlines()]
+    if hook == "missing":
+        assert not hook_result.exists()
+    else:
+        assert len(records) == 1 and records[0]["version"] == "2.0.0"
+        assert records[0]["pid"] != management_pid and records[0]["parentPid"] == management_pid
+        assert records[0]["controlCredentialPresent"] is False
+        assert records[0]["argv"] == ["--type=extension-post-uninstall"]
+        assert not psutil.pid_exists(records[0]["pid"]), "停机返回时真实卸载子进程仍未退出"
+    logs = domain.owner._log_store.path_for("extension-management").read_text(errors="replace")
+    if hook in {"failure", "timeout"}:
+        assert "Failed to run post uninstall script" in logs
+        assert ("post-uninstall process exited with code 23" if hook == "failure" else "timed out") in logs
+    (case.context.artifacts_dir / f"cleanup-{hook}.json").write_text(json.dumps({
+        "hook": hook, "records": records, "management_pid": management_pid,
+        "old_version_removed_without_hook": True, "final_package_and_storage_removed": True,
+        "active_reference_shutdown": blocked.json(), "peer_inventory": peer_installed.inventory.model_dump(mode="json"),
+        "preserved_files": [str(path) for path in preserved],
+        "boundary": "真实Gateway／Backend client／Node原安装器及原Web准入引用；存储为测试文件，不代表真实Worker激活、Memento或完整Workbench。",
+    }, ensure_ascii=False, indent=2) + "\n")
 
 
 @pytest.fixture
