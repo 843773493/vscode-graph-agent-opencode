@@ -349,3 +349,105 @@ async def test_context_json_relay_shares_event_validation_and_preserves_grant(cl
     assert len(received) == 1 and received[0]["operation"] == "read"
     assert received[0]["resource_target"] == query.resource_target.to_payload()
     assert received[0]["body"] == query.model_dump(mode="json")
+
+
+@pytest.fixture
+def ordered_context_search(events: list[dict]) -> tuple[FederatedSearchRequest, list[dict]]:
+    owners = [OWNER, {**OWNER, "workspace_id": "00000000-0000-4000-8000-000000000002"}]
+    scope = json.loads(json.dumps(events[0]))
+    scope["scope"]["scope"].update(mode="selected", owners=owners)
+    scope["scope"]["branches"] = [{"owner": owner, "state": "registered"} for owner in owners]
+    request = FederatedSearchRequest.model_validate({
+        "scope": {"mode": "selected", "owners": owners},
+        "queries": [{"category": "context", "operation": "content", "query": "needle", "match_mode": "literal"}],
+    })
+    branches = [{"branch": {"owner": owner, "category": "context", "operation": "content"},
+                 "state": "limited", "allocated_results": 1, "returned_results": 0,
+                 "code": "result_limit", "cursor": f"owner-{index}-cursor"} for index, owner in enumerate(owners)]
+    payload = [scope]
+    # B 先完成不改变冻结范围或最终汇总的 A、B 顺序。
+    for branch in reversed(branches):
+        owner = branch["branch"]["owner"]
+        page = {"provider_id": "session-context", "workspace_id": owner["workspace_id"], "category": "context",
+                "operation": "content", "contract_version": 1, "state": "limited", "limited_reason": "result_limit",
+                "context": {"resource_identity": str(workspace_session_inventory_identity(owner["workspace_id"])),
+                            "uri": workspace_session_inventory_uri(owner["workspace_id"], gateway_authority=owner["gateway_id"]),
+                            "scope": "workspace", "query": "needle", "match_mode": "literal", "revision": "original-owner-revision",
+                            "has_more": True, "next_cursor": branch["cursor"]}}
+        payload.extend([{"type": "page", "branch": branch, "page": page}, {"type": "branch", "branch": branch}])
+    payload.append({"type": "end", "summary": {"state": "incomplete", "order": "category-scope-owner-v1",
+                                               "branches": branches, "returned_results": 0}})
+    for sequence, event in enumerate(payload, 1):
+        event.update(sequence=sequence, request_id=REQUEST_ID)
+    return request, payload
+
+
+@pytest.mark.parametrize("mode,repeated", [("selected", False), ("selected", True), ("resume", False)])
+@pytest.mark.parametrize("encoding", ["sse", "relay"])
+@pytest.mark.parametrize("reordered", [False, True])
+async def test_explicit_scope_order_is_preserved_independently_of_page_arrival(
+    client, monkeypatch, ordered_context_search, mode, repeated, encoding, reordered,
+):
+    request, payload = ordered_context_search
+    owners = list(request.scope.owners)
+    if repeated:
+        request = request.model_copy(update={"scope": request.scope.model_copy(update={"owners": (*request.scope.owners, owners[0])})})
+    if mode == "resume":
+        request = FederatedSearchRequest.model_validate({**request.model_dump(), "scope": {
+            "mode": "resume", "scope": payload[0]["scope"]["scope"],
+        }})
+    if reordered:
+        payload[0]["scope"]["scope"]["owners"].reverse()
+    stream = None
+    if encoding == "sse":
+        stream, requests = install_response(monkeypatch, client, payload)
+
+        async def consume_stream():
+            return [event async for event in client.resource_search.search(request, request_id=REQUEST_ID)]
+
+        consume = consume_stream
+    else:
+        requests = []
+
+        async def send(http_request):
+            requests.append(http_request)
+            return httpx.Response(200, json={"request_id": REQUEST_ID, "data": {"events": payload}},
+                                  headers={"X-Request-ID": REQUEST_ID})
+
+        monkeypatch.setattr(client._http_client, "_transport", httpx.MockTransport(send))
+        query = GatewayContextSearchRequest.model_validate({
+            "source_gateway_id": OWNER["gateway_id"], "resource_search": request,
+            "resource_target": {"gateway_id": OWNER["gateway_id"], "scope": "gateway",
+                                "resource_identity": str(gateway_session_inventory_identity(OWNER["gateway_id"])),
+                                "uri": gateway_session_inventory_uri(OWNER["gateway_id"], gateway_authority=OWNER["gateway_id"])},
+        })
+
+        async def consume_relay():
+            result = await client.search_gateway_context(query)
+            return result.events
+
+        consume = consume_relay
+
+    gateway_token, request_token = set_current_gateway_id(OWNER["gateway_id"]), set_current_request_id(REQUEST_ID)
+    try:
+        if reordered:
+            with pytest.raises(RuntimeError, match="实际范围与明确选择不一致"):
+                await consume()
+        else:
+            actual = await consume()
+            assert list(actual[0].scope.scope.owners) == owners
+            assert [event.branch.branch.owner for event in actual if event.type == "page"] == list(reversed(owners))
+            assert [branch.branch.owner for branch in actual[-1].summary.branches] == owners
+            assert [branch.cursor for branch in actual[-1].summary.branches] == ["owner-0-cursor", "owner-1-cursor"]
+            assert actual[-1].summary.order == "category-scope-owner-v1"
+            assert all(event.request_id == REQUEST_ID for event in actual)
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+    assert len(requests) == 1
+    assert requests[0].url.path == ("/api/gateway/search/agent" if encoding == "sse" else "/api/gateway/federation/relay")
+    sent = json.loads(requests[0].content)
+    sent_scope = sent["scope"] if encoding == "sse" else sent["body"]["resource_search"]["scope"]
+    assert sent_scope == request.scope.model_dump(mode="json")
+    if stream is not None:
+        assert stream.closed

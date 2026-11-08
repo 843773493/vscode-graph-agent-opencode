@@ -57,8 +57,8 @@ class GatewaySearchEventValidator:
                 raise RuntimeError("Gateway 搜索范围必须先于领域页且只发布一次")
             self.scope = event.scope.scope
             selection = self.request.scope
-            expected = ((selection.origin,) if selection.mode == "origin" else selection.owners)
-            if (selection.mode in {"origin", "selected"} and set(self.scope.owners) != set(expected)) or (
+            expected = ((selection.origin,) if selection.mode == "origin" else tuple(dict.fromkeys(selection.owners)))
+            if (selection.mode in {"origin", "selected"} and self.scope.owners != expected) or (
                 selection.mode == "resume" and self.scope != selection.scope
             ):
                 raise RuntimeError("Gateway 搜索实际范围与明确选择不一致")

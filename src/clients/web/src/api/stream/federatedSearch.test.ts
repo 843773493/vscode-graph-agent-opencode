@@ -141,6 +141,25 @@ test("续查只传冻结范围、B 的原 cursor 和本次查询，不预检或�
   expect(backend.calls[0].body.continuations).toEqual(followup.continuations);
 });
 
+test.each([false, true])("明确范围按首次 owner 顺序去重，快页不改变最终顺序：重复=%s", async repeated => {
+  const backend = install(), selected = request(), received: string[] = [];
+  if (repeated) selected.scope!.owners = [owners[0], owners[1], owners[0]];
+  const running = streamFederatedSearch(49_353, selected, { signal: new AbortController().signal,
+    onEvent: event => { if (event.type === "page") received.push(event.branch!.branch!.owner!.workspace_id); } }).catch(error => error);
+  await until(() => backend.calls.length === 1);
+  backend.send("scope", { scope: resolution() });
+  for (const index of [1, 0]) {
+    backend.send("page", { branch: branch(index), page: page(index) });
+    backend.send("branch", { branch: branch(index) });
+  }
+  backend.send("end", { summary: summary() }); backend.close();
+  expect(await running).toMatchObject(summary());
+  expect(received).toEqual(["B", "A"]);
+  expect(backend.calls[0].body.scope).toEqual(selected.scope);
+  expect(backend.calls).toHaveLength(1);
+  expect(backend.locked).toBe(false);
+});
+
 test.each(["断流", "重复终态", "错误请求", "跳序", "字段非法", "错误归属", "范围改写", "缺分支", "结束后事件"])("流协议错误明确失败并回收读取：%s", async kind => {
   const backend = install();
   const outcome = streamFederatedSearch(49_353, request(), { signal: new AbortController().signal, onEvent() {} }).catch(error => error as Error);

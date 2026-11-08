@@ -9,6 +9,7 @@ import type { GatewayDiagnosticLogQueryResultDTO } from "../../types/protocol_ge
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import { validateFederatedSearchEvent } from "../../sse/sseRuntimeSchemas";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, requestGatewayResponse } from "../http";
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 
 /** 未取得完整终态不等于搜索完成；请求身份来自原 HTTP 响应头。 */
 export class IncompleteSearchStreamError extends Error {
@@ -91,7 +92,7 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
           const owners = event.scope.scope?.owners;
           if (!owners) throw new Error("搜索范围缺少冻结 owner");
           const requestedOwners = request.scope?.mode === "origin" ? [request.scope.origin]
-            : request.scope?.mode === "selected" ? request.scope.owners
+            : request.scope?.mode === "selected" ? [...new Map(request.scope.owners.map(owner => [gatewayWorkspaceKey(owner), owner] as const)).values()]
             : request.scope?.mode === "resume" ? request.scope.scope?.owners : undefined;
           if (requestedOwners && (owners.length !== requestedOwners.length || owners.some((owner, index) =>
             owner.gateway_id !== requestedOwners[index]?.gateway_id || owner.workspace_id !== requestedOwners[index]?.workspace_id))) {
