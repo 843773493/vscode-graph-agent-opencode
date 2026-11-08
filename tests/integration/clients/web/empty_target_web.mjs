@@ -10,7 +10,7 @@ const run = await TestRunContext.fromTestFile('tests/integration/clients/web/tes
 const observations = () => ({ pageErrors: [], consoleErrors: [], nodeChannels: [], nodeResolves: [], webAdmissions: [],
   targetDirectories: [], inventoryRequests: [], themeResources: [] });
 const result = { phase: 'initialize', ...observations(), receipts: [],
-  boundary: '正式默认Workbench／双真实Gateway和Backend／原Node管理安装器／原目标资格、iframe、Worker、公开扩展命令及主题选择器；只将SSH执行及隧道替换为既有loopback装具。安装由正式API生成，页面不注入运行描述或命令。两个独立BrowserContext验证零boxteam-file根的browser与纯声明式主题，不代表公网市场、真实SSH、Windows、Electron或Node扩展运行。' };
+  boundary: '正式默认Workbench／双真实Gateway和Backend／原Node管理安装器／原Web Worker及目标Node宿主。原API安装同包双入口及纯声明式主题；原挂接命令生成运行视图，两个BrowserContext核库存、隔离和清缓存恢复。SSH执行及隧道仍为loopback装具，不代表公网市场、真实SSH、Windows或Electron。' };
 const save = () => writeFile(output, JSON.stringify(result, null, 2) + '\n');
 const phase = async value => { result.phase = value; await save(); };
 let page, diagnosticPage, failure;
@@ -64,13 +64,17 @@ try {
     expect(receipt.status).toBe(200); expect(receipt.body.request_id).toBeTruthy(); expect(receipt.body.request_id).toBe(receipt.header);
     return receipt.body.data;
   };
+  const ready = async view => {
+    await expect(view.locator('.monaco-workbench')).toBeVisible({ timeout: 30_000 });
+    await view.waitForFunction(() => typeof globalThis.workbench?.commands?.executeCommand === 'function', null, { timeout: 30_000 });
+  };
   const initialize = async (view, base, target) => {
     await view.goto(new URL('/api/gateway/health', base).href);
     await api(view, '/api/gateway/users/guest', 'POST', { tracking: { source: 'empty-target-web' } });
     // 默认产品入口保留虚拟Workbench根；不传folder/workspace参数，也不挂接工作区文件根。
     await view.goto(base, { waitUntil: 'domcontentloaded' });
     expect(new URL(view.url()).search).toBe('');
-    await expect(view.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
+    await ready(view);
     const health = await api(view, '/api/gateway/health'), workspaces = await api(view, '/api/gateway/workspaces');
     expect(workspaces.active_workspace.gateway_id).toBe(health.gateway_id);
     expect(health.gateway_id).toBe(target.gateway_id);
@@ -82,8 +86,8 @@ try {
     expect(state.webAdmissions.filter(item => item.kind === 'open')).toHaveLength(count);
     for (const { value } of values) {
       expect(value).toMatchObject({ ...target, workspace_ids: [], view_id: 'default' });
-      expect(value.extension_keys).toHaveLength(2);
-      for (const id of ['empty-browser', 'empty-theme']) expect(value.extension_keys.some(key => key.startsWith('boxteam-probe.' + id + '-'))).toBe(true);
+      expect(value.extension_keys).toHaveLength(3);
+      for (const id of ['empty-browser', 'empty-theme', 'empty-hybrid']) expect(value.extension_keys.some(key => key.startsWith('boxteam-probe.' + id + '-'))).toBe(true);
     }
     expect(state.nodeResolves).toEqual([]); expect(state.nodeChannels).toEqual([]);
     return values.at(-1).value;
@@ -103,6 +107,18 @@ try {
     await expect(view.locator('.quick-input-widget:visible').getByText(fixture.theme.label, { exact: true })).toBeVisible();
     await input.press('Enter'); await selected;
   };
+  const inventory = async (view, target) => {
+    const data = await api(view, '/api/gateway/extension-installations/inventory', 'POST', { protocol_version: 1, ...target });
+    expect(data).toMatchObject({ protocol_version: 1, ...target, profile_scope: 'default' });
+    return data.inventory;
+  };
+  const webHybrid = async (view, version, connection) => {
+    const value = await command(view, 'boxteam.empty.hybrid');
+    expect(value).toMatchObject({ mode: 'web', version, worker: true, folders: [] });
+    expect(value.extensionUri).toContain('/' + connection.gateway_id + '/' + connection.backend_id + '/' + connection.profile_id
+      + '/' + connection.view_id + '/' + connection.generation + '/boxteam-probe.empty-hybrid-' + version + '/');
+    return value;
+  };
   await initialize(page, fixture.base_url, fixture.targets.a);
 
   await phase('run-entry-a-empty-web');
@@ -112,7 +128,20 @@ try {
   expect(result.before.extensionUri).toContain('/' + fixture.targets.a.backend_id + '/');
   expect(result.nodeResolves).toEqual([]); expect(result.nodeChannels).toEqual([]);
   const initialAdmission = admission(result, fixture.targets.a, 1);
+  result.inventoryA = await inventory(page, fixture.targets.a);
+  result.hybrid = await webHybrid(page, '1.0.0', initialAdmission);
   expect(result.targetDirectories[0]).toEqual({ protocol_version: 1, gateway_id: fixture.targets.a.gateway_id });
+
+  await phase('node-only-unavailable-in-empty-window');
+  result.nodeOnlyRejected = await command(page, 'boxteam.empty.nodeOnly').then(value => ({ value }), error => ({ error: String(error) }));
+  expect(result.nodeOnlyRejected.error).toContain('boxteam.empty.nodeOnly');
+  await command(page, 'workbench.view.extensions');
+  const nodeRow = page.getByRole('listitem', { name: /^empty-node-only, / });
+  await expect(nodeRow).toBeVisible(); await nodeRow.dblclick();
+  const unavailable = '此扩展当前不可运行：Node 扩展需要挂接该目标的工作区。';
+  await expect(page.getByText(unavailable, { exact: true })).toBeVisible();
+  await expect(nodeRow).not.toContainText('Restart Required');
+  result.nodeOnlyStatus = unavailable;
 
   await phase('select-entry-a-declarative-theme');
   await selectTheme(page);
@@ -130,6 +159,7 @@ try {
   await expect(picker).toBeHidden(); await expect(targetAction).toHaveText('目标：Empty Target B');
   await expect.poll(() => result.inventoryRequests.some(item => item.gateway_id === fixture.targets.b.gateway_id
     && item.backend_id === fixture.targets.b.backend_id)).toBe(true);
+  result.relayInventoryB = await inventory(page, fixture.targets.b);
   result.after = await command(page, 'boxteam.empty.inspect', 'after-management-switch');
   expect(result.after).toMatchObject({ value: 'after-management-switch', version: '1.0.0', folders: [], webWorker: true, uiKind: 2 });
   expect(result.after.activation).toBe(result.before.activation); expect(result.after.extensionUri).toBe(result.before.extensionUri);
@@ -141,8 +171,7 @@ try {
   await phase('reload-entry-a-regenerates-target-view');
   await page.reload({ waitUntil: 'domcontentloaded' });
   // 重载沿原布局恢复 Extensions 侧边栏，不要求会话导航抢回当前视图。
-  await expect(page.locator('.monaco-workbench')).toBeVisible({ timeout: 30_000 });
-  await page.waitForFunction(() => typeof globalThis.workbench?.commands?.executeCommand === 'function', null, { timeout: 30_000 });
+  await ready(page);
   result.reloaded = await command(page, 'boxteam.empty.inspect', 'after-reload');
   expect(result.reloaded).toMatchObject({ value: 'after-reload', version: '1.0.0', folders: [], webWorker: true, uiKind: 2 });
   expect(result.reloaded.activation).not.toBe(result.before.activation);
@@ -164,6 +193,9 @@ try {
   expect(result.secondClient.inspection).toMatchObject({ value: 'direct-entry-b', version: '2.0.0', folders: [], webWorker: true, uiKind: 2 });
   expect(result.secondClient.inspection.activation).not.toBe(result.reloaded.activation);
   const admissionB = admission(result.secondClient, fixture.targets.b, 1);
+  result.secondClient.inventory = await inventory(pageB, fixture.targets.b);
+  expect(result.secondClient.inventory).toEqual(result.relayInventoryB);
+  result.secondClient.hybrid = await webHybrid(pageB, '2.0.0', admissionB);
   expect(result.secondClient.inspection.extensionUri).toContain('/api/gateway/extension-packages/content/' + fixture.targets.b.gateway_id + '/'
     + fixture.targets.b.backend_id + '/' + admissionB.profile_id + '/default/' + admissionB.generation + '/');
   expect(result.secondClient.targetDirectories[0]).toEqual({ protocol_version: 1, gateway_id: fixture.targets.b.gateway_id });
@@ -185,6 +217,64 @@ try {
     expect(state.themeResources.every(resource => resource.status === 200 && !!resource.requestId)).toBe(true);
   }
   await page.screenshot({ path: output.replace(/\.json$/, '.png'), fullPage: true });
+
+  await phase('clear-client-cache-and-recover-target-installations');
+  await page.close();
+  page = await context.newPage(); diagnosticPage = page;
+  await page.goto(new URL('/api/gateway/health', fixture.base_url).href);
+  const databases = () => page.evaluate(async () => (await indexedDB.databases()).map(database => database.name).sort());
+  result.cacheRecovery = { ...observations(), databasesBefore: await databases() };
+  expect(result.cacheRecovery.databasesBefore.length).toBeGreaterThan(0);
+  const cdp = await context.newCDPSession(page);
+  try {
+    await cdp.send('Storage.clearDataForOrigin', { origin: new URL(fixture.base_url).origin,
+      storageTypes: 'indexeddb,cache_storage,local_storage,service_workers' });
+    await cdp.send('Network.clearBrowserCache');
+  } finally { await cdp.detach(); }
+  result.cacheRecovery.databasesAfterClear = await databases();
+  expect(result.cacheRecovery.databasesAfterClear).toEqual([]);
+  observe(page, result.cacheRecovery);
+  await initialize(page, fixture.base_url, fixture.targets.a);
+  result.cacheRecovery.inspection = await command(page, 'boxteam.empty.inspect', 'after-cache-clear');
+  expect(result.cacheRecovery.inspection).toMatchObject({ version: '1.0.0', folders: [], webWorker: true });
+  expect(result.cacheRecovery.inspection.activation).not.toBe(result.reloaded.activation);
+  const recovered = admission(result.cacheRecovery, fixture.targets.a, 1);
+  result.cacheRecovery.hybrid = await webHybrid(page, '1.0.0', recovered);
+  result.cacheRecovery.inventory = await inventory(page, fixture.targets.a);
+  expect(result.cacheRecovery.inventory).toEqual(result.inventoryA);
+  await selectTheme(page);
+  await expect.poll(() => themeColor(page)).toBe(fixture.theme.colors.a);
+  await expect.poll(() => themeResource(result.cacheRecovery, recovered)).toBe(true);
+  await page.close();
+
+  await phase('attach-real-workspace-selects-same-package-node-entry');
+  page = await context.newPage(); diagnosticPage = page;
+  result.attached = observations(); observe(page, result.attached);
+  await initialize(page, fixture.base_url, fixture.targets.a);
+  await command(page, 'boxteam.empty.hybrid');
+  expect(result.attached.nodeResolves).toEqual([]); expect(result.attached.nodeChannels).toEqual([]);
+  const navigation = page.waitForURL(url => url.searchParams.has('workspace'), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  const attaching = command(page, 'boxteam.extensions.attachWorkspaceViews');
+  const workspacePicker = page.locator('.quick-input-widget:visible');
+  await expect(workspacePicker).toBeVisible();
+  await workspacePicker.locator('.monaco-list-row').filter({ hasText: fixture.targets.a.gateway_id }).locator('.monaco-checkbox').click();
+  await workspacePicker.locator('input').press('Enter');
+  await attaching.catch(error => { if (!String(error).includes('Execution context was destroyed')) throw error; });
+  await navigation; await ready(page);
+  result.attached.url = page.url();
+  result.attached.hybrid = await command(page, 'boxteam.empty.hybrid');
+  expect(result.attached.hybrid).toMatchObject({ mode: 'node', version: '1.0.0', platform: fixture.native_platform,
+    nativeContent: 'hybrid-node-1.0.0', folders: [fixture.native_root_a] });
+  result.attached.nodeOnly = await command(page, 'boxteam.empty.nodeOnly');
+  expect(result.attached.nodeOnly).toEqual({ mode: 'node', version: '1.0.0' });
+  expect(result.attached.nodeResolves).toEqual([{ protocol_version: 1, ...fixture.targets.a, workspace_ids: [fixture.workspace_id] }]);
+  expect(result.attached.nodeChannels).toEqual(['/api/gateway/extension-hosts/channel']);
+  const attachedAdmission = result.attached.webAdmissions.filter(item => item.kind === 'qualified').at(-1).value;
+  expect(attachedAdmission).toMatchObject({ ...fixture.targets.a, workspace_ids: [fixture.workspace_id] });
+  expect(attachedAdmission.extension_keys).toEqual(['boxteam-probe.empty-browser-1.0.0', 'boxteam-probe.empty-theme-1.0.0']);
+  expect(await inventory(page, fixture.targets.a)).toEqual(result.inventoryA);
+  for (const state of [result.cacheRecovery, result.attached]) expect(state.pageErrors).toEqual([]);
+  await page.screenshot({ path: output.replace(/\.json$/, '.node.png'), fullPage: true });
   await phase('complete');
 } catch (error) {
   failure = error; result.error = String(error.stack ?? error);

@@ -21,9 +21,22 @@ export function transformExtensionStatus(root, path, source, replaceOnce) {
   const index = paths.indexOf(path);
   if (index < 0) return source;
   if (index === 10) {
-    let contents = source.replace('IExtensionService, toExtension, toExtensionDescription', 'IExtensionService, toExtension');
+    let contents = `import { targetRuntimeUnavailableReason } from ${JSON.stringify(join(root, 'src/extensions/targetContext.js'))};\n`
+      + source.replace('IExtensionService, toExtension, toExtensionDescription', 'IExtensionService, toExtension');
+    contents = replaceOnce(contents, 'ExtensionType, ExtensionIdentifier,', 'ExtensionType, installationTargetKey, ExtensionIdentifier,');
     contents = replaceOnce(contents, 'canAddExtension(toExtensionDescription(extension))', 'canAddExtension(extension)');
     contents = replaceOnce(contents, 'canAddExtension(toExtensionDescription(this.extension!.local))', 'canAddExtension(this.extension!.local)');
+    contents = replaceOnce(contents, 'const isRunning = this.extensionService.extensions.some(e => areSameExtensions({ id: e.identifier.value, uuid: e.uuid }, this.extension!.identifier));', `const target = this.extension.local.installationTarget;
+    const isRunning = this.extensionService.extensions.some(e => areSameExtensions({ id: e.identifier.value, uuid: e.uuid }, this.extension!.identifier)
+      && (target ? !!e.installationTarget && installationTargetKey(e.installationTarget) === installationTargetKey(target) : e.installationTarget?.kind === 'web'));
+    if (isEnabled && !isRunning) {
+      const reason = targetRuntimeUnavailableReason(this.extension.local,
+        this.extensionManifestPropertiesService.getExtensionKind(this.extension.local.manifest), this.extensionService.getExtensionWorkspaceViews());
+      if (reason) {
+        this.updateStatus({ icon: warningIcon, message: new MarkdownString().appendText(reason) }, true);
+        return;
+      }
+    }`);
     return replaceOnce(contents, 'canRemoveExtension(toExtensionDescription(this.extension!.local))', 'canRemoveExtension(this.extension!.local)');
   }
   if (index === 11) {
@@ -40,18 +53,23 @@ export function transformExtensionStatus(root, path, source, replaceOnce) {
   }
   if (index === 1) {
     const start = source.indexOf('\tgetExtensionRuntimeStatus('), end = source.indexOf('\n\tasync updateRunningExtensions', start);
-    let contents = replaceOnce(source, source.slice(start, end), `
+    let contents = `import { targetRuntimeUnavailableReason } from ${JSON.stringify(join(root, 'src/extensions/targetContext.js'))};\n`
+      + replaceOnce(replaceOnce(source, 'IExtensionManifest, ExtensionType,', 'IExtensionManifest, ExtensionType, installationTargetKey,'), source.slice(start, end), `
   getExtensionRuntimeStatus(extension: IExtension): IExtensionRuntimeStatus | undefined {
     const target = extension.local?.installationTarget;
     const candidates = Object.values(this.extensionService.getExtensionsStatus()).filter(status =>
       areSameExtensions({ id: status.id.value }, extension.identifier) && (target
-        ? JSON.stringify(status.installationTarget) === JSON.stringify(target) : status.installationTarget.kind === 'web'));
+        ? installationTargetKey(status.installationTarget) === installationTargetKey(target) : status.installationTarget.kind === 'web'));
     if (candidates.length > 1) throw new Error('Extension runtime status requires an explicit installation target');
     return candidates[0];
   }
 `);
     contents = contents.replace('toExtension, toExtensionDescription', 'toExtension');
     contents = contents.replaceAll('canAddExtension(toExtensionDescription(extension.local))', 'canAddExtension(extension.local)');
+    contents = replaceOnce(contents, '// Extension is not running\n\t\t\telse {', `// Extension is not running
+\t\t\telse {
+        if (isEnabled && extension.local.isValid && targetRuntimeUnavailableReason(extension.local,
+          this.extensionManifestPropertiesService.getExtensionKind(extension.local.manifest), this.extensionService.getExtensionWorkspaceViews())) return undefined;`);
     return replaceOnce(contents, 'canRemoveExtension(runningExtension)', 'canRemoveExtension(toExtension(runningExtension))');
   }
   if (index === 2) {

@@ -1,5 +1,5 @@
 import type { ExtensionKind } from '../../upstream/src/vs/platform/environment/common/environment.js';
-import type { IExtensionDescription } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
+import { installationTargetKey, type IExtension, type IExtensionDescription, type IExtensionWorkspaceView } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
 import type { Event } from '../../upstream/src/vs/base/common/event.js';
 import type { IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
@@ -72,4 +72,16 @@ export function targetExecutionKind(extension: Pick<IExtensionDescription, 'main
     if (kind === 'web' && (extension.browser || !extension.main)) return 'web';
   }
   return undefined;
+}
+
+/** 只从原 Tracker 的目标视图说明 Node 不可运行原因，不改变用户启用状态。 */
+export function targetRuntimeUnavailableReason(extension: IExtension, kinds: readonly ExtensionKind[], views: readonly IExtensionWorkspaceView[]): string | undefined {
+  const target = extension.installationTarget;
+  if (target?.kind !== 'backend' || targetExecutionKind(extension.manifest, kinds, true) !== 'node') return undefined;
+  const view = views.find(view => installationTargetKey(view.installationTarget) === installationTargetKey(target));
+  if (!view) return '此扩展当前不可运行：当前窗口没有该安装目标的运行视图。';
+  if (!view.capabilities.host_manage) return '此扩展当前不可运行：没有目标扩展宿主管理权限。';
+  if (targetExecutionKind(extension.manifest, kinds, view.nodeRuntime?.channel_state === 'available')) return undefined;
+  if (!view.workspaceIds.length) return '此扩展当前不可运行：Node 扩展需要挂接该目标的工作区。';
+  return '此扩展当前不可运行：目标 Node 扩展宿主不可用（' + (view.nodeRuntime?.reason ?? 'runtime_missing') + '）。';
 }

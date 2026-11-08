@@ -42,11 +42,17 @@ export { ExtensionManagementServerService } from '${upstream}workbench/services/
 export { ExtensionManagementService } from '${upstream}workbench/services/extensionManagement/common/extensionManagementService.js';
 export { Extension, ExtensionsWorkbenchService } from '${upstream}workbench/contrib/extensions/browser/extensionsWorkbenchService.js';
 export { Extensions as OriginalExtensions } from '${upstream}workbench/contrib/extensions/browser/extensionsWorkbenchService.js';
-export { InstallAnotherVersionAction } from '${upstream}workbench/contrib/extensions/browser/extensionsActions.js';
+export { InstallAnotherVersionAction, ExtensionStatusAction, ExtensionRuntimeStateAction } from '${upstream}workbench/contrib/extensions/browser/extensionsActions.js';
 export { ExtensionsInput } from '${upstream}workbench/contrib/extensions/common/extensionsInput.js';
 export { ExtensionState } from '${upstream}workbench/contrib/extensions/common/extensions.js';
+export { EnablementState } from '${upstream}workbench/services/extensionManagement/common/extensionManagement.js';
+export { ExtensionManifestPropertiesService } from '${upstream}workbench/services/extensions/common/extensionManifestPropertiesService.js';
+export { ExtensionRunningLocationTracker } from '${upstream}workbench/services/extensions/common/extensionRunningLocationTracker.js';
+export { renderMarkdown } from '${upstream}base/browser/markdownRenderer.js';
+export { ExtensionDescriptionRegistry } from '${upstream}workbench/services/extensions/common/extensionDescriptionRegistry.js';
+export { default as Severity } from '${upstream}base/common/severity.js';
 export { CancellationToken } from '${upstream}base/common/cancellation.js';
-export { ExtensionType } from '${upstream}platform/extensions/common/extensions.js';
+export { ExtensionType, ExtensionIdentifier } from '${upstream}platform/extensions/common/extensions.js';
 export { toExtensionDescription } from '${upstream}workbench/services/extensions/common/extensions.js';
 export { CommandsRegistry } from '${upstream}platform/commands/common/commands.js';
 export { NullLogService } from '${upstream}platform/log/common/log.js';
@@ -83,7 +89,7 @@ beforeAll(async () => {
 afterAll(async () => {
   try { await run.close(); }
   finally { await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ checks,
-    boundary: '真实Chromium、原管理服务边界/事件、市场消费者、目标选择命令、库存解析及descriptor序列化；GatewayHTTP、native库存和gallery回执为具名装具，真实安装/平台与资源读取另由Python Gateway测试证明，不代表完整市场窗口UI。' }, null, 2)); }
+    boundary: '真实Chromium、原管理服务边界/事件、市场消费者、目标选择命令、库存解析、descriptor序列化及原状态Action/runtimeState/Tracker；GatewayHTTP、native库存、gallery回执、运行清单和UI依赖为具名装具，真实安装/平台与资源读取另由Python Gateway测试证明，不代表完整市场窗口UI。' }, null, 2)); }
 });
 
 async function open() {
@@ -176,7 +182,45 @@ async function open() {
       return { workbench, observed, makeLocal: local => instantiation.createInstance(m.Extension,
         extension => workbench.getExtensionState(extension), () => undefined, { extensionManagementService: service }, local, gallery, undefined, undefined) };
     };
-    globalThis.managementProbe = { m, state, service, select, entry, inventory, gallery, profiles, profileLocation, createWorkbench,
+    const createRuntimeStatus = (views, local) => {
+      const { workbench } = createWorkbench(), logs = new m.NullLogService(), statusState = { running: [], statuses: {}, canAdd: false, canAddCalls: 0, actions: [] };
+      const configuration = { inspect: () => ({}), getValue: () => undefined, onDidChangeConfiguration: m.Event.None };
+      const properties = new m.ExtensionManifestPropertiesService({}, configuration, { isWorkspaceTrustEnabled: () => false }, logs);
+      const registry = new m.ExtensionDescriptionRegistry({ readActivationEvents: extension => extension.activationEvents ?? [] }, [], true);
+      const tracker = new m.ExtensionRunningLocationTracker(registry, {}, {}, configuration, logs, properties);
+      tracker.setRemoteViews(views);
+      // 运行清单、动态加入能力和 UI 依赖为装具；状态判断仍运行原 Action、原方法及真实 Tracker/manifest owner。
+      const extensionService = { get extensions() { return statusState.running; }, onDidChangeExtensions: m.Event.None,
+        getExtensionsStatus: () => statusState.statuses,
+        getExtensionWorkspaceViews: () => tracker.workspaceViews,
+        canAddExtension: () => { statusState.canAddCalls++; return statusState.canAdd; }, canRemoveExtension: () => false };
+      const server = workbench.extensionManagementServerService.webExtensionManagementServer;
+      const extension = new m.Extension(() => m.ExtensionState.Installed, value => workbench.getRuntimeState(value),
+        server, local, undefined, undefined, undefined, {}, {}, logs, {}, { version: '1.145.0', quality: 'stable' });
+      const enablement = { isEnabled: () => [m.EnablementState.EnabledGlobally, m.EnablementState.EnabledWorkspace,
+        m.EnablementState.EnabledByEnvironment].includes(extension.enablementState) };
+      const allowed = { isAllowed: () => ({ value: 'fixture policy denied' }), onDidChangeAllowedExtensionsConfigValue: m.Event.None };
+      Object.assign(workbench, { extensionService, extensionManifestPropertiesService: properties, extensionEnablementService: enablement,
+        getRuntimeState: m.ExtensionsWorkbenchService.prototype.getRuntimeState, canSetLanguage: () => false,
+        shouldRequireConsentToUpdate: async () => undefined, isAutoUpdateDelayed: () => false,
+        updateRunningExtensions: async () => { statusState.actions.push('restart'); } });
+      const action = new m.ExtensionStatusAction(workbench.extensionManagementServerService,
+        { onDidChangeFormatters: m.Event.None }, {}, { isWorkspaceTrustEnabled: () => false }, { isWorkspaceTrusted: () => true },
+        workbench, extensionService, properties, { getWorkspace: () => ({ folders: [] }) }, {}, allowed, enablement,
+        { onDidChangeAccessData: m.Event.None, getAccessData: () => undefined }, { getExtensionGalleryManifest: async () => ({}) }, configuration);
+      const runtimeAction = new m.ExtensionRuntimeStateAction({ reload: () => { statusState.actions.push('reload'); } },
+        workbench, {}, extensionService, {}, { publicLog2() {} });
+      action.extension = extension; runtimeAction.extension = extension;
+      return { extension, state: statusState, runtimeAction, runtimeStatus: () => workbench.getExtensionRuntimeStatus(extension), async read() {
+        await action.recomputeStatus(); runtimeAction.update();
+        return { messages: action.status.map(status => {
+          const rendered = m.renderMarkdown(status.message);
+          try { return rendered.element.textContent.replaceAll('\u00a0', ' '); } finally { rendered.dispose(); }
+        }), warning: action.class.includes('extension-status-warning'),
+          runtime: extension.runtimeState ?? null, restartEnabled: runtimeAction.enabled, enablementState: extension.enablementState };
+      }, dispose() { action.dispose(); runtimeAction.dispose(); workbench.dispose(); properties.dispose(); registry.dispose(); } };
+    };
+    globalThis.managementProbe = { m, state, service, select, entry, inventory, gallery, profiles, profileLocation, createWorkbench, createRuntimeStatus,
       initial: await service.getInstalled(m.ExtensionType.User) };
   });
   return { context, page };
@@ -629,5 +673,127 @@ test('不支持的profile和选项明确拒绝，畸形原生库存不进入管�
     expect(value.failures).toHaveLength(4); expect(value.failures[0]).toContain('默认 profile');
     expect(value.failures[1]).toContain('updated'); expect(value.failures[2]).toContain('非标准安装选项'); expect(value.failures[3]).toContain('平台不匹配');
     expect(value.installWrites).toBe(0); checks.push('非默认profile、未接线选项/metadata和畸形平台库存快失败');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原状态Action从精确Tracker视图说明Node不可运行，原runtimeState不再伪报重启', async () => {
+  const { context, page } = await open();
+  try {
+    const values = await page.evaluate(async () => {
+      const { m, initial, createRuntimeStatus } = globalThis.managementProbe, target = initial[0].installationTarget;
+      const view = { installationTarget: target, viewId: 'default', workspaceIds: ['workspace-a'],
+        capabilities: { installation_manage: true, host_manage: true } };
+      const hybrid = { ...initial[0], manifest: { ...initial[0].manifest, browser: './browser.js', extensionKind: ['workspace', 'web'] } };
+      const cases = [
+        { name: 'empty', views: [{ ...view, workspaceIds: [] }] },
+        { name: 'unavailable', views: [{ ...view, nodeRuntime: { channel_state: 'unavailable', reason: 'fixture unavailable' } }] },
+        { name: 'draining', views: [{ ...view, nodeRuntime: { channel_state: 'draining', reason: 'fixture draining' } }] },
+        { name: 'missing', views: [view] }, { name: 'unbound', views: [] },
+        { name: 'permission', views: [{ ...view, capabilities: { installation_manage: true, host_manage: false } }] },
+        { name: 'other-target', views: [{ ...view, installationTarget: { ...target, backendId: 'backend-b' }, nodeRuntime: { channel_state: 'available' } }] },
+        { name: 'other-running', views: [view, { ...view, installationTarget: { ...target, backendId: 'backend-b' }, nodeRuntime: { channel_state: 'available' } }],
+          running: { ...m.toExtensionDescription(initial[0]), version: '9.0.0', installationTarget: { ...target, backendId: 'backend-b' } } },
+        { name: 'hybrid-unbound', local: hybrid, views: [] },
+        { name: 'hybrid-permission', local: hybrid, views: [{ ...view, capabilities: { installation_manage: true, host_manage: false } }] },
+        { name: 'unscoped-running', views: [view], running: { ...m.toExtensionDescription(initial[0]), installationTarget: undefined } },
+      ];
+      const results = [];
+      for (const item of cases) {
+        const probe = createRuntimeStatus(item.views, item.local ?? initial[0]);
+        try {
+          if (item.running) probe.state.running.push(item.running);
+          const status = await probe.read(); await probe.runtimeAction.run();
+          results.push({ name: item.name, ...status, canAddCalls: probe.state.canAddCalls, actions: probe.state.actions,
+            enablementUnchanged: probe.extension.enablementState === m.EnablementState.EnabledGlobally });
+        } finally { probe.dispose(); }
+      }
+      return results;
+    });
+    const reasons = ['需要挂接', 'fixture unavailable', 'fixture draining', 'runtime', '没有该安装目标的运行视图', '没有目标扩展宿主管理权限', '没有该安装目标的运行视图', 'runtime',
+      '没有该安装目标的运行视图', '没有目标扩展宿主管理权限', 'runtime'];
+    for (const [index, value] of values.entries()) {
+      expect(value.messages).toHaveLength(1); expect(value.messages[0]).toContain('当前不可运行'); expect(value.messages[0]).toContain(reasons[index]);
+      expect(value.warning).toBe(true); expect(value.runtime).toBeNull(); expect(value.restartEnabled).toBe(false);
+      expect(value.canAddCalls).toBe(0); expect(value.actions).toEqual([]); expect(value.enablementUnchanged).toBe(true);
+    }
+    checks.push('原Action精确目标无根/未挂接/无权限/Node unavailable与draining明确警告，原runtimeState和运行Action零虚假重启且enablement不变');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原状态入口保留合法Node、browser回退、声明式与窗口builtin的新安装重启行为', async () => {
+  const { context, page } = await open();
+  try {
+    const values = await page.evaluate(async () => {
+      const { initial, createRuntimeStatus } = globalThis.managementProbe, local = initial[0];
+      const view = { installationTarget: local.installationTarget, viewId: 'default', workspaceIds: ['workspace-a'],
+        capabilities: { installation_manage: true, host_manage: true }, nodeRuntime: { channel_state: 'available' } };
+      const cases = [
+        { name: 'node', local, views: [view] },
+        { name: 'hybrid-web', local: { ...local, manifest: { ...local.manifest, browser: './browser.js' } }, views: [{ ...view, nodeRuntime: undefined }] },
+        { name: 'browser', local: { ...local, manifest: { ...local.manifest, main: undefined, browser: './browser.js', extensionKind: undefined } }, views: [{ ...view, nodeRuntime: undefined }] },
+        { name: 'declarative', local: { ...local, manifest: { ...local.manifest, main: undefined, extensionKind: undefined } }, views: [view] },
+        { name: 'builtin', local: { ...local, isBuiltin: true, installationTarget: { kind: 'web', profileId: 'browser-default' } }, views: [] },
+      ];
+      const results = [];
+      for (const item of cases) {
+        const probe = createRuntimeStatus(item.views, item.local);
+        try { results.push({ name: item.name, ...await probe.read() }); } finally { probe.dispose(); }
+      }
+      return results;
+    });
+    for (const value of values) {
+      expect(value.messages).toEqual([]); expect(value.warning).toBe(false);
+      expect(value.runtime).toMatchObject({ action: 'restartExtensions' }); expect(value.restartEnabled).toBe(true);
+    }
+    checks.push('合法Node、同包browser回退、browser-only、无脚本与原Web builtin仍交原新安装重启分支');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('Node不可用诊断保留原invalid、用户禁用、策略及更新状态优先级', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const { m, initial, createRuntimeStatus } = globalThis.managementProbe, local = initial[0];
+      const view = { installationTarget: local.installationTarget, viewId: 'default', workspaceIds: [],
+        capabilities: { installation_manage: true, host_manage: true } };
+      const cases = [
+        { name: 'invalid', local: { ...local, isValid: false, validations: [[m.Severity.Error, 'fixture invalid manifest']] }, enablement: m.EnablementState.DisabledByInvalidExtension },
+        { name: 'global', enablement: m.EnablementState.DisabledGlobally }, { name: 'workspace', enablement: m.EnablementState.DisabledWorkspace },
+        { name: 'environment', enablement: m.EnablementState.DisabledByEnvironment }, { name: 'policy', enablement: m.EnablementState.DisabledByAllowlist },
+      ];
+      const priorities = [];
+      for (const item of cases) {
+        const probe = createRuntimeStatus([view], item.local ?? local);
+        try { probe.extension.enablementState = item.enablement; priorities.push({ name: item.name, ...await probe.read() }); }
+        finally { probe.dispose(); }
+      }
+      const update = createRuntimeStatus([view], local);
+      try {
+        update.state.running.push({ ...m.toExtensionDescription(local), version: '0.9.0' });
+        const pendingUpdate = await update.read();
+        update.extension.enablementState = m.EnablementState.DisabledGlobally;
+        const pendingDisable = await update.read();
+        const builtin = createRuntimeStatus([], { ...local, isBuiltin: true, installationTarget: { kind: 'web', profileId: 'browser-default' } });
+        try {
+          builtin.state.running.push(m.toExtensionDescription(local));
+          builtin.extension.enablementState = m.EnablementState.DisabledGlobally;
+          const otherTargetRunning = await builtin.read();
+          const windowStatus = { id: new m.ExtensionIdentifier(local.identifier.id), installationTarget: { profileId: 'browser-default', kind: 'web' }, activationTimes: { fixture: true } };
+          builtin.state.statuses = { backend: { id: windowStatus.id, installationTarget: local.installationTarget }, window: windowStatus };
+          return { priorities, pendingUpdate, pendingDisable, otherTargetRunning,
+            runtimeIdentity: builtin.runtimeStatus() === windowStatus };
+        } finally { builtin.dispose(); }
+      } finally { update.dispose(); }
+    });
+    const messages = ['fixture invalid manifest', 'disabled globally by the user', 'disabled for this workspace by the user', 'disabled by the environment', 'fixture policy denied'];
+    for (const [index, status] of value.priorities.entries()) {
+      expect(status.messages).toHaveLength(1); expect(status.messages[0]).toContain(messages[index]); expect(status.runtime).toBeNull();
+    }
+    expect(value.pendingUpdate.messages).toEqual([]);
+    expect(value.pendingUpdate.runtime).toMatchObject({ action: 'restartExtensions' }); expect(value.pendingUpdate.runtime.reason).toContain('enable the updated extension');
+    expect(value.pendingDisable.runtime).toMatchObject({ action: 'restartExtensions' }); expect(value.pendingDisable.runtime.reason).toContain('disable this extension');
+    expect(value.otherTargetRunning.messages).toEqual(['This extension is disabled globally by the user.']);
+    expect(value.otherTargetRunning.runtime).toBeNull(); expect(value.runtimeIdentity).toBe(true);
+    checks.push('原invalid、全局/工作区禁用、环境与策略消息保持，旧运行版本更新和禁用仍有真实原重启动作');
   } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
 });

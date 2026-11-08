@@ -1,4 +1,4 @@
-"""默认零根 Workbench 运行目标 browser 与纯声明式主题；SSH 传输为具名装具。"""
+"""默认 Workbench 的目标 Web／Node 分派、声明式贡献与冷恢复；SSH 为具名装具。"""
 
 from __future__ import annotations
 
@@ -135,10 +135,46 @@ exports.activate = context => {
         entry, = [entry for entry in installed_theme["inventory"]["extensions"] if entry["description"]["name"] == "empty-theme"]
         assert entry["is_valid"] and not entry["description"].get("main") and not entry["description"].get("browser")
 
+        hybrid = vsix_factory(workspace, version, "双入口", manifest_overrides={
+            "name": "empty-hybrid", "main": "./node.js", "browser": "./browser.js",
+            "extensionKind": ["workspace", "web"], "activationEvents": ["onCommand:boxteam.empty.hybrid"],
+            "contributes": {"commands": [{"command": "boxteam.empty.hybrid", "title": "双入口检查"}]},
+        })
+        with ZipFile(hybrid, "a") as archive:
+            archive.writestr("extension/browser.js", """
+const vscode = require('vscode');
+exports.activate = context => context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid', () => ({
+  mode: 'web', version: context.extension.packageJSON.version, worker: typeof document === 'undefined' && typeof self !== 'undefined',
+  extensionUri: context.extensionUri.toString(true), folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
+})));
+""")
+            archive.writestr("extension/node.js", """
+const vscode = require('vscode');
+exports.activate = context => context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid', () => ({
+  mode: 'node', version: context.extension.packageJSON.version, platform: process.platform,
+  nativeContent: require('node:fs').readFileSync(require('node:path').join(__dirname, 'native.txt'), 'utf8'),
+  folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
+})));
+""")
+            archive.writestr("extension/native.txt", "hybrid-node-" + version)
+        installed_hybrid = exchange(client, "POST", "/api/gateway/extension-installations/install", {
+            "protocol_version": 1, **targets[label], "workspace_ids": [network.workspace_id],
+            "source_uri": resource_display_uri(scope="workspace", scope_id=network.workspace_id, kind="files",
+                tail_segments=("root", hybrid.name), gateway_authority=gateway_id)})
+        assert installed_hybrid["installed"]["id"] == "boxteam-probe.empty-hybrid"
+        assert installed_hybrid["installed"]["version"] == version
+
     node = vsix_factory(network.workspace_roots[0], "1.0.0", "不得在空根窗口激活", manifest_overrides={
-        "name": "empty-node-only", "activationEvents": ["onCommand:boxteam.empty.nodeOnly"],
+        "name": "empty-node-only", "main": "./node-only.js", "activationEvents": ["onCommand:boxteam.empty.nodeOnly"],
         "contributes": {"commands": [{"command": "boxteam.empty.nodeOnly", "title": "只允许挂根的 Node"}]},
     })
+    with ZipFile(node, "a") as archive:
+        archive.writestr("extension/node-only.js", """
+const vscode = require('vscode');
+exports.activate = context => context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.nodeOnly', () => ({
+  mode: 'node', version: context.extension.packageJSON.version,
+})));
+""")
     exchange(local, "POST", "/api/gateway/extension-installations/install", {
         "protocol_version": 1, **targets["a"], "workspace_ids": [network.workspace_id],
         "source_uri": resource_display_uri(scope="workspace", scope_id=network.workspace_id, kind="files",
@@ -153,7 +189,8 @@ exports.activate = context => {
         "bun", "tests/integration/clients/web/empty_target_web.mjs"]
     paths = ["app/gateway/server/extension_host.py", "src/clients/workbench/src/extensions/inventory.ts", "src/clients/workbench/scripts/extensions/extensionBrowserTransform.mjs",
         "src/clients/workbench/src/extensions/webHost.ts", "src/clients/workbench/src/extensions/targetContext.ts",
-        "src/clients/workbench/scripts/extensions/extensionEnablementTransform.mjs", "tests/integration/clients/web/test_empty_target_web.py",
+        "src/clients/workbench/scripts/extensions/extensionEnablementTransform.mjs",
+        "src/clients/workbench/scripts/extensions/extensionStatusTransform.mjs", "tests/integration/clients/web/test_empty_target_web.py",
         "tests/integration/clients/web/empty_target_web.mjs"]
     fingerprints = {path: hashlib.sha256((Path.cwd() / path).read_bytes()).hexdigest() for path in paths}
     runtime = context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"])
@@ -162,7 +199,8 @@ exports.activate = context => {
             env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_EMPTY_TARGET_WEB": json.dumps({
                     "base_url": str(local.base_url).rstrip("/"), "base_url_b": str(remote.base_url).rstrip("/"),
-                    "targets": targets, "theme": theme})})
+                    "targets": targets, "theme": theme, "workspace_id": network.workspace_id,
+                    "native_root_a": network.workspace_roots[0].as_uri(), "native_platform": sys.platform})})
     (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
     (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
     after = {path: hashlib.sha256((Path.cwd() / path).read_bytes()).hexdigest() for path in paths}
@@ -181,5 +219,10 @@ exports.activate = context => {
     assert browser["afterSecondClient"]["version"] == "1.0.0" and browser["afterSecondClient"]["folders"] == []
     assert browser["nodeChannels"] == browser["nodeResolves"] == []
     assert browser["secondClient"]["nodeChannels"] == browser["secondClient"]["nodeResolves"] == []
+    assert browser["hybrid"]["mode"] == browser["secondClient"]["hybrid"]["mode"] == "web"
+    assert browser["cacheRecovery"]["inspection"]["version"] == "1.0.0"
+    assert browser["cacheRecovery"]["nodeChannels"] == browser["cacheRecovery"]["nodeResolves"] == []
+    assert browser["attached"]["hybrid"]["mode"] == browser["attached"]["nodeOnly"]["mode"] == "node"
+    assert browser["attached"]["hybrid"]["nativeContent"] == "hybrid-node-1.0.0"
     observations = [json.loads(line) for path in network.observation_paths.values() for line in path.read_text(encoding="utf-8").splitlines()]
-    assert not any(item["path"].endswith("/extension-hosts/resolve") for item in observations)
+    assert any(item["path"].endswith("/extension-hosts/resolve") for item in observations)
