@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
+from app.agents.builtin_tool_registry import browser_tool_ids
+from app.agents.policy.tool_groups import DEBUGGING_TOOL_NAMES
 from app.schemas.gateway.service_plugin import (
     ExtensionPoint,
     PluginExtensionRequirement,
@@ -59,8 +61,8 @@ EXTENSION_POINTS: dict[str, ExtensionPointSupport] = {
     ),
 }
 
-# 首批没有获准关联的无服务工具；新增条目必须是明确的产品合同，不继承全部内置工具。
-PRODUCT_APPROVED_SKILL_TOOL_IDS: frozenset[str] = frozenset()
+# 原 Backend 业务工具只关联说明，执行仍由资源／调试 owner 通过插件服务受理。
+PRODUCT_APPROVED_SKILL_TOOL_IDS = frozenset(browser_tool_ids()) | DEBUGGING_TOOL_NAMES
 
 
 def validate_extension_requirements(requirements: Iterable[PluginExtensionRequirement]) -> None:
@@ -79,7 +81,7 @@ def validate_extension_requirements(requirements: Iterable[PluginExtensionRequir
 
 __all__ = [
     "EXTENSION_POINTS",
-    "ExtensionPointSupport",
     "PRODUCT_APPROVED_SKILL_TOOL_IDS",
+    "ExtensionPointSupport",
     "validate_extension_requirements",
 ]

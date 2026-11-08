@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -44,6 +45,49 @@ def test_build_custom_tools_loads_factory_from_config_spec() -> None:
 
     assert [tool.name for tool in tools] == ["test_tool_2"]
     assert tools[0].invoke({}) == "4568"
+
+
+def test_product_skill_associations_require_actual_browser_or_debug_producer() -> None:
+    from app.agents.policy.tool_capability import metadata_for_tool
+    from app.schemas.gateway.service_plugin import PluginToolBinding
+    from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
+    from app.services.infrastructure.mcp.tool_definitions import (
+        SkillToolSource,
+        _tool_skill_associations,
+        definition_from_tool,
+    )
+
+    tools = build_custom_tools([
+        {"tool_id": "openBrowserPage"},
+        {"name": "evaluate_expression", "factory": "app.agents.tools.debugging:create_debugging_tool",
+         "options": {"tool_name": "evaluate_expression"}},
+    ], context=replace(_context(), node_debug_service=MagicMock()))
+    for tool, plugin_id in zip(tools, ("browser", "debugging"), strict=True):
+        source = SkillToolSource(
+            name=f"{plugin_id}-guide", source_id="gateway-source", entry_identity=f"plugin:{plugin_id}",
+            display_uri="boxteam://gateway/target/resources/skills/guide/SKILL.md",
+            plugin=PluginSkillSourceDTO(
+                package_id="boxteam.developer-tools", package_version="0.1.0", plugin_id=plugin_id,
+                package_digest="a" * 64, contribution_id="guide",
+                tool_bindings=[PluginToolBinding(tool_id=tool.name, contract_version=1)],
+            ),
+        )
+        metadata = metadata_for_tool(tool, origin="custom")
+        definition = definition_from_tool(tool, metadata)
+        available, = _tool_skill_associations(tool.name, definition, (source,), (), gateway_id="target")
+        assert available.status == "available"
+        assert available.entry_identity == source.entry_identity
+        # 同名但并非原业务工厂发布的工具，不能借名称继承产品合同。
+        unverified, = _tool_skill_associations(
+            tool.name, replace(definition, product_tool_contract=None), (source,), (), gateway_id="target",
+        )
+        assert (unverified.status, unverified.reason) == ("unavailable", "product-tool-source-unverified")
+        assert source.plugin is not None
+        incompatible_source = replace(source, plugin=source.plugin.model_copy(update={
+            "tool_bindings": [PluginToolBinding(tool_id=tool.name, contract_version=2)],
+        }))
+        incompatible, = _tool_skill_associations(tool.name, definition, (incompatible_source,), (), gateway_id="target")
+        assert incompatible.status == "unavailable"
 
 
 def test_build_custom_tools_passes_each_spec_options_to_factory(

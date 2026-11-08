@@ -151,6 +151,7 @@ def _build_tool(
         name=name,
         description=registration.description,
         args_schema=registration.input_model,
+        metadata={"product_tool_contract": (name, 1)},
     )
 
 

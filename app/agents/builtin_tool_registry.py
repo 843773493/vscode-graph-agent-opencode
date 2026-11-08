@@ -50,3 +50,9 @@ def builtin_tool_id_for_factory(factory_path: str) -> str | None:
         if registered_path == factory_path:
             return tool_id
     return None
+
+
+def browser_tool_ids() -> tuple[str, ...]:
+    """浏览器业务 owner 提供的稳定工具集合；不从 Skill 正文注册工具。"""
+    return tuple(tool_id for tool_id, factory in _BUILTIN_TOOL_FACTORIES.items()
+                 if factory.startswith("app.agents.tools.browser:"))

@@ -263,6 +263,7 @@ def create_list_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
 
     return StructuredTool.from_function(
         coroutine=list_browser_page, name="listBrowserPage",
+        metadata={"product_tool_contract": ("listBrowserPage", 1)},
         description="只读列出当前精确 Thread 已关联的浏览器，返回稳定 pageId 和标签页摘要。",
         args_schema=ListBrowserPageInput,
     )
@@ -301,6 +302,7 @@ def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
 
     return StructuredTool.from_function(
         coroutine=open_browser_page, name="openBrowserPage",
+        metadata={"product_tool_contract": ("openBrowserPage", 1)},
         description=(
             "打开 URL；默认复用当前精确 Thread 已关联的页面，forceNew=true 时新建。"
             "默认 thread 临时保留，retention_scope=workspace 创建或提升为工作区持久浏览器。"
@@ -323,6 +325,7 @@ def create_read_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=read_page,
         name="readPage",
+        metadata={"product_tool_contract": ("readPage", 1)},
         description="读取浏览器页面当前状态，返回文本摘要和可交互元素 ref；导航或页面更新后必须先重新读取再使用旧 ref。",
         args_schema=PageIdInput,
     )
@@ -345,6 +348,7 @@ def create_navigate_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=navigate_page,
         name="navigatePage",
+        metadata={"product_tool_contract": ("navigatePage", 1)},
         description="让浏览器跳转、后退、前进、刷新，或新建、激活、关闭标签页。",
         args_schema=NavigatePageInput,
     )
@@ -376,6 +380,7 @@ def create_click_element_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=click_element,
         name="clickElement",
+        metadata={"product_tool_contract": ("clickElement", 1)},
         description=(
             "点击浏览器页面中的元素。优先使用 readPage 返回的 ref，也可使用 Playwright selector；"
             "导航后目标可能短暂重建，selector 会进行一次有限重新定位，ref 失效时请重新 readPage。"
@@ -412,6 +417,7 @@ def create_type_in_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=type_in_page,
         name="typeInPage",
+        metadata={"product_tool_contract": ("typeInPage", 1)},
         description="在浏览器页面中输入文本或按键。",
         args_schema=TypeInPageInput,
     )
@@ -435,6 +441,7 @@ def create_hover_element_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=hover_element,
         name="hoverElement",
+        metadata={"product_tool_contract": ("hoverElement", 1)},
         description="将鼠标悬停到浏览器页面中的元素上。",
         args_schema=ElementInput,
     )
@@ -468,6 +475,7 @@ def create_drag_element_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=drag_element,
         name="dragElement",
+        metadata={"product_tool_contract": ("dragElement", 1)},
         description="将浏览器页面中的一个元素拖拽到另一个元素上。",
         args_schema=DragElementInput,
     )
@@ -495,6 +503,7 @@ def create_handle_dialog_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=handle_dialog,
         name="handleDialog",
+        metadata={"product_tool_contract": ("handleDialog", 1)},
         description="响应浏览器页面中的 alert/confirm/prompt 或文件选择对话框。",
         args_schema=HandleDialogInput,
     )
@@ -524,6 +533,7 @@ def create_screenshot_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=screenshot_page,
         name="screenshotPage",
+        metadata={"product_tool_contract": ("screenshotPage", 1)},
         description=(
             "捕获浏览器页面或元素截图，返回截图身份与可寻址的 "
             "screenshot_url（由浏览器管理器只读端点提供），不返回文件系统路径。"
@@ -545,6 +555,7 @@ def create_run_playwright_code_tool(context: CustomToolFactoryContext) -> BaseTo
     return StructuredTool.from_function(
         coroutine=run_playwright_code,
         name="runPlaywrightCode",
+        metadata={"product_tool_contract": ("runPlaywrightCode", 1)},
         description=(
             "对浏览器页面执行一段 Playwright JS 代码。只有其它浏览器工具不足时使用。"
             "pageId 始终使用 openBrowserPage 返回的浏览器会话 ID；超时会返回 status=error、"

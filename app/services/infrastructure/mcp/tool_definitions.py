@@ -151,6 +151,7 @@ class ToolDefinition:
     readiness: ConnectionReadiness = field(default="ready", kw_only=True)
     skill_associations: tuple[SkillToolAssociation, ...] = field(default=(), kw_only=True)
     plugin_tool_source: PluginToolSource | None = field(default=None, kw_only=True, repr=False)
+    product_tool_contract: tuple[str, int] | None = field(default=None, kw_only=True, repr=False)
 
     @property
     def payload(self) -> dict[str, object]:
@@ -174,6 +175,10 @@ def definition_from_tool(tool: BaseTool, metadata: ToolMetadata) -> ToolDefiniti
     return ToolDefinition(
         metadata, extension_schema_hash(schema), tool.description, canonical_json_bytes(schema),
         plugin_tool_source=plugin_tool_source_from_tool(tool),
+        product_tool_contract=(
+            (tool.name, 1) if metadata.origin == "custom"
+            and (tool.metadata or {}).get("product_tool_contract") == (tool.name, 1) else None
+        ),
     )
 
 
@@ -212,7 +217,10 @@ def _tool_skill_associations(
             if not source.effective:
                 reason = "skill-source-not-effective"
             elif binding.service_id is None:
-                reason = "product-tool-source-unverified"
+                if definition.product_tool_contract != (binding.tool_id, binding.contract_version):
+                    reason = "product-tool-source-unverified"
+                elif binding.schema_hash is not None and binding.schema_hash != definition.schema_hash:
+                    reason = "tool-schema-hash-mismatch"
             elif tool_source is None:
                 reason = "plugin-service-source-unverified"
             elif binding.contract_version != 1:
