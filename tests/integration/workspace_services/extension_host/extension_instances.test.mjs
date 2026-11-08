@@ -11,7 +11,8 @@ const run = await TestRunContext.fromTestFile('tests/integration/workspace_servi
 const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'extension-instances.fixture.mjs');
 const upstream = './src/clients/workbench/upstream/src/vs/';
 const sourcePaths = ['tests/integration/workspace_services/extension_host/extension_instances.test.mjs',
-  ...['src/extensions/inventory.ts', 'scripts/sourceTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
+  ...['src/extensions/inventory.ts', 'src/extensions/nativeInventory.ts', 'src/extensions/webConnection.ts',
+    'scripts/sourceTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
     'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionOwnerTransform.mjs',
     'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocationTracker.ts',
     'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocation.ts'].map(path => 'src/clients/workbench/' + path)];
@@ -95,7 +96,7 @@ function extension(target, version = '1.0.0', overrides = {}) {
     activationEvents: ['onCommand:probe.shared'], contributes: { commands: [{ command: 'probe.shared', title: 'Shared' }] }, ...overrides };
 }
 const reader = { readActivationEvents: extension => m.ImplicitActivationEvents.readActivationEvents(extension) };
-const receipt = { boundary: '真实 Registry、Tracker、原 profile StorageManager／GlobalEnablement、原 CommandsRegistry、目标发现/库存扫描业务入口及 typed URI；HTTP 与 picker 是明确边界装具，不代替真实 Gateway 权限判定／浏览器或全扩展 API 验收。', checks: [], scans: [] };
+const receipt = { boundary: '真实 Registry、Tracker、原 profile StorageManager／GlobalEnablement、原 CommandsRegistry、目标发现/库存扫描业务入口、原Web资格校验及 typed URI；HTTP、token、WebSocket字节与picker是明确边界装具，不代替真实 Gateway 权限判定／浏览器或全扩展 API 验收。', checks: [], scans: [] };
 
 test('挂接原命令只进入原工作区 owner，持久文件重读保留完整不透明根和有序集合', async () => {
   const routes = [{ gateway_id: 'gateway-a', workspace_id: 'a1', name: 'A1', status: 'ready' },
@@ -403,14 +404,21 @@ test('原 MainThreadDocuments 的 save/dirty/encoding 事件只发给已跟踪�
 });
 
 const scanLifetime = new m.DisposableStore();
-const scan = context => m.scanTargetExtensions(context, extension => extension.installationTarget.kind === 'backend' ? ['workspace'] : ['web'], scanLifetime);
+const scanWarnings = [];
+const scanKinds = extension => extension.extensionKind ?? (extension.installationTarget.kind === 'backend' ? ['workspace'] : ['web']);
+const scan = (context, entryGatewayId = targetA.gatewayId) => m.scanTargetExtensions(context, scanKinds, scanLifetime,
+  entryGatewayId, { warn: (...values) => scanWarnings.push(values.map(String).join(' ')) });
 function context(owners) { return { getCompleteWorkspace: async () => ({ folders: [{ uri: m.URI.parse('boxteam-workspace:/') }, ...owners.map(owner => ({ uri: m.workspaceFileUri(owner, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId, 'boxteam://' + owner.gatewayId + '/root/' + owner.workspaceId) }))] }) }; }
+const targetListPath = '/api/gateway/extension-targets';
 const targetResolvePath = '/api/gateway/extension-targets/resolve';
 const hostResolvePath = '/api/gateway/extension-hosts/resolve';
 const inventoryPath = '/api/gateway/extension-installations/inventory';
 const ownerA = workspaceId => ({ gatewayId: targetA.gatewayId, workspaceId });
 function targetReply(payload, capabilities = fullCapabilities) {
   return { ...payload, backend_id: payload.gateway_id === targetA.gatewayId ? targetA.backendId : targetB.backendId, source: 'live', capabilities: { ...capabilities } };
+}
+function directoryReply(payload, capabilities = fullCapabilities) {
+  return { ...payload, source: 'live', targets: [targetReply(payload, capabilities)] };
 }
 function hostReply(payload) { return { ...payload, source: 'live', channel_state: 'available', runtime: { commit: pinnedUpstreamCommit } }; }
 function inventoryReply(payload) {
@@ -420,6 +428,7 @@ function inventoryReply(payload) {
 const scannedRequests = () => requests.map(([path, options]) => ({ path, method: options.method, body: JSON.parse(options.body) }));
 function scanResponse(path, options) {
   const payload = JSON.parse(options.body);
+  if (path === targetListPath) return directoryReply(payload);
   if (path === targetResolvePath) return targetReply(payload);
   if (path === hostResolvePath) return hostReply(payload);
   if (path === inventoryPath) return inventoryReply(payload);
@@ -524,15 +533,150 @@ for (const invalid of ['protocol', 'gateway', 'backend', 'order', 'source', 'cap
   receipt.scans.push({ name: '拒绝完整组-' + invalid, requests: scannedRequests() });
 });
 
-test('真实scanner前置目标授权拒绝保留原错误，不回退宿主发现；纯Web根零请求', async () => {
+test('真实scanner前置目标授权拒绝保留原错误，不回退宿主发现或空根目录', async () => {
   requests.length = 0;
   const denied = new Error('extension targets forbidden: original-authorization-request');
   request = async () => { throw denied; };
   await expect(scan(context([ownerA('a1')]))).rejects.toBe(denied);
   expect(requests.map(([path]) => path)).toEqual([targetResolvePath]);
+  receipt.checks.push('目标授权失败保留原错误，不借宿主管理权或空根目录回退');
+});
+
+test('空根scanner从页面入口目录绑定唯一域，browser和hybrid运行原Web资格而Node-only明确诊断', async () => {
+  requests.length = 0; scanWarnings.length = 0;
+  const opens = [], sockets = [], originals = Object.fromEntries(['location', 'fetch', 'WebSocket'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const entries = [
+    extension(targetB, '1.0.0', { identifier: id('probe.browser'), name: 'browser', main: undefined, browser: './browser.js', extensionKind: ['web'] }),
+    extension(targetB, '1.0.0', { identifier: id('probe.hybrid'), name: 'hybrid', browser: './browser.js', extensionKind: ['workspace', 'web'] }),
+    extension(targetB, '1.0.0', { identifier: id('probe.node-only'), name: 'node-only', extensionKind: ['workspace'] }),
+  ];
+  const native = payload => ({ ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', target_platform: 'linux-x64',
+    extensions: entries.map(value => ({ source: 'profile', extension_key: value.identifier.value + '-1.0.0', is_valid: true,
+      validations: [], description: JSON.parse(JSON.stringify(value)) })) } });
+  // HTTP和WebSocket字节是具名边界；扫描、原资格校验、包位置绑定及Tracker均执行生产算法。
+  class QualificationSocket extends EventTarget {
+    constructor(url) {
+      super(); sockets.push(this); expect(new URL(url).pathname).toBe('/api/gateway/extension-web-hosts/channel');
+      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+    }
+    send(data) {
+      const payload = JSON.parse(data); opens.push(payload);
+      const inventory = native(payload).inventory;
+      inventory.extensions = payload.extension_keys.map(key => inventory.extensions.find(entry => entry.extension_key === key));
+      const value = { ...payload, request_id: 'empty-web-request', client_id: 'empty-web-client', generation: 'empty-web-generation', inventory,
+        context: { os: 'linux', remote_settings: { resource_uri: 'boxteam://profile/settings' },
+          workspace: { id: 'empty-workspace', name: 'Empty', folders: [] } } };
+      queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) })));
+    }
+    close() { this.dispatchEvent(new Event('close')); }
+  }
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { href: 'http://entry-gateway.test/' } });
+  Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: QualificationSocket });
+  globalThis.fetch = async url => {
+    expect(new URL(url).pathname).toBe('/api/gateway/auth/local-credential');
+    return new Response(JSON.stringify({ data: { token: 'qualification-boundary-token' } }));
+  };
+  request = async (path, options) => {
+    const payload = JSON.parse(options.body);
+    if (path === targetListPath) return directoryReply(payload);
+    if (path === inventoryPath) return native(payload);
+    throw new Error('空根不能进入Node或按工作区发现入口：' + path);
+  };
+  try {
+    const snapshot = await scan(context([])), [view] = snapshot.views;
+    expect(scannedRequests()).toEqual([
+      { path: targetListPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId } },
+      { path: inventoryPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId } },
+    ]);
+    expect(view.installationTarget).toEqual(targetA); expect(view.workspaceIds).toEqual([]); expect(view.nodeRuntime).toBeUndefined();
+    expect(snapshot.extensions).toHaveLength(3);
+    expect(snapshot.extensions.every(value => value.installationTarget.gatewayId === targetA.gatewayId)).toBe(true);
+    expect(opens).toEqual([{ protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId,
+      workspace_ids: [], view_id: 'default', profile_id: 'native-default', extension_keys: ['probe.browser-1.0.0', 'probe.hybrid-1.0.0'] }]);
+    expect(sockets).toHaveLength(1); expect(scanWarnings).toHaveLength(1);
+    expect(scanWarnings[0]).toContain('probe.node-only'); expect(scanWarnings[0]).toMatch(/零根.*运行宿主/);
+    const registry = new m.ExtensionDescriptionRegistry(reader, snapshot.extensions, true), running = tracker(registry, scanKinds);
+    try {
+      running.setRemoteViews(snapshot.views); running.initializeRunningLocation([], snapshot.extensions);
+      expect(running.remoteRunningLocations).toEqual([]); expect(running.targetWebRunningLocations).toHaveLength(1);
+      expect(running.targetWebRunningLocations[0].workspaceIds).toEqual([]);
+      for (const value of snapshot.extensions) {
+        if (value.name === 'node-only') expect(running.getRunningLocation(value)).toBeNull();
+        else {
+          expect(running.getRunningLocation(value).equals(running.targetWebRunningLocations[0])).toBe(true);
+          expect(value.extensionLocation.toString()).toContain('/api/gateway/extension-packages/content/gateway-a/');
+        }
+      }
+    } finally { registry.dispose(); }
+    receipt.scans.push({ name: '空根页面入口唯一域及原Web资格', requests: scannedRequests(), opens, warnings: [...scanWarnings] });
+  } finally {
+    scanLifetime.clear();
+    for (const [name, descriptor] of Object.entries(originals)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+    }
+  }
+});
+
+test('空根仅安装权限保留空view，目录之后零库存及零宿主准入', async () => {
+  requests.length = 0; scanWarnings.length = 0;
+  request = async (path, options) => {
+    if (path !== targetListPath) throw new Error('仅安装权限空根不得读取启动库存或进入宿主');
+    return directoryReply(JSON.parse(options.body), installationOnly);
+  };
+  const snapshot = await scan(context([]));
+  expect(snapshot).toEqual({ views: [{ installationTarget: targetA, viewId: 'default', workspaceIds: [], capabilities: installationOnly }], extensions: [] });
+  expect(scannedRequests()).toEqual([{ path: targetListPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId } }]);
+  expect(scanWarnings).toEqual([]);
+  const registry = new m.ExtensionDescriptionRegistry(reader, [], true), running = tracker(registry);
+  try {
+    running.setRemoteViews(snapshot.views); running.initializeRunningLocation([], snapshot.extensions);
+    expect(running.remoteRunningLocations).toEqual([]); expect(running.targetWebRunningLocations).toEqual([]);
+  } finally { registry.dispose(); }
+  receipt.scans.push({ name: '空根仅安装权限', requests: scannedRequests(), views: snapshot.views });
+});
+
+test('空根合法无管理组件目录明确诊断，零库存或宿主请求且返回空目标清单', async () => {
+  requests.length = 0; scanWarnings.length = 0;
+  request = async (path, options) => {
+    if (path !== targetListPath) throw new Error('无管理组件不能继续库存或宿主入口');
+    const reply = directoryReply(JSON.parse(options.body)); reply.targets = []; return reply;
+  };
+  expect(await scan(context([]))).toEqual({ views: [], extensions: [] });
+  expect(scannedRequests()).toEqual([{ path: targetListPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId } }]);
+  expect(scanWarnings).toHaveLength(1); expect(scanWarnings[0]).toMatch(/扩展|目标|安装/);
+  receipt.scans.push({ name: '空根合法无管理组件', requests: scannedRequests(), warnings: [...scanWarnings] });
+});
+
+for (const invalid of ['multiple', 'protocol', 'gateway', 'source', 'target-protocol', 'target-gateway', 'target-source', 'backend', 'capabilities', 'missing-capabilities', 'denied']) test(`空根目录${invalid}拒绝，不回退工作区或管理标题目标`, async () => {
   requests.length = 0;
-  expect(await scan(context([]))).toEqual({ views: [], extensions: [] }); expect(requests).toEqual([]);
-  receipt.checks.push('目标授权失败保留原错误，不借宿主管理权回退；纯Web根不做目标请求');
+  request = async (path, options) => {
+    if (path !== targetListPath) throw new Error('非法空根目录不能继续其它入口');
+    const reply = directoryReply(JSON.parse(options.body)), target = reply.targets[0];
+    if (invalid === 'multiple') reply.targets.push({ ...target, backend_id: targetB.backendId });
+    if (invalid === 'protocol') reply.protocol_version = 2;
+    if (invalid === 'gateway') reply.gateway_id = targetB.gatewayId;
+    if (invalid === 'source') reply.source = 'cached';
+    if (invalid === 'target-protocol') target.protocol_version = 2;
+    if (invalid === 'target-gateway') target.gateway_id = targetB.gatewayId;
+    if (invalid === 'target-source') target.source = 'cached';
+    if (invalid === 'backend') target.backend_id = '';
+    if (invalid === 'capabilities') target.capabilities = { installation_manage: true, host_manage: 'true' };
+    if (invalid === 'missing-capabilities') delete target.capabilities;
+    if (invalid === 'denied') target.capabilities = { installation_manage: false, host_manage: false };
+    return reply;
+  };
+  await expect(scan(context([]))).rejects.toThrow();
+  expect(scannedRequests()).toEqual([{ path: targetListPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId } }]);
+  receipt.scans.push({ name: '空根拒绝-' + invalid, requests: scannedRequests() });
+});
+
+for (const status of ['offline', 403, 503]) test(`空根目录${status}保留原错误，零库存和零Node解析`, async () => {
+  requests.length = 0;
+  const error = Object.assign(new Error('empty directory ' + status + ': original-entry-request'), { status });
+  request = async () => { throw error; };
+  await expect(scan(context([]))).rejects.toBe(error);
+  expect(scannedRequests()).toEqual([{ path: targetListPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId } }]);
+  receipt.checks.push('空根目录' + status + '不吞成无组件目录，不回退其它Gateway、工作区或Node宿主');
 });
 
 test('原 CommandsRegistry 单入口按编辑器／原host冻结调用，dispose仅撤自己的generation', async () => {
@@ -690,5 +834,5 @@ afterAll(async () => {
     const after = await fingerprint(), drift = sourcePaths.filter(path => fingerprints[path] !== after[path]);
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ ...receipt, fingerprints, fingerprintsAfter: after, drift }, null, 2));
     if (drift.length) throw new Error('验证期间源码改变：' + drift.join(', '));
-  } finally { delete globalThis.__extensionInventoryBoundary; await run.close(); }
+  } finally { scanLifetime.dispose(); delete globalThis.__extensionInventoryBoundary; await run.close(); }
 });

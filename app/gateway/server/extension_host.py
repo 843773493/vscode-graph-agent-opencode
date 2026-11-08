@@ -254,12 +254,15 @@ async def list_extension_targets(
                     raise ValueError("远端安装域目录不属于原 Gateway 或协议")
                 return result
             capabilities = _check_inventory_permission(request, auth)
-            owner = management_owner(request)
             _check_inventory_access(request, auth, access, [], capabilities)
             if access is not None:
                 expires_at = _users(request).expires_at(access)
                 if expires_at is None or datetime.fromisoformat(expires_at) <= datetime.now(UTC):
                     raise PermissionError("扩展目标客户端租约已过期")
+            if request.app.state.extension_management is None:
+                return APIResponse(data=ExtensionTargetListDTO(protocol_version=payload.protocol_version,
+                    gateway_id=payload.gateway_id, targets=[]), request_id=request_id)
+            owner = management_owner(request)
             target = ExtensionTargetDTO(protocol_version=payload.protocol_version, gateway_id=payload.gateway_id,
                 backend_id=owner.backend_id, capabilities=ExtensionTargetCapabilitiesDTO(
                     installation_manage=capabilities[0], host_manage=capabilities[1]))

@@ -254,6 +254,32 @@ def test_target_directory_uses_gateway_owner_without_backend_identity(inventory_
     assert requests == [] and native_control.calls == [] and h.calls == []
 
 
+def test_target_directory_without_optional_component_is_live_empty(inventory_proxy, native_control):
+    h, requests, _ = inventory_proxy
+    h.application.state.extension_management = None
+    response = h.client.post("/api/gateway/extension-targets", json={"protocol_version": 1, "gateway_id": GATEWAY},
+        headers={"X-Local-Token": h.token, "X-Request-ID": "domain-not-configured"})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "domain-not-configured"
+    assert response.json()["data"] == {"protocol_version": 1, "gateway_id": GATEWAY, "source": "live", "targets": []}
+    assert requests == [] and native_control.calls == [] and h.calls == []
+
+
+def test_target_directory_configured_component_failure_is_not_empty(inventory_proxy, native_control, monkeypatch):
+    h, requests, _ = inventory_proxy
+
+    def fail():
+        raise RuntimeError("extension component exited: original failure")
+
+    monkeypatch.setattr(native_control.owner, "assert_healthy", fail)
+    response = h.client.post("/api/gateway/extension-targets", json={"protocol_version": 1, "gateway_id": GATEWAY},
+        headers={"X-Local-Token": h.token, "X-Request-ID": "domain-failed"})
+    assert response.status_code == 409, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "domain-failed"
+    assert "extension component exited: original failure" in response.text and "data" not in response.json()
+    assert requests == [] and native_control.calls == [] and h.calls == []
+
+
 def test_management_directory_preserves_remote_connections_without_workspaces(inventory_proxy) -> None:
     h, requests, _ = inventory_proxy
     h.application.include_router(workspaces.router)
@@ -271,8 +297,11 @@ def test_management_directory_preserves_remote_connections_without_workspaces(in
 
 
 @pytest.mark.parametrize("capability", [None, "discovery", "read", "extension_installation_manage", "extension_host_manage"])
-def test_target_directory_checks_native_management_permission_before_identity(inventory_proxy, capability: str | None) -> None:
+@pytest.mark.parametrize("configured", [False, True])
+def test_target_directory_checks_native_management_permission_before_identity(inventory_proxy, capability: str | None, configured: bool) -> None:
     h, requests, _ = inventory_proxy
+    if not configured:
+        h.application.state.extension_management = None
     h.policy.publish({"rules": [] if capability is None else [{"capability": capability,
         "effect": "allow", "principal_ref": principal_ref_for_gateway(PEER)}]})
     response = h.client.post("/api/gateway/extension-targets", json={"protocol_version": 1, "gateway_id": GATEWAY},

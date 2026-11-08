@@ -94,7 +94,7 @@ try {
     } });
     const folderUris = spec.targets.map(target => m.workspaceFileUri({ gatewayId: target.gatewayId, workspaceId: target.workspaceId }, target.root, target.root));
     const snapshot = await m.scanTargetExtensions({ getCompleteWorkspace: async () => ({ folders: folderUris.map(uri => ({ uri })) }) },
-      extension => extension.extensionKind ?? ['web'], lifetime);
+      extension => extension.extensionKind ?? ['web'], lifetime, spec.targets[0].gatewayId, logs);
     if (snapshot.views.length !== 2 || snapshot.extensions.some(extension => extension.main)) throw new Error('目标库存没有得到双 Web-only 实例');
     const errors = [], calls = [], notifications = { error: error => errors.push(String(error)) }, labels = { getWorkspaceLabel: workspace => workspace.name ?? workspace.id };
     const product = { version: spec.version, commit: spec.commit, nameLong: 'Worker probe', urlProtocol: 'boxteam', quality: 'stable' };

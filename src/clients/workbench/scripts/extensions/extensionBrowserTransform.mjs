@@ -17,6 +17,7 @@ export function transformExtensionBrowser(root, path, source, replaceOnce) {
   if (path === join(root, 'upstream', extensionBrowserSourcePaths[1])) return transformInstallationActions(root, path, source, replaceOnce);
   if (path !== join(root, 'upstream', extensionBrowserSourcePaths[0])) return source;
   let contents = `import { scanTargetExtensions } from ${JSON.stringify(join(root, 'src/extensions/inventory.js'))};
+import { browserGatewayId } from ${JSON.stringify(join(root, '../web/src/hooks/settings/browserUiSettings.js'))};
 import { TargetExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/targetHost.js'))};
 import { TargetWebExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/webHost.js'))};
 import { DisposableStore } from '../../../../base/common/lifecycle.js';\n` + source;
@@ -34,7 +35,8 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';\n` + sou
   contents = replaceOnce(contents, contents.slice(resolveStart, resolveEnd), `
   private async _resolveExtensionsDefault(emitter: AsyncIterableEmitter<ResolvedExtensions>) {
     const [localExtensions, inventory] = await Promise.all([this._scanWebExtensions(),
-      scanTargetExtensions(this._workspaceContext, extension => this._manifestProperties.getExtensionKind(extension), this._targetExtensionLifetime)]);
+      browserGatewayId(0).then(gatewayId => scanTargetExtensions(this._workspaceContext,
+        extension => this._manifestProperties.getExtensionKind(extension), this._targetExtensionLifetime, gatewayId, this._logService))]);
     this._setExtensionWorkspaceViews(inventory.views);
     emitter.emitOne(new RemoteExtensions(inventory.extensions));
     emitter.emitOne(new LocalExtensions(localExtensions));
