@@ -125,6 +125,7 @@ from app.services.infrastructure.mcp.invocation import (
 from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolCatalog,
     FrozenToolDefinition,
+    SkillToolSource,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
@@ -586,6 +587,14 @@ def create_my_deep_agent(
     direct_confirmation_names: set[str] = set()
     extension_policies: dict[str, object] = {}
     custom_metadata: dict[str, ToolMetadata] = {}
+    custom_specs_by_name = {
+        spec.name: spec for spec in parse_custom_tool_specs(
+            custom_tool_specs or [], context=f"agent {agent_id} 的 tools.custom",
+        )
+    }
+    custom_skill_bindings = {
+        name: spec.skills for name, spec in custom_specs_by_name.items() if spec.skills
+    }
     extension_tools: list[BaseTool] = []
     custom_tools: list[BaseTool] = []
     extension_invoker: BaseTool | None = None
@@ -666,13 +675,6 @@ def create_my_deep_agent(
             node_debug_service=node_debug_service,
             mcp_connection_service=mcp_connection_service,
         )
-        custom_specs_by_name = {
-            spec.name: spec
-            for spec in parse_custom_tool_specs(
-                custom_tool_specs or [],
-                context=f"agent {agent_id} 的 tools.custom",
-            )
-        }
         custom_tools = []
         for tool in custom_tool_bundle.tools:
             if tool.name in resolved_tool_denylist:
@@ -762,9 +764,24 @@ def create_my_deep_agent(
                 target, origin=origin, group_id=group_id,
             ),))[target.name].execution_enabled
 
+        effective_skill_identities = (
+            {entry.entry_identity for entry in resolved_skills.entries}
+            if resolved_skills is not None else set()
+        )
+        published_skill_sources = tuple(
+            SkillToolSource(
+                name=source.name, source_id=source.source_id,
+                entry_identity=source.entry_identity, display_uri=source.display_uri,
+                plugin=source.plugin, effective=source.entry_identity in effective_skill_identities,
+            )
+            for source in (resolved_skills.sources if resolved_skills is not None else ())
+        )
         publisher = McpCatalogResourcePublisher(
             registry=resource_registry, custom_tools=custom_tools,
             policy_resolver=extension_context_policies, custom_metadata=custom_metadata,
+            custom_skill_bindings=custom_skill_bindings,
+            skill_sources=published_skill_sources,
+            gateway_id=resolved_skills.gateway_id if resolved_skills is not None else None,
         )
         unsubscribe = mcp_catalog_owner.subscribe_publication(publisher.publish)
         try:

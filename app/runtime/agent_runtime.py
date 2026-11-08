@@ -44,13 +44,15 @@ from app.services.infrastructure.workspace_files.text_owner import (
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
-    from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from app.agents.graph_binding import GraphBindingStorePort
     from app.agents.skill_catalog import PublishedSkillCatalog
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
+    from app.services.infrastructure.rollout_context.checkpoint.saver import (
+        RolloutCheckpointSaver,
+    )
     from app.services.orchestration.resource_activation import (
         ResourceActivationCoordinator,
     )
@@ -70,7 +72,7 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_job_service(self) -> JobServiceProtocol: ...
 
-    def get_checkpointer(self) -> BaseCheckpointSaver: ...
+    def get_checkpointer(self) -> RolloutCheckpointSaver: ...
 
     def get_resource_navigation(self) -> ResourceNavigation: ...
 
@@ -191,32 +193,6 @@ def build_session_agent_runtime(
         owns_thread=owns_thread,
         workspace_root=workspace_root,
     )
-
-def get_workspace_custom_tool_skill_sources(
-    *,
-    agent_id: str,
-    config_service: ConfigService,
-) -> dict[str, list[str]]:
-    """从独立工具归属配置返回自定义扩展工具到 skill 名称的映射。
-
-    归因只来自 tools.custom[].skills 显式声明;SKILL.md frontmatter 的
-    allowed_tools 已按 OpenSpec 4.2 从 Skill context contract 移除。
-    """
-    custom_tool_names = get_configured_custom_tool_names(
-        agent_id=agent_id,
-        config_service=config_service,
-    )
-    tool_config = config_service.get_agent_tool_config(agent_id)
-    tool_to_skills: dict[str, list[str]] = {}
-    for spec in parse_custom_tool_specs(
-        tool_config.get("custom", []),
-        context=f"agent {agent_id} 的 tools.custom",
-    ):
-        if spec.name not in custom_tool_names or not spec.skills:
-            continue
-        tool_to_skills[spec.name] = list(spec.skills)
-    return tool_to_skills
-
 
 def get_configured_custom_tool_names(
     *,

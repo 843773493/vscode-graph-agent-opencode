@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -119,7 +119,7 @@ async def process_agent_event_stream(
     job_id: str,
     turn_id: str | None,
     agent_id: str,
-    custom_tool_skill_sources: dict[str, list[str]],
+    extension_skill_names_resolver: Callable[[str, str], Sequence[str]] | None,
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     session_changes_service: SessionChangesRecorderProtocol,
     workspace_root: Path,
@@ -151,6 +151,7 @@ async def process_agent_event_stream(
     tool_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
     message_stream_tool_call_ids_by_run_id: dict[str, str] = {}
     message_stream_tool_attempt_ids_by_run_id: dict[str, str] = {}
+    skill_names_by_run_id: dict[str, tuple[str, ...]] = {}
     last_tool_result_text = ""
     successful_tool_calls: list[SuccessfulToolCall] = []
     completed_custom_tool_names: list[str] = []
@@ -573,6 +574,7 @@ async def process_agent_event_stream(
                     tool_scopes_by_run_id[run_id] = execution_scope.child(f"tool-{run_id}")
                 tool_contexts_by_run_id[run_id] = display_context
                 tool_attempt_id = run_id
+                message_stream_tool_call_id: str | None = None
                 if message_stream_runtime is not None:
                     message_stream_tool_call_id = await message_stream_runtime.tool_call_for_callback(run_id)
                     message_stream_tool_call_ids_by_run_id[run_id] = message_stream_tool_call_id
@@ -580,7 +582,14 @@ async def process_agent_event_stream(
                         message_stream_tool_call_id, callback_run_id=run_id,
                     )
                     message_stream_tool_attempt_ids_by_run_id[run_id] = tool_attempt_id
-                skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
+                skill_names: tuple[str, ...] = ()
+                if (display_context.invocation_tool_name == EXTENSION_TOOL_INVOKER_NAME
+                        and extension_skill_names_resolver is not None
+                        and message_stream_tool_call_id is not None):
+                    skill_names = tuple(await asyncio.to_thread(
+                        extension_skill_names_resolver, message_stream_tool_call_id, display_context.tool_name,
+                    ))
+                skill_names_by_run_id[run_id] = skill_names
                 interrupt_state = SessionInterruptState.start_tool(
                     session_id, thread_id=thread_id,
                     run_id=run_id,
@@ -606,7 +615,7 @@ async def process_agent_event_stream(
                 if message_stream_runtime is not None:
                     await message_stream_runtime.start_tool(
                         tool_execution_id=tool_attempt_id,
-                        tool_call_id=message_stream_tool_call_id,
+                        tool_call_id=message_stream_tool_call_ids_by_run_id[run_id],
                         tool_name=display_context.tool_name,
                     )
                     activity_bindings: list[tuple[str, str, str | None]] = []
@@ -724,7 +733,7 @@ async def process_agent_event_stream(
                     )
                 result_text = extract_tool_result_text(output)
                 last_tool_result_text = result_text
-                skill_names = custom_tool_skill_sources.get(display_context.tool_name, [])
+                skill_names = skill_names_by_run_id.pop(run_id, ())
                 if effective_tool_status == "success":
                     successful_tool_calls.append(
                         SuccessfulToolCall(

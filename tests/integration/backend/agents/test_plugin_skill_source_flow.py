@@ -28,6 +28,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.trace import get_trace_payload
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -48,8 +49,15 @@ class ModelCase:
     artifacts: Path
     calls: list[str] = field(default_factory=list)
 
-    def plan(self, session_id: str, thread_id: str, *, load: bool) -> list[str]:
+    def plan(self, session_id: str, thread_id: str, *, load: bool, tool_id: str | None = None) -> list[str]:
         replies: list[tuple[dict[str, object], str]] = [({"role": "assistant", "content": "PLUGIN_SKILL_OK"}, "stop")]
+        if tool_id is not None:
+            replies.insert(0, ({"role": "assistant", "tool_calls": [{
+                "index": 0, "id": "call_plugin_tool", "type": "function",
+                "function": {"name": "invoke_extension_tool", "arguments": json.dumps({
+                    "tool_name": tool_id, "arguments": {},
+                })},
+            }]}, "tool_calls"))
         if load:
             replies.insert(0, ({"role": "assistant", "tool_calls": [{
                 "index": 0, "id": "call_plugin_skill", "type": "function",
@@ -88,7 +96,7 @@ def _configure_model(path: Path, gateway_url: str) -> None:
     for agent in config["agents"].values():
         if "model" in agent:
             agent["model"] = {"primary_provider": "plugin-skill", "fallback_providers": []}
-        agent["tools"]["custom"] = []
+        agent["tools"]["custom"] = [{"tool_id": "test_tool_2", "skills": [NAME]}]
     config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
         "url": gateway_url, "timeout_seconds": 5,
     }
@@ -235,7 +243,7 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
             slot, = [item for item in status["plugins"] if item["binding"]["plugin_id"] == PLUGIN]
             assert slot["declarative"] and slot["instance"] is None and slot["binding"]["enabled"]
             session_id, thread_id = await _session(client, workspace_id)
-            calls = plugin_model.plan(session_id, thread_id, load=True)
+            calls = plugin_model.plan(session_id, thread_id, load=True, tool_id="test_tool_2")
             plugin_model.control.arm(calls[0], "model.response_ready")
             job_id = await _send(client, workspace_id, session_id)
             try:
@@ -249,6 +257,22 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
             assert "Plugin source description" in plugin_model.request_text(calls[0])
             assert BODIES["1.0.0"].strip() in plugin_model.request_text(calls[1])
             assert BODIES["2.0.0"].strip() not in plugin_model.request_text(calls[1])
+            traces = await _data(await client.get(f"/api/v1/sessions/{session_id}/traces",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id}))
+            tool_events = [item for item in traces["items"] if item["type"] in {"tool_call_start", "tool_call_end"}
+                and get_trace_payload(item).get("tool_name") == "test_tool_2"]
+            assert [item["type"] for item in tool_events] == ["tool_call_start", "tool_call_end"]
+            assert all(item["skill_names"] == [NAME] for item in tool_events)
+            assert get_trace_payload(tool_events[-1])["result"] == "4568"
+            # 原调用缺少工具时，由原信封返回错误，归因读取不能抢先中止执行流。
+            unknown_session, unknown_thread = await _session(client, workspace_id)
+            plugin_model.plan(unknown_session, unknown_thread, load=False, tool_id="unknown_plugin_tool")
+            await _completed(client, workspace_id, await _send(client, workspace_id, unknown_session))
+            unknown_traces = await _data(await client.get(f"/api/v1/sessions/{unknown_session}/traces",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id}))
+            unknown_end, = [get_trace_payload(item) for item in unknown_traces["items"]
+                if item["type"] == "tool_call_end" and get_trace_payload(item).get("tool_name") == "unknown_plugin_tool"]
+            assert unknown_end["status"] == "error"
             new_session, new_thread = await _session(client, workspace_id)
             new_calls = plugin_model.plan(new_session, new_thread, load=True)
             await _completed(client, workspace_id, await _send(client, workspace_id, new_session))
@@ -275,6 +299,13 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
             cold = RolloutCheckpointSaver(workspace / ".boxteam/sessions")
             restored = cold.load_tool_call_skill_catalog(new_session, thread_id=new_thread,
                 tool_call_id="call_plugin_skill", model_call_id=new_calls[0], skill_name=NAME)
+            tool_catalog = cold.load_tool_call_extension_catalog(session_id, thread_id=thread_id,
+                tool_call_id="call_plugin_tool", model_call_id=calls[1], tool_ids=frozenset({"test_tool_2"}))
+            tool_definition, = tool_catalog.definitions
+            association, = tool_definition.skill_associations
+            assert association.status == "available" and association.skill_name == NAME
+            assert association.entry_identity == entry["entry_identity"]
+            assert association.display_uri == entry["display_uri"]
             frozen = restored.entries[NAME]
             assert frozen.body == BODIES["2.0.0"]
             assert frozen.plugin is not None and frozen.plugin.package_version == "2.0.0"

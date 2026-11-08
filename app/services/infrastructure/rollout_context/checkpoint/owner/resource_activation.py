@@ -171,6 +171,7 @@ class ResourceActivationOwnerMixin:
     def load_tool_call_extension_catalog(
         self, session_id: str, *, thread_id: str, tool_call_id: str,
         model_call_id: str | None = None, checkpoint_ns: str = "",
+        tool_ids: frozenset[str] | None = None,
     ) -> FrozenToolCatalog:
         """恢复原调用的完整目录，所有定义正文共用一次 rollout 读取快照。"""
         checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
@@ -185,7 +186,7 @@ class ResourceActivationOwnerMixin:
                 activation, lambda frozen, binding: body_store.read_payload(
                     snapshot=frozen, binding=binding, storage_owner=(session_id, thread_id),
                     checkpoint_ns=checkpoint_ns, read_snapshot=current,
-                ),
+                ), tool_ids=tool_ids,
             )
 
     def resolve_extension_dispatch_for_tool_call(

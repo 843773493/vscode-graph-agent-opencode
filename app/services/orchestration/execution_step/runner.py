@@ -58,7 +58,6 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.runtime.agent_runtime import (
     get_configured_custom_tool_names,
-    get_workspace_custom_tool_skill_sources,
 )
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
@@ -569,10 +568,6 @@ class StepRunner:
                     agent_id=resolved_agent_id,
                     config_service=self.ports.config_service,
                 )
-                custom_tool_skill_sources = get_workspace_custom_tool_skill_sources(
-                    agent_id=resolved_agent_id,
-                    config_service=self.ports.config_service,
-                )
             tool_selection = self.ports.tool_selection_store.snapshot(resolved_agent_id)
             execution_overrides = tool_selection.execution_overrides
             model_visibility_overrides = tool_selection.model_visibility_overrides
@@ -598,6 +593,22 @@ class StepRunner:
                 admission,
                 langgraph_thread_id=thread_id,
             )
+
+            def extension_skill_names_for_tool_call(tool_call_id: str, tool_id: str) -> tuple[str, ...]:
+                catalog = checkpointer.load_tool_call_extension_catalog(
+                    session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+                    checkpoint_ns=rollout_checkpoint_ns, tool_ids=frozenset({tool_id}),
+                )
+                if not catalog.definitions:
+                    # 未知工具由原调用入口报告；说明归因不改变执行错误。
+                    return ()
+                definition, = catalog.definitions
+                if definition.metadata.tool_id != tool_id:
+                    raise RuntimeError("工具 Skill 归因与原封存 tool_id 不一致")
+                return tuple(
+                    association.skill_name for association in definition.skill_associations
+                    if association.status == "available"
+                )
 
             # 获取 lease 留在 admission/stream 的取消闭包中；建图在飞时不得释放 Job 槽。
             runtime_acquire_task = asyncio.create_task(
@@ -664,7 +675,7 @@ class StepRunner:
                 turn_id=turn_id,
                 config=config,
                 next_input_messages=next_input_messages,
-                custom_tool_skill_sources=custom_tool_skill_sources,
+                extension_skill_names_resolver=extension_skill_names_for_tool_call,
                 publish=event_publisher.publish,
                 session_changes_service=self.ports.session_changes_service,
                 workspace_root=self.ports.workspace_root,

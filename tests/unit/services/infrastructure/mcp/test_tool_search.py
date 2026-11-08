@@ -30,6 +30,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
+    PluginToolSource,
+    SkillToolSource,
+    ToolDefinition,
+    _tool_skill_associations,
     definition_resource_id,
     tool_catalog_from_activation,
 )
@@ -187,6 +191,178 @@ async def test_task_search_is_deterministic_cross_origin_and_keeps_hidden_schema
     assert definition["input_schema"]["required"] == ["run"]
     assert definition["input_schema"]["additionalProperties"] == {"type": "string"}
     assert json.loads(await tool.ainvoke({"query": "不存在的任务"}))["results"] == []
+
+
+async def test_custom_skill_association_is_published_frozen_and_returned_by_search(
+    catalog_runtime, guidance_prepare, discovery_tool_factory, extension_catalog_policy_resolver, registry_db,
+):
+    _owner, _factory, registry, _scope = catalog_runtime
+
+    def execute(text: str) -> str:
+        return text
+
+    custom = StructuredTool.from_function(execute, name="local_build", description="执行本地构建")
+    publisher = McpCatalogResourcePublisher(
+        registry=registry,
+        custom_tools=(custom,),
+        policy_resolver=extension_catalog_policy_resolver,
+        custom_skill_bindings={"local_build": ("Build Guide",), "missing_tool": ("Build Guide",)},
+        skill_sources=(SkillToolSource(
+            name="Build Guide", source_id="workspace-skills:v1",
+            entry_identity="workspace-skill:build-guide:v1",
+            display_uri="boxteam://workspace/test/resources/skills/Build%20Guide/SKILL.md",
+        ),),
+    )
+    publisher.publish(_owner.publication_snapshot())
+    _wire, frozen = guidance_prepare("skill-tool-association:freeze", boundary="turn")
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    restored = tool_catalog_from_activation(
+        frozen,
+        lambda snapshot, binding: saver.read_resource_activation_payload(
+            snapshot, binding, storage_owner=(session, thread),
+        ),
+    )
+    definition, = (item for item in restored.definitions if item.metadata.tool_id == "local_build")
+    assert [item.to_dict() for item in definition.skill_associations] == [{
+        "skill_name": "Build Guide", "tool_id": "local_build", "source_id": "workspace-skills:v1",
+        "entry_identity": "workspace-skill:build-guide:v1",
+        "display_uri": "boxteam://workspace/test/resources/skills/Build%20Guide/SKILL.md",
+        "status": "available",
+    }]
+
+    policies = {
+        item.metadata.tool_id: extension_catalog_policy_resolver((item.metadata,))[item.metadata.tool_id]
+        for item in restored.definitions
+    }
+    search = discovery_tool_factory(
+        catalog_resolver=lambda: restored, policy_resolver=lambda _metadata: policies,
+    )
+    result = json.loads(await search.ainvoke({"tool_ids": ["local_build"]}))
+    assert result["results"][0]["skill_names"] == ["Build Guide"]
+    assert result["results"][0]["skill_associations"] == [definition.skill_associations[0].to_dict()]
+    assert result["skill_associations"] == []
+    missing = json.loads(await search.ainvoke({"tool_ids": ["missing_tool"]}))
+    assert missing["skill_associations"] == [
+        {
+            "skill_name": "Build Guide", "tool_id": "missing_tool", "source_id": "workspace-skills:v1",
+            "entry_identity": "workspace-skill:build-guide:v1",
+            "display_uri": "boxteam://workspace/test/resources/skills/Build%20Guide/SKILL.md",
+            "status": "unavailable", "reason": "tool-not-in-published-catalog",
+        },
+    ]
+
+
+async def test_skill_associations_do_not_disclose_hidden_or_disabled_tool_names(
+    catalog_runtime, guidance_prepare, discovery_tool_factory, extension_catalog_policy_resolver, registry_db,
+):
+    owner, _factory, registry, _scope = catalog_runtime
+
+    def execute() -> str:
+        return "ok"
+
+    tools = tuple(StructuredTool.from_function(execute, name=name, description=name)
+        for name in ("hidden_skill_tool", "disabled_skill_tool", "visible_skill_tool"))
+    publisher = McpCatalogResourcePublisher(
+        registry=registry, custom_tools=tools, policy_resolver=extension_catalog_policy_resolver,
+        custom_skill_bindings={item.name: ("Private Guide",) for item in tools},
+        skill_sources=(SkillToolSource(name="Private Guide", source_id="workspace-skills:v1",
+            entry_identity="private-guide:v1",
+            display_uri="boxteam://workspace/test/resources/skills/Private%20Guide/SKILL.md"),),
+    )
+    publisher.publish(owner.publication_snapshot())
+    _wire, frozen = guidance_prepare("private-tool-association", boundary="turn")
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    catalog = tool_catalog_from_activation(frozen, lambda snapshot, binding: saver.read_resource_activation_payload(
+        snapshot, binding, storage_owner=(session, thread)))
+    resolver = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={
+        "execution_disabled": ["disabled_skill_tool"], "model_hidden": ["hidden_skill_tool"],
+    })
+    policies = {item.metadata.tool_id: resolver.resolve(item.metadata) for item in catalog.definitions}
+    search = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda _metadata: policies)
+    result = json.loads(await search.ainvoke({"query": "skill_tool"}))
+    assert [item["tool_id"] for item in result["results"]] == ["visible_skill_tool"]
+    assert result["skill_associations"] == []
+    assert "hidden_skill_tool" not in json.dumps(result)
+    assert "disabled_skill_tool" not in json.dumps(result)
+    assert result["results"][0]["skill_names"] == ["Private Guide"]
+
+
+def test_plugin_tool_association_requires_exact_source_and_schema_identity():
+    from app.agents.policy.tool_capability import ToolMetadata
+    from app.domain.itemized.hashing import canonical_json_bytes
+    from app.schemas.gateway.service_plugin import PluginToolBinding
+    from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
+    from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
+
+    tool_id = "mcp__browser__navigate"
+    schema = {"type": "object", "properties": {"url": {"type": "string"}}}
+    schema_hash = extension_schema_hash(schema)
+    plugin = PluginSkillSourceDTO(
+        package_id="browser-tools", plugin_id="browser", package_version="1.2.0",
+        package_digest="a" * 64, contribution_id="browser.skills", workspace_id=None,
+        tool_bindings=[PluginToolBinding(
+            tool_id=tool_id, service_id="browser-mcp", contract_version=1, schema_hash=schema_hash,
+        )],
+    )
+    source = SkillToolSource(
+        name="Browser Guide", source_id="gateway-skills:v1", entry_identity="browser-guide:v1",
+        display_uri="boxteam://gateway/test/resources/skills/Browser%20Guide/SKILL.md", plugin=plugin,
+    )
+    definition = ToolDefinition(
+        metadata=ToolMetadata(tool_id, "mcp", "tool", "browser"), schema_hash=schema_hash,
+        description="navigate", _input_schema_json=canonical_json_bytes(schema),
+    )
+
+    missing_source, = _tool_skill_associations(tool_id, definition, (source,), (), gateway_id="gateway-1")
+    assert (missing_source.status, missing_source.reason) == ("unavailable", "plugin-service-source-unverified")
+
+    exact_source = PluginToolSource(
+        gateway_id="gateway-1", package_id="browser-tools", plugin_id="browser", package_version="1.2.0",
+        package_digest="a" * 64, service_id="browser-mcp", workspace_id=None, contract_version=1,
+    )
+    verified_definition = ToolDefinition(
+        metadata=definition.metadata, schema_hash=schema_hash, description=definition.description,
+        _input_schema_json=definition._input_schema_json, plugin_tool_source=exact_source,
+    )
+    available, = _tool_skill_associations(tool_id, verified_definition, (source,), (), gateway_id="gateway-1")
+    assert (available.status, available.reason) == ("available", None)
+    assert available.tool_source == exact_source
+    deduplicated, = _tool_skill_associations(
+        tool_id, verified_definition, (source,), ("Browser Guide",), gateway_id="gateway-1",
+    )
+    assert deduplicated.status == "available"
+
+    for invalid_source in (
+        PluginToolSource(**{**exact_source.to_dict(), "gateway_id": "other-gateway"}),
+        PluginToolSource(**{**exact_source.to_dict(), "package_digest": "b" * 64}),
+        PluginToolSource(**{**exact_source.to_dict(), "service_id": "other-service"}),
+        PluginToolSource(**{**exact_source.to_dict(), "contract_version": 2}),
+    ):
+        invalid_definition = ToolDefinition(
+            metadata=definition.metadata, schema_hash=schema_hash, description=definition.description,
+            _input_schema_json=definition._input_schema_json, plugin_tool_source=invalid_source,
+        )
+        unavailable, = _tool_skill_associations(
+            tool_id, invalid_definition, (source,), (), gateway_id="gateway-1",
+        )
+        assert (unavailable.status, unavailable.reason) in {
+            ("unavailable", "plugin-service-source-mismatch"),
+            ("unavailable", "tool-contract-version-unsupported"),
+        }
+
+    shadowed, = _tool_skill_associations(
+        tool_id, verified_definition, (replace(source, effective=False),), (), gateway_id="gateway-1",
+    )
+    assert (shadowed.status, shadowed.reason) == ("unavailable", "skill-source-not-effective")
+
+    wrong_schema_definition = ToolDefinition(
+        metadata=definition.metadata, schema_hash="sha256:" + "b" * 64, description=definition.description,
+        _input_schema_json=definition._input_schema_json, plugin_tool_source=exact_source,
+    )
+    mismatched, = _tool_skill_associations(tool_id, wrong_schema_definition, (source,), (), gateway_id="gateway-1")
+    assert (mismatched.status, mismatched.reason) == ("unavailable", "tool-schema-hash-mismatch")
 
 
 async def test_exact_ids_keep_order_errors_and_do_not_disclose_disabled_schema(discovery_case):

@@ -6,7 +6,10 @@ from collections.abc import Mapping, Sequence
 
 from app.agents.policy.tool_capability import ToolCapabilityPolicy
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.services.infrastructure.mcp.tool_definitions import ToolDefinition
+from app.services.infrastructure.mcp.tool_definitions import (
+    SkillToolAssociation,
+    ToolDefinition,
+)
 
 MAX_NAVIGATION_GROUPS = 8
 MAX_NAVIGATION_LABEL_LENGTH = 80
@@ -21,6 +24,7 @@ def _label(value: str, limit: int) -> str:
 def extension_tool_guidance(
     definitions: Sequence[ToolDefinition],
     policies: Mapping[str, ToolCapabilityPolicy],
+    *, skill_associations: Sequence[SkillToolAssociation] = (),
 ) -> str:
     """软隐藏只留分组导航；硬隐藏和执行禁用不投递名称、描述或契约。
 
@@ -45,13 +49,19 @@ def extension_tool_guidance(
     ]
     automatic = [
         {"tool_name": definition.metadata.tool_id, **definition.payload, "schema_hash": definition.schema_hash,
+         **({"skill_names": [association.skill_name for association in definition.skill_associations
+                             if association.status == "available"]}
+            if any(association.status == "available" for association in definition.skill_associations) else {}),
          **({"readiness": definition.readiness, "execution_ready": False,
              "next_step": "先在工作区连接管理入口连接，再在允许的激活边界重新发现。"}
             if definition.readiness != "ready" else {})}
         for definition in discoverable if policies[definition.metadata.tool_id].model_visible
     ]
-    return canonical_json_bytes({
+    payload: dict[str, object] = {
         "discovery": "使用 search_tools(query=任务) 或 search_tools(tool_ids=[精确工具ID]) 获取完整定义；通过 invoke_extension_tool 调用。Skill 正文仍须由 skill_load 激活。",
         "navigation": navigation, "additional_groups": max(0, len(groups) - len(navigation)),
         "automatic_definitions": automatic,
-    }).decode("utf-8")
+    }
+    if skill_associations:
+        payload["skill_associations"] = [association.to_dict() for association in skill_associations]
+    return canonical_json_bytes(payload).decode("utf-8")

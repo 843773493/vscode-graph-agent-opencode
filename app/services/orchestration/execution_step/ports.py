@@ -11,8 +11,6 @@ from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
 
 if TYPE_CHECKING:
-    from langgraph.checkpoint.base import BaseCheckpointSaver
-
     from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
     from app.abstractions.job_event_bus import JobEventBusProtocol
     from app.abstractions.session_changes import SessionChangesRecorderProtocol
@@ -25,6 +23,9 @@ if TYPE_CHECKING:
         ExternalResourceLeaseLedger,
     )
     from app.services.infrastructure.message_stream_store import MessageStreamStore
+    from app.services.infrastructure.rollout_context.checkpoint.saver import (
+        RolloutCheckpointSaver,
+    )
     from app.services.orchestration.execution_step.approval import ToolApprovalService
     from app.services.orchestration.resource_activation import (
         ResourceActivationCoordinator,
@@ -71,7 +72,7 @@ class StepExecutionPorts:
     # 映射到会话节点内的绝对路径，保证控制事实与其它会话数据聚合在同一
     # .boxteam/sessions 会话节点下；测试可用显式实现替换。
     control_inbox_state_path: Callable[[str, str], Path]
-    checkpointer_provider: Callable[[], BaseCheckpointSaver]
+    checkpointer_provider: Callable[[], RolloutCheckpointSaver]
     session_service_provider: Callable[[], SessionLookupProtocol]
     tool_approvals: ToolApprovalService
     external_resource_leases: ExternalResourceLeaseLedger | None = None

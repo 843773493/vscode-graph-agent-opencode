@@ -74,7 +74,7 @@ async def test_partial_patch_keeps_published_file_in_changeset(text_mutations_fa
 
     result = await process_agent_event_stream(agent=PatchAgent(), input_payload={"messages": []}, config={},
         session_id=session.session_id, thread_id=session.thread_id, job_id="job_partial_patch", turn_id="job_partial_patch", agent_id="default",
-        custom_tool_skill_sources={}, publish=publish, session_changes_service=changes, workspace_root=root)
+        extension_skill_names_resolver=None, publish=publish, session_changes_service=changes, workspace_root=root)
     assert receipt["effect"] == "partial" and receipt["status"] == "error"
     assert [item["state"] for item in receipt["files"]] == ["published", "not_published", "not_attempted"]
     assert (root / "src/patch-first.txt").read_bytes() == b"first"
@@ -114,7 +114,7 @@ async def test_changeset_uses_owner_postimage_when_later_writer_precedes_tool_ev
 
     await process_agent_event_stream(agent=DelayedToolEvent(), input_payload={"messages": []}, config={},
         session_id=session.session_id, thread_id=session.thread_id, job_id="job_first", turn_id="job_first", agent_id="default",
-        custom_tool_skill_sources={}, publish=publish, session_changes_service=changes, workspace_root=root)
+        extension_skill_names_resolver=None, publish=publish, session_changes_service=changes, workspace_root=root)
     changed, = (await changes.get_changeset(session_id=session.session_id, changeset_id="all")).files
     assert changed.file_path == receipt["files"][0]["path"]
     assert changed.after_preview == "first" and "+first" in changed.diff_text and "+later" not in changed.diff_text
@@ -153,7 +153,7 @@ async def test_unknown_non_utf8_postimage_is_visible_without_fabricated_changese
 
     result = await process_agent_event_stream(agent=UnknownToolEvent(), input_payload={"messages": []}, config={},
         session_id=session.session_id, thread_id=session.thread_id, job_id="job_unknown", turn_id="job_unknown", agent_id="default",
-        custom_tool_skill_sources={}, publish=publish, session_changes_service=changes, workspace_root=root)
+        extension_skill_names_resolver=None, publish=publish, session_changes_service=changes, workspace_root=root)
     assert result.successful_tool_calls == ()
     end = next(payload for _, payload in events if "failed" in payload)
     assert end["failed"] and end["status"] == "error" and "unknown" in end["result"]

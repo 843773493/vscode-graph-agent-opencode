@@ -56,7 +56,7 @@ async def test_tool_error_closes_activity_without_fabricating_a_result(
     result = await process_agent_event_stream(
         agent=FakeAgent(events, tool_invocations={"run_invalid": ("model_error", "call_invalid")}),
         input_payload={"messages": []}, config={}, session_id="ses_error", thread_id="thr_error",
-        job_id="job_error", turn_id="turn_error", agent_id="default", custom_tool_skill_sources={},
+        job_id="job_error", turn_id="turn_error", agent_id="default", extension_skill_names_resolver=None,
         publish=publish, session_changes_service=FakeSessionChangesService(), workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )

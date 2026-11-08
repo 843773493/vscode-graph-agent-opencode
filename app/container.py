@@ -9,7 +9,6 @@ from types import TracebackType
 from typing import Self
 
 from langchain_core.tools import BaseTool
-from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
@@ -231,7 +230,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         *,
         message_service: MessageService,
         session_service: SessionService,
-        checkpointer: BaseCheckpointSaver,
+        checkpointer: RolloutCheckpointSaver,
         terminal_resource_owner: TerminalResourceOwner,
         browser_resource_owner: BrowserResourceOwner,
         session_context_query_service: SessionContextQueryService,
@@ -274,7 +273,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
     def get_session_service(self) -> SessionService:
         return self._session_service
 
-    def get_checkpointer(self) -> BaseCheckpointSaver:
+    def get_checkpointer(self) -> RolloutCheckpointSaver:
         return self._checkpointer
 
     def get_resource_navigation(self) -> ResourceNavigation:

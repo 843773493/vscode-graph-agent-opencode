@@ -105,6 +105,11 @@ def _definition_result(
             "resource_id": definition.provenance.resource_id,
             "revision": definition.provenance.revision,
         },
+        "skill_names": [
+            association.skill_name for association in definition.skill_associations
+            if association.status == "available"
+        ],
+        "skill_associations": [association.to_dict() for association in definition.skill_associations],
     }
 
 
@@ -148,6 +153,11 @@ async def search_tool_catalog(
     result: dict[str, object] = {
         "catalog_revision": catalog.catalog_revision, "policy_revision": policy_revision,
         "results": [], "next_cursor": None,
+        "skill_associations": [
+            item.to_dict() for item in catalog.skill_associations
+            if item.tool_id not in definitions
+            and (tool_ids is None or item.tool_id in tool_ids)
+        ],
     }
     results: list[dict[str, object]] = []
     result["results"] = results
