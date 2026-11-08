@@ -5,6 +5,7 @@
 # 可修改内容
 
 - `plugin.jsonc`、声明资源路径和包内物理文件的校验。
+- Python `uv.lock`／Node `package-lock.json` 锁定依赖的目标准备及原子发布。
 - 插件包版本的不可变原子发布、库存、读取和引用冲突卸载。
 - 从原 Workspace 配置 owner 认证交接已提交绑定，并投影到原 runtime；随原 registry 提交协调完整工作区停止和恢复。
 
@@ -18,6 +19,8 @@
 
 - 只读取根 `plugin.jsonc`；插件、入口和 Skill 均由清单显式声明，禁止按目录名或递归扫描发现。
 - 入口和贡献资源路径按包根解析，发布前验证真实文件且拒绝越界或链接。
+- Python 依赖只能用标准 `pyproject.toml`＋`uv.lock`，准备到包内 `.venv`；Node 依赖只能用 `package.json`＋npm lock v3，准备到包内 `node_modules`。不重新解析锁、不执行包脚本；唯一原生例外是内建 node-gyp 对 `node-pty` 的显式构建。
+- Python 运行入口直接由包内 venv 解释器执行 `.py` 文件，避免移动原子 staging 目录时依赖 console-script shebang；Node 使用目标 Node 执行已发布包入口并从其祖先查找包内依赖。
 - 已发布包内容不可变；普通库存读取不启动插件或重新哈希包内容。
 - 配置投影只存在内存；Backend 单独重启及暂不可达不推断停用，完整停止仍由原运行时意图决定。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

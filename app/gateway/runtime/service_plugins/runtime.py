@@ -227,7 +227,9 @@ class GatewayPluginRuntime:
         entrypoint = slot.declaration.entrypoint
         assert entrypoint is not None
         if slot.declaration.runtime == "python":
-            executable = str(resolve_python_executable())
+            executable = str(self.packages.python_executable(
+                slot.binding.package_id, slot.binding.package_version, plugin_id=slot.binding.plugin_id,
+            ) or resolve_python_executable())
         else:
             executable = os.environ.get("BOXTEAM_NODE_BIN", "")
             if not executable or not Path(executable).is_absolute():

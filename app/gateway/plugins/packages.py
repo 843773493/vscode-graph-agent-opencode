@@ -9,7 +9,6 @@ import re
 import shutil
 import stat
 import tempfile
-import tomllib
 import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -20,6 +19,11 @@ import commentjson
 import portalocker
 
 from app.core.atomic_fs import fsync_directory, fsync_file
+from app.gateway.plugins.dependencies import (
+    has_python_lock,
+    prepare_dependencies,
+    validate_dependency_inputs,
+)
 from app.schemas.gateway.service_plugin import PluginPackageManifest
 
 _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -120,6 +124,20 @@ class PluginPackageStore:
     def package_root(self, package_id: str, version: str) -> Path:
         return self.get(package_id, version).root
 
+    def python_executable(self, package_id: str, version: str, *, plugin_id: str) -> Path | None:
+        installed = self.get(package_id, version)
+        plugin = next((item for item in installed.manifest.plugins if item.id == plugin_id), None)
+        if plugin is None or plugin.runtime != "python":
+            raise ValueError("Python 插件解释器查询必须属于精确 Python 插件")
+        if not has_python_lock(installed.root):
+            return None
+        executable = installed.root / ".venv" / (
+            "Scripts/python.exe" if os.name == "nt" else "bin/python"
+        )
+        if not executable.is_file():
+            raise RuntimeError("已发布 Python 插件缺少锁定依赖解释器")
+        return executable
+
     def uninstall(self, package_id: str, version: str, *, references: Iterable[str] = ()) -> None:
         _validate_identity(package_id, version)
         package_dir = self.root / package_id
@@ -157,6 +175,9 @@ class PluginPackageStore:
                 staged_manifest, staged_entries,
                 lambda relative: (staging / relative).read_bytes(),
             )
+            runtimes = {plugin.runtime for plugin in staged_manifest.plugins if plugin.runtime is not None}
+            validate_dependency_inputs(staging, runtimes=runtimes)
+            prepare_dependencies(staging, runtimes=runtimes)
             metadata = {"digest": digest, "manifest": manifest.model_dump(mode="json")}
             metadata_path = staging / ".boxteam-plugin.json"
             with metadata_path.open("x", encoding="utf-8") as stream:
@@ -201,6 +222,8 @@ def _zip_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
     folded_names: set[str] = set()
     for info in infos:
         name = _safe_member(info.filename)
+        if name.split("/", 1)[0] in {"node_modules", ".venv"} or name == ".npmrc":
+            raise ValueError(f"插件包不能携带目标生成依赖或 npm 凭据配置: {name}")
         if name.casefold() in folded_names:
             raise ValueError(f"插件 ZIP 含重复路径: {name}")
         mode = info.external_attr >> 16
@@ -223,6 +246,8 @@ def _directory_entries(source: Path) -> tuple[str, ...]:
     for item in source.rglob("*"):
         relative = item.relative_to(source).as_posix()
         _safe_member(relative)
+        if relative.split("/", 1)[0] in {"node_modules", ".venv"} or relative == ".npmrc":
+            raise ValueError(f"开发插件不能携带目标生成依赖或 npm 凭据配置: {relative}")
         if item.is_symlink():
             raise ValueError(f"插件目录不允许符号链接: {relative}")
         if item.is_file():
@@ -257,17 +282,6 @@ def _validate_package_files(manifest: PluginPackageManifest, names: Iterable[str
                 raise ValueError(f"Node 插件入口必须是 JavaScript 文件: {plugin.id}")
             if plugin.runtime == "python" and not entrypoint[0].endswith(".py"):
                 raise ValueError(f"Python 插件入口必须是 Python 文件: {plugin.id}")
-        if plugin.runtime is not None:
-            if plugin.runtime == "python" and ("requirements.txt" in available or "requirements.lock" in available or "uv.lock" in available or "poetry.lock" in available):
-                raise ValueError("插件依赖准备尚未实现，拒绝发布包含 Python 依赖锁文件的代码插件")
-            if plugin.runtime == "python" and "pyproject.toml" in available:
-                project = tomllib.loads(read_file("pyproject.toml").decode("utf-8")).get("project", {})
-                if project.get("dependencies") or project.get("optional-dependencies"):
-                    raise ValueError("插件依赖准备尚未实现，拒绝发布声明 Python 依赖的代码插件")
-            if plugin.runtime == "node" and "package.json" in available:
-                package_json = json.loads(read_file("package.json").decode("utf-8"))
-                if package_json.get("dependencies") or package_json.get("optionalDependencies"):
-                    raise ValueError("插件依赖准备尚未实现，拒绝发布声明 Node 依赖的代码插件")
         for skill in plugin.contributes.skills:
             skill_path = skill.path
             if not skill_path:
