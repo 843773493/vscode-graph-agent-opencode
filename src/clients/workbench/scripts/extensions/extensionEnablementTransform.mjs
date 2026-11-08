@@ -27,7 +27,8 @@ export function areSameEnablementIdentifiers(a: IExtensionIdentifier, b: IExtens
 }\n`;
   }
   if (path !== paths[2]) return source;
-  let contents = replaceOnce(source, 'import { StorageManager }', 'import { StorageManager, areSameEnablementIdentifiers }');
+  let contents = `import { targetExecutionKind } from ${JSON.stringify(join(root, 'src/extensions/targetContext.js'))};\n`
+    + replaceOnce(source, 'import { StorageManager }', 'import { StorageManager, areSameEnablementIdentifiers }');
   contents = replaceOnce(contents, 'ExtensionType, EXTENSIONS_', 'installationTargetKey, ExtensionType, EXTENSIONS_');
   contents = replaceOnce(contents, '\tprivate get hasWorkspace():', `
   private _enablementIdentifier(extension: IExtension): IExtensionIdentifier {
@@ -56,7 +57,8 @@ export function areSameEnablementIdentifiers(a: IExtensionIdentifier, b: IExtens
   contents = replaceOnce(contents, 'private _isDisabledByExtensionKind(extension: IExtension): boolean {', `private _isDisabledByExtensionKind(extension: IExtension): boolean {
     if (extension.installationTarget?.kind === 'backend') {
       const kinds = this.extensionManifestPropertiesService.getExtensionKind(extension.manifest);
-      return !(extension.manifest.main && kinds.includes('workspace') || extension.manifest.browser && kinds.includes('web'));
+      // 启用只核入口种类，实际 Node 可用性仍由原 running-location owner 判断。
+      return !targetExecutionKind(extension.manifest, kinds, true);
     }`);
   contents = replaceOnce(contents, '(this.extensionManagementServerService.getExtensionManagementServer(e) === this.extensionManagementServerService.getExtensionManagementServer(extension) || ((e.manifest.main || e.manifest.browser) && e.manifest.api === \'none\'))', `(this._sameInstallation(e, extension) || (e.installationTarget?.kind !== 'backend' && ((e.manifest.main || e.manifest.browser) && e.manifest.api === 'none')))`);
   contents = replaceOnce(contents, '!result.includes(dependent) && dependent.manifest.extensionDependencies?', '!result.includes(dependent) && this._sameInstallation(dependent, extension) && dependent.manifest.extensionDependencies?');

@@ -65,11 +65,11 @@ export function targetConfigurationRequest(context: TargetConfigurationContext):
     : { ...target, generation: context.connection.generation };
 }
 
-/** 使用原 manifest 的有序运行偏好；缺失 Node runtime 不阻止合法的 browser 扩展。 */
+/** 使用原 manifest 的有序运行偏好；无代码贡献按原 Web 资格加载，不要求入口脚本。 */
 export function targetExecutionKind(extension: Pick<IExtensionDescription, 'main' | 'browser'>, kinds: readonly ExtensionKind[], nodeAvailable: boolean): 'node' | 'web' | undefined {
   for (const kind of kinds) {
     if (kind === 'workspace' && extension.main && nodeAvailable) return 'node';
-    if (kind === 'web' && extension.browser) return 'web';
+    if (kind === 'web' && (extension.browser || !extension.main)) return 'web';
   }
   return undefined;
 }

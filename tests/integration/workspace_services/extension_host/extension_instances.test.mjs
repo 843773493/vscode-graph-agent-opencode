@@ -11,9 +11,11 @@ const run = await TestRunContext.fromTestFile('tests/integration/workspace_servi
 const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'extension-instances.fixture.mjs');
 const upstream = './src/clients/workbench/upstream/src/vs/';
 const sourcePaths = ['tests/integration/workspace_services/extension_host/extension_instances.test.mjs',
-  ...['src/extensions/inventory.ts', 'src/extensions/nativeInventory.ts', 'src/extensions/webConnection.ts',
+  ...['src/extensions/inventory.ts', 'src/extensions/nativeInventory.ts', 'src/extensions/webConnection.ts', 'src/extensions/targetContext.ts',
     'scripts/sourceTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
-    'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionOwnerTransform.mjs',
+    'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionOwnerTransform.mjs', 'scripts/extensions/extensionEnablementTransform.mjs',
+    'upstream/src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts',
+    'upstream/src/vs/workbench/services/extensions/common/abstractExtensionService.ts',
     'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocationTracker.ts',
     'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocation.ts'].map(path => 'src/clients/workbench/' + path)];
 const fingerprint = async () => Object.fromEntries(await Promise.all(sourcePaths.map(async path => [path, createHash('sha256').update(await readFile(path)).digest('hex')])));
@@ -31,6 +33,7 @@ export { ExtensionIdentifier, extensionInstanceKey, installationTargetKey } from
 export { ImplicitActivationEvents } from '${upstream}platform/extensionManagement/common/implicitActivationEvents.js';
 export { StorageManager, GlobalExtensionEnablementService, areSameEnablementIdentifiers } from '${upstream}platform/extensionManagement/common/extensionEnablementService.js';
 export { ExtensionEnablementService } from '${upstream}workbench/services/extensionManagement/browser/extensionEnablementService.js';
+export { checkEnabledAndProposedAPI } from '${upstream}workbench/services/extensions/common/abstractExtensionService.js';
 export { EnablementState, ExtensionInstallLocation } from '${upstream}workbench/services/extensionManagement/common/extensionManagement.js';
 export { MainThreadDocumentAndEditorStateComputer } from '${upstream}workbench/api/browser/mainThreadDocumentsAndEditors.js';
 export { MainThreadDocuments } from '${upstream}workbench/api/browser/mainThreadDocuments.js';
@@ -264,6 +267,9 @@ test('原Tracker按manifest有序偏好分配目标Web/Node，无Node运行时�
     { kinds: ['workspace'], node: false, expected: null },
     { kinds: ['web'], node: false, expected: 2, main: undefined },
     { kinds: ['workspace'], node: false, expected: null, browser: undefined },
+    { kinds: ['ui', 'workspace', 'web'], node: false, expected: 2, main: undefined, browser: undefined },
+    { kinds: ['ui', 'workspace', 'web'], node: true, expected: 2, main: undefined, browser: undefined },
+    { kinds: ['workspace'], node: true, expected: null, main: undefined, browser: undefined },
   ];
   for (const value of cases) {
     const item = extension(targetA, '1.0.0', { main: './node.js', browser: './browser.js', extensionKind: value.kinds,
@@ -300,16 +306,11 @@ test('原 enablement storage 保存目标与视图，A 禁用不改变 B 或原 
   workspace.dispose(); service.dispose(); receipt.checks.push('原 storage 序列化与禁用比较均消费稳定target/view，不剥离字段或串改另一个目标');
 });
 
-test('原 Workbench enablement 入口保留扫描无效、Node kind及同目标依赖启用行为', async () => {
+function workbenchEnablement(all) {
   const values = new Map(), storage = { onDidChangeValue: () => m.Event.None, get: (key, scope, fallback) => values.get(key + '@' + scope) ?? fallback,
     getBoolean: () => undefined, getObject: (_key, _scope, fallback) => fallback,
     store: (key, value, scope) => values.set(key + '@' + scope, value), remove: (key, scope) => values.delete(key + '@' + scope) };
   const global = new m.GlobalExtensionEnablementService(storage, { onDidInstallExtensions: m.Event.None });
-  const a = m.toExtension(extension(targetA, '1.0.0', { extensionKind: ['workspace'], enablementView: 'view-a' }));
-  const b = m.toExtension(extension(targetB, '2.0.0', { extensionKind: ['workspace'], enablementView: 'view-b' }));
-  const local = m.toExtension(extension(web, '3.0.0', { browser: './web.js', extensionKind: ['web'] }));
-  const dep = target => m.toExtension(extension(target, '1.0.0', { identifier: id('probe.dep'), name: 'dep', extensionKind: ['workspace'] }));
-  const depA = dep(targetA), depB = dep(targetB), all = [a, b, local, depA, depB];
   const webServer = {}, manager = { extensions: all, whenInitialized: async () => {}, onDidChangeExtensions: m.Event.None, dispose() {} };
   // 本片不运行控制清单轮询；扩展管理及计时器是外部边界，启用计算和写入仍走原 owner。
   class Enablement extends m.ExtensionEnablementService { loopCheckForMaliciousExtensions() {} }
@@ -320,6 +321,16 @@ test('原 Workbench enablement 入口保留扫描无效、Node kind及同目标�
     {}, {}, {}, {}, {}, {}, { isDisabledByBisect: () => false }, { isAllowed: () => true, onDidChangeAllowedExtensionsConfigValue: m.Event.None },
     { isWorkspaceTrusted: () => true }, {}, { getExtensionKind: manifest => manifest.extensionKind,
       getExtensionVirtualWorkspaceSupportType: () => false, canExecuteOnWeb: () => true }, {}, { createInstance: () => manager }, { debug() {} }, {});
+  return { service, global };
+}
+
+test('原 Workbench enablement 入口保留扫描无效、Node kind及同目标依赖启用行为', async () => {
+  const a = m.toExtension(extension(targetA, '1.0.0', { extensionKind: ['workspace'], enablementView: 'view-a' }));
+  const b = m.toExtension(extension(targetB, '2.0.0', { extensionKind: ['workspace'], enablementView: 'view-b' }));
+  const local = m.toExtension(extension(web, '3.0.0', { browser: './web.js', extensionKind: ['web'] }));
+  const dep = target => m.toExtension(extension(target, '1.0.0', { identifier: id('probe.dep'), name: 'dep', extensionKind: ['workspace'] }));
+  const depA = dep(targetA), depB = dep(targetB);
+  const { service, global } = workbenchEnablement([a, b, local, depA, depB]);
   const changed = [], listener = service.onEnablementChanged(extensions => changed.push(extensions));
   try {
     await Promise.resolve();
@@ -542,13 +553,20 @@ test('真实scanner前置目标授权拒绝保留原错误，不回退宿主发�
   receipt.checks.push('目标授权失败保留原错误，不借宿主管理权或空根目录回退');
 });
 
-test('空根scanner从页面入口目录绑定唯一域，browser和hybrid运行原Web资格而Node-only明确诊断', async () => {
+test('空根scanner让browser、hybrid及纯声明式贡献共用原Web资格，Node-only和不支持Web的kind不取得位置', async () => {
   requests.length = 0; scanWarnings.length = 0;
   const opens = [], sockets = [], originals = Object.fromEntries(['location', 'fetch', 'WebSocket'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const entries = [
     extension(targetB, '1.0.0', { identifier: id('probe.browser'), name: 'browser', main: undefined, browser: './browser.js', extensionKind: ['web'] }),
     extension(targetB, '1.0.0', { identifier: id('probe.hybrid'), name: 'hybrid', browser: './browser.js', extensionKind: ['workspace', 'web'] }),
     extension(targetB, '1.0.0', { identifier: id('probe.node-only'), name: 'node-only', extensionKind: ['workspace'] }),
+    ...[
+      { name: 'theme', contributes: { themes: [{ label: '目标主题', uiTheme: 'vs-dark', path: './theme.json' }] } },
+      { name: 'grammar', contributes: { grammars: [{ language: 'target-probe', scopeName: 'source.target-probe', path: './grammar.json' }] } },
+      { name: 'snippet', contributes: { snippets: [{ language: 'target-probe', path: './snippets.json' }] } },
+      { name: 'no-web', contributes: { themes: [{ label: '禁止Web的主题', uiTheme: 'vs-dark', path: './no-web.json' }] } },
+    ].map(value => extension(targetB, '1.0.0', { ...value, identifier: id('probe.' + value.name), main: undefined, browser: undefined,
+      activationEvents: [], extensionKind: value.name === 'no-web' ? ['workspace'] : ['ui', 'workspace', 'web'] })),
   ];
   const native = payload => ({ ...payload, profile_scope: 'default', inventory: { profile_id: 'native-default', target_platform: 'linux-x64',
     extensions: entries.map(value => ({ source: 'profile', extension_key: value.identifier.value + '-1.0.0', is_valid: true,
@@ -589,26 +607,45 @@ test('空根scanner从页面入口目录绑定唯一域，browser和hybrid运行
       { path: inventoryPath, method: 'POST', body: { protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId } },
     ]);
     expect(view.installationTarget).toEqual(targetA); expect(view.workspaceIds).toEqual([]); expect(view.nodeRuntime).toBeUndefined();
-    expect(snapshot.extensions).toHaveLength(3);
+    expect(snapshot.extensions).toHaveLength(7);
     expect(snapshot.extensions.every(value => value.installationTarget.gatewayId === targetA.gatewayId)).toBe(true);
     expect(opens).toEqual([{ protocol_version: 1, gateway_id: targetA.gatewayId, backend_id: targetA.backendId,
-      workspace_ids: [], view_id: 'default', profile_id: 'native-default', extension_keys: ['probe.browser-1.0.0', 'probe.hybrid-1.0.0'] }]);
+      workspace_ids: [], view_id: 'default', profile_id: 'native-default',
+      extension_keys: ['probe.browser-1.0.0', 'probe.hybrid-1.0.0', 'probe.theme-1.0.0', 'probe.grammar-1.0.0', 'probe.snippet-1.0.0'] }]);
     expect(sockets).toHaveLength(1); expect(scanWarnings).toHaveLength(1);
     expect(scanWarnings[0]).toContain('probe.node-only'); expect(scanWarnings[0]).toMatch(/零根.*运行宿主/);
-    const registry = new m.ExtensionDescriptionRegistry(reader, snapshot.extensions, true), running = tracker(registry, scanKinds);
+    const { service, global } = workbenchEnablement(snapshot.extensions.map(value => m.toExtension(value)));
+    await Promise.resolve();
+    const enabled = m.checkEnabledAndProposedAPI(new m.NullLogService(), service, { updateEnabledApiProposals() {} }, snapshot.extensions, false);
+    const registry = new m.ExtensionDescriptionRegistry(reader, [...enabled], true), running = tracker(registry, scanKinds);
     try {
-      running.setRemoteViews(snapshot.views); running.initializeRunningLocation([], snapshot.extensions);
+      expect(service.getEnablementStates(snapshot.extensions.map(value => m.toExtension(value))))
+        .toEqual([...Array(6).fill(m.EnablementState.EnabledGlobally), m.EnablementState.DisabledByExtensionKind]);
+      expect(enabled.map(value => value.name)).toEqual(['browser', 'hybrid', 'node-only', 'theme', 'grammar', 'snippet']);
+      running.setRemoteViews(snapshot.views); running.initializeRunningLocation([], enabled);
       expect(running.remoteRunningLocations).toEqual([]); expect(running.targetWebRunningLocations).toHaveLength(1);
       expect(running.targetWebRunningLocations[0].workspaceIds).toEqual([]);
       for (const value of snapshot.extensions) {
-        if (value.name === 'node-only') expect(running.getRunningLocation(value)).toBeNull();
-        else {
+        if (value.name === 'node-only' || value.name === 'no-web') {
+          expect(running.getRunningLocation(value)).toBeNull(); expect(value.extensionLocation.scheme).toBe('file');
+        } else {
           expect(running.getRunningLocation(value).equals(running.targetWebRunningLocations[0])).toBe(true);
-          expect(value.extensionLocation.toString()).toContain('/api/gateway/extension-packages/content/gateway-a/');
+          expect(value.extensionLocation.toString()).toBe(view.webHost.packageUri(value.extensionKey, value.identifier.value).toString());
+          expect(value.extensionLocation.toString()).toContain('/api/gateway/extension-packages/content/gateway-a/' + targetA.backendId
+            + '/native-default/default/empty-web-generation/' + value.extensionKey + '/' + value.identifier.value + '/');
         }
       }
-    } finally { registry.dispose(); }
-    receipt.scans.push({ name: '空根页面入口唯一域及原Web资格', requests: scannedRequests(), opens, warnings: [...scanWarnings] });
+      const contributions = new m.ExtensionDescriptionRegistry(reader, running.filterByExtensionHostKind(enabled, 2), true);
+      try {
+        expect(contributions.getWindowExtensionDescriptions().map(value => value.name)).toEqual(['browser', 'grammar', 'hybrid', 'snippet', 'theme']);
+        for (const name of ['theme', 'grammar', 'snippet']) {
+          const value = contributions.getExtensionDescription('probe.' + name, targetA);
+          expect(value.main).toBeUndefined(); expect(value.browser).toBeUndefined();
+          expect(value.contributes).toEqual(entries.find(entry => entry.name === name).contributes);
+        }
+      } finally { contributions.dispose(); }
+    } finally { registry.dispose(); service.dispose(); global.dispose(); }
+    receipt.scans.push({ name: '空根唯一域的原Web资格、纯声明式启用及窗口贡献', requests: scannedRequests(), opens, warnings: [...scanWarnings] });
   } finally {
     scanLifetime.clear();
     for (const [name, descriptor] of Object.entries(originals)) {
