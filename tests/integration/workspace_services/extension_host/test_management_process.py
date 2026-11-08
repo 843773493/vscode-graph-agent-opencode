@@ -18,12 +18,14 @@ import httpx
 import pytest
 
 from app.core.child_process import OwnedChildProcess
+from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.services.infrastructure.extension_host.configuration import native_path
 from app.services.infrastructure.extension_host.management import (
     NativeExtensionPublication,
     NativeFileRead,
 )
 from app.services.infrastructure.extension_host.package_files import publication_file
+from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -214,6 +216,55 @@ async def test_node_rejects_removed_configuration_operations_without_touching_fi
         assert set(frame) == {"error", "code"} and "不支持" in str(frame["error"])
         assert (await process.result({"method": "inventory"}))["extensions"] == []
         assert settings.read_bytes() == original and not (workspace_home / view_id).exists()
+
+
+async def test_crashed_management_cannot_rebuild_without_old_host_exit_proofs(
+    management_process: ManagementProcess, management_component: tuple[Path, Path],
+    native_vsix: Callable[[str, str, str], Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = management_process
+    installed = await process.result({"method": "install", "vsix_path": str(native_vsix("crash-held", "1.0.0", "retained-before-crash"))})
+    # 真实服务接受原引用后崩溃；不把测试登记的引用称为已运行宿主的退出验证。
+    reference = await process.client.post("/references", json={"method": "open-host",
+        "backend_id": process.service["backend_id"], "runtime_instance_id": process.service["runtime_instance_id"],
+        "generation": str(uuid4()), "capability": uuid4().hex})
+    reference.raise_for_status()
+    assert set(reference.json()) == {"result"}
+    record = process.directory / "service.json"
+    original = record.read_bytes()
+    package = process.directory / "extensions/boxteam-probe.crash-held-1.0.0/extension.js"
+    assert package.read_bytes() == b"retained-before-crash"
+    assert process.child.process is not None
+    process.child.process.kill()
+    async with asyncio.timeout(10):
+        assert await process.child.process.wait() != 0
+    await process.child.close()
+    assert process.child.state.exit_verified
+    executable, component = management_component
+    metadata = json.loads((component / "version.json").read_text())
+    runtime = NodeHostRuntime(executable, component / "extensionHostProcess.mjs",
+        metadata["commit"], metadata["version"], metadata["nodeVersion"])
+    monkeypatch.setattr("app.gateway.runtime.extension_management.get_gateway_local_token",
+        lambda: process.client.headers["X-Local-Token"])
+    outcomes = []
+    for _ in range(2):
+        candidate = GatewayExtensionManagement(backend_id=str(process.service["backend_id"]), runtime=runtime,
+            directory=process.directory, environment=os.environ, log_dir=process.directory / "candidate-logs",
+            logging_startup={"revision": "crash-proof", "level": "info", "pretty": False})
+        try:
+            with pytest.raises(RuntimeError, match="旧扩展实例.*退出证明") as rejected:
+                await candidate.start()
+            outcomes.append(str(rejected.value))
+            assert candidate.process is None and candidate.instance is None
+            assert record.read_bytes() == original and package.read_bytes() == b"retained-before-crash"
+        finally:
+            await candidate.close()
+    (process.context.artifacts_dir / "reconstruction.json").write_text(json.dumps({
+        "original_service": process.service, "original_reference": reference.json(), "installed": installed,
+        "rejections": outcomes, "management_exit": asdict(process.child.state),
+        "service_record_unchanged": record.read_bytes() == original, "package_preserved": package.read_text(),
+        "boundary": "真实Node原生安装与引用准入，随后真实kill及Gateway管理owner启动；未创建Web/Node运行实例，未验证全域退出或获准重建。",
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @pytest.mark.parametrize("body,status", [("{broken", 400), ('{"method":null}', 200)])

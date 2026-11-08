@@ -705,3 +705,27 @@ async def test_dead_service_rejects_requests_without_restarting(control: HttpCon
         await c.owner.request({"method": "inventory"})
     assert c.commands == []
     c.spawn.assert_not_called()
+
+
+async def test_dead_service_record_requires_all_host_exit_proofs_before_reconstruction(control: HttpControl) -> None:
+    c = control
+    record = c.owner.directory / "service.json"
+    original = record.read_bytes()
+    package = c.owner.directory / "extensions" / "retained-version" / "extension.js"
+    package.parent.mkdir(parents=True)
+    package.write_bytes(b"original-extension")
+    c.process.alive = False
+    for owner in (c.owner, GatewayExtensionManagement(backend_id=c.owner.backend_id, runtime=c.owner.runtime,
+        directory=c.owner.directory, environment={}, log_dir=c.owner.directory / "other-logs", logging_startup={})):
+        with pytest.raises(RuntimeError, match="旧扩展实例.*退出证明"):
+            await owner.start()
+        assert record.read_bytes() == original
+        assert package.read_bytes() == b"original-extension"
+        assert owner.process is None and owner.instance is None
+        with pytest.raises(RuntimeError, match="owner 已失败"):
+            await owner.start()
+    c.spawn.assert_not_called()
+    c.open_log.assert_not_called()
+    c.adopt_log.assert_not_called()
+    c.client_factory.assert_not_called()
+    assert c.requests == [] and c.events == []

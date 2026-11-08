@@ -159,8 +159,11 @@ class GatewayExtensionManagement:
         instance = ExtensionManagementInstance.model_validate(payload)
         instance.validate_target(backend_id=self.backend_id, runtime=self.runtime)
         if not AdoptedManagedProcess(instance.process_id).is_alive():
-            record.unlink()
-            return None
+            # 管理进程退出会丢失内存引用；其它 Backend 的 Node/Web 实例和文件读取仍可能存活。
+            # TODO(4.4)：由全部原运行 owner 提供同代实例与读取的退出证明后，才能解除隔离并重建。
+            raise RuntimeError("旧扩展实例与包读取尚无完整退出证明，拒绝重建或回收扩展管理安装域: "
+                f"backend_id={instance.backend_id}, runtime_instance_id={instance.runtime_instance_id}, "
+                f"process_id={instance.process_id}；须先由原运行 owner 停止并核实全部旧实例")
         self._client = httpx.AsyncClient(trust_env=False, timeout=self._operation_timeout)
         try:
             status = await self._health(instance)
