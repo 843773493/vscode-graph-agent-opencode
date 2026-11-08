@@ -36,7 +36,8 @@ import type { TargetConfigurationContext } from ${context};
     contents = section(contents, 'export class SettingsEditor2Input extends EditorInput {', 'const PreferencesEditorIcon =', `export class SettingsEditor2Input extends EditorInput {
   static readonly ID: string = 'workbench.input.settings2';
   readonly resource: URI;
-  readonly location: TargetSettingsLocation | undefined;
+  private settingsLocation: TargetSettingsLocation | undefined;
+  get location(): TargetSettingsLocation | undefined { return this.settingsLocation; }
   private readonly settingsModel: Settings2EditorModel | undefined;
   private readonly groupModels = new WeakMap<IInstantiationService, Settings2EditorModel>();
   private readonly writers = new Map<number, { pending(): boolean; save(): Promise<void>; revert(): Promise<void> }>();
@@ -44,7 +45,7 @@ import type { TargetConfigurationContext } from ${context};
   constructor(location: TargetSettingsLocation | undefined, private initialContext: TargetConfigurationContext | undefined,
     @IPreferencesService preferencesService: IPreferencesService) {
     super();
-    this.location = location && parseSettingsLocation(location);
+    this.settingsLocation = location && parseSettingsLocation(location);
     this.resource = URI.from({ scheme: Schemas.vscodeSettings, path: 'settingseditor',
       query: this.location ? settingsEditorIdentity(this.location) : '' });
     this.settingsModel = this.location ? undefined : preferencesService.createSettings2EditorModel();
@@ -52,12 +53,25 @@ import type { TargetConfigurationContext } from ${context};
 
   override get editorPaneScope(): EditorInput | undefined { return this.location ? this : undefined; }
 
+  bindSettingsTarget(location: TargetSettingsLocation, context: TargetConfigurationContext): void {
+    if (!this.location || settingsEditorIdentity(this.location) !== settingsEditorIdentity(location)) {
+      throw new Error('设置输入不能重新绑定其它目标或视图');
+    }
+    const changed = this.location.gateway_connection_id !== location.gateway_connection_id;
+    this.settingsLocation = parseSettingsLocation(location);
+    this._onDidChangeLabel.fire();
+    if (!changed) return;
+    this.initialContext = context;
+    this.invalidateEditorPaneScope();
+  }
+
   override async prepareEditorPane(parent: IInstantiationService, disposables: DisposableStore, token: CancellationToken): Promise<IInstantiationService> {
     if (!this.location) return parent;
+    const version = this.editorPaneScopeVersion;
     const initial = this.initialContext;
     this.initialContext = undefined;
     const child = await prepareSettingsPane(parent, this.location, initial, disposables, token);
-    if (token.isCancellationRequested || this.isDisposed()) throw new CancellationError();
+    if (token.isCancellationRequested || this.isDisposed() || this.editorPaneScopeVersion !== version) throw new CancellationError();
     const model = disposables.add(child.invokeFunction(accessor => accessor.get(IPreferencesService)).createSettings2EditorModel());
     this.groupModels.set(child, model);
     disposables.add(toDisposable(() => this.groupModels.delete(child)));
@@ -202,8 +216,12 @@ import { parseSettingsLocation, settingsHistoryLocation, prepareSettingsContext,
   }
   if (path === paths[3]) {
     contents = `import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { ConfirmResult, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { EditorInput } from '../../../common/editor/editorInput.js';
+import { SideBySideEditorInput } from '../../../common/editor/sideBySideEditorInput.js';
+import { FileEditorInput } from '../../files/browser/editors/fileEditorInput.js';
 import { ITargetSettingsContext } from ${scope};
-import { captureSettingsLocation } from ${editor};
+import { captureSettingsLocation, prepareSettingsContext, rebindSettingsFiles, settingsEditorIdentity } from ${editor};
 import { selectSettingsManagementTargetCommand, type ManagementTarget } from ${JSON.stringify(resolve(root, 'src/managementTarget.js'))};
 ` + contents;
     contents = replaceOnce(contents, 'export class SettingsEditor2 extends EditorPane {', `interface PendingSettingsUpdate {
@@ -214,11 +232,13 @@ import { selectSettingsManagementTargetCommand, type ManagementTarget } from ${J
 export class SettingsEditor2 extends EditorPane {`);
     contents = replaceOnce(contents, '\tprivate pendingSettingUpdate: { key: string; value: unknown; languageFilter: string | undefined } | null = null;', `  private readonly pendingSettingUpdates = new Map<string, PendingSettingsUpdate>();
   private pendingSettingWrite: Promise<void> | undefined;
-  private settingsWriterInput: SettingsEditor2Input | undefined;`);
+  private settingsWriterInput: SettingsEditor2Input | undefined;
+  private settingsTargetSelection = 0;`);
     contents = replaceOnce(contents, '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,', `\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
     @ITargetSettingsContext private readonly targetSettingsContext: ITargetSettingsContext,
     @ICommandService private readonly commandService: ICommandService,
-    @INotificationService private readonly notificationService: INotificationService,`);
+    @INotificationService private readonly notificationService: INotificationService,
+    @IFileDialogService private readonly fileDialogService: IFileDialogService,`);
     contents = replaceOnce(contents, 'const model = await this.input.resolve();', 'const model = await input.resolve(this.instantiationService);');
     contents = replaceOnce(contents, 'this.viewState = { settingsTarget: ConfigurationTarget.USER_LOCAL };', 'this.viewState = { settingsTarget: this.targetSettingsContext.target ? ConfigurationTarget.USER_REMOTE : ConfigurationTarget.USER_LOCAL };');
     contents = replaceOnce(contents, 'this.settingsTargetsWidget.settingsTarget = ConfigurationTarget.USER_LOCAL;', 'this.settingsTargetsWidget.settingsTarget = this.targetSettingsContext.target ? ConfigurationTarget.USER_REMOTE : ConfigurationTarget.USER_LOCAL;');
@@ -264,13 +284,68 @@ export class SettingsEditor2 extends EditorPane {`);
   }
 
   private async switchSettingsGateway(): Promise<void> {
-    await this.flushSettingsUpdates();
+    const selection = ++this.settingsTargetSelection, owner = this.input;
     const selected = await this.commandService.executeCommand<ManagementTarget | undefined>(selectSettingsManagementTargetCommand);
     if (!selected) return;
-    // TODO: 连接被删除并以新 ID 重建时，显式重选还需刷新同归属 Input/文件模型的传输引用。
-    const captured = await captureSettingsLocation(this.instantiationService, CancellationToken.None);
-    const next = this.instantiationService.createInstance(SettingsEditor2Input, captured.location, captured.context);
-    await this.group.openEditor(next, { pinned: true });
+    const captured = await captureSettingsLocation(this.instantiationService, CancellationToken.None, selected);
+    const identity = settingsEditorIdentity(captured.location);
+    const children = (input: EditorInput): EditorInput[] => input instanceof SideBySideEditorInput
+      ? [input, ...children(input.primary), ...children(input.secondary)] : [input];
+    const groups = this.editorGroupService.groups;
+    const opened = [...new Set(groups.flatMap(group => group.editors.flatMap(children)))];
+    const settings = opened.filter((input): input is SettingsEditor2Input => input instanceof SettingsEditor2Input
+      && input.location?.gateway_id === captured.location.gateway_id && input.location.backend_id === captured.location.backend_id
+      && input.location.profile_id === captured.location.profile_id);
+    const files = opened.filter((input): input is FileEditorInput => input instanceof FileEditorInput
+      && input.settingsLocation?.gateway_id === captured.location.gateway_id && input.settingsLocation.backend_id === captured.location.backend_id
+      && input.settingsLocation.profile_id === captured.location.profile_id);
+    const contexts = new Map([[identity, captured]]);
+    // 所有原视图先完成准备；任何一个失败都不改现存 Input、模型引用或路由。
+    for (const input of [...settings, ...files]) {
+      const existing = input instanceof SettingsEditor2Input ? input.location! : input.settingsLocation!;
+      const location = { ...existing, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
+      const key = settingsEditorIdentity(location);
+      if (existing.gateway_connection_id !== location.gateway_connection_id && !contexts.has(key)) {
+        contexts.set(key, { location, context: await prepareSettingsContext(location, new AbortController().signal) });
+      }
+    }
+    const affected = new Set<EditorInput>([...settings, ...files].filter(input =>
+      (input instanceof SettingsEditor2Input ? input.location : input.settingsLocation)?.gateway_connection_id !== captured.location.gateway_connection_id));
+    const settling = new Set(settings.filter(input => affected.has(input)));
+    if (owner instanceof SettingsEditor2Input && (!owner.location || settingsEditorIdentity(owner.location) !== identity
+      || owner.location.gateway_connection_id !== captured.location.gateway_connection_id)) settling.add(owner);
+    const isCurrentSelection = () => selection === this.settingsTargetSelection && owner === this.input && !owner?.isDisposed();
+    if (!isCurrentSelection()) return;
+    const dirty = [...settling].filter(input => input.isDirty());
+    if (dirty.length) {
+      // 重绑会释放旧 writer；先沿原保存确认处理草稿，不把旧队列静默改投新连接。
+      const confirmation = await this.fileDialogService.showSaveConfirm(dirty.map(input => input.getName()));
+      if (confirmation === ConfirmResult.CANCEL || !isCurrentSelection()) return;
+      await Promise.all(dirty.map(input => confirmation === ConfirmResult.SAVE ? input.save() : input.revert()));
+    }
+    if (!isCurrentSelection()) return;
+    if ([...settling].some(input => input.isDirty())) throw new Error('设置仍有未结清的修改，请重新确认保存或放弃后再切换目标。');
+    const views = groups.map(group => ({ group, input: group.activeEditor, viewState: group.activeEditorPane?.getViewState(),
+      options: group.activeEditorPane?.options })).filter(view => view.input && children(view.input).some(input => affected.has(input)));
+    const references = new DisposableStore();
+    try {
+      if (affected.size) references.add(rebindSettingsFiles(this.instantiationService, [...contexts.values()].map(prepared => prepared.context)));
+      const next = settings.find(input => this.group.editors.includes(input) && settingsEditorIdentity(input.location!) === identity)
+        ?? this.instantiationService.createInstance(SettingsEditor2Input, captured.location, captured.context);
+      for (const input of settings) {
+        const location = { ...input.location!, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
+        input.bindSettingsTarget(location, contexts.get(settingsEditorIdentity(location))?.context ?? captured.context);
+      }
+      for (const file of files) {
+        const location = { ...file.settingsLocation!, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
+        file.bindSettingsTarget(location, contexts.get(settingsEditorIdentity(location))?.context);
+      }
+      await Promise.all(views.filter(view => view.group !== this.group).map(view => view.group.openEditor(view.input!, {
+        ...view.options, viewState: view.viewState, preserveFocus: true,
+      })));
+      const current = views.find(view => view.group === this.group && view.input === next);
+      await this.group.openEditor(next, { pinned: true, viewState: current?.viewState });
+    } finally { references.dispose(); }
   }
 
   private notifySettingsDirty(): void {
@@ -280,7 +355,8 @@ export class SettingsEditor2 extends EditorPane {`);
   private async discardSettingsUpdates(): Promise<void> {
     this.settingFastUpdateDelayer.cancel();
     this.settingSlowUpdateDelayer.cancel();
-    await this.pendingSettingWrite;
+    // 用户已明确放弃草稿；旧请求仍结算并保留错误，不声称撤销已经发送的写入。
+    await this.pendingSettingWrite?.catch(error => this.logService.error(error));
     for (const [identity, update] of this.pendingSettingUpdates) {
       if (!update.inFlight) this.pendingSettingUpdates.delete(identity);
     }
@@ -323,6 +399,7 @@ export class SettingsEditor2 extends EditorPane {`);
   }
   if (path === paths[4]) {
     contents = `import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { CancellationError } from '../../../../../base/common/errors.js';
 import { prepareSettingsPane, retainSettingsFile, parseSettingsLocation, settingsEditorIdentity } from ${editor};
 import { ITargetSettingsContext, type TargetSettingsLocation } from ${scope};
 import type { TargetConfigurationContext } from ${context};
@@ -337,17 +414,23 @@ import type { TargetConfigurationContext } from ${context};
       if (settingsEditorIdentity(existing) !== settingsEditorIdentity(location)) {
         throw new Error('同一设置文件不能重新绑定其它目标或视图');
       }
-      return;
+      // 历史恢复只有稳定归属，不能覆盖仍活跃的显式连接。
+      if (!context) return;
+      if (existing.gateway_connection_id === location.gateway_connection_id) return;
     }
     this.settingsTarget = { location: parseSettingsLocation(location), context };
+    this.verifiedSettingsContext = undefined;
     this.setPreferredLanguageId('jsonc');
+    if (existing) this.invalidateEditorPaneScope();
   }
   override async prepareEditorPane(parent: IInstantiationService, disposables: DisposableStore, token: CancellationToken): Promise<IInstantiationService> {
     const target = this.settingsTarget;
     if (!target) return parent;
+    const version = this.editorPaneScopeVersion;
     const initial = target.context;
     target.context = undefined;
     const child = await prepareSettingsPane(parent, target.location, initial, disposables, token, this.resource);
+    if (token.isCancellationRequested || this.isDisposed() || version !== this.editorPaneScopeVersion) throw new CancellationError();
     this.verifiedSettingsContext = child.invokeFunction(accessor => accessor.get(ITargetSettingsContext)).target?.configuration;
     return child;
   }

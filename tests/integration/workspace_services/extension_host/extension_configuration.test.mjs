@@ -16,7 +16,7 @@ export { targetConfigurationSourceFilter } from './src/clients/workbench/src/ext
 export { acquireConfigurationContributions, acceptRuntimeConfigurationExtensions } from '${upstream}workbench/api/common/configurationExtensionPoint.js';
 export { ExtensionIdentifier } from '${upstream}platform/extensions/common/extensions.js';
 export { DefaultSettings } from '${upstream}workbench/services/preferences/common/preferencesModels.js';
-export { registerTargetConfigurationFiles } from './src/clients/workbench/src/extensions/configurationFiles.js';
+export { registerTargetConfigurationFiles, rebindTargetConfigurationFiles, retainTargetConfigurationFile } from './src/clients/workbench/src/extensions/configurationFiles.js';
 export { TargetUriTransformer } from './src/clients/workbench/src/extensions/targetUris.js';
 export { MainThreadConfiguration } from '${upstream}workbench/api/browser/mainThreadConfiguration.js';
 export { ExtHostConfigProvider } from '${upstream}workbench/api/common/extHostConfiguration.js';
@@ -99,7 +99,10 @@ async function open() {
       GatewayRequestError: class extends Error { constructor(status, message, detail) { super(message); this.status = status; this.detail = detail; } } };
     transport.gateway = { async request(endpoint, options) {
       options.signal.throwIfAborted();
-      const body = JSON.parse(options.body); transport.requests.push({ endpoint, body });
+      const body = JSON.parse(options.body); transport.requests.push({ endpoint, body, signal: options.signal });
+      if (transport.pause && endpoint.endsWith('/write') && body.gateway_connection_id === transport.pause.route) {
+        transport.pause.entered(); await transport.pause.promise;
+      }
       if (transport.failure && endpoint.endsWith(transport.failureOperation ?? '/write')) throw transport.failure;
       const native = transport.mapping.get(body.resource_uri);
       if (!native) throw new transport.GatewayRequestError(403, '未登记配置资源');
@@ -275,6 +278,114 @@ test('相同配置传输引用共享SSE并按最后引用释放，不合并不�
     expect(result.afterOneRelease).toBe(1); expect(result.changes).toBeGreaterThan(0);
     expect(result.afterLastRelease).toBe(false); expect(result.readFailure).toContain('未绑定'); expect(result.written).toBe('shared-ref-write');
     checks.push('同一kind/完整请求/资源集合注册复用一条SSE，单引用释放不撤销读写通知，最后引用释放后请求拒绝；generation/route仍独立');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('显式同归属重连切换后续读写和 watch，旧在途写入冻结且失去新引用不回退', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, m = p.m, a = await p.make('A', ['A1', 'A2']), b = await p.make('B');
+      const { gateway_id, backend_id, view_id, workspace_ids, initialization } = a.binding;
+      const old = { kind: 'settings', gatewayConnectionId: 'old-route', connection: {
+        protocol_version: 1, gateway_id, backend_id, view_id, workspace_ids, profile_id: 'default', extensions: [],
+        context: { os: initialization.os, remote_settings: initialization.environment.remote_settings, workspace: initialization.workspace },
+      } };
+      const resource = m.URI.parse(a.remote.resource_uri), workspace = m.URI.parse(a.config.resource_uri), provider = p.files.getProvider('boxteam');
+      const oldReference = m.rebindTargetConfigurationFiles(p.files, [old]), watch = p.files.watch(resource);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      let entered, release;
+      const waiting = new Promise(resolve => { entered = resolve; });
+      p.transport.pause = { route: 'old-route', entered, promise: new Promise(resolve => { release = resolve; }) };
+      const pending = provider.writeFile(resource, new TextEncoder().encode('{"draft":"old-in-flight"}'), { create: true, overwrite: true });
+      await waiting;
+      const oldRequest = p.transport.requests.find(item => item.endpoint.endsWith('/write') && item.body.gateway_connection_id === 'old-route');
+      const next = { ...old, gatewayConnectionId: 'new-route' };
+      const nextReference = m.rebindTargetConfigurationFiles(p.files, [next]);
+      oldReference.dispose(); a.store.dispose();
+      const oldSignalBeforeSettlement = oldRequest.signal.aborted;
+      const lateOldReference = m.registerTargetConfigurationFiles(p.files, old);
+      await provider.readFile(resource); await provider.stat(workspace);
+      const modelReference = m.retainTargetConfigurationFile(p.files, resource);
+      const newSubscription = p.transport.subscribers.find(item => item.body.gateway_connection_id === 'new-route');
+      const sameReference = m.rebindTargetConfigurationFiles(p.files, [next]);
+      const sameWatch = p.transport.subscribers.find(item => item.body.gateway_connection_id === 'new-route') === newSubscription;
+      sameReference.dispose(); nextReference.dispose();
+      await provider.writeFile(resource, new TextEncoder().encode('{"draft":"new-after-ui-close"}'), { create: true, overwrite: true });
+      const newWrite = p.transport.requests.findLast(item => item.endpoint.endsWith('/write') && item.body.gateway_connection_id === 'new-route');
+      let rejectedOwner;
+      try { m.rebindTargetConfigurationFiles(p.files, [{ ...next, gatewayConnectionId: 'rejected-route' },
+        { ...next, connection: { ...next.connection, profile_id: 'foreign-profile' } }]); }
+      catch (error) { rejectedOwner = error.message; }
+      const activeRoutes = p.transport.subscribers.filter(item => item.body.backend_id === backend_id).map(item => item.body.gateway_connection_id);
+      modelReference.dispose();
+      const unavailable = await provider.readFile(resource).then(() => undefined, error => error.message);
+      lateOldReference.dispose();
+      const oldStillPending = !oldRequest.signal.aborted;
+      p.transport.pause = undefined; release(); await pending;
+      const oldSignalAfterSettlement = oldRequest.signal.aborted;
+      const operations = p.transport.requests.filter(item => item.body.gateway_connection_id === 'new-route')
+        .map(item => ({ operation: item.endpoint.split('/').at(-1), resource: item.body.resource_uri }));
+      watch.dispose();
+      return { oldSignalBeforeSettlement, oldStillPending, oldSignalAfterSettlement, oldBody: oldRequest.body,
+        newBody: newWrite.body, sameWatch, activeRoutes, unavailable, rejectedOwner, operations,
+        other: b.owner.getValue('probe.machine'), resource: resource.toString(), workspace: workspace.toString() };
+    });
+    expect(result.oldSignalBeforeSettlement).toBe(false); expect(result.oldStillPending).toBe(true); expect(result.oldSignalAfterSettlement).toBe(true);
+    expect(result.oldBody.gateway_connection_id).toBe('old-route');
+    expect(Buffer.from(result.oldBody.content_base64, 'base64').toString()).toBe('{"draft":"old-in-flight"}');
+    expect(result.newBody.gateway_connection_id).toBe('new-route');
+    expect(Buffer.from(result.newBody.content_base64, 'base64').toString()).toBe('{"draft":"new-after-ui-close"}');
+    expect(result.sameWatch).toBe(true); expect(result.activeRoutes).toEqual(['new-route']); expect(result.other).toBe('B-remote');
+    expect(result.unavailable).toContain('未绑定'); expect(result.rejectedOwner).toContain('不能改变');
+    expect(result.operations).toContainEqual({ operation: 'read', resource: result.resource });
+    expect(result.operations).toContainEqual({ operation: 'stat', resource: result.workspace });
+    checks.push('显式同归属换连接：原Provider冻结旧write正文/signal并等结算，后续read/stat/write及SSE只走新route，同route复用watch，model引用保留新传输且零旧route回退');
+  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
+});
+
+test('显式连接的共享profile随原view关闭继续使用同连接另一view，最后关闭不回旧连接', async () => {
+  const { context, page } = await open();
+  try {
+    const result = await page.evaluate(async () => {
+      const p = globalThis.probe, m = p.m, a = await p.make('A', ['A1', 'A2']), c = await p.make('C', ['C1', 'C2'], a);
+      const scope = host => {
+        const { gateway_id, backend_id, view_id, workspace_ids, initialization } = host.binding;
+        return { kind: 'settings', gatewayConnectionId: 'new-route', connection: {
+          protocol_version: 1, gateway_id, backend_id, view_id, workspace_ids, profile_id: 'default', extensions: [],
+          context: { os: initialization.os, remote_settings: initialization.environment.remote_settings, workspace: initialization.workspace },
+        } };
+      };
+      const first = scope(a), second = scope(c), resource = m.URI.parse(a.remote.resource_uri), provider = p.files.getProvider('boxteam');
+      const oldReference = p.lifetime.add(m.registerTargetConfigurationFiles(p.files, { ...first, gatewayConnectionId: 'old-route' }));
+      const transition = p.lifetime.add(m.rebindTargetConfigurationFiles(p.files, [first, second]));
+      const firstReference = p.lifetime.add(m.registerTargetConfigurationFiles(p.files, first));
+      const secondReference = p.lifetime.add(m.registerTargetConfigurationFiles(p.files, second));
+      const watch = p.lifetime.add(p.files.watch(resource));
+      transition.dispose(); a.store.dispose(); c.store.dispose();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const before = p.transport.subscribers.map(item => item.body.workspace_ids);
+      firstReference.dispose();
+      const remainingRead = await provider.readFile(resource).then(value => new TextDecoder().decode(value), error => error.message);
+      const after = p.transport.subscribers.map(item => ({ route: item.body.gateway_connection_id, roots: item.body.workspace_ids }));
+      await provider.writeFile(resource, new TextEncoder().encode('{"continued":"C"}'), { create: true, overwrite: true });
+      const writtenRoots = p.transport.requests.findLast(item => item.endpoint.endsWith('/write')).body.workspace_ids;
+      let changes = 0;
+      const listener = p.lifetime.add(provider.onDidChangeFile(() => changes++));
+      p.transport.subscribers.find(item => item.body.gateway_connection_id === 'new-route')
+        .send('changes', { changes: [{ resource_uri: resource.toString(), kind: 'edit' }], overflow: false });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      secondReference.dispose();
+      const unavailable = await provider.readFile(resource).then(() => undefined, error => error.message);
+      oldReference.dispose(); watch.dispose(); listener.dispose();
+      return { before, after, remainingRead, writtenRoots, changes, unavailable };
+    });
+    expect(result.before).toEqual([['A1', 'A2']]);
+    expect(result.remainingRead).toContain('A-remote');
+    expect(result.after).toEqual([{ route: 'new-route', roots: ['C1', 'C2'] }]);
+    expect(result.writtenRoots).toEqual(['C1', 'C2']); expect(result.changes).toBe(1);
+    expect(result.unavailable).toContain('未绑定');
+    checks.push('显式新连接的共享profile沿剩余view保持读写/watch归属，最后新连接引用关闭仍拒绝旧连接');
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
 

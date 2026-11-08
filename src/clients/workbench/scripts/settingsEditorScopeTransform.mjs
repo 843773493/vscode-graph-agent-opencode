@@ -4,6 +4,7 @@ export const settingsEditorScopeSourcePaths = [
   'src/vs/workbench/common/editor/editorInput.ts',
   'src/vs/workbench/browser/parts/editor/editorPanes.ts',
   'src/vs/workbench/browser/parts/editor/sideBySideEditor.ts',
+  'src/vs/workbench/common/editor/sideBySideEditorInput.ts',
 ];
 
 function replaceSection(source, start, end, replacement, replaceOnce) {
@@ -25,6 +26,15 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 	/** 可选的 Pane 生命周期所有者；启用后整个输入寿命内保持同一身份。 */
 	get editorPaneScope(): EditorInput | undefined { return undefined; }
 
+	private editorPaneVersion = 0;
+	get editorPaneScopeVersion(): number { return this.editorPaneVersion; }
+	private readonly _onDidChangeEditorPaneScope = this._register(new Emitter<void>());
+	readonly onDidChangeEditorPaneScope = this._onDidChangeEditorPaneScope.event;
+	protected invalidateEditorPaneScope(): void {
+		this.editorPaneVersion++;
+		this._onDidChangeEditorPaneScope.fire();
+	}
+
 	/** 从当前组的 DI 派生服务；新增服务必须登记到 Pane 持有的 disposables。 */
 	async prepareEditorPane(parent: IInstantiationService, disposables: DisposableStore, token: CancellationToken): Promise<IInstantiationService> {
 		return parent;
@@ -32,21 +42,24 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
   }
 
   if (path === join(upstream, settingsEditorScopeSourcePaths[1])) {
+    contents = replaceOnce(contents, "import { Emitter } from '../../../../base/common/event.js';",
+      "import { Emitter, Event } from '../../../../base/common/event.js';");
     contents = replaceOnce(contents, 'IEditorProgressService, LongRunningOperation', 'IEditorProgressService, IOperation, LongRunningOperation');
     contents = replaceOnce(contents, "import { isCancellationError } from '../../../../base/common/errors.js';",
       "import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';");
-    contents = replaceOnce(contents, '\tprivate readonly editorPanes: EditorPane[] = [];', `	private readonly editorPanes: { descriptor: IEditorPaneDescriptor; scope: EditorInput | undefined; pane: EditorPane; disposables: DisposableStore }[] = [];
+    contents = replaceOnce(contents, '\tprivate readonly editorPanes: EditorPane[] = [];', `	private readonly editorPanes: { descriptor: IEditorPaneDescriptor; scope: EditorInput | undefined; version: number; pane: EditorPane; disposables: DisposableStore }[] = [];
 	private editorOpening: { editor: EditorInput; operation: IOperation } | undefined;`);
     contents = replaceOnce(contents, '\tprivate registerListeners(): void {', `	private registerListeners(): void {
 		this._register(this.groupView.onDidCloseEditor(e => this.doCloseScopedEditorPane(e.editor)));`);
     contents = replaceSection(contents, '\tprivate async doOpenEditor(', '\tprivate shouldRestoreFocus(', `	private async doOpenEditor(descriptor: IEditorPaneDescriptor, editor: EditorInput, options: IEditorOptions | undefined, internalOptions: IInternalEditorOpenOptions | undefined, context: IEditorOpenContext = Object.create(null)): Promise<IOpenEditorResult> {
 		// 错误和信任占位仍用原组服务，不能再次执行失败的输入准备。
 		const scope = this.editorPanesRegistry.getEditorPane(editor) === descriptor ? editor.editorPaneScope : undefined;
+		const version = scope?.editorPaneScopeVersion ?? 0;
 		if (scope?.isDisposed()) {
 			return { cancelled: true };
 		}
 
-		let pane = this.editorPanes.find(entry => entry.descriptor === descriptor && entry.scope === scope)?.pane;
+		let pane = this.editorPanes.find(entry => entry.descriptor === descriptor && entry.scope === scope && entry.version === version)?.pane;
 		const reuseInput = pane && pane === this._activeEditorPane && pane.input?.matches(editor) && !options?.forceReload;
 		if (pane !== this._activeEditorPane) {
 			this.doHideActiveEditorPane();
@@ -57,7 +70,7 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 		if (operation) {
 			this.editorOpening = { editor, operation };
 		}
-		const preparation = scope?.onWillDispose(() => operation?.stop());
+		const preparation = scope && Event.any(scope.onWillDispose, scope.onDidChangeEditorPaneScope)(() => operation?.stop());
 		const activeElementBeforePreparation = scope && !pane ? getActiveElement() : undefined;
 		let services: DisposableStore | undefined;
 		try {
@@ -67,11 +80,11 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 					services = new DisposableStore();
 					const opening = assertReturnsDefined(operation);
 					instantiationService = await editor.prepareEditorPane(this.instantiationService, services, opening.token);
-					if (this._store.isDisposed || scope.isDisposed() || opening.token.isCancellationRequested || !opening.isCurrent()) {
+					if (this._store.isDisposed || scope.isDisposed() || scope.editorPaneScopeVersion !== version || opening.token.isCancellationRequested || !opening.isCurrent()) {
 						return { cancelled: true };
 					}
 				}
-				pane = this.doInstantiateEditorPane(descriptor, scope, instantiationService, services);
+				pane = this.doInstantiateEditorPane(descriptor, scope, version, instantiationService, services);
 				services = undefined;
 			}
 			if (!pane || operation && (!operation.isCurrent() || operation.token.isCancellationRequested)) {
@@ -141,14 +154,14 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
       '\t\t\t\teditorPane.create(editorPaneContainer);\n\t\t\t\tif (!this.editorPanes.some(entry => entry.pane === editorPane)) {\n\t\t\t\t\tthrow new CancellationError();\n\t\t\t\t}');
     contents = replaceOnce(contents, '\t\t\t\thide(editorPaneContainer);\n\n\t\t\t\tthrow error;',
       '\t\t\t\thide(editorPaneContainer);\n\t\t\t\tthis.doDisposeEditorPane(editorPane, false);\n\n\t\t\t\tthrow error;');
-    contents = replaceSection(contents, 'private doInstantiateEditorPane(', '\tprivate doSetActiveEditorPane(', `	private doInstantiateEditorPane(descriptor: IEditorPaneDescriptor, scope?: EditorInput, instantiationService = this.instantiationService, services?: DisposableStore): EditorPane {
-		const existing = this.editorPanes.find(entry => entry.descriptor === descriptor && entry.scope === scope);
+    contents = replaceSection(contents, 'private doInstantiateEditorPane(', '\tprivate doSetActiveEditorPane(', `	private doInstantiateEditorPane(descriptor: IEditorPaneDescriptor, scope?: EditorInput, version = scope?.editorPaneScopeVersion ?? 0, instantiationService = this.instantiationService, services?: DisposableStore): EditorPane {
+		const existing = this.editorPanes.find(entry => entry.descriptor === descriptor && entry.scope === scope && entry.version === version);
 		if (existing) {
 			return existing.pane;
 		}
 
 		const pane = descriptor.instantiate(instantiationService, this.groupView);
-		if (this._store.isDisposed || scope?.isDisposed() || services?.isDisposed) {
+		if (this._store.isDisposed || scope?.isDisposed() || scope && scope.editorPaneScopeVersion !== version || services?.isDisposed) {
 			pane.dispose();
 			throw new CancellationError();
 		}
@@ -158,9 +171,9 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 		if (services) {
 			disposables.add(services);
 		}
-		this.editorPanes.push({ descriptor, scope, pane, disposables });
+		this.editorPanes.push({ descriptor, scope, version, pane, disposables });
 		if (scope) {
-			disposables.add(scope.onWillDispose(() => this.doDisposeEditorPane(pane)));
+			disposables.add(Event.any(scope.onWillDispose, scope.onDidChangeEditorPaneScope)(() => this.doDisposeEditorPane(pane)));
 		}
 		return pane;
 	}
@@ -240,6 +253,8 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 			throw new CancellationError();
 		}`);
     contents = replaceOnce(contents, '\t\t\tthis.createEditors(input);', '\t\t\tawait this.createEditors(input, token);');
+    contents = replaceOnce(contents, 'if (!oldInput || !input.matches(oldInput)) {',
+      'if (!oldInput || !input.matches(oldInput) || !this.primaryEditorPane || !this.secondaryEditorPane) {');
     contents = replaceOnce(contents, '\t\t// Restore any previous view state', `		if (token.isCancellationRequested || this.input !== input || input.isDisposed()) {
 			throw new CancellationError();
 		}
@@ -297,11 +312,12 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 			throw new Error('No editor pane descriptor for editor found');
 		}
 		const scope = editorInput.editorPaneScope;
+		const version = scope?.editorPaneScopeVersion;
 		if (disposables.isDisposed || token.isCancellationRequested || scope?.isDisposed() || editorInput.isDisposed()) {
 			throw new CancellationError();
 		}
 		if (scope) {
-			disposables.add(scope.onWillDispose(disposeCurrent));
+			disposables.add(Event.any(scope.onWillDispose, scope.onDidChangeEditorPaneScope)(disposeCurrent));
 		}
 		const preparation = new DisposableStore();
 		let retained = false;
@@ -309,11 +325,11 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 			const instantiationService = scope
 				? await editorInput.prepareEditorPane(this.instantiationService, preparation, token)
 				: this.instantiationService;
-			if (disposables.isDisposed || token.isCancellationRequested || scope?.isDisposed() || editorInput.isDisposed()) {
+			if (disposables.isDisposed || token.isCancellationRequested || scope?.isDisposed() || scope?.editorPaneScopeVersion !== version || editorInput.isDisposed()) {
 				throw new CancellationError();
 			}
 			const editorPane = descriptor.instantiate(instantiationService, this.group);
-			if (disposables.isDisposed || token.isCancellationRequested || scope?.isDisposed() || editorInput.isDisposed()) {
+			if (disposables.isDisposed || token.isCancellationRequested || scope?.isDisposed() || scope?.editorPaneScopeVersion !== version || editorInput.isDisposed()) {
 				editorPane.dispose();
 				throw new CancellationError();
 			}
@@ -337,6 +353,14 @@ export function transformSettingsEditorScope(root, path, contents, replaceOnce) 
 	}
 
 `, replaceOnce);
+  }
+  if (path === join(upstream, settingsEditorScopeSourcePaths[3])) {
+    contents = replaceOnce(contents, '\tprivate hasIdenticalSides: boolean;', `\tprivate hasIdenticalSides: boolean;
+	override get editorPaneScope(): EditorInput | undefined {
+		return this.primary.editorPaneScope || this.secondary.editorPaneScope ? this : undefined;
+	}`);
+    contents = replaceOnce(contents, '\tprivate registerListeners(): void {', `\tprivate registerListeners(): void {
+		this._register(Event.any(this.primary.onDidChangeEditorPaneScope, this.secondary.onDidChangeEditorPaneScope)(() => this.invalidateEditorPaneScope()));`);
   }
   return contents;
 }

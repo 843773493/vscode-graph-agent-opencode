@@ -15,7 +15,9 @@ import { isFalsyOrWhitespace } from '../../../../src/clients/workbench/upstream/
 import { URI } from '../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configuration.js';
 import { ConfigurationScope, Extensions } from '../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configurationRegistry.js';
+import { IFileService } from '../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
 import { IContextKeyService } from '../../../../src/clients/workbench/upstream/src/vs/platform/contextkey/common/contextkey.js';
+import { ConfirmResult } from '../../../../src/clients/workbench/upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { createDecorator, IInstantiationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/serviceCollection.js';
@@ -24,6 +26,8 @@ import { IWorkspaceContextService } from '../../../../src/clients/workbench/upst
 import { EditorModel } from '../../../../src/clients/workbench/upstream/src/vs/workbench/common/editor/editorModel.js';
 import { IPreferencesService, SettingMatchType, SettingValueType, validateSettingsEditorOptions } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ITextEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textEditorService.js';
+import { ITextFileService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/textfile/common/textfiles.js';
+import { IEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
 import * as preferences from '../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/preferences/common/preferences.js';
 import { pinnedUpstreamCommit, sourceTransform } from '../../../../src/clients/workbench/scripts/sourceTransform.mjs';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
@@ -36,7 +40,7 @@ const testSource = await readFile(import.meta.path, 'utf8');
 await writeFile(join(run.artifactsDir, 'test-source.mjs'), testSource);
 fingerprints.push({ path: 'tests/integration/clients/web/settings_editor_target.test.mjs',
   original: createHash('sha256').update(testSource).digest('hex') });
-const selectedEditorMembers = ['pendingSettingUpdates', 'pendingSettingWrite', 'settingsWriterInput', 'shouldSettingUpdateFast',
+const selectedEditorMembers = ['pendingSettingUpdates', 'pendingSettingWrite', 'settingsWriterInput', 'settingsTargetSelection', 'switchSettingsGateway', 'shouldSettingUpdateFast',
   'setInput', '_setOptions', 'clearInput', 'onDidChangeSetting', 'notifySettingsDirty',
   'discardSettingsUpdates', 'flushSettingsUpdates', 'updateChangedSetting'];
 
@@ -109,6 +113,12 @@ const { SettingsEditor2Input } = evaluate(await source('workbench/services/prefe
   parseSettingsLocation, settingsEditorIdentity, prepareSettingsPane, toDisposable, CancellationError,
   SettingsEditorIcon: { id: 'settings-integration-icon' }, nls: { localize: (_key, text) => text },
 });
+const { FileEditorInput } = evaluate(await source('workbench/contrib/files/browser/editors/fileEditorInput.ts'), ['FileEditorInput'], {
+  AbstractTextResourceEditorInput: EditorInput, parseSettingsLocation, settingsEditorIdentity, prepareSettingsPane, CancellationError,
+}, ['settingsTarget', 'verifiedSettingsContext', 'settingsLocation', 'editorPaneScope', 'bindSettingsTarget', 'prepareEditorPane']);
+const { SideBySideEditorInput } = evaluate(await source('workbench/common/editor/sideBySideEditorInput.ts'), ['SideBySideEditorInput'], {
+  EditorInput, Event, IEditorService,
+});
 const { SettingsEditor2InputSerializer } = evaluate(await source('workbench/contrib/preferences/browser/preferences.contribution.ts'),
   ['SettingsEditor2InputSerializer'], { SettingsEditor2Input, parseSettingsLocation, settingsHistoryLocation });
 const { FileEditorInputSerializer } = evaluate(await source('workbench/contrib/files/browser/editors/fileEditorHandler.ts'),
@@ -136,10 +146,15 @@ const queryParsed = await source('workbench/contrib/preferences/browser/settings
 const { parseQuery } = evaluate(queryParsed, ['tagRegex', 'extensionRegex', 'featureRegex', 'idRegex', 'languageRegex', 'parseQuery'], {
   ...preferences, isFalsyOrWhitespace,
 });
+const switching = {};
 const { SettingsEditor2 } = evaluate(await source('workbench/contrib/preferences/browser/settingsEditor2.ts'), ['SettingsEditor2'], {
   EditorPane, SettingsEditor2Input, Settings2EditorModel, SettingValueType, ConfigurationTarget,
   URI, parseQuery, isCancellationError, MODIFIED_SETTING_TAG: preferences.MODIFIED_SETTING_TAG,
-  validateSettingsEditorOptions, platform,
+  validateSettingsEditorOptions, platform, DisposableStore, CancellationToken, SideBySideEditorInput, FileEditorInput,
+  settingsEditorIdentity, selectSettingsManagementTargetCommand: 'integration.selectSettingsTarget',
+  ConfirmResult,
+  captureSettingsLocation: (...args) => switching.capture(...args), prepareSettingsContext: (...args) => switching.prepare(...args),
+  rebindSettingsFiles: (...args) => switching.rebind(...args),
 }, selectedEditorMembers);
 await Promise.all(['sourceTransform.mjs', 'settingsEditorTransform.mjs', 'settingsEditorScopeTransform.mjs', 'settingsTreeScopeTransform.mjs']
   .map(name => source(`scripts/${name}`, true)));
@@ -213,6 +228,7 @@ function fixture() {
       pane.viewState = { settingsTarget: ConfigurationTarget.USER_REMOTE };
       pane.inSettingsEditorContextKey = { set() {} };
       pane.logService = { error: error => logs.push(error) };
+      pane.fileDialogService = { showSaveConfirm: async () => ConfirmResult.SAVE };
       pane.onConfigUpdate = (...args) => { refreshes.push(args); return Promise.resolve(); };
       pane.updateTreeScrollSync = () => {};
       pane.refreshInstalledExtensionsList = async () => {};
@@ -318,6 +334,263 @@ scenario('原文件 serializer 保留规范资源与编辑选项，设置 JSON �
     serializer.deserialize(services, JSON.stringify({ ...serialized, settingsTarget: undefined }));
     expect(bindings).toHaveLength(1);
   } finally { services.dispose(); }
+});
+
+scenario('原文件 Input 只在同归属的新连接失效 Pane，稳定资源和模型引用不变', () => {
+  const input = new FileEditorInput(), model = { dirty: true, etag: 'original-etag' }, reference = { object: model };
+  input.setPreferredLanguageId = () => {};
+  input.cachedTextFileModelReference = reference;
+  const first = location({ view_id: 'settings-profile', workspace_ids: [] }), next = { ...first, gateway_connection_id: 'new-route' };
+  let invalidations = 0; input.onDidChangeEditorPaneScope(() => invalidations++);
+  try {
+    input.bindSettingsTarget(first, { integrationTransport: 'old' });
+    input.verifiedSettingsContext = { integrationTransport: 'verified-old' };
+    input.bindSettingsTarget(next, { integrationTransport: 'new' });
+    expect(input.settingsLocation).toEqual(next); expect(input.editorPaneScopeVersion).toBe(1); expect(invalidations).toBe(1);
+    expect(input.verifiedSettingsContext).toBeUndefined(); expect(input.cachedTextFileModelReference).toBe(reference);
+    expect(model).toEqual({ dirty: true, etag: 'original-etag' });
+    input.bindSettingsTarget(next); expect(input.editorPaneScopeVersion).toBe(1); expect(invalidations).toBe(1);
+    input.bindSettingsTarget(settingsHistoryLocation(first));
+    expect(input.settingsLocation).toEqual(next); expect(input.editorPaneScopeVersion).toBe(1);
+    expect(() => input.bindSettingsTarget({ ...next, profile_id: 'other-profile' })).toThrow('不能重新绑定');
+    expect(input.settingsLocation).toEqual(next);
+  } finally { input.dispose(); }
+});
+
+scenario('显式重选沿原入口重绑同一 UI Input 与 JSON，各组恢复原视图；同连接不重建', async () => {
+  const f = fixture(), input = f.input(), first = await f.editor(input, 1), second = await f.editor(input, 2);
+  const otherView = f.input(location({ view_id: 'other-view', workspace_ids: ['workspace-C'] }));
+  const file = new FileEditorInput(), calls = [], references = [], selected = { gateway_id: 'gateway-A', gateway_connection_id: 'new-route' };
+  file.setPreferredLanguageId = () => {};
+  file.bindSettingsTarget(location({ view_id: 'settings-profile', workspace_ids: [] }));
+  const split = new SideBySideEditorInput('设置 JSON', undefined, new EditorInput(), file, {});
+  const view = (group, active, query) => Object.assign(group, { editors: [active], activeEditor: active,
+    activeEditorPane: { getViewState: () => ({ query }), options: { marker: query } },
+    async openEditor(opened, options) { calls.push({ group: this.id, input: opened, options }); return undefined; } });
+  const a = view(first.pane.group, input, '@id:first'), b = view(second.pane.group, input, '@modified'), c = view({ id: 3 }, split, 'json-position');
+  const d = view({ id: 4 }, otherView, '@id:other-view');
+  const contexts = [];
+  switching.capture = async (_parent, _token, target) => {
+    expect(target).toBe(selected);
+    return { location: location({ gateway_connection_id: 'new-route' }), context: { integrationTransport: 'new-ui' } };
+  };
+  switching.prepare = async target => { contexts.push(target); return { integrationTransport: 'new-json' }; };
+  switching.rebind = (_parent, contexts) => { const ref = { contexts, disposed: false, dispose() { this.disposed = true; } }; references.push(ref); return ref; };
+  first.pane.commandService = { executeCommand: async () => selected };
+  first.pane.editorGroupService = { groups: [a, b, c, d] };
+  try {
+    const resource = input.resource, history = new SettingsEditor2InputSerializer().serialize(input);
+    first.change('pending.first', 'old-queue');
+    await first.pane.switchSettingsGateway();
+    expect(first.group.configuration.calls.map(call => call.key)).toEqual(['pending.first']);
+    expect(input.resource).toBe(resource); expect(new SettingsEditor2InputSerializer().serialize(input)).toBe(history);
+    expect(input.editorPaneScopeVersion).toBe(1); expect(file.editorPaneScopeVersion).toBe(1); expect(split.editorPaneScopeVersion).toBe(1);
+    expect(otherView.location).toEqual(location({ view_id: 'other-view', workspace_ids: ['workspace-C'], gateway_connection_id: 'new-route' }));
+    expect(otherView.editorPaneScopeVersion).toBe(1);
+    expect(input.location.gateway_connection_id).toBe('new-route'); expect(file.settingsLocation.gateway_connection_id).toBe('new-route');
+    expect(contexts).toEqual([location({ view_id: 'other-view', workspace_ids: ['workspace-C'], gateway_connection_id: 'new-route' }),
+      location({ view_id: 'settings-profile', workspace_ids: [], gateway_connection_id: 'new-route' })]);
+    expect(calls.map(call => call.group).sort()).toEqual([1, 2, 3, 4]);
+    expect(calls.find(call => call.group === 1)).toMatchObject({ input, options: { pinned: true, viewState: { query: '@id:first' } } });
+    expect(calls.find(call => call.group === 2)).toMatchObject({ input, options: { preserveFocus: true, viewState: { query: '@modified' } } });
+    expect(calls.find(call => call.group === 3)).toMatchObject({ input: split, options: { preserveFocus: true, viewState: { query: 'json-position' } } });
+    expect(calls.every(call => !call.options.forceReload)).toBe(true);
+    expect(references).toHaveLength(1); expect(references[0].contexts).toHaveLength(3); expect(references.every(ref => ref.disposed)).toBe(true);
+    calls.length = 0; await first.pane.switchSettingsGateway();
+    expect(input.editorPaneScopeVersion).toBe(1); expect(file.editorPaneScopeVersion).toBe(1);
+    expect(references).toHaveLength(1); expect(calls.map(call => call.group)).toEqual([1]);
+  } finally { split.dispose(); split.secondary.dispose(); file.dispose(); f.close(); }
+});
+
+scenario('当前 Pane 改投另一 view 时，先创建新 Input，再释放原 Pane 和 child DI 并沿原组打开', async () => {
+  const f = fixture(), input = f.input(location({ view_id: 'other-view', workspace_ids: ['workspace-C'] }));
+  const { pane, group } = await f.editor(input, 1), calls = [], selected = { gateway_id: 'gateway-A', gateway_connection_id: 'new-route' };
+  const captured = { location: location({ gateway_connection_id: 'new-route' }), context: { integrationTransport: 'new-view' } };
+  const invalidation = input.onDidChangeEditorPaneScope(() => { pane.dispose(); group.lifetime.dispose(); });
+  Object.assign(pane.group, { editors: [input], activeEditor: input,
+    activeEditorPane: { getViewState: () => ({ query: '@id:old-view' }), options: {} },
+    async openEditor(next, options) {
+      expect(pane.input).toBeUndefined();
+      expect(() => group.di.invokeFunction(() => {})).toThrow('disposed');
+      calls.push({ next, options });
+    } });
+  pane.editorGroupService = { groups: [pane.group] };
+  pane.commandService = { executeCommand: async () => selected };
+  switching.capture = async () => captured;
+  switching.prepare = async target => {
+    expect(target).toEqual(location({ view_id: 'other-view', workspace_ids: ['workspace-C'], gateway_connection_id: 'new-route' }));
+    return { integrationTransport: 'old-view-new-route' };
+  };
+  switching.rebind = () => toDisposable(() => {});
+  try {
+    await pane.switchSettingsGateway();
+    expect(input.editorPaneScopeVersion).toBe(1); expect(calls).toHaveLength(1);
+    expect(calls[0].next).not.toBe(input); expect(calls[0].next.location).toEqual(captured.location);
+    expect(calls[0].options).toEqual({ pinned: true, viewState: undefined });
+  } finally { invalidation.dispose(); for (const call of calls) call.next.dispose(); f.close(); }
+});
+
+for (const target of ['same', 'other']) for (const choice of ['save', 'discard', 'cancel']) {
+  scenario(`旧连接拒绝并保留延迟草稿后，${target === 'same' ? '同一稳定' : '其它'}目标重选沿原确认${choice}且不处理其它目标`, async () => {
+    const f = fixture(), input = f.input(), first = await f.editor(input, 1);
+    const otherInput = f.input(location({ view_id: 'other-view', workspace_ids: ['workspace-C'] })), other = await f.editor(otherInput, 2);
+    const untouchedInput = f.input(location({ backend_id: 'backend-unaffected' })), untouched = await f.editor(untouchedInput, 3);
+    const victim = target === 'same' ? other : first, victimInput = target === 'same' ? otherInput : input;
+    const failure = new Error('具名旧连接写入边界：连接已删除'), failed = Promise.withResolvers(), dialogs = [], opened = [], rebound = [];
+    const captured = { location: location({ gateway_connection_id: 'new-route', ...(target === 'other' ? { backend_id: 'backend-selected' } : {}) }),
+      context: { integrationTransport: 'prepared-new-route' } };
+    victim.group.configuration.write = async () => { throw failure; };
+    victim.pane.logService.error = error => { victim.logs.push(error); failed.resolve(); };
+    const groups = [[first, input], [other, otherInput], [untouched, untouchedInput]].map(([editor, active]) => Object.assign(editor.pane.group, {
+      editors: [active], activeEditor: active, activeEditorPane: { getViewState: () => ({}), options: {} },
+      async openEditor(next) { opened.push(next); },
+    }));
+    first.pane.editorGroupService = { groups };
+    first.pane.commandService = { executeCommand: async () => ({ gateway_id: 'gateway-A', gateway_connection_id: 'new-route' }) };
+    first.pane.fileDialogService = { async showSaveConfirm(names) {
+      dialogs.push(names); expect(victimInput.isDirty()).toBe(true); expect(victimInput.editorPaneScopeVersion).toBe(0);
+      expect(victim.group.configuration.calls.map(call => call.value)).toEqual([17]);
+      return { save: ConfirmResult.SAVE, discard: ConfirmResult.DONT_SAVE, cancel: ConfirmResult.CANCEL }[choice];
+    } };
+    switching.capture = async () => captured;
+    switching.prepare = async () => ({ integrationTransport: 'prepared-other-view' });
+    switching.rebind = (_parent, contexts) => { rebound.push(contexts); return toDisposable(() => {}); };
+    try {
+      victim.change('editor.fontSize', 17, SettingValueType.String, true); await failed.promise;
+      victim.change('editor.fontSize', 21); untouched.change('editor.tabSize', 4);
+      if (target === 'other') other.change('editor.tabSize', 6);
+      const reconnect = first.pane.switchSettingsGateway();
+      if (choice === 'save') await expect(reconnect).rejects.toBe(failure);
+      else await reconnect;
+      expect(dialogs).toEqual([[victimInput.getName()]]);
+      expect(untouchedInput.isDirty()).toBe(true); expect(untouched.group.configuration.calls).toEqual([]);
+      expect(untouchedInput.editorPaneScopeVersion).toBe(0);
+      if (target === 'other') { expect(otherInput.isDirty()).toBe(true); expect(other.group.configuration.calls).toEqual([]); }
+      if (choice === 'discard') {
+        expect(victimInput.isDirty()).toBe(false); expect(victim.group.configuration.calls.map(call => call.value)).toEqual([17]);
+        expect(opened.at(-1).location).toEqual(captured.location);
+        expect(rebound).toHaveLength(target === 'same' ? 1 : 0);
+      } else {
+        expect(victimInput.isDirty()).toBe(true); expect(opened).toEqual([]); expect(rebound).toEqual([]);
+        expect(victimInput.location.gateway_connection_id).toBe('route-A'); expect(victimInput.editorPaneScopeVersion).toBe(0);
+        expect(victim.group.configuration.calls.map(call => call.value)).toEqual(choice === 'save' ? [17, 21] : [17]);
+      }
+    } finally { for (const next of opened) if (next !== input && next !== otherInput && next !== untouchedInput) next.dispose(); f.close(); }
+  });
+}
+
+scenario('明确不保存仍等待旧在途写入失败结算，保留原拒绝诊断后才丢弃草稿并重连', async () => {
+  const f = fixture(), input = f.input(), first = await f.editor(input, 1), otherInput = f.input(location({ view_id: 'other-view' }));
+  const other = await f.editor(otherInput, 2), entered = Promise.withResolvers(), release = Promise.withResolvers(), confirmed = Promise.withResolvers();
+  const failure = new Error('具名旧连接在途写入失败'), changes = [], captured = { location: location({ gateway_connection_id: 'new-route' }), context: {} };
+  const groups = [[first, input], [other, otherInput]].map(([editor, active]) => Object.assign(editor.pane.group, {
+    editors: [active], activeEditor: active, async openEditor() {},
+  }));
+  other.group.configuration.write = async () => { entered.resolve(); await release.promise; throw failure; };
+  first.pane.editorGroupService = { groups };
+  first.pane.commandService = { executeCommand: async () => ({ gateway_id: 'gateway-A' }) };
+  first.pane.fileDialogService = { async showSaveConfirm() { confirmed.resolve(); return ConfirmResult.DONT_SAVE; } };
+  switching.capture = async () => captured; switching.prepare = async () => ({});
+  switching.rebind = () => { changes.push('rebind'); return toDisposable(() => {}); };
+  let reconnect;
+  try {
+    other.change('editor.fontSize', 17); const failedWrite = otherInput.save().then(() => undefined, error => error); await entered.promise;
+    other.change('editor.tabSize', 6);
+    reconnect = first.pane.switchSettingsGateway(); const result = reconnect.then(() => undefined, error => error); await confirmed.promise;
+    expect(changes).toEqual([]); expect(otherInput.isDirty()).toBe(true); expect(otherInput.editorPaneScopeVersion).toBe(0);
+    release.resolve(); expect(await failedWrite).toBe(failure); expect(await result).toBeUndefined();
+    expect(other.logs).toEqual([failure]); expect(other.group.configuration.calls.map(call => call.key)).toEqual(['editor.fontSize']);
+    expect(otherInput.isDirty()).toBe(false); expect(changes).toEqual(['rebind']); expect(otherInput.location.gateway_connection_id).toBe('new-route');
+  } finally { release.resolve(); await reconnect?.catch(() => {}); f.close(); }
+});
+
+scenario('保存确认等待期间原 Pane 已切换时，迟到的不保存选择不能清除其它 view 草稿或改投', async () => {
+  const f = fixture(), input = f.input(), first = await f.editor(input, 1), otherInput = f.input(location({ view_id: 'other-view' }));
+  const other = await f.editor(otherInput, 2), entered = Promise.withResolvers(), choice = Promise.withResolvers(), calls = [];
+  const groups = [[first, input], [other, otherInput]].map(([editor, active]) => Object.assign(editor.pane.group, {
+    editors: [active], activeEditor: active, async openEditor() { calls.push('open'); },
+  }));
+  first.pane.editorGroupService = { groups }; first.pane.commandService = { executeCommand: async () => ({ gateway_id: 'gateway-A' }) };
+  first.pane.fileDialogService = { async showSaveConfirm() { entered.resolve(); return choice.promise; } };
+  switching.capture = async () => ({ location: location({ gateway_connection_id: 'new-route' }), context: {} });
+  switching.prepare = async () => ({}); switching.rebind = () => { calls.push('rebind'); return toDisposable(() => {}); };
+  try {
+    other.change('editor.fontSize', 21); const pending = first.pane.switchSettingsGateway(); await entered.promise;
+    first.pane.clearInput(); choice.resolve(ConfirmResult.DONT_SAVE); await pending;
+    expect(calls).toEqual([]); expect(otherInput.isDirty()).toBe(true); expect(other.group.configuration.calls).toEqual([]);
+    expect(otherInput.location.gateway_connection_id).toBe('route-A'); expect(otherInput.editorPaneScopeVersion).toBe(0);
+  } finally { choice.resolve(ConfirmResult.CANCEL); f.close(); }
+});
+
+scenario('确认保存期间新增草稿仍保留 dirty，重选明确拒绝且不隐式再次 flush 或改投', async () => {
+  const f = fixture(), input = f.input(), first = await f.editor(input, 1), entered = Promise.withResolvers(), release = Promise.withResolvers(), calls = [];
+  Object.assign(first.pane.group, { editors: [input], activeEditor: input, async openEditor() { calls.push('open'); } });
+  first.pane.editorGroupService = { groups: [first.pane.group] };
+  first.pane.commandService = { executeCommand: async () => ({ gateway_id: 'gateway-A' }) };
+  first.group.configuration.write = async () => { entered.resolve(); await release.promise; };
+  switching.capture = async () => ({ location: location({ gateway_connection_id: 'new-route' }), context: {} });
+  switching.rebind = () => { calls.push('rebind'); return toDisposable(() => {}); };
+  let reconnect;
+  try {
+    first.change('editor.fontSize', 17); reconnect = first.pane.switchSettingsGateway();
+    const result = reconnect.then(() => undefined, error => error); await entered.promise;
+    first.change('editor.fontSize', 21); release.resolve(); expect((await result).message).toContain('未结清');
+    expect(input.isDirty()).toBe(true); expect(first.group.configuration.calls.map(call => call.value)).toEqual([17]);
+    expect(calls).toEqual([]); expect(input.location.gateway_connection_id).toBe('route-A'); expect(input.editorPaneScopeVersion).toBe(0);
+  } finally { release.resolve(); await reconnect?.catch(() => {}); f.close(); }
+});
+
+for (const stage of ['cancel', 'capture', 'json-prepare']) scenario(`显式重选 ${stage} 未成功时，原 Input、版本与路由零改动`, async () => {
+  const f = fixture(), input = f.input(), { pane } = await f.editor(input, 1), file = new FileEditorInput();
+  file.setPreferredLanguageId = () => {}; file.bindSettingsTarget(location({ view_id: 'settings-profile', workspace_ids: [] }));
+  const calls = [];
+  Object.assign(pane.group, { editors: [input, file], activeEditor: input, openEditor: (...args) => calls.push(args) });
+  pane.editorGroupService = { groups: [pane.group] };
+  pane.commandService = { executeCommand: async () => stage === 'cancel' ? undefined : { gateway_id: 'gateway-A' } };
+  switching.capture = async () => {
+    if (stage === 'capture') throw new Error('capture denied');
+    return { location: location({ gateway_connection_id: 'new-route' }), context: { integrationTransport: 'new' } };
+  };
+  switching.prepare = async () => { throw new Error('json prepare denied'); };
+  switching.rebind = () => { throw new Error('失败或取消不能重绑路由'); };
+  try {
+    if (stage === 'cancel') await pane.switchSettingsGateway();
+    else await expect(pane.switchSettingsGateway()).rejects.toThrow(stage === 'capture' ? 'capture denied' : 'json prepare denied');
+    expect(input.location).toEqual(location()); expect(file.settingsLocation.gateway_connection_id).toBe('route-A');
+    expect(input.editorPaneScopeVersion).toBe(0); expect(file.editorPaneScopeVersion).toBe(0); expect(calls).toHaveLength(0);
+  } finally { file.dispose(); f.close(); }
+});
+
+for (const delayed of [false, true]) scenario(`JSON 模型${delayed ? '迟到 resolve' : '既有 lease'}在重选后只保留新传输，关闭 UI 不释放模型引用`, async () => {
+  const resource = URI.parse('boxteam://gateway-A/profile/settings'), willDispose = new Emitter(), gate = Promise.withResolvers();
+  const model = { resource, dirty: true, etag: 'original-etag', onWillDispose: willDispose.event }, counts = new Map();
+  const old = { route: 'old-route' }, next = { route: 'new-route' }, files = {};
+  let selected = old, resolved = !delayed;
+  const reference = context => {
+    counts.set(context.route, (counts.get(context.route) ?? 0) + 1);
+    return toDisposable(() => counts.set(context.route, counts.get(context.route) - 1));
+  };
+  const retainedFileModels = new WeakMap();
+  const helpers = evaluate(helperParsed, ['retainSettingsFile', 'rebindSettingsFiles'], {
+    retainedFileModels, MutableDisposable, Event, IFileService, ITextFileService, URI,
+    targetSettings: () => ({ resource_uri: resource.toString() }), targetWorkspace: () => ({}),
+    registerTargetConfigurationFiles: (_files, context) => reference(context),
+    rebindTargetConfigurationFiles: (_files, contexts) => { selected = contexts[0]; return reference(selected); },
+    retainTargetConfigurationFile: () => reference(selected),
+  });
+  const di = new InstantiationService(new ServiceCollection([IFileService, files], [ITextFileService, { files: { get: () => resolved ? model : undefined } }]));
+  const paneReference = reference(old);
+  try {
+    const opening = helpers.retainSettingsFile(di, old, resource, async () => { if (delayed) await gate.promise; resolved = true; return model; });
+    if (!delayed) expect(await opening).toBe(model);
+    const transition = helpers.rebindSettingsFiles(di, [next]);
+    gate.resolve(); expect(await opening).toBe(model);
+    paneReference.dispose(); transition.dispose();
+    expect(counts.get('old-route')).toBe(0); expect(counts.get('new-route')).toBe(1);
+    expect(model.dirty).toBe(true); expect(model.etag).toBe('original-etag');
+    expect(retainedFileModels.has(model)).toBe(true);
+    willDispose.fire(); expect(counts.get('new-route')).toBe(0); expect(retainedFileModels.has(model)).toBe(false);
+  } finally { gate.resolve(); willDispose.dispose(); paneReference.dispose(); di.dispose(); }
 });
 
 scenario('同一原输入为两组创建不同原模型，各组关闭只释放自己的模型与绑定', async () => {

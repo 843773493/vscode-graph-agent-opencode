@@ -122,7 +122,7 @@ class ScopedInput extends PlainInput {
   async prepareEditorPane(parent, store, token) {
     this.entered.resolve();
     await this.prepareGate;
-    const target = { key: this.key, disposed: 0, order: [], createError: this.createError,
+    const target = { key: this.key, route: this.route, disposed: 0, order: [], createError: this.createError,
       onConstruct: this.onConstruct, onCreate: this.onCreate, onVisible: this.onVisible };
     store.add(toDisposable(() => { target.disposed++; target.order.push('services'); }));
     const child = parent.createChild(new ServiceCollection([Target, target]), store);
@@ -514,6 +514,51 @@ scenario('SideBySideEditor 一侧准备失败后，另一侧迟到结果不能�
     expect(f.created).toHaveLength(0); expect(a.preparations[0].target.disposed).toBe(1); expect(b.preparations[0].target.disposed).toBe(1);
     expect(side.getPrimaryEditorPane()).toBeUndefined(); expect(side.primaryEditorContainer.children).toHaveLength(0);
   } finally { gate.resolve(); input.dispose(); a.dispose(); b.dispose(); side.dispose(); f.close(); }
+});
+
+scenario('同一稳定 Input 换准备版本，原 Pane 与 child 全部释放后仅新连接的 Pane 可复用', async () => {
+  const f = await harness(), input = new ScopedInput('stable-owner'); input.route = 'old-route';
+  try {
+    const first = (await f.panes.openEditor(input)).pane, identity = input.resource.toString();
+    input.route = 'new-route'; input.invalidateEditorPaneScope();
+    expect(input.resource.toString()).toBe(identity); expect(input.isDisposed()).toBe(false);
+    expect(first.disposed).toBe(1); expect(first.target.order).toEqual(['pane', 'services']);
+    expect(f.panes.editorPanes).toHaveLength(0);
+    const next = (await f.panes.openEditor(input)).pane;
+    expect(next).not.toBe(first); expect(next.target.route).toBe('new-route'); expect(input.preparations).toHaveLength(2);
+    expect((await f.panes.openEditor(input, { preserveFocus: true })).pane).toBe(next);
+    expect(input.preparations).toHaveLength(2); expect(next.disposed).toBe(0);
+  } finally { input.dispose(); f.close(); }
+});
+
+scenario('换路取消原准备，旧结果迟到不覆盖新 Pane 且 child 仍回收', async () => {
+  const f = await harness(), input = new ScopedInput('same-input'), gate = Promise.withResolvers();
+  input.prepareGate = gate.promise; input.route = 'old-route';
+  try {
+    const old = f.panes.openEditor(input); await input.entered.promise;
+    input.route = 'new-route'; input.invalidateEditorPaneScope(); input.prepareGate = undefined;
+    const next = (await f.panes.openEditor(input)).pane;
+    gate.resolve(); expect((await old).cancelled).toBe(true);
+    expect(f.created).toEqual([next]); expect(next.target.route).toBe('new-route');
+    expect(input.preparations[1].token.isCancellationRequested).toBe(true);
+    expect(input.preparations[1].target.disposed).toBe(1);
+    expect(f.panes.activeEditorPane).toBe(next); expect(next.disposed).toBe(0);
+  } finally { gate.resolve(); input.dispose(); f.close(); }
+});
+
+scenario('JSON 分屏沿原复合 Input 传播准备版本，重新 setInput 不复用已撤销的子 Pane', async () => {
+  const f = await harness(), side = f.side(), left = new PlainInput('defaults'), right = new ScopedInput('stable-json');
+  const input = new CompoundInput(undefined, undefined, left, right, {});
+  try {
+    expect(input.editorPaneScope).toBe(input);
+    await side.setInput(input, undefined, {}, CancellationToken.None);
+    const previous = side.getPrimaryEditorPane(), version = input.editorPaneScopeVersion;
+    right.route = 'new-route'; right.invalidateEditorPaneScope();
+    expect(input.editorPaneScopeVersion).toBe(version + 1); expect(previous.disposed).toBe(1);
+    await side.setInput(input, undefined, {}, CancellationToken.None);
+    expect(side.getPrimaryEditorPane()).not.toBe(previous); expect(side.getPrimaryEditorPane().target.route).toBe('new-route');
+    expect(input.primary).toBe(right); expect(right.isDisposed()).toBe(false);
+  } finally { input.dispose(); left.dispose(); right.dispose(); side.dispose(); f.close(); }
 });
 
 for (const stage of ['onConstruct', 'onCreate']) {

@@ -1,7 +1,7 @@
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { Event } from '../../upstream/src/vs/base/common/event.js';
-import { DisposableStore, IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { DisposableStore, IDisposable, MutableDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import { ConfigurationTarget } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
@@ -21,11 +21,11 @@ import { extUri, joinPath } from '../../upstream/src/vs/base/common/resources.js
 import type { ExtensionConfigurationTargetRequest, ExtensionConfigurationViewDTO, ExtensionConfigurationTargetListDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { targetConfigurationServices } from '../extensions/configuration.js';
-import { registerTargetConfigurationFiles } from '../extensions/configurationFiles.js';
+import { registerTargetConfigurationFiles, rebindTargetConfigurationFiles, retainTargetConfigurationFile } from '../extensions/configurationFiles.js';
 import { TargetWorkspaceResources } from '../extensions/targetUris.js';
 import type { TargetConfigurationContext } from '../extensions/targetContext.js';
 import { targetSettings, targetWorkspace } from '../extensions/targetContext.js';
-import { managementGateway } from '../managementTarget.js';
+import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { ITargetSettingsContext, type TargetSettingsLocation } from './scope.js';
@@ -70,10 +70,9 @@ export function settingsFileOptions(context: TargetConfigurationContext, resourc
 }
 
 /** 入口只冻结明确目标；不启动扩展宿主，不把焦点作为后续保存的路由。 */
-export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken): Promise<{
+export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')): Promise<{
   location: TargetSettingsLocation; context: TargetConfigurationContext & { kind: 'settings' };
 }> {
-  const target = managementGateway('settings');
   const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort());
   try {
     if (token.isCancellationRequested) throw new CancellationError();
@@ -148,7 +147,21 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
   } finally { cancellation.dispose(); controller.abort(); }
 }
 
-const retainedFileModels = new WeakSet<ITextFileEditorModel>();
+const retainedFileModels = new WeakMap<ITextFileEditorModel, MutableDisposable<IDisposable>>();
+
+/** 原文件模型换传输引用，不重载正文、etag 或原保存队列。 */
+export function rebindSettingsFiles(parent: IInstantiationService, contexts: readonly TargetConfigurationContext[]): IDisposable {
+  const files = parent.invokeFunction(accessor => accessor.get(IFileService));
+  const reference = rebindTargetConfigurationFiles(files, contexts);
+  const resources = contexts.flatMap(context => [targetSettings(context), targetWorkspace(context).configuration]).filter(value => !!value).map(value => URI.parse(value.resource_uri));
+  for (const resource of resources) {
+    const model = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files.get(resource);
+    const retained = model && retainedFileModels.get(model);
+    if (retained) retained.value = retainTargetConfigurationFile(files, resource);
+  }
+  return reference;
+}
+
 /** JSON 文件模型持有独立传输引用，关闭设置面板不会中止原 TextFileService 的保存。 */
 export async function retainSettingsFile<T>(parent: IInstantiationService, context: TargetConfigurationContext, resource: URI,
   open: () => Promise<T>): Promise<T> {
@@ -159,9 +172,12 @@ export async function retainSettingsFile<T>(parent: IInstantiationService, conte
     const result = await open();
     const model = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files.get(resource);
     if (model && !retainedFileModels.has(model)) {
-      retainedFileModels.add(model);
-      Event.once(model.onWillDispose)(() => { retainedFileModels.delete(model); reference.dispose(); });
-      retained = true;
+      const lease = new MutableDisposable<IDisposable>();
+      // resolve 可能迟于显式重选完成；模型只能保留当前传输，不能复活旧 route。
+      lease.value = resource.scheme === 'boxteam' ? retainTargetConfigurationFile(files, resource) : reference;
+      retainedFileModels.set(model, lease);
+      Event.once(model.onWillDispose)(() => { retainedFileModels.delete(model); lease.dispose(); });
+      retained = resource.scheme !== 'boxteam';
     }
     return result;
   } finally { if (!retained) reference.dispose(); }
