@@ -93,6 +93,68 @@ describe('独立于 Tab 的会话历史镜像', () => {
     expect(await new ThreadHistoryCache().read(target, 'scope')).toBeNull();
   });
 
+  test('清除期间尚未完成的磁盘读取不能重新交付或恢复旧镜像，其它 Thread 不受影响', async () => {
+    const target = owner('history-delete-reading'), other = { ...target, threadId: 'other-thread' };
+    const writer = new ThreadHistoryCache();
+    writer.remember(target, history(), failure);
+    writer.remember(other, { ...history(), threadId: other.threadId }, failure);
+    await writer.flushAll();
+    const cache = new ThreadHistoryCache();
+    // 读取仍在原 IndexedDB 事务中；删除不能只清空此刻尚为空的内存。
+    const first = cache.read(target, 'first-scope'), second = cache.read(target, 'second-scope');
+    const unaffected = cache.read(other, 'other-scope');
+    await cache.remove(target);
+    expect(await first).toBeNull();
+    expect(await second).toBeNull();
+    expect((await unaffected)?.scopeKey).toBe('other-scope');
+    expect(await cache.read(target, 'after-delete')).toBeNull();
+    expect(await new ThreadHistoryCache().read(target, 'cold-after-delete')).toBeNull();
+  });
+
+  test('清除前的迟到读取不能替换随后取得的新快照或其持久化结果', async () => {
+    const target = owner('history-delete-then-remember'), writer = new ThreadHistoryCache();
+    writer.remember(target, history(), failure);
+    await writer.flushAll();
+    const cache = new ThreadHistoryCache(), stale = cache.read(target, 'old-scope');
+    const removing = cache.remove(target);
+    const current = { ...history(), historyViewRevision: 2,
+      turnsById: { job_latest: { ...turnDetail(1), revision: 2, final_response: '新快照正文' } } };
+    cache.remember(target, current, failure);
+    await removing;
+    expect(await stale).toBeNull();
+    expect((await cache.read(target, 'new-scope'))?.historyViewRevision).toBe(2);
+    await cache.flushAll();
+    const cold = await new ThreadHistoryCache().read(target, 'cold');
+    expect(cold?.historyViewRevision).toBe(2);
+    expect(cold?.turnsById).toEqual(current.turnsById);
+  });
+
+  test('同 Thread 的并发冷读取共用一次磁盘读取，但各自保留 scope', async () => {
+    const target = owner('history-shared-read'), writer = new ThreadHistoryCache();
+    writer.remember(target, history(), failure);
+    await writer.flushAll();
+    const cache = new ThreadHistoryCache(), transaction = spyOn(IDBDatabase.prototype, 'transaction');
+    try {
+      const [first, second] = await Promise.all([cache.read(target, 'first'), cache.read(target, 'second')]);
+      expect(first?.scopeKey).toBe('first');
+      expect(second?.scopeKey).toBe('second');
+      expect(first?.turnsById).toEqual(second?.turnsById);
+      expect(transaction.mock.calls.filter(([, mode]) => mode === 'readonly')).toHaveLength(1);
+    } finally { transaction.mockRestore(); }
+  });
+
+  test('共享冷读取失败向每个调用方保留原错误，并允许明确重试', async () => {
+    const cache = new ThreadHistoryCache(), target = owner('history-shared-read-failure');
+    const error = new Error('历史镜像磁盘拒读');
+    const transaction = spyOn(IDBDatabase.prototype, 'transaction').mockImplementationOnce(() => { throw error; });
+    try {
+      const first = cache.read(target, 'first'), second = cache.read(target, 'second');
+      const outcomes = await Promise.allSettled([first, second]);
+      expect(outcomes).toEqual([{ status: 'rejected', reason: error }, { status: 'rejected', reason: error }]);
+    } finally { transaction.mockRestore(); }
+    expect(await cache.read(target, 'retry')).toBeNull();
+  });
+
   test('有限保留最近 64 个 Thread，不无限堆积正文', async () => {
     const cache = new ThreadHistoryCache();
     for (let index = 0; index < 66; index++) {

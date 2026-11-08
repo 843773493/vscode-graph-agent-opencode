@@ -33,12 +33,26 @@ function isOlder(left: SessionTurnTimeline, right: SessionTurnTimeline): boolean
 /** 与 EditorPane 生命周期分离的历史镜像；正文只保存服务端已经物化的窗口。 */
 export class ThreadHistoryCache {
   private readonly memory = new Map<string, HistorySnapshot>();
+  private readonly reads = new Map<string, { result: Promise<HistorySnapshot | undefined>; invalidated: boolean }>();
   private readonly pending = new Map<string, { snapshot: HistorySnapshot; timer: ReturnType<typeof setTimeout>; onError: (error: unknown) => void }>();
   private readonly writes = new Set<Promise<CacheWriteFailure | undefined>>();
 
   async read(owner: ThreadHistoryOwner, scopeKey: string): Promise<SessionTurnTimeline | null> {
     const key = snapshotKey(owner);
-    const cached = this.memory.get(key) ?? await readBrowserView<HistorySnapshot>(key);
+    let cached = this.memory.get(key);
+    if (!cached) {
+      let reading = this.reads.get(key);
+      if (!reading) {
+        reading = { result: readBrowserView<HistorySnapshot>(key), invalidated: false };
+        this.reads.set(key, reading);
+      }
+      try {
+        cached = await reading.result;
+        if (reading.invalidated) return null;
+      } finally {
+        if (this.reads.get(key) === reading) this.reads.delete(key);
+      }
+    }
     // 读取数据库期间可能已有更晚的后端快照到达，不能用迟到读取覆盖它。
     const snapshot = this.memory.get(key) ?? cached;
     if (!snapshot) return null;
@@ -113,6 +127,9 @@ export class ThreadHistoryCache {
 
   async remove(owner: ThreadHistoryOwner): Promise<void> {
     const key = snapshotKey(owner);
+    // 撤销本次清除之前的读取；迟到完成不能复活旧镜像或进入新调用方的 scope。
+    const reading = this.reads.get(key);
+    if (reading) { reading.invalidated = true; this.reads.delete(key); }
     const pending = this.pending.get(key);
     if (pending) clearTimeout(pending.timer);
     this.pending.delete(key);
