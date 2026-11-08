@@ -251,6 +251,7 @@ export function useSessionResourceExplorer({
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
   const branchRequestRefs = useRef<Map<string, number>>(new Map());
+  const branchRequestSequenceRef = useRef(0);
   const catalogRefreshInFlightRef = useRef<Map<string, Promise<SessionCatalogPage[]>>>(new Map());
   // 导航请求的发布闸门：只有最新一次请求能把结果写回，且成功发布必须同时清掉
   // 上一次的导航错误。六处调用点只允许走这一个入口，杜绝「漏清错误」或
@@ -270,6 +271,48 @@ export function useSessionResourceExplorer({
   const catalogRefreshVersionsRef = useRef(catalogRefreshVersions);
   const terminalOutboxSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
   const trackedOutboxOperationKeysRef = useRef<Set<string>>(new Set());
+  const workspaceReadControllersRef = useRef(new Map<string, AbortController>());
+
+  useLayoutEffect(() => () => {
+    navigationRequestRef.current += 1;
+    currentSessionRevealRequestRef.current += 1;
+    for (const controller of workspaceReadControllersRef.current.values()) {
+      controller.abort(new CatalogReadSupersededError("会话目录读取 owner 已释放"));
+    }
+    branchRequestRefs.current.clear();
+    branchInFlightRequestsRef.current.clear();
+    catalogRefreshInFlightRef.current.clear();
+  }, [apiPort]);
+
+  useLayoutEffect(() => {
+    const owners = new Set(workspaces.map(gatewayWorkspaceKey));
+    const retired = [...workspaceReadControllersRef.current]
+      .filter(([owner, controller]) => !owners.has(owner) || controller.signal.aborted)
+      .map(([owner]) => owner);
+    for (const owner of retired) {
+      workspaceReadControllersRef.current.get(owner)!.abort(
+        new CatalogReadSupersededError(`会话目录登记 owner 已移除: ${owner}`),
+      );
+      workspaceReadControllersRef.current.delete(owner);
+      for (const requests of [branchRequestRefs.current, branchInFlightRequestsRef.current]) {
+        for (const key of requests.keys()) if (key.startsWith(`${owner}:`)) requests.delete(key);
+      }
+      for (const key of catalogRefreshInFlightRef.current.keys()) {
+        if (key.startsWith(`${owner}\u0000`)) catalogRefreshInFlightRef.current.delete(key);
+      }
+    }
+    if (retired.length > 0) {
+      updateBranches(previous => new Map([...previous]
+        .filter(([key]) => !retired.some(owner => key.startsWith(`${owner}:`)))));
+      setExpandedIds(previous => new Set([...previous].filter(id => !retired.some(owner =>
+        id === `workspace:${owner}` || id.startsWith(`catalog:${owner}:`)))));
+    }
+    for (const owner of owners) {
+      if (!workspaceReadControllersRef.current.has(owner)) {
+        workspaceReadControllersRef.current.set(owner, new AbortController());
+      }
+    }
+  }, [apiPort, workspaces, updateBranches]);
 
   const workspaceRequestTarget = useCallback(
     (workspaceId: string) => requireGatewayWorkspaceRequestTarget(workspaces, workspaceId),
@@ -369,6 +412,7 @@ export function useSessionResourceExplorer({
     append = false,
     confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal; refreshRoot?: boolean } = {},
   ): Promise<SessionCatalogPage | undefined> => {
+    confirmedRead.signal?.throwIfAborted();
     if (sessionCatalogOutboxRuntime && gatewayUserAccess) {
       void openCatalogOutbox(workspaceId).catch((error: unknown) => {
         sessionCatalogOutboxRuntime.reportError(
@@ -394,7 +438,8 @@ export function useSessionResourceExplorer({
     if (inFlight) {
       return inFlight;
     }
-    const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
+    // 同一 owner 移除后可重新登记，请求编号不能随分支 Map 清理而复用。
+    const requestId = ++branchRequestSequenceRef.current;
     branchRequestRefs.current.set(key, requestId);
     const current = branchesRef.current.get(key);
     updateBranches((previous) => {
@@ -424,6 +469,7 @@ export function useSessionResourceExplorer({
         while (true) {
           for (let attempt = 0; ; attempt += 1) {
             try {
+              confirmedRead.signal?.throwIfAborted();
               page = refreshRoot && cursor === null ? await refreshSessionCatalog(
                 apiPort,
                 workspaceRequestTarget(workspaceId),
@@ -537,7 +583,7 @@ export function useSessionResourceExplorer({
         if (parentNodeId === null || !confirmedRead.visibleParentIds
           || confirmedRead.visibleParentIds.has(parentNodeId)) return true;
         const key = branchKey(workspaceId, parentNodeId);
-        const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
+        const requestId = ++branchRequestSequenceRef.current;
         // 权威节点集已撤销该可见分支；旧在途页不得把缓存重新写回来。
         branchRequestRefs.current.set(key, requestId);
         removed.set(key, requestId);
@@ -636,6 +682,9 @@ export function useSessionResourceExplorer({
           .map(result => `${result.parentNodeId ?? "root"}=${result.page!.catalog_revision}`).join(", ")})，保留原 confirmed 等待重新对账`);
         failed = true;
       }
+      if (confirmedRead.signal?.reason instanceof CatalogReadSupersededError) {
+        confirmedRead.signal.throwIfAborted();
+      }
       if (errors.length > 0) {
         const message = `重新读取会话目录失败: ${errors.join("；")}`;
         updateBranches((previous) => {
@@ -679,6 +728,14 @@ export function useSessionResourceExplorer({
       reuseConfirmedBranches?: boolean;
     } = {},
   ) => {
+    const target = workspaceRequestTarget(workspaceId);
+    const lifetime = workspaceReadControllersRef.current.get(workspaceId);
+    if (!lifetime || lifetime.signal.aborted) {
+      throw new CatalogReadSupersededError(`会话目录读取 owner 已释放: ${workspaceId}`);
+    }
+    const signal = options.signal
+      ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal;
+    signal.throwIfAborted();
     const parentNodeIds = new Set<string | null>();
     const scopedSnapshotKey = gatewayUserAccess
       ? sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess)
@@ -767,7 +824,8 @@ export function useSessionResourceExplorer({
       let minimumCatalogRevision = options.minimumCatalogRevision ?? 0;
       let visibleParentIds: ReadonlySet<string> | undefined;
       if ([...parentNodeIds].some((parentNodeId) => parentNodeId !== null)) {
-        const catalog = await getSessionCatalogExport(apiPort, workspaceRequestTarget(workspaceId), { signal: options.signal });
+        const catalog = await getSessionCatalogExport(apiPort, target, { signal });
+        signal.throwIfAborted();
         const floor = Math.max(minimumCatalogRevision, ...[...branchesRef.current.entries()]
           .filter(([key]) => key.startsWith(`${workspaceId}:`))
           .map(([, branch]) => branch.catalog_revision ?? 0));
@@ -778,9 +836,10 @@ export function useSessionResourceExplorer({
         visibleParentIds = new Set(catalog.items.map((node) => node.node_id));
       }
       return await reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds, {
-        ...options, minimumCatalogRevision, visibleParentIds,
+        ...options, signal, minimumCatalogRevision, visibleParentIds,
       });
     })().catch((error: unknown) => {
+      if (lifetime.signal.aborted) throw lifetime.signal.reason;
       if (branchRequestRefs.current.get(rootKey) === rootRequestId) {
         updateBranches((previous) => {
           const next = new Map(previous);
@@ -1578,7 +1637,8 @@ export function useSessionResourceExplorer({
   }, [apiPort, catalogViewVersion, navigation, searchOpen, searchQuery]);
 
   useEffect(() => {
-    if (!currentSessionWorkspaceId || !currentSessionId || !navigation) {
+    if (!currentSessionWorkspaceId || !currentSessionId || !navigation
+      || !workspaceReadControllersRef.current.has(currentSessionWorkspaceId)) {
       currentSessionRevealRequestRef.current += 1;
       currentSessionRevealKeyRef.current = null;
       setRevealError(null);
