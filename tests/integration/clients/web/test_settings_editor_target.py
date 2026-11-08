@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
+from zipfile import ZipFile
 
 import commentjson
 import pytest
@@ -25,6 +26,13 @@ from tests.integration.gateway.test_mcp_artifact_installation import (
 from tests.integration.gateway.test_mcp_artifact_installation import (
     installation_case as installation_case,  # noqa: PLC0414
 )
+from tests.integration.test_shared_managed_backend_lifecycle import (
+    SharedBackendCase,
+    _join_group,
+)
+from tests.integration.test_shared_managed_backend_lifecycle import (
+    shared_backend_case as shared_backend_case,  # noqa: PLC0414
+)
 from tests.integration.workspace_services.extension_host.test_extension_management import (
     management_runtime as management_runtime,  # noqa: PLC0414
 )
@@ -35,7 +43,8 @@ from tests.support.paths import chromium_temporary_environment
 
 
 @pytest.fixture(autouse=True)
-def settings_management_component(management_runtime, runtime_manifest_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+def settings_management_component(management_runtime, runtime_manifest_path: Path, web_workbench_assets: Path,
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
     context, component, runtime = management_runtime
     manifest = context.runtime_root_for_node(request.node.nodeid) / "settings-runtime.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -45,6 +54,8 @@ def settings_management_component(management_runtime, runtime_manifest_path: Pat
     }
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("BOXTEAM_TEST_MCP_RUNTIME_MANIFEST", str(manifest))
+    monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(manifest))
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
 
 
 async def test_settings_editor_saves_target_json_and_restores_same_profile(installation_case: InstallationCase, vsix_factory) -> None:
@@ -97,3 +108,98 @@ async def test_settings_editor_saves_target_json_and_restores_same_profile(insta
     assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == workspace_config
     assert all(write["gateway_id"] == binding["gateway_id"] and write["backend_id"] == binding["backend_id"]
         and write["profile_id"] == binding["profile_id"] for write in browser["writes"])
+
+
+async def test_target_browser_configuration_scopes_use_original_multiroot_writer(
+    shared_backend_case: SharedBackendCase, vsix_factory,
+) -> None:
+    case = shared_backend_case
+    primary, secondary, joined = await _join_group(case)
+    gateway_id = joined["gateway_id"]
+    targets = await case.data("POST", "/api/gateway/extension-targets", json={"protocol_version": 1, "gateway_id": gateway_id})
+    target, = targets["targets"]
+    originals = [(root / ".boxteam/workspace.jsonc").read_bytes() for root in case.roots]
+    package = vsix_factory(case.roots[0], "1.0.0", "web-configuration-scopes", manifest_overrides={
+        "name": "web-configuration-scopes", "browser": "./browser.js", "extensionKind": ["web"],
+        "activationEvents": ["onCommand:boxteam.webScopes.read"], "contributes": {
+            "commands": [{"command": "boxteam.webScopes.read", "title": "读取多根 Web 配置"}],
+            "configuration": {"title": "Web 作用域验收", "properties": {
+                "webScopeProbe.value": {"type": "string", "default": "default-value", "scope": "resource"},
+                "webScopeProbe.language": {"type": "string", "default": "default-language", "scope": "language-overridable"},
+                "webScopeProbe.inferred": {"type": "string", "default": "default-inferred", "scope": "resource"},
+                "webScopeProbe.window": {"type": "string", "default": "default-window", "scope": "window"}}},
+            "configurationDefaults": {"[typescript]": {"webScopeProbe.language": "default-typescript"}}}}, omit=("main",))
+    with ZipFile(package, "a") as archive:
+        archive.writestr("extension/browser.js", """
+const vscode = require('vscode');
+exports.activate = context => {
+  const events = [];
+  const activation = Math.random().toString(36);
+  const scope = options => {
+    const uri = options.uri ? vscode.Uri.parse(options.uri) : options.folder === undefined ? undefined
+      : vscode.workspace.workspaceFolders[options.folder].uri;
+    return options.language ? { uri, languageId: options.language } : uri;
+  };
+  const configuration = options => vscode.workspace.getConfiguration('webScopeProbe', scope(options));
+  const read = (options = {}) => {
+    const config = configuration(options);
+    return JSON.parse(JSON.stringify({ activation, value: config.get('value'), language: config.get('language'),
+      inferred: config.get('inferred'), window: config.get('window'), inspect: config.inspect('value'),
+      languageInspect: config.inspect('language'), inferredInspect: config.inspect('inferred'), events,
+      folders: vscode.workspace.workspaceFolders.map(folder => folder.uri.toString(true)),
+      workspaceFile: vscode.workspace.workspaceFile?.toString(true),
+      worker: typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope,
+    }, (_key, value) => value === undefined ? null : value));
+  };
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('webScopeProbe')) events.push({
+      first: read({folder: 0}).value, second: read({folder: 1}).value,
+      language: read({folder: 0, language: 'typescript'}).language,
+    });
+  }), vscode.commands.registerCommand('boxteam.webScopes.read', read),
+  vscode.commands.registerCommand('boxteam.webScopes.update', async options => {
+    const target = options.target === undefined ? undefined : vscode.ConfigurationTarget[options.target];
+    await configuration(options).update(options.key, options.value, target, options.overrideInLanguage);
+    return read(options);
+  }));
+};
+""")
+    installed = await case.data("POST", "/api/gateway/extension-installations/install", json={
+        "protocol_version": 1, "gateway_id": gateway_id, "backend_id": target["backend_id"], "workspace_ids": [primary],
+        "source_uri": resource_display_uri(scope="workspace", scope_id=primary, kind="files",
+            tail_segments=("root", package.name), gateway_authority=gateway_id)})
+    assert installed["installed"]["id"] == "boxteam-probe.web-configuration-scopes"
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "Web 多根配置验收需要真实 Chromium"
+    output = case.context.artifacts_dir / "web-configuration-scopes.json"
+    supervisor = Path.cwd() / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
+        "bun", "tests/integration/clients/web/target_web_configuration_scopes.mjs"]
+    with chromium_temporary_environment(case.context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"]) / "chromium-tmp") as temporary:
+        result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=195, check=False,
+            env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+                "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url).rstrip("/"), "BOXTEAM_BROWSER_RESULT_PATH": str(output),
+                "BOXTEAM_WEB_CONFIGURATION_SCOPES": json.dumps({"gateway_id": gateway_id, "backend_id": target["backend_id"],
+                    "workspace_ids": [primary, secondary]})})
+    (case.context.artifacts_dir / "scopes-browser.stdout.raw").write_text(result.stdout)
+    (case.context.artifacts_dir / "scopes-browser.stderr.raw").write_text(result.stderr)
+    (case.context.artifacts_dir / "scopes-browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}, indent=2))
+    assert result.returncode == 0, result.stdout + result.stderr
+    browser = json.loads(output.read_text())
+    assert browser["phase"] == "complete" and browser["pageErrors"] == []
+    assert browser["nodeChannels"] == [] and browser["binding"]["workspace_ids"] == [primary, secondary]
+    workspace_uri = urlsplit(browser["binding"]["context"]["workspace"]["configuration"]["native_uri"])
+    assert workspace_uri.scheme == "file" and not workspace_uri.netloc
+    workspace_file = Path(url2pathname(workspace_uri.path)).resolve()
+    assert workspace_file.is_relative_to(case.boxteam_home.resolve())
+    saved = commentjson.loads(workspace_file.read_text())
+    assert saved["settings"]["webScopeProbe.value"] == "external-view"
+    assert saved["settings"]["webScopeProbe.inferred"] == "inferred-view"
+    assert len(saved["folders"]) == 2
+    first_settings = commentjson.loads((case.roots[0] / ".vscode/settings.json").read_text())
+    assert first_settings["webScopeProbe.value"] == "inferred-folder"
+    assert first_settings["[typescript]"]["webScopeProbe.language"] == "folder-typescript"
+    assert not (case.roots[1] / ".vscode/settings.json").exists()
+    assert all((root / ".boxteam/workspace.jsonc").read_bytes() == original
+        for root, original in zip(case.roots, originals, strict=True))
+    assert not case.planned_calls
