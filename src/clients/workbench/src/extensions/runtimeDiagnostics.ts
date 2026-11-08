@@ -15,7 +15,8 @@ interface ApiSupport {
 // 声明已接线的范围，不把类型、通道或单项通过当作整类 API 的支持证明。
 const targetApiSupport: readonly ApiSupport[] = [
   { id: 'commands', state: 'partial', detail: '命令与激活按原宿主派发；完整菜单、快捷键及视图上下文仍待迁齐。' },
-  { id: 'documentsLanguageSearch', state: 'partial', detail: '已有文档、语言、诊断和符号的目标投影；Notebook、其它编辑入口及完整搜索闭包仍待迁齐。' },
+  { id: 'documentsLanguageSearch', state: 'partial', detail: '已有文档、语言、诊断和符号的目标投影；其它编辑入口及完整搜索闭包仍待迁齐。' },
+  { id: 'notebooks', state: 'unsupported', detail: 'Notebook 文档、编辑器、serializer、Cell URI 和执行服务尚未完成目标绑定，公开及主线程入口明确拒绝。' },
   { id: 'workspaceFiles', state: 'partial', detail: '工作区视图、文件读取、创建、保存及监听复用目标 owner；重命名、删除及完整原生路径往返仍待迁齐。' },
   { id: 'configuration', state: 'partial', detail: '配置按目标 profile/view/folder 接入原服务；完整多目标编辑和平台验收仍待完成。' },
   { id: 'terminal', state: 'unsupported', detail: '尚未接入目标终端服务；终端、shell、环境集合和 shell integration 明确拒绝。' },

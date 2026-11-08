@@ -286,6 +286,10 @@ Web 实例 SHALL 在原运行 owner 准入时冻结安装目标、扩展及确�
 - **WHEN** B 的 Web 或 Node 扩展在对应目标执行服务尚未接入时注册、查询或执行任务与调试，订阅相关事件，或内部协议请求创建适配器、运行终端
 - **THEN** 原公开与协议入口明确拒绝，包含废弃任务注册入口及 Node integrated／external 调试终端；拒绝前不取得 A 的任务／会话／断点、不调用扩展执行回调或创建替代进程。B 初始化不向 A 注册任务系统、执行能力或调试类型，A 的窗口内置宿主原 Provider、执行与事件行为保持；纯任务定义值仍可构造
 
+#### Scenario: 尚未完整绑定的 Notebook 能力
+- **WHEN** 目标 Web 或 Node 扩展读取、订阅或操作 Notebook 文档／编辑器、注册 serializer／controller／renderer，或经内部 RPC、保存参与者和 WorkspaceEdit 提交 Notebook 编辑
+- **THEN** 在访问窗口 Notebook 服务或产生副作用前明确拒绝，初始化不推送窗口 Notebook 正文及编辑器、不订阅窗口增量和保存事件；机器诊断报告 notebooks 为 unsupported。窗口内置宿主原行为与 NotebookData／NotebookCellData／NotebookEdit 纯值构造保持。完整目标支持须迁齐文档、Cell URI、serializer／viewType、kernel／renderer 与执行归属，不能以局部 delta 过滤代替
+
 ### Requirement: 宿主恢复与持久存储必须保持目标隔离
 
 宿主 SHALL 惰性创建并按有界客户端租约回收；断开、崩溃、后端重启及权限失效须停止新准入、撤销旧代际贡献并报告实际原因，不自动重放未知副作用。安装记录及持久状态不随宿主关闭删除。扩展全局状态 SHALL 按 profile／原生目标／扩展隔离，工作区状态进一步按稳定工作区视图区分，不以临时客户端 ID／endpoint 作为持久身份；凭据留实际消费侧。

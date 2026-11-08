@@ -24,6 +24,8 @@ Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成�
 
 任务与调试同样沿原 MainThread／ExtHost 拒绝未接通的目标能力，初始化不得注册窗口任务系统／调试类型或订阅窗口状态；公开 namespace、废弃任务注册、内部执行／RPC 和 Node 调试终端分流均使用同一认证标记。保留内置窗口行为及纯值构造，不把明确拒绝当目标执行已实现；带原生依赖的转换文件只进入专用 Node 类型清单，两个运行面共用原 sourceTransform。
 
+Notebook 未完整绑定前，公开 API、原 MainThread RPC、初始同步、订阅和保存参与者统一拒绝目标宿主；内置窗口与纯值构造保持。Notebook 转换在原 FileEvents 转换之后消费同一宿主字段，不复制 owner；完整接线必须同时处理 Cell URI、serializer、viewType 和执行归属，不能用局部正文过滤伪装支持。
+
 诊断继续由原 MainThreadDiagnostics／MarkerService 持有；目标 collection 的内部 owner 使用原 extHostId 区分，清空及释放只撤本代。事件按 workspace view 投影并过滤外部关联位置，保留普通正文及合法文档链接；写入先核整批资源，不能部分发布后报错。窗口内置 Web 保留原 owner 与窗口事件语义。
 
 配置转换复用原 WorkspaceService、scope 合并及 ConfigurationEditing；显式目标 settings 不等待窗口 RemoteAgent。原文件夹 parser 保留 raw／名称并按目标平台解析，结果须匹配已认证的有序根；所有 MainThread customer 共用该 host 的配置／context child。配置读取的目标不可用错误不能吞成空配置。

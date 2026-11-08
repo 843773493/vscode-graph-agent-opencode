@@ -127,7 +127,7 @@ try {
     const [diagnostic] = report.targets;
     expect(diagnostic.installationTarget).toEqual({ kind: 'backend', gatewayId: target.gateway_id, backendId: target.backend_id });
     expect(diagnostic.viewId).toBe('default');
-    for (const api of ['terminal', 'tasks', 'debug', 'secrets', 'stateSync']) expect(report.apiSupport.find(entry => entry.id === api).state).toBe('unsupported');
+    for (const api of ['notebooks', 'terminal', 'tasks', 'debug', 'secrets', 'stateSync']) expect(report.apiSupport.find(entry => entry.id === api).state).toBe('unsupported');
     expect(report.apiSupport.find(entry => entry.id === 'documentsLanguageSearch').state).toBe('partial');
     expect(diagnostic.hosts.length).toBeGreaterThan(0);
     if (scope === 'caller') expect(diagnostic.hosts).toHaveLength(1);
@@ -136,6 +136,24 @@ try {
     expect(host.extensions.some(extension => extension.activationStarted && extension.activated)).toBe(true);
     expect(JSON.stringify([state.nodeResolves, state.nodeChannels, state.webAdmissions])).toBe(before);
     return report;
+  };
+  const notebooks = async (view, id) => {
+    const value = await command(view, id);
+    const names = [
+      ...['activeNotebookEditor', 'onDidChangeActiveNotebookEditor', 'visibleNotebookEditors', 'onDidChangeVisibleNotebookEditors',
+        'onDidChangeNotebookEditorSelection', 'onDidChangeNotebookEditorVisibleRanges', 'showNotebookDocument'].map(name => 'window.' + name),
+      ...['notebookDocuments', 'openNotebookDocument', 'onDidSaveNotebookDocument', 'onDidChangeNotebookDocument',
+        'onWillSaveNotebookDocument', 'onDidOpenNotebookDocument', 'onDidCloseNotebookDocument', 'registerNotebookSerializer'].map(name => 'workspace.' + name),
+      ...['createNotebookController', 'registerNotebookCellStatusBarItemProvider', 'createRendererMessaging',
+        'createNotebookControllerDetectionTask', 'registerKernelSourceActionProvider'].map(name => 'notebooks.' + name),
+    ].sort();
+    expect(value.rejected.map(item => item.api).sort()).toEqual(names);
+    for (const item of value.rejected) {
+      expect(item.accepted).toBeUndefined();
+      expect(item.error).toContain('目标扩展暂不支持 Notebook API');
+    }
+    expect(value.values).toEqual({ language: 'python', count: 1, metadata: { probe: true } });
+    return value;
   };
   await initialize(page, fixture.base_url, fixture.targets.a);
 
@@ -152,6 +170,7 @@ try {
     'boxteam.extensions.getRuntimeDiagnostics', 'web', 'window');
   result.callerDiagnostics = await runtimeDiagnostics(page, result, fixture.targets.a,
     'boxteam.empty.runtimeDiagnostics', 'web', 'caller');
+  result.notebooks = await notebooks(page, 'boxteam.empty.webNotebooks');
   expect(result.runtimeDiagnostics.targets[0].nodeChannel).toBeNull();
   expect(result.callerDiagnostics.targets[0].hosts[0].binding.generation).toBe(initialAdmission.generation);
   expect(result.targetDirectories[0]).toEqual({ protocol_version: 1, gateway_id: fixture.targets.a.gateway_id });
@@ -300,6 +319,7 @@ try {
     'boxteam.extensions.getRuntimeDiagnostics', 'node', 'window');
   result.attached.nodeDiagnostics = await runtimeDiagnostics(page, result.attached, fixture.targets.a,
     'boxteam.empty.nodeDiagnostics', 'node', 'caller');
+  result.attached.notebooks = await notebooks(page, 'boxteam.empty.nodeNotebooks');
   expect(result.attached.runtimeDiagnostics.targets[0].hosts.map(host => host.kind).sort()).toEqual(['node', 'web']);
   expect(result.attached.nodeDiagnostics.targets[0].hosts[0].processApi.state).toBe('partial');
   expect(result.attached.nodeDiagnostics.targets[0].nodeChannel.state).toBe('available');

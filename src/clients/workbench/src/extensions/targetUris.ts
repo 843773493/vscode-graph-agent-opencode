@@ -2,6 +2,7 @@ import { isEqualOrParent as isPathEqualOrParent, toSlashes } from '../../upstrea
 import { posix, win32 } from '../../upstream/src/vs/base/common/path.js';
 import { dirname, ExtUri, extUri, joinPath, originalFSPath, relativePath } from '../../upstream/src/vs/base/common/resources.js';
 import { equalsIgnoreCase } from '../../upstream/src/vs/base/common/strings.js';
+import { NotSupportedError } from '../../upstream/src/vs/base/common/errors.js';
 import { URI, UriComponents } from '../../upstream/src/vs/base/common/uri.js';
 import type { IURITransformer } from '../../upstream/src/vs/base/common/uriIpc.js';
 import type { IExtensionDescription } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
@@ -157,6 +158,8 @@ export function hostOwnsFileEventResource(host: IExtensionHost, uri: URI, parent
 /** 编辑先核整批所有端点，不能先写合法首项再发现跨视图后项。 */
 export function assertHostWorkspaceEdit(host: IExtensionHost, edit: IWorkspaceEditDto): void {
   for (const value of edit.edits) {
+    // TODO(6.2)：Notebook serializer 与完整文档归属迁齐前，不能经通用 WorkspaceEdit 绕过原 Notebook 入口。
+    if (host.targetContext && 'cellEdit' in value) throw new NotSupportedError('目标扩展暂不支持 Notebook 编辑；原 Notebook 服务尚未完成目标绑定');
     const resources = ['resource' in value ? value.resource : undefined,
       'oldResource' in value ? value.oldResource : undefined, 'newResource' in value ? value.newResource : undefined];
     for (const raw of resources) {

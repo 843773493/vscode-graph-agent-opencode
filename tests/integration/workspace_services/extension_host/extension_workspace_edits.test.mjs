@@ -227,7 +227,7 @@ afterAll(async () => {
   try { await run.close(); }
   finally {
     await writeFile(join(run.artifactsDir, 'receipt.json'), JSON.stringify({ pinnedUpstreamCommit, fingerprints, checks,
-      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、RenameSkeleton/Controller.run、inline EditorState/RenameSymbolRunnable、preview handler/_previewEdit/PreviewSession/getBulkEditPane/Pane.setInput/_done/_openElementInMultiDiffEditor 和完整 BulkEditPreviewProvider 类；原 RenameSymbolProcessor 注册并执行真实 CommandsRegistry 命令，原 MainThreadLanguageFeatures/共享 registry/rawRename 的同一返回对象直接交原 BulkEditService。公开 Rename 命令经原 MainThreadCommands/真实 RPC 返回，核窗口不可枚举 lifecycleToken 不进入 DTO。另运行原 ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、扩展 Rename 回调/已冻结版本 DTO、文档版本镜像、常规文本 resolver 延迟/失败/按需创建原模型、编辑器/Widget/通知/进度、preview View/UX/输入创建和树UI、配置与纯文本TreeSitter库是具名装具；状态取消实际运行原EditorStateCancellationTokenSource，readonly编辑器使原BulkTextEdits选择原模型任务。常规编辑组resolver只观察请求/释放，不证明其引用计数及关模/重开保护；Provider窄组另运行原BulkFileOperations/ConflictDetector、TextModelResolverService/AsyncReferenceCollection/TextResourceEditorModel，源模型持原baseline引用，resolver包装仅注入回执延迟/失败并观察原引用，词法queueMicrotask仅收集并调度原callback，不改写Provider方法或伪造模型销毁。语言检测/辅助通知和Pane资源计算/openEditor为具名边界；Pane核两次await后的input/provider精确身份及fresh成功。目标文件和配置provider由原InMemoryFileSystemProvider替代。Notebook新增原Controller的delta版本生产，经公开applyEdit和RPC核整批冲突零写入；目标模型仍由具名resolver提供，不证明真实Notebook编辑或目标同步。本片不重复原RenameAdapter版本producer，不验证inline推断/NES命令、真实Preview渲染/UX恢复、Chat分项移交后的owner、产品WorkspaceFiles rename/delete、真实配置保存、Gateway、真实Node、磁盘保存、Windows、无版本字段原子性或所有取消时点。',
+      boundary: '真实 Chromium 中 AST 提取的原 workspace.applyEdit、RenameSkeleton/Controller.run、inline EditorState/RenameSymbolRunnable、preview handler/_previewEdit/PreviewSession/getBulkEditPane/Pane.setInput/_done/_openElementInMultiDiffEditor 和完整 BulkEditPreviewProvider 类；原 RenameSymbolProcessor 注册并执行真实 CommandsRegistry 命令，原 MainThreadLanguageFeatures/共享 registry/rawRename 的同一返回对象直接交原 BulkEditService。公开 Rename 命令经原 MainThreadCommands/真实 RPC 返回，核窗口不可枚举 lifecycleToken 不进入 DTO。另运行原 ExtHostBulkEdits/转换器、RPCProtocol/SerializableObjectWithBuffers/TargetUriTransformer、MainThreadBulkEdits、BulkTextEdits/ModelService/TextModel/UndoRedoService、BulkFileEdits/WorkingCopyFileService/FileService 和 OpaqueEdits。认证 binding、字节输送、扩展 Rename 回调/已冻结版本 DTO、文档版本镜像、常规文本 resolver 延迟/失败/按需创建原模型、编辑器/Widget/通知/进度、preview View/UX/输入创建和树UI、配置与纯文本TreeSitter库是具名装具；状态取消实际运行原EditorStateCancellationTokenSource，readonly编辑器使原BulkTextEdits选择原模型任务。常规编辑组resolver只观察请求/释放，不证明其引用计数及关模/重开保护；Provider窄组另运行原BulkFileOperations/ConflictDetector、TextModelResolverService/AsyncReferenceCollection/TextResourceEditorModel，源模型持原baseline引用，resolver包装仅注入回执延迟/失败并观察原引用，词法queueMicrotask仅收集并调度原callback，不改写Provider方法或伪造模型销毁。语言检测/辅助通知和Pane资源计算/openEditor为具名边界；Pane核两次await后的input/provider精确身份及fresh成功。目标文件和配置provider由原InMemoryFileSystemProvider替代。Notebook公开applyEdit经真实RPC在resolver前明确拒绝；原BulkEdit已有Notebook版本及cellURI冲突独立核零写入，不证明目标Notebook支持。本片不重复原RenameAdapter版本producer，不验证inline推断/NES命令、真实Preview渲染/UX恢复、Chat分项移交后的owner、产品WorkspaceFiles rename/delete、真实配置保存、Gateway、真实Node、磁盘保存、Windows、无版本字段原子性或所有取消时点。',
     }, null, 2));
     await writeFile(join(run.artifactsDir, 'observations.json'), JSON.stringify(observations, null, 2));
     await writeFile(join(run.artifactsDir, 'browser-events.json'), JSON.stringify(browserEvents, null, 2));
@@ -815,8 +815,8 @@ test('入口已取消的版本编辑不请求 resolver，也不开始任何文�
   expect(result.operations).toEqual([]); expect(result.warnings).toEqual([]); expect(result.failures).toEqual([]); checks.push('原BulkEditService入口已取消时零版本解析、零file/text副作用且isApplied=false');
 });
 
-test('真实 Notebook owner 生产的版本经公开 applyEdit 和 RPC 在首 file 前阻止过期整批编辑', async () => {
-  const result = await inBrowser('Notebook版本生产到整批门禁', async () => {
+test('目标 Notebook 编辑经公开 applyEdit 和 RPC 在首 file 前明确拒绝', async () => {
+  const result = await inBrowser('未接通Notebook目标链时拒绝整批编辑', async () => {
     const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A'));
     const native = p.native(a, 0, 'producer.ipynb'), resource = a.logical(native), created = p.native(a, 1, 'must-not-create.ts');
     a.syncNotebook(native, 3);
@@ -824,18 +824,15 @@ test('真实 Notebook owner 生产的版本经公开 applyEdit 和 RPC 在首 fi
     const edit = new m.WorkspaceEdit(); edit.createFile(created, { contents: new TextEncoder().encode('bad') });
     edit.set(native, [m.NotebookEdit.updateNotebookMetadata({ changed: true })]);
     const applied = await a.workspace.applyEdit(edit);
-    return { applied, exists: await p.files.exists(a.logical(created)), version: a.calls[0].edits[1].notebookVersionId,
-      resource: a.calls[0].edits[1].resource.toString(), expectedResource: resource.toString(),
+    return { applied, exists: await p.files.exists(a.logical(created)), calls: a.calls,
       notebookWrites: p.notebooks.writes, references: p.notebooks.references, requests: p.notebooks.requests,
       operations: p.operations, warnings: p.warnings, failures: p.failures };
   });
-  expect(result.version).toBe(3); expect(result.resource).toBe(result.expectedResource);
   expect(result.applied).toBe(false); expect(result.exists).toBe(false); expect(result.notebookWrites).toBe(0); expect(result.operations).toEqual([]);
-  expect(result.requests).toEqual([result.expectedResource]); expect(result.references).toHaveLength(1);
-  expect(result.references[0].disposed).toBe(true); expect(result.references[0].disposeCount).toBe(1);
-  expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('Notebook'); expect(result.warnings[0]).toContain('has changed in the meantime');
-  expect(result.failures).toHaveLength(1);
-  checks.push('原NotebookController的delta生成版本，经原公开applyEdit/WorkspaceEdit.from/RPC/URI转换/BulkEdit在首file前拒绝；目标Notebook resolver仍为具名边界');
+  expect(result.calls).toEqual([]); expect(result.requests).toEqual([]); expect(result.references).toEqual([]);
+  expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('目标扩展暂不支持 Notebook 编辑');
+  expect(result.failures).toEqual([]);
+  checks.push('目标Notebook经原公开applyEdit和RPC在BulkEdit及resolver前整批拒绝；未接通目标Notebook同步不伪装支持');
 });
 
 test('同资源的文本与 Notebook 版本分别核对，重复 Notebook 后项冲突在首 file 前拒绝', async () => {
@@ -843,22 +840,23 @@ test('同资源的文本与 Notebook 版本分别核对，重复 Notebook 后项
     const p = globalThis.editProbe, m = p.m, a = await p.connect(p.target('A')), native = p.native(a, 0, 'shared.ipynb'), resource = a.logical(native), created = p.native(a, 1, 'must-not-create.ts');
     const model = p.openText(a, native, 'old-text'), version = model.getVersionId(), notebook = p.notebookVersion(resource, version + 10);
     p.notebooks.onResolve = async () => notebook;
-    // 此场景用显式 DTO 单独验证逐项多版本；真实版本生产经前一公开 API 场景验证。
-    const applied = await a.remote.$tryApplyWorkspaceEdit(new m.SerializableObjectWithBuffers({ edits: [p.dtoCreate(created),
-      { ...p.dtoText(native, 'BAD'), versionId: version },
-      { resource: native, notebookVersionId: notebook.versionId, cellEdit: { editType: m.CellEditType.DocumentMetadata, metadata: { first: true } } },
-      { resource: native, notebookVersionId: notebook.versionId - 1, cellEdit: { editType: m.CellEditType.DocumentMetadata, metadata: { late: true } } },
-    ] }));
-    return { applied, value: model.getValue(), exists: await p.files.exists(a.logical(created)), notebookWrites: p.notebooks.writes,
+    // 原BulkEdit自身仍支持Notebook版本；目标扩展入口在前一场景明确拒绝，不以此内部验证声称目标支持。
+    let error;
+    try { await a.actualBulk.apply([
+      new m.ResourceFileEdit(undefined, a.logical(created), { contents: m.VSBuffer.fromString('bad') }),
+      new m.ResourceTextEdit(resource, p.dtoText(resource, 'BAD').textEdit, version),
+      new m.ResourceNotebookCellEdit(resource, { editType: m.CellEditType.DocumentMetadata, metadata: { first: true } }, notebook.versionId),
+      new m.ResourceNotebookCellEdit(resource, { editType: m.CellEditType.DocumentMetadata, metadata: { late: true } }, notebook.versionId - 1),
+    ]); } catch (failure) { error = failure.message; }
+    return { error, value: model.getValue(), exists: await p.files.exists(a.logical(created)), notebookWrites: p.notebooks.writes,
       textReferences: p.resolutions, notebookReferences: p.notebooks.references, textRequests: p.resolver.requests, notebookRequests: p.notebooks.requests, resource: resource.toString(),
-      versions: a.calls[0].edits.map(edit => edit.versionId ?? edit.notebookVersionId ?? null), expectedVersions: [null, version, notebook.versionId, notebook.versionId - 1],
       operations: p.operations, warnings: p.warnings, failures: p.failures };
   });
-  expect(result.applied).toBe(false); expect(result.value).toBe('old-text'); expect(result.exists).toBe(false); expect(result.notebookWrites).toBe(0); expect(result.operations).toEqual([]);
-  expect(result.versions).toEqual(result.expectedVersions); expect(result.textRequests).toEqual([result.resource]); expect(result.notebookRequests).toEqual([result.resource]);
+  expect(result.error).toContain('has changed in the meantime'); expect(result.value).toBe('old-text'); expect(result.exists).toBe(false); expect(result.notebookWrites).toBe(0); expect(result.operations).toEqual([]);
+  expect(result.textRequests).toEqual([result.resource]); expect(result.notebookRequests).toEqual([result.resource]);
   for (const references of [result.textReferences, result.notebookReferences]) { expect(references).toHaveLength(1); expect(references[0].disposed).toBe(true); expect(references[0].disposeCount).toBe(1); }
-  expect(result.warnings).toHaveLength(1); expect(result.warnings[0]).toContain('IGNORING workspace edit:'); expect(result.warnings[0]).toContain('Notebook'); expect(result.warnings[0]).toContain('has changed in the meantime');
-  expect(result.failures).toHaveLength(1); expect(result.failures[0]).toContain('Notebook'); checks.push('原版本DTO/RPC分别核同URI文本与Notebook，Notebook重复resource单引用但逐项核版本，后项冲突在首file前零副作用');
+  expect(result.warnings).toEqual([]);
+  expect(result.failures).toHaveLength(1); expect(result.failures[0]).toContain('Notebook'); checks.push('原BulkEdit分别核同URI文本与Notebook，Notebook重复resource单引用但逐项核版本，后项冲突在首file前零副作用；不代表目标扩展Notebook已支持');
 });
 
 test('Notebook cell URI 通过原 CellUri 归一，版本冲突在文件及 Notebook 写入前失败', async () => {

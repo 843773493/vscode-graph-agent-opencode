@@ -85,9 +85,32 @@ async def test_default_empty_workbench_runs_entry_browser_target_after_managemen
 
     targets = {}
     theme = {"label": "Empty Target Theme", "colors": {"a": "#123456", "b": "#654321"}}
+    notebook_probe = """
+function registerNotebookProbe(context, id) {
+  context.subscriptions.push(vscode.commands.registerCommand(id, async () => {
+    const rejected = [];
+    for (const [namespace, api] of [['window', vscode.window], ['workspace', vscode.workspace], ['notebooks', vscode.notebooks]]) {
+      for (const name of Object.keys(api).filter(name => namespace === 'notebooks' || /notebook/i.test(name)).sort()) {
+        try {
+          const member = api[name];
+          await (typeof member === 'function' ? member() : member);
+          rejected.push({ api: namespace + '.' + name, accepted: true });
+        } catch (error) {
+          rejected.push({ api: namespace + '.' + name, error: String(error) });
+        }
+      }
+    }
+    const cell = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, 'print(1)', 'python');
+    const data = new vscode.NotebookData([cell]);
+    const edit = vscode.NotebookEdit.updateNotebookMetadata({ probe: true });
+    return { rejected, values: { language: data.cells[0].languageId, count: data.cells.length, metadata: edit.newNotebookMetadata } };
+  }));
+}
+"""
     browser_code = """
 const vscode = require('vscode');
 exports.activate = context => {
+  registerNotebookProbe(context, 'boxteam.empty.webNotebooks');
   const activation = crypto.randomUUID();
   context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.runtimeDiagnostics',
     () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
@@ -99,7 +122,7 @@ exports.activate = context => {
     uiKind: vscode.env.uiKind
   })));
 };
-"""
+""" + notebook_probe
     for label, client, gateway_id, workspace, version in zip(
         ("a", "b"), network.clients, network.gateway_ids, network.workspace_roots, ("1.0.0", "2.0.0"), strict=True,
     ):
@@ -152,13 +175,16 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
 """)
             archive.writestr("extension/node.js", """
 const vscode = require('vscode');
-exports.activate = context => context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid', () => ({
+exports.activate = context => {
+registerNotebookProbe(context, 'boxteam.empty.nodeNotebooks');
+context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid', () => ({
   mode: 'node', version: context.extension.packageJSON.version, platform: process.platform,
   nativeContent: require('node:fs').readFileSync(require('node:path').join(__dirname, 'native.txt'), 'utf8'),
   folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
 })), vscode.commands.registerCommand('boxteam.empty.nodeDiagnostics',
   () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
-""")
+};
+""" + notebook_probe)
             archive.writestr("extension/native.txt", "hybrid-node-" + version)
         installed_hybrid = exchange(client, "POST", "/api/gateway/extension-installations/install", {
             "protocol_version": 1, **targets[label], "workspace_ids": [network.workspace_id],
@@ -194,6 +220,8 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
         "src/clients/workbench/src/extensions/webHost.ts", "src/clients/workbench/src/extensions/targetContext.ts",
         "src/clients/workbench/src/extensions/runtimeDiagnostics.ts", "src/clients/workbench/src/extensions/commands.ts",
         "src/clients/workbench/src/extensions/contribution.ts",
+        "src/clients/workbench/src/extensions/targetUris.ts", "src/clients/workbench/scripts/sourceTransform.mjs",
+        "src/clients/workbench/scripts/extensions/extensionNotebookTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionEnablementTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionStatusTransform.mjs", "tests/integration/clients/web/test_empty_target_web.py",
         "tests/integration/clients/web/empty_target_web.mjs"]

@@ -264,6 +264,7 @@ Rename 的调用前文本版本快照与 CodeAction 共用原 ExtHost 文档 own
 |---|---|---|
 | commands／menus／keybindings／activation | 原声明与条件，绑定实际 host，活动上下文只显示合法目标 | 不注册假 handler／不激活错误目标 |
 | text documents／language providers／symbols／search | 原内部 URI 唯一投影，文档同步和取消归资源目标，沿原 SearchService／搜索合同 | 不以本地 IndexedDB 同名资源替代 |
+| Notebook 文档／编辑器／serializer／kernel／renderer | 文档、Cell URI、viewType、执行及资源读取须同批绑定目标 | 完整接线前公开API、主线程RPC及通用编辑入口明确拒绝，不订阅或推送窗口Notebook |
 | workspace folders／fs／watcher／configuration | host 的明确工作区视图，目标文件与设置 owner | 拒绝不支持的操作，不转向浏览器文件系统 |
 | terminal／tasks／debug／process／环境 | 在该后端目标执行，使用目标 PATH／平台和真实生命周期 | 明示具体能力不可用，不改到 Electron／Gateway 执行 |
 | views／webviews／资源与端口 | 复用原贡献、CSP 与资源通道，带 host 来源；远端 localhost 地址按原明确端口转发能力处理 | 不把远端 localhost 解释为浏览器机器 |
@@ -277,6 +278,8 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 目标终端尚未接入期间，目标安装的 Web／Node 扩展从原公开终端 API、shell 与环境集合入口明确取得不支持错误；内部调试路径调用原终端创建服务也在构造本地 Terminal 对象前拒绝。原 MainThreadTerminalService 与独立的 MainThreadTerminalShellIntegration 不向目标宿主初始化或订阅窗口终端，所有入站终端 RPC 同样拒绝。原目标终端服务初始化不向窗口登记进程能力；窗口内置 Web 宿主继续沿原行为。本边界不表示目标终端、任务、调试或完整机器可查询能力矩阵已经实现，后续目标终端接入沿原 owner 替换这些拒绝。
 
 目标任务与调试尚未接入期间，原 tasks／debug namespace、废弃的 workspace.registerTaskProvider 及内部执行／协议入口在使用窗口服务、转换任务、调用 CustomExecution 或创建调试适配器前明确拒绝。目标 MainThread 不订阅窗口任务、会话、断点或焦点；目标 ExtHost 初始化不登记窗口任务系统、执行能力或调试类型。原窗口内置宿主保留 Provider、执行、事件与清理语义，Task／ProcessExecution 等纯值类型仍可构造。Node 的 runInTerminal 在 integrated／external 分流前拒绝；后续真实目标接线沿这些原 owner 替换拒绝，不增加替代进程或第二执行平台。此边界不标为完整目标执行或能力矩阵已完成。
+
+目标 Notebook 尚未完整绑定时，原 window／workspace Notebook API 与 notebooks namespace 在读取共享服务或检查 proposed API 前拒绝。主线程不发送窗口 Notebook 初始正文、编辑器、增量或保存事件，也不注册目标保存参与者；所有 Notebook RPC、内部文档／编辑器处理及 WorkspaceEdit 的 cellEdit 旁路同样拒绝。窗口内置宿主与 NotebookData／NotebookCellData／NotebookEdit 纯值构造保持。完整支持仍为 TODO：须同批迁齐原文档owner、Cell URI、serializer／viewType、kernel／renderer、执行及恢复，不能仅过滤同步delta后宣称支持；运行诊断独立报告 notebooks=unsupported。
 
 `globalStorageUri`、`storageUri`、`logUri` 与 `extensionUri` 也属于 URI／存储闭包：Node host 取得的是目标本机可用路径，包目录与可写状态目录分开；工作台资源访问仍走原受权通道。Memento 的共享持久数据沿原 storage owner 及变更事件同步，同身份客户端并发沿原写入语义，不虚构逐字段事务合并；运行回调与瞬时活动态不随持久存储共享。 原 Workbench profile／IndexedDB 继续持有 Memento 正文，ExtensionStorageService 统一按稳定安装目标及 workspace view 生成键，MainThreadStorage 的通知还原原公开 extension ID；不另建目标状态库。目标 Node 的 `setKeysForSync` 跨设备同步尚未迁齐原同步消费者，当前从原公开 API 明确拒绝并登记 TODO，不保存无人消费的同步声明；Web 原同步与清理保持。目标侧秘密 owner 尚未接通，Node SecretStorage 在秘密进入浏览器 RPC 前明确拒绝，MainThreadSecretState 也不读写或广播 Web profile 的秘密；完整目标秘密支持仍是 TODO，不以浏览器同名扩展的秘密库代替。
 

@@ -29,6 +29,7 @@ import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './sett
 import { extensionTerminalSourcePaths, transformExtensionTerminal } from './extensions/extensionTerminalTransform.mjs';
 import { extensionDebugSourcePaths, transformExtensionDebug } from './extensions/extensionDebugTransform.mjs';
 import { extensionTasksSourcePaths, transformExtensionTasks } from './extensions/extensionTasksTransform.mjs';
+import { extensionNotebookSourcePaths, transformExtensionNotebookApi, transformExtensionNotebooks } from './extensions/extensionNotebookTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -80,6 +81,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionStatusSourcePaths,
   ...extensionEnablementSourcePaths,
   ...extensionDocumentSourcePaths,
+  ...extensionNotebookSourcePaths,
   ...extensionTabsSourcePaths,
   ...extensionLanguageFeaturesSourcePaths,
   ...extensionWorkspaceSymbolsSourcePaths,
@@ -136,6 +138,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionTerminal(root, path, contents, replaceOnce);
     contents = transformExtensionDebug(root, path, contents, replaceOnce);
     contents = transformExtensionTasks(root, path, contents, replaceOnce);
+    contents = transformExtensionNotebookApi(root, path, contents);
     contents = transformMcpProviders(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
       // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
@@ -188,6 +191,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformConfigurationContributions(root, path, contents, replaceOnce);
     contents = transformConfigurationRegistry(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
+    contents = transformExtensionNotebooks(root, path, contents, replaceOnce);
     contents = transformSettingsEditor(root, path, contents, replaceOnce);
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);

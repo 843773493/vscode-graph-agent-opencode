@@ -81,7 +81,7 @@ const targetA = { kind: 'backend', gatewayId: 'gateway-a', backendId: '11111111-
 const targetB = { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' };
 const targetC = { kind: 'backend', gatewayId: 'gateway-c', backendId: '33333333-3333-4333-8333-333333333333' };
 const product = { version: '1.105.0-test', commit: pinnedUpstreamCommit };
-const unsupported = ['terminal', 'tasks', 'debug', 'secrets', 'stateSync'];
+const unsupported = ['notebooks', 'terminal', 'tasks', 'debug', 'secrets', 'stateSync'];
 const partial = ['commands', 'documentsLanguageSearch', 'workspaceFiles', 'configuration', 'viewsWebviewsPorts', 'memento', 'dependenciesNativeModulesProposedApi'];
 
 function description(target, name, version, entry) {
