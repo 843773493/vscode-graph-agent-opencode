@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-存放客户端和工作区辅助服务之间共享的跨进程传输定义。目前这里主要提供 SSE 字节流解析、帧边界处理、取消/超时语义、运行时校验及 Node 产品诊断日志。
+存放客户端和工作区辅助服务之间共享的跨进程传输定义。目前这里主要提供 SSE 字节流解析、帧边界处理、取消/超时语义、运行时校验、Node 产品诊断日志及受管插件的管理合同。
 
 ## 可修改内容
 
@@ -13,6 +13,7 @@
 - 受管 Node 首次使用日志入口前严格校验 `BOXTEAM_RUNTIME_LOGGING` 的 revision／level／pretty；之后读取实际 writer 状态，不重放启动值覆盖热应用。未受管入口仍使用共享合同默认值。
 - Gateway 交付的 `BOXTEAM_RUNTIME_LOG_SINK` 仅提供冻结文件身份；进程状态同时核对实际 stdout/stderr 与当前路径打开后的句柄。device/inode 在 Windows 统一表示原生卷序列号和文件索引，其他平台使用 fstat；不能跳过设备身份或把环境中的路径当成已验证去向。Launcher 创建、重开和捕获接管共用 `runtimeLogFileIdentity`／`runtimeLogSinkMatches`。Launcher 通过 `registerRuntimeLogSink` 登记自己实际持有的日志描述符，登记成功后才提供诊断证明；未交付证明时 `log_sink` 为 null。
 - `serverRuntimeControl.mjs`：复用 Gateway 私有凭据与既有服务端口／Launcher 控制通道的日志查询和应用。实际设置与 revision 只在日志入口保存；同实例、同 revision 重放幂等，冲突和过期确认明确拒绝。Launcher 应用确认复用其原 Logger 和文件 sink。辅助服务关闭共用本机鉴权，冻结 PID／工作区并在 ACK 后进入原 shutdown；回执不代表排空或进程退出。
+- `serverPluginRuntime.mjs`：Node 插件读取 Gateway 交付的严格实例／端口／控制凭据，复用日志查询和应用，并提供 ready 身份回执和在 ACK 后调用服务原关闭函数的入口。仅声明 status／shutdown 能力；不提供 supervisor、实例账本、telemetry 或 statistics。
 - `serverJsonRequest.mjs`：Terminal／Browser 共用的 JSON 解析及 HTTP 正文读取。Browser WebSocket 复用同一解析器，分别传入传输名、阶段及原服务 logger。空 HTTP 正文及正常 JSON 保持原语义；解析失败只公开阶段与类别，原异常写入已绑定工作区的服务日志并保留 cause，日志失败也不得覆盖原解析失败。
 - `serverHttpShutdown.mjs`：两类辅助服务共用的 HTTP 收尾，最多等待5秒；到期关闭原连接并抛出明确错误，宿主记录失败并退出1。普通关闭须先完成Manager排空，未核实则沿原管理重试链；致命错误仍按原合同退出1。传输收尾不是整个shutdown或外部资源的终止证明。
 

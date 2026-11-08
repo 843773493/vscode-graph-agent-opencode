@@ -18,7 +18,7 @@ export function verifyRuntimeControlToken(token, expected) {
   throw error;
 }
 
-function verifyLocalRuntimeControlRequest(request) {
+export function verifyLocalRuntimeControlRequest(request) {
   if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress)
       || request.headers.origin !== undefined || request.headers["sec-fetch-site"] !== undefined) {
     const error = new Error("运行时控制只接受本机管理通道");
@@ -34,10 +34,10 @@ export function runtimeLoggingControl(payload, { service, token, contract, logge
   throw new TypeError("未知日志管理操作");
 }
 
-export async function handleRuntimeLoggingRequest(request, response, { pathname, service, readJson }) {
+export async function handleRuntimeLoggingRequest(request, response, { pathname, service, readJson, token }) {
   if (pathname !== "/internal/runtime-logging") return false;
   verifyLocalRuntimeControlRequest(request);
-  verifyRuntimeControlToken(request.headers["x-local-token"], process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
+  verifyRuntimeControlToken(request.headers["x-local-token"], token ?? process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN);
   let data;
   if (request.method === "GET") data = runtimeLoggingState(service);
   else if (request.method === "POST") data = applyRuntimeLogging(await readJson(request), service);
