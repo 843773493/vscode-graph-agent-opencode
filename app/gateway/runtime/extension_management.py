@@ -114,9 +114,9 @@ class GatewayExtensionManagement:
 
     def assert_healthy(self) -> None:
         if self._failure is not None:
-            raise RuntimeError("Gateway 常驻扩展管理组件已失败；不自动重启或重放操作") from self._failure
+            raise RuntimeError("Gateway 常驻扩展管理组件已失败；请重启服务组或应用，不自动重启或重放操作") from self._failure
         if self._closing or self._detached or self.process is None or not self.process.is_alive() or self.instance is None:
-            raise RuntimeError("Gateway 常驻扩展管理组件未运行")
+            raise RuntimeError("Gateway 常驻扩展管理组件未运行；请重启服务组或应用，未确认的安装结果可能未知，不自动重放")
 
     async def _health(self, instance: ExtensionManagementInstance) -> RuntimeLoggingStatus:
         assert self._client is not None
@@ -159,11 +159,8 @@ class GatewayExtensionManagement:
         instance = ExtensionManagementInstance.model_validate(payload)
         instance.validate_target(backend_id=self.backend_id, runtime=self.runtime)
         if not AdoptedManagedProcess(instance.process_id).is_alive():
-            # 管理进程退出会丢失内存引用；其它 Backend 的 Node/Web 实例和文件读取仍可能存活。
-            # TODO(4.4)：由全部原运行 owner 提供同代实例与读取的退出证明后，才能解除隔离并重建。
-            raise RuntimeError("旧扩展实例与包读取尚无完整退出证明，拒绝重建或回收扩展管理安装域: "
-                f"backend_id={instance.backend_id}, runtime_instance_id={instance.runtime_instance_id}, "
-                f"process_id={instance.process_id}；须先由原运行 owner 停止并核实全部旧实例")
+            # 应用重启沿原 OS 安装锁重新启动；旧发现记录不承担崩溃隔离或引用恢复职责。
+            return None
         self._client = httpx.AsyncClient(trust_env=False, timeout=self._operation_timeout)
         try:
             status = await self._health(instance)
@@ -399,6 +396,10 @@ class GatewayExtensionManagement:
     async def _settle_downloads(self) -> None:
         if self._download_admission is None:
             return
+        if self.process is not None and not self.process.is_alive():
+            logger.error("扩展管理进程已退出，安装结果未知；停止下载准入，不自动重放原操作")
+            self._download_admission = None
+            return
         assert self._client is not None and self.instance is not None
         # 控制回执未知不等于安装结束。原 environment 与安装共用串行队列，
         # 等它返回后才能关闭本代下载入口；不重放原安装或另建 drain 接口。
@@ -439,7 +440,9 @@ class GatewayExtensionManagement:
         deadline = self._begin_shutdown()
         # 监听关闭前结清、HTTP shutdown 和实际进程退出共用总期限，不能逐阶段重开预算。
         async with asyncio.timeout_at(deadline), self._lock:
-            if preserve:
+            if not self.process.is_alive():
+                await self._settle_downloads()
+            if preserve and self.process.is_alive():
                 await self._settle_downloads()
                 if self._client is not None:
                     await self._client.aclose()
@@ -460,7 +463,7 @@ class GatewayExtensionManagement:
                     await self._client.aclose()
                     self._client = None
                 return
-            if self._client is not None and self.instance is not None:
+            if self.process.is_alive() and self._client is not None and self.instance is not None:
                 response = await self._client.post(f"{self.instance.base_url}/shutdown",
                     headers={"X-Local-Token": get_gateway_local_token()}, follow_redirects=False)
                 response.raise_for_status()

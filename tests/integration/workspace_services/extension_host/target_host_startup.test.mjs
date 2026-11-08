@@ -219,3 +219,18 @@ test('原协议排空失败仍关闭真实WebSocket并保留同一异常', async
   expect(p.notifications).toEqual([]);
   checks.push({ stage: 'drain-failure-closes-socket' });
 }));
+
+test('通道已退出时原owner可结清宿主，不向已关闭通道发送终止消息', async () => scenario(async p => {
+  await p.host.start();
+  const exited = deferred();
+  p.host.onExit(reason => exited.resolve({ reason, cleanup: p.host.disconnect().finally(() => p.host.dispose()).then(
+    () => ({ closed: true }), error => ({ error })) }));
+  p.host.socket.close(1011, 'extension_host_upstream_closed');
+  const observed = await exited.promise;
+  expect(observed.reason[0]).toBe(1);
+  expect(await observed.cleanup).toEqual({ closed: true });
+  await p.closed;
+  expect(p.connections).toHaveLength(1);
+  expect(p.notifications).toEqual([]);
+  checks.push({ stage: 'crashed-transport-owner-cleanup' });
+}));

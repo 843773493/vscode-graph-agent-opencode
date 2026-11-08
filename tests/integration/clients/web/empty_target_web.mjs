@@ -21,6 +21,11 @@ try {
   const context = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
   run.addCleanup('空根目标 BrowserContext', () => context.close());
   page = await context.newPage();
+  const webTransports = [];
+  // 只持有原 WebSocket 的网络故障注入口；Worker、握手和后续恢复仍由产品创建。
+  await context.routeWebSocket('**/api/gateway/extension-web-hosts/channel*', socket => {
+    webTransports.push({ client: socket, server: socket.connectToServer() });
+  });
   const observe = (view, state) => {
     view.on('pageerror', error => state.pageErrors.push(String(error.stack ?? error)));
     view.on('console', entry => { if (entry.type() === 'error') state.consoleErrors.push(entry.text()); });
@@ -342,6 +347,76 @@ try {
   const attachedAdmission = result.attached.webAdmissions.filter(item => item.kind === 'qualified').at(-1).value;
   expect(attachedAdmission).toMatchObject({ ...fixture.targets.a, workspace_ids: [fixture.workspace_id] });
   expect(attachedAdmission.extension_keys).toEqual(['boxteam-probe.empty-browser-1.0.0', 'boxteam-probe.empty-theme-1.0.0']);
+  expect(await inventory(page, fixture.targets.a)).toEqual(result.inventoryA);
+  await selectTheme(page);
+  await expect.poll(() => themeColor(page)).toBe(fixture.theme.colors.a);
+  await expect.poll(() => themeResource(result.attached, attachedAdmission)).toBe(true);
+  await phase('web-crash-recovery');
+  const failedWeb = webTransports.at(-1);
+  expect(failedWeb).toBeTruthy();
+  await Promise.all([failedWeb.client, failedWeb.server].map(socket => socket.close({
+    code: 1011, reason: 'Web qualification transport lost',
+  })));
+  result.webCrash = {};
+  await expect.poll(async () => {
+    const report = await command(page, 'boxteam.extensions.getRuntimeDiagnostics');
+    const host = report.targets[0].hosts.find(host => host.kind === 'web');
+    result.webCrash.diagnostics = report;
+    return host?.phase === 'bound' && host.binding.generation !== attachedAdmission.generation
+      && host.extensions.some(extension => extension.activated);
+  }, { timeout: 30_000 }).toBe(true);
+  result.webCrash.inspection = await command(page, 'boxteam.empty.inspect', 'after-web-crash');
+  expect(result.webCrash.inspection).toMatchObject({ version: '1.0.0', folders: result.attached.webSymbols.folders });
+  expect(result.webCrash.inspection.activation).not.toBe(result.attached.webSymbols.activation);
+  const recoveredAdmission = result.attached.webAdmissions.filter(item => item.kind === 'qualified').at(-1).value;
+  expect(recoveredAdmission.generation).not.toBe(attachedAdmission.generation);
+  expect(recoveredAdmission.extension_keys).toEqual(attachedAdmission.extension_keys);
+  expect(result.webCrash.inspection.extensionUri).toContain('/' + recoveredAdmission.generation + '/');
+  await expect.poll(() => themeColor(page), { timeout: 30_000 }).toBe(fixture.theme.colors.a);
+  await expect.poll(() => themeResource(result.attached, recoveredAdmission)).toBe(true);
+  expect(await command(page, 'boxteam.empty.hybrid')).toEqual(result.attached.hybrid);
+  await phase('node-crash-recovery');
+  result.crashes = [];
+  let previousNode = result.attached.hybrid;
+  let previousGeneration = result.attached.nodeDiagnostics.targets[0].hosts[0].binding.generation;
+  for (let crash = 1; crash <= 3; crash++) {
+    // 经真实扩展命令退出实际 Node；恢复只重激活扩展，不重放这次未知 RPC。
+    const receipt = await command(page, 'boxteam.empty.crashNode').then(value => ({ value }), error => ({ error: String(error) }));
+    expect(receipt.error).toBeTruthy();
+    const observation = { crash, receipt };
+    result.crashes.push(observation);
+    if (crash === 3) {
+      const notification = page.getByRole('dialog', { name: /扩展宿主在 5 分钟内已崩溃 3 次，停止自动重启/ });
+      await expect(notification).toBeVisible({ timeout: 30_000 });
+      observation.notification = await notification.innerText();
+      observation.diagnostics = await command(page, 'boxteam.extensions.getRuntimeDiagnostics');
+      expect(observation.diagnostics.targets[0].hosts.map(host => host.kind)).toEqual(['web']);
+      observation.web = await command(page, 'boxteam.empty.inspect', 'after-node-restart-limit');
+      expect(observation.web.activation).toBe(result.webCrash.inspection.activation);
+      expect(observation.web.extensionUri).toBe(result.webCrash.inspection.extensionUri);
+      expect(result.attached.nodeChannels).toHaveLength(3);
+      break;
+    }
+    let recovered;
+    await expect.poll(async () => {
+      recovered = await command(page, 'boxteam.extensions.getRuntimeDiagnostics');
+      const host = recovered.targets[0].hosts.find(host => host.kind === 'node');
+      return host?.phase === 'bound' && host.binding.generation !== previousGeneration
+        && host.extensions.some(extension => extension.activated);
+    }, { timeout: 30_000 }).toBe(true);
+    observation.diagnostics = recovered;
+    const current = await command(page, 'boxteam.empty.hybrid');
+    expect(current).toMatchObject({ mode: 'node', version: '1.0.0', nativeContent: 'hybrid-node-1.0.0',
+      folders: [fixture.native_root_a], activation: previousNode.activation + 1 });
+    expect(current.pid).not.toBe(previousNode.pid);
+    observation.node = current;
+    const web = await command(page, 'boxteam.empty.inspect', 'after-node-crash-' + crash);
+    expect(web.activation).toBe(result.webCrash.inspection.activation);
+    expect(web.extensionUri).toBe(result.webCrash.inspection.extensionUri);
+    observation.web = web;
+    previousNode = current;
+    previousGeneration = recovered.targets[0].hosts.find(host => host.kind === 'node').binding.generation;
+  }
   expect(await inventory(page, fixture.targets.a)).toEqual(result.inventoryA);
   for (const state of [result.cacheRecovery, result.attached]) expect(state.pageErrors).toEqual([]);
   await page.screenshot({ path: output.replace(/\.json$/, '.node.png'), fullPage: true });

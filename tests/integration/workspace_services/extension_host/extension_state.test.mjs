@@ -1,14 +1,21 @@
 import { afterAll, expect, test } from 'bun:test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
+import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform } from '../../../../src/clients/workbench/scripts/sourceTransform.mjs';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/workspace_services/extension_host/extension_state.test.mjs').prepare();
 const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'extension-state.fixture.mjs');
 const upstream = './src/clients/workbench/upstream/src/vs/';
+const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
+const browserSourcePath = join(root, 'upstream/src/vs/workbench/services/extensions/browser/extensionService.ts');
+const browserSource = ts.createSourceFile(browserSourcePath, await transform(browserSourcePath, await readFile(browserSourcePath, 'utf8')), ts.ScriptTarget.Latest, true);
+const browserOwner = browserSource.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'ExtensionService');
+const restartHook = browserOwner.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(browserSource) === '_prepareExtensionHostRestart');
+if (!restartHook) throw new Error('未找到真实 Browser 恢复 hook');
 await build({ stdin: { contents: `
 export { ExtensionHostExtensions } from '${upstream}workbench/services/extensions/common/extensions.js';
 export { AbstractExtHostExtensionService } from '${upstream}workbench/api/common/extHostExtensionService.js';
@@ -22,14 +29,30 @@ export { DisposableStore } from '${upstream}base/common/lifecycle.js';
 export { ExtensionIdentifier, ExtensionIdentifierMap, extensionInstanceKey } from '${upstream}platform/extensions/common/extensions.js';
 export { URI } from '${upstream}base/common/uri.js';
 export { NullLogService } from '${upstream}platform/log/common/log.js';
+export { RecoveryBrowserExtensionService } from 'recovery-browser-owner';
+export { scanTargetExtensions } from './src/clients/workbench/src/extensions/inventory.js';
+export { IconExtensionPoint } from '${upstream}workbench/services/themes/common/iconExtensionPoint.js';
+export { getIconRegistry } from '${upstream}platform/theme/common/iconRegistry.js';
+export { MenuRegistry } from '${upstream}platform/actions/common/actions.js';
+import '${upstream}workbench/services/actions/common/menusExtensionPoint.js';
 `, resolveDir: resolve('.') }, outfile: bundle, bundle: true, format: 'esm', platform: 'node', target: 'es2024',
   plugins: [{ name: 'explicit-window-timer-service-boundary', setup(builder) {
+    // 运行产品实际转换后的 Browser hook；浏览器构造／页面服务不是本组 owner 边界。
+    builder.onResolve({ filter: /^recovery-browser-owner$/ }, () => ({ path: 'recovery-browser-owner', namespace: 'recovery-browser-owner' }));
+    builder.onLoad({ filter: /.*/, namespace: 'recovery-browser-owner' }, () => ({ contents: `
+      import { AbstractExtensionService } from '${upstream}workbench/services/extensions/common/abstractExtensionService.js';
+      import { ExtensionHostKind } from '${upstream}workbench/services/extensions/common/extensionHostKind.js';
+      import { installationTargetKey } from '${upstream}platform/extensions/common/extensions.js';
+      import { reopenTargetWebHost } from './src/clients/workbench/src/extensions/inventory.js';
+      export class RecoveryBrowserExtensionService extends AbstractExtensionService { ${restartHook.getText(browserSource)} }
+    `, loader: 'ts', resolveDir: resolve('.') }));
+    builder.onLoad({ filter: /\/src\/agentApi\.ts$/ }, () => ({ contents: 'export const gateway = { request: (...args) => globalThis.__extensionRecoveryInventory(...args) }; export class GatewayRequestError extends Error {}', loader: 'ts' }));
     // 本片不运行窗口启动性能服务；只保留同一DI标识，避免在Node装具初始化DOM。
     builder.onLoad({ filter: /\/services\/timer\/browser\/timerService\.ts$/ }, args => ({
       contents: "import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js'; export const ITimerService = createDecorator('timerService');",
       loader: 'ts', resolveDir: dirname(args.path),
     }));
-  } }, buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))],
+  } }, buildSourcePlugin(root, transform)],
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 const m = await import(pathToFileURL(bundle).href);
 const id = value => new m.ExtensionIdentifier(value);
@@ -40,7 +63,7 @@ const description = (name, overrides = {}) => ({ identifier: id(name), name, pub
   isBuiltin: false, isUserBuiltin: false, isUnderDevelopment: false, preRelease: false, targetPlatform: 'undefined', installationTarget: targetA, ...overrides });
 const delta = (versionId, fields = {}) => ({ versionId, toAdd: [], toRemove: [], myToAdd: [], myToRemove: [], addActivationEvents: {}, ...fields });
 const base = description('probe.base', { activationEvents: ['onBase'] });
-const receipt = { boundary: '编译真实发送端描述类、接收端构造器／RPC方法、原Registry、Sequencer与路径索引；主线程服务和eager activation为明确替身，仅在目标fsRealpath边界阻塞或失败。真实Node/RPC扩展另验。', checks: [] };
+const receipt = { boundary: '编译真实发送端描述类、接收端构造器／RPC方法、原Registry、Sequencer、路径索引、原owner／Manager、实际转换后的Browser恢复hook、产品Web资格类及原命令icon／icon font消费者。进程／Worker执行、RPC字节、主线程服务、eager activation与Gateway HTTP／WebSocket回执为具名边界；fsRealpath在具名边界阻塞或失败。真实Node／Worker及Gateway产品入口另验。', checks: [] };
 
 function receiver(realpath = async path => path, { all = [base], mine = all.map(extension => extension.identifier), mainThread = {} } = {}) {
   // 不复制receiver状态机；仅替换本用例不执行的扩展激活和主线程服务。
@@ -575,6 +598,229 @@ test('新安装自动激活迁入唯一持有者，三类状态回调拒绝外�
     expect(o.owner._runningLocations.getRunningLocation(unknown)).toBeNull();
     receipt.checks.push('新安装activation同一路由；未知／非所属回调零状态及位置写入');
   } finally { o.close(); f.close(); }
+});
+
+const targetB = { kind: 'backend', gatewayId: 'gateway-b', backendId: '22222222-2222-4222-8222-222222222222' };
+const hostView = (target, workspaceIds = ['workspace-a']) => ({ installationTarget: target, viewId: 'default', workspaceIds,
+  capabilities: { installation_manage: true, host_manage: true }, nodeRuntime: { channel_state: 'available' } });
+async function until(predicate) {
+  const deadline = performance.now() + 2000;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error('等待真实恢复状态超时');
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+}
+
+// 仅进程／RPC字节和Worker执行为具名边界；Factory→原owner→collection→Manager→receiver均运行生产方法。
+async function recoveryFixture({ all = [base], views = [hostView(targetA)], browser = false, disconnect } = {}) {
+  const notifications = [], statuses = [], generations = [], calls = [];
+  let owner;
+  const factory = { createExtensionHost(running, location) {
+    if (!location.installationTarget) return null;
+    const view = running.workspaceViews.find(view => JSON.stringify(view.installationTarget) === JSON.stringify(location.installationTarget));
+    if (!view || location.kind === 2 && !view.webHost || location.kind === 3 && !view.nodeRuntime) return null;
+    const snapshot = owner._registry.getSnapshot(), descriptions = running.getHostExtensions(snapshot.extensions, location);
+    const mine = running.filterByRunningLocation(descriptions, location).map(extension => extension.identifier);
+    const f = receiver(undefined, { all: descriptions, mine }), exit = new m.Emitter();
+    const lifetime = new m.DisposableStore(), generation = generations.length + 1;
+    const host = { runningLocation: location, startup: 1, extensions: new m.ExtensionHostExtensions(snapshot.versionId, descriptions, mine),
+      onExit: exit.event, start: async () => ({}),
+      async disconnect() { exit.fire([0, null]); await disconnect?.(generation); },
+      dispose() { lifetime.dispose(); } };
+    if (location.kind === 2) {
+      lifetime.add(view.webHost);
+      lifetime.add(view.webHost.onDidClose(reason => exit.fire([1, reason])));
+    }
+    generations.push({ host, f, exit, generation, view, lifetime });
+    return host;
+  } };
+  const Owner = browser ? m.RecoveryBrowserExtensionService : m.AbstractExtensionService;
+  owner = new Owner({ hasLocalProcess: false, allowRemoteExtensionsInLocalWebWorker: false }, {}, factory, {}, {},
+    { error: error => notifications.push(String(error)), status: message => { statuses.push(message); return { dispose() {} }; } },
+    { debugExtensionHost: {} }, { publicLog2() {} }, { onEnablementChanged: m.Event.None }, { onWillActivateFileSystemProvider: m.Event.None }, {},
+    { onDidChangeProfile: m.Event.None, onDidEnableExtensions: m.Event.None, onDidInstallExtensions: m.Event.None, onDidUninstallExtension: m.Event.None },
+    {}, {}, {}, new m.NullLogService(), {}, {}, { onWillShutdown: m.Event.None }, {}, {});
+  owner._doCreateExtensionHostManager = function (host, initialEvents) {
+    const internal = this._acquireInternalAPI(host), item = generations.find(item => item.host === host);
+    item.internal = internal;
+    const proxy = { startExtensionHost: delta => item.f.service.$startExtensionHost(delta),
+      deltaExtensions: delta => item.f.service.$deltaExtensions(delta),
+      activate: async (extension, reason) => {
+        calls.push({ generation: item.generation, type: 'activate', id: extension.value, reason });
+        internal._onWillActivateExtension(extension); internal._onDidActivateExtension(extension, 1, 2, 3, reason); return true;
+      },
+      activateByEvent: async event => { calls.push({ generation: item.generation, type: 'event', event }); },
+    };
+    class Manager extends m.ExtensionHostManager { _createExtensionHostCustomers() { return proxy; } }
+    return item.manager = new Manager(host, initialEvents, internal, {}, {}, { publicLog2() {} }, new m.NullLogService());
+  };
+  owner._setExtensionWorkspaceViews(views);
+  const lock = await owner._registry.acquireLock('recovery fixture inventory');
+  try { owner._registry.deltaExtensions(lock, all, []); } finally { lock.dispose(); }
+  for (const extension of all) {
+    const view = views.find(view => JSON.stringify(view.installationTarget) === JSON.stringify(extension.installationTarget));
+    const location = view.webHost && extension.browser
+      ? new m.LocalWebWorkerRunningLocation(0, view.installationTarget, view.viewId, view.workspaceIds)
+      : new m.RemoteRunningLocation(view.installationTarget, view.viewId, view.workspaceIds);
+    owner._runningLocations.set(extension.identifier, location, extension.installationTarget);
+  }
+  owner._installedExtensionsReady.open();
+  owner._startExtensionHostsIfNecessary(true, []);
+  await Promise.all(generations.map(item => item.manager.ready()));
+  return { owner, calls, generations, notifications, statuses,
+    settle: () => until(() => owner._extensionHostRestarts._toDispose.size === 0),
+    close() { owner.dispose(); for (const item of generations) { item.f.close(); item.exit.dispose(); } } };
+}
+
+test('真实退出重建精确位置，只恢复已完成激活，不重放命令事件或另一宿主', async () => {
+  const sibling = description('probe.pending'), peer = { ...base, installationTarget: targetB, version: '2.0.0' };
+  const f = await recoveryFixture({ all: [base, sibling, peer], views: [hostView(targetA), hostView(targetB, ['workspace-b'])] });
+  try {
+    const [a, b] = f.generations;
+    const reason = { startup: false, extensionId: base.identifier, activationEvent: 'onCommand:probe.change' };
+    await a.manager.activate(base.identifier, reason);
+    a.internal._onWillActivateExtension(sibling.identifier);
+    await f.owner.activateByEvent('onCommand:probe.change', 0, a.host);
+    f.calls.length = 0;
+    a.exit.fire([137, 'SIGKILL']);
+    await f.settle();
+    expect(f.generations).toHaveLength(3);
+    const next = f.generations[2];
+    expect(next.host.runningLocation.equals(a.host.runningLocation)).toBe(true);
+    expect(f.owner.getExtensionHosts()).toEqual([b.host, next.host]);
+    expect(f.calls).toEqual([{ generation: 3, type: 'activate', id: base.identifier.value, reason }]);
+    expect(f.notifications).toEqual([]); expect(f.statuses).toHaveLength(1);
+    expect(() => a.internal._onDidActivateExtension(base.identifier, 1, 2, 3, reason)).toThrow('generation is closed');
+    a.exit.fire([137, 'late']); await f.settle(); expect(f.generations).toHaveLength(3);
+    receipt.checks.push('原退出订阅→精确位置factory→原Manager；仅已完成激活事实，无命令事件／未完成激活／peer重放，旧代际迟到拒绝');
+  } finally { f.close(); }
+});
+
+test('原五分钟tracker按精确位置计数，第三次停止，过期后首轮可恢复', async () => {
+  const clock = Date.now; let now = clock(); Date.now = () => now;
+  const f = await recoveryFixture({ all: [base, { ...base, installationTarget: targetB }], views: [hostView(targetA), hostView(targetB, ['workspace-b'])] });
+  try {
+    for (let index = 0; index < 3; index++) {
+      const current = f.generations.filter(item => item.host.runningLocation.installationTarget === targetA).at(-1);
+      current.exit.fire([1, null]); await f.settle();
+    }
+    expect(f.generations).toHaveLength(4);
+    expect(f.notifications).toHaveLength(1); expect(f.notifications[0]).toContain('5 分钟内已崩溃 3 次');
+    const peer = f.generations.find(item => item.host.runningLocation.installationTarget === targetB);
+    peer.exit.fire([1, null]); await f.settle(); expect(f.generations).toHaveLength(5);
+    now += 5 * 60 * 1000 + 1;
+    f.owner._startExtensionHostsIfNecessary(false, [], locationA());
+    await f.generations.at(-1).manager.ready();
+    f.generations.at(-1).exit.fire([1, null]); await f.settle();
+    expect(f.generations).toHaveLength(7); expect(f.notifications).toHaveLength(1);
+    receipt.checks.push('原ExtensionHostCrashTracker五分钟第三次停止；按target/view/roots隔离计数，过期窗口恢复');
+  } finally { Date.now = clock; f.close(); }
+});
+
+test('主动停止及崩溃清理等待中的主动停止均不重启', async () => {
+  const a = await recoveryFixture();
+  try {
+    await a.owner._doStopExtensionHosts(); await a.settle();
+    expect(a.generations).toHaveLength(1); expect(a.owner.getExtensionHosts()).toEqual([]);
+    expect(a.notifications).toEqual([]); expect(a.statuses).toEqual([]);
+  } finally { a.close(); }
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const b = await recoveryFixture({ disconnect: async () => { entered.resolve(); await release.promise; } });
+  try {
+    b.generations[0].exit.fire([1, null]); await entered.promise;
+    await b.owner._doStopExtensionHosts(); release.resolve(); await b.settle(); await new Promise(resolve => setTimeout(resolve, 5));
+    expect(b.generations).toHaveLength(1); expect(b.owner.getExtensionHosts()).toEqual([]);
+    expect(b.notifications).toEqual([]); expect(b.statuses).toEqual([]);
+    receipt.checks.push('原stopAll在disconnect前撤退出订阅；正常停机取消在途恢复，无虚假崩溃通知');
+  } finally { release.resolve(); b.close(); }
+});
+
+test('原Browser hook重新核精确Web资格并换代，原命令图标和icon font消费新冻结URL', async () => {
+  const originals = Object.fromEntries(['location', 'fetch', 'WebSocket'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const opens = [], sockets = [], lifetime = new m.DisposableStore(); let rejectQualification = false, deferQualification = false;
+  const native = description('probe.web', { name: 'web', main: undefined, browser: './browser.js', extensionKind: ['web'],
+    contributes: { commands: [{ command: 'probe.recoveryAsset', title: '恢复资源', icon: './icon.svg' }],
+      icons: { 'probe-recovery-icon': { description: '恢复字体', default: { fontPath: './icons.woff', fontCharacter: '\\E001' } } } } });
+  const inventory = { profile_id: 'native-default', target_platform: 'linux-x64', extensions: [{ source: 'profile',
+    extension_key: 'probe.web-1.0.0', is_valid: true, validations: [], description: JSON.parse(JSON.stringify(native)) }] };
+  class QualificationSocket extends EventTarget {
+    constructor() { super(); sockets.push(this); queueMicrotask(() => this.dispatchEvent(new Event('open'))); }
+    send(data) {
+      const request = JSON.parse(data); opens.push(request);
+      if (deferQualification) return;
+      if (rejectQualification) { queueMicrotask(() => this.remoteClose('原key已卸载')); return; }
+      const value = { ...request, inventory, request_id: 'request-' + opens.length, client_id: 'client-' + opens.length,
+        generation: 'generation-' + opens.length, context: { os: 'linux', remote_settings: { resource_uri: 'boxteam://profile/settings' },
+          workspace: { id: 'empty', name: 'Empty', folders: [] } } };
+      queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) })));
+    }
+    remoteClose(reason = 'transport lost') { const event = new Event('close'); Object.assign(event, { code: 1008, reason }); this.dispatchEvent(event); }
+    close() { this.remoteClose('client closed'); }
+  }
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { href: 'http://qualification.test/' } });
+  Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: QualificationSocket });
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { token: 'recovery-boundary-token' } }));
+  const inventoryRequests = [];
+  globalThis.__extensionRecoveryInventory = async (path, options) => {
+    inventoryRequests.push(path); const request = JSON.parse(options.body);
+    if (path.endsWith('/extension-targets')) return { ...request, source: 'live', targets: [{ ...request, backend_id: targetA.backendId,
+      source: 'live', capabilities: { installation_manage: true, host_manage: true } }] };
+    if (path.endsWith('/inventory')) return { ...request, profile_scope: 'default', inventory };
+    throw new Error('恢复不应重新扫描目标库存：' + path);
+  };
+  const iconOwner = new m.IconExtensionPoint(); let f;
+  try {
+    const initial = await m.scanTargetExtensions({ getCompleteWorkspace: async () => ({ folders: [] }) },
+      extension => extension.extensionKind, lifetime, targetA.gatewayId, new m.NullLogService());
+    f = await recoveryFixture({ all: initial.extensions, views: initial.views, browser: true });
+    f.owner._doHandleExtensionPoints(initial.extensions, false);
+    const beforeCommand = m.MenuRegistry.getCommand('probe.recoveryAsset').icon.dark.toString();
+    const beforeIcon = m.getIconRegistry().getIcon('probe-recovery-icon').defaults.font.definition.src[0].location.toString();
+    expect(beforeCommand).toContain('/generation-1/'); expect(beforeIcon).toContain('/generation-1/');
+    await f.generations[0].manager.activate(initial.extensions[0].identifier,
+      { startup: false, extensionId: initial.extensions[0].identifier, activationEvent: 'onCommand:probe.recoveryAsset' });
+    f.calls.length = 0;
+    sockets[0].remoteClose(); await f.settle();
+    expect(f.notifications).toEqual([]); expect(f.generations).toHaveLength(2);
+    expect(opens).toEqual([opens[0], opens[0]]); expect(opens[0].extension_keys).toEqual(['probe.web-1.0.0']);
+    expect(inventoryRequests).toEqual(['/api/gateway/extension-targets', '/api/gateway/extension-installations/inventory']);
+    expect(() => initial.views[0].webHost.connection).toThrow('关闭');
+    const view = f.owner.getExtensionWorkspaceViews()[0], restored = f.owner.extensions[0];
+    expect(view.webHost.connection.generation).toBe('generation-2');
+    expect(restored.contributes).toBe(initial.extensions[0].contributes);
+    expect(restored.extensionLocation.toString()).toContain('/generation-2/');
+    expect(m.MenuRegistry.getCommand('probe.recoveryAsset').icon.dark.toString()).toContain('/generation-2/');
+    expect(m.getIconRegistry().getIcon('probe-recovery-icon').defaults.font.definition.src[0].location.toString()).toContain('/generation-2/');
+    expect(m.getIconRegistry().getIcons().filter(icon => icon.id === 'probe-recovery-icon')).toHaveLength(1);
+    expect(f.calls.map(call => call.type)).toEqual(['activate']);
+    rejectQualification = true; sockets[1].remoteClose(); await f.settle();
+    expect(f.generations).toHaveLength(2); expect(f.owner.getExtensionHosts()).toEqual([]);
+    expect(f.notifications[0]).toMatch(/Reload Window/); expect(f.notifications[0]).toContain('原key已卸载');
+    // 等待资格时正常停机，必须撤销真实owner启动的connection等待；不能迟到创建Worker。
+    rejectQualification = false;
+    const again = await m.scanTargetExtensions({ getCompleteWorkspace: async () => ({ folders: [] }) },
+      extension => extension.extensionKind, lifetime, targetA.gatewayId, new m.NullLogService());
+    const waiting = await recoveryFixture({ all: again.extensions, views: again.views, browser: true });
+    try {
+      deferQualification = true; const opened = opens.length;
+      sockets.at(-1).remoteClose(); await until(() => opens.length === opened + 1);
+      await waiting.owner._doStopExtensionHosts(); await waiting.settle();
+      expect(waiting.owner.getExtensionHosts()).toEqual([]); expect(waiting.generations).toHaveLength(1);
+      expect(waiting.notifications).toEqual([]);
+    } finally { waiting.close(); }
+    receipt.checks.push('真实scanner→原Browser hook→新资格generation→同Registry／原命令icon／原icon font；精确key无重扫，closed资格不复用，卸载提示Reload，等待可取消');
+  } finally {
+    if (f) {
+      const current = f.owner.extensions;
+      const lock = await f.owner._registry.acquireLock('remove recovery contributions');
+      try { f.owner._registry.deltaExtensions(lock, [], current); } finally { lock.dispose(); }
+      f.owner._doHandleExtensionPoints(current, false); f.close();
+    }
+    void iconOwner; lifetime.dispose(); delete globalThis.__extensionRecoveryInventory;
+    for (const [name, descriptor] of Object.entries(originals)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+    }
+  }
 });
 
 afterAll(async () => {

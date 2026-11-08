@@ -16,7 +16,7 @@ export function transformExtensionBrowser(root, path, source, replaceOnce) {
   }
   if (path === join(root, 'upstream', extensionBrowserSourcePaths[1])) return transformInstallationActions(root, path, source, replaceOnce);
   if (path !== join(root, 'upstream', extensionBrowserSourcePaths[0])) return source;
-  let contents = `import { scanTargetExtensions } from ${JSON.stringify(join(root, 'src/extensions/inventory.js'))};
+  let contents = `import { scanTargetExtensions, reopenTargetWebHost } from ${JSON.stringify(join(root, 'src/extensions/inventory.js'))};
 import { browserGatewayId } from ${JSON.stringify(join(root, '../web/src/hooks/settings/browserUiSettings.js'))};
 import { TargetExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/targetHost.js'))};
 import { TargetWebExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/webHost.js'))};
@@ -47,6 +47,18 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';\n` + sou
   contents = replaceOnce(contents, '\n\t\t\textensionManifestPropertiesService,', '\n\t\t\t_manifestProperties,');
   contents = replaceOnce(contents, '\n\t\t\tcontextService,', '\n\t\t\t_workspaceContext,');
   contents = replaceOnce(contents, '\tprivate _initFetchFileSystem(): void {', `
+  protected override async _prepareExtensionHostRestart(location: ExtensionRunningLocation, pending: DisposableStore) {
+    if (location.kind !== ExtensionHostKind.LocalWebWorker || !location.installationTarget) return undefined;
+    const view = this._runningLocations.workspaceViews.find(view =>
+      installationTargetKey(view.installationTarget) === installationTargetKey(location.installationTarget!));
+    if (!view?.webHost || location.viewId !== view.viewId || JSON.stringify(location.workspaceIds) !== JSON.stringify(view.workspaceIds)) {
+      throw new Error('目标 Web 宿主恢复没有匹配原工作区视图，请重新载入窗口');
+    }
+    const previous = this._runningLocations.filterByRunningLocation(this.extensions, location);
+    const next = await reopenTargetWebHost(view, previous, pending);
+    await this._rebindWebExtensionHost(view, next.webHost, previous, next.extensions, pending);
+    return next.webHost;
+  }
   protected override _bindExtension(extension: IExtension): IExtension {
     // 这些事件来自原 Web management owner；Backend 事件必须携带其原生可信 target。
     return { ...extension, installationTarget: extension.installationTarget ?? { kind: 'web', profileId: this._userDataProfileService.currentProfile.id } };

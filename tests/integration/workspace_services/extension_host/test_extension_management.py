@@ -1491,7 +1491,8 @@ async def test_unknown_control_reply_fails_gateway_without_replay_or_backend_tak
     recovered = _backend(case.workspace / "target", case)
     with pytest.raises(httpx.HTTPStatusError) as still_failed:
         await recovered.extension_hosts.management.install(vsix_factory(case.workspace, "2.0.0", "must-not-install"))
-    assert still_failed.value.response.status_code == 500
+    assert still_failed.value.response.status_code == 503
+    assert "请重启服务组或应用" in still_failed.value.response.json()["detail"]
     assert len(replies) == 1 and gateway.instance is original_instance
     old_process = gateway.process
     await gateway.close()

@@ -8,6 +8,7 @@ export const nativeManagementSourcePaths = [
   'src/vs/platform/extensionManagement/common/extensionsScannerService.ts',
   'src/vs/platform/files/common/diskFileSystemProvider.ts',
   'src/vs/platform/request/node/requestService.ts',
+  'src/vs/platform/extensionManagement/node/extensionLifecycle.ts',
 ];
 
 /** 暴露并结算原服务自己的初始化及异步回调，不复制安装、扫描或清理算法。 */
@@ -17,7 +18,15 @@ export function transformNativeManagement(root, path, source, replaceOnce) {
     const imported = relative(dirname(path), join(root, 'node/extensionManagementLifecycle.js')).replaceAll('\\', '/');
     return `import { NativeManagementLifecycle } from ${JSON.stringify(imported)};\n`;
   };
-  if (path === join(root, 'upstream/src/vs/platform/request/node/requestService.ts')) {
+  if (matches('node/extensionLifecycle')) {
+    // 原卸载脚本仍按原规则执行，但不能继承安装服务的内部控制凭据。
+    source = replaceOnce(source, 'const opts = {\n\t\t\tsilent: true,',
+      `const env = { ...process.env };
+    delete env.BOXTEAM_RUNTIME_CONTROL_TOKEN;
+    const opts = {
+      env,
+\t\t\tsilent: true,`);
+  } else if (path === join(root, 'upstream/src/vs/platform/request/node/requestService.ts')) {
     source = `import { pipeline } from 'node:stream';\n` + source;
     // pipe 不传播源错误；pipeline 将截断错误交给原消费流，回调不另建错误通道。
     source = replaceOnce(source, 'stream = res.pipe(createGunzip());',

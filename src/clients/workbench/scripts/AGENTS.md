@@ -48,7 +48,7 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 
 `nodeHost.mjs`构建原宿主和目标管理两个独立进程入口，共用固定上游与冻结依赖闭包。管理入口只装配原生安装／profile／scanner服务，不启动整套Remote Agent或扩展代码；当前只发行空的内置扩展目录，不承诺Node内置扩展可用。`typecheckNode.mjs`从明确组件manifest解析真实运行依赖，与浏览器类型检查共用`typecheckProjection.mjs`投影实际转换源码；Node配置同时检查实际Extension Host与管理进程两个入口、原vscode／monaco／debug声明；Node类型版本与固定上游锁一致，不能用管理图代替整个宿主类型闭包或检查未转换上游。类型通过仍不代替真实API／目标产品验收。原安装器尚未创建任务时直接保留前置错误；原scanner的后台缓存校验消费dispose取消，其他错误仍走原unexpected-error处理，不加全局rejection吞噬。
 
-`nativeManagementTransform.mjs`只进入Node构建，暴露原watcher／目录事件／下载缓存的初始化及原异步回调结算；旧版本仍沿官方profile与.obsolete标记，不调用物理cleanUp。Gallery下载的缓存释放Promise必须由原安装任务观察，签名或传输失败不能产生未处理拒绝而杀死常驻组件。原nodeRequest的gzip解压使用Node标准pipeline传递源断流错误，错误继续交原消费流和安装器，不新增重试或吞错。管理组件关闭时先释放消费者，再在其明确持有的disk provider上await原watch([])，最后dispose provider并自然退出，不复制watcher算法或扫描安装目录。
+`nativeManagementTransform.mjs`只进入Node构建，暴露原watcher／目录事件／下载缓存的初始化及原异步回调结算；正常完整停机先排空原异步工作，成功后沿官方profile与.obsolete调用原cleanUp，启动或崩溃恢复不以清包为就绪门。原卸载hook保留脚本规则，但不继承内部管理凭据。Gallery下载的缓存释放Promise必须由原安装任务观察，签名或传输失败不能产生未处理拒绝而杀死常驻组件。原nodeRequest的gzip解压使用Node标准pipeline传递源断流错误，错误继续交原消费流和安装器，不新增重试或吞错。管理组件随后释放消费者，在其明确持有的disk provider上await原watch([])，最后dispose provider并自然退出，不复制watcher算法或扫描安装目录。
 
 直接位置和原 Gallery 安装写入前消费同次 toScannedExtension 的 isValid／validations，拒绝无效版本并保留原件；警告及原扫描诊断语义不变，不重复计算 manifest 校验。
 

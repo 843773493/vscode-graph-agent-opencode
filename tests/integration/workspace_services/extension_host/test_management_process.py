@@ -10,7 +10,7 @@ from base64 import b64decode, b64encode
 from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -23,6 +23,7 @@ from app.services.infrastructure.extension_host.configuration import native_path
 from app.services.infrastructure.extension_host.management import (
     NativeExtensionPublication,
     NativeFileRead,
+    ProfileExtensionInventory,
 )
 from app.services.infrastructure.extension_host.package_files import publication_file
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
@@ -122,20 +123,29 @@ async def management_process(
                 ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+class NativeVsixFactory(Protocol):
+    def __call__(self, name: str, version: str, script: str, *, uninstall_script: str | None = None) -> Path: ...
+
+
 @pytest.fixture
-def native_vsix(management_process: ManagementProcess) -> Callable[[str, str, str], Path]:
+def native_vsix(management_process: ManagementProcess) -> NativeVsixFactory:
     context = management_process.context
     sources = context.workspace_root / context.run_root.name / uuid4().hex
     sources.mkdir(parents=True)
 
-    def create(name: str, version: str, script: str) -> Path:
+    def create(name: str, version: str, script: str, *, uninstall_script: str | None = None) -> Path:
         source = sources / f"{name}-{version}-{uuid4().hex}.vsix"
+        manifest = {"publisher": "boxteam-probe", "name": name,
+            "version": version, "engines": {"vscode": "^1.0.0"}, "main": "./extension.js",
+            "extensionKind": ["workspace"], "activationEvents": ["onCommand:boxteam.persistent"],
+            "contributes": {"commands": [{"command": "boxteam.persistent", "title": "常驻管理测试"}]}}
+        if uninstall_script is not None:
+            manifest["scripts"] = {"vscode:uninstall": "node ./uninstall.js"}
         with ZipFile(source, "w") as archive:
-            archive.writestr("extension/package.json", json.dumps({"publisher": "boxteam-probe", "name": name,
-                "version": version, "engines": {"vscode": "^1.0.0"}, "main": "./extension.js",
-                "extensionKind": ["workspace"], "activationEvents": ["onCommand:boxteam.persistent"],
-                "contributes": {"commands": [{"command": "boxteam.persistent", "title": "常驻管理测试"}]}}))
+            archive.writestr("extension/package.json", json.dumps(manifest))
             archive.writestr("extension/extension.js", script)
+            if uninstall_script is not None:
+                archive.writestr("extension/uninstall.js", uninstall_script)
         return source
 
     return create
@@ -218,9 +228,9 @@ async def test_node_rejects_removed_configuration_operations_without_touching_fi
         assert settings.read_bytes() == original and not (workspace_home / view_id).exists()
 
 
-async def test_crashed_management_cannot_rebuild_without_old_host_exit_proofs(
+async def test_application_restart_recovers_management_and_normal_cleanup_preserves_installed_storage(
     management_process: ManagementProcess, management_component: tuple[Path, Path],
-    native_vsix: Callable[[str, str, str], Path], monkeypatch: pytest.MonkeyPatch,
+    native_vsix: NativeVsixFactory, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process = management_process
     installed = await process.result({"method": "install", "vsix_path": str(native_vsix("crash-held", "1.0.0", "retained-before-crash"))})
@@ -231,7 +241,21 @@ async def test_crashed_management_cannot_rebuild_without_old_host_exit_proofs(
     reference.raise_for_status()
     assert set(reference.json()) == {"result"}
     record = process.directory / "service.json"
-    original = record.read_bytes()
+    environment = await process.result({"method": "environment"})
+    storage = native_path(str(environment["global_storage_home_uri"])) / "boxteam-probe.crash-held" / "saved.json"
+    storage.parent.mkdir(parents=True, exist_ok=True)
+    storage.write_text('{"persisted": true}', encoding="utf-8")
+    hook_result = process.context.artifacts_dir / "uninstall-hook.json"
+    hook_script = "require('node:fs').writeFileSync(" + json.dumps(str(hook_result)) + ", JSON.stringify({" \
+        "controlCredentialPresent: Boolean(process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN)}));"
+    removed = await process.result({"method": "install", "vsix_path": str(native_vsix("crash-removed", "1.0.0",
+        "not-activated", uninstall_script=hook_script))})
+    await process.result({"method": "uninstall", "profile_id": cast(dict[str, object], removed["installed"])["profile_id"],
+        "extension_id": "boxteam-probe.crash-removed", "version": "1.0.0"})
+    obsolete_package = process.directory / "extensions/boxteam-probe.crash-removed-1.0.0"
+    obsolete = process.directory / "extensions/.obsolete"
+    assert json.loads(obsolete.read_text())["boxteam-probe.crash-removed-1.0.0"] is True
+    assert obsolete_package.is_dir() and not hook_result.exists()
     package = process.directory / "extensions/boxteam-probe.crash-held-1.0.0/extension.js"
     assert package.read_bytes() == b"retained-before-crash"
     assert process.child.process is not None
@@ -246,24 +270,35 @@ async def test_crashed_management_cannot_rebuild_without_old_host_exit_proofs(
         metadata["commit"], metadata["version"], metadata["nodeVersion"])
     monkeypatch.setattr("app.gateway.runtime.extension_management.get_gateway_local_token",
         lambda: process.client.headers["X-Local-Token"])
-    outcomes = []
-    for _ in range(2):
-        candidate = GatewayExtensionManagement(backend_id=str(process.service["backend_id"]), runtime=runtime,
-            directory=process.directory, environment=os.environ, log_dir=process.directory / "candidate-logs",
-            logging_startup={"revision": "crash-proof", "level": "info", "pretty": False})
-        try:
-            with pytest.raises(RuntimeError, match="旧扩展实例.*退出证明") as rejected:
-                await candidate.start()
-            outcomes.append(str(rejected.value))
-            assert candidate.process is None and candidate.instance is None
-            assert record.read_bytes() == original and package.read_bytes() == b"retained-before-crash"
-        finally:
-            await candidate.close()
+    candidate = GatewayExtensionManagement(backend_id=str(process.service["backend_id"]), runtime=runtime,
+        directory=process.directory, environment={**os.environ, "BOXTEAM_PROJECT_ROOT": str(process.context.project_root)},
+        log_dir=process.directory / "candidate-logs",
+        logging_startup={"revision": "application-restart", "level": "info", "pretty": False})
+    try:
+        await candidate.start()
+        candidate.assert_healthy()
+        assert candidate.instance is not None and candidate.process is not None
+        replacement = candidate.instance.model_dump(mode="json")
+        assert replacement["process_id"] != process.service["process_id"]
+        assert replacement["runtime_instance_id"] != process.service["runtime_instance_id"]
+        assert json.loads(record.read_text()) == replacement
+        inventory = await candidate.call({"method": "inventory"}, response_type=ProfileExtensionInventory)
+        assert inventory.model_dump(mode="json") == installed["inventory"]
+        assert package.read_bytes() == b"retained-before-crash" and storage.read_text() == '{"persisted": true}'
+        # ready 不清包、不恢复崩溃前的内存引用，也不执行未知安装／卸载脚本。
+        assert obsolete_package.is_dir() and not hook_result.exists()
+    finally:
+        await candidate.close()
+    assert candidate.drained and not record.exists()
+    assert not obsolete_package.exists()
+    assert json.loads(hook_result.read_text()) == {"controlCredentialPresent": False}
+    assert package.read_bytes() == b"retained-before-crash" and storage.read_text() == '{"persisted": true}'
     (process.context.artifacts_dir / "reconstruction.json").write_text(json.dumps({
         "original_service": process.service, "original_reference": reference.json(), "installed": installed,
-        "rejections": outcomes, "management_exit": asdict(process.child.state),
-        "service_record_unchanged": record.read_bytes() == original, "package_preserved": package.read_text(),
-        "boundary": "真实Node原生安装与引用准入，随后真实kill及Gateway管理owner启动；未创建Web/Node运行实例，未验证全域退出或获准重建。",
+        "replacement_service": replacement, "management_exit": asdict(process.child.state),
+        "package_preserved": package.read_text(), "storage_preserved": json.loads(storage.read_text()),
+        "obsolete_removed_on_shutdown": not obsolete_package.exists(), "uninstall_hook": json.loads(hook_result.read_text()),
+        "boundary": "真实Node原生安装、卸载及内存引用准入，真实kill后由新应用owner恢复；正常停机运行原清理与卸载hook。持久数据是原globalStorage目录文件，未创建运行宿主或验证插件Memento恢复。",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

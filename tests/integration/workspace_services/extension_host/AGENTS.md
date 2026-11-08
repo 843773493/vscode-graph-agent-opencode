@@ -15,7 +15,8 @@
 - 使用显式 Node runtime 和隔离依赖，产物按测试路径写入 out/tests；所有运行带进程外超时和内存保护。
 - `test_windows_pipe.py`直接核Windows原管道的当前用户唯一受保护ACL、单实例、双向大正文及首次调度前／后的取消回收；不能用构造参数或替身句柄代替这些原生断言。
 - 原型不代表 Gateway、目标授权、多目标窗口 registry 或完整产品验收。
-- `test_runtime_references.py` 经真实安装 Gateway／原安装器、Backend owner、私有 IPC、原 RPC 和实际 Node registry 验首次与动态版本登记、更新／逻辑卸载后的旧包读取、单实例关闭、同 PID 管理交接及最后真实退出。卸载后再用原引用请求旧 key，区分真实 producer 登记与测试代替登记；通用管理 token 和运行能力均不应被扩展从环境读取。TCP 仅为装具到 IPC 的字节桥，主线程通知／配置／存储为具名边界；不证明完整 Workbench、远端 SSH、异常重建对账或物理回收。
+- `test_runtime_references.py` 经真实安装 Gateway／原安装器、Backend owner、私有 IPC、原 RPC 和实际 Node registry 验首次与动态版本登记、更新／逻辑卸载后的旧包读取、单实例关闭、同 PID 管理交接及最后真实退出。卸载后再用原引用请求旧 key，区分真实 producer 登记与测试代替登记；通用管理 token 和运行能力均不应被扩展从环境读取。TCP 仅为装具到 IPC 的字节桥，主线程通知／配置／存储为具名边界；不证明完整 Workbench、远端 SSH或物理回收。
+- `test_management_process.py` 崩溃场景经真实安装、卸载、内存引用准入与kill，由新应用owner启动新管理进程；核原profile、包和仍安装插件的globalStorage文件保持，ready不清包，正常完整停机才沿原.obsolete清理并执行不含控制凭据的卸载hook。不创建运行宿主，不将目录文件保持称为插件Memento恢复。
 - `test_node_host.py`使用真实Backend registry与原BackendLifespan关闭宿主；ipc直接接owner，gateway/relay使用真实Uvicorn与产品认证路由，TCP listener只桥接原协议字节。Uvicorn关闭完整lifespan装配，未装配工作区业务图和真实SSH；窗口主线程仍是后续验收边界。
 - `extension_state.test.mjs` 编译真实描述类、接收端、Registry、Sequencer、原 Manager 和生命周期 owner；只在文件 realpath、进程／RPC 传输和主线程服务边界提供明确装具。候选发布、失败代际移除和 eager 并发必须经过这些原方法，不能复制状态机；该组合验证不等同 Gateway 授权或完整多目标产品验收。
 - 内部回调代际验证使用原owner生成的API及原eager／lazy Manager关闭入口；覆盖断连等待／失败、直接dispose、迟到激活和同位置替换，不能用测试自行设置active变量代替产品准入。

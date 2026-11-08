@@ -71,6 +71,11 @@ export function transformExtensionRunning(root, path, source, replaceOnce) {
     for (const [key, view] of next) this._remoteViews.set(key, view);
   }
   public get workspaceViews(): readonly IExtensionWorkspaceView[] { return [...this._remoteViews.values()]; }
+  public replaceWebHost(view: IExtensionWorkspaceView, webHost: NonNullable<IExtensionWorkspaceView['webHost']>): void {
+    const key = installationTargetKey(view.installationTarget);
+    if (this._remoteViews.get(key) !== view) throw new Error('Web extension workspace view changed during restart');
+    this._remoteViews.set(key, { ...view, webHost });
+  }
   public get remoteRunningLocations(): RemoteRunningLocation[] {
     return this.workspaceViews.filter(view => view.capabilities.host_manage && view.nodeRuntime?.channel_state === 'available')
       .map(view => new RemoteRunningLocation(view.installationTarget, view.viewId, view.workspaceIds));

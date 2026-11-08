@@ -95,29 +95,48 @@ export async function scanTargetExtensions(context: IWorkspaceContextService,
       webHost = lifetime.add(new TargetWebHostConnection({ ...request, view_id: view.viewId,
         profile_id: inventory.inventory!.profile_id, extension_keys: browser.map(extension => extension.extensionKey!) }));
       await webHost.connect();
-      const frozen = webHost.connection.inventory!;
       for (const extension of browser) {
-        const entry = frozen.extensions.find(entry => entry.extension_key === extension.extensionKey);
-        if (!entry?.is_valid || entry.source !== 'profile') throw new Error('Web 宿主冻结发布缺少有效的 profile 描述');
-        const value = revive(entry.description) as IExtensionDescription | undefined;
-        if (!value || !ExtensionIdentifier.equals(value.identifier?.value, extension.identifier) || value.version !== extension.version
-          || value.publisher !== extension.publisher || value.name !== extension.name
-          || !URI.isUri(value.extensionLocation) || value.extensionLocation.scheme !== 'file') {
-          throw new Error('Web 宿主冻结发布与库存的精确扩展实例不匹配');
-        }
         const index = descriptions.indexOf(extension);
-        descriptions[index] = bindExtensionDescription({ ...value, identifier: extension.identifier, extensionKey: entry.extension_key,
-          installationProfileId: extension.installationProfileId, gatewayConnectionId: extension.gatewayConnectionId,
-          isValid: true, enablementView: extension.enablementView,
-          validations: entry.validations.map(validation => [validation.severity, validation.message]),
-          extensionLocation: webHost.packageUri(entry.extension_key, extension.identifier.value),
-        }, installationTarget);
+        descriptions[index] = frozenWebExtension(webHost, extension);
       }
     }
     views.push({ ...view, nodeRuntime, webHost });
     extensions.push(...descriptions);
   }
   return { views, extensions };
+}
+
+/** 只重新准入当前窗口冻结的 key；库存切版与卸载后的集合迁移仍需 Reload Window。 */
+export async function reopenTargetWebHost(view: IExtensionWorkspaceView, previous: readonly IExtensionDescription[], lifetime: DisposableStore) {
+  if (!view.webHost) throw new Error('目标 Web 宿主恢复缺少原冻结资格');
+  const webHost = lifetime.add(new TargetWebHostConnection(view.webHost.request));
+  // TODO：升级或卸载导致原 key 不再属于当前 profile 时，沿正常 Reload 重新扫描，不在恢复中切换扩展集合。
+  try { await webHost.connect(); }
+  catch (cause) { throw new Error('无法重新取得当前窗口的 Web 扩展资格，请重新载入窗口（Reload Window）：' + String(cause), { cause }); }
+  const extensions = previous.map(extension => {
+    const frozen = frozenWebExtension(webHost, extension);
+    if (frozen.extensionLocation.toString() === extension.extensionLocation.toString()) throw new Error('Web 宿主恢复复用了旧 generation');
+    return bindExtensionDescription({ ...extension, extensionLocation: frozen.extensionLocation }, view.installationTarget);
+  });
+  return { webHost, extensions };
+}
+
+function frozenWebExtension(webHost: TargetWebHostConnection, extension: IExtensionDescription): IBoundExtensionDescription {
+  const entry = webHost.connection.inventory!.extensions.find(entry => entry.extension_key === extension.extensionKey);
+  if (!entry?.is_valid || entry.source !== 'profile') throw new Error('Web 宿主冻结发布缺少有效的 profile 描述');
+  const value = revive(entry.description) as IExtensionDescription | undefined;
+  if (!value || !ExtensionIdentifier.equals(value.identifier?.value, extension.identifier) || value.version !== extension.version
+    || value.publisher !== extension.publisher || value.name !== extension.name
+    || !URI.isUri(value.extensionLocation) || value.extensionLocation.scheme !== 'file') {
+    throw new Error('Web 宿主冻结发布与库存的精确扩展实例不匹配');
+  }
+  if (!extension.installationTarget) throw new Error('Web 宿主冻结发布缺少安装目标');
+  return bindExtensionDescription({ ...value, identifier: extension.identifier, extensionKey: entry.extension_key,
+    installationProfileId: extension.installationProfileId, gatewayConnectionId: extension.gatewayConnectionId,
+    isValid: true, enablementView: extension.enablementView,
+    validations: entry.validations.map(validation => [validation.severity, validation.message]),
+    extensionLocation: webHost.packageUri(entry.extension_key, extension.identifier.value),
+  }, extension.installationTarget);
 }
 
 function assertInstallationTarget(target: ExtensionTargetDTO,

@@ -22,6 +22,6 @@
 - VSIX 安装结果与完整库存由同一次串行 Node 控制操作生成；Python 不在释放安装请求后另读库存拼回执。保留原安装器的现有版本复用，物理卸载和运行版本切换须沿各自生命周期完成。
 - 市场安装由目标原 Gallery 按 ID／版本重新取对象并交原 installFromGallery；元数据写入只接受公开布尔选项，UUID、publisher 和平台等事实从原 Gallery 重取。选项校验与字段映射共用生成 proto descriptor，不复制逐字段转换。库存中的平台、metadata 和 README／CHANGELOG 相对路径消费同次原安装／扫描服务，不按浏览器平台或候选正文猜测。
 - `installed.reused`消费同次原安装器context的实际版本复用结果；不能以候选manifest声称已替换正文。私有进程回执保留原ExtensionManagementError.code，文件系统错误继续使用原Provider错误映射。
-- 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。运行版本引用由原安装服务持有，Backend 开通与结清原 session；Node registry 在首次运行 barrier 与增量发布前提交实际用户扩展集合。曾准入的版本保留到真实 child 退出，不因 delta 移除而提前释放；Web 旧实例资格与字节仍由原 Backend session／Python publication_file 处理，current-only 即时核当前成员。TODO(4.4)：异常重建对账与最终回收未接通，不能启用全局物理 cleanUp。
+- 精确发布描述沿原scanner核ExtensionKey、逻辑ID和当前profile资格；不读取包内路径或正文。运行版本引用由原安装服务持有，Backend 开通与结清原 session；Node registry 在首次运行 barrier 与增量发布前提交实际用户扩展集合。曾准入的版本保留到真实 child 退出，不因 delta 移除而提前释放；Web 旧实例资格与字节仍由原 Backend session／Python publication_file 处理，current-only 即时核当前成员。管理组件崩溃走服务组／应用恢复，不要求全域退出证明或持久引用对账；正常完整停机在引用与读取结清后沿原安装器清理旧包，清包不阻塞恢复，仍安装插件的持久存储保持。
 - `/references` 的运行能力只能取得本代宿主的版本准入，不能打开／关闭引用或调用通用管理入口；开关仍由 Backend 使用原本机认证。Node 首次运行前把能力移入内部模块闭包并删除启动环境项，扩展及其子进程不继承它，通用管理 token 不传给运行宿主。该边界不宣称提供 OS 沙箱。
 - Web 准入在本次串行请求内共用原 profile 扫描对象生成库存与发布描述，不逐包重复扫描 profile／manifest；后续请求仍重新扫描，不能持久缓存准入资格或省略原件、精确版本和发布根校验。

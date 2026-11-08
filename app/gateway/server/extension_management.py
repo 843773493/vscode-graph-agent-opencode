@@ -47,7 +47,10 @@ def management_owner(connection: HTTPConnection, backend_id: str | None = None) 
         raise TypeError("Gateway 扩展管理组件尚未初始化")
     if backend_id is not None and backend_id != owner.backend_id:
         raise ValueError("扩展管理目标不属于原生 Gateway 的安装域")
-    owner.assert_healthy()
+    try:
+        owner.assert_healthy()
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error
     return owner
 
 

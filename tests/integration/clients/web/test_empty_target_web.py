@@ -184,8 +184,12 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
 """)
             archive.writestr("extension/node.js", """
 const vscode = require('vscode');
-exports.activate = context => {
+exports.activate = async context => {
+const activation = context.globalState.get('crashActivations', 0) + 1;
+await context.globalState.update('crashActivations', activation);
 registerNotebookProbe(context, 'boxteam.empty.nodeNotebooks');
+// 原宿主拦截 process.exit；信号只终止本扩展宿主，制造真实进程崩溃。
+context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.crashNode', () => process.kill(process.pid, 'SIGKILL')));
 context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider({
   async provideWorkspaceSymbols(query) {
     if (query === 'ScopedSymbolProbe') throw new Error('目标 Node 符号故障探针');
@@ -193,7 +197,7 @@ context.subscriptions.push(vscode.languages.registerWorkspaceSymbolProvider({
   }
 }));
 context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid', () => ({
-  mode: 'node', version: context.extension.packageJSON.version, platform: process.platform,
+  mode: 'node', version: context.extension.packageJSON.version, platform: process.platform, pid: process.pid, activation,
   nativeContent: require('node:fs').readFileSync(require('node:path').join(__dirname, 'native.txt'), 'utf8'),
   folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
 })), vscode.commands.registerCommand('boxteam.empty.nodeDiagnostics',
@@ -237,6 +241,8 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
         "src/clients/workbench/src/extensions/contribution.ts",
         "src/clients/workbench/src/extensions/targetUris.ts", "src/clients/workbench/scripts/sourceTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionNotebookTransform.mjs",
+        "src/clients/workbench/scripts/extensions/extensionOwnerTransform.mjs",
+        "src/clients/workbench/scripts/extensions/extensionRunningTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionWorkspaceSymbolsTransform.mjs",
         "src/clients/workbench/src/search/symbolsQuickAccess.ts",
         "src/clients/workbench/scripts/extensions/extensionEnablementTransform.mjs",

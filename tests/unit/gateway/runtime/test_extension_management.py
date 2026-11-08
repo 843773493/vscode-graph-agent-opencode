@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import JsonValue
 
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
@@ -24,6 +25,7 @@ from app.gateway.runtime.extension_management import (
     GatewayExtensionManagement,
 )
 from app.gateway.runtime.process_logs import ProcessLogFile, ProcessLogOwnership
+from app.gateway.server.extension_management import management_owner
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     NativeExtensionPublication,
@@ -707,7 +709,7 @@ async def test_dead_service_rejects_requests_without_restarting(control: HttpCon
     c.spawn.assert_not_called()
 
 
-async def test_dead_service_record_requires_all_host_exit_proofs_before_reconstruction(control: HttpControl) -> None:
+async def test_application_restart_replaces_dead_service_record_without_recovery_proofs(control: HttpControl) -> None:
     c = control
     record = c.owner.directory / "service.json"
     original = record.read_bytes()
@@ -715,17 +717,56 @@ async def test_dead_service_record_requires_all_host_exit_proofs_before_reconstr
     package.parent.mkdir(parents=True)
     package.write_bytes(b"original-extension")
     c.process.alive = False
-    for owner in (c.owner, GatewayExtensionManagement(backend_id=c.owner.backend_id, runtime=c.owner.runtime,
-        directory=c.owner.directory, environment={}, log_dir=c.owner.directory / "other-logs", logging_startup={})):
-        with pytest.raises(RuntimeError, match="旧扩展实例.*退出证明"):
-            await owner.start()
-        assert record.read_bytes() == original
-        assert package.read_bytes() == b"original-extension"
-        assert owner.process is None and owner.instance is None
-        with pytest.raises(RuntimeError, match="owner 已失败"):
-            await owner.start()
-    c.spawn.assert_not_called()
-    c.open_log.assert_not_called()
+    def spawn_service(*_args: object, **_kwargs: object) -> ManagementProcessFake:
+        c.process.alive = True
+        record.write_text(c.instance.model_dump_json(), encoding="utf-8")
+        return c.process
+
+    c.spawn.side_effect = spawn_service
+    await c.owner.start()
+    c.owner.assert_healthy()
+    assert record.read_bytes() == original and package.read_bytes() == b"original-extension"
+    assert c.owner.instance == c.instance
+    c.spawn.assert_called_once()
+    c.open_log.assert_called_once()
     c.adopt_log.assert_not_called()
-    c.client_factory.assert_not_called()
-    assert c.requests == [] and c.events == []
+    assert c.commands == []
+    await c.owner.close()
+    assert c.owner.drained and c.process.close_timeouts == [0]
+
+
+@pytest.mark.parametrize("preserve", [False, True])
+async def test_dead_service_shutdown_reaps_handle_without_waiting_for_http_drain(
+    control: HttpControl, preserve: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    c = control
+    await c.owner.start()
+    c.owner._download_admission = ("unknown-install", "original-request")
+    c.process.alive = False
+    with pytest.raises(RuntimeError, match="请重启服务组或应用.*结果可能未知"):
+        c.owner.assert_healthy()
+    await c.owner.quiesce()
+    await c.owner.close(preserve=preserve)
+    assert c.owner.drained and c.owner.instance is None and c.client.is_closed
+    assert c.process.close_timeouts == [0] and c.process.detach_calls == 0
+    assert c.events == ["process-close", "client-close"]
+    assert c.commands == [] and not any(request.method == "POST" for request in c.requests)
+    assert "安装结果未知" in caplog.text and "不自动重放" in caplog.text
+    c.spawn.assert_not_called()
+
+
+async def test_management_consumer_receives_restart_guidance_after_service_crash(control: HttpControl) -> None:
+    c = control
+    await c.owner.start()
+    c.process.alive = False
+    application = FastAPI()
+    application.state.extension_management = c.owner
+    request = Request({"type": "http", "app": application})
+    with pytest.raises(HTTPException) as failed:
+        management_owner(request, c.owner.backend_id)
+    assert failed.value.status_code == 503
+    assert "请重启服务组或应用" in failed.value.detail and "不自动重放" in failed.value.detail
+    assert isinstance(failed.value.__cause__, RuntimeError)
+    assert c.commands == []
+    c.spawn.assert_not_called()
+    await c.owner.close()

@@ -127,7 +127,12 @@ export class TargetExtensionHost extends Disposable implements IExtensionHost {
     const protocol = this.protocol!;
     this._register(protocol.onSocketClose(event => {
       this.configurationLifetime.dispose();
-      if (!this.closing) this.exited.fire([1, event && 'reason' in event ? event.reason : 'extension_host_channel_closed']);
+      if (!this.closing) {
+        // 通道已退出；原 owner 后续 disconnect 只结清资源，不再向死通道发送 Terminate。
+        this.closing = true;
+        this.startupCancellation.cancel();
+        this.exited.fire([1, event && 'reason' in event ? event.reason : 'extension_host_channel_closed']);
+      }
     }));
     const configuration = await raceCancellationError(
       targetConfigurationServices(this.instantiation, this.targetContext!, this.configurationLifetime), this.startupCancellation.token);

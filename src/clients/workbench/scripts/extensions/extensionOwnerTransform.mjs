@@ -11,11 +11,36 @@ export const extensionOwnerSourcePaths = [
   'src/vs/workbench/api/browser/mainThreadCommands.ts',
   'src/vs/workbench/services/commands/common/commandService.ts',
   'src/vs/workbench/api/browser/mainThreadFileSystem.ts',
+  'src/vs/workbench/services/extensions/common/extensionsRegistry.ts',
+  'src/vs/workbench/services/themes/common/iconExtensionPoint.ts',
 ];
 
 /** 原协调 owner 继续持有唯一窗口 registry；宿主只消费从它派生的合法快照。 */
 export function transformExtensionOwner(root, path, source, replaceOnce) {
   const paths = extensionOwnerSourcePaths.map(value => join(root, 'upstream', value));
+  if (path === paths[11]) return replaceOnce(source, 'iconRegistry.deregisterIcon(id);', `iconRegistry.deregisterIcon(id);
+          const defaultIcon = extensionValue[id].default;
+          if (typeof defaultIcon === 'object' && typeof defaultIcon.fontPath === 'string') {
+            iconRegistry.deregisterIconFont(getFontId(extension.description, defaultIcon.fontPath));
+          }`);
+  if (path === paths[10]) {
+    let contents = replaceOnce(source, 'EXTENSION_CATEGORIES, ExtensionIdentifierSet', 'EXTENSION_CATEGORIES, ExtensionIdentifier, ExtensionIdentifierSet');
+    // 原 handler 对同 ID 的新增／移除顺序不同；换位置先完整移除，再沿原流程新增。
+    return replaceOnce(contents, '\tacceptUsers(users: IExtensionPointUser<T>[]): void {', `
+  acceptUsers(users: IExtensionPointUser<T>[]): void {
+    if (this._users) {
+      const locations = new Map(users.map(user => [ExtensionIdentifier.toKey(user.description.identifier), user.description.extensionLocation.toString()]));
+      const retained = this._users.filter(user => {
+        const location = locations.get(ExtensionIdentifier.toKey(user.description.identifier));
+        return location === undefined || location === user.description.extensionLocation.toString();
+      });
+      if (retained.length !== this._users.length) {
+        this._delta = ExtensionPointUserDelta.compute(this._users, retained);
+        this._users = retained;
+        this._handle();
+      }
+    }`);
+  }
   if (path === paths[9]) {
     // provider info 的 URI 只标记 scheme，没有文件身份；不能交给真实路径转换。
     let contents = replaceOnce(source, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
@@ -207,6 +232,13 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
   contents = replaceOnce(contents, 'public getExtension(id: string):', 'public getExtension(id: string, target?: ExtensionInstallationTarget):');
   contents = replaceOnce(contents, 'return this._registry.getExtensionDescription(id);', 'return this._registry.getExtensionDescription(id, target);');
   contents = contents.replaceAll('const availableExtensions = this._registry.getAllExtensionDescriptions();', 'const availableExtensions = this._registry.getWindowExtensionDescriptions();');
+  contents = replaceOnce(contents, 'private _startExtensionHostsIfNecessary(isInitialStart: boolean, initialActivationEvents: string[]): void {',
+    'private _startExtensionHostsIfNecessary(isInitialStart: boolean, initialActivationEvents: string[], onlyLocation?: ExtensionRunningLocation): void {');
+  contents = replaceOnce(contents, 'for (const location of locations) {', 'for (const location of locations) {\n      if (onlyLocation && !location.equals(onlyLocation)) continue;');
+  contents = replaceOnce(contents, 'protected async _doStopExtensionHosts(): Promise<void> {',
+    'protected async _doStopExtensionHosts(): Promise<void> {\n    this._extensionHostRestarts.clear();');
+  contents = replaceOnce(contents, 'public async stopAllInReverse(): Promise<void> {',
+    'public async stopAllInReverse(): Promise<void> {\n    for (const manager of this._extensionHostManagers) manager.disposableStore.dispose();');
   contents = replaceOnce(contents, 'const extensionStatus = this._extensionStatus.get(extension.identifier);', 'const extensionStatus = this._extensionStatus.get(extensionInstanceKey(extension));');
   contents = replaceOnce(contents, 'result[extension.identifier.value] = {', 'result[extensionInstanceKey(extension)] = {\n          installationTarget: requireExtensionTarget(extension).installationTarget,');
   const statusStart = contents.indexOf('\tprivate _getOrCreateExtensionStatus('), statusEnd = contents.indexOf('\n\tprivate _handleExtensionPointMessage', statusStart);
@@ -260,15 +292,67 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
     }
 \t\tconst result = Promise.all(
 \t\t\tmanagers.map(extHostManager => extHostManager.activateByEvent(activationEvent, activationKind))`);
-  // 通道关闭不借单 RemoteAgent 获取另一个目标的退出信息，也不自动重放未知副作用。
+  // 崩溃恢复仍由原窗口 owner 重建精确位置；只重新激活原事实，不重放命令或未知 RPC。
   const crashStart = contents.indexOf('\tprotected _onExtensionHostCrashed('), crashEnd = contents.indexOf('\n\tprivate _getExtensionHostExitInfoWithTimeout', crashStart);
   contents = replaceOnce(contents, contents.slice(crashStart, crashEnd), `
   protected _onExtensionHostCrashed(manager: IExtensionHostManager, code: number, signal: string | null): void {
+    if (this._store.isDisposed || !this.getExtensionHosts().includes(manager.extensionHost)) return;
+    this._logService.error('Extension host terminated unexpectedly. Code: ' + code + ', Signal: ' + signal);
     this._logExtensionHostCrash(manager);
+    const location = manager.extensionHost.runningLocation;
     const affected = manager.extensionHost.extensions?.allExtensions.filter(extension => manager.containsExtension(extension.identifier)) ?? [];
+    const activated = affected.flatMap(extension => {
+      const reason = this._extensionStatus.get(extensionInstanceKey(extension))?.activationTimes?.activationReason;
+      return reason ? [{ id: extension.identifier, reason }] : [];
+    });
     for (const extension of affected) this._extensionStatus.get(extensionInstanceKey(extension))?.clearRuntimeStatus();
     this._onDidChangeExtensionsStatus.fire(affected.map(extension => extension.identifier));
-    void this._stopFailedExtensionHost(manager, new Error('Extension host closed: ' + manager.friendyName + ' / ' + code + ' / ' + signal));
+    let tracker = this._extensionHostCrashTrackers.get(location.asString());
+    if (!tracker) { tracker = new ExtensionHostCrashTracker(); this._extensionHostCrashTrackers.set(location.asString(), tracker); }
+    tracker.registerCrash();
+    const restart = tracker.shouldAutomaticallyRestart();
+    const pending = this._extensionHostRestarts.add(new DisposableStore());
+    void (async () => {
+      await this._extensionHostManagers.stopOne(manager);
+      if (pending.isDisposed || this._store.isDisposed) return;
+      if (!restart) throw new Error('扩展宿主在 5 分钟内已崩溃 3 次，停止自动重启：' + location.asString());
+      this._notificationService.status('扩展宿主意外退出，正在重启：' + location.asString(), { hideAfter: 5000 });
+      const admission = await this._prepareExtensionHostRestart(location, pending);
+      if (pending.isDisposed || this._store.isDisposed || this._extensionHostManagers.getByRunningLocation(location)) return;
+      this._startExtensionHostsIfNecessary(false, [], location);
+      const next = this._extensionHostManagers.getByRunningLocation(location);
+      if (!next) throw new Error('扩展宿主恢复时没有合法运行位置：' + location.asString());
+      if (admission) pending.deleteAndLeak(admission);
+      await next.ready();
+      for (const activation of activated) {
+        if (pending.isDisposed || this._extensionHostManagers.getByRunningLocation(location) !== next) return;
+        if (next.containsExtension(activation.id) && !await next.activate(activation.id, activation.reason)) {
+          throw new Error('扩展宿主恢复时重新激活被拒绝：' + activation.id.value);
+        }
+      }
+    })().catch(error => {
+      if (pending.isDisposed || this._store.isDisposed) return;
+      this._logService.error('Extension host recovery failed: ' + location.asString(), error);
+      this._notificationService.error(toErrorMessage(error));
+    }).finally(() => this._extensionHostRestarts.delete(pending));
+  }
+
+  protected async _prepareExtensionHostRestart(_location: ExtensionRunningLocation, _pending: DisposableStore): Promise<IDisposable | undefined> { return undefined; }
+
+  protected async _rebindWebExtensionHost(view: IExtensionWorkspaceView, webHost: NonNullable<IExtensionWorkspaceView['webHost']>,
+    previous: IExtensionDescription[], next: IExtensionDescription[], pending: DisposableStore): Promise<void> {
+    const lock = await this._registry.acquireLock('rebindWebExtensionHost');
+    try {
+      if (pending.isDisposed || !this._runningLocations.workspaceViews.includes(view)) throw new Error('Web 宿主恢复已撤销');
+      if (previous.some(extension => this._registry.getExtensionDescription(extension.identifier, extension.installationTarget) !== extension)) {
+        throw new Error('Web 宿主恢复期间窗口扩展集合已变化，请重新载入窗口');
+      }
+      const removed = previous.map(requireExtensionTarget);
+      const result = this._registry.deltaExtensions(lock, next, removed);
+      this._runningLocations.replaceWebHost(view, webHost);
+      this._doHandleExtensionPoints(previous.concat(next), false);
+      await Promise.all(this._extensionHostManagers.map(manager => this._updateExtensionsOnExtHost(manager, result.versionId, next, removed, undefined)));
+    } finally { lock.dispose(); }
   }
 `);
   const oldRemoteStart = contents.indexOf('\n\tprivate _getExtensionHostExitInfoWithTimeout('), oldRemoteEnd = contents.indexOf('\n\tprotected _logExtensionHostCrash(', oldRemoteStart);
@@ -278,6 +362,8 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
   contents = contents.replace('ExtensionRunningLocationTracker, filterExtensionIdentifiers', 'ExtensionRunningLocationTracker');
   contents = contents.replace('IExtensionHostExitInfo, IRemoteAgentService', 'IRemoteAgentService');
   contents = contents.replace('NotificationTelemetryId, NotificationActionTelemetryId', 'NotificationTelemetryId');
-  contents = contents.replace('\tprivate readonly _remoteCrashTracker = new ExtensionHostCrashTracker();\n', '');
+  contents = replaceOnce(contents, '\tprivate readonly _remoteCrashTracker = new ExtensionHostCrashTracker();',
+    'private readonly _extensionHostCrashTrackers = new Map<string, ExtensionHostCrashTracker>();\n  private readonly _extensionHostRestarts = this._register(new DisposableStore());');
+  contents = replaceOnce(contents, 'import { Disposable, DisposableStore }', 'import { Disposable, DisposableStore, IDisposable }');
   return contents;
 }

@@ -612,7 +612,6 @@ class NodeExtensionHostOwner:
             snapshot = ProfileExtensionInventory(profile_id=inventory.profile_id,
                 target_platform=inventory.target_platform, extensions=[members[key] for key in extension_keys])
             # 冻结同次原 scanner 发布描述；后续文件 I/O 不再逐文件调用 Gateway／Node。
-            # TODO(4.4)：管理服务异常重建的引用对账与最终回收未闭合，继续禁止全局 cleanUp。
             session.profile_id = inventory.profile_id
             session.publications = publications
 

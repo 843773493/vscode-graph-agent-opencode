@@ -200,8 +200,12 @@ export async function createExtensionManagement(directory: string, builtinExtens
         async dispose() {
           if (hosts.size) throw new Error(`仍有 ${hosts.size} 个宿主引用未由原 Backend 结清，不能关闭安装服务`);
           const failures: unknown[] = [];
-          // 先排空写入及消费者，再沿原 watcher 停止 API 关句柄，最后释放 provider。
-          for (const close of [() => management.drainNativeManagement(), () => consumers.dispose(),
+          // 原异步工作结清后，正常完整停机才沿 profile／.obsolete 清包；排空失败不能继续删包。
+          try {
+            await management.drainNativeManagement();
+            await management.cleanUp();
+          } catch (error) { failures.push(error); }
+          for (const close of [() => consumers.dispose(),
             () => disk.stopNativeManagementWatchers(), () => scope.dispose()]) {
             try { await close(); } catch (error) { failures.push(error); }
           }
@@ -251,12 +255,10 @@ export async function createExtensionManagement(directory: string, builtinExtens
           const publication = { inventory: await describeInventory(extensions), publications, environment: await this.environment() };
           // Node 已加载代码不能动态卸载；曾准入版本一直保护到真实 child 退出。
           for (const extension of extensions) host.extensions.set(ExtensionKey.create(extension).toString(), extension);
-          // TODO(4.4)：管理服务异常重建的引用对账与最终回收尚未闭合，继续禁止全局 cleanUp。
           return publication;
         },
         async install(vsixPath: string) {
           // 同版本复用、不同版本并存沿原安装器处理；安装不覆盖在用目录或切换运行实例。
-          // TODO(4.4): 宿主引用闭包接通后，沿原卸载服务回收不再使用的版本。
           const context = { [NATIVE_EXTENSION_REUSED_CONTEXT]: false };
           const extension = await management.install(URI.file(vsixPath), { profileLocation: profile.extensionsResource, keepExisting: true, context });
           // 在同一串行控制请求内读取发布后的库存，避免并发安装把回执拼成另一版本。
