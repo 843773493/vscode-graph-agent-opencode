@@ -19,11 +19,13 @@ import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   getApiBaseUrl,
   getGatewayToken,
+  onGatewayUserSessionInvalidated,
   requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
 } from "./http";
+import { awaitWithAbort } from "../utils/abortable";
 
 
 /**
@@ -309,18 +311,29 @@ export async function getWorkspaceRawFileBlob(
   range?: { start: number; end?: number },
 ): Promise<Blob> {
   const { query } = fileTreeLocationQuery(path);
-  // 二进制下载只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
-  const response = await requestGatewayResponse(
-    port,
-    `/api/v1/workspace/files/raw?${query.toString()}`,
-    {
-      headers: { ...workspaceHeader(workspaceId), ...(range ? { Range: `bytes=${range.start}-${range.end ?? ""}` } : {}) },
-      signal,
-      skipGatewayUserSession: true,
-    },
-  );
-  if (range && response.status !== 206) throw new Error("目标文件服务没有按请求返回字节范围");
-  return await response.blob();
+  const controller = new AbortController();
+  const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const release = onGatewayUserSessionInvalidated(port, () => controller.abort(
+    new DOMException("Gateway 或用户身份已改变，请重新读取文件", "AbortError"),
+  ));
+  try {
+    // 沿原凭据刷新链，不额外建立用户会话屏障；身份变化撤销整个正文读取。
+    const response = await requestGatewayResponse(
+      port,
+      `/api/v1/workspace/files/raw?${query.toString()}`,
+      {
+        headers: { ...workspaceHeader(workspaceId), ...(range ? { Range: `bytes=${range.start}-${range.end ?? ""}` } : {}) },
+        signal: reading,
+        skipGatewayUserSession: true,
+      },
+    );
+    if (range && response.status !== 206) {
+      const error = new Error("目标文件服务没有按请求返回字节范围");
+      controller.abort(error);
+      throw error;
+    }
+    return await awaitWithAbort(response.blob(), reading);
+  } finally { release(); }
 }
 
 export async function updateWorkspaceFileContent(

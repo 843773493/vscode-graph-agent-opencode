@@ -2,13 +2,16 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../../api";
 import WorkspaceMarkdownImage from "./WorkspaceMarkdownImage";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
 }
 
-const MARKDOWN_PATH = "/resources/files/ws/docs/readme.md";
+const OWNER = { gatewayId: "gateway-markdown-image", workspaceId: "00000000-0000-4000-8000-000000000065" };
+const ROOT = `boxteam://${OWNER.gatewayId}/workspace/${OWNER.workspaceId}/resources/files/root`;
+const MARKDOWN_PATH = `${ROOT}/docs/readme.md`;
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -105,7 +108,7 @@ function markdownImage(src: string, alt: string) {
   return (
     <WorkspaceMarkdownImage
       apiPort={8014}
-      workspaceId="gw_1"
+      workspaceId={gatewayWorkspaceKey(OWNER)}
       markdownPath={MARKDOWN_PATH}
       src={src}
       alt={alt}
@@ -163,7 +166,7 @@ test("在途期间切换图片源后，迟到的旧响应不得创建对象 URL 
   });
   await flush();
   expect(getBlob).toHaveBeenCalledTimes(1);
-  expect(getBlob.mock.calls[0]?.[1]).toBe("/resources/files/ws/docs/old.png");
+  expect(getBlob.mock.calls[0]?.[1]).toBe(`${ROOT}/docs/old.png`);
 
   // 用户切到另一张图：旧请求仍被 abort 挂在途中。
   act(() => {
@@ -189,7 +192,7 @@ test("在途期间切换图片源后，迟到的旧响应不得创建对象 URL 
   });
   await flush();
   expect(getBlob).toHaveBeenCalledTimes(2);
-  expect(getBlob.mock.calls[1]?.[1]).toBe("/resources/files/ws/docs/new.png");
+  expect(getBlob.mock.calls[1]?.[1]).toBe(`${ROOT}/docs/new.png`);
 
   await act(async () => {
     newRequest.resolve(new Blob(["new"]));

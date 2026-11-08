@@ -194,25 +194,20 @@ function createRequestAbortState(
   }
 
   const controller = new AbortController();
+  // 响应头到达后只结束建连期限，原调用方仍能取消后续二进制／SSE 正文读取。
+  const signal = externalSignal ? AbortSignal.any([externalSignal, controller.signal]) : controller.signal;
   let timedOut = false;
-  const abortFromExternal = () => controller.abort(abortReason(externalSignal!));
-  if (externalSignal?.aborted) {
-    abortFromExternal();
-  } else {
-    externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
-  }
   const timeoutId = globalThis.setTimeout(() => {
-    if (controller.signal.aborted) return;
+    if (signal.aborted) return;
     timedOut = true;
     controller.abort(new DOMException(timeoutErrorMessage, "TimeoutError"));
   }, timeoutMs);
 
   return {
-    signal: controller.signal,
+    signal,
     didTimeout: () => timedOut,
     cleanup: () => {
       globalThis.clearTimeout(timeoutId);
-      externalSignal?.removeEventListener("abort", abortFromExternal);
     },
   };
 }
