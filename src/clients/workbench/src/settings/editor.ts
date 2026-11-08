@@ -20,6 +20,7 @@ import type { ITextFileEditorModel } from '../../upstream/src/vs/workbench/servi
 import { extUri, joinPath } from '../../upstream/src/vs/base/common/resources.js';
 import type { ExtensionConfigurationTargetRequest, ExtensionConfigurationViewDTO, ExtensionConfigurationTargetListDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from '../agentApi.js';
+import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { targetConfigurationServices } from '../extensions/configuration.js';
 import { registerTargetConfigurationFiles, rebindTargetConfigurationFiles, retainTargetConfigurationFile } from '../extensions/configurationFiles.js';
 import { TargetWorkspaceResources } from '../extensions/targetUris.js';
@@ -73,7 +74,7 @@ export function settingsFileOptions(context: TargetConfigurationContext, resourc
 export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')): Promise<{
   location: TargetSettingsLocation; context: TargetConfigurationContext & { kind: 'settings' };
 }> {
-  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort());
+  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort(new CancellationError()));
   try {
     if (token.isCancellationRequested) throw new CancellationError();
     let backendId = target.backend_id;
@@ -108,19 +109,33 @@ export async function captureSettingsLocation(parent: IInstantiationService, tok
 }
 
 export async function prepareSettingsContext(target: ExtensionConfigurationTargetRequest | TargetSettingsLocation, signal: AbortSignal): Promise<TargetConfigurationContext & { kind: 'settings' }> {
-  const request: ExtensionConfigurationTargetRequest = { protocol_version: 1, gateway_id: target.gateway_id, backend_id: target.backend_id,
-    view_id: target.view_id, workspace_ids: [...target.workspace_ids], gateway_connection_id: target.gateway_connection_id };
-  const connection = await gateway.request<ExtensionConfigurationViewDTO>('/api/gateway/extension-configurations/prepare', {
-    method: 'POST', body: JSON.stringify(request), signal,
+  const controller = new AbortController();
+  let entry = workspaceContext.getSnapshot().gatewayId;
+  const invalidate = () => controller.abort(new CancellationError());
+  const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
+  const releaseContext = workspaceContext.subscribe(() => {
+    const current = workspaceContext.getSnapshot().gatewayId;
+    // 历史还原可早于导航初始化；首次取得入口身份不算切换。
+    if (entry === null) entry = current;
+    else if (current !== entry) invalidate();
   });
-  signal.throwIfAborted();
-  if (connection.protocol_version !== 1 || connection.gateway_id !== target.gateway_id || connection.backend_id !== target.backend_id
-    || connection.view_id !== target.view_id || connection.workspace_ids.length !== target.workspace_ids.length
-    || connection.workspace_ids.some((id, index) => id !== target.workspace_ids[index])
-    || 'profile_id' in target && connection.profile_id !== target.profile_id) throw new Error('配置准备回执不属于原目标、profile 或有序视图');
-  const context = { kind: 'settings' as const, connection, gatewayConnectionId: target.gateway_connection_id };
-  new TargetWorkspaceResources(context);
-  return context;
+  const requestSignal = AbortSignal.any([signal, controller.signal]);
+  try {
+    requestSignal.throwIfAborted();
+    const request: ExtensionConfigurationTargetRequest = { protocol_version: 1, gateway_id: target.gateway_id, backend_id: target.backend_id,
+      view_id: target.view_id, workspace_ids: [...target.workspace_ids], gateway_connection_id: target.gateway_connection_id };
+    const connection = await gateway.request<ExtensionConfigurationViewDTO>('/api/gateway/extension-configurations/prepare', {
+      method: 'POST', body: JSON.stringify(request), signal: requestSignal,
+    });
+    requestSignal.throwIfAborted();
+    if (connection.protocol_version !== 1 || connection.gateway_id !== target.gateway_id || connection.backend_id !== target.backend_id
+      || connection.view_id !== target.view_id || connection.workspace_ids.length !== target.workspace_ids.length
+      || connection.workspace_ids.some((id, index) => id !== target.workspace_ids[index])
+      || 'profile_id' in target && connection.profile_id !== target.profile_id) throw new Error('配置准备回执不属于原目标、profile 或有序视图');
+    const context = { kind: 'settings' as const, connection, gatewayConnectionId: target.gateway_connection_id };
+    new TargetWorkspaceResources(context);
+    return context;
+  } finally { releaseUser(); releaseContext(); controller.abort(); }
 }
 
 /** 每组在原 group child 上派生原服务，避免覆盖组的 context key 与进度服务。 */
@@ -133,7 +148,15 @@ export async function settingsEditorServices(parent: IInstantiationService, loca
 
 export async function prepareSettingsPane(parent: IInstantiationService, location: TargetSettingsLocation,
   initialContext: TargetConfigurationContext | undefined, lifetime: DisposableStore, token: CancellationToken, resource?: URI): Promise<IInstantiationService> {
-  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort());
+  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort(new CancellationError()));
+  let entry = workspaceContext.getSnapshot().gatewayId;
+  const invalidate = () => controller.abort(new CancellationError());
+  const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
+  const releaseContext = workspaceContext.subscribe(() => {
+    const current = workspaceContext.getSnapshot().gatewayId;
+    if (entry === null) entry = current;
+    else if (current !== entry) invalidate();
+  });
   try {
     if (token.isCancellationRequested) throw new CancellationError();
     const context = initialContext ?? await prepareSettingsContext(location, controller.signal);
@@ -143,8 +166,10 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
         throw new Error('设置 JSON 资源不属于已冻结的 profile 或工作区视图');
       }
     }
-    return await settingsEditorServices(parent, location, context, lifetime);
-  } finally { cancellation.dispose(); controller.abort(); }
+    const child = await settingsEditorServices(parent, location, context, lifetime);
+    controller.signal.throwIfAborted();
+    return child;
+  } finally { releaseUser(); releaseContext(); cancellation.dispose(); controller.abort(); }
 }
 
 const retainedFileModels = new WeakMap<ITextFileEditorModel, MutableDisposable<IDisposable>>();

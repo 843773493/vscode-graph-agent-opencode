@@ -215,7 +215,8 @@ import { parseSettingsLocation, settingsHistoryLocation, prepareSettingsContext,
 \t\t\t\t\treturn accessor.get(IPreferencesService).openUserSettings({ jsonEditor: false, ...sanitizedArgs, groupId });`);
   }
   if (path === paths[3]) {
-    contents = `import { INotificationService } from '../../../../platform/notification/common/notification.js';
+    contents = `import { CancellationError } from '../../../../base/common/errors.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { ConfirmResult, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { SideBySideEditorInput } from '../../../common/editor/sideBySideEditorInput.js';
@@ -224,6 +225,8 @@ import { ITargetSettingsContext } from ${scope};
 import { SettingsContextHeader } from ${JSON.stringify(resolve(root, 'src/settings/header.js'))};
 import { captureSettingsLocation, prepareSettingsContext, rebindSettingsFiles, settingsEditorIdentity } from ${editor};
 import { selectSettingsManagementTargetCommand, type ManagementTarget } from ${JSON.stringify(resolve(root, 'src/managementTarget.js'))};
+import { onGatewayUserSessionInvalidated } from ${JSON.stringify(resolve(root, '../web/src/api/http.js'))};
+import { workspaceContext } from ${JSON.stringify(resolve(root, 'src/workspaceContext.js'))};
 ` + contents;
     contents = replaceOnce(contents, 'export class SettingsEditor2 extends EditorPane {', `interface PendingSettingsUpdate {
   key: string; value: unknown; languageFilter: string | undefined; manualReset: boolean;
@@ -234,8 +237,10 @@ export class SettingsEditor2 extends EditorPane {`);
     contents = replaceOnce(contents, '\tprivate pendingSettingUpdate: { key: string; value: unknown; languageFilter: string | undefined } | null = null;', `  private readonly pendingSettingUpdates = new Map<string, PendingSettingsUpdate>();
   private pendingSettingWrite: Promise<void> | undefined;
   private settingsWriterInput: SettingsEditor2Input | undefined;
-  private settingsTargetSelection = 0;
+  private readonly settingsTargetSelection = this._register(new MutableDisposable<DisposableStore>());
   private settingsContextHeader: SettingsContextHeader | undefined;`);
+    contents = replaceOnce(contents, '\t\tthis.inSettingsEditorContextKey.set(true);', '\t\tthis.settingsTargetSelection.clear();\n\t\tthis.inSettingsEditorContextKey.set(true);');
+    contents = replaceOnce(contents, '\t\tthis.inSettingsEditorContextKey.set(false);', '\t\tthis.settingsTargetSelection.clear();\n\t\tthis.inSettingsEditorContextKey.set(false);');
     contents = replaceOnce(contents, '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,', `\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
     @ITargetSettingsContext private readonly targetSettingsContext: ITargetSettingsContext,
     @ICommandService private readonly commandService: ICommandService,
@@ -268,7 +273,9 @@ export class SettingsEditor2 extends EditorPane {`);
     const targetButton = this._register(new Button(headerControlsContainer, defaultButtonStyles));
     targetButton.label = target ? '目标：' + target.location.name + ' · ' + target.location.backend_id : '目标：本地 · 当前工作台';
     targetButton.element.title = target ? target.location.gateway_id + ' · profile ' + target.location.profile_id : '当前工作台 profile；选择 Gateway 和配置域';
-    this._register(targetButton.onDidClick(() => this.switchSettingsGateway().catch(error => this.notificationService.error(error))));
+    this._register(targetButton.onDidClick(() => this.switchSettingsGateway().catch(error => {
+      if (!isCancellationError(error)) this.notificationService.error(error);
+    })));
     this.settingsContextHeader = this._register(this.instantiationService.createInstance(SettingsContextHeader,
       DOM.append(headerControlsContainer, DOM.$('div')), () => { if (this.dimension) this.layoutSplitView(this.dimension); }));
 
@@ -294,68 +301,82 @@ export class SettingsEditor2 extends EditorPane {`);
   }
 
   private async switchSettingsGateway(): Promise<void> {
-    const selection = ++this.settingsTargetSelection, owner = this.input;
-    const selected = await this.commandService.executeCommand<ManagementTarget | undefined>(selectSettingsManagementTargetCommand);
-    if (!selected) return;
-    const captured = await captureSettingsLocation(this.instantiationService, CancellationToken.None, selected);
-    const identity = settingsEditorIdentity(captured.location);
-    const children = (input: EditorInput): EditorInput[] => input instanceof SideBySideEditorInput
-      ? [input, ...children(input.primary), ...children(input.secondary)] : [input];
-    const groups = this.editorGroupService.groups;
-    const opened = [...new Set(groups.flatMap(group => group.editors.flatMap(children)))];
-    const settings = opened.filter((input): input is SettingsEditor2Input => input instanceof SettingsEditor2Input
-      && input.location?.gateway_id === captured.location.gateway_id && input.location.backend_id === captured.location.backend_id
-      && input.location.profile_id === captured.location.profile_id);
-    const files = opened.filter((input): input is FileEditorInput => input instanceof FileEditorInput
-      && input.settingsLocation?.gateway_id === captured.location.gateway_id && input.settingsLocation.backend_id === captured.location.backend_id
-      && input.settingsLocation.profile_id === captured.location.profile_id);
-    const contexts = new Map([[identity, captured]]);
-    // 所有原视图先完成准备；任何一个失败都不改现存 Input、模型引用或路由。
-    for (const input of [...settings, ...files]) {
-      const existing = input instanceof SettingsEditor2Input ? input.location! : input.settingsLocation!;
-      const location = { ...existing, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
-      const key = settingsEditorIdentity(location);
-      if (existing.gateway_connection_id !== location.gateway_connection_id && !contexts.has(key)) {
-        contexts.set(key, { location, context: await prepareSettingsContext(location, new AbortController().signal) });
-      }
-    }
-    const affected = new Set<EditorInput>([...settings, ...files].filter(input =>
-      (input instanceof SettingsEditor2Input ? input.location : input.settingsLocation)?.gateway_connection_id !== captured.location.gateway_connection_id));
-    const settling = new Set(settings.filter(input => affected.has(input)));
-    if (owner instanceof SettingsEditor2Input && (!owner.location || settingsEditorIdentity(owner.location) !== identity
-      || owner.location.gateway_connection_id !== captured.location.gateway_connection_id)) settling.add(owner);
-    const isCurrentSelection = () => selection === this.settingsTargetSelection && owner === this.input && !owner?.isDisposed();
-    if (!isCurrentSelection()) return;
-    const dirty = [...settling].filter(input => input.isDirty());
-    if (dirty.length) {
-      // 重绑会释放旧 writer；先沿原保存确认处理草稿，不把旧队列静默改投新连接。
-      const confirmation = await this.fileDialogService.showSaveConfirm(dirty.map(input => input.getName()));
-      if (confirmation === ConfirmResult.CANCEL || !isCurrentSelection()) return;
-      await Promise.all(dirty.map(input => confirmation === ConfirmResult.SAVE ? input.save() : input.revert()));
-    }
-    if (!isCurrentSelection()) return;
-    if ([...settling].some(input => input.isDirty())) throw new Error('设置仍有未结清的修改，请重新确认保存或放弃后再切换目标。');
-    const views = groups.map(group => ({ group, input: group.activeEditor, viewState: group.activeEditorPane?.getViewState(),
-      options: group.activeEditorPane?.options })).filter(view => view.input && children(view.input).some(input => affected.has(input)));
-    const references = new DisposableStore();
+    const selection = new DisposableStore(), controller = new AbortController(), owner = this.input;
+    selection.add({ dispose: () => controller.abort(new CancellationError()) });
+    this.settingsTargetSelection.value = selection;
+    const token = CancellationToken.fromAbortSignal(controller.signal, selection);
+    const entry = workspaceContext.getSnapshot().gatewayId;
+    const invalidate = () => controller.abort(new CancellationError());
+    selection.add({ dispose: onGatewayUserSessionInvalidated(0, invalidate) });
+    selection.add({ dispose: workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); }) });
+    const isCurrentSelection = () => !controller.signal.aborted && this.settingsTargetSelection.value === selection
+      && owner === this.input && !owner?.isDisposed();
     try {
-      if (affected.size) references.add(rebindSettingsFiles(this.instantiationService, [...contexts.values()].map(prepared => prepared.context)));
-      const next = settings.find(input => this.group.editors.includes(input) && settingsEditorIdentity(input.location!) === identity)
-        ?? this.instantiationService.createInstance(SettingsEditor2Input, captured.location, captured.context);
-      for (const input of settings) {
-        const location = { ...input.location!, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
-        input.bindSettingsTarget(location, contexts.get(settingsEditorIdentity(location))?.context ?? captured.context);
+      const selected = await this.commandService.executeCommand<ManagementTarget | undefined>(selectSettingsManagementTargetCommand);
+      if (!selected || !isCurrentSelection()) return;
+      const captured = await captureSettingsLocation(this.instantiationService, token, selected);
+      if (!isCurrentSelection()) return;
+      const identity = settingsEditorIdentity(captured.location);
+      const children = (input: EditorInput): EditorInput[] => input instanceof SideBySideEditorInput
+        ? [input, ...children(input.primary), ...children(input.secondary)] : [input];
+      const groups = this.editorGroupService.groups;
+      const opened = [...new Set(groups.flatMap(group => group.editors.flatMap(children)))];
+      const settings = opened.filter((input): input is SettingsEditor2Input => input instanceof SettingsEditor2Input
+        && input.location?.gateway_id === captured.location.gateway_id && input.location.backend_id === captured.location.backend_id
+        && input.location.profile_id === captured.location.profile_id);
+      const files = opened.filter((input): input is FileEditorInput => input instanceof FileEditorInput
+        && input.settingsLocation?.gateway_id === captured.location.gateway_id && input.settingsLocation.backend_id === captured.location.backend_id
+        && input.settingsLocation.profile_id === captured.location.profile_id);
+      const contexts = new Map([[identity, captured]]);
+      // 所有原视图先完成准备；任何一个失败都不改现存 Input、模型引用或路由。
+      for (const input of [...settings, ...files]) {
+        const existing = input instanceof SettingsEditor2Input ? input.location! : input.settingsLocation!;
+        const location = { ...existing, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
+        const key = settingsEditorIdentity(location);
+        if (existing.gateway_connection_id !== location.gateway_connection_id && !contexts.has(key)) {
+          contexts.set(key, { location, context: await prepareSettingsContext(location, controller.signal) });
+          if (!isCurrentSelection()) return;
+        }
       }
-      for (const file of files) {
-        const location = { ...file.settingsLocation!, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
-        file.bindSettingsTarget(location, contexts.get(settingsEditorIdentity(location))?.context);
+      const affected = new Set<EditorInput>([...settings, ...files].filter(input =>
+        (input instanceof SettingsEditor2Input ? input.location : input.settingsLocation)?.gateway_connection_id !== captured.location.gateway_connection_id));
+      const settling = new Set(settings.filter(input => affected.has(input)));
+      if (owner instanceof SettingsEditor2Input && (!owner.location || settingsEditorIdentity(owner.location) !== identity
+        || owner.location.gateway_connection_id !== captured.location.gateway_connection_id)) settling.add(owner);
+      if (!isCurrentSelection()) return;
+      const dirty = [...settling].filter(input => input.isDirty());
+      if (dirty.length) {
+        // 重绑会释放旧 writer；先沿原保存确认处理草稿，不把旧队列静默改投新连接。
+        const confirmation = await this.fileDialogService.showSaveConfirm(dirty.map(input => input.getName()));
+        if (confirmation === ConfirmResult.CANCEL || !isCurrentSelection()) return;
+        await Promise.all(dirty.map(input => confirmation === ConfirmResult.SAVE ? input.save() : input.revert()));
       }
-      await Promise.all(views.filter(view => view.group !== this.group).map(view => view.group.openEditor(view.input!, {
-        ...view.options, viewState: view.viewState, preserveFocus: true,
-      })));
-      const current = views.find(view => view.group === this.group && view.input === next);
-      await this.group.openEditor(next, { pinned: true, viewState: current?.viewState });
-    } finally { references.dispose(); }
+      if (!isCurrentSelection()) return;
+      if ([...settling].some(input => input.isDirty())) throw new Error('设置仍有未结清的修改，请重新确认保存或放弃后再切换目标。');
+      const views = groups.map(group => ({ group, input: group.activeEditor, viewState: group.activeEditorPane?.getViewState(),
+        options: group.activeEditorPane?.options })).filter(view => view.input && children(view.input).some(input => affected.has(input)));
+      const references = new DisposableStore();
+      try {
+        if (affected.size) references.add(rebindSettingsFiles(this.instantiationService, [...contexts.values()].map(prepared => prepared.context)));
+        const next = settings.find(input => this.group.editors.includes(input) && settingsEditorIdentity(input.location!) === identity)
+          ?? this.instantiationService.createInstance(SettingsEditor2Input, captured.location, captured.context);
+        for (const input of settings) {
+          const location = { ...input.location!, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
+          input.bindSettingsTarget(location, contexts.get(settingsEditorIdentity(location))?.context ?? captured.context);
+        }
+        for (const file of files) {
+          const location = { ...file.settingsLocation!, name: captured.location.name, gateway_connection_id: captured.location.gateway_connection_id };
+          file.bindSettingsTarget(location, contexts.get(settingsEditorIdentity(location))?.context);
+        }
+        await Promise.all(views.filter(view => view.group !== this.group).map(view => view.group.openEditor(view.input!, {
+          ...view.options, viewState: view.viewState, preserveFocus: true,
+        })));
+        const current = views.find(view => view.group === this.group && view.input === next);
+        await this.group.openEditor(next, { pinned: true, viewState: current?.viewState });
+      } finally { references.dispose(); }
+    } finally {
+      if (this.settingsTargetSelection.value === selection) this.settingsTargetSelection.clear();
+    }
   }
 
   private notifySettingsDirty(): void {

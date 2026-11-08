@@ -33,6 +33,8 @@ import { ITargetSettingsContext } from '../../../../src/clients/workbench/src/se
 import { IEditorService } from '../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
 import * as preferences from '../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/preferences/common/preferences.js';
 import { pinnedUpstreamCommit, sourceTransform } from '../../../../src/clients/workbench/scripts/sourceTransform.mjs';
+import { invalidateGatewayUserSession, onGatewayUserSessionInvalidated } from '../../../../src/clients/web/src/api/http.js';
+import { workspaceContext } from '../../../../src/clients/workbench/src/workspaceContext.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/settings_editor_target.test.mjs').prepare();
@@ -101,8 +103,11 @@ const GroupIdentity = createDecorator('settingsEditorTargetIntegrationGroup');
 const helperParsed = await source('src/settings/editor.ts', true);
 const { settingsEditorIdentity, parseSettingsLocation, settingsHistoryLocation } = evaluate(helperParsed,
   ['settingsEditorIdentity', 'parseSettingsLocation', 'settingsHistoryLocation'], {});
+const contextGetters = evaluate(await source('src/extensions/targetContext.ts', true),
+  ['targetWorkspace', 'targetSettings', 'targetOperatingSystem'], {});
+const { TargetWorkspaceResources } = evaluate(await source('src/extensions/targetUris.ts', true), ['TargetWorkspaceResources'], { URI, ...contextGetters });
 const { prepareSettingsPane } = evaluate(helperParsed, ['prepareSettingsPane'], {
-  CancellationError,
+  CancellationError, workspaceContext, onGatewayUserSessionInvalidated,
   // 只替代配置 HTTP 准备及目标服务装配；原 prepare/取消流程和 Input 模型绑定仍实际执行。
   prepareSettingsContext: async (location, signal) => {
     signal.throwIfAborted();
@@ -157,9 +162,10 @@ const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts'
 const { SettingsEditor2 } = evaluate(await source('workbench/contrib/preferences/browser/settingsEditor2.ts'), ['SettingsEditor2'], {
   EditorPane, SettingsEditor2Input, Settings2EditorModel, SettingValueType, ConfigurationTarget,
   URI, parseQuery, isCancellationError, MODIFIED_SETTING_TAG: preferences.MODIFIED_SETTING_TAG,
-  validateSettingsEditorOptions, platform, DisposableStore, CancellationToken, SideBySideEditorInput, FileEditorInput,
+  validateSettingsEditorOptions, platform, DisposableStore, MutableDisposable, CancellationToken, SideBySideEditorInput, FileEditorInput,
   settingsEditorIdentity, selectSettingsManagementTargetCommand: 'integration.selectSettingsTarget',
   ConfirmResult,
+  workspaceContext, onGatewayUserSessionInvalidated, CancellationError,
   captureSettingsLocation: (...args) => switching.capture(...args), prepareSettingsContext: (...args) => switching.prepare(...args),
   rebindSettingsFiles: (...args) => switching.rebind(...args),
 }, selectedEditorMembers);
@@ -676,6 +682,123 @@ scenario('确认保存期间新增草稿仍保留 dirty，重选明确拒绝且�
     expect(calls).toEqual([]); expect(input.location.gateway_connection_id).toBe('route-A'); expect(input.editorPaneScopeVersion).toBe(0);
   } finally { release.resolve(); await reconnect?.catch(() => {}); f.close(); }
 });
+
+for (const invalidation of ['user', 'entry-gateway', 'clear', 'dispose', 'reselect']) scenario(`设置准备期间${invalidation}撤销旧读取，迟到回执不能重绑或打开`, async () => {
+  const f = fixture(), input = f.input(), first = await f.editor(input, 1), entered = Promise.withResolvers(), reply = Promise.withResolvers();
+  const original = workspaceContext.getSnapshot(), calls = [], selected = { gateway_id: 'gateway-A', gateway_connection_id: 'new-route' };
+  let token;
+  Object.assign(first.pane.group, { editors: [input], activeEditor: input, async openEditor() { calls.push('open'); } });
+  first.pane.editorGroupService = { groups: [first.pane.group] };
+  first.pane.commandService = { executeCommand: async () => selected };
+  switching.capture = async (_parent, cancellation) => { token = cancellation; entered.resolve(); return reply.promise; };
+  switching.rebind = () => { calls.push('rebind'); return toDisposable(() => {}); };
+  let pending;
+  try {
+    pending = first.pane.switchSettingsGateway(); await entered.promise;
+    if (invalidation === 'user') invalidateGatewayUserSession(0);
+    else if (invalidation === 'entry-gateway') { workspaceContext.publish({ ...original, gatewayId: 'another-entry' }); workspaceContext.publish(original); }
+    else if (invalidation === 'clear') first.pane.clearInput();
+    else if (invalidation === 'dispose') first.pane.dispose();
+    else { first.pane.commandService.executeCommand = async () => undefined; await first.pane.switchSettingsGateway(); }
+    expect(token.isCancellationRequested).toBe(true);
+    reply.resolve({ location: location({ gateway_connection_id: 'new-route' }), context: {} }); await pending;
+    expect(calls).toEqual([]); expect(input.location.gateway_connection_id).toBe('route-A'); expect(input.editorPaneScopeVersion).toBe(0);
+  } finally { reply.resolve({ location: location(), context: {} }); await pending?.catch(() => {}); workspaceContext.publish(original); f.close(); }
+});
+
+scenario('目标选择迟到时已关闭的原 Pane 不再发起配置准备', async () => {
+  const f = fixture(), input = f.input(), { pane } = await f.editor(input, 1), selected = Promise.withResolvers(), calls = [];
+  pane.commandService = { executeCommand: () => selected.promise };
+  switching.capture = async () => { calls.push('prepare'); throw new Error('关闭后不得准备'); };
+  let pending;
+  try {
+    pending = pane.switchSettingsGateway(); pane.clearInput();
+    selected.resolve({ gateway_id: 'gateway-A' }); await pending; expect(calls).toEqual([]);
+  } finally { selected.resolve(undefined); await pending?.catch(() => {}); f.close(); }
+});
+
+for (const invalidation of ['user', 'entry-gateway']) scenario(`设置确认期间${invalidation}失效，迟到不保存不能清除原草稿或重绑`, async () => {
+  const f = fixture(), input = f.input(), first = await f.editor(input, 1), confirmed = Promise.withResolvers(), choice = Promise.withResolvers();
+  const original = workspaceContext.getSnapshot(), calls = [];
+  const selected = { gateway_id: 'gateway-A', gateway_connection_id: 'new-route' };
+  Object.assign(first.pane.group, { editors: [input], activeEditor: input, async openEditor() { calls.push('open'); } });
+  first.pane.editorGroupService = { groups: [first.pane.group] };
+  first.pane.commandService = { executeCommand: async () => selected };
+  first.pane.fileDialogService = { async showSaveConfirm() { confirmed.resolve(); return choice.promise; } };
+  switching.capture = async () => ({ location: location({ gateway_connection_id: 'new-route' }), context: {} });
+  switching.rebind = () => { calls.push('rebind'); return toDisposable(() => {}); };
+  let pending;
+  try {
+    first.change('editor.fontSize', 21); pending = first.pane.switchSettingsGateway(); await confirmed.promise;
+    if (invalidation === 'user') invalidateGatewayUserSession(0);
+    else { workspaceContext.publish({ ...original, gatewayId: 'another-entry' }); workspaceContext.publish(original); }
+    choice.resolve(ConfirmResult.DONT_SAVE); await pending;
+    expect(calls).toEqual([]); expect(input.isDirty()).toBe(true); expect(first.group.configuration.calls).toEqual([]);
+    expect(input.location.gateway_connection_id).toBe('route-A'); expect(input.editorPaneScopeVersion).toBe(0);
+  } finally { choice.resolve(ConfirmResult.CANCEL); await pending?.catch(() => {}); workspaceContext.publish(original); f.close(); }
+});
+
+for (const initial of [false, true]) for (const invalidation of ['user', 'entry-gateway', 'initialize']) {
+  scenario(`${initial ? '已有准备回执' : '恢复输入'}在原组服务装配期间${invalidation}，首次初始化可发布而身份失效拒绝迟到模型`, async () => {
+    const f = fixture(), input = initial ? f.input(location(), { integrationTransport: 'initial' }) : f.input();
+    const entered = Promise.withResolvers(), release = Promise.withResolvers(), original = workspaceContext.getSnapshot();
+    const boundary = f.parent.invokeFunction(accessor => accessor.get(ScopeBoundary)), prepare = boundary.prepare;
+    boundary.prepare = async (...args) => { const child = prepare(...args); entered.resolve(); await release.promise; return child; };
+    let pending;
+    try {
+      workspaceContext.publish({ ...original, gatewayId: invalidation === 'initialize' ? null : 'established-entry' });
+      pending = f.group(input, 1).then(value => ({ value }), error => ({ error })); await entered.promise;
+      if (invalidation === 'user') invalidateGatewayUserSession(0);
+      else if (invalidation === 'entry-gateway') { workspaceContext.publish({ ...original, gatewayId: 'another-entry' }); workspaceContext.publish({ ...original, gatewayId: 'established-entry' }); }
+      else workspaceContext.publish({ ...original, gatewayId: 'initialized-entry' });
+      release.resolve(); const outcome = await pending;
+      const child = f.preparations[0].di;
+      if (invalidation === 'initialize') expect(outcome.value.di).toBe(child);
+      else expect(isCancellationError(outcome.error)).toBe(true);
+      expect(input.groupModels.has(child)).toBe(invalidation === 'initialize');
+      f.close(); expect(() => child.invokeFunction(() => {})).toThrow('disposed');
+    } finally { release.resolve(); await pending; workspaceContext.publish(original); f.close(); }
+  });
+}
+
+for (const consumer of ['capture', 'restore']) for (const invalidation of ['focus', 'initialize', 'user', 'entry-gateway', 'caller']) {
+  scenario(`${consumer}消费原配置准备时${invalidation}只允许有效身份发布且不重复请求`, async () => {
+    const original = workspaceContext.getSnapshot(), response = Promise.withResolvers(), requests = [], controller = new AbortController();
+    const target = { ...location({ view_id: 'default', workspace_ids: [] }), connection_kind: 'remote_gateway' };
+    const { prepareSettingsContext } = evaluate(helperParsed, ['prepareSettingsContext'], {
+      CancellationError, workspaceContext, onGatewayUserSessionInvalidated, TargetWorkspaceResources,
+      gateway: { request: async (path, options) => { requests.push({ path, options }); return response.promise; } },
+    });
+    const { captureSettingsLocation } = evaluate(helperParsed, ['captureSettingsLocation'], {
+      CancellationError, workspaceContext, IWorkspaceContextService, prepareSettingsContext,
+    });
+    const lifetime = new DisposableStore(), token = CancellationToken.fromAbortSignal(controller.signal, lifetime);
+    const parent = lifetime.add(new InstantiationService(new ServiceCollection([IWorkspaceContextService, { getWorkspace: () => ({ folders: [] }) }])));
+    let pending;
+    try {
+      workspaceContext.publish({ ...original, gatewayId: invalidation === 'initialize' ? null : 'established-entry' });
+      pending = (consumer === 'capture' ? captureSettingsLocation(parent, token, target) : prepareSettingsContext(target, controller.signal))
+        .then(value => ({ value }), error => ({ error }));
+      expect(requests).toHaveLength(1);
+      if (invalidation === 'user') invalidateGatewayUserSession(0);
+      else if (invalidation === 'entry-gateway') { workspaceContext.publish({ ...original, gatewayId: 'another-entry' }); workspaceContext.publish({ ...original, gatewayId: 'established-entry' }); }
+      else if (invalidation === 'caller') controller.abort(new CancellationError());
+      else if (invalidation === 'initialize') workspaceContext.publish({ ...original, gatewayId: 'initialized-entry' });
+      else workspaceContext.publish({ ...workspaceContext.getSnapshot(), activeId: 'unrelated-focus' });
+      const canceled = !['focus', 'initialize'].includes(invalidation);
+      expect(requests[0].options.signal.aborted).toBe(canceled);
+      const connection = { protocol_version: 1, gateway_id: target.gateway_id, backend_id: target.backend_id, profile_id: target.profile_id,
+        view_id: target.view_id, workspace_ids: [], extensions: [], context: { os: 'linux', workspace: { id: 'settings-view', folders: [] },
+          remote_settings: { resource_uri: 'boxteam://gateway-A/gateway/gateway-A/resources/config/extension-host/backend-A/profiles/profile-A/settings',
+            native_uri: 'file:///target/settings.json' } } };
+      response.resolve(connection);
+      const outcome = await pending;
+      if (!canceled) expect((consumer === 'capture' ? outcome.value.context : outcome.value).connection).toBe(connection);
+      else expect(isCancellationError(outcome.error)).toBe(true);
+      expect(requests).toHaveLength(1);
+    } finally { response.resolve(undefined); await pending; lifetime.dispose(); workspaceContext.publish(original); }
+  });
+}
 
 for (const stage of ['cancel', 'capture', 'json-prepare']) scenario(`显式重选 ${stage} 未成功时，原 Input、版本与路由零改动`, async () => {
   const f = fixture(), input = f.input(), { pane } = await f.editor(input, 1), file = new FileEditorInput();
