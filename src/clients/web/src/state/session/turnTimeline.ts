@@ -590,6 +590,8 @@ function replaceProjection(
   ) {
     return timeline;
   }
+  // bootstrap 只带新代际元数据；恢复镜像仍只读，等权威历史页整体替换正文。
+  if (timeline.restoredFromCache) return { ...timeline, projectionEpoch, historyViewRevision: null };
   return {
     ...createSessionTurnTimeline(timeline.scopeKey, timeline.generation),
     phase: timeline.phase,
@@ -654,7 +656,7 @@ export function applyTurnBootstrap(
     projectionState,
     error: null,
   };
-  return bootstrap.latest_turn ? upsertTurn(next, bootstrap.latest_turn) : next;
+  return bootstrap.latest_turn && !next.restoredFromCache ? upsertTurn(next, bootstrap.latest_turn) : next;
 }
 
 function requireMatchingEpoch(

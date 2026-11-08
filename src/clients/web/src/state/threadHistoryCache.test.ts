@@ -157,14 +157,19 @@ describe('独立于 Tab 的会话历史镜像', () => {
 
   test('有限保留最近 64 个 Thread，不无限堆积正文', async () => {
     const cache = new ThreadHistoryCache();
-    for (let index = 0; index < 66; index++) {
-      const target = { ...owner('history-limit'), sessionId: `session-${index}` };
-      cache.remember(target, history(), failure);
-      await cache.flush(target);
-    }
-    const reload = new ThreadHistoryCache();
-    expect(await reload.read({ ...owner('history-limit'), sessionId: 'session-0' }, 'scope')).toBeNull();
-    expect(await reload.read({ ...owner('history-limit'), sessionId: 'session-65' }, 'scope')).not.toBeNull();
+    // 淘汰按保存时间排序；明确各快照的年龄，不依赖循环恰好跨过毫秒边界。
+    const clock = spyOn(Date, 'now');
+    try {
+      for (let index = 0; index < 66; index++) {
+        clock.mockReturnValue(index + 1);
+        const target = { ...owner('history-limit'), sessionId: `session-${index}` };
+        cache.remember(target, history(), failure);
+        await cache.flush(target);
+      }
+      const reload = new ThreadHistoryCache();
+      expect(await reload.read({ ...owner('history-limit'), sessionId: 'session-0' }, 'scope')).toBeNull();
+      expect(await reload.read({ ...owner('history-limit'), sessionId: 'session-65' }, 'scope')).not.toBeNull();
+    } finally { clock.mockRestore(); }
   });
 
   test('恢复镜像保持可见；bootstrap 不把它标记为已同步，权威空历史清除所有旧 Turn', async () => {
@@ -183,6 +188,25 @@ describe('独立于 Tab 的会话历史镜像', () => {
     expect(synced.phase).toBe('ready');
     expect(synced.eventCursor).toBe('event-1');
   });
+  test('新代际 bootstrap 只同步元数据，保留旧只读窗口直到新代际历史整体替换', () => {
+    const cached = beginTurnBootstrap({ ...history(), restoredFromCache: true as const, historyViewRevision: 8 }, 1);
+    const metadata = bootstrap('ready', 2);
+    const next = applyTurnBootstrap(cached, 1, { ...metadata,
+      latest_turn: { ...metadata.latest_turn!, turn_id: 'metadata-only', source_view_revision: 1 } });
+    expect(next.projectionEpoch).toBe(2);
+    expect(next.restoredFromCache).toBe(true);
+    expect(next.phase).toBe('bootstrapping');
+    expect(next.orderedTurnIds).toEqual(cached.orderedTurnIds);
+    expect(next.turnsById).toEqual(cached.turnsById);
+    expect(next.eventCursor).toBe('event-2');
+    const synced = applyTurnHistoryPage(next, { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING,
+      source_view_revision: 1, projection_epoch: 2, items: [], internal_executions: [] });
+    expect(synced.orderedTurnIds).toEqual([]);
+    expect(synced.restoredFromCache).toBeUndefined();
+    expect(synced.phase).toBe('ready');
+    expect(synced.historyViewRevision).toBe(1);
+  });
+
   test('迟到的较低历史版本不能把已恢复的较新正文清空或标记为已同步', () => {
     const cached = { ...history(), restoredFromCache: true as const, historyViewRevision: 8 };
     const stale = applyTurnHistoryPage(cached, { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING,

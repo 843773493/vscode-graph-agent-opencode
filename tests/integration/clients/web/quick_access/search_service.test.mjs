@@ -28,10 +28,9 @@ const files = (target, names, extra = {}) => page(target.uri, [], { entries: nam
 
 /** 仅提供显式领域页资产；生产 Provider、共享 SSE 消费及其校验均实际运行。 */
 async function withTransport(callback, asset = async target => page(target.uri), diagnostic = {}, expectedMetadata = [], metadataReply = paths => paths) {
-  const calls = [], paths = [], metadata = [], resolved = [];
-  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async owner => {
-    resolved.push({ gatewayId: owner.gatewayId, workspaceId: owner.workspaceId });
-    return JSON.stringify([owner.gatewayId, owner.workspaceId]);
+  const calls = [], paths = [], metadata = [];
+  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async () => {
+    throw new Error('规范引用已携完整 owner，不应重复请求全部工作区登记');
   });
   const direct = spyOn(gateway, 'request').mockImplementation(async (path, init, workspaceKey) => {
     expect(path).toBe('/api/v1/workspace/files/references'); expect(init.method).toBe('POST');
@@ -82,9 +81,8 @@ async function withTransport(callback, asset = async target => page(target.uri),
     const result = await callback(calls);
     expect(paths.every(path => path === '/api/gateway/search')).toBe(true);
     expect(metadata).toEqual(expectedMetadata);
-    expect(resolved).toEqual(expectedMetadata.map(batch => batch.owner));
     expect(direct).toHaveBeenCalledTimes(expectedMetadata.length);
-    expect(routes).toHaveBeenCalledTimes(expectedMetadata.length);
+    expect(routes).not.toHaveBeenCalled();
     return result;
   } finally { unwrapSessionApiFetch(); routes.mockRestore(); direct.mockRestore(); }
 }
