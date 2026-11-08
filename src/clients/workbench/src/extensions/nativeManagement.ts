@@ -29,16 +29,17 @@ import { invalidateMcpProviderInstallations } from '../mcp/providerBridge.js';
 type TargetOptions = InstallOptions & { readonly nativeTarget?: ReturnType<typeof managementGateway>; readonly nativeProfileId?: string };
 const targetKey = (target: NativeExtensionTarget) => JSON.stringify([installationTargetKey(target), target.gatewayConnectionId]);
 
-/** 原市场入口在第一次等待前冻结展示选择；更新则直接沿已安装对象的原目标。 */
-export function captureTargetInstallOptions(options: InstallOptions = {}, local?: ILocalExtension): TargetOptions {
-  const nativeTarget = (options as TargetOptions).nativeTarget;
-  if (nativeTarget) return { ...options, nativeTarget: { ...nativeTarget } };
-  if (local) {
-    if (local.installationTarget?.kind !== 'backend' || !local.installationProfileId) throw new Error('该扩展不是目标默认 profile 的原生安装项');
+/** 原市场入口先冻结展示选择；原生更新沿已安装目标，窗口内置项不提供安装域。 */
+export function captureTargetInstallOptions(options: InstallOptions = {}, local?: ILocalExtension,
+  target?: ReturnType<typeof managementGateway>): TargetOptions {
+  if (local?.installationTarget?.kind === 'backend') {
+    if (!local.installationProfileId) throw new Error('原生扩展缺少目标默认 profile');
     return { ...options, nativeTarget: { gateway_id: local.installationTarget.gatewayId, backend_id: local.installationTarget.backendId,
       gateway_connection_id: local.gatewayConnectionId, name: local.installationTarget.gatewayId, connection_kind: local.gatewayConnectionId ? 'remote_gateway' : 'local' },
       nativeProfileId: local.installationProfileId };
   }
+  const nativeTarget = target ?? (options as TargetOptions).nativeTarget;
+  if (nativeTarget) return { ...options, nativeTarget: { ...nativeTarget } };
   return { ...options, nativeTarget: managementGateway('extensions') };
 }
 
@@ -155,8 +156,8 @@ export class WebExtensionManagementService extends AbstractExtensionManagementSe
     for (const read of reads) read.controller.abort(error);
   }
 
-  async getTargetPlatform(): Promise<TargetPlatform> {
-    return this.withTarget(await this.readTargetOptions(), async (target, signal) => {
+  async getTargetPlatform(options: InstallOptions = {}): Promise<TargetPlatform> {
+    return this.withTarget(await this.readTargetOptions(options), async (target, signal) => {
       const value = this.lastInventory && targetKey(this.lastInventory.target) === targetKey(target) ? this.lastInventory.value : await this.inventory(target, signal);
       return value.inventory!.target_platform as TargetPlatform;
     });

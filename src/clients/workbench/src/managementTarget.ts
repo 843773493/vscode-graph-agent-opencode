@@ -23,6 +23,11 @@ const extensionTitle = new MutableDisposable();
 const mcpTitle = new MutableDisposable();
 const extensionManagementChanged = new Emitter<void>();
 export const onDidChangeExtensionManagementTarget = extensionManagementChanged.event;
+
+/** 详情身份只取稳定安装域；显式连接仍由原对象持有用于后续传输。 */
+export function sameExtensionManagementTarget(first: ManagementTarget | undefined, second: ManagementTarget | undefined): boolean {
+  return first?.gateway_id === second?.gateway_id && first?.backend_id === second?.backend_id;
+}
 const mcpManagementChanged = new Emitter<void>();
 export const onDidChangeMcpManagementTarget = mcpManagementChanged.event;
 

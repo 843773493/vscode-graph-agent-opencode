@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { chromium } from 'playwright';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { build } from '../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
@@ -10,6 +10,11 @@ import { TestRunContext } from '../../../harness/js/run-context.mjs';
 const run = await TestRunContext.fromTestFile('tests/integration/workspace_services/extension_host/extension_native_management.test.mjs').prepare();
 const root = resolve('src/clients/workbench'), upstream = './src/clients/workbench/upstream/src/vs/';
 const bundle = join(run.artifactsDir, 'management.fixture.mjs');
+const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
+const workbenchPath = join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/extensionsWorkbenchService.ts');
+const workbenchSource = ts.createSourceFile(workbenchPath, await transform(workbenchPath, await readFile(workbenchPath, 'utf8')), ts.ScriptTarget.Latest, true);
+const workbenchClass = workbenchSource.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'ExtensionsWorkbenchService');
+const workbenchParameters = workbenchClass.members.find(ts.isConstructorDeclaration).parameters.map(parameter => parameter.name.getText(workbenchSource));
 const navigationPath = join(root, 'src/react/useNavigationRuntime.ts');
 const navigationSource = ts.createSourceFile(navigationPath, await readFile(navigationPath, 'utf8'), ts.ScriptTarget.Latest, true);
 const navigation = navigationSource.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'useNavigationRuntime');
@@ -35,6 +40,12 @@ export { WebExtensionManagementService as OriginalManagementOwner } from '${upst
 export { WebExtensionsScannerService } from '${upstream}workbench/services/extensionManagement/browser/webExtensionsScannerService.js';
 export { ExtensionManagementServerService } from '${upstream}workbench/services/extensionManagement/common/extensionManagementServerService.js';
 export { ExtensionManagementService } from '${upstream}workbench/services/extensionManagement/common/extensionManagementService.js';
+export { Extension, ExtensionsWorkbenchService } from '${upstream}workbench/contrib/extensions/browser/extensionsWorkbenchService.js';
+export { Extensions as OriginalExtensions } from '${upstream}workbench/contrib/extensions/browser/extensionsWorkbenchService.js';
+export { InstallAnotherVersionAction } from '${upstream}workbench/contrib/extensions/browser/extensionsActions.js';
+export { ExtensionsInput } from '${upstream}workbench/contrib/extensions/common/extensionsInput.js';
+export { ExtensionState } from '${upstream}workbench/contrib/extensions/common/extensions.js';
+export { CancellationToken } from '${upstream}base/common/cancellation.js';
 export { ExtensionType } from '${upstream}platform/extensions/common/extensions.js';
 export { toExtensionDescription } from '${upstream}workbench/services/extensions/common/extensions.js';
 export { CommandsRegistry } from '${upstream}platform/commands/common/commands.js';
@@ -45,10 +56,17 @@ export { URI } from '${upstream}base/common/uri.js';
 export { workspaceContext } from './src/clients/workbench/src/workspaceContext.js';
 export { managementGateway, onDidChangeExtensionManagementTarget } from './src/clients/workbench/src/managementTarget.js';
 export { invalidateGatewayUserSession } from './src/clients/web/src/api/http.js';
+export const workbenchParameters = ${JSON.stringify(workbenchParameters)};
 ` }, outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
+  loader: { '.css': 'empty', '.ttf': 'file', '.svg': 'file', '.png': 'file' },
   plugins: [{ name: 'explicit-management-http-boundary', setup(builder) {
     builder.onLoad({ filter: /\/src\/agentApi\.ts$/ }, () => ({ contents: 'export const gateway = globalThis.managementTransport; export class GatewayRequestError extends Error {}', loader: 'ts' }));
-  } }, buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))],
+    // 仅给原内部类增加测试导出；算法和所有消费者仍经过唯一生产源码转换。
+    builder.onLoad({ filter: /\/contrib\/extensions\/browser\/extensionsWorkbenchService\.ts$/ }, async args => ({
+      contents: (await transform(args.path, await readFile(args.path, 'utf8'))).replace('class Extensions extends Disposable', 'export class Extensions extends Disposable'),
+      loader: 'ts', resolveDir: dirname(args.path),
+    }));
+  } }, buildSourcePlugin(root, transform)],
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 
 let browser, server;
@@ -105,7 +123,60 @@ async function open() {
     };
     const gallery = { type: 'gallery', identifier: { id: 'probe.native', uuid: 'gallery-uuid' }, version: '9.0.0',
       publisher: 'probe', name: 'native', allTargetPlatforms: ['linux-x64'], properties: {}, assets: {} };
-    globalThis.managementProbe = { m, state, service, select, entry, inventory, gallery, profiles, profileLocation,
+    const createWorkbench = () => {
+      const observed = { opened: [], synchronized: [], locals: [], galleryFetches: [], galleryGate: undefined, getExtensionsGate: undefined };
+      const galleryApi = { isEnabled: () => true,
+        query: async () => {
+          if (observed.galleryGate) { observed.galleryGate.entered.resolve(); await observed.galleryGate.release.promise; }
+          return { firstPage: [gallery], total: 2, pageSize: 1, getPage: async () => [gallery] };
+        },
+        getExtensions: async (infos, options) => {
+          observed.galleryFetches.push({ infos, options });
+          if (observed.getExtensionsGate) { observed.getExtensionsGate.entered.resolve(); await observed.getExtensionsGate.release.promise; }
+          return [gallery];
+        },
+      };
+      const product = { version: '1.145.0', commit: 'probe', defaultChatAgent: { extensionId: 'probe.chat' } };
+      const instantiation = { createInstance: (Type, ...args) => Type === m.Extension
+        ? new Type(...args, galleryApi, {}, new m.NullLogService(), {}, product) : new Type(...args) };
+      const server = { id: 'web', extensionManagementService: service };
+      const management = { preferPreReleases: false, getExtensionsControlManifest: async () => ({ malicious: [], deprecated: {} }),
+        getTargetPlatform: options => m.ExtensionManagementService.prototype.getTargetPlatform.call({
+          extensionManagementServerService: { webExtensionManagementServer: server },
+        }, options),
+        installFromGallery: (value, options) => service.installFromGallery(value, options),
+        updateFromGallery: (value, local, options) => m.ExtensionManagementService.prototype.updateFromGallery.call({
+          getServer: () => ({ extensionManagementService: service }),
+        }, value, local, options),
+        uninstallExtensions: extensions => service.uninstallExtensions(extensions),
+      };
+      const dependencies = { galleryService: galleryApi, extensionManagementService: management, instantiationService: instantiation,
+        configurationService: { getValue: () => false }, productService: product,
+        editorService: { openEditor: async input => { observed.opened.push(input); } },
+        extensionGalleryManifestService: { getExtensionGalleryManifest: async () => ({}) },
+        contextKeyService: { createKey: () => ({ set() {}, reset() {} }) }, urlService: { registerHandler() {} },
+        updateService: { state: { type: 'idle' } },
+        userDataProfilesService: { profiles: [profiles.currentProfile] },
+      };
+      // 原构造器和管理目标订阅真实执行；后台启动、渲染、进度UI属于完整页面验收边界。
+      class ViewWorkbench extends m.ExtensionsWorkbenchService { async initialize() {} }
+      const workbench = new ViewWorkbench(...m.workbenchParameters.map(name => dependencies[name] ?? {}));
+      service._register(workbench);
+      Object.assign(workbench, {
+        extensionManagementServerService: { webExtensionManagementServer: server, getExtensionManagementServer: () => server },
+        webExtensions: { canInstall: (...args) => m.OriginalExtensions.prototype.canInstall.call({ server }, ...args),
+          getExtensionState: extension => m.OriginalExtensions.prototype.getExtensionState.call({
+            installed: observed.locals, installing: [], uninstalling: [],
+          }, extension) },
+        syncInstalledExtensionsWithGallery: async (...args) => { observed.synchronized.push(args); },
+        shouldAutoUpdateExtension: () => true, getRuntimeState: () => undefined,
+        withProgress: async (_options, task) => task(),
+      });
+      Object.defineProperties(workbench, { local: { get: () => observed.locals }, installed: { get: () => observed.locals } });
+      return { workbench, observed, makeLocal: local => instantiation.createInstance(m.Extension,
+        extension => workbench.getExtensionState(extension), () => undefined, { extensionManagementService: service }, local, gallery, undefined, undefined) };
+    };
+    globalThis.managementProbe = { m, state, service, select, entry, inventory, gallery, profiles, profileLocation, createWorkbench,
       initial: await service.getInstalled(m.ExtensionType.User) };
   });
   return { context, page };
@@ -251,6 +322,215 @@ test('旧身份共享库存读取立即撤销，新身份同目标不复用旧�
     expect(value.oldAborted).toBe(true); expect(value.freshActive).toBe(true); expect(value.oldDidNotCompleteFresh).toBe(true);
     expect(value.readsAfterOldSettled).toBe(2); expect(value.versions).toEqual(['3.0.0', '3.0.0']);
     checks.push('真实身份失效事件取消并淘汰共享库存，旧HTTP迟到不污染新身份同目标结果或移除新共享请求');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原市场详情按目标分开标签，旧B详情和确认中的安装切回A仍只写B', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const p = globalThis.managementProbe, { workbench, observed } = p.createWorkbench();
+      await p.select('backend-b');
+      const [b] = (await workbench.queryGallery({}, p.m.CancellationToken.None)).firstPage;
+      await workbench.open(b);
+      await p.select('backend-a');
+      const [a] = await workbench.getExtensions([{ id: p.gallery.identifier.id }], p.m.CancellationToken.None);
+      await workbench.open(a);
+      const [inputB, inputA] = observed.opened;
+      p.state.handlers.set('/api/gateway/extension-installations/install-gallery', body => {
+        const reply = p.inventory(body.backend_id, p.gallery.version);
+        p.state.inventories.set(body.backend_id, structuredClone(reply));
+        return { ...reply, installed: { id: p.gallery.identifier.id, version: p.gallery.version, profile_id: reply.inventory.profile_id, reused: false } };
+      });
+      const versionAction = new p.m.InstallAnotherVersionAction(b, true, workbench, workbench.extensionManagementService,
+        {}, {}, {}, {}, { isAllowed: () => true, onDidChangeAllowedExtensionsConfigValue: p.m.Event.None });
+      p.service._register(versionAction);
+      const versionActionBeforeInstall = versionAction.enabled;
+      const installed = await workbench.install(b);
+      versionAction.update();
+      const versionActionAfterInstall = versionAction.enabled;
+      const prompt = { entered: Promise.withResolvers(), release: Promise.withResolvers() };
+      workbench.dialogService = { prompt: async () => { prompt.entered.resolve(); return prompt.release.promise; } };
+      await p.select('backend-b');
+      const pending = workbench.install(b, { justification: '确认后沿原详情安装', isMachineScoped: false });
+      await Promise.race([prompt.entered.promise, pending.then(() => { throw new Error('原安装在确认前结束'); })]);
+      await p.select('backend-a'); prompt.release.resolve({ result: true });
+      await pending;
+      return { targetA: a.managementTarget, targetB: b.managementTarget,
+        matches: inputB.matches(inputA), sameMatches: inputB.matches(new p.m.ExtensionsInput(b)),
+        resources: [inputA.resource.toString(), inputB.resource.toString()], descriptions: [inputA.getDescription(), inputB.getDescription()],
+        installedTarget: installed.local.installationTarget.backendId, oldDetailTarget: b.local.installationTarget.backendId,
+        marketServer: b.server === workbench.extensionManagementServerService.webExtensionManagementServer,
+        installedServer: installed.server === b.server, versionActionBeforeInstall, versionActionAfterInstall,
+        writes: p.state.requests.filter(request => request.endpoint.endsWith('/install-gallery')).map(request => request.body.backend_id) };
+    });
+    expect(value.targetA).toMatchObject({ gateway_id: 'gateway-a', backend_id: 'backend-a' });
+    expect(value.targetB).toMatchObject({ gateway_id: 'gateway-a', backend_id: 'backend-b' });
+    expect(value.matches).toBe(false); expect(value.sameMatches).toBe(true);
+    expect(value.resources[0]).not.toBe(value.resources[1]);
+    expect(value.descriptions[0]).toContain('backend-a'); expect(value.descriptions[1]).toContain('backend-b');
+    expect(value.installedTarget).toBe('backend-b'); expect(value.oldDetailTarget).toBe('backend-b');
+    expect(value.marketServer).toBe(true); expect(value.installedServer).toBe(true);
+    expect(value.versionActionBeforeInstall).toBe(false); expect(value.versionActionAfterInstall).toBe(true);
+    expect(value.writes).toEqual(['backend-b', 'backend-b']);
+    checks.push('原queryGallery/getExtensions、目标详情标签身份、旧B详情Install及确认等待均只写B');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原gallery首屏和ID查询迟到被拒绝，不把A结果复用成B已安装对象', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const p = globalThis.managementProbe, { workbench, observed, makeLocal } = p.createWorkbench(), results = [];
+      for (const mode of ['query', 'ids']) {
+        await p.select('backend-a');
+        const gate = { entered: Promise.withResolvers(), release: Promise.withResolvers() };
+        observed[mode === 'query' ? 'galleryGate' : 'getExtensionsGate'] = gate;
+        const pending = (mode === 'query' ? workbench.queryGallery({}, p.m.CancellationToken.None)
+          : workbench.getExtensions([{ id: p.gallery.identifier.id }], p.m.CancellationToken.None)).then(
+            () => ({ status: 'fulfilled' }), error => ({ status: 'rejected', message: error.message }));
+        await Promise.race([gate.entered.promise, pending.then(result => { throw new Error('原查询在Gallery前结束：' + JSON.stringify(result)); })]);
+        await p.select('backend-b');
+        const [localB] = await p.service.getInstalled(p.m.ExtensionType.User);
+        observed.locals = [makeLocal(localB)]; gate.release.resolve(); results.push(await pending);
+        observed.galleryGate = undefined; observed.getExtensionsGate = undefined;
+      }
+      return { results, synchronized: observed.synchronized.length, target: observed.locals[0].managementTarget };
+    });
+    expect(value.results.map(result => result.status)).toEqual(['rejected', 'rejected']);
+    for (const result of value.results) expect(result.message).toMatch(/Canceled|目标.*改变|目标.*变更|目标.*切换/);
+    expect(value.synchronized).toBe(0); expect(value.target).toMatchObject({ backend_id: 'backend-b' });
+    checks.push('原首屏与公开ID查询在目标切换后拒绝迟到，零跨目标同步或对象复用');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原gallery分页切目标后拒绝旧页，旧详情目标不受新同ID库存对象影响', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const p = globalThis.managementProbe, { workbench, observed, makeLocal } = p.createWorkbench();
+      await p.select('backend-a');
+      const pager = await workbench.queryGallery({}, p.m.CancellationToken.None), old = pager.firstPage[0];
+      await p.select('backend-b');
+      const [localB] = await p.service.getInstalled(p.m.ExtensionType.User); observed.locals = [makeLocal(localB)];
+      const result = await pager.getPage(1, p.m.CancellationToken.None).then(() => 'fulfilled', error => error.message);
+      return { result, oldTarget: old.managementTarget, currentTarget: observed.locals[0].managementTarget,
+        synchronized: observed.synchronized.length };
+    });
+    expect(value.result).toMatch(/Canceled|目标.*改变|目标.*变更|目标.*切换/);
+    expect(value.oldTarget).toMatchObject({ backend_id: 'backend-a' }); expect(value.currentTarget).toMatchObject({ backend_id: 'backend-b' });
+    expect(value.synchronized).toBe(1);
+    checks.push('原gallery分页带目标代际，A详情保留目标而B同ID库存独立');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('Linux列表保留的Windows详情按原目标判断准入、查询指定版本及执行版本选择', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const p = globalThis.managementProbe, { workbench, observed } = p.createWorkbench();
+      const windows = p.state.inventories.get('backend-b');
+      windows.inventory.target_platform = 'win32-x64'; windows.inventory.extensions[0].description.targetPlatform = 'win32-x64';
+      p.gallery.allTargetPlatforms = ['win32-x64']; p.gallery.properties.targetPlatform = 'win32-x64'; p.gallery.isSigned = true;
+      await p.select('backend-b');
+      const [b] = (await workbench.queryGallery({}, p.m.CancellationToken.None)).firstPage;
+      await p.select('backend-a');
+      const [a] = (await workbench.queryGallery({}, p.m.CancellationToken.None)).firstPage;
+      const canB = await workbench.canInstall(b), canA = await workbench.canInstall(a);
+      p.state.handlers.set('/api/gateway/extension-installations/install-gallery', body => {
+        const reply = p.inventory(body.backend_id, body.version);
+        reply.inventory.target_platform = body.backend_id === 'backend-b' ? 'win32-x64' : 'linux-x64';
+        reply.inventory.extensions[0].description.targetPlatform = reply.inventory.target_platform;
+        p.state.inventories.set(body.backend_id, structuredClone(reply));
+        return { ...reply, installed: { id: p.gallery.identifier.id, version: body.version, profile_id: reply.inventory.profile_id, reused: false } };
+      });
+      const installed = await workbench.install(b, { version: '8.0.0' });
+      const picker = { entered: Promise.withResolvers(), release: Promise.withResolvers() }, platforms = [];
+      const action = { enabled: true, extension: b, extensionsWorkbenchService: workbench,
+        extensionManagementService: workbench.extensionManagementService,
+        extensionGalleryService: { getAllCompatibleVersions: async (_id, _pre, platform) => {
+          platforms.push(platform); return [{ version: '7.0.0', date: '2026-11-08T00:00:00Z', isPreReleaseVersion: false }];
+        } },
+        quickInputService: { pick: async picks => { picker.entered.resolve(picks); await picker.release.promise; return picks[0]; } },
+      };
+      const pending = p.m.InstallAnotherVersionAction.prototype.run.call(action);
+      await Promise.race([picker.entered.promise, pending.then(() => { throw new Error('原版本动作在选择器前结束'); })]);
+      // 模拟同一原动作被新列表对象重新绑定；进行中的选择必须保留发起B详情。
+      action.extension = a; picker.release.resolve(); await pending;
+      return { canB, canA: canA === true ? true : canA.value, selectedPlatform: platforms,
+        queryPlatforms: observed.galleryFetches.filter(item => item.infos[0].version).map(item => item.options?.targetPlatform),
+        queries: observed.galleryFetches.filter(item => item.infos[0].version).map(item => item.infos[0].version),
+        installed: installed.local.installationTarget.backendId,
+        writes: p.state.requests.filter(request => request.endpoint.endsWith('/install-gallery')).map(request => request.body.backend_id) };
+    });
+    expect(value.canB).toBe(true); expect(value.canA).not.toBe(true); expect(value.canA).toContain('Linux');
+    expect(value.selectedPlatform).toEqual(['win32-x64']); expect(value.queryPlatforms).toEqual(['win32-x64', 'win32-x64']);
+    expect(value.queries).toEqual(['8.0.0', '7.0.0']); expect(value.installed).toBe('backend-b');
+    expect(value.writes).toEqual(['backend-b', 'backend-b']);
+    checks.push('真实原生库存A/Linux与B/Windows，旧B详情准入／指定版本／原版本选择动作均使用Windows且只写B');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原B详情卸载只清B对象，当前A同ID库存和卸载后详情归属保持', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const p = globalThis.managementProbe, { workbench, observed, makeLocal } = p.createWorkbench();
+      await p.select('backend-b');
+      const [localB] = await p.service.getInstalled(p.m.ExtensionType.User), b = makeLocal(localB);
+      await p.select('backend-a');
+      const a = makeLocal(p.initial[0]); observed.locals = [a];
+      p.state.handlers.set('/api/gateway/extension-installations/uninstall', body => {
+        const reply = p.inventory(body.backend_id, body.version); reply.inventory.extensions = [];
+        p.state.inventories.set(body.backend_id, reply);
+        return { ...reply, uninstalled: { id: p.gallery.identifier.id, version: body.version, profile_id: reply.inventory.profile_id } };
+      });
+      const before = { a: a.state, b: b.state };
+      await workbench.uninstall(b);
+      return { before, after: { a: a.state, b: b.state }, aVersion: a.local.manifest.version, bHasLocal: !!b.local,
+        targetB: b.managementTarget.backend_id, installed: p.m.ExtensionState.Installed, uninstalled: p.m.ExtensionState.Uninstalled,
+        writes: p.state.requests.filter(request => request.endpoint.endsWith('/uninstall')).map(request => request.body) };
+    });
+    expect(value.before).toEqual({ a: value.installed, b: value.installed });
+    expect(value.after).toEqual({ a: value.installed, b: value.uninstalled });
+    expect(value.aVersion).toBe('1.0.0'); expect(value.bHasLocal).toBe(false); expect(value.targetB).toBe('backend-b');
+    expect(value.writes).toHaveLength(1); expect(value.writes[0]).toMatchObject({ backend_id: 'backend-b', profile_id: 'profile-backend-b', version: '2.0.0' });
+    checks.push('原卸载／state消费者精确B、A同ID保持，清local后原详情目标仍B');
+  } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
+});
+
+test('原窗口builtin安装版本冻结B并返回新目标对象，异步切A不改写原builtin', async () => {
+  const { context, page } = await open();
+  try {
+    const value = await page.evaluate(async () => {
+      const p = globalThis.managementProbe, { workbench, observed, makeLocal } = p.createWorkbench();
+      const local = { ...p.initial[0], type: p.m.ExtensionType.System, isBuiltin: true,
+        location: p.m.URI.parse('builtin:/probe.native'), installationTarget: { kind: 'web', profileId: 'browser-default' },
+        installationProfileId: undefined, extensionKey: undefined };
+      const builtin = makeLocal(local), gate = { entered: Promise.withResolvers(), release: Promise.withResolvers() };
+      observed.locals = [builtin]; observed.getExtensionsGate = gate;
+      p.state.handlers.set('/api/gateway/extension-installations/install-gallery', body => {
+        const reply = p.inventory(body.backend_id, body.version);
+        p.state.inventories.set(body.backend_id, structuredClone(reply));
+        return { ...reply, installed: { id: p.gallery.identifier.id, version: body.version, profile_id: reply.inventory.profile_id, reused: false } };
+      });
+      await p.select('backend-b');
+      const pending = workbench.install(builtin, { version: '8.0.0' });
+      await Promise.race([gate.entered.promise, pending.then(() => { throw new Error('原builtin安装在版本查询前结束'); })]);
+      await p.select('backend-a'); gate.release.resolve();
+      const installed = await pending;
+      return { sameObject: installed === builtin, installedTarget: installed.managementTarget,
+        installedLocalTarget: installed.local.installationTarget,
+        originalTarget: builtin.local.installationTarget, originalVersion: builtin.local.manifest.version,
+        originalManagementTarget: builtin.managementTarget ?? null, originalLocation: builtin.local.location.toString(),
+        writes: p.state.requests.filter(request => request.endpoint.endsWith('/install-gallery')).map(request => request.body.backend_id) };
+    });
+    expect(value.sameObject).toBe(false); expect(value.installedTarget).toMatchObject({ backend_id: 'backend-b' });
+    expect(value.installedLocalTarget).toEqual({ kind: 'backend', gatewayId: 'gateway-a', backendId: 'backend-b' });
+    expect(value.originalTarget).toEqual({ kind: 'web', profileId: 'browser-default' });
+    expect(value.originalVersion).toBe('1.0.0'); expect(value.originalManagementTarget).toBeNull();
+    expect(value.originalLocation).toBe('builtin:/probe.native'); expect(value.writes).toEqual(['backend-b']);
+    checks.push('原窗口builtin指定版本转唯一原生B安装，查询等待切A仍B；新回执对象不改原builtin实例或Web归属');
   } finally { await page.evaluate(() => globalThis.managementProbe.service.dispose()); await context.close(); }
 });
 

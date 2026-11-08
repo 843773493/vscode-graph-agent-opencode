@@ -4,13 +4,18 @@ export const configurationRegistrySourcePaths = [
   'src/vs/platform/configuration/common/configurationRegistry.ts',
 ];
 
+/** 配置来源的纯类型由两个运行面共用；运行时投影仍仅属于 renderer。 */
+export function transformConfigurationSourceTypes(root, path, source, replaceOnce) {
+  if (path !== join(root, 'upstream', configurationRegistrySourcePaths[0])) return source;
+  return replaceOnce(source, 'export interface IExtensionInfo {\n\tid: string;',
+    'export interface IExtensionInfo {\n\t/** 仅设置发现持有此贡献；窗口运行来源存在时省略。 */\n\tconfigurationOnly?: boolean;\n\t/** 原窗口内置扩展贡献，不依赖目标的用户安装集合。 */\n\tisBuiltin?: boolean;\n\tid: string;');
+}
+
 /** 目标设置只投影原注册事实，默认值仍由原合并函数计算。 */
 export function transformConfigurationRegistry(root, path, source, replaceOnce) {
   if (path !== join(root, 'upstream', configurationRegistrySourcePaths[0])) return source;
   let contents = replaceOnce(source, "import * as types from '../../../base/common/types.js';",
     "import * as types from '../../../base/common/types.js';\nimport { deepClone } from '../../../base/common/objects.js';");
-  contents = replaceOnce(contents, 'export interface IExtensionInfo {\n\tid: string;',
-    'export interface IExtensionInfo {\n\t/** 仅设置发现持有此贡献；窗口运行来源存在时省略。 */\n\tconfigurationOnly?: boolean;\n\t/** 原窗口内置扩展贡献，不依赖目标的用户安装集合。 */\n\tisBuiltin?: boolean;\n\tid: string;');
   for (const method of ['getConfigurationProperties', 'getExcludedConfigurationProperties']) {
     contents = replaceOnce(contents, `${method}(): IStringDictionary<IRegisteredConfigurationPropertySchema>;`,
       `${method}(sourceFilter?: (source: ConfigurationDefaultSource | undefined) => boolean): IStringDictionary<IRegisteredConfigurationPropertySchema>;`);
