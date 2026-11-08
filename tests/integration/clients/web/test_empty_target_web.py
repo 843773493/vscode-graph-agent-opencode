@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 from zipfile import ZipFile
 
 import commentjson
@@ -282,3 +284,107 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
     assert browser["attached"]["hybrid"]["nativeContent"] == "hybrid-node-1.0.0"
     observations = [json.loads(line) for path in network.observation_paths.values() for line in path.read_text(encoding="utf-8").splitlines()]
     assert any(item["path"].endswith("/extension-hosts/resolve") for item in observations)
+
+
+async def test_settings_ui_and_target_browser_share_native_configuration(
+    target_gateway_network: TargetGatewayNetwork, vsix_factory,
+) -> None:
+    network = target_gateway_network
+    local, remote = network.clients
+    gateway_a, gateway_b = network.gateway_ids
+    context = network.context
+    receipts: list[dict[str, object]] = []
+
+    def exchange(client, method: str, path: str, body: dict[str, object] | None = None):
+        response = client.request(method, path, json=body)
+        payload = response.json()
+        receipts.append({"method": method, "path": path, "status": response.status_code, "body": payload})
+        assert response.is_success, response.text
+        assert payload["request_id"] == response.headers["X-Request-ID"]
+        return payload["data"]
+
+    source = exchange(remote, "GET", "/api/gateway/config/sources/gateway_mutable_override")
+    config = commentjson.loads(source["jsonc"])
+    config.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": [
+        {"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway(gateway_a)}
+        for capability in ("extension_installation_manage", "extension_host_manage", "configuration_read", "configuration_write")]}
+    exchange(remote, "PUT", "/api/gateway/config/sources/gateway_mutable_override", {
+        "gateway_id": gateway_b, "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
+        "base_file_digest": source["file_digest"], "base_layer_revision": source["layer_revision"],
+        "base_layer_digest": source["layer_digest"], "expected_active_revision": source["active_revision"],
+        "expected_active_digest": source["active_digest"], "idempotency_key": "settings-browser-policy"})
+    topology = json.loads((context.artifacts_dir / "topology.json").read_text(encoding="utf-8"))
+    exchange(local, "POST", "/api/gateway/remote-gateways", {"name": "Settings Target B", "host": "127.0.0.1", "port": 22,
+        "username": "settings-target", "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3]})
+
+    targets = {}
+    originals = [(root / ".boxteam/workspace.jsonc").read_bytes() for root in network.workspace_roots]
+    for label, client, gateway_id, workspace in zip(("a", "b"), network.clients, network.gateway_ids, network.workspace_roots, strict=True):
+        directory = exchange(client, "POST", "/api/gateway/extension-targets", {"protocol_version": 1, "gateway_id": gateway_id})
+        target, = directory["targets"]
+        targets[label] = {"gateway_id": gateway_id, "backend_id": target["backend_id"]}
+        package = vsix_factory(workspace, "1.0.0", "settings-browser", manifest_overrides={
+            "name": "settings-browser", "displayName": "目标配置浏览器扩展", "browser": "./browser.js", "extensionKind": ["web"],
+            "activationEvents": ["onCommand:boxteam.settingsProbe.read"], "contributes": {
+                "commands": [{"command": "boxteam.settingsProbe.read", "title": "读取目标配置"}],
+                "configuration": {"title": "目标配置", "properties": {
+                    "targetSettingsProbe.value": {"type": "string", "default": "target-default", "scope": "window"}}}}}, omit=("main",))
+        with ZipFile(package, "a") as archive:
+            archive.writestr("extension/browser.js", """
+const vscode = require('vscode');
+exports.activate = context => {
+  const events = [];
+  const read = () => ({ value: vscode.workspace.getConfiguration('targetSettingsProbe').get('value'),
+    inspect: vscode.workspace.getConfiguration('targetSettingsProbe').inspect('value'), events: [...events],
+    extensionUri: context.extensionUri.toString(true), worker: typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope });
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('targetSettingsProbe.value')) events.push(read().value);
+  }), vscode.commands.registerCommand('boxteam.settingsProbe.read', read),
+  vscode.commands.registerCommand('boxteam.settingsProbe.update', async value => {
+    await vscode.workspace.getConfiguration('targetSettingsProbe').update('value', value, vscode.ConfigurationTarget.Global);
+    return read();
+  }));
+};
+""")
+        installed = exchange(client, "POST", "/api/gateway/extension-installations/install", {
+            "protocol_version": 1, **targets[label], "workspace_ids": [network.workspace_id],
+            "source_uri": resource_display_uri(scope="workspace", scope_id=network.workspace_id, kind="files",
+                tail_segments=("root", package.name), gateway_authority=gateway_id)})
+        assert installed["installed"]["id"] == "boxteam-probe.settings-browser"
+    (context.artifacts_dir / "preparation.json").write_text(json.dumps(receipts, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "目标设置联合验收需要真实 Chromium"
+    output = context.artifacts_dir / "target-settings-browser.json"
+    supervisor = Path.cwd() / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
+        "bun", "tests/integration/clients/web/target_settings_federation.mjs"]
+    runtime = context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"])
+    with chromium_temporary_environment(runtime / "chromium-tmp") as temporary:
+        result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=195, check=False,
+            env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+                "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_TARGET_SETTINGS": json.dumps({
+                    "base_url": str(local.base_url).rstrip("/"), "base_url_b": str(remote.base_url).rstrip("/"), "targets": targets})})
+    (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
+    (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
+    (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}, indent=2), encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+    browser = json.loads(output.read_text(encoding="utf-8"))
+    assert browser["phase"] == "complete"
+    assert browser["a"]["pageErrors"] == browser["b"]["pageErrors"] == []
+    assert browser["a"]["nodeChannels"] == browser["b"]["nodeChannels"] == []
+    assert browser["a"]["nodeResolves"] == browser["b"]["nodeResolves"] == []
+    assert browser["binding"]["gateway_id"] == gateway_b
+    settings_uri = urlsplit(browser["binding"]["context"]["remote_settings"]["native_uri"])
+    assert settings_uri.scheme == "file" and not settings_uri.netloc
+    native = Path(url2pathname(settings_uri.path)).resolve()
+    expected = network.gateway_homes[1] / "state/backend/extension-management" / targets["b"]["backend_id"] / "data/User/settings.json"
+    assert native == expected.resolve(), "设置正文必须属于 B 原安装器的默认 profile"
+    saved = native.read_text(encoding="utf-8")
+    assert commentjson.loads(saved) == {"targetSettingsProbe.value": "from-B-worker"}
+    assert all((root / ".boxteam/workspace.jsonc").read_bytes() == original
+        for root, original in zip(network.workspace_roots, originals, strict=True))
+    assert browser["localValue"] == "target-default"
+    assert browser["remoteValue"] == browser["uiValue"] == "from-B-worker"
+    assert browser["a"]["writes"] and all(write["gateway_id"] == gateway_b and write["backend_id"] == targets["b"]["backend_id"]
+        and "generation" not in write for write in browser["a"]["writes"])
