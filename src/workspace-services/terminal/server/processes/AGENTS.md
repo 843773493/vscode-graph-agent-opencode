@@ -4,7 +4,6 @@
 
 ```text
 processes/
-├── terminalProcessLifecycle.js       进程元数据、身份核验、信号与进程树退出
 ├── terminalProcessLifecycle.test.js  元数据解析及POSIX停止快照后新后代的系统边界替身
 ├── terminalWindowsTermination.test.js  Windows工具失败及目标退出确认的系统边界替身
 ├── isolatedPtyProcess.js             后端持有的隔离Node句柄与IPC
@@ -12,9 +11,9 @@ processes/
 └── ptyWorker.js                      隔离进程内的node-pty及逐包读取背压
 ```
 
-按资源边界理解调用链：Manager和Session决定终端业务状态，IsolatedPtyProcess管理Node宿主句柄，ptyWorker持有PTY，terminalProcessLifecycle核验并停止操作系统进程。进程退出观察不等于整个终端资源已经释放，信号发送也不等于进程已退出。
+按资源边界理解调用链：Manager和Session决定终端业务状态，IsolatedPtyProcess管理Node宿主句柄，ptyWorker持有PTY，共享 `src/shared/serverProcessLifecycle.mjs` 核验并停止操作系统进程。进程退出观察不等于整个终端资源已经释放，信号发送也不等于进程已退出。
 
-`TerminalProcessStat`统一说明PID、进程组、操作系统SID/Darwin sess与`processStartTime`。启动标记只用于同平台身份联合核验：Linux为启动后的时钟滴答数，其他POSIX为ps原文；不是业务Session ID或UTC时间。Linux僵尸进程已停止执行，等待父进程回收不属于终端停止职责。真实信号与身份检查位于`tests/integration/workspace_services/terminal/test_process_release.py`。
+共享 `ProcessStat`统一说明PID、进程组、操作系统SID/Darwin sess与`processStartTime`。启动标记只用于同平台身份联合核验：Linux为启动后的时钟滴答数，其他POSIX为ps原文；不是业务Session ID或UTC时间。Linux僵尸进程已停止执行，等待父进程回收不属于终端停止职责。真实信号与身份检查位于`tests/integration/workspace_services/terminal/test_process_release.py`。
 
 退出等待只核验已捕获进程是否仍存在：Linux读取`/proc`并忽略僵尸状态，Darwin及其他POSIX直接用`process.kill(pid, 0)`检查，避免每轮、每个PID都启动`ps`；Windows在`taskkill`成功后用同一存在性检查确认根进程退出。POSIX在两次宽限等待后重查整个原session，不能凭旧PID集合消失漏掉新后代；首次取得的session与启动身份保留到本次停止结束，根回收后也继续核后代，强杀后仍存活返回`still_running`。需要启动标记或进程组/session信息时才读取完整元数据。
 

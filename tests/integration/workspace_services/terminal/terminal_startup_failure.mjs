@@ -21,7 +21,7 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
 const moduleUrl = relative => new URL(relative, pathToFileURL(process.argv[1])).href;
 // 注入实际执行包中的同一模块，不能修改仓库副本却让安装包实例绕过故障屏障。
 const { IsolatedPtyProcess } = await import(moduleUrl("./processes/isolatedPtyProcess.js"));
-const { readProcessStat } = await import(moduleUrl("./processes/terminalProcessLifecycle.js"));
+const { readProcessStat } = await import(moduleUrl("../../../shared/serverProcessLifecycle.mjs"));
 const start = IsolatedPtyProcess.prototype.start;
 
 IsolatedPtyProcess.prototype.start = async function (options) {

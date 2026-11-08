@@ -1,8 +1,8 @@
 import { createRequire } from "node:module";
 import {
   readProcessStat,
-  terminateTerminalProcessTree,
-} from "./terminalProcessLifecycle.js";
+  terminateProcessTree,
+} from "../../../../shared/serverProcessLifecycle.mjs";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
@@ -58,7 +58,7 @@ async function shutdown({ orphaned = false, terminatePty = true } = {}) {
   }
   if (orphaned || terminatePty) {
     const metadata = await shellProcessMetadata;
-    const result = await terminateTerminalProcessTree({
+    const result = await terminateProcessTree({
       pid: activePty.pid,
       processSessionId: metadata?.processSessionId ?? null,
       processStartTime: metadata?.processStartTime ?? null,
@@ -84,7 +84,7 @@ async function handlePtyExit(activePty, { exitCode, signal }) {
   }
   ptyProcess = null;
   const metadata = await shellProcessMetadata;
-  const cleanupResult = await terminateTerminalProcessTree({
+  const cleanupResult = await terminateProcessTree({
     pid: activePty.pid,
     processSessionId: metadata?.processSessionId ?? null,
     processStartTime: metadata?.processStartTime ?? null,

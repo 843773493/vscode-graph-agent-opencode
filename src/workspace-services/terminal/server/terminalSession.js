@@ -2,8 +2,8 @@ import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 
 import {
   readProcessStat,
-  terminateTerminalProcessTree,
-} from "./processes/terminalProcessLifecycle.js";
+  terminateProcessTree,
+} from "../../../shared/serverProcessLifecycle.mjs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
@@ -146,7 +146,7 @@ export class TerminalSession {
     this.processGroupId = record.process_group_id ?? null;
     /** @type {number|string|null} 操作系统 SID / Darwin sess，不是业务 Session ID。 */
     this.processSessionId = record.process_session_id ?? null;
-    /** @type {number|string|null} 同 TerminalProcessStat：Linux 时钟滴答数或 POSIX lstart 原文，只作进程身份比较。 */
+    /** @type {number|string|null} 同 ProcessStat：Linux 时钟滴答数或 POSIX lstart 原文，只作进程身份比较。 */
     this.processStartTime = record.process_start_time ?? null;
     this.releaseReason = record.release_reason ?? null;
     this.creationCancellationPending = false;
@@ -343,7 +343,7 @@ export class TerminalSession {
           : `pty_cleanup_${cleanupResult}`;
       if (wasRunning && this.osPid) {
         try {
-          const managerCleanupResult = await terminateTerminalProcessTree({
+          const managerCleanupResult = await terminateProcessTree({
             pid: this.osPid,
             processSessionId: this.processSessionId,
             processStartTime: this.processStartTime,
@@ -539,7 +539,7 @@ export class TerminalSession {
     if (!isolatedPty) {
       await this.verifyPersistedProcessIdentity(pid);
     }
-    const result = await terminateTerminalProcessTree({
+    const result = await terminateProcessTree({
       pid,
       processSessionId: this.processSessionId,
       processStartTime: this.processStartTime,

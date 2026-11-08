@@ -12,7 +12,6 @@ server/
 ├── processes/                    操作系统进程与隔离PTY宿主
 │   ├── isolatedPtyProcess.js      后端持有的worker句柄与IPC
 │   ├── ptyWorker.js               worker内的PTY与逐包背压
-│   ├── terminalProcessLifecycle.js  进程身份、进程树终止与退出确认
 │   └── *.test.js                 宿主关闭及进程元数据解析
 ├── output/                       输出字节边界、重放与逐连接流控
 │   ├── terminalOutputMultiplexer.js 模型与客户端输出游标、重放和广播

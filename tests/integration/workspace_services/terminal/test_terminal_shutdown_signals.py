@@ -56,15 +56,15 @@ def terminal_service(
                 stop_terminal_plugin_service(process)
             finally:
                 # Manager正常退出沿既有合同保留PTY；只回收本fixture记录的精确进程实例。
-                lifecycle = (Path.cwd() / "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js").as_uri()
+                lifecycle = (Path.cwd() / "src/shared/serverProcessLifecycle.mjs").as_uri()
                 script = f"""
 import {{readFile}} from 'node:fs/promises';
-import {{terminateTerminalProcessTree}} from {json.dumps(lifecycle)};
+import {{terminateProcessTree}} from {json.dumps(lifecycle)};
 let raw;
 try {{ raw = await readFile(process.argv[1], 'utf8'); }} catch (error) {{ if (error.code !== 'ENOENT') throw error; }}
 for (const line of (raw ?? '').trim().split('\\n').filter(Boolean)) {{
   const identity = JSON.parse(line);
-  const result = await terminateTerminalProcessTree(identity);
+  const result = await terminateProcessTree(identity);
   console.log(JSON.stringify({{ identity, result }}));
 }}
 """

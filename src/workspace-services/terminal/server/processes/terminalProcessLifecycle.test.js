@@ -6,7 +6,7 @@ import {
   parseLinuxProcStat,
   parsePosixPsStat,
   parsePosixSessionProcesses,
-} from "./terminalProcessLifecycle.js";
+} from "../../../../shared/serverProcessLifecycle.mjs";
 
 test("Linux stat 保留退出状态与身份，命令名中的空格和右括号不改变字段位置", () => {
   const fields = ["Z", "1", "4312", "4312", ...Array(15).fill("0"), "1000"];
@@ -141,13 +141,13 @@ function observeNativeFailure(scenario, failSink = false) {
       exec(...args, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr }));
     });
     syncBuiltinESMExports();
-    const { readProcessStat, processExists, terminateTerminalProcessTree } = await import(moduleUrl);
+    const { readProcessStat, processExists, terminateProcessTree } = await import(moduleUrl);
     let failure, result;
     try {
       result = ["read", "parse", "posix-read", "posix-probe-after", "missing-stat", "missing-posix", "windows-stat"].includes(scenario)
         ? await readProcessStat(pid)
         : ["probe", "missing-probe", "denied-probe"].includes(scenario) ? processExists(pid)
-        : await terminateTerminalProcessTree({ pid });
+        : await terminateProcessTree({ pid });
     } catch (error) { failure = error; }
     if (scenario.startsWith("missing-") || scenario === "windows-stat" || scenario === "denied-probe") {
       assert.equal(failure, undefined);
@@ -155,7 +155,7 @@ function observeNativeFailure(scenario, failSink = false) {
       assert.deepEqual(logs, []);
     } else {
       assert(failure);
-      assert.match(failure.message, /^终端进程操作失败:/);
+      assert.match(failure.message, /^进程操作失败:/);
       assert(!failure.message.includes("/private/"));
       assert.equal(failure.code, scenario === "parse" ? undefined : primary.code);
       if (scenario.endsWith("probe-after")) {
@@ -185,7 +185,7 @@ function observeNativeFailure(scenario, failSink = false) {
     console.log(JSON.stringify({ signals, result, failed: Boolean(failure) }));
   `;
   return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", source,
-    JSON.stringify([new URL("./terminalProcessLifecycle.js", import.meta.url).href, scenario, failSink])],
+    JSON.stringify([new URL("../../../../shared/serverProcessLifecycle.mjs", import.meta.url).href, scenario, failSink])],
   { encoding: "utf8", timeout: 5000 }));
 }
 
@@ -249,16 +249,16 @@ function observeForkDuringTermination(signal, explicitIdentity) {
       return true;
     };
     syncBuiltinESMExports();
-    const { terminateTerminalProcessTree } = await import(moduleUrl);
+    const { terminateProcessTree } = await import(moduleUrl);
     const identity = explicitIdentity
       ? { pid: root, processSessionId: root, processStartTime: 1000 }
       : { pid: root };
-    const result = await terminateTerminalProcessTree(identity);
+    const result = await terminateProcessTree(identity);
     console.log(JSON.stringify({ result, signals, descendantState: states.get(descendant) }));
   `;
   const stdout = execFileSync(process.execPath, [
     "--input-type=module", "--eval", source,
-    JSON.stringify([new URL("./terminalProcessLifecycle.js", import.meta.url).href, signal, explicitIdentity]),
+    JSON.stringify([new URL("../../../../shared/serverProcessLifecycle.mjs", import.meta.url).href, signal, explicitIdentity]),
   ], { encoding: "utf8", timeout: 5000 });
   return JSON.parse(stdout);
 }

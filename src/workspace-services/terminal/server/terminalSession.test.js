@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 import { IsolatedPtyProcess } from "./processes/isolatedPtyProcess.js";
-import { readProcessStat } from "./processes/terminalProcessLifecycle.js";
+import { readProcessStat } from "../../../shared/serverProcessLifecycle.mjs";
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalSession/workspace", randomUUID());
 // 文件级清理兜住准备失败；用例结束优先释放本次创建的独占工作区。
@@ -527,7 +527,7 @@ test("Worker诊断和原停止信号同时失败时保留全部原因", { skip: 
     assert.equal(error.cause, diagnosticFailure);
     assert.deepEqual(diagnosticFailure.errors, [original, diagnosticError]);
     assert.equal(diagnosticFailure.cause, original);
-    assert(secondary.message.startsWith("终端进程操作失败:"));
+    assert(secondary.message.startsWith("进程操作失败:"));
     assert.equal(secondary.code, "EPERM");
     assert.deepEqual(secondary.cause.errors, [cleanupError, diagnosticError]);
     assert.equal(secondary.cause.cause, cleanupError);

@@ -111,13 +111,13 @@ def release_process_tree() -> Callable[[int], dict[str, object]]:
     assert node is not None, "未找到 Terminal 使用的 Node 运行时"
     module = (
         Path.cwd()
-        / "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js"
+        / "src/shared/serverProcessLifecycle.mjs"
     ).as_uri()
     script = f"""
-import {{ readProcessStat, terminateTerminalProcessTree }} from {json.dumps(module)};
+import {{ readProcessStat, terminateProcessTree }} from {json.dumps(module)};
 const pid = Number(process.argv[1]);
 const before = await readProcessStat(pid);
-const result = await terminateTerminalProcessTree({{
+const result = await terminateProcessTree({{
   pid,
   processSessionId: before?.processSessionId ?? null,
   processStartTime: before?.processStartTime ?? null,

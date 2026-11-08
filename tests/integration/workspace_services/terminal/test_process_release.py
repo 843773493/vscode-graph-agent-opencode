@@ -107,13 +107,13 @@ def unreaped_process() -> Iterator[Callable[[str], int]]:
 def release_process() -> Callable[..., dict[str, object]]:
     node = shutil.which("node")
     assert node is not None, "未找到 Terminal 使用的 Node 运行时"
-    module = (Path.cwd() / "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js").as_uri()
+    module = (Path.cwd() / "src/shared/serverProcessLifecycle.mjs").as_uri()
     script = f"""
 import {{ readdir }} from 'node:fs/promises';
-import {{ readProcessStat, terminateTerminalProcessTree }} from {json.dumps(module)};
+import {{ readProcessStat, terminateProcessTree }} from {json.dumps(module)};
 const pid = Number(process.argv[1]);
 const before = await readProcessStat(pid);
-const result = await terminateTerminalProcessTree({{
+const result = await terminateProcessTree({{
   pid,
   processSessionId: before.processSessionId,
   processStartTime: before.processStartTime + Number(process.argv[2]),

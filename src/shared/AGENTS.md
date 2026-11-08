@@ -15,6 +15,7 @@
 - `serverRuntimeControl.mjs`：复用 Gateway 私有凭据与既有服务端口／Launcher 控制通道的日志查询和应用。实际设置与 revision 只在日志入口保存；同实例、同 revision 重放幂等，冲突和过期确认明确拒绝。Launcher 应用确认复用其原 Logger 和文件 sink。辅助服务关闭共用本机鉴权，冻结 PID／工作区并在 ACK 后进入原 shutdown；回执不代表排空或进程退出。
 - `serverPluginRuntime.mjs`：Node 插件读取 Gateway 交付的严格实例／端口／控制凭据，复用日志查询和应用，并提供 ready 身份回执和在 ACK 后调用服务原关闭函数的入口。仅声明 status／shutdown 能力；不提供 supervisor、实例账本、telemetry 或 statistics。
 - `serverJsonRequest.mjs`：Terminal／Browser 共用的 JSON 解析及 HTTP 正文读取。Browser WebSocket 复用同一解析器，分别传入传输名、阶段及原服务 logger。空 HTTP 正文及正常 JSON 保持原语义；解析失败只公开阶段与类别，原异常写入已绑定工作区的服务日志并保留 cause，日志失败也不得覆盖原解析失败。
+- `serverProcessLifecycle.mjs`：Terminal 与 Debug 共用的操作系统进程身份、进程树终止和实际退出核实；只在显式停止时读取进程事实，不参与普通业务调用。
 - `serverHttpShutdown.mjs`：两类辅助服务共用的 HTTP 收尾，最多等待5秒；到期关闭原连接并抛出明确错误，宿主记录失败并退出1。普通关闭须先完成Manager排空，未核实则沿原管理重试链；致命错误仍按原合同退出1。传输收尾不是整个shutdown或外部资源的终止证明。
 
 ## 不可修改内容

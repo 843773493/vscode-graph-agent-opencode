@@ -9,7 +9,7 @@ const projectRoot = process.env.BOXTEAM_TEST_PROJECT_ROOT;
 const controlRoot = process.env.BOXTEAM_TEST_TERMINAL_CONTROL;
 const moduleUrl = (relative) => pathToFileURL(path.join(projectRoot, relative)).href;
 const { IsolatedPtyProcess } = await import(moduleUrl("src/workspace-services/terminal/server/processes/isolatedPtyProcess.js"));
-const { readProcessStat } = await import(moduleUrl("src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js"));
+const { readProcessStat } = await import(moduleUrl("src/shared/serverProcessLifecycle.mjs"));
 
 async function readControl(name) {
   try {

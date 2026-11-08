@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-const lifecycleModule = new URL("./terminalProcessLifecycle.js", import.meta.url).href;
+const lifecycleModule = new URL("../../../../shared/serverProcessLifecycle.mjs", import.meta.url).href;
 
 function observeWindowsTermination(scenario) {
   // 在独立进程中模拟Windows系统边界，绝不向宿主上的真实PID发送信号。
@@ -71,7 +71,7 @@ function observeWindowsTermination(scenario) {
       if (scenario !== "pending-tool") setImmediate(completeTaskkill);
     };
     syncBuiltinESMExports();
-    const { terminateTerminalProcessTree } = await import(moduleUrl);
+    const { terminateProcessTree } = await import(moduleUrl);
     let observation;
     try {
       let result;
@@ -82,7 +82,7 @@ function observeWindowsTermination(scenario) {
         });
         await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
         try {
-          const termination = terminateTerminalProcessTree({ pid });
+          const termination = terminateProcessTree({ pid });
           const body = await new Promise((resolve, reject) => {
             get({ hostname: "127.0.0.1", port: server.address().port }, (response) => {
               let text = "";
@@ -100,7 +100,7 @@ function observeWindowsTermination(scenario) {
           await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
         }
       } else {
-        result = await terminateTerminalProcessTree({ pid });
+        result = await terminateProcessTree({ pid });
       }
       observation = { result };
     } catch (error) {

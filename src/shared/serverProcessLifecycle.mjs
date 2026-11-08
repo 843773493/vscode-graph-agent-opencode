@@ -1,27 +1,27 @@
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
-import { createRuntimeLogger } from "../../../../shared/serverRuntimeLogging.mjs";
+import { createRuntimeLogger } from "./serverRuntimeLogging.mjs";
 
 const TERMINATION_GRACE_MS = 1500;
 const PROCESS_SCAN_BATCH_SIZE = 64;
 const execFileAsync = promisify(execFile);
-const logger = createRuntimeLogger("terminal", "terminal.processLifecycle");
+const logger = createRuntimeLogger("process", "process.lifecycle");
 
 function processOperationError(stage, primary, { pid = null, processSessionId = null, signal = primary.signal ?? "none" } = {}, cause = primary) {
   const code = primary.code ?? "none";
-  const message = `终端进程操作失败: stage=${stage}, pid=${pid}, process_session_id=${processSessionId}, type=${primary.name}, code=${code}, signal=${signal}`;
+  const message = `进程操作失败: stage=${stage}, pid=${pid}, process_session_id=${processSessionId}, type=${primary.name}, code=${code}, signal=${signal}`;
   try {
-    logger.error(`[terminal-process] ${message}`, cause);
+    logger.error(`[process] ${message}`, cause);
   } catch (diagnosticError) {
-    cause = new AggregateError([cause, diagnosticError], "终端进程操作与诊断输出均失败", { cause });
+    cause = new AggregateError([cause, diagnosticError], "进程操作与诊断输出均失败", { cause });
   }
   return Object.assign(new Error(message, { cause }), { code: primary.code });
 }
 
 /**
  * 操作系统进程身份快照；与业务会话、终端资源的创建时间分开。
- * @typedef {Object} TerminalProcessStat
+ * @typedef {Object} ProcessStat
  * @property {number} pid 被查询的操作系统进程 PID。
  * @property {string} [state] Linux 进程状态码；其他 POSIX 查询不提供。
  * @property {number} ppid 父进程 PID。
@@ -32,7 +32,7 @@ function processOperationError(stage, primary, { pid = null, processSessionId = 
  * 该标记不是秒、毫秒或 UTC 时间。
  */
 
-/** @returns {TerminalProcessStat} */
+/** @returns {ProcessStat} */
 export function parseLinuxProcStat(raw) {
   const endOfCommand = raw.lastIndexOf(")");
   if (endOfCommand === -1) {
@@ -50,7 +50,7 @@ export function parseLinuxProcStat(raw) {
   };
 }
 
-/** @returns {TerminalProcessStat|null} */
+/** @returns {ProcessStat|null} */
 export function parsePosixPsStat(raw, { numericSession = true } = {}) {
   const fields = raw.trim().split(/\s+/);
   if (fields.length < 9) {
@@ -118,7 +118,7 @@ async function readPosixProcessStat(pid) {
       exists = processExists(pid);
     } catch (probeError) {
       throw processOperationError("read-stat", error, { pid }, new AggregateError(
-        [error, probeError], "终端进程身份读取与存在性核实均失败", { cause: error },
+        [error, probeError], "进程身份读取与存在性核实均失败", { cause: error },
       ));
     }
     if (!exists) {
@@ -128,7 +128,7 @@ async function readPosixProcessStat(pid) {
   }
 }
 
-/** @returns {Promise<TerminalProcessStat|null>} Windows 或进程已消失时返回 null。 */
+/** @returns {Promise<ProcessStat|null>} Windows 或进程已消失时返回 null。 */
 export async function readProcessStat(pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return null;
@@ -195,7 +195,7 @@ async function requestWindowsProcessTreeTermination(pid) {
       exists = error.killed || processExists(pid);
     } catch (probeError) {
       throw processOperationError("taskkill", error, { pid }, new AggregateError(
-        [error, probeError], "终端进程树终止与存在性核实均失败", { cause: error },
+        [error, probeError], "进程树终止与存在性核实均失败", { cause: error },
       ));
     }
     if (exists) {
@@ -299,7 +299,7 @@ async function terminalProcessIds({
   return isLiveProcess(stat) ? [pid] : [];
 }
 
-export async function terminateTerminalProcessTree({
+export async function terminateProcessTree({
   pid,
   processSessionId = null,
   processStartTime = null,

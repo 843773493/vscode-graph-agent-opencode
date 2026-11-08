@@ -23,7 +23,7 @@ const SOURCE_FILES = [
   "src/workspace-services/terminal/server/output/terminalUtf8Output.js",
   "src/workspace-services/terminal/server/processes/isolatedPtyProcess.js",
   "src/workspace-services/terminal/server/processes/ptyWorker.js",
-  "src/workspace-services/terminal/server/processes/terminalProcessLifecycle.js",
+  "src/shared/serverProcessLifecycle.mjs",
   "src/workspace-services/terminal/server/terminalInput.js",
   "src/workspace-services/terminal/server/terminalManager.js",
   "src/workspace-services/terminal/server/terminalSession.js",

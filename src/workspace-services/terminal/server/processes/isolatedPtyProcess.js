@@ -15,7 +15,7 @@ export class IsolatedPtyProcess {
     this.workerProcess = null;
     /** @type {number|null} worker原生创建消息中的PTY执行根PID；就绪前也保留原身份。 */
     this.pid = null;
-    /** @type {import("./terminalProcessLifecycle.js").TerminalProcessStat|null|undefined} 原Worker读取的创建身份；undefined表示尚未交付，null表示平台没有该元数据。 */
+    /** @type {import("../../../../shared/serverProcessLifecycle.mjs").ProcessStat|null|undefined} 原Worker读取的创建身份；undefined表示尚未交付，null表示平台没有该元数据。 */
     this.processIdentity = undefined;
     /** @type {string|null} 只记录本次就绪前 PTY 退出的正式进程树清理结果。 */
     this.startupCleanupResult = null;
