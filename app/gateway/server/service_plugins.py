@@ -73,8 +73,7 @@ async def validate_workspace_bindings(workspace_id: CanonicalWorkspaceId, bindin
             keys = {(binding.package_id, binding.plugin_id) for binding in bindings}
             if len(keys) != len(bindings) or any(binding.workspace_id != workspace_id for binding in bindings):
                 raise ValueError("插件绑定必须唯一且属于认证交付的工作区")
-            for binding in bindings:
-                request.app.state.service_plugins.declaration(binding)
+            request.app.state.service_plugins.validate_bindings(bindings, workspace_id=workspace_id)
     except (ValueError, LookupError, FileNotFoundError) as error:
         raise HTTPException(409, str(error)) from error
     return APIResponse(data=True, request_id=get_request_id(request))
@@ -161,6 +160,7 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
             require_federation_capability(request, auth, "service_plugin_installation_manage")
             bindings = gateway_plugin_bindings(request.app.state.gateway_config_reload.config.payload)
             references = owner.references(payload.package_id, payload.package_version)
+            references.extend(request.app.state.skill_source_owner.read_references(payload.package_id, payload.package_version))
             coordinator = request.app.state.workspace_plugin_bindings
             package = owner.packages.get(payload.package_id, payload.package_version)
             workspace_bindings = (await coordinator.read_references()

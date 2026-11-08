@@ -77,7 +77,7 @@ class GatewaySkillSourcePort:
             raise FederationError(FEDERATION_MALFORMED_FRAME, "Gateway Skill source 请求类型无效")
         navigation = ResourceNavigationRequest.model_validate(request.get("navigation"))
         try:
-            result = await self.owner.navigate(navigation, deadline=deadline)
+            result = await self.owner.navigate(navigation, deadline=deadline, workspace_id=workspace_id)
         except ResourceUriGrammarError as error:
             return {**identity, "status": 400, "detail": {"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}}
         except ResourceUriResolveError as error:

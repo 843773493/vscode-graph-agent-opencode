@@ -23,6 +23,7 @@ from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import get_workspace_root
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
 from app.services.business.resource_derivations.skills import (
     SkillCatalogLoader,
     SkillDerivationEntry,
@@ -111,6 +112,7 @@ class SkillCatalogSource:
     source_id: str
     directory_id: str
     priority: int = 0
+    plugin: PluginSkillSourceDTO | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +262,7 @@ def _accepted_skill_sources(
                 for entry in remote.entries:
                     source = SkillCatalogSource(
                         entry.layer, entry.name, None, entry.display_uri, entry.entry_identity, entry.source_id, directory_id, entry.priority,
+                        entry.plugin,
                     )
                     sources.append(source)
                     revisions[source.source_id] = _AcceptedSkillRevision(
@@ -309,7 +312,7 @@ def _publish_workspace_skill_catalog(
     """唯一 Skill 发布链：accepted vector → graph facets → catalog。"""
     derivations = tuple(SkillDerivationEntry(
         source.name, source.layer, source.entry_identity, source.source_id, source.display_uri,
-        source.priority,
+        source.priority, source.plugin,
     ) for source in batch.sources)
     catalog_id = "skill-entry:workspace:catalog:catalog"
     with registry.publication():

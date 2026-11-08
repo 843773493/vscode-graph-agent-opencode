@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -10,20 +11,28 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.lifecycle import LifetimeScope
+from app.core.resource_uri import ParsedResourceUri, parse_resource_uri
+from app.core.shielded_cleanup import run_sync_shielded
+from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerStage,
     GatewayRuntimeHealthProof,
 )
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillPublicationRequest,
     GatewaySkillRefreshDTO,
     GatewaySkillSourceEntryDTO,
     GatewaySkillSourcesDTO,
+    PluginSkillSourceDTO,
 )
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
+)
+from app.services.business.resource_derivations.skill_frontmatter import (
+    parse_skill_frontmatter,
 )
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
@@ -44,14 +53,27 @@ from app.services.infrastructure.resource_platform.sources.skill_source_config i
 )
 from app.services.infrastructure.resource_platform.sources.skill_source_identity import (
     gateway_skill_revision,
+    plugin_skill_identity,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     FileSourceObservation,
     WorkspaceFileResourceRegistry,
 )
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+
+PluginSkillKey = tuple[str, str, str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _PluginSkills:
+    binding: PluginBinding
+    entries: tuple[GatewaySkillSourceEntryDTO, ...]
+    roots: dict[str, Path]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +89,7 @@ class GatewaySkillSourceOwner:
     def __init__(self, *, gateway_id: str, skills_root: Path, update_policy: SourceUpdatePolicy | None = None,
                  sources: tuple[SkillSourceConfig, ...] = ()) -> None:
         self.gateway_id = gateway_id
+        self._skills_root = skills_root
         self._scope = LifetimeScope("gateway-skill-sources")
         watcher = WorkspaceFileWatchService(workspace_root=skills_root)
         self.file_registry = WorkspaceFileResourceRegistry(
@@ -88,6 +111,84 @@ class GatewaySkillSourceOwner:
         self._publication_generation = secrets.token_hex(16)
         self._publication_sequence = 0
         self._task: asyncio.Task[None] | None = None
+        self._plugin_skills: dict[PluginSkillKey, _PluginSkills] = {}
+        self._audience_publications: dict[str, _GatewaySkillPublication] = {}
+        self._reads: dict[tuple[str, str], int] = {}
+
+    def _plugin_candidate(self, binding: PluginBinding, packages: PluginPackageStore) -> _PluginSkills:
+        installed = packages.get(binding.package_id, binding.package_version)
+        declaration = next(plugin for plugin in installed.manifest.plugins if plugin.id == binding.plugin_id)
+        entries = []
+        roots = {}
+        if binding.enabled:
+            for skill in declaration.contributes.skills:
+                root = installed.root / skill.path
+                content = (root / "SKILL.md").read_bytes().decode("utf-8")
+                metadata = parse_skill_frontmatter(content)
+                source = PluginSkillSourceDTO(
+                    package_id=binding.package_id, plugin_id=binding.plugin_id,
+                    package_version=binding.package_version, package_digest=installed.digest,
+                    contribution_id=skill.id, workspace_id=binding.workspace_id,
+                    tool_bindings=skill.tool_bindings,
+                )
+                source_id, entry_identity, uri = plugin_skill_identity(self.gateway_id, source)
+                raw = content.encode("utf-8")
+                entries.append(GatewaySkillSourceEntryDTO(
+                    name=metadata.name, source_id=source_id, entry_identity=entry_identity,
+                    display_uri=uri, revision="sha256:" + hashlib.sha256(raw).hexdigest(),
+                    byte_length=len(raw), content=content, available=True, plugin=source,
+                ))
+                roots[parse_resource_uri(uri).tail_segments[0]] = root
+        return _PluginSkills(binding, tuple(entries), roots)
+
+    def _validate_plugin_candidates(self, candidates: dict[PluginSkillKey, _PluginSkills],
+                                    existing: tuple[GatewaySkillSourceEntryDTO, ...] | None = None) -> None:
+        if existing is None:
+            existing = self._publication.entries if self._publication is not None else ()
+        names: dict[str, list[str | None]] = {
+            entry.name: [None] for entry in existing if entry.layer == "gateway" and entry.priority == 0
+        }
+        for (_package_id, _plugin_id, workspace_id), skills in candidates.items():
+            for entry in skills.entries:
+                audiences = names.setdefault(entry.name, [])
+                if any(owner is None or workspace_id is None or owner == workspace_id for owner in audiences):
+                    raise ValueError(f"插件 Skill 同层名称冲突: {entry.name}")
+                audiences.append(workspace_id)
+
+    def validate_plugin_bindings(self, bindings: list[PluginBinding], packages: PluginPackageStore,
+                                 *, workspace_id: str | None) -> None:
+        candidates = {key: value for key, value in self._plugin_skills.items() if key[2] != workspace_id}
+        for binding in bindings:
+            key = binding.package_id, binding.plugin_id, binding.workspace_id
+            current = self._plugin_skills.get(key)
+            candidates[key] = (current if current is not None and current.binding == binding
+                               else self._plugin_candidate(binding, packages))
+        self._validate_plugin_candidates(candidates)
+
+    def publish_plugin(self, binding: PluginBinding, packages: PluginPackageStore) -> None:
+        key = binding.package_id, binding.plugin_id, binding.workspace_id
+        previous = self._plugin_skills.get(key)
+        if previous is not None and previous.binding == binding:
+            return
+        candidate = self._plugin_candidate(binding, packages)
+        candidates = {**self._plugin_skills, key: candidate}
+        self._validate_plugin_candidates(candidates)
+        if self._plugin_skills.get(key) != candidate:
+            self._plugin_skills = candidates
+            self._notify_publication()
+
+    def remove_plugin(self, key: PluginSkillKey) -> None:
+        if self._plugin_skills.pop(key, None) is not None:
+            self._notify_publication()
+
+    def _notify_publication(self) -> None:
+        self._audience_publications.clear()
+        self._publication_sequence += 1
+        self._publications.notify(ResourceObservation(uri=None, directory_id=self._directory_id,
+                                                      revision=None, available=True))
+
+    def read_references(self, package_id: str, version: str) -> list[str]:
+        return [f"skill-read:{package_id}:{version}"] if self._reads.get((package_id, version), 0) else []
 
     def policy_stage(
         self, *, policy: SourceUpdatePolicy, generation: str,
@@ -205,7 +306,9 @@ class GatewaySkillSourceOwner:
         publication = _GatewaySkillPublication(revision, tuple(entries), available)
         if publication == self._publication:
             return
+        self._validate_plugin_candidates(self._plugin_skills, publication.entries)
         self._publication = publication
+        self._audience_publications.clear()
         self._publication_sequence += 1
         # 必须先发布权威快照，再唤醒消费者；通知自身不携带来源正文。
         self._publications.notify(ResourceObservation(
@@ -237,8 +340,44 @@ class GatewaySkillSourceOwner:
         finally:
             self._publications.unsubscribe(subscription)
 
-    async def navigate(self, request: ResourceNavigationRequest, *, deadline: float | None = None) -> ResourceNavigationResultDTO:
-        return await self._navigation.navigate(request, local_gateway_id=self.gateway_id, deadline=deadline)
+    async def navigate(self, request: ResourceNavigationRequest, *, deadline: float | None = None,
+                       workspace_id: str | None = None) -> ResourceNavigationResultDTO:
+        parsed = parse_resource_uri(request.uri, local_gateway_id=self.gateway_id)
+        if parsed.kind != "skills" or not parsed.tail_segments[0].startswith("plugin_"):
+            return await self._navigation.navigate(request, local_gateway_id=self.gateway_id, deadline=deadline)
+        root_name = parsed.tail_segments[0]
+        selected = next(((key, skills) for key, skills in self._plugin_skills.items()
+                         if key[2] in {None, workspace_id} and root_name in skills.roots), None)
+        if selected is None:
+            raise ResourceUriResolveError("unknown_resource", "插件 Skill 未开启或不属于本工作区")
+        key, skills = selected
+        entry = next(entry for entry in skills.entries
+                     if parse_resource_uri(entry.display_uri).tail_segments[0] == root_name)
+        assert entry.plugin is not None
+        reference = entry.plugin.package_id, entry.plugin.package_version
+
+        def resolve_root(target: ParsedResourceUri) -> Path | None:
+            if target.scope != "gateway" or target.scope_id != self.gateway_id:
+                raise ResourceUriResolveError("scope_mismatch", "插件 Skill 与原生 Gateway 不符")
+            root = skills.roots.get(target.tail_segments[0])
+            if root is None:
+                raise ResourceUriResolveError("unknown_resource", "插件 Skill 文件根未登记")
+            return root
+
+        navigation = ResourceNavigation(gateway_skills_root=self._skills_root,
+            gateway_id=self.gateway_id, skill_root_resolver=resolve_root)
+        self._reads[reference] = self._reads.get(reference, 0) + 1
+        try:
+            # 取消也等待实际文件操作结清后释放引用，不能提前允许卸载包。
+            result = await run_sync_shielded(navigation.navigate_sync, request,
+                                            local_gateway_id=self.gateway_id, deadline=deadline)
+            if self._plugin_skills.get(key) is not skills:
+                raise ResourceUriResolveError("unknown_resource", "插件 Skill 读取期间绑定已撤销或替换")
+            return result
+        finally:
+            self._reads[reference] -= 1
+            if not self._reads[reference]:
+                del self._reads[reference]
 
     async def start(self) -> None:
         subscription = self.file_registry.subscribe_observation(label="Gateway raw Skill publication")
@@ -281,6 +420,15 @@ class GatewaySkillSourceOwner:
             self.file_registry.check_running()
             self.configured_sources.entries()
         publication = self._publication
+        if self._plugin_skills:
+            accepted = self._audience_publications.get(workspace_id)
+            if accepted is None:
+                entries = (*publication.entries, *(entry for key, skills in self._plugin_skills.items()
+                           if key[2] in {None, workspace_id} for entry in skills.entries))
+                accepted = _GatewaySkillPublication(
+                    gateway_skill_revision(self.gateway_id, publication.available, entries), entries, publication.available)
+                self._audience_publications[workspace_id] = accepted
+            publication = accepted
         return GatewaySkillSourcesDTO(
             gateway_id=self.gateway_id, workspace_id=workspace_id,
             revision=publication.revision, entries=publication.entries,

@@ -12,6 +12,7 @@ from app.domain.itemized.epoch.root_compilation import (
     RootPlacement,
     SourcePolicyKey,
 )
+from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
 
 SkillLoadMode = Literal["snapshot", "tracked", "untrack"]
 
@@ -226,6 +227,7 @@ class SkillCatalogBinding:
     activation_revision: str
     body: str
     description: str = ""
+    plugin: PluginSkillSourceDTO | None = None
     content_hash: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:

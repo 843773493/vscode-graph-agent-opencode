@@ -122,11 +122,11 @@
 ## 13. 插件 Skill 交付与原技能链路接入
 
 - [ ] 13.1 全仓清点 resources/skills、bundled_skill_groups、Gateway Skill 来源、tools.custom[].skills、Skill URI、模型提示／schema／示例、skill_names 展示、上下文封存、测试及发行消费者；冻结原 skill_load 三模式与 search_tools／invoke_extension_tool 合同，明确 Browser／Debug 迁移而其他两组保留。
-- [ ] 13.2 实现 plugins[].contributes.skills 的 id／相对目录／tool_bindings 及原 parser；Skill 名称说明不重复维护，纯 Skill 插件仅开关声明，无 runtime，allowed-tools 不授权。
+- [x] 13.2 实现 plugins[].contributes.skills 的 id／相对目录／tool_bindings 及原 parser；Skill 名称说明不重复维护，纯 Skill 插件仅开关声明，无 runtime，allowed-tools 不授权。
 - [ ] 13.3 插件 Skill 与工具关联同包校验发布，安装不启用；插件开启后接认证 Gateway 来源／SkillCatalog，固定scope及精确绑定隔离、原四层优先级，同层冲突明确拒绝，无副本／新目录。
 - [ ] 13.4 在原技能资源 owner 登记合法 URI、相对配套文件及目录读／列举／搜索；保持包版本／内容 revision 与实例代际分离，原生目标最终判权，不暴露物理安装路径或恢复旧 VSIX 包根，普通读取不激活／追踪／运行。
 - [ ] 13.5 原工具目录 owner 归并包默认 tool_bindings 与原 tools.custom[].skills 显式关联，按真实来源身份去重；不回写配置或新建工具目录，缺失／失效／不兼容关联明确标注，关联不授权／启用／执行工具，frontmatter 不生成 allowlist；迁齐前端 skill_names 归因。
-- [ ] 13.6 保持原 name-only skill_load 三模式／冻结 snapshot／CSM 封存；插件开启统一发布贡献，Skill 加载不启动代码，关闭撤销新使用，运行崩溃不改静态说明开启状态；无新增发现、探活、全包 hash。
+- [x] 13.6 保持原 name-only skill_load 三模式／冻结 snapshot／CSM 封存；插件开启统一发布贡献，Skill 加载不启动代码，关闭撤销新使用，运行崩溃不改静态说明开启状态；无新增发现、探活、全包 hash。
 - [ ] 13.7 明确整包发布新版本与插件绑定切换分别处理；原 owner 发布对应 Skill revision，v1 冻结不改读v2，snapshot／tracked／untrack 沿原语义，说明不宣称旧运行的新能力，不增独立Skill开关。
 - [ ] 13.8 接通停用／撤权／解除绑定／卸载的新准入撤销与观察释放；卸载只沿D7原四类引用和原删除互斥，未知拒绝不巡检；已封存正文／来源／历史和用户配置保留，完整冻结正文不永久占包引用，不新增持久参与者账本。
 - [ ] 13.9 随第4／11组纵向迁齐 browser-control／debugging 正文、文件、工具定义／示例及发布／打包／测试引用后删除原 inline 同义来源和 fallback，保持 name／工具信封；web-search-fetch、gateway-context 及明确保留的三条执行链和原关联不改。
@@ -151,6 +151,8 @@
 - [ ] 15.4 复用第7／9／13组真实产品装具验证安装→开启→Skill加载／工具调用→实例重启，核包内容未被运行写入及日志／业务数据归属；同批定向核目录解析反例，不为目录约定另跑全套或增加生产逐请求hash／扫描。
 
 2026-11-08 Terminal 新合同验收：4.1／4.2 已迁齐正式 ZIP、Workspace 配置交付、Backend→Gateway HTTP、精确实例 WS grant、Gateway attach 静态资产、测试及发行接线。隔离完整候选的 `candidate-terminal-core-v6.log` 证明真实 PTY 创建／执行／resize／Chromium attach、Backend 重启保留实例、owner_revision 撤权与重附加、插件重启和关闭；`candidate-resource-shutdown-v9.log` 2 passed 证明监听关闭前资源结清；`candidate-handoff-v10.log` 1 passed 证明 Launcher 换代保留实例及完整停机实际退出；消费者定向回归 v9 其余516项与 v10补验159项通过。Web真实类型、完整Workbench构建、协议生成一致性及Node打包检查已有同依赖通过原件，详见 `out/tests/temp/2026/11/08/terminal_plugin/artifacts/terminal-validation-ledger-final.json`。HEAD对照确认的既有 API文案／挂载fixture冲突／静态诊断未混作本片回归；Windows、SSH与源码目录外发行启动未验，跨Browser与范围隔离4.5仍未完成。
+
+2026-11-08 插件 Skill 来源切片：真实 Gateway ZIP 安装、Workspace 来源 CAS、双工作区隔离、原资源读／列举／搜索、模型 skill_load、v1 冻结／v2 切换、禁用／解绑／卸载及冷读原调用封存通过；纯声明零进程，代码重启不撤静态贡献。精确候选来源批117项、历史回归52项、最终重启／代理／联邦批30项分别通过，批次不相加；新增生产与测试类型零诊断，历史／导航旧类型及 lifespan Ruff 已对照 HEAD 无新增，协议生成一致性通过。原件和指纹见 `out/tests/temp/2026/11/08/plugin_skills/artifacts/verification-v1.json`。工具关联归并、Browser／Debug 正文迁移、真实 Relay／Windows 和 Workbench 完整验收未完成，宽项保持未勾选。
 
 ## 历史证据（旧方案，非当前任务或执行指令）
 

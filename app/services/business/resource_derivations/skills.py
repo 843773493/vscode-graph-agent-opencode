@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Literal
 
+from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
 from app.services.business.resource_derivations.skill_frontmatter import (
     SkillFrontmatterError,
     parse_skill_frontmatter,
@@ -27,6 +28,7 @@ class SkillDerivationEntry:
     source_id: str
     display_uri: str
     priority: int = 0
+    plugin: PluginSkillSourceDTO | None = None
 
     def resource_id(self, facet: str) -> str:
         return f"{self.entry_identity}:{facet}"
@@ -68,7 +70,10 @@ class SkillFacetLoader:
                 error=f"Skill name 必须与 entry 目录名一致: entry={self.entry.name!r}",
             )
         if self.facet == "activation":
-            return SemanticPayload(payload={"body": content[parsed.body_offset :]})
+            return SemanticPayload(payload={
+                "body": content[parsed.body_offset :],
+                **({"plugin": self.entry.plugin.model_dump(mode="json")} if self.entry.plugin is not None else {}),
+            })
         return SemanticPayload(
             payload={"name": parsed.name, "description": parsed.description}
         )

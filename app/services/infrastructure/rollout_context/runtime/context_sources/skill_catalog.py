@@ -9,6 +9,7 @@ from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
 )
+from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
 from app.services.infrastructure.rollout_context.runtime.context_sources.delta import (
     _revision,
 )
@@ -102,13 +103,14 @@ def skill_catalog_from_activation(
         } or not isinstance(metadata["name"], str) or not metadata["name"] or not isinstance(metadata["description"], str):
             raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill metadata 正文非法")
         body = read_payload(activation, activation_ref)
-        if not isinstance(body, Mapping) or set(body) != {"body"} or not isinstance(body["body"], str):
+        if not isinstance(body, Mapping) or set(body) not in ({"body"}, {"body", "plugin"}) or not isinstance(body["body"], str):
             raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill activation 正文非法")
         sources[uri] = SkillCatalogBinding(
             name=metadata["name"], resource_id=activation_ref.resource_id,
             entry_identity=entry_identity, display_uri=uri,
             activation_revision=activation_ref.revision, body=body["body"],
             description=metadata["description"],
+            plugin=PluginSkillSourceDTO.model_validate(body["plugin"]) if "plugin" in body else None,
         )
     if set(sources) != (set(activation_by_uri) if selected_uris is None else selected_uris):
         raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill activation 缺少 metadata")

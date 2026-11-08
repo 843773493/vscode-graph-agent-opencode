@@ -31,6 +31,7 @@ from app.gateway.runtime.process_lifecycle import (
 )
 from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.runtime.process_ports import allocate_local_port
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime.workspace_process import (
     _local_child_environment,
     resolve_python_executable,
@@ -100,9 +101,11 @@ class GatewayPluginRuntime:
     """配置只在原 owner 持有；这里仅保有当前绑定投影和实际进程句柄。"""
 
     def __init__(self, *, home: Path, gateway_id: str, packages: PluginPackageStore,
-                 settings: Callable[[], dict[str, object]], workspace_root: Callable[[str], Path]) -> None:
+                 settings: Callable[[], dict[str, object]], workspace_root: Callable[[str], Path],
+                 skill_sources: GatewaySkillSourceOwner) -> None:
         self.gateway_id, self.packages, self.settings = gateway_id, packages, settings
         self.workspace_root = workspace_root
+        self.skill_sources = skill_sources
         self.directory = home / "state/gateway/service-plugins"
         self.logs = ProcessLogStore(home / "state/logs")
         self.slots: dict[Slot, PluginSlot] = {}
@@ -124,8 +127,12 @@ class GatewayPluginRuntime:
         return plugin
 
     def validate(self, payload: dict[str, object]) -> None:
-        for binding in gateway_plugin_bindings(payload):
+        self.validate_bindings(gateway_plugin_bindings(payload), workspace_id=None)
+
+    def validate_bindings(self, bindings: list[PluginBinding], *, workspace_id: str | None) -> None:
+        for binding in bindings:
             self.declaration(binding)
+        self.skill_sources.validate_plugin_bindings(bindings, self.packages, workspace_id=workspace_id)
 
     async def apply(self, payload: dict[str, object], revision: str) -> None:
         await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None)
@@ -134,12 +141,12 @@ class GatewayPluginRuntime:
         bindings = {self.key(binding): binding for binding in entries}
         if len(bindings) != len(entries) or any(binding.workspace_id != workspace_id for binding in entries):
             raise ValueError("插件绑定必须唯一且属于当前配置 owner 的范围")
-        for binding in entries:
-            self.declaration(binding)
+        self.validate_bindings(entries, workspace_id=workspace_id)
         # 配置已经提交；启动失败只改实际回执，不回滚 enabled。
         for key, slot in tuple(self.slots.items()):
             if slot.binding.workspace_id == workspace_id and key not in bindings:
                 async with self._locks.setdefault(key, asyncio.Lock()):
+                    self.skill_sources.remove_plugin(key)
                     try:
                         await self._stop(key, slot)
                     except Exception as error:
@@ -158,12 +165,15 @@ class GatewayPluginRuntime:
             if restart and (previous is None or previous.binding != binding):
                 raise ValueError("重启基线已失效，请读取原绑定")
             if previous is not None and previous.binding == binding and not restart:
+                self.skill_sources.publish_plugin(binding, self.packages)
                 previous.revision = revision
                 return previous.describe()
             declaration = self.declaration(binding)
             if restart and (not binding.enabled or declaration.runtime is None):
                 raise ValueError("只有已开启的代码插件可以重启")
             if previous is not None:
+                if previous.binding != binding:
+                    self.skill_sources.remove_plugin(key)
                 try:
                     await self._stop(key, previous)
                 except Exception as error:
@@ -172,6 +182,7 @@ class GatewayPluginRuntime:
                     return previous.describe()
             slot = PluginSlot(binding, revision, declaration, self.gateway_id)
             self.slots[key] = slot
+            self.skill_sources.publish_plugin(binding, self.packages)
             if binding.enabled and declaration.runtime is not None:
                 try:
                     await self._start(key, slot)
@@ -400,9 +411,11 @@ class GatewayPluginRuntime:
 async def plugin_runtime_lifespan(*, home: Path, gateway_id: str,
     payload: Callable[[], dict[str, object]], revision: Callable[[], str],
     preserve: Callable[[], bool], workspace_root: Callable[[str], Path],
+    skill_sources: GatewaySkillSourceOwner,
 ) -> AsyncIterator[GatewayPluginRuntime]:
     packages = PluginPackageStore(home / "plugins/packages")
     owner = GatewayPluginRuntime(home=home, gateway_id=gateway_id, packages=packages, workspace_root=workspace_root,
+        skill_sources=skill_sources,
         settings=lambda: {"logging": {"revision": revision(),
             **cast(dict[str, dict[str, object]], payload()["logging"])["runtime"]}})
     try:

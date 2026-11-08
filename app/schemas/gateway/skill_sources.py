@@ -8,6 +8,8 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.core.resource_uri import parse_resource_uri
+from app.schemas.canonical_params import CanonicalWorkspaceId
+from app.schemas.gateway.service_plugin import PluginToolBinding
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,20 @@ _SkillDocumentURI = Annotated[
 ]
 
 
+class PluginSkillSourceDTO(BaseModel):
+    """包来源与运行实例分离；读取不依赖进程存活。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    package_id: str
+    plugin_id: str
+    package_version: str
+    package_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    contribution_id: str
+    workspace_id: CanonicalWorkspaceId | None = None
+    tool_bindings: list[PluginToolBinding] = Field(default_factory=list)
+
+
 class GatewaySkillSourceEntryDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -43,6 +59,7 @@ class GatewaySkillSourceEntryDTO(BaseModel):
     error_code: Literal["source-unavailable"] | None = None
     layer: Literal["gateway", "network"] = "gateway"
     priority: int = Field(default=0, strict=True)
+    plugin: PluginSkillSourceDTO | None = None
 
 
 class GatewaySkillSourcesDTO(BaseModel):

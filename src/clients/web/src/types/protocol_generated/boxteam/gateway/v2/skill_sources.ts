@@ -5,8 +5,19 @@
 // source: boxteam/gateway/v2/skill_sources.proto
 
 /* eslint-disable */
+import { PluginToolBinding } from "./service_plugin.js";
 
 export const protobufPackage = "boxteam.gateway.v2";
+
+export interface PluginSkillSourceDTO {
+  package_id: string;
+  plugin_id: string;
+  package_version: string;
+  package_digest: string;
+  contribution_id: string;
+  workspace_id?: string | undefined;
+  tool_bindings: PluginToolBinding[];
+}
 
 /** 认证控制面原始来源；不携带物理路径或凭据，不解释 Skill 语义。 */
 export interface GatewaySkillSourceEntryDTO {
@@ -21,6 +32,7 @@ export interface GatewaySkillSourceEntryDTO {
   error_code?: string | undefined;
   layer: string;
   priority: number;
+  plugin?: PluginSkillSourceDTO | undefined;
 }
 
 export interface GatewaySkillSourcesDTO {
@@ -31,6 +43,75 @@ export interface GatewaySkillSourcesDTO {
   available: boolean;
   error_code?: string | undefined;
 }
+
+function createBasePluginSkillSourceDTO(): PluginSkillSourceDTO {
+  return {
+    package_id: "",
+    plugin_id: "",
+    package_version: "",
+    package_digest: "",
+    contribution_id: "",
+    workspace_id: undefined,
+    tool_bindings: [],
+  };
+}
+
+export const PluginSkillSourceDTO: MessageFns<PluginSkillSourceDTO> = {
+  fromJSON(object: any): PluginSkillSourceDTO {
+    return {
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      package_digest: isSet(object.package_digest) ? globalThis.String(object.package_digest) : "",
+      contribution_id: isSet(object.contribution_id) ? globalThis.String(object.contribution_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      tool_bindings: globalThis.Array.isArray(object?.tool_bindings)
+        ? object.tool_bindings.map((e: any) => PluginToolBinding.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PluginSkillSourceDTO): unknown {
+    const obj: any = {};
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.package_digest !== "") {
+      obj.package_digest = message.package_digest;
+    }
+    if (message.contribution_id !== "") {
+      obj.contribution_id = message.contribution_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.tool_bindings?.length) {
+      obj.tool_bindings = message.tool_bindings.map((e) => PluginToolBinding.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginSkillSourceDTO>, I>>(base?: I): PluginSkillSourceDTO {
+    return PluginSkillSourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginSkillSourceDTO>, I>>(object: I): PluginSkillSourceDTO {
+    const message = createBasePluginSkillSourceDTO();
+    message.package_id = object.package_id ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.package_digest = object.package_digest ?? "";
+    message.contribution_id = object.contribution_id ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.tool_bindings = object.tool_bindings?.map((e) => PluginToolBinding.fromPartial(e)) || [];
+    return message;
+  },
+};
 
 function createBaseGatewaySkillSourceEntryDTO(): GatewaySkillSourceEntryDTO {
   return {
@@ -45,6 +126,7 @@ function createBaseGatewaySkillSourceEntryDTO(): GatewaySkillSourceEntryDTO {
     error_code: undefined,
     layer: "",
     priority: 0,
+    plugin: undefined,
   };
 }
 
@@ -62,6 +144,7 @@ export const GatewaySkillSourceEntryDTO: MessageFns<GatewaySkillSourceEntryDTO> 
       error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
       layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
       priority: isSet(object.priority) ? globalThis.Number(object.priority) : 0,
+      plugin: isSet(object.plugin) ? PluginSkillSourceDTO.fromJSON(object.plugin) : undefined,
     };
   },
 
@@ -100,6 +183,9 @@ export const GatewaySkillSourceEntryDTO: MessageFns<GatewaySkillSourceEntryDTO> 
     if (message.priority !== 0) {
       obj.priority = Math.round(message.priority);
     }
+    if (message.plugin !== undefined) {
+      obj.plugin = PluginSkillSourceDTO.toJSON(message.plugin);
+    }
     return obj;
   },
 
@@ -119,6 +205,9 @@ export const GatewaySkillSourceEntryDTO: MessageFns<GatewaySkillSourceEntryDTO> 
     message.error_code = object.error_code ?? undefined;
     message.layer = object.layer ?? "";
     message.priority = object.priority ?? 0;
+    message.plugin = (object.plugin !== undefined && object.plugin !== null)
+      ? PluginSkillSourceDTO.fromPartial(object.plugin)
+      : undefined;
     return message;
   },
 };

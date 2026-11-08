@@ -4,11 +4,58 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
+import type { PluginToolBinding } from "./service_plugin_pb.js";
 
 /**
  * Describes the file boxteam/gateway/v2/skill_sources.proto.
  */
 export declare const file_boxteam_gateway_v2_skill_sources: GenFile;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginSkillSourceDTO
+ */
+export declare type PluginSkillSourceDTO = Message<"boxteam.gateway.v2.PluginSkillSourceDTO"> & {
+  /**
+   * @generated from field: string package_id = 1;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string plugin_id = 2;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string package_version = 3;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: string package_digest = 4;
+   */
+  packageDigest: string;
+
+  /**
+   * @generated from field: string contribution_id = 5;
+   */
+  contributionId: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 6;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginToolBinding tool_bindings = 7;
+   */
+  toolBindings: PluginToolBinding[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginSkillSourceDTO.
+ * Use `create(PluginSkillSourceDTOSchema)` to create a new message.
+ */
+export declare const PluginSkillSourceDTOSchema: GenMessage<PluginSkillSourceDTO>;
 
 /**
  * 认证控制面原始来源；不携带物理路径或凭据，不解释 Skill 语义。
@@ -70,6 +117,11 @@ export declare type GatewaySkillSourceEntryDTO = Message<"boxteam.gateway.v2.Gat
    * @generated from field: int64 priority = 11;
    */
   priority: bigint;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.PluginSkillSourceDTO plugin = 12;
+   */
+  plugin?: PluginSkillSourceDTO | undefined;
 };
 
 /**

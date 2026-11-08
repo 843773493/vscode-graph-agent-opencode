@@ -165,6 +165,7 @@ class ResourceNavigation:
         gateway_navigation: GatewayResourceNavigation | None = None,
         artifact_reader: ResourceFileReader | None = None,
         network_skill_reader: ResourceFileReader | None = None,
+        skill_root_resolver: Callable[[ParsedResourceUri], Path | None] | None = None,
     ) -> None:
         if (workspace_root is None) == (gateway_skills_root is None):
             raise ValueError("导航 owner 必须且只能绑定 Workspace 或 Gateway Skill 域")
@@ -184,6 +185,7 @@ class ResourceNavigation:
         self._gateway_id = gateway_id
         self._artifact_reader = artifact_reader
         self._network_skill_reader = network_skill_reader
+        self._skill_root_resolver = skill_root_resolver
 
     async def local_skill_metadata(
         self, budget: ResourceNavigationBudget, *, deadline: float | None = None,
@@ -874,6 +876,10 @@ class ResourceNavigation:
             return self._workspace_root, ("AGENTS.md",)
         if parsed.kind != "skills":
             raise ResourceUriResolveError("capability_denied", "该资源由领域 owner 访问，不公开文件树")
+        if self._skill_root_resolver is not None:
+            declared_root = self._skill_root_resolver(parsed)
+            if declared_root is not None:
+                return declared_root, parsed.tail_segments[1:]
         collection = self._skill_collection(parsed.scope)
         root = collection / parsed.tail_segments[0]
         if root.is_symlink() or not _resolve_path(root).is_relative_to(_resolve_path(collection)):

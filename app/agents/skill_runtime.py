@@ -173,6 +173,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         """
         if self._context_source_manager is None or self._catalog is None:
             return
+        sources = {source.entry_identity: source for source in self._catalog.sources}
         bindings = {
             entry.name: SkillCatalogBinding(
                 name=entry.name,
@@ -181,6 +182,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 display_uri=entry.display_uri,
                 activation_revision=entry.activation_revision,
                 body=self._catalog.activation_bodies[entry.name],
+                plugin=sources[entry.entry_identity].plugin,
             )
             for entry in self._catalog.entries
         }

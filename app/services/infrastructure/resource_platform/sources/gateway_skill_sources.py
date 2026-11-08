@@ -52,6 +52,7 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.sources.skill_source_identity import (
     configured_skill_identity,
     gateway_skill_revision,
+    plugin_skill_identity,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -367,7 +368,11 @@ class GatewaySkillSources:
             if entry.entry_identity in identities or entry.name in {".", ".."} or "/" in entry.name or "\\" in entry.name:
                 raise ValueError("Gateway Skill source entry identity 无效")
             identities.add(entry.entry_identity)
-            if entry.layer == "network":
+            if entry.plugin is not None:
+                if entry.layer != "gateway" or entry.plugin.workspace_id not in {None, self._workspace_id}:
+                    raise ValueError("插件 Skill 来源与固定 Workspace audience 不符")
+                expected_source, expected_identity, expected_uri = plugin_skill_identity(gateway_id, entry.plugin)
+            elif entry.layer == "network":
                 parsed = parse_resource_uri(entry.display_uri)
                 source_key = parsed.tail_segments[0].removeprefix("http_")
                 expected_source, expected_identity, expected_uri = configured_skill_identity("gateway", gateway_id, source_key)

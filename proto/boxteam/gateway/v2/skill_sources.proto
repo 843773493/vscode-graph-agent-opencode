@@ -2,6 +2,18 @@ syntax = "proto3";
 
 package boxteam.gateway.v2;
 
+import "boxteam/gateway/v2/service_plugin.proto";
+
+message PluginSkillSourceDTO {
+  string package_id = 1;
+  string plugin_id = 2;
+  string package_version = 3;
+  string package_digest = 4;
+  string contribution_id = 5;
+  optional string workspace_id = 6;
+  repeated PluginToolBinding tool_bindings = 7;
+}
+
 // 认证控制面原始来源；不携带物理路径或凭据，不解释 Skill 语义。
 message GatewaySkillSourceEntryDTO {
   string name = 1;
@@ -15,6 +27,7 @@ message GatewaySkillSourceEntryDTO {
   optional string error_code = 9;
   string layer = 10;
   int64 priority = 11;
+  optional PluginSkillSourceDTO plugin = 12;
 }
 
 message GatewaySkillSourcesDTO {

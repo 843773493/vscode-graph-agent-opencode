@@ -17,6 +17,7 @@ from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
+from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.server.service_plugin_proxy import router
 
 
@@ -28,8 +29,11 @@ async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         calls.append(request)
         raise httpx.ConnectError("具名插件连接已退出", request=request)
 
+    skill_sources = GatewaySkillSourceOwner(gateway_id="gateway_" + "a" * 32, skills_root=tmp_path / "skills")
+    await skill_sources.start()
     owner = GatewayPluginRuntime(home=tmp_path, gateway_id="gateway_" + "a" * 32,
-        packages=PluginPackageStore(tmp_path / "packages"), settings=dict, workspace_root=lambda _: tmp_path)
+        packages=PluginPackageStore(tmp_path / "packages"), settings=dict, workspace_root=lambda _: tmp_path,
+        skill_sources=skill_sources)
     await owner.client.aclose()
     owner.client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
     monkeypatch.setattr(owner, "service", lambda *args, **kwargs: ("http://127.0.0.1:49152/services/echo", "private", asyncio.Event()))
@@ -45,6 +49,7 @@ async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         yield app, calls
     finally:
         await owner.close()
+        await skill_sources.close()
 
 
 async def test_service_connect_failure_is_attributed_without_replay(

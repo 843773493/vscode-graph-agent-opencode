@@ -231,6 +231,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         ) as extension_management,
         plugin_runtime_lifespan(
             home=get_boxteam_home(), gateway_id=gateway_id,
+            skill_sources=skill_source_owner,
             workspace_root=registry.local_workspace_root,
             payload=lambda: gateway_config_reload.config.payload,
             revision=lambda: gateway_config_reload.config.revision,
