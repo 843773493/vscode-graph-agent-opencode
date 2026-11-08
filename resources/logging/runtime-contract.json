@@ -9,6 +9,7 @@
     "terminal": ["terminal", "local-terminal-{instance}.log"],
     "browser": ["browser", "local-browser-{instance}.log"],
     "extension-management": ["extension-management", "extension-management.log"],
+    "service-plugin": ["plugins", "plugin-{instance}.log"],
     "ssh-tunnel": ["ssh", "ssh-tunnel-{instance}.log"],
     "ssh-port-forward": ["ssh", "ssh-port-forward-{instance}.log"]
   },

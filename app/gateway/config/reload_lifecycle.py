@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 class ReloadLifecycleMixin:
     _CONFIG_DOMAIN = "gateway"
+
+    @asynccontextmanager
+    async def mutation_guard(self) -> AsyncIterator[None]:
+        """包删除／显式重启与配置提交共享原准入，不新增配置事实源。"""
+        async with self._reload_lock:
+            yield
     def __init__(
         self,
         *,
@@ -48,6 +55,7 @@ class ReloadLifecycleMixin:
         local_config_path: Path,
         schema_path: Path | None = None,
         on_runtime_config: GatewayConfigRuntimeApplier | None = None,
+        on_committed_config: Callable[[GatewayConfig], Awaitable[None]] | None = None,
         gateway_id: str | None = None,
     ) -> None:
         self._state_store = state_store
@@ -56,6 +64,7 @@ class ReloadLifecycleMixin:
         self._local_config_path = local_config_path.expanduser().resolve()
         self._schema_path = schema_path.expanduser().resolve() if schema_path else None
         self._on_runtime_config = on_runtime_config
+        self._on_committed_config = on_committed_config
         self._gateway_id = gateway_id
         self._watcher: ConfigFileWatcher | None = None
         self._reload_lock = asyncio.Lock()
@@ -660,6 +669,9 @@ class ReloadLifecycleMixin:
                 reason=self._status.reason or "invalid_config",
             )
             raise
+        if self._on_committed_config is not None:
+            # active 已提交；运行消费失败不得改写配置提交事实。
+            await self._on_committed_config(candidate)
     async def _handle_runtime_apply_failure(
         self,
         *,

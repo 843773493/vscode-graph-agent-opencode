@@ -7,6 +7,7 @@ from google.protobuf.descriptor_pool import Default, DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.gateway.v2 import service_plugin_pb2
 from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
@@ -38,6 +39,27 @@ from app.schemas.gateway.mcp_definitions import (
     McpProviderResolveDTO,
     McpProviderSnapshotDTO,
     McpProviderStdioLaunchDTO,
+)
+from app.schemas.gateway.service_plugin import (
+    InstalledPluginPackageDTO,
+    InstallPluginRequest,
+    PluginBinding,
+    PluginContributions,
+    PluginExtensionRequirement,
+    PluginInstanceStatus,
+    PluginInstanceView,
+    PluginInventoryResultDTO,
+    PluginPackageManifest,
+    PluginRuntimeStatusDTO,
+    PluginServiceContribution,
+    PluginSkillContribution,
+    PluginSlotStatusDTO,
+    PluginSourceStatusDTO,
+    PluginTarget,
+    PluginUninstallResultDTO,
+    PluginVersionRequest,
+    RestartPluginRequest,
+    ServicePluginManifest,
 )
 
 # HTTP 根登记完整消息名，在发布时从本次 descriptor 解析；新增消息不依赖旧生成绑定。
@@ -186,6 +208,16 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     )
 }
 
+# 插件合同从独立 proto 文件生成；Pydantic 只保留业务校验，不重复维护跨语言字段结构。
+GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
+    name: f"{service_plugin_pb2.DESCRIPTOR.package}.{name}"
+    for name in (
+        "PluginTarget", "InstallPluginRequest", "PluginVersionRequest", "RestartPluginRequest",
+        "InstalledPluginPackageDTO", "PluginInventoryResultDTO", "PluginRuntimeStatusDTO",
+        "PluginSlotStatusDTO", "PluginUninstallResultDTO",
+    )
+}
+
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "ExtensionConfigurationEventDTO": gateway_public_pb2.DESCRIPTOR.message_types_by_name["ExtensionConfigurationEventDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
@@ -240,6 +272,15 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
                   ExtensionMcpDefinitionChannelRequest, ExtensionMcpDefinitionChannelDTO, McpProviderDefinitionDTO,
                   McpProviderSnapshotDTO, McpProviderInvalidateDTO, McpProviderResolveDTO, McpProviderCancelDTO,
                   McpProviderStdioLaunchDTO, McpProviderHttpLaunchDTO):
+        message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
+        assert_public_schema(model.model_json_schema(), message)
+    for model in (
+        PluginExtensionRequirement, PluginServiceContribution, PluginSkillContribution, PluginContributions,
+        ServicePluginManifest, PluginPackageManifest, PluginBinding, PluginInstanceStatus, PluginTarget,
+        InstallPluginRequest, PluginVersionRequest, RestartPluginRequest,
+        PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
+        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO,
+    ):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)
     # wire 的 launch 是 typed superset；运行时的两种互斥 DTO 已逐一核对。

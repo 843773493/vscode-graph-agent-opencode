@@ -1,6 +1,11 @@
 {
   "$schema": "./gateway_schema.jsonc",
   "config_version": 4,
+  "plugins": {
+    "sources": {"entries": []}, // TODO：接自有在线目录；空源不发网络请求。
+    "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。
+    "workspace_defaults": {"entries": []} // TODO：接原工作区创建 intent 后开放。
+  },
   "logging": {
     "runtime": {
       "level": "info",

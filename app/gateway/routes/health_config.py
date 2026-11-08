@@ -473,13 +473,27 @@ async def save_gateway_config_source(
     )
     if relayed is not None:
         return relayed
+    plugin_binding_changed = False
+
     def require_write() -> None:
         require_federation_capability(request, auth, "configuration_read")
         require_federation_capability(request, auth, "configuration_write")
+        if plugin_binding_changed:
+            require_federation_capability(request, auth, "service_plugin_runtime_manage")
 
     require_write()
     try:
-        result = await service.save_source_edit(source_key=source_key, request=payload, before_write=require_write)
+        from app.gateway.runtime.service_plugins.runtime import gateway_plugin_bindings
+
+        def authorize_plugins(candidate) -> None:
+            nonlocal plugin_binding_changed
+            plugin_binding_changed = gateway_plugin_bindings(candidate.payload) != gateway_plugin_bindings(service.config.payload)
+            if plugin_binding_changed:
+                require_federation_capability(request, auth, "service_plugin_runtime_manage")
+                request.app.state.service_plugins.validate(candidate.payload)
+
+        result = await service.save_source_edit(source_key=source_key, request=payload,
+            before_write=require_write, authorize_candidate=authorize_plugins)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (TypeError, ValueError) as error:

@@ -246,6 +246,7 @@ class GatewaySourceEditMixin:
 
     async def save_source_edit(
         self, *, source_key: str, request: GatewayConfigSourceEditRequest, before_write: Callable[[], None] | None = None,
+        authorize_candidate: Callable[[GatewayConfig], None] | None = None,
     ) -> GatewayConfigSourceDocumentDTO:
         service = cast("GatewayConfigReloadService", self)
         path, store = self._source_path(source_key), service._state_store
@@ -280,6 +281,9 @@ class GatewaySourceEditMixin:
                 elif claim is not None:
                     raise ConfigConflictError("已有 Gateway apply claim，禁止接纳另一来源意图")
                 file = self._check_source_edit(source_key, request, accepted)
+                # 已持有原 reload 准入；包卸载不能插入候选校验与提交之间。
+                if authorize_candidate is not None:
+                    authorize_candidate(candidate)
                 if accepted is None:
                     self._prepare_candidate(candidate, idempotency_key=request.idempotency_key, source_edit=intent)
                 verify_stable_config_file(file)

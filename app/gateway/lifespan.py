@@ -76,6 +76,7 @@ from app.gateway.runtime.logging_consumer import (
     logging_progress_recorder,
 )
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.service_plugins.runtime import plugin_runtime_lifespan
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import (
     _apply_gateway_runtime_config,
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             )
         ),
         gateway_id=gateway_id,
+        on_committed_config=lambda config: app.state.service_plugins.apply(config.payload, config.revision),
     )
     app.state.gateway_config_reload = gateway_config_reload
     federation_policy = FederationPolicyStore(
@@ -225,10 +227,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 "level": cast(str, runtime_logging["level"]), "pretty": cast(bool, runtime_logging["pretty"])},
             preserve_for_handoff=should_preserve_for_handoff,
         ) as extension_management,
+        plugin_runtime_lifespan(
+            home=get_boxteam_home(), gateway_id=gateway_id,
+            payload=lambda: gateway_config_reload.config.payload,
+            revision=lambda: gateway_config_reload.config.revision,
+            preserve=should_preserve_for_handoff,
+        ) as service_plugins,
     ):
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
         app.state.extension_management = extension_management
+        app.state.service_plugins = service_plugins
         app.state.workspace_navigation_store = WorkspaceNavigationStore(
             storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
         )
@@ -639,6 +648,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             if pending_consumer_result is not None:
                 await pending_consumer_result.finalize()
                 pending_consumer_result = None
+            await service_plugins.adopt()
+            await service_plugins.apply(gateway_config_reload.config.payload, gateway_config_reload.config.revision)
             yield {"before_http_shutdown": extension_management.quiesce if extension_management is not None else None}
         except BaseException as error:
             recovery_errors: list[Exception] = []

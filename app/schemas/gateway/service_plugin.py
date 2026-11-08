@@ -1,0 +1,259 @@
+"""项目自有服务插件声明、绑定与运行回执合同。"""
+
+from __future__ import annotations
+
+from pathlib import PurePosixPath
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+
+from app.schemas.canonical_params import CanonicalWorkspaceId
+
+ExtensionPoint = Literal[
+    "commands", "menus", "keybindings", "configuration", "services", "debuggers", "skills",
+]
+PluginRuntime = Literal["python", "node"]
+PluginScope = Literal["gateway", "workspace"]
+PluginState = Literal["stopped", "starting", "ready", "stopping", "failed"]
+
+
+class _PluginValue(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+
+class PluginExtensionRequirement(_PluginValue):
+    """插件要求的扩展点合同版本。"""
+
+    extension_point: ExtensionPoint
+    version: Literal[1]
+
+
+class PluginTarget(_PluginValue):
+    gateway_id: str = Field(min_length=1)
+    gateway_connection_id: str | None = None
+
+
+class InstallPluginRequest(PluginTarget):
+    """从明确目标机器的原生绝对路径导入本地包或显式开发目录。"""
+
+    path: str = Field(min_length=1)
+    development_directory: bool = False
+    expected_digest: str | None = None
+
+
+class PluginVersionRequest(PluginTarget):
+    package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    package_version: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+
+
+class RestartPluginRequest(PluginVersionRequest):
+    plugin_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    revision: str = Field(min_length=1)
+
+
+class PluginServiceContribution(_PluginValue):
+    """插件导出的具名业务服务，不包含监听地址或进程信息。"""
+
+    service_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    service_type: Literal["mcp", "terminal", "browser", "debug"]
+    protocol: Literal["streamable-http", "http", "websocket", "dap"]
+
+    @model_validator(mode="after")
+    def protocol_matches_service(self) -> PluginServiceContribution:
+        allowed = {
+            "mcp": {"streamable-http"},
+            "terminal": {"http", "websocket"},
+            "browser": {"http", "websocket"},
+            "debug": {"dap"},
+        }
+        if self.protocol not in allowed[self.service_type]:
+            raise ValueError("服务协议与 service_type 不匹配")
+        return self
+
+
+class PluginSkillContribution(_PluginValue):
+    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    path: str = Field(min_length=1)
+    tool_bindings: list[dict[str, JsonValue]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def skill_path_is_relative(self) -> PluginSkillContribution:
+        path = PurePosixPath(self.path)
+        if ("\\" in self.path or path.is_absolute() or ".." in path.parts or path == PurePosixPath(".")
+                or (len(self.path) >= 2 and self.path[0].isalpha() and self.path[1] == ":")):
+            raise ValueError("Skill path 必须是包根内的显式相对 POSIX 路径")
+        return self
+
+
+class PluginContributions(_PluginValue):
+    """首批开放贡献；具体扩展点数据由对应业务 owner 继续校验。"""
+
+    commands: list[dict[str, JsonValue]] = Field(default_factory=list)
+    menus: list[dict[str, JsonValue]] = Field(default_factory=list)
+    keybindings: list[dict[str, JsonValue]] = Field(default_factory=list)
+    configuration: dict[str, JsonValue] | None = None
+    services: list[PluginServiceContribution] = Field(default_factory=list)
+    debuggers: list[dict[str, JsonValue]] = Field(default_factory=list)
+    skills: list[PluginSkillContribution] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def at_least_one_contribution(self) -> PluginContributions:
+        if not any((self.commands, self.menus, self.keybindings, self.configuration is not None,
+                    self.services, self.debuggers, self.skills)):
+            raise ValueError("插件必须声明至少一种已开放贡献")
+        return self
+
+
+class ServicePluginManifest(_PluginValue):
+    id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1)
+    instance_scope: PluginScope
+    requires: list[PluginExtensionRequirement] = Field(default_factory=list)
+    contributes: PluginContributions
+    runtime: PluginRuntime | None = None
+    entrypoint: list[str] | None = None
+    management_protocol_version: Literal[1] | None = None
+
+    @model_validator(mode="after")
+    def runtime_fields_match(self) -> ServicePluginManifest:
+        requirements = {item.extension_point: item.version for item in self.requires}
+        if len(requirements) != len(self.requires):
+            raise ValueError("requires 中扩展点不得重复")
+        contribution_points = {
+            name for name in ExtensionPoint.__args__
+            if (getattr(self.contributes, name) is not None if name == "configuration"
+                else bool(getattr(self.contributes, name)))
+        }
+        if set(requirements) != contribution_points:
+            raise ValueError("requires 必须与实际声明的七类贡献逐项一致")
+        if self.runtime is None:
+            if self.entrypoint is not None or self.management_protocol_version is not None:
+                raise ValueError("纯声明插件不能声明 entrypoint 或管理协议版本")
+            if self.contributes.commands or self.contributes.services or self.contributes.debuggers:
+                raise ValueError("命令、服务和调试器贡献必须由代码插件提供")
+            return self
+        if self.entrypoint is None or not self.entrypoint or self.management_protocol_version is None:
+            raise ValueError("代码插件必须声明 runtime、entrypoint 和 management_protocol_version")
+        entry = self.entrypoint[0]
+        path = PurePosixPath(entry)
+        if (not entry or "\\" in entry or path.is_absolute() or ".." in path.parts or path == PurePosixPath(".")
+                or (len(entry) >= 2 and entry[0].isalpha() and entry[1] == ":")):
+            raise ValueError("插件入口必须是包根内的相对 POSIX 路径")
+        return self
+
+
+class PluginPackageManifest(_PluginValue):
+    manifest_version: Literal[1] = 1
+    package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    version: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+    name: str = Field(min_length=1)
+    description: str | None = None
+    extension_contract_version: Literal[1] = 1
+    plugins: list[ServicePluginManifest] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def plugin_ids_are_unique(self) -> PluginPackageManifest:
+        plugin_ids = [plugin.id for plugin in self.plugins]
+        if len(plugin_ids) != len(set(plugin_ids)):
+            raise ValueError("同一插件包内 plugin id 必须唯一")
+        return self
+
+
+class PluginBinding(_PluginValue):
+    package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    plugin_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    package_version: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+    workspace_id: CanonicalWorkspaceId | None = None
+    enabled: bool
+
+
+class PluginInstanceView(_PluginValue):
+    gateway_id: str = Field(min_length=1)
+    package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    package_version: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+    plugin_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    instance_scope: PluginScope
+    workspace_id: CanonicalWorkspaceId | None = None
+    instance_id: str = Field(min_length=1)
+    management_protocol_version: Literal[1]
+    extension_contract_version: Literal[1]
+    status: PluginState
+    process_id: int = Field(gt=0)
+    capabilities: list[str] = Field(default_factory=list)
+    services: list[PluginServiceContribution] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def status_matches_scope(self) -> PluginInstanceView:
+        if (self.instance_scope == "workspace") != (self.workspace_id is not None):
+            raise ValueError("workspace 插件回执必须且只能绑定 workspace_id")
+        if len({service.service_id for service in self.services}) != len(self.services):
+            raise ValueError("插件回执包含重复 service_id")
+        return self
+
+
+class PluginInstanceStatus(PluginInstanceView):
+    log_sink: dict[str, JsonValue] | None = None
+
+
+class InstalledPluginPackageDTO(_PluginValue):
+    manifest: PluginPackageManifest
+    digest: str
+
+
+class PluginSourceStatusDTO(_PluginValue):
+    configured: bool
+    message: str
+
+
+class PluginInventoryResultDTO(_PluginValue):
+    packages: list[InstalledPluginPackageDTO]
+    sources: PluginSourceStatusDTO
+
+
+class PluginSlotStatusDTO(_PluginValue):
+    gateway_id: str = Field(min_length=1)
+    binding: PluginBinding
+    instance_scope: PluginScope
+    revision: str
+    state: PluginState
+    error: str | None = None
+    declarative: bool
+    instance: PluginInstanceView | None = None
+
+
+class PluginRuntimeStatusDTO(_PluginValue):
+    plugins: list[PluginSlotStatusDTO]
+    configured_bindings: list[PluginBinding]
+
+
+class PluginUninstallResultDTO(_PluginValue):
+    package_id: str
+    package_version: str
+    uninstalled: bool
+
+
+__all__ = [
+    "ExtensionPoint",
+    "InstallPluginRequest",
+    "InstalledPluginPackageDTO",
+    "PluginBinding",
+    "PluginContributions",
+    "PluginExtensionRequirement",
+    "PluginInstanceStatus",
+    "PluginInstanceView",
+    "PluginInventoryResultDTO",
+    "PluginPackageManifest",
+    "PluginRuntime",
+    "PluginRuntimeStatusDTO",
+    "PluginScope",
+    "PluginServiceContribution",
+    "PluginSkillContribution",
+    "PluginSlotStatusDTO",
+    "PluginSourceStatusDTO",
+    "PluginState",
+    "PluginTarget",
+    "PluginUninstallResultDTO",
+    "PluginVersionRequest",
+    "RestartPluginRequest",
+    "ServicePluginManifest",
+]

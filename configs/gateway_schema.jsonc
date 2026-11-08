@@ -10,6 +10,8 @@
     { "pattern": "/resources/skill_sources/local_updates/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/sources", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/ui/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -36,6 +38,25 @@
       "type": "integer",
       "enum": [1, 2, 3, 4],
       "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-config 推进到 v4，移除迁至工作区的生成器轮询设置。Gateway workspaces 变化属于 restart_gateway。"
+    },
+    "plugins": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"entries": {"type": "array", "default": [], "maxItems": 0,
+            "description": "自有在线目录尚未开放，当前仅支持本地 ZIP 或显式开发目录。"}}
+        },
+        "runtime": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"entries": {"type": "array", "default": [], "items": {"$ref": "#/$defs/pluginBinding"}}}
+        },
+        "workspace_defaults": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"entries": {"type": "array", "default": [], "maxItems": 0,
+            "description": "工作区创建模板尚待接入创建 intent，当前明确拒绝非空模板。"}}
+        }
+      }
     },
     "logging": {
       "type": "object",
@@ -146,7 +167,7 @@
                 "additionalProperties": false,
                 "required": ["capability"],
                 "properties": {
-                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "mcp_installation_manage", "extension_installation_manage", "extension_host_manage"] },
+                  "capability": { "enum": ["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "mcp_installation_manage", "extension_installation_manage", "extension_host_manage", "service_plugin_installation_manage", "service_plugin_runtime_manage"] },
                   "effect": { "enum": ["allow", "deny"], "default": "deny" },
                   "origin_gateway_id": { "type": ["string", "null"], "minLength": 1 },
                   "principal_ref": { "type": ["string", "null"], "minLength": 1 }
@@ -180,6 +201,16 @@
     }
   ],
   "$defs": {
+    "pluginBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["package_id", "plugin_id", "package_version", "enabled"],
+      "properties": {
+        "package_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+        "plugin_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+        "package_version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"},
+        "enabled": {"type": "boolean"}
+      }
+    },
     "featuresConfig": {
       "type": "object",
       "additionalProperties": false,

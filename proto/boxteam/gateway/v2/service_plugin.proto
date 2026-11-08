@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package boxteam.gateway.v2;
+
+import "google/protobuf/struct.proto";
+
+// 插件声明、Gateway 绑定、实例回执及管理请求的跨语言公开合同。
+// 扩展点具体业务规则仍由对应 owner 校验。
+message PluginExtensionRequirement {
+  string extension_point = 1;
+  int32 version = 2;
+}
+
+message PluginServiceContribution {
+  string service_id = 1;
+  string service_type = 2;
+  string protocol = 3;
+}
+
+message PluginSkillContribution {
+  string id = 1;
+  string path = 2;
+  repeated google.protobuf.Struct tool_bindings = 3;
+}
+
+message PluginContributions {
+  repeated google.protobuf.Struct commands = 1;
+  repeated google.protobuf.Struct menus = 2;
+  repeated google.protobuf.Struct keybindings = 3;
+  optional google.protobuf.Struct configuration = 4;
+  repeated PluginServiceContribution services = 5;
+  repeated google.protobuf.Struct debuggers = 6;
+  repeated PluginSkillContribution skills = 7;
+}
+
+message ServicePluginManifest {
+  string id = 1;
+  string name = 2;
+  string instance_scope = 3;
+  repeated PluginExtensionRequirement requires = 4;
+  PluginContributions contributes = 5;
+  optional string runtime = 6;
+  repeated string entrypoint = 7;
+  optional int32 management_protocol_version = 8;
+}
+
+message PluginPackageManifest {
+  int32 manifest_version = 1;
+  string package_id = 2;
+  string version = 3;
+  string name = 4;
+  optional string description = 5;
+  int32 extension_contract_version = 6;
+  repeated ServicePluginManifest plugins = 7;
+}
+
+message PluginBinding {
+  string package_id = 1;
+  string plugin_id = 2;
+  string package_version = 3;
+  optional string workspace_id = 4;
+  bool enabled = 5;
+}
+
+message PluginInstanceStatus {
+  string package_id = 1;
+  string package_version = 2;
+  string plugin_id = 3;
+  string instance_scope = 4;
+  optional string workspace_id = 5;
+  string instance_id = 6;
+  int32 management_protocol_version = 7;
+  int32 extension_contract_version = 8;
+  string status = 9;
+  int32 process_id = 10;
+  optional google.protobuf.Struct log_sink = 11;
+  repeated string capabilities = 12;
+  repeated PluginServiceContribution services = 13;
+  string gateway_id = 14;
+}
+
+message PluginInstanceView {
+  string gateway_id = 1;
+  string package_id = 2;
+  string package_version = 3;
+  string plugin_id = 4;
+  string instance_scope = 5;
+  optional string workspace_id = 6;
+  string instance_id = 7;
+  int32 management_protocol_version = 8;
+  int32 extension_contract_version = 9;
+  string status = 10;
+  int32 process_id = 11;
+  repeated string capabilities = 12;
+  repeated PluginServiceContribution services = 13;
+}
+
+message InstalledPluginPackageDTO {
+  PluginPackageManifest manifest = 1;
+  string digest = 2;
+}
+
+message PluginSourceStatusDTO {
+  bool configured = 1;
+  string message = 2;
+}
+
+message PluginInventoryResultDTO {
+  repeated InstalledPluginPackageDTO packages = 1;
+  PluginSourceStatusDTO sources = 2;
+}
+
+message PluginSlotStatusDTO {
+  PluginBinding binding = 1;
+  string revision = 2;
+  string state = 3;
+  optional string error = 4;
+  bool declarative = 5;
+  optional PluginInstanceView instance = 6;
+  string gateway_id = 7;
+  string instance_scope = 8;
+}
+
+message PluginRuntimeStatusDTO {
+  repeated PluginSlotStatusDTO plugins = 1;
+  repeated PluginBinding configured_bindings = 2;
+}
+
+message PluginUninstallResultDTO {
+  string package_id = 1;
+  string package_version = 2;
+  bool uninstalled = 3;
+}
+
+message PluginTarget {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+}
+
+message InstallPluginRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string path = 3;
+  bool development_directory = 4;
+  optional string expected_digest = 5;
+}
+
+message PluginVersionRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string package_id = 3;
+  string package_version = 4;
+}
+
+message RestartPluginRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string package_id = 3;
+  string package_version = 4;
+  string plugin_id = 5;
+  string revision = 6;
+}
