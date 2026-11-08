@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -12,11 +13,11 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport
 
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.auth import verify_gateway_token
+from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
-from app.gateway.server.service_plugins import router
+from app.gateway.server.service_plugin_proxy import router
 
 
 @pytest.fixture
@@ -31,13 +32,15 @@ async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         packages=PluginPackageStore(tmp_path / "packages"), settings=dict, workspace_root=lambda _: tmp_path)
     await owner.client.aclose()
     owner.client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
-    monkeypatch.setattr(owner, "service", lambda *args, **kwargs: ("http://127.0.0.1:49152/services/echo", "private"))
+    monkeypatch.setattr(owner, "service", lambda *args, **kwargs: ("http://127.0.0.1:49152/services/echo", "private", asyncio.Event()))
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
     app.include_router(router)
     app.state.service_plugins = owner
-    app.dependency_overrides[verify_gateway_token] = lambda: "test"
+    from app.gateway.registry import GatewayWorkspaceRegistry
+    app.state.registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=owner.gateway_id)
+    app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
     try:
         yield app, calls
     finally:

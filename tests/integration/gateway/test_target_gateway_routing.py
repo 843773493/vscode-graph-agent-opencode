@@ -174,8 +174,14 @@ class TargetGatewayNetwork:
 
 
 @pytest.fixture
+def target_gateway_port(request: pytest.FixtureRequest) -> Callable[[int], int]:
+    return integration_port_block_for_file(Path(request.node.path)).port
+
+
+@pytest.fixture
 def target_gateway_network(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
+    target_gateway_port: Callable[[int], int],
 ) -> Iterator[TargetGatewayNetwork]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace_a = Path(integration_workspace_root_path)
@@ -199,23 +205,22 @@ def target_gateway_network(
     )}
     for path in observations.values():
         path.parent.mkdir(parents=True, exist_ok=True)
-    ports = integration_port_block_for_file(Path(request.node.path))
     private_key = runtime / "pairing-key"
     shutil.copyfile(Path.cwd() / "asset/gateway_ssh/boxteam_gateway_e2e_ed25519", private_key)
     private_key.chmod(0o600)
     with ExitStack() as cleanup:
-        lease = E2EProcessLease(runtime / "ports.json", tuple(ports.port(offset) for offset in (0, 1, 20, 21, 22, 2)))
+        lease = E2EProcessLease(runtime / "ports.json", tuple(target_gateway_port(offset) for offset in (0, 1, 20, 21, 22, 2)))
         lease.acquire()
         cleanup.callback(lease.release)
         backends = []
         for index, (workspace, offset, home) in enumerate(zip((workspace_a, workspace_b), (0, 20), homes, strict=True)):
             role = "backend-a" if index == 0 else "backend-b"
             backend = start_backend_process(
-                workspace_root=str(workspace), port=ports.port(offset), log_name=role,
+                workspace_root=str(workspace), port=target_gateway_port(offset), log_name=role,
                 boxteam_home=home, artifacts_dir=observations[role].parent,
                 asgi_app=f"{__name__}:create_backend_app", env_unset=("BOXTEAM_GATEWAY_ROOT",),
                 env_overrides={
-                    "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}",
+                    "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{target_gateway_port(offset + 1)}",
                     "BOXTEAM_TEST_TARGET_HTTP_LOG": str(observations[role]),
                 },
             )
@@ -227,7 +232,7 @@ def target_gateway_network(
         routes: dict[int, str] = {}
         gateways: list[GatewayProcess | None] = [None, None]
         previous_gateway: GatewayProcess | None = None
-        gateway_ports = [ports.port(1), ports.port(21)]
+        gateway_ports = [target_gateway_port(1), target_gateway_port(21)]
         stderr_offsets: dict[int, int] = {}
         gateway_history: list[dict[str, object]] = []
 
@@ -247,9 +252,9 @@ def target_gateway_network(
             draining_errors = [record for record in records[draining_start:shutdown_start] if "[ERROR]" in record.partition("\n")[0] or record.startswith("ERROR:")]
             # B 已迁端口时，旧 A 在监听排空期间仍可能重拨原 B；其它错误不能略过。
             expected_draining_errors = [record for record in draining_errors
-                                       if index == 0 and gateway_ports[1] == ports.port(22)
+                                       if index == 0 and gateway_ports[1] == target_gateway_port(22)
                                        and "logger=app.gateway.federation.channel_owner 联邦 spoke channel 无法连接:" in record.partition("\n")[0]
-                                       and re.fullmatch(rf"ConnectionRefusedError: .*Connect call failed \('127\.0\.0\.1', {ports.port(21)}\)", record.rstrip().splitlines()[-1])]
+                                       and re.fullmatch(rf"ConnectionRefusedError: .*Connect call failed \('127\.0\.0\.1', {target_gateway_port(21)}\)", record.rstrip().splitlines()[-1])]
             gateway_history.append({
                 "action": "stopped", "index": index, "port": gateway.port,
                 "pid": gateway.process.pid, "returncode": gateway.process.returncode,
@@ -338,7 +343,7 @@ def target_gateway_network(
             nonlocal previous_gateway
             assert previous_gateway is None and gateways[0] is not None
             previous_gateway = gateways[0]
-            candidate_port = ports.port(2) if previous_gateway.port == ports.port(1) else ports.port(1)
+            candidate_port = target_gateway_port(2) if previous_gateway.port == target_gateway_port(1) else target_gateway_port(1)
             return start_gateway(0, candidate_port, extra_env)
 
         # 先启动远端，A 的产品注册随后通过真实 HTTP 发现它。

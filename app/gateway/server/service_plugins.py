@@ -10,8 +10,6 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from starlette.background import BackgroundTask
 
 from app.api.runtime_control import verify_local_control_request
 from app.core.shielded_cleanup import run_sync_shielded
@@ -22,11 +20,6 @@ from app.gateway.auth import (
     verify_gateway_token,
 )
 from app.gateway.federation.policy import require_federation_capability
-from app.gateway.proxy_upstream import (
-    UpstreamResponseBody,
-    build_upstream_url,
-    send_upstream_request,
-)
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
     gateway_plugin_bindings,
@@ -246,49 +239,3 @@ async def restart(payload: RestartPluginRequest, request: Request,
         raise HTTPException(409, str(error)) from error
     data = PluginSlotStatusDTO.model_validate(result)
     return APIResponse[PluginSlotStatusDTO](data=data, request_id=get_request_id(request))
-
-
-@router.api_route("/api/gateway/service-plugins/{package_id}/{plugin_id}/instances/{instance_id}/services/{service_id}/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"], dependencies=[Depends(verify_gateway_token)],
-    response_model=None, include_in_schema=False)
-async def service_request(package_id: str, plugin_id: str, instance_id: str, service_id: str,
-    path: str, package_version: str, request: Request,
-    owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
-    workspace_id: CanonicalWorkspaceId | None = None,
-) -> StreamingResponse:
-    # TODO：接原联邦业务权限；本机业务不要求安装／启停管理权限。
-    binding = PluginBinding(package_id=package_id, plugin_id=plugin_id,
-        package_version=package_version, enabled=True, workspace_id=workspace_id)
-    try:
-        base_url, token = owner.service(binding, service_id=service_id, instance_id=instance_id)
-    except LookupError as error:
-        raise HTTPException(409, str(error)) from error
-    query = [(key, value) for key, value in request.query_params.multi_items()
-        if key not in {"package_version", "workspace_id"}]
-    headers = {"X-Local-Token": token, "X-Request-ID": get_request_id(request)}
-    if workspace_id is not None:
-        headers["X-BoxTeam-Workspace-Id"] = workspace_id
-    if request.headers.get("content-type"):
-        headers["Content-Type"] = request.headers["content-type"]
-    try:
-        url = build_upstream_url(base_url, (), path)
-    except ValueError as error:
-        raise HTTPException(422, "服务路径不能越过具名服务") from error
-    upstream = owner.client.build_request(request.method, url,
-        params=tuple(query), content=request.stream(), headers=headers, timeout=None)
-    try:
-        response = await send_upstream_request(owner.client, upstream)
-    except httpx.RequestError as error:
-        logger.exception("插件上游请求失败: request_id=%s instance_id=%s service_id=%s",
-            get_request_id(request), instance_id, service_id)
-        raise HTTPException(502, f"插件上游连接失败: instance_id={instance_id}, service_id={service_id}, "
-            f"error_type={type(error).__name__}；请查看 Gateway 服务日志") from error
-    except TimeoutError as error:
-        logger.exception("插件上游响应头超时: request_id=%s instance_id=%s service_id=%s",
-            get_request_id(request), instance_id, service_id)
-        raise HTTPException(504, f"插件上游响应头超时: instance_id={instance_id}, service_id={service_id}") from error
-    body = UpstreamResponseBody(response)
-    return StreamingResponse(body, status_code=response.status_code,
-        headers={key: value for key, value in response.headers.items()
-            if key.lower() in {"content-type", "cache-control", "etag", "mcp-session-id", "mcp-protocol-version"}},
-        background=BackgroundTask(body.aclose))

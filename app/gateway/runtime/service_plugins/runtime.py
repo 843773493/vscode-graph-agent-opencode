@@ -10,7 +10,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
@@ -83,6 +83,7 @@ class PluginSlot:
     token: str | None = None
     error: str | None = None
     state: str = "stopped"
+    stopped: asyncio.Event = field(default_factory=asyncio.Event)
 
     def describe(self) -> dict[str, object]:
         if self.process is not None and self.state == "ready" and not self.process.is_alive():
@@ -329,6 +330,8 @@ class GatewayPluginRuntime:
             raise
 
     async def _stop_process(self, key: Slot, slot: PluginSlot) -> None:
+        # 先撤销新连接和原流准入，再进入同一进程关闭期限。
+        slot.stopped.set()
         if slot.process is not None:
             slot.state = "stopping"
             deadline = time.monotonic() + 8
@@ -350,19 +353,22 @@ class GatewayPluginRuntime:
             self._record(key).unlink(missing_ok=True)
         slot.state = "stopped"
 
-    def service(self, binding: PluginBinding, *, service_id: str, instance_id: str) -> tuple[str, str]:
+    def service(self, binding: PluginBinding, *, service_id: str, instance_id: str,
+                websocket: bool = False) -> tuple[str, str, asyncio.Event]:
         slot = self.slots.get(self.key(binding))
         if slot is None or slot.binding != binding:
             raise LookupError("插件绑定不可用或版本已切换")
-        slot.describe()
         if not binding.enabled or slot.state != "ready" or slot.receipt is None:
             raise LookupError(f"插件尚未就绪: state={slot.state}, error={slot.error}")
         if slot.receipt.instance_id != instance_id:
             raise LookupError("插件实例已失效，不改投同名新实例")
-        if service_id not in {service.service_id for service in slot.receipt.services}:
+        service = next((service for service in slot.receipt.services if service.service_id == service_id), None)
+        if service is None:
             raise LookupError("插件未导出此服务")
+        if websocket != (service.protocol in {"websocket", "dap"}):
+            raise LookupError("连接传输与插件声明的服务协议不符")
         assert slot.base_url is not None and slot.token is not None
-        return slot.base_url + "/services/" + service_id, slot.token
+        return slot.base_url + "/services/" + service_id, slot.token, slot.stopped
 
     def references(self, package_id: str, version: str) -> list[str]:
         return [

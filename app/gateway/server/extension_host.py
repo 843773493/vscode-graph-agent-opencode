@@ -26,6 +26,10 @@ from starlette.responses import JSONResponse
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
+from app.core.async_channel import (
+    close_channel,
+    run_channel,
+)
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -95,10 +99,6 @@ from app.schemas.gateway.mcp_definitions import (
     validate_provider_frame,
 )
 from app.schemas.internal_v2.common import APIResponse
-from app.services.infrastructure.extension_host.channel import (
-    close_channel,
-    run_channel,
-)
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     InstalledProfile,

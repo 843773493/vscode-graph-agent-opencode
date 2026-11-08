@@ -1,4 +1,4 @@
-"""宿主通道只传原协议字节；任一方向结束后结清同一组任务。"""
+"""双向通道只传原协议字节；任一方向结束后结清同一组任务。"""
 
 from __future__ import annotations
 
@@ -36,6 +36,6 @@ async def run_channel(*operations: Coroutine[None, None, None]) -> None:
         if len(errors) == 1:
             raise errors[0]
         if errors:
-            raise BaseExceptionGroup("Node 宿主通道及收尾失败", errors)
+            raise BaseExceptionGroup("双向通道及收尾失败", errors)
 
     await run_cleanup_shielded(settle)

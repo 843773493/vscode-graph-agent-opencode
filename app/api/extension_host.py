@@ -20,6 +20,10 @@ from starlette.responses import JSONResponse
 
 from app.api.runtime_control import verify_runtime_control_token
 from app.container import WorkspaceContainerRegistry
+from app.core.async_channel import (
+    close_channel,
+    run_channel,
+)
 from app.core.trace_middleware import get_request_id
 from app.schemas.gateway.extension_host import (
     ExtensionHostConnectionDTO,
@@ -45,10 +49,6 @@ from app.schemas.gateway.mcp_definitions import (
     validate_provider_frame,
 )
 from app.schemas.internal_v2.common import APIResponse
-from app.services.infrastructure.extension_host.channel import (
-    close_channel,
-    run_channel,
-)
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
     NativeFileRead,

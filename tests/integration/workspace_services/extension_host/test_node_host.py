@@ -240,7 +240,7 @@ async def test_original_node_host_protocol_and_dual_native_extensions(
                             channel_bindings[f"{label}-closed"] = {"code": channel.close_code, "reason": channel.close_reason}
                             assert error.rcvd is not None and error.rcvd.code == 1011
 
-                    from app.services.infrastructure.extension_host.channel import (
+                    from app.core.async_channel import (
                         run_channel,
                     )
                     await run_channel(to_channel(), from_channel())

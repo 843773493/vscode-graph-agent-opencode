@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from app.services.infrastructure.extension_host.channel import run_channel
+from app.core.async_channel import run_channel
 
 
 async def test_first_eof_waits_for_other_direction_cleanup() -> None:
