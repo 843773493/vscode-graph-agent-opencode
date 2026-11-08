@@ -119,6 +119,24 @@ try {
       + '/' + connection.view_id + '/' + connection.generation + '/boxteam-probe.empty-hybrid-' + version + '/');
     return value;
   };
+  const runtimeDiagnostics = async (view, state, target, id, kind, scope) => {
+    const before = JSON.stringify([state.nodeResolves, state.nodeChannels, state.webAdmissions]);
+    const report = await command(view, id);
+    expect(report.scope).toBe(scope); expect(report.version).toBe('1.145.0');
+    expect(report.targets).toHaveLength(1);
+    const [diagnostic] = report.targets;
+    expect(diagnostic.installationTarget).toEqual({ kind: 'backend', gatewayId: target.gateway_id, backendId: target.backend_id });
+    expect(diagnostic.viewId).toBe('default');
+    for (const api of ['terminal', 'tasks', 'debug', 'secrets', 'stateSync']) expect(report.apiSupport.find(entry => entry.id === api).state).toBe('unsupported');
+    expect(report.apiSupport.find(entry => entry.id === 'documentsLanguageSearch').state).toBe('partial');
+    expect(diagnostic.hosts.length).toBeGreaterThan(0);
+    if (scope === 'caller') expect(diagnostic.hosts).toHaveLength(1);
+    const host = diagnostic.hosts.find(host => host.kind === kind);
+    expect(host.phase).toBe('bound'); expect(host.binding.generation).toBeTruthy(); expect(host.binding.requestId).toBeTruthy();
+    expect(host.extensions.some(extension => extension.activationStarted && extension.activated)).toBe(true);
+    expect(JSON.stringify([state.nodeResolves, state.nodeChannels, state.webAdmissions])).toBe(before);
+    return report;
+  };
   await initialize(page, fixture.base_url, fixture.targets.a);
 
   await phase('run-entry-a-empty-web');
@@ -130,6 +148,12 @@ try {
   const initialAdmission = admission(result, fixture.targets.a, 1);
   result.inventoryA = await inventory(page, fixture.targets.a);
   result.hybrid = await webHybrid(page, '1.0.0', initialAdmission);
+  result.runtimeDiagnostics = await runtimeDiagnostics(page, result, fixture.targets.a,
+    'boxteam.extensions.getRuntimeDiagnostics', 'web', 'window');
+  result.callerDiagnostics = await runtimeDiagnostics(page, result, fixture.targets.a,
+    'boxteam.empty.runtimeDiagnostics', 'web', 'caller');
+  expect(result.runtimeDiagnostics.targets[0].nodeChannel).toBeNull();
+  expect(result.callerDiagnostics.targets[0].hosts[0].binding.generation).toBe(initialAdmission.generation);
   expect(result.targetDirectories[0]).toEqual({ protocol_version: 1, gateway_id: fixture.targets.a.gateway_id });
 
   await phase('node-only-unavailable-in-empty-window');
@@ -161,6 +185,9 @@ try {
     && item.backend_id === fixture.targets.b.backend_id)).toBe(true);
   result.relayInventoryB = await inventory(page, fixture.targets.b);
   result.after = await command(page, 'boxteam.empty.inspect', 'after-management-switch');
+  result.afterManagementDiagnostics = await runtimeDiagnostics(page, result, fixture.targets.a,
+    'boxteam.empty.runtimeDiagnostics', 'web', 'caller');
+  expect(result.afterManagementDiagnostics.targets[0].hosts[0].binding.generation).toBe(initialAdmission.generation);
   expect(result.after).toMatchObject({ value: 'after-management-switch', version: '1.0.0', folders: [], webWorker: true, uiKind: 2 });
   expect(result.after.activation).toBe(result.before.activation); expect(result.after.extensionUri).toBe(result.before.extensionUri);
   admission(result, fixture.targets.a, 1);
@@ -196,6 +223,9 @@ try {
   result.secondClient.inventory = await inventory(pageB, fixture.targets.b);
   expect(result.secondClient.inventory).toEqual(result.relayInventoryB);
   result.secondClient.hybrid = await webHybrid(pageB, '2.0.0', admissionB);
+  result.secondClient.runtimeDiagnostics = await runtimeDiagnostics(pageB, result.secondClient, fixture.targets.b,
+    'boxteam.empty.runtimeDiagnostics', 'web', 'caller');
+  expect(result.secondClient.runtimeDiagnostics.targets[0].hosts[0].binding.generation).toBe(admissionB.generation);
   expect(result.secondClient.inspection.extensionUri).toContain('/api/gateway/extension-packages/content/' + fixture.targets.b.gateway_id + '/'
     + fixture.targets.b.backend_id + '/' + admissionB.profile_id + '/default/' + admissionB.generation + '/');
   expect(result.secondClient.targetDirectories[0]).toEqual({ protocol_version: 1, gateway_id: fixture.targets.b.gateway_id });
@@ -266,6 +296,13 @@ try {
   expect(result.attached.hybrid).toMatchObject({ mode: 'node', version: '1.0.0', platform: fixture.native_platform,
     nativeContent: 'hybrid-node-1.0.0', folders: [fixture.native_root_a] });
   result.attached.nodeOnly = await command(page, 'boxteam.empty.nodeOnly');
+  result.attached.runtimeDiagnostics = await runtimeDiagnostics(page, result.attached, fixture.targets.a,
+    'boxteam.extensions.getRuntimeDiagnostics', 'node', 'window');
+  result.attached.nodeDiagnostics = await runtimeDiagnostics(page, result.attached, fixture.targets.a,
+    'boxteam.empty.nodeDiagnostics', 'node', 'caller');
+  expect(result.attached.runtimeDiagnostics.targets[0].hosts.map(host => host.kind).sort()).toEqual(['node', 'web']);
+  expect(result.attached.nodeDiagnostics.targets[0].hosts[0].processApi.state).toBe('partial');
+  expect(result.attached.nodeDiagnostics.targets[0].nodeChannel.state).toBe('available');
   expect(result.attached.nodeOnly).toEqual({ mode: 'node', version: '1.0.0' });
   expect(result.attached.nodeResolves).toEqual([{ protocol_version: 1, ...fixture.targets.a, workspace_ids: [fixture.workspace_id] }]);
   expect(result.attached.nodeChannels).toEqual(['/api/gateway/extension-hosts/channel']);

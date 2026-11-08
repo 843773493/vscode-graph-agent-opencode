@@ -89,6 +89,8 @@ async def test_default_empty_workbench_runs_entry_browser_target_after_managemen
 const vscode = require('vscode');
 exports.activate = context => {
   const activation = crypto.randomUUID();
+  context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.runtimeDiagnostics',
+    () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
   context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.inspect', value => ({
     value, activation, version: context.extension.packageJSON.version,
     folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
@@ -154,7 +156,8 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
   mode: 'node', version: context.extension.packageJSON.version, platform: process.platform,
   nativeContent: require('node:fs').readFileSync(require('node:path').join(__dirname, 'native.txt'), 'utf8'),
   folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
-})));
+})), vscode.commands.registerCommand('boxteam.empty.nodeDiagnostics',
+  () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
 """)
             archive.writestr("extension/native.txt", "hybrid-node-" + version)
         installed_hybrid = exchange(client, "POST", "/api/gateway/extension-installations/install", {
@@ -189,6 +192,8 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
         "bun", "tests/integration/clients/web/empty_target_web.mjs"]
     paths = ["app/gateway/server/extension_host.py", "src/clients/workbench/src/extensions/inventory.ts", "src/clients/workbench/scripts/extensions/extensionBrowserTransform.mjs",
         "src/clients/workbench/src/extensions/webHost.ts", "src/clients/workbench/src/extensions/targetContext.ts",
+        "src/clients/workbench/src/extensions/runtimeDiagnostics.ts", "src/clients/workbench/src/extensions/commands.ts",
+        "src/clients/workbench/src/extensions/contribution.ts",
         "src/clients/workbench/scripts/extensions/extensionEnablementTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionStatusTransform.mjs", "tests/integration/clients/web/test_empty_target_web.py",
         "tests/integration/clients/web/empty_target_web.mjs"]

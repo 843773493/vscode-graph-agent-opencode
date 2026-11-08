@@ -112,7 +112,7 @@ import type { ExtensionHostConnectionDTO } from ${JSON.stringify(join(root, '../
     return replaceOnce(contents, 'this._commandService.executeCommand<T>(id, ...args)', 'executeHostCommand<T>(this._commandService, this.extHostContext.extensionHost, id, args)');
   }
   if (path === paths[8]) {
-    let contents = `import { captureCommandHost, executeCommandForHost, unpackCommandSource } from ${JSON.stringify(join(root, 'src/extensions/commands.js'))};
+    let contents = `import { captureCommandHost, executeCommandForHost, unpackCommandSource, isHostCommand } from ${JSON.stringify(join(root, 'src/extensions/commands.js'))};
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IEditorService } from '../../editor/common/editorService.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
@@ -122,7 +122,8 @@ import type { IExtensionHost } from '../../extensions/common/extensions.js';\n` 
     args = source.args;
     const target = await captureCommandHost(this._extensionService, id,
       () => this._instantiationService.invokeFunction(accessor => EditorResourceAccessor.getCanonicalUri(accessor.get(IEditorService).activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY })),
-      () => this._instantiationService.invokeFunction(accessor => accessor.get(IQuickInputService)), source.source);`);
+      () => this._instantiationService.invokeFunction(accessor => accessor.get(IQuickInputService)), source.source);
+    if (isHostCommand(id)) return this._tryExecuteCommand(id, args, target);`);
     contents = contents.replaceAll('this._tryExecuteCommand(id, args)', 'this._tryExecuteCommand(id, args, target)');
     contents = contents.replaceAll('this._extensionService.activateByEvent(activationEvent)', 'this._extensionService.activateByEvent(activationEvent, undefined, target)');
     contents = replaceOnce(contents, 'private _tryExecuteCommand(id: string, args: unknown[]):', 'private _tryExecuteCommand(id: string, args: unknown[], target?: IExtensionHost):');

@@ -272,6 +272,8 @@ Rename 的调用前文本版本快照与 CodeAction 共用原 ExtHost 文档 own
 
 capability discovery 只读取版本与实际已支持服务，不启动 Agent。兼容矩阵与实际运行结果可查询；缺少必要能力的扩展不得显示为已可用。宿主启动、扩展激活、命令执行与业务结果分别验收。安装包可复用，但 host 运行态不跨目标／客户端共享；持久 storage key 不含临时客户端会话或 endpoint，以保持重启恢复。
 
+工作台的机器查询命令 `boxteam.extensions.getRuntimeDiagnostics` 每次读取原 IExtensionService 的视图、宿主、合法实例及状态，不发起发现、准入、激活或进程启动。实现范围、当前管理授权、Node 通道、宿主 created／bound 阶段及实例激活结果分别呈现；整类仍有缺口时报告 partial，已明确拒绝的能力报告 unsupported，不从类型或 available 通道推导完整 API 支持。窗口调用读取当前已登记视图，扩展调用沿原私有命令来源只返回自身宿主，不能用当前焦点、管理标题或显式参数扩大范围；退役来源拒绝。结果为即时值快照，不缓存第二份运行状态，调用方修改结果不影响原 owner。完整能力接线和跨平台验收仍由各自任务独立完成。
+
 目标终端尚未接入期间，目标安装的 Web／Node 扩展从原公开终端 API、shell 与环境集合入口明确取得不支持错误；内部调试路径调用原终端创建服务也在构造本地 Terminal 对象前拒绝。原 MainThreadTerminalService 与独立的 MainThreadTerminalShellIntegration 不向目标宿主初始化或订阅窗口终端，所有入站终端 RPC 同样拒绝。原目标终端服务初始化不向窗口登记进程能力；窗口内置 Web 宿主继续沿原行为。本边界不表示目标终端、任务、调试或完整机器可查询能力矩阵已经实现，后续目标终端接入沿原 owner 替换这些拒绝。
 
 目标任务与调试尚未接入期间，原 tasks／debug namespace、废弃的 workspace.registerTaskProvider 及内部执行／协议入口在使用窗口服务、转换任务、调用 CustomExecution 或创建调试适配器前明确拒绝。目标 MainThread 不订阅窗口任务、会话、断点或焦点；目标 ExtHost 初始化不登记窗口任务系统、执行能力或调试类型。原窗口内置宿主保留 Provider、执行、事件与清理语义，Task／ProcessExecution 等纯值类型仍可构造。Node 的 runInTerminal 在 integrated／external 分流前拒绝；后续真实目标接线沿这些原 owner 替换拒绝，不增加替代进程或第二执行平台。此边界不标为完整目标执行或能力矩阵已完成。

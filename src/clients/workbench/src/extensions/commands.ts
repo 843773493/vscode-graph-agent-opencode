@@ -26,6 +26,10 @@ export function unpackCommandSource(args: unknown[]): { source?: IExtensionHost;
 /** 在首次 await 前捕获编辑器 URI，选定后保留原 host 对象，以阻止 reload 期间转投新代际。 */
 export async function captureCommandHost(service: IExtensionService, id: string, resource: () => URI | undefined,
   picker: () => IQuickInputService, source?: IExtensionHost): Promise<IExtensionHost | undefined> {
+  if (isHostCommand(id)) {
+    if (source && !service.getExtensionHosts().includes(source)) throw new Error('发起命令的扩展宿主代际已经关闭');
+    return source;
+  }
   if (!source && CommandsRegistry.getCommand(id) && !commandHosts(service, id, service.getExtensionHosts()).length) return undefined;
   const activeResource = source ? undefined : resource();
   await service.whenInstalledExtensionsRegistered();
@@ -77,7 +81,21 @@ function chooseUnique(hosts: IExtensionHost[], id: string): IExtensionHost {
 type Handler = (...args: unknown[]) => Promise<unknown>;
 interface SharedCommand { registration: IDisposable; sources: Map<IExtensionHost, Handler> }
 const commands = new WeakMap<IExtensionService, Map<string, SharedCommand>>();
-const dispatchers = new WeakMap<Function, (accessor: ServicesAccessor, args: unknown[], host?: IExtensionHost) => Promise<unknown>>();
+type Dispatcher = (accessor: ServicesAccessor, args: unknown[], host?: IExtensionHost) => unknown;
+const dispatchers = new WeakMap<Function, { dispatch: Dispatcher; core: boolean }>();
+
+export function isHostCommand(id: string): boolean {
+  const command = CommandsRegistry.getCommand(id);
+  return !!command && !!dispatchers.get(command.handler)?.core;
+}
+
+/** 窗口命令复用原派发元数据，扩展调用保留真实来源，不向其它宿主暴露诊断。 */
+export function registerHostCommand(id: string, dispatch: Dispatcher): IDisposable {
+  const handler = (accessor: ServicesAccessor, ...args: unknown[]) => dispatch(accessor, args);
+  const registration = CommandsRegistry.registerCommand(id, handler);
+  dispatchers.set(handler, { dispatch, core: true });
+  return toDisposable(() => { dispatchers.delete(handler); registration.dispose(); });
+}
 
 /** 同一窗口命令 ID 只有一个原注册入口；dispose 只撤销自己的来源和代际。 */
 export function registerTargetCommand(service: IExtensionService, host: IExtensionHost, id: string, handler: Handler): IDisposable {
@@ -97,7 +115,7 @@ export function registerTargetCommand(service: IExtensionService, host: IExtensi
       return execute(...args);
     };
     const sharedHandler = (accessor: ServicesAccessor, ...args: unknown[]) => dispatch(accessor, args);
-    dispatchers.set(sharedHandler, dispatch);
+    dispatchers.set(sharedHandler, { dispatch, core: false });
     entry = { sources, registration: CommandsRegistry.registerCommand(id, sharedHandler) };
     registry.set(id, entry);
   }
@@ -118,5 +136,5 @@ export function executeCommandForHost(command: ICommand, accessor: ServicesAcces
     if (!accessor.get(IExtensionService).getExtensionHosts().includes(host)) throw new Error('发起符号查询的扩展宿主代际已经关闭');
     return command.handler(accessor, args[0], new ExtensionCommandSource(host, []));
   }
-  return dispatcher ? dispatcher(accessor, args, host) : command.handler(accessor, ...args);
+  return dispatcher ? dispatcher.dispatch(accessor, args, host) : command.handler(accessor, ...args);
 }
