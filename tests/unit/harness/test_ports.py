@@ -157,16 +157,16 @@ def test_wrong_layer_and_missing_files_are_rejected(port_tree: PortTree) -> None
         integration_port_block_for_file(Path.cwd() / "tests/integration/test_missing.py")
 
 
-def test_port_block_keeps_offsets_in_zero_through_99() -> None:
+def test_port_block_accepts_exactly_its_configured_offsets() -> None:
     block = TestFilePortBlock(
         test_file=Path("test_ports.py"), index=0,
         start=TEST_FILE_PORT_START, end=TEST_FILE_PORT_START + TEST_FILE_PORT_BLOCK_SIZE - 1,
     )
 
     assert block.port(0) == block.start
-    assert block.port(99) == block.end
-    with pytest.raises(ValueError, match="offset=100"):
-        block.port(100)
+    assert block.port(TEST_FILE_PORT_BLOCK_SIZE - 1) == block.end
+    with pytest.raises(ValueError, match=f"offset={TEST_FILE_PORT_BLOCK_SIZE}"):
+        block.port(TEST_FILE_PORT_BLOCK_SIZE)
     with pytest.raises(ValueError, match="offset=-1"):
         block.port(-1)
 
@@ -177,6 +177,6 @@ def test_shifted_port_block_does_not_extend_its_original_boundary() -> None:
         start=TEST_FILE_PORT_START + 20, end=TEST_FILE_PORT_START + TEST_FILE_PORT_BLOCK_SIZE - 1,
     )
 
-    assert block.port(79) == block.end
-    with pytest.raises(ValueError, match="offset=80"):
-        block.port(80)
+    assert block.port(TEST_FILE_PORT_BLOCK_SIZE - 21) == block.end
+    with pytest.raises(ValueError, match=f"offset={TEST_FILE_PORT_BLOCK_SIZE - 20}"):
+        block.port(TEST_FILE_PORT_BLOCK_SIZE - 20)

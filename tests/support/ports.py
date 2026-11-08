@@ -7,7 +7,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import ClassVar, Literal
 
-TEST_FILE_PORT_BLOCK_SIZE = 100
+TEST_FILE_PORT_BLOCK_SIZE = 96
 TEST_FILE_PORT_START = 8800
 # 先保留既有高端口块，耗尽后使用低段；跳过特权端口及 8000–8799 开发服务段。
 TEST_FILE_PORT_RANGES = ((TEST_FILE_PORT_START, 65535), (1024, 7999))
