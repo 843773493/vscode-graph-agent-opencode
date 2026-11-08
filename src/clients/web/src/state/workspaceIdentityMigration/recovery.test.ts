@@ -1,6 +1,7 @@
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { browserViewKey, readBrowserView, updateBrowserView } from "../browserViewStore";
+import type { SessionSelection } from "../sessionViewState";
 import { openWorkspaceFileIntentStore } from "../workspaceFiles/intentStore";
 import { openCatalogOutboxDatabase } from "../session/sessionCatalogOutboxStore";
 import { recoverWorkspaceIdentity } from "./recovery";
@@ -139,7 +140,7 @@ test("多 Gateway 旧队列必须同时导入各来源材料，相同 UUID 不�
     { partition_key: ["gateway_other_native", UUID, "user:original"].join("\u0000"), next_client_sequence: 1007 },
   ]));
   expect(await all(catalog, "identity-recovery")).toHaveLength(2); catalog.close();
-  expect(await readBrowserView(browserViewKey(second.registry_gateway_id, "selection")))
+  expect(await readBrowserView<SessionSelection>(browserViewKey(second.registry_gateway_id, "selection")))
     .toEqual({ gateway_id: "gateway_other_native", workspace_id: UUID, session_id: "second-session" });
   expect((await recoverWorkspaceIdentity([material, second])).batches.every(batch => batch.changed === 0)).toBe(true);
 });
@@ -161,13 +162,13 @@ test("显式升级旧 selection、会话视图、设置和草稿；历史正文�
   await updateBrowserView(historyKey, () => history);
   const result = await recoverWorkspaceIdentity(material);
   expect(result.batches.flatMap(batch => batch.issues)).toEqual([]);
-  expect(await readBrowserView(selection)).toEqual({ gateway_id: remote, workspace_id: UUID, session_id: "ses" });
+  expect(await readBrowserView<SessionSelection>(selection)).toEqual({ gateway_id: remote, workspace_id: UUID, session_id: "ses" });
   expect(await readBrowserView(oldView)).toBeUndefined();
-  expect(await readBrowserView(browserViewKey(registry, "session", ownerKey, "ses", "main"))).toEqual({ ...view, gateway_id: remote, workspace_id: UUID });
+  expect(await readBrowserView<typeof view & SessionSelection>(browserViewKey(registry, "session", ownerKey, "ses", "main"))).toEqual({ ...view, gateway_id: remote, workspace_id: UUID });
   expect(await readBrowserView(oldDraft)).toBeUndefined();
-  expect(await readBrowserView(`draft:${registry}::${encodeURIComponent(ownerKey)}::ses::thread:thread`)).toBe("草稿正文 gw_remote 不替换");
-  expect(await readBrowserView(historyKey)).toEqual(history);
-  expect(await readBrowserView(other)).toEqual({ workspace_id: "gw_unknown", session_id: "other" });
+  expect(await readBrowserView<string>(`draft:${registry}::${encodeURIComponent(ownerKey)}::ses::thread:thread`)).toBe("草稿正文 gw_remote 不替换");
+  expect(await readBrowserView<typeof history>(historyKey)).toEqual(history);
+  expect(await readBrowserView<Pick<SessionSelection, "workspace_id" | "session_id">>(other)).toEqual({ workspace_id: "gw_unknown", session_id: "other" });
   const settings = await readBrowserView<{ session_sidebar: { collapsed_workspace_ids: string[]; expanded_root_tree_ids: string[] }; workspace_file_tree: { expanded_paths_by_workspace: Record<string, string[]> } }>(settingsKey);
   expect(settings?.session_sidebar.collapsed_workspace_ids).toEqual([ownerKey]);
   expect(settings?.session_sidebar.expanded_root_tree_ids).toEqual([`workspace:${ownerKey}`, "folder:unchanged"]);
@@ -183,9 +184,9 @@ test("未知 selection 与目标冲突逐项保留，可确认的其他记录仍
   await updateBrowserView(target, () => ({ gateway_id: remote, workspace_id: UUID, session_id: "ses", scroll_offset: 2 }));
   const result = await recoverWorkspaceIdentity(material);
   expect(result.batches[0]?.issues.map(issue => issue.key)).toEqual([selection, source]);
-  expect(await readBrowserView(source)).toEqual({ workspace_id: alias, session_id: "ses", scroll_offset: 1 });
+  expect(await readBrowserView<{ workspace_id: string; session_id: string; scroll_offset: number }>(source)).toEqual({ workspace_id: alias, session_id: "ses", scroll_offset: 1 });
   expect((await readBrowserView<{ scroll_offset: number }>(target))?.scroll_offset).toBe(2);
-  expect(await readBrowserView(selection)).toEqual({ workspace_id: "gw_missing", session_id: "ses" });
+  expect(await readBrowserView<Pick<SessionSelection, "workspace_id" | "session_id">>(selection)).toEqual({ workspace_id: "gw_missing", session_id: "ses" });
 });
 
 test("文件 v1 普通打开拒绝，显式迁移保留 Blob、命令、回执和序号高水位", async () => {
@@ -196,8 +197,8 @@ test("文件 v1 普通打开拒绝，显式迁移保留 Blob、命令、回执�
   const store = await openWorkspaceFileIntentStore(), scope = { gatewayId: remote, workspaceId: UUID, workspaceRoot: root, actor: "local" as const };
   const [restored] = await store.load(scope);
   expect(restored?.scope).toEqual(scope);
-  expect(restored?.intent).toEqual(original.intent);
-  expect(restored?.receipt).toEqual(original.receipt);
+  expect(original.intent).toEqual(restored?.intent);
+  expect(original.receipt).toEqual(restored?.receipt);
   if (restored?.command.kind !== "upload") throw new Error("上传命令丢失");
   expect(await restored.command.entries[0]!.file.text()).toBe("原始上传 gw_remote");
   const next = await store.insert({ scope, directoryPath: root, directoryKey: { workspace_id: UUID, path: root, root, scope: "workspace" },

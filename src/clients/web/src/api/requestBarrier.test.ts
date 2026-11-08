@@ -337,7 +337,7 @@ describe("共享 HTTP 回执和身份失效", () => {
       options.push(init!);
       return Response.json({ result: 1 }, { headers: { "X-Request-ID": "req-receipt" } });
     }, { preconnect: originalFetch.preconnect });
-    expect(await requestJson(port, "/api/gateway/health", { onResponse: id => ids.push(id) })).toEqual({ result: 1 });
+    expect(await requestJson<{ result: number }>(port, "/api/gateway/health", { onResponse: id => ids.push(id) })).toEqual({ result: 1 });
     expect(ids).toEqual(["req-receipt"]);
     expect(options[0]).not.toHaveProperty("onResponse");
   });

@@ -29,6 +29,7 @@ const remoteWorkspace: GatewayWorkspace = {
 
 function forward(): GatewayPortForward {
   return {
+    gateway_id: remoteWorkspace.gateway_id,
     forward_id: "pf_vite",
     workspace_id: remoteWorkspace.workspace_id,
     connection_id: "remote_dev",

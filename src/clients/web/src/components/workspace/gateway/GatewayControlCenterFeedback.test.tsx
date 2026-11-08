@@ -16,7 +16,7 @@ afterEach(restoreGatewayTestEnvironment);
 function installHealthyGateway(): void {
   const health: GatewayHealth = {
     status: "ok",
-    active_workspace: null,
+    active_workspace: undefined,
     process_id: 10,
     development_restart_available: false,
     gateway_id: "gateway_local",

@@ -5,7 +5,7 @@ import type { SessionViewState } from "../../state/sessionViewState";
 import type { AppState } from "../../types/frontend";
 import { mountViewStateController } from "../../tests/fixtures/session/sessionViewState";
 
-const value: SessionViewState = { workspace_id: "workspace", session_id: "session", turn_anchor: "turn-1", scroll_offset: 45,
+const value: SessionViewState = { gateway_id: "gateway-test", workspace_id: "workspace", session_id: "session", turn_anchor: "turn-1", scroll_offset: 45,
   follow_latest: false, projection_version: 1, tool_details_expanded: true, updated_at: "2026-10-30T00:00:00Z" };
 const mounted: Array<{ unmount: () => void }> = [];
 const restores: Array<() => void> = [];

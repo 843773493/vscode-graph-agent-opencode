@@ -138,9 +138,9 @@ describe("指定 Turn 的真实 history reader", () => {
     const located: TurnMessageLocationDTO = { turn_id: "turn-found", role: "user", content: "😀定位词",
       reference: { item_id: "item-found", content_hash: "opaque", start_codepoint: 1, end_codepoint: 4 } };
     const harness = aroundHarness(9148, () => aroundResponse(aroundPage("turn-found", { located_message: located })));
-    let result;
-    await act(async () => { result = await harness.load("turn-found", undefined, located.reference); });
-    expect(result).toEqual(located);
+    let result!: ReturnType<LoadAroundTurn>;
+    await act(async () => { result = harness.load("turn-found", undefined, located.reference); await result; });
+    expect(await result).toEqual(located);
     expect(harness.requests[0].body.anchor_message).toEqual(located.reference);
     expect(harness.timeline().orderedTurnIds).toEqual(["turn-found"]);
     expect(JSON.stringify(harness.state())).not.toContain("item-found");
@@ -196,7 +196,7 @@ describe("指定 Turn 的真实 history reader", () => {
       return index === 0 ? first.promise : second.promise;
     });
     let firstOutcome!: Promise<unknown>;
-    let secondOutcome!: Promise<void>;
+    let secondOutcome!: ReturnType<LoadAroundTurn>;
     await act(async () => {
       firstOutcome = harness.load("turn-first").then(() => null, (error: unknown) => error);
       await reached[0].promise;
