@@ -183,11 +183,13 @@ try {
     return { firstA, firstB, afterA, afterB, emptyResult, upgradedOldA, uninstalledOldA, stillB, style, newAdmission, closedA,
       upgraded: upgrade.installed.version, uninstalled: uninstall.uninstalled.version, errors, secretCalls: calls.filter(call => call.actor === 'MainThreadSecretState'),
       terminalCalls: calls.filter(call => call.actor === 'MainThreadTerminalService'),
+      debugCalls: calls.filter(call => call.actor === 'MainThreadDebugService'), taskCalls: calls.filter(call => call.actor === 'MainThreadTask'),
       bindings, typedRoots: folderUris.map(uri => uri.toString(true)), iframeCount: document.querySelectorAll('iframe.web-worker-ext-host-iframe').length };
   }, spec);
   await writeFile(join(spec.artifacts, 'worker-result.json'), JSON.stringify(result, null, 2));
   assert.equal(result.firstA.version, '1.0.0'); assert.equal(result.firstB.version, '2.0.0');
   assert.deepEqual(result.terminalCalls, []);
+  assert.deepEqual(result.debugCalls, []); assert.deepEqual(result.taskCalls, []);
   assert.equal(result.firstA.chunk, '1.0.0'); assert.equal(result.firstB.chunk, '2.0.0');
   assert.deepEqual(result.firstA.folders, [result.typedRoots[0]]); assert.deepEqual(result.firstB.folders, [result.typedRoots[1]]);
   assert.equal(result.firstA.setting, 'A-remote'); assert.equal(result.firstB.setting, 'B-remote');
@@ -204,6 +206,9 @@ try {
     assert.equal(value.errors.filter(error => error.includes('setKeysForSync')).length, 1);
     assert.equal(value.terminalErrors.length, 5);
     assert.equal(value.terminalErrors.every(message => message?.includes('目标终端服务')), true);
+    assert.equal(value.debugErrors.length, 20); assert.equal(value.debugErrors.every(message => message?.includes('目标调试服务')), true);
+    assert.equal(value.taskErrors.length, 10); assert.equal(value.taskErrors.every(message => message?.includes('目标任务执行服务')), true);
+    assert.match(value.deprecatedTaskError, /目标任务执行服务/);
     assert.equal(value.extensionUri.includes('token'), false);
   }
   assert.notEqual(result.firstA.globalStorageUri, result.firstB.globalStorageUri);

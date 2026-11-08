@@ -59,6 +59,13 @@ exports.activate = async context => {
       await context.workspaceState.update('value', value);
     }
     const errors = [];
+    const unsupported = async namespace => Promise.all(Object.keys(namespace).map(async key => {
+      try { const value = namespace[key]; await (typeof value === 'function' ? value() : value); return null; }
+      catch (error) { return error.message; }
+    }));
+    const debugErrors = await unsupported(vscode.debug), taskErrors = await unsupported(vscode.tasks);
+    let deprecatedTaskError;
+    try { vscode.workspace.registerTaskProvider('probe', {}); } catch (error) { deprecatedTaskError = error.message; }
     const terminalErrors = [() => vscode.window.createTerminal({name:'wrong-window'}), () => vscode.window.terminals,
       () => vscode.window.onDidOpenTerminal(() => {}), () => vscode.env.shell, () => context.environmentVariableCollection]
       .map(operation => { try { operation(); return null; } catch (error) { return error.message; } });
@@ -69,7 +76,7 @@ exports.activate = async context => {
     return { version: context.extension.packageJSON.version, extensionUri: context.extensionUri.toString(true),
       chunk: chunk.marker, style: chunk.style, marker: await (await fetch(vscode.Uri.joinPath(context.extensionUri, 'dist', 'marker.txt').toString(true))).text(),
       folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
-      setting: vscode.workspace.getConfiguration('probe').get('remote'), before, errors, terminalErrors,
+      setting: vscode.workspace.getConfiguration('probe').get('remote'), before, errors, terminalErrors, debugErrors, taskErrors, deprecatedTaskError,
       globalStorageUri: context.globalStorageUri.toString(true), storageUri: context.storageUri?.toString(true),
       logUri: context.logUri.toString(true) };
   }));

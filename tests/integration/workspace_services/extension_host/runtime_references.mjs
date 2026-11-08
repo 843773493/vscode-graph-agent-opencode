@@ -89,8 +89,11 @@ async function connect(label) {
   register('MainThreadTerminalService', Object.fromEntries(['$registerProcessSupport', '$createTerminal', '$startSendingDataEvents', '$setEnvironmentVariableCollection']
     .map(name => [name, (...args) => terminalCalls.push({ name, args })])));
   notify('MainThreadSearch', ['$registerTextSearchProvider']);
-  notify('MainThreadTask', ['$registerSupportedExecutions', '$registerTaskSystem']);
-  notify('MainThreadDebugService', ['$registerDebugTypes']);
+  const taskCalls = [], debugCalls = [];
+  for (const [actor, names, calls] of [
+    ['MainThreadTask', ['$registerSupportedExecutions', '$registerTaskSystem', '$registerTaskProvider', '$fetchTasks', '$executeTask'], taskCalls],
+    ['MainThreadDebugService', ['$registerDebugTypes', '$startDebugging', '$stopDebugging', '$registerDebugConfigurationProvider', '$registerDebugAdapterDescriptorFactory'], debugCalls],
+  ]) register(actor, Object.fromEntries(names.map(name => [name, (...args) => calls.push({ name, args })])));
   notify('MainThreadCommands', ['$registerCommand', '$unregisterCommand']);
   notify('MainThreadFileSystem', ['$ensureActivation']);
   register('MainThreadWindow', { $getInitialState: () => ({ isFocused: true, isActive: true }) });
@@ -113,7 +116,7 @@ async function connect(label) {
   await service.$startExtensionHost(delta(1));
   assert.equal(await service.$activate(extension.identifier,
     { startup: false, extensionId: extension.identifier, activationEvent: '*' }), true);
-  return { extension, target: binding.target, service, terminalCalls,
+  return { extension, target: binding.target, service, terminalCalls, taskCalls, debugCalls,
     inspect: () => rpc.getProxy(m.ExtHostContext.ExtHostCommands).$executeContributedCommand('runtime.inspect'),
     async stop() { protocol.send(m.VSBuffer.wrap(Uint8Array.of(3))); assert.deepEqual(await exit, [false]); },
   };
@@ -131,8 +134,16 @@ try {
     assert.equal(state.terminalErrors.length, 8);
     assert.equal(state.terminalErrors.every(message => message?.includes('目标终端服务')), true);
     assert.deepEqual(host.terminalCalls, []);
+    assert.equal(state.debugErrors.length, 20);
+    assert.equal(state.debugErrors.every(message => message?.includes('目标调试服务')), true);
+    assert.equal(state.taskErrors.length, 10);
+    assert.equal(state.taskErrors.every(message => message?.includes('目标任务执行服务')), true);
+    assert.match(state.deprecatedTaskError, /目标任务执行服务/);
+    assert.deepEqual(host.debugCalls, []); assert.deepEqual(host.taskCalls, []);
   }
-  receipts.push({ terminalErrors: firstState.terminalErrors, terminalCalls: first.terminalCalls });
+  receipts.push({ terminalErrors: firstState.terminalErrors, terminalCalls: first.terminalCalls,
+    debugErrors: firstState.debugErrors, debugCalls: first.debugCalls, taskErrors: firstState.taskErrors,
+    deprecatedTaskError: firstState.deprecatedTaskError, taskCalls: first.taskCalls });
   const updated = await control('update');
   const third = await connect('third');
   assert.equal((await third.inspect()).version, '2.0.0');

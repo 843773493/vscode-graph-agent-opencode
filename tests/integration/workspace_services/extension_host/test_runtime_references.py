@@ -41,11 +41,20 @@ def _vsix(directory: Path, *, name: str, version: str) -> Path:
 const vscode = require('vscode');
 const fs = require('node:fs');
 exports.activate = context => {
-  context.subscriptions.push(vscode.commands.registerCommand('runtime.inspect', () => ({
+  const unsupported = async namespace => Promise.all(Object.keys(namespace).map(async key => {
+    try { const value = namespace[key]; await (typeof value === 'function' ? value() : value); return null; }
+    catch (error) { return error.message; }
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand('runtime.inspect', async () => ({
     version: fs.readFileSync(require('node:path').join(__dirname, 'lazy.txt'), 'utf8'),
     ids: vscode.extensions.all.map(extension => extension.id),
     hasManagementToken: process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN !== undefined,
     hasReferenceCapability: process.env.BOXTEAM_EXTENSION_HOST_REFERENCE !== undefined,
+    debugErrors: await unsupported(vscode.debug),
+    taskErrors: await unsupported(vscode.tasks),
+    deprecatedTaskError: await (async () => {
+      try { vscode.workspace.registerTaskProvider('probe', {}); return null; } catch (error) { return error.message; }
+    })(),
     terminalErrors: [() => vscode.window.createTerminal('wrong-window'), () => vscode.window.createTerminal({name:'wrong-window'}),
       () => vscode.window.createTerminal({name:'pty', pty:{}}), () => vscode.window.terminals, () => vscode.window.activeTerminal,
       () => vscode.window.onDidWriteTerminalData(() => {}), () => vscode.env.shell, () => context.environmentVariableCollection]

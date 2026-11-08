@@ -27,6 +27,8 @@ import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './
 import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEditorTransform.mjs';
 import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
 import { extensionTerminalSourcePaths, transformExtensionTerminal } from './extensions/extensionTerminalTransform.mjs';
+import { extensionDebugSourcePaths, transformExtensionDebug } from './extensions/extensionDebugTransform.mjs';
+import { extensionTasksSourcePaths, transformExtensionTasks } from './extensions/extensionTasksTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -83,6 +85,9 @@ export const transformedSourcePaths = [...new Set([
   ...extensionWorkspaceSymbolsSourcePaths,
   ...extensionStorageSourcePaths,
   ...extensionTerminalSourcePaths,
+  // 带原生进程依赖的入口由下面的 Node 清单及其真实 tsconfig 检查。
+  ...extensionDebugSourcePaths.filter(path => !path.includes('/node/')),
+  ...extensionTasksSourcePaths.filter(path => !path.includes('/node/')),
   ...extensionConfigurationSourcePaths, ...configurationContributionSourcePaths, ...configurationRegistrySourcePaths,
   ...extensionFileEventsSourcePaths,
   ...settingsEditorScopeSourcePaths,
@@ -91,7 +96,7 @@ export const transformedSourcePaths = [...new Set([
 ])];
 
 export const nodeTransformedSourcePaths = [...new Set([
-  ...transformedSourcePaths, ...nativeManagementSourcePaths,
+  ...transformedSourcePaths, ...extensionDebugSourcePaths, ...extensionTasksSourcePaths, ...nativeManagementSourcePaths,
   'src/vs/platform/log/node/spdlogLog.ts',
 ])];
 
@@ -129,6 +134,8 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionDocuments(root, path, contents, replaceOnce);
     contents = transformExtensionStorage(root, path, contents, replaceOnce, runtime);
     contents = transformExtensionTerminal(root, path, contents, replaceOnce);
+    contents = transformExtensionDebug(root, path, contents, replaceOnce);
+    contents = transformExtensionTasks(root, path, contents, replaceOnce);
     contents = transformMcpProviders(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
       // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
