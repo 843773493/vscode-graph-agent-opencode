@@ -5,6 +5,7 @@ import json
 
 from app.abstractions.resource_search import GatewayResourceSearchProtocol
 from app.abstractions.session_context import (
+    SessionContextCursorError,
     WorkspaceSessionContextAccessError,
     WorkspaceSessionContextTransportProtocol,
 )
@@ -100,7 +101,7 @@ class GatewayContextQueryService:
             ),
         )
         if char_offset:
-            raise ValueError("Gateway session inventory 不支持 item 内字符偏移")
+            raise SessionContextCursorError("position_invalid", "Gateway session inventory 不支持 item 内字符偏移")
         require_cursor_offset_in_range(
             offset,
             len(inventory.items),

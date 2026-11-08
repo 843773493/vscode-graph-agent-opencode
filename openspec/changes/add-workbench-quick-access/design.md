@@ -228,6 +228,8 @@ continuations 明确选择原冻结范围中的分支及原 owner cursor；省�
 
 已分派 Provider 的原生 I/O／SQLite 读取失败由工作区搜索 owner 标明 `search_provider/provider_read_failed`、provider_id、类别及操作，并保留原 cause 与日志；明确文件系统错误的目标机器位置和原因可以用于诊断，不作为另一个资源定位关系。HTTP 返回500，Gateway沿原请求ID转为该分支failed，保留原cursor、零交付计数和显式重试能力，其它分支继续。TimeoutError先于OSError处理，仍为deadline；取消、原领域拒绝及内部编程错误不改标。错误HTTP响应与成功响应一样须核本次请求ID，不能把其它请求的错误附到本分支。
 
+上下文续点复用原 codec 和分页器，错误为 `session_context_cursor/invalid_context_cursor`，按格式、归属、查询、非法位置及实际越界区分原因；布尔值不作为整数，末尾非零字符偏移不能伪报完成。直接读取／搜索及统一搜索将这类输入拒绝返回400，版本冲突仍为原409。联邦搜索保留原诊断、输入cursor、零交付和不可重试状态；精确relay仍使用原409外壳与owner detail，客户端仅在原请求身份及读取／搜索响应匹配时复原，工具返回结构化原原因。不新增cursor实现、不自动重查。
+
 #### 排序、身份、URI 和缓存归属
 
 | 对象 | 权威与处理 |

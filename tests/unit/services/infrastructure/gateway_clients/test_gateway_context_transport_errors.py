@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.abstractions.session_context import (
+    SessionContextCursorError,
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
@@ -219,3 +220,40 @@ async def test_context_pattern_error_rehydrates_only_original_owner_and_request(
         assert f"request_id={requests[0].headers['X-Request-ID']}" in caught.value.__notes__[0]
     else:
         assert "query 不是有效正则表达式" not in str(caught.value) and "/private/context" not in str(caught.value)
+
+
+@pytest.mark.parametrize("context_operation,expects_cursor", [
+    ("read", True), ("search", True), ("fork", False), ("inventory", False),
+], indirect=["context_operation"])
+@pytest.mark.parametrize("mutation", ["valid", "body_id", "header_id", "owner", "code", "reason", "message", "status"])
+async def test_context_cursor_error_rehydrates_only_for_original_read_or_search(
+    context_operation: Callable[[], Awaitable[object]], monkeypatch: pytest.MonkeyPatch, mutation: str, expects_cursor: bool,
+) -> None:
+    original = SessionContextCursorError("position_out_of_bounds", "cursor offset 越界: offset=9 total=2")
+    requests: list[httpx.Request] = []
+
+    async def respond(_client, method, url, **kwargs):
+        request_id = kwargs["headers"].get("X-Request-ID")
+        detail: dict[str, object] = {**original.detail()}
+        if mutation in {"owner", "code"}:
+            detail[mutation] = "other"
+        elif mutation in {"reason", "message"}:
+            detail[mutation] = {"invalid": "value"}
+        request = httpx.Request(method, url, headers=kwargs["headers"])
+        requests.append(request)
+        return httpx.Response(500 if mutation == "status" else 409, request=request,
+            json={"request_id": "other" if mutation == "body_id" else request_id,
+                  "detail": {"code": "federation-target-owner-rejected", "detail": detail}},
+            headers={"X-Request-ID": "other" if mutation == "header_id" else request_id} if request_id is not None else {})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", respond)
+    expected = (SessionContextCursorError if mutation == "valid" and expects_cursor
+                else RuntimeError if mutation == "status" else WorkspaceSessionContextAccessError)
+    with pytest.raises(expected) as caught:
+        await context_operation()
+    assert type(caught.value) is expected
+    if isinstance(caught.value, SessionContextCursorError):
+        assert caught.value.detail() == original.detail()
+        assert f"request_id={requests[0].headers['X-Request-ID']}" in caught.value.__notes__[0]
+    else:
+        assert str(original) not in str(caught.value)

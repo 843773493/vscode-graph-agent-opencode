@@ -1,13 +1,18 @@
 """产品执行产生有效上下文，经无浏览器联邦查询、原读取及重启续页验收。"""
 
 import asyncio
+import base64
+import json
 from pathlib import Path
 
 import httpx
 import pytest
 from pydantic import TypeAdapter
 
-from app.abstractions.session_context import SessionContextSearchPatternError
+from app.abstractions.session_context import (
+    SessionContextCursorError,
+    SessionContextSearchPatternError,
+)
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
@@ -103,14 +108,15 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         "message": "query 不是有效正则表达式: unterminated character set at position 0",
     }
 
-    def require_pattern_failure(events: list[FederatedSearchEventDTO], request_id: str) -> None:
+    def require_input_failure(events: list[FederatedSearchEventDTO], request_id: str,
+                              detail: dict[str, str], cursor: str | None = None) -> None:
         assert {event.request_id for event in events} == {request_id}
         assert not any(event.type == "page" for event in events)
         terminal, = [event.branch for event in events if event.type == "branch"]
-        assert terminal is not None and terminal.state == "failed" and terminal.code == expected_error["code"]
-        assert terminal.error_owner == expected_error["owner"] and terminal.reason == expected_error["reason"]
-        assert terminal.message == expected_error["message"] and terminal.http_status == 400 and not terminal.retryable
-        assert terminal.cursor is None and terminal.returned_results == 0
+        assert terminal is not None and terminal.state == "failed" and terminal.code == detail["code"]
+        assert terminal.error_owner == detail["owner"] and terminal.reason == detail["reason"]
+        assert terminal.message == detail["message"] and terminal.http_status == 400 and not terminal.retryable
+        assert terminal.cursor == cursor and terminal.returned_results == 0
         assert events[-1].summary is not None and events[-1].summary.state == "incomplete"
         assert events[-1].summary.branches == [terminal] and events[-1].summary.returned_results == 0
 
@@ -146,9 +152,9 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
                     assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == request_id
                     assert rejected.json()["detail"] == expected_error
             failed = await search({"scope": {"mode": "origin", "origin": owner}, "queries": [invalid_query]}, "req_invalid_regex_sse")
-            require_pattern_failure(failed, "req_invalid_regex_sse")
+            require_input_failure(failed, "req_invalid_regex_sse", expected_error)
             failed_json = await gateway_context_search({"scope": {"mode": "all"}, "queries": [invalid_query]}, "req_invalid_regex_json")
-            require_pattern_failure(failed_json.events, "req_invalid_regex_json")
+            require_input_failure(failed_json.events, "req_invalid_regex_json", expected_error)
 
             exact_request = {**empty_request, "uri": workspace_session_inventory_uri(owner["workspace_id"], gateway_authority=gateway_id)}
             exact_target = {"gateway_id": gateway_id, **{key: exact_request[key] for key in ("resource_identity", "uri", "scope")}}
@@ -241,6 +247,97 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         assert first[-1].summary is not None
         branch, = first[-1].summary.branches
         assert branch.state == "limited" and branch.cursor is not None
+        # 关键历史和原续点来自上面的真实执行；只改调用输入，不准备替代业务状态。
+        def corrupt_cursor(original_cursor: str, mutation: str | dict[str, object]) -> str:
+            if isinstance(mutation, str):
+                return mutation
+            decoded = json.loads(base64.urlsafe_b64decode(original_cursor + "=" * (-len(original_cursor) % 4)))
+            return base64.urlsafe_b64encode(json.dumps({**decoded, **mutation}).encode()).decode().rstrip("=")
+
+        invalid_cursors: list[tuple[str, str | dict[str, object]]] = [
+            ("malformed", "!!"), ("malformed", base64.urlsafe_b64encode(b"[]").decode()),
+            ("owner_mismatch", {"resource_identity": "other"}),
+            ("query_mismatch", {"operation": "other"}),
+            ("position_invalid", {"offset": True}),
+            ("position_invalid", {"char_offset": 1}),
+            ("position_out_of_bounds", {"offset": 999999}),
+        ]
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
+            await acquire_gateway_guest(ui)
+            ui.headers.update({"X-BoxTeam-Workspace-Id": owner["workspace_id"], "X-BoxTeam-Target-Gateway-Id": gateway_id})
+            direct_entries = (("context/search", {
+                "resource_identity": workspace_session_inventory_identity(owner["workspace_id"]),
+                "uri": workspace_session_inventory_uri(owner["workspace_id"], gateway_authority=gateway_id),
+                "scope": "workspace", "query": query["query"], "case_sensitive": True, "max_results": 1,
+            }), ("search", {"workspace_id": owner["workspace_id"], **query}))
+            entry_cursors = {}
+            for entry, payload in direct_entries:
+                for client_name, client in (("backend", original_client), ("gateway", ui)):
+                    response = await client.post(f"/api/v1/{entry}", json=payload, headers={"X-BoxTeam-Gateway-Id": gateway_id})
+                    assert response.status_code == 200, response.text
+                    data = response.json()["data"]
+                    entry_cursors[(entry, client_name)] = (data["context"] if entry == "search" else data)["next_cursor"]
+                    assert entry_cursors[(entry, client_name)] is not None
+            for index, (reason, mutation) in enumerate(invalid_cursors):
+                cursor = corrupt_cursor(branch.cursor, mutation)
+                expected_detail = None
+                for entry, payload in direct_entries:
+                    for client_name, client in (("backend", original_client), ("gateway", ui)):
+                        request_id = f"req_cursor_{index}_{client_name}_{entry.replace('/', '_')}"
+                        entry_cursor = corrupt_cursor(entry_cursors[(entry, client_name)], mutation)
+                        rejected_http = await client.post(f"/api/v1/{entry}", json={**payload, "cursor": entry_cursor},
+                            headers={"X-BoxTeam-Gateway-Id": gateway_id, "X-Request-ID": request_id})
+                        actual[request_id] = {"status": rejected_http.status_code, "headers": dict(rejected_http.headers), "body": rejected_http.json()}
+                        assert rejected_http.status_code == 400, rejected_http.text
+                        assert rejected_http.headers["X-Request-ID"] == rejected_http.json()["request_id"] == request_id
+                        detail = rejected_http.json()["detail"]
+                        assert detail["owner"] == SessionContextCursorError.owner and detail["code"] == SessionContextCursorError.code
+                        assert detail["reason"] == reason and detail["message"]
+                        if expected_detail is None:
+                            expected_detail = detail
+                        expected_message = expected_detail["message"]
+                        if entry == "context/search" and client_name == "gateway":
+                            # 原精确代理使用本机简称；诊断仍引用该入口自己的原资源。
+                            expected_message = expected_message.replace(
+                                workspace_session_inventory_uri(owner["workspace_id"], gateway_authority=gateway_id),
+                                workspace_session_inventory_uri(owner["workspace_id"]),
+                            )
+                        assert detail == {**expected_detail, "message": expected_message}
+                assert expected_detail is not None
+                continuation = {"scope": {"mode": "resume", "scope": first[0].scope.scope.model_dump(mode="json")},
+                                "queries": [query], "continuations": [{"branch": branch.branch.model_dump(mode="json"), "cursor": cursor}]}
+                request_id = f"req_cursor_{index}_sse"
+                require_input_failure(await search(continuation, request_id), request_id, expected_detail, cursor)
+                request_id = f"req_cursor_{index}_json"
+                json_result = await gateway_context_search(continuation, request_id)
+                require_input_failure(json_result.events, request_id, expected_detail, cursor)
+
+        gateway_context = set_current_gateway_id(gateway_id)
+        read_context = set_current_request_id("req_context_cursor_exact")
+        try:
+            exact_search = SessionContextSearchRequest.model_validate({
+                **exact_request, "query": query["query"], "match_mode": "literal", "case_sensitive": True, "max_results": 1,
+            })
+            exact_page = await transport.search_resource_context(exact_search)
+            assert exact_page.next_cursor is not None
+            exact_read = SessionContextReadRequest(resource_identity=hit.resource_identity, uri=hit.uri,
+                scope=hit.scope, view="messages", limit=1)
+            read_page = await transport.read_resource_context(exact_read)
+            for operation, cursor in (("search", exact_page.next_cursor), ("read", read_page.next_cursor)):
+                assert cursor is not None
+                decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+                rejected_cursor = base64.urlsafe_b64encode(json.dumps({**decoded, "offset": True}).encode()).decode().rstrip("=")
+                with pytest.raises(SessionContextCursorError) as caught_cursor:
+                    if operation == "read":
+                        await transport.read_resource_context(exact_read.model_copy(update={"cursor": rejected_cursor}))
+                    else:
+                        await transport.search_resource_context(exact_search.model_copy(update={"cursor": rejected_cursor}))
+                assert caught_cursor.value.reason == "position_invalid"
+                assert "request_id=req_context_cursor_exact" in caught_cursor.value.__notes__[0]
+                actual[f"exact_cursor_{operation}"] = {"detail": caught_cursor.value.detail(), "notes": caught_cursor.value.__notes__}
+        finally:
+            reset_current_request_id(read_context)
+            reset_current_gateway_id(gateway_context)
         await case.restart(hard=False)
         resumed = await search({"scope": {"mode": "resume", "scope": first[0].scope.scope.model_dump(mode="json")}, "queries": [query],
             "continuations": [{"branch": branch.branch.model_dump(mode="json"), "cursor": branch.cursor}]}, "req_context_resume")
@@ -269,7 +366,8 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
             "continuations": [{"branch": branch.branch.model_dump(mode="json"), "cursor": branch.cursor}]}, "req_context_changed_source")
         assert stale[-1].summary is not None
         rejected, = stale[-1].summary.branches
-        assert rejected.state == "failed" and rejected.code == "owner_rejected" and rejected.cursor == branch.cursor
+        assert rejected.state == "failed" and rejected.code == "invalid_context_cursor" and rejected.cursor == branch.cursor
+        assert rejected.error_owner == "session_context_cursor" and rejected.reason == "query_mismatch"
         assert len(case.requests()) == 1 and not transport._http_client.cookies
 
         # 经真实模型工具入口消费相同 Provider；不替产品准备执行或工具结果。

@@ -13,7 +13,10 @@ from dataclasses import dataclass
 import httpx
 from pydantic import ValidationError
 
-from app.abstractions.session_context import SessionContextSearchPatternError
+from app.abstractions.session_context import (
+    SessionContextCursorError,
+    SessionContextSearchPatternError,
+)
 from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_request_id,
@@ -268,6 +271,10 @@ class WorkspaceSessionMainPort:
                             and detail.get("code") == SessionContextSearchPatternError.code
                             and detail.get("reason") == SessionContextSearchPatternError.reason):
                         raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝上下文查询", detail=detail)
+                    if (path in {"/api/v1/context/read", "/api/v1/context/search"} and response.status_code == 400
+                            and isinstance(detail, dict) and detail.get("owner") == SessionContextCursorError.owner
+                            and detail.get("code") == SessionContextCursorError.code):
+                        raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝上下文续点", detail=detail)
                     code = detail.get("code") if isinstance(detail, dict) else None
                     if isinstance(code, str) and (
                         code in RESOURCE_URI_RESOLVE_REASON_CODES or code == "snapshot_changed"
@@ -504,6 +511,8 @@ class WorkspaceSessionMainPort:
                         result = await self.search_resource_context(query.search)
                     else:
                         raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询缺少 read/search")
+            except SessionContextCursorError as error:
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标 Gateway 拒绝上下文续点", detail={**error.detail()}) from error
             except SearchScopeError as error:
                 raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标 Gateway 拒绝上下文搜索范围",
                                       detail={"owner": "search_scope", "code": error.code, "message": str(error)}) from error

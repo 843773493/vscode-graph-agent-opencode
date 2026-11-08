@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage
 
 from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
+    SessionContextCursorError,
     SessionContextHistoryProjection,
     SessionContextRevisionChangedError,
     SessionContextSearchPatternError,
@@ -968,8 +969,9 @@ async def test_read_cursor_offset_beyond_items_is_rejected(
         ),
         offset=len(first.items) + 1,
     )
-    with pytest.raises(ValueError, match="offset 越界"):
+    with pytest.raises(SessionContextCursorError, match="offset 越界") as caught:
         await service.read_context(request.model_copy(update={"cursor": beyond}))
+    assert caught.value.reason == "position_out_of_bounds"
 
     # 恰好等于 item 数是合法的「已读完」边界，仍返回空页且不报错。
     tail = await service.read_context(
@@ -1012,5 +1014,6 @@ async def test_search_cursor_offset_beyond_matches_is_rejected(
     assert first.next_cursor is not None
 
     beyond = _resign_cursor_offset(first.next_cursor, first.total_matches + 1)
-    with pytest.raises(ValueError, match="offset 越界"):
+    with pytest.raises(SessionContextCursorError, match="offset 越界") as caught:
         await service.search_context(request.model_copy(update={"cursor": beyond}))
+    assert caught.value.reason == "position_out_of_bounds"

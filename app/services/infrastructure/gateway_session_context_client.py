@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel
 
 from app.abstractions.session_context import (
+    SessionContextCursorError,
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
@@ -181,7 +182,7 @@ class GatewaySessionContextClient:
     ) -> ResponseDTO:
         response, request_id = await self._send_request(method, path, json_body=json_body)
         self._raise_http_error(response, method=method, path=path, request_id=request_id,
-                               context_search=response_type is SessionContextSearchResultDTO)
+                               response_type=response_type)
         try:
             return self._decode_response(response, path=path, request_id=request_id, response_type=response_type)
         except (KeyError, TypeError, ValueError) as error:
@@ -255,7 +256,7 @@ class GatewaySessionContextClient:
 
     @staticmethod
     def _raise_http_error(
-        response: httpx.Response, *, method: str, path: str, request_id: str | None, context_search: bool = False,
+        response: httpx.Response, *, method: str, path: str, request_id: str | None, response_type: type[BaseModel] | None = None,
     ) -> None:
         if not response.is_success:
             try:
@@ -278,7 +279,7 @@ class GatewaySessionContextClient:
             federation = payload.get("detail") if isinstance(payload, dict) else None
             detail = federation.get("detail") if isinstance(federation, dict) else None
             original_message = detail.get("message") if isinstance(detail, dict) else None
-            if (context_search and response.status_code == 409 and identity_valid
+            if (response_type is SessionContextSearchResultDTO and response.status_code == 409 and identity_valid
                     and isinstance(federation, dict) and federation.get("code") == FEDERATION_TARGET_OWNER_REJECTED
                     and isinstance(detail, dict) and detail.get("owner") == SessionContextSearchPatternError.owner
                     and detail.get("code") == SessionContextSearchPatternError.code
@@ -286,6 +287,15 @@ class GatewaySessionContextClient:
                 error = SessionContextSearchPatternError(original_message)
                 error.add_note(message)
                 raise error
+            if (response_type in {SessionContextReadResultDTO, SessionContextSearchResultDTO}
+                    and response.status_code == 409 and identity_valid
+                    and isinstance(federation, dict) and federation.get("code") == FEDERATION_TARGET_OWNER_REJECTED
+                    and isinstance(detail, dict) and detail.get("owner") == SessionContextCursorError.owner
+                    and detail.get("code") == SessionContextCursorError.code
+                    and isinstance(detail.get("reason"), str) and isinstance(original_message, str)):
+                cursor_error = SessionContextCursorError(detail["reason"], original_message)
+                cursor_error.add_note(message)
+                raise cursor_error
             if response.status_code in MODEL_RECOVERABLE_HTTP_STATUSES:
                 raise WorkspaceSessionContextAccessError(message)
             raise RuntimeError(message)

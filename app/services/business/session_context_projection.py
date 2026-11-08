@@ -5,6 +5,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 
+from app.abstractions.session_context import SessionContextCursorError
 from app.prompting.validation import internal_prompt_metadata
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
@@ -192,6 +193,8 @@ def paginate_read_items(
     effective_record_count: int = 0,
 ) -> SessionContextReadResultDTO:
     require_cursor_offset_in_range(offset, len(items), uri=request.uri)
+    if offset == len(items) and char_offset:
+        raise SessionContextCursorError("position_out_of_bounds", "context cursor 已到末尾，不能继续读取 item 内字符")
     selected = items[offset:offset + request.limit]
     returned: list[SessionContextItemDTO] = []
     budget_truncated = False
@@ -291,8 +294,8 @@ def _largest_fitting_chunk(
 ) -> tuple[SessionContextItemDTO | None, int | None]:
     # 分片必须与完整DTO同形，保留nullable来源URI与空集合，消费者无需补字段。
     if char_offset >= len(serialized):
-        raise ValueError(
-            f"context cursor 字符偏移越界: offset={char_offset}, "
+        raise SessionContextCursorError(
+            "position_out_of_bounds", f"context cursor 字符偏移越界: offset={char_offset}, "
             f"total={len(serialized)}"
         )
     low = char_offset + 1

@@ -1,12 +1,17 @@
 """原上下文 owner 与统一 Provider 的来源、身份和分页一致。"""
 
+import base64
+import json
 import time
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
-from app.abstractions.session_context import SessionContextRevisionChangedError
+from app.abstractions.session_context import (
+    SessionContextCursorError,
+    SessionContextRevisionChangedError,
+)
 from app.api.context import router as context_router
 from app.api.deps import (
     get_session_context_query_service,
@@ -33,6 +38,7 @@ from app.services.business.session_context_resource import (
 from tests.unit.services.business.test_session_context_query_service import (
     BACKEND_WORKSPACE_ID,
     _FakeMessageSource,
+    _session_request,
 )
 from tests.unit.services.business.test_session_context_query_service import (
     session_context_service_factory as session_context_service_factory,  # noqa: PLC0414 - 复用原来源装具，不准备另一套历史。
@@ -153,3 +159,76 @@ async def test_old_and_unified_http_entries_keep_same_revision_conflict(context_
         detail = response.json()["detail"]
         assert detail["code"] == "snapshot_changed" and detail["expected_revision"] == "stale"
         assert detail["actual_revision"] and detail["actual_revision"] != "stale"
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("invalid_base64", "malformed"), ("array", "malformed"),
+    ("resource_identity", "owner_mismatch"), ("uri", "owner_mismatch"), ("scope", "owner_mismatch"),
+    ("operation", "query_mismatch"), ("record_index", "query_mismatch"), ("assembly_ref", "query_mismatch"),
+    ("negative", "position_invalid"), ("boolean", "position_invalid"), ("fraction", "position_invalid"),
+    ("char_boolean", "position_invalid"), ("past_end", "position_out_of_bounds"),
+    ("char_past_end", "position_out_of_bounds"), ("end_with_char", "position_out_of_bounds"),
+])
+@pytest.mark.parametrize("entry", ["read", "search", "unified"])
+async def test_cursor_rejection_keeps_original_owner_across_http_entries(context_http, entry, mutation, reason):
+    import httpx
+
+    owner = {"resource_identity": workspace_session_inventory_identity(BACKEND_WORKSPACE_ID),
+             "uri": workspace_session_inventory_uri(BACKEND_WORKSPACE_ID, gateway_authority=GATEWAY), "scope": "workspace"}
+    if entry == "read":
+        endpoint = "/api/v1/context/read"
+        request = _session_request(view="messages", limit=1).model_dump(mode="json")
+    elif entry == "search":
+        endpoint, request = "/api/v1/context/search", {**owner, "query": "问题", "max_results": 1}
+    else:
+        endpoint, request = "/api/v1/search", {"workspace_id": BACKEND_WORKSPACE_ID, "category": "context",
+                                              "operation": "content", "match_mode": "literal", "query": "问题", "limit": 1}
+    request_id = f"req_cursor_{entry}_{mutation}"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=context_http), base_url="http://test",
+        headers={"X-Request-ID": request_id, "X-BoxTeam-Gateway-Id": GATEWAY}) as client:
+        first = await client.post(endpoint, json=request)
+        assert first.status_code == 200, first.text
+        page = first.json()["data"]
+        if entry == "unified":
+            page = page["context"]
+        cursor = page["next_cursor"]
+        assert cursor is not None
+        payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if mutation == "invalid_base64":
+            cursor = "!!"
+        elif mutation == "array":
+            cursor = base64.urlsafe_b64encode(b"[]").decode().rstrip("=")
+        else:
+            if mutation in {"resource_identity", "uri", "scope", "operation", "record_index", "assembly_ref"}:
+                payload[mutation] = "other"
+            elif mutation == "negative":
+                payload["offset"] = -1
+            elif mutation == "boolean":
+                payload["offset"] = True
+            elif mutation == "fraction":
+                payload["offset"] = 1.5
+            elif mutation == "char_boolean":
+                payload["char_offset"] = True
+            elif mutation == "past_end":
+                payload["offset"] = 999999
+            elif mutation == "char_past_end":
+                payload["char_offset"] = 999999
+                if entry != "read":
+                    reason = "position_invalid"
+            else:
+                if entry == "read":
+                    full = await client.post(endpoint, json={**request, "limit": 200})
+                    assert full.status_code == 200 and not full.json()["data"]["has_more"], full.text
+                    total = len(full.json()["data"]["items"])
+                else:
+                    total = page["total_matches"]
+                payload.update(offset=total, char_offset=1)
+                if entry != "read":
+                    reason = "position_invalid"
+            cursor = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        rejected = await client.post(endpoint, json={**request, "cursor": cursor})
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == request_id
+    detail = rejected.json()["detail"]
+    assert detail["owner"] == SessionContextCursorError.owner and detail["code"] == SessionContextCursorError.code
+    assert detail["reason"] == reason and detail["message"]

@@ -41,6 +41,22 @@ Gateway 资源地址解析 SHALL 在保留原 `uri`、文件根及定位字段�
 - **WHEN** 没有会话的工作区收到非法正则查询
 - **THEN** 原 owner 在开始读取库存前拒绝；直接 HTTP、联邦 SSE 和 Gateway inventory JSON relay 均保留原诊断及请求身份，不交付结果页或提供无效输入重试
 
+### Requirement: 上下文游标拒绝保留原分页 owner 和明确原因
+
+上下文读取及搜索 SHALL 由原分页器统一拒绝非法续点，返回 `owner=session_context_cursor`、`code=invalid_context_cursor`、具体 `reason` 及详细原原因。原因 SHALL 区分格式错误 `malformed`、资源归属不匹配 `owner_mismatch`、查询选择不匹配 `query_mismatch`、非法位置 `position_invalid` 与超出实际数据的 `position_out_of_bounds`。布尔值不是整数位置；末尾条目位置仅在字符偏移为零时表示合法完成页。版本变化继续沿既有 `snapshot_changed`／409 合同处理。
+
+直接上下文 HTTP 和统一搜索 HTTP SHALL 将该输入拒绝返回为 400；联邦搜索分支保留原 owner、代码、原因、request_id、输入 cursor 与零交付计数，明确不可重试，不自动重查或伪报成功空页。精确上下文 relay 保留既有 409 联邦外壳及完整原 owner detail；客户端只在读取／搜索响应及原请求身份匹配时复原具名异常，Agent 上下文工具保留结构化诊断。
+
+#### Scenario: 同一无效续点经不同入口查询
+
+- **WHEN** 调用方将原 cursor 改为不匹配的资源、查询或非法位置，或提供非对象／损坏格式
+- **THEN** 直接 HTTP、统一搜索、联邦 SSE 和 Gateway inventory JSON 均返回原分页器的明确拒绝，保留请求身份与原续点；其它健康分支不受影响
+
+#### Scenario: 读取末尾字符偏移越界
+
+- **WHEN** 读取 cursor 的条目位置已等于条目总数，但字符偏移非零
+- **THEN** 原分页器返回 `position_out_of_bounds`；相同条目位置且零字符偏移仍返回合法完成页
+
 ### Requirement: Gateway 上下文搜索采用唯一分支合同
 
 Gateway inventory 范围的 `search_context` SHALL 经既有上下文 `read` grant 传递类型化 `GatewayContextSearchRequest`，在目标 Gateway 调用与普通资源搜索相同的范围解析、调度、期限和输出准入；跨 Gateway 时保留原 origin、目标、通道及授权约束，不转投发起 Gateway 或活动工作区。该授权只接受 `context/content`，MUST NOT 据此执行文件、消息或其它类别查询。

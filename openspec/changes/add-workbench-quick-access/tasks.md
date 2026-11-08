@@ -997,3 +997,10 @@
 - 沿原 getWorkspaceSymbols 的可选错误回调向同次 `#` Picker 交原 Provider／原错误；成功结果继续原聚合、去重、排序与接受，失败行取固定宿主的 Gateway／Backend。业务入口改为 await 捕获原异步转换拒绝，取消后不发布迟到候选或失败。不改原无范围窗口查询、Anything 或公开符号命令的宽容语义，不复制聚合器或引入符号索引。
 - 独立原 owner 组件7项／64断言、原符号隔离回归7项／91断言通过；实际Browser181份／Node190份转换源码类型、Ruff／Pyright通过。正式79扩展Workbench构建与真实双Gateway／Backend页面1 passed／125.85秒：由产品入口激活真实Web／Node扩展，原`#`面板同时展示Web成功符号与Node受控失败，原目标身份及原因可见；安装、配置、冷恢复、Notebook明确拒绝和原生文件读取断言保持，pageErrors为零。原console／网络错误分类保留，不称控制台无错。
 - 原组件的认证、控件及扩展回调为具名边界；真实页面SSH仍为既有loopback装具，未验Windows／真实SSH／Electron。符号分支增量发布、单分支明确重试和默认列表includeSymbols仍为TODO；本片不扩大既有任务完成范围。独立审查无阻断，owned进程与六端口均回收；准确命令、指纹、原始输出、构建与适用边界见 `out/tests/temp/2026/11/08/workspace_symbol_failures/artifacts/verification-v1.json`。
+
+### 2026-11-08：上下文续点的原 owner 诊断（16.18 部分）
+
+- 原上下文 codec、读取分页器和搜索 owner 统一返回 `session_context_cursor/invalid_context_cursor`，区分格式、归属、查询选择、非法位置和实际越界；拒绝布尔位置与末尾非零字符偏移，合法末尾空页及 revision 的原409保持。直接HTTP和统一搜索返回400，联邦分支保留原原因、request_id、输入cursor、零交付及不可重试；精确relay保留原409外壳，读取／搜索客户端和内置上下文工具复原结构化诊断。不新增分页链路或自动重查。
+- 406项定向与112项相关单测通过，覆盖三个HTTP入口、布尔／负数／小数／字符偏移、原请求身份漂移、relay detail与工具错误。Ruff、OpenSpec strict及差异检查通过；16份Python文件的96条类型诊断与完整HEAD归档基线逐项相同，无新增，不称全仓类型零诊断。
+- 当前共享树的真实集成在装具阶段被637个测试文件超过636个端口块容量拦住，未修改他人负责的测试基础设施。以完整HEAD＋本切片全部生产／测试改动生成隔离Git tree `2c5e84488ed8389959f094602c3a197e7fae1a13`，归档SHA256 `2613164deba1b5984baf9b30b27db7a4afee965aa7e0e3771605d2057d00d252`；持有原仓库独占锁、外层超时与内存保护，真实Gateway／Backend／统一model_stream产品验收1 passed／79.96秒（外层85.48秒）。核七类拒绝的直接HTTP、联邦SSE和inventory JSON、精确读取／搜索异常、七次真实模型请求及重启续页；此证据不代替当前全部共享改动的联合验收。
+- 首轮隔离测试将联邦完整URI游标错投原精确代理的本机简称入口，导致归属先于查询拒绝；根据原始请求修正为各入口先取得自己的真实游标，保留明确原因和完整诊断断言。准确命令、前后源码指纹、失败／通过输出、退出码与私有补丁位于 `out/tests/temp/2026/11/08/context_cursor_diagnostics/artifacts/`；16.18整项保持未勾选，插件／扩展与MCP暂停边界保持。

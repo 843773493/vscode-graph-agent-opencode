@@ -9,7 +9,10 @@ from collections.abc import Awaitable, Callable
 import httpx
 import pytest
 
-from app.abstractions.session_context import SessionContextSearchPatternError
+from app.abstractions.session_context import (
+    SessionContextCursorError,
+    SessionContextSearchPatternError,
+)
 from app.core.session_control_communication_ledger.observations import (
     OBSERVATION_ERROR_CODES,
     observation_error_code,
@@ -240,6 +243,10 @@ async def test_workspace_named_rejection_requires_original_request_identity(
     ("/api/v1/context/search", 409, {"code": "snapshot_changed"}, FEDERATION_TARGET_OWNER_REJECTED, {"owner": "context_revision", "code": "snapshot_changed"}),
     ("/api/v1/context/search", 400, SessionContextSearchPatternError("原正则解析器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
      SessionContextSearchPatternError("原正则解析器拒绝").detail()),
+    ("/api/v1/context/read", 400, SessionContextCursorError("position_out_of_bounds", "原读取分页器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
+     SessionContextCursorError("position_out_of_bounds", "原读取分页器拒绝").detail()),
+    ("/api/v1/context/search", 400, SessionContextCursorError("query_mismatch", "原搜索分页器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
+     SessionContextCursorError("query_mismatch", "原搜索分页器拒绝").detail()),
     (f"/api/v1/sessions/{TARGET_SESSION}/communication-observations", 409, {"code": "read-snapshot-invalid"}, FEDERATION_TARGET_OWNER_REJECTED, {"owner": "communication_observation", "code": "read-snapshot-invalid"}),
 ])
 @pytest.mark.parametrize("identity", ["valid", "body_drift", "header_drift", "body_missing"])

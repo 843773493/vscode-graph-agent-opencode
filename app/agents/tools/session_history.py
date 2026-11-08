@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.session_context import (
+    SessionContextCursorError,
     SessionContextRevisionChangedError,
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
@@ -143,7 +144,7 @@ def _validate_target_identity(
 async def _result_json(operation: Awaitable[ResultModel]) -> str:
     try:
         result = await operation
-    except SessionContextSearchPatternError as error:
+    except (SessionContextSearchPatternError, SessionContextCursorError) as error:
         detail = error.detail()
         if request_id := get_current_request_id():
             detail["request_id"] = request_id

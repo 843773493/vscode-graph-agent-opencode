@@ -53,6 +53,20 @@ class SessionContextSearchPatternError(ValueError):
         return {"owner": self.owner, "code": self.code, "reason": self.reason, "message": str(self)}
 
 
+class SessionContextCursorError(ValueError):
+    """原上下文分页器的输入拒绝；读取、搜索和 relay 共用原原因。"""
+
+    owner = "session_context_cursor"
+    code = "invalid_context_cursor"
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": self.owner, "code": self.code, "reason": self.reason, "message": str(self)}
+
+
 class SessionContextRevisionChangedError(RuntimeError):
     """后续读取所绑定的上下文 revision 已发生变化。"""
 

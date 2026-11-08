@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
+    SessionContextCursorError,
     SessionContextMessageSourceProtocol,
     SessionContextSearchPatternError,
     SessionInformationSourceProtocol,
@@ -243,7 +244,7 @@ class SessionContextQueryService:
                 operation=f"search:{query_hash}",
             )
             if char_offset != 0:
-                raise ValueError("search cursor 不支持 item 内字符偏移")
+                raise SessionContextCursorError("position_invalid", "search cursor 不支持 item 内字符偏移")
             found: list[tuple[_SearchCandidate, re.Match[str]]] = []
             for candidate in candidates:
                 match = expression.search(candidate.text)

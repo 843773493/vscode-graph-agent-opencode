@@ -8,7 +8,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
-from app.abstractions.session_context import SessionContextRevisionChangedError
+from app.abstractions.session_context import (
+    SessionContextCursorError,
+    SessionContextRevisionChangedError,
+)
 from app.core.resource_uri import (
     parse_resource_uri,
     resource_display_uri,
@@ -228,8 +231,8 @@ def require_session_context_revision(expected: str | None, actual: str) -> None:
 def require_cursor_offset_in_range(offset: int, total: int, *, uri: str) -> None:
     """游标 offset 越过真实条目数时 fail-closed。"""
     if offset > total:
-        raise ValueError(
-            f"cursor offset 越界: uri={uri} offset={offset} total={total}"
+        raise SessionContextCursorError(
+            "position_out_of_bounds", f"cursor offset 越界: uri={uri} offset={offset} total={total}"
         )
 
 
@@ -329,9 +332,9 @@ class SessionContextCursorCodec:
             json.JSONDecodeError,
             binascii.Error,
         ) as error:
-            raise ValueError("cursor 格式无效") from error
+            raise SessionContextCursorError("malformed", "cursor 格式无效") from error
         if not isinstance(payload, dict):
-            raise TypeError("cursor payload 必须是对象")
+            raise SessionContextCursorError("malformed", "cursor payload 必须是对象")
         cursor_revision = payload.get("revision")
         if cursor_revision != revision:
             raise SessionContextRevisionChangedError(
@@ -342,16 +345,17 @@ class SessionContextCursorCodec:
             "resource_identity": str(resource_identity),
             "uri": uri,
             "scope": scope,
-            "operation": operation,
-            "record_index": record_index,
-            "assembly_ref": str(assembly_ref) if assembly_ref is not None else None,
         }
         if any(payload.get(key) != value for key, value in expected.items()):
-            raise ValueError("cursor 与当前资源或查询选择不匹配")
+            raise SessionContextCursorError("owner_mismatch", "cursor 与当前资源或查询选择不匹配")
+        selection = {"operation": operation, "record_index": record_index,
+                     "assembly_ref": str(assembly_ref) if assembly_ref is not None else None}
+        if any(payload.get(key) != value for key, value in selection.items()):
+            raise SessionContextCursorError("query_mismatch", "cursor 与当前资源或查询选择不匹配")
         offset = payload.get("offset")
-        if not isinstance(offset, int) or offset < 0:
-            raise ValueError("cursor offset 无效")
+        if type(offset) is not int or offset < 0:
+            raise SessionContextCursorError("position_invalid", "cursor offset 无效")
         char_offset = payload.get("char_offset", 0)
-        if not isinstance(char_offset, int) or char_offset < 0:
-            raise ValueError("cursor char_offset 无效")
+        if type(char_offset) is not int or char_offset < 0:
+            raise SessionContextCursorError("position_invalid", "cursor char_offset 无效")
         return offset, char_offset

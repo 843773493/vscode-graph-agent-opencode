@@ -13,6 +13,7 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from app.abstractions.session_context import (
+    SessionContextCursorError,
     SessionContextRevisionChangedError,
     SessionContextSearchPatternError,
 )
@@ -155,6 +156,28 @@ async def test_invalid_regex_tool_keeps_typed_error_and_original_request_identit
         reset_current_request_id(token)
     assert isinstance(result, ToolMessage) and result.status == "error"
     assert json.loads(result.text) == {**error.detail(), "request_id": "req_invalid_context_regex"}
+    query.assert_awaited_once()
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+@pytest.mark.parametrize("remote", [False, True])
+async def test_cursor_tool_error_keeps_original_reason_and_request(history_context, monkeypatch, operation, remote):
+    error = SessionContextCursorError("query_mismatch", "cursor 与当前资源或查询选择不匹配")
+    query = AsyncMock(side_effect=error)
+    service = history_context.workspace_session_context_client if remote else history_context.session_context_query_service
+    monkeypatch.setattr(service, f"{operation}_resource_context" if remote else f"{operation}_context", query)
+    tool = create_read_context_tool(history_context) if operation == "read" else create_search_context_tool(history_context)
+    workspace_id = REMOTE_WORKSPACE if remote else WORKSPACE_ID
+    arguments = {"resource_identity": str(workspace_session_inventory_identity(workspace_id)),
+                 "uri": workspace_session_inventory_uri(workspace_id), "scope": "workspace", "cursor": "old"}
+    arguments.update({"view": "inventory"} if operation == "read" else {"query": "needle"})
+    token = set_current_request_id("req_invalid_context_cursor")
+    try:
+        result = await tool.ainvoke({"type": "tool_call", "id": "cursor_rejection", "name": tool.name, "args": arguments})
+    finally:
+        reset_current_request_id(token)
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert json.loads(result.text) == {**error.detail(), "request_id": "req_invalid_context_cursor"}
     query.assert_awaited_once()
 
 
