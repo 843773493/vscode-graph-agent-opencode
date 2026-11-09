@@ -109,18 +109,17 @@ def _archive(destination: Path) -> None:
     package["name"] = "command-proof"
     package["dependencies"] = {key: value for key, value in package["dependencies"].items()
                                if key in {"@bufbuild/protobuf", "ajv"}}
-    lock = json.loads(Path("resources/plugins/developer-tools/package-lock.json").read_text())
-    lock["name"] = package["name"]
-    lock["packages"][""] = {"name": package["name"], "version": package["version"], "dependencies": package["dependencies"]}
+    lock = commentjson.loads(Path("resources/plugins/developer-tools/bun.lock").read_text())
+    lock["workspaces"][""] = {"name": package["name"], "dependencies": package["dependencies"]}
     for key in list(lock["packages"]):
-        if key in {f"node_modules/{name}" for name in ("node-pty", "node-addon-api", "playwright", "playwright-core", "fsevents", "ws")}:
+        if key in {"node-pty", "node-addon-api", "playwright", "playwright-core", "fsevents", "ws"}:
             del lock["packages"][key]
     with zipfile.ZipFile(destination, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("entry.py", PYTHON)
         archive.writestr("entry.mjs", NODE)
         archive.writestr("package.json", json.dumps(package))
-        archive.writestr("package-lock.json", json.dumps(lock))
+        archive.writestr("bun.lock", json.dumps(lock))
         for file in ("serverPluginRuntime.mjs", "serverPluginCommands.mjs", "serverRuntimeControl.mjs", "serverRuntimeLogging.mjs"):
             archive.write(Path("src/shared") / file, f"src/shared/{file}")
         for file in ("plugin_commands_pb.js", "service_plugin_pb.js"):
