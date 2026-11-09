@@ -167,7 +167,7 @@ async function observePinnedArchive(scriptUrl, archiveKind, scenario) {
       const imported = await import(specifier.startsWith(".") ? new URL(specifier, scriptUrl).href : specifier);
       const exports = { ...imported };
       if (specifier === "./versions.mjs") {
-        for (const name of ["PYTHON_RUNTIME", "PYTHON_RUNTIME_WINDOWS_X64", "NODE_RUNTIME_WINDOWS_X64"]) {
+        for (const name of ["PYTHON_RUNTIME", "PYTHON_RUNTIME_WINDOWS_X64", "NODE_RUNTIME_LINUX_X64", "NODE_RUNTIME_WINDOWS_X64"]) {
           exports[name] = {
             ...exports[name],
             archive: path.relative(fixtureRoot, archivePath),
@@ -186,6 +186,7 @@ async function observePinnedArchive(scriptUrl, archiveKind, scenario) {
         module.namespace[{
           "linux-python": "downloadPinnedLinuxPython",
           "windows-python": "downloadPinnedWindowsPython",
+          "linux-node": "downloadPinnedLinuxNode",
           "windows-node": "downloadPinnedWindowsNode",
         }[archiveKind]](fixtureRoot),
         new Promise((_resolve, reject) => {
@@ -295,7 +296,7 @@ function runPinnedArchive(archiveKind, scenario) {
 }
 
 describe("固定版本构建归档下载", () => {
-  for (const archiveKind of ["linux-python", "windows-python", "windows-node"]) {
+  for (const archiveKind of ["linux-python", "windows-python", "linux-node", "windows-node"]) {
     for (const scenario of ["cache-reference", "cache-valid", "cache-invalid", "download", "download-corrupt"]) {
       test(`${archiveKind}/${scenario}保持缓存、下载和摘要拒绝合同`, () => {
         const observation = runPinnedArchive(archiveKind, scenario);

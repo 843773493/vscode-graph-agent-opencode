@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import {
   BOXTEAM_VERSION,
   NODE_RUNTIME_DEPENDENCIES,
+  NODE_RUNTIME_LINUX_X64,
   PYTHON_RUNTIME,
 } from "./versions.mjs";
 import {
@@ -20,7 +21,7 @@ import {
   stageRuntimeAndLauncherPackages,
   writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
-import { downloadPinnedLinuxPython } from "./pinned-archive-download.mjs";
+import { downloadPinnedLinuxPython, downloadPinnedLinuxNode } from "./pinned-archive-download.mjs";
 import { copyApplicationSources } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
 import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
@@ -93,7 +94,7 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
   });
 }
 
-function installChromium(applicationRoot, chromiumRoot) {
+function installChromium(applicationRoot, chromiumRoot, nodeExecutable) {
   const chromiumCacheRoot = path.join(downloadRoot, "playwright-browsers");
   mkdirSync(chromiumCacheRoot, { recursive: true });
   const environment = {
@@ -101,7 +102,7 @@ function installChromium(applicationRoot, chromiumRoot) {
     PLAYWRIGHT_BROWSERS_PATH: chromiumCacheRoot,
   };
   run(
-    process.execPath,
+    nodeExecutable,
     [
       path.join(applicationRoot, "node_modules", "playwright", "cli.js"),
       "install",
@@ -110,7 +111,7 @@ function installChromium(applicationRoot, chromiumRoot) {
     { cwd: applicationRoot, env: environment },
   );
   const executable = run(
-    process.execPath,
+    nodeExecutable,
     [
       "--input-type=module",
       "--eval",
@@ -161,9 +162,8 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     web_assets: "web",
     chromium_executable: path.relative(runtimePackageRoot, chromiumExecutable),
     node: {
-      // TODO: 源码外发行验收前改用随发行物携带的固定 Node；当前 npm Launcher 的 Node 不匹配会按制品合同拒绝。
-      source: "launcher",
-      executable: null,
+      source: "bundled",
+      executable: "node/bin/node",
     },
   };
   writeFileSync(
@@ -175,6 +175,7 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     `${JSON.stringify(
       {
         python: PYTHON_RUNTIME,
+        node_runtime: NODE_RUNTIME_LINUX_X64,
         node_dependencies: NODE_RUNTIME_DEPENDENCIES,
         playwright: "Apache-2.0",
         chromium: "Chromium 项目随附许可文件，仅打包 manifest 指向的浏览器资源",
@@ -228,6 +229,16 @@ async function main() {
     throw new Error(`解压后缺少 Python: ${pythonExecutable}`);
   }
 
+  const nodeArchive = await downloadPinnedLinuxNode(downloadRoot);
+  const bundledNodeRoot = path.join(runtimePackageRoot, "node");
+  mkdirSync(bundledNodeRoot, { recursive: true });
+  run("tar", ["-xzf", nodeArchive, "-C", bundledNodeRoot, "--strip-components=1",
+    `node-v${NODE_RUNTIME_LINUX_X64.version}-linux-x64/bin/node`,
+    `node-v${NODE_RUNTIME_LINUX_X64.version}-linux-x64/LICENSE`,
+  ]);
+  const nodeExecutable = path.join(bundledNodeRoot, "bin", "node");
+  if (!existsSync(nodeExecutable)) throw new Error(`Node 压缩包缺少 bin/node: ${nodeArchive}`);
+
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);
@@ -243,11 +254,10 @@ async function main() {
     "from app.core.sqlite_state import sqlite_vfs_max_pathname; " +
       "print('SQLite VFS mxPathname:', sqlite_vfs_max_pathname())",
   ], { cwd: applicationRoot });
-  const nodeExecutable = Bun.which(process.env.BOXTEAM_NODE_BIN ?? "node");
   const bunExecutable = Bun.which("bun");
   const uvExecutable = Bun.which("uv");
-  if (!nodeExecutable || !bunExecutable || !uvExecutable) {
-    throw new Error("发布构建需要明确的 Node、Bun 和 uv 构建工具");
+  if (!bunExecutable || !uvExecutable) {
+    throw new Error("发布构建需要明确的 Bun 和 uv 构建工具");
   }
   const nodeRuntime = JSON.parse(run(nodeExecutable, ["--print",
     "JSON.stringify({version:process.versions.node,abi:process.versions.modules,glibc:process.report.getReport().header.glibcVersionRuntime})",
@@ -277,6 +287,7 @@ async function main() {
   const chromiumExecutable = installChromium(
     applicationRoot,
     path.join(runtimePackageRoot, "chromium"),
+    nodeExecutable,
   );
   writeRuntimeMetadata({ chromiumExecutable });
   stageRuntimeAndLauncherPackages({

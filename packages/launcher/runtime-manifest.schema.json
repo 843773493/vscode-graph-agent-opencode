@@ -101,5 +101,26 @@
         "component_root": { "type": "string", "minLength": 1, "pattern": "\\S" }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "distribution": { "enum": ["npm", "standalone"] }
+        },
+        "required": ["distribution"]
+      },
+      "then": {
+        "properties": {
+          "node": {
+            "type": "object",
+            "properties": {
+              "source": { "const": "bundled" },
+              "executable": { "type": "string", "minLength": 1, "pattern": "\\S" }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

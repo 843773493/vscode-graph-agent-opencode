@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import Ajv2020 from "ajv/dist/2020.js";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -74,13 +75,48 @@ describe("runtime manifest", () => {
     ).toThrow("包含未知字段");
   });
 
-  test("npm launcher Node 使用当前 Node", () => {
-    const manifest = resolveRuntimeManifest(runtimeManifestPath, {
-      ...baseManifest,
-      distribution: "npm",
-    });
+  test("npm 与 standalone 必须使用 bundled Node，source-* 保留 launcher Node", () => {
+    for (const distribution of ["npm", "standalone"]) {
+      expect(() => resolveRuntimeManifest(runtimeManifestPath, {
+        ...baseManifest,
+        distribution,
+      })).toThrow("必须使用包内 bundled Node");
+      const manifest = resolveRuntimeManifest(runtimeManifestPath, {
+        ...baseManifest,
+        distribution,
+        node: { source: "bundled", executable: "node-runtime" },
+      });
+      expect(resolveNodeExecutable(manifest)).toBe(
+        path.resolve(runtimeDirectory, "node-runtime"),
+      );
+    }
+    expect(validateRuntimeManifest(baseManifest).node.source).toBe("launcher");
+    expect(validateRuntimeManifest({ ...baseManifest, distribution: "source-installed" }).node.source).toBe("launcher");
+  });
 
-    expect(resolveNodeExecutable(manifest)).toBe(process.execPath);
+  test("JSON Schema 与发行物 Node 来源保持一致", () => {
+    const schema = JSON.parse(readFileSync(
+      new URL("../../runtime-manifest.schema.json", import.meta.url),
+      "utf8",
+    ));
+    const validate = new Ajv2020().compile(schema);
+    for (const distribution of ["source-development", "source-installed"]) {
+      expect(validate({ ...baseManifest, distribution })).toBe(true);
+    }
+    for (const distribution of ["npm", "standalone"]) {
+      expect(validate({
+        ...baseManifest,
+        distribution,
+        node: { source: "bundled", executable: "runtime/node" },
+      })).toBe(true);
+      for (const node of [
+        { source: "launcher", executable: null },
+        { source: "bundled", executable: null },
+        { source: "bundled", executable: " " },
+      ]) {
+        expect(validate({ ...baseManifest, distribution, node })).toBe(false);
+      }
+    }
   });
 
   test("standalone 使用 manifest 声明的 bundled Node", () => {

@@ -349,9 +349,6 @@ async function main() {
     `boxteam-runtime-windows-x64-${BOXTEAM_VERSION}`,
   );
   const standaloneArchivePath = requiredStandaloneArchive();
-  const nodeExecutable = run("node", ["--print", "process.execPath"], {
-    capture: true,
-  });
 
   rmSync(verificationRoot, { recursive: true, force: true });
   mkdirSync(installRoot, { recursive: true });
@@ -388,10 +385,11 @@ async function main() {
   if (!existsSync(launcherEntry)) {
     throw new Error(`relocation 后缺少 Launcher: ${launcherEntry}`);
   }
+  const nodeExecutable = path.join(relocatedRoot, "node_modules", "@boxteam", "runtime-windows-x64", "node/node.exe");
   const environment = {
     ...process.env,
     BOXTEAM_HOME: boxteamHome,
-    // 清空 PATH，证明启动依赖的是 npm 包内 Python 和 Chromium。
+    // 清空 PATH，证明启动只依赖发行物内的 Node、Python 和 Chromium。
     PATH: emptyPath,
   };
   const doctor = run(nodeExecutable, [launcherEntry, "doctor", "--json"], {

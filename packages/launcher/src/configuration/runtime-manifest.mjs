@@ -72,6 +72,9 @@ export function validateRuntimeManifest(value) {
   if (node.source === "bundled" && nodeExecutable === null) {
     throw new Error("node.source=bundled 时必须提供 executable");
   }
+  if ((manifest.distribution === "npm" || manifest.distribution === "standalone") && node.source !== "bundled") {
+    throw new Error(`${manifest.distribution} 发行物必须使用包内 bundled Node`);
+  }
   let extensionHost = null;
   if (manifest.extension_host !== null && manifest.extension_host !== undefined) {
     const value = requireObject(manifest.extension_host, "runtime manifest.extension_host");

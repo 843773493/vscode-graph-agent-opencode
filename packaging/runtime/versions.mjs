@@ -50,6 +50,15 @@ export const PYTHON_RUNTIME_WINDOWS_X64 = Object.freeze({
   license: "MPL-2.0（构建系统）与 Python-2.0（CPython）",
 });
 
+export const NODE_RUNTIME_LINUX_X64 = Object.freeze({
+  version: "22.17.0",
+  abi: "127",
+  archive: "node-v22.17.0-linux-x64.tar.gz",
+  url: "https://nodejs.org/dist/v22.17.0/node-v22.17.0-linux-x64.tar.gz",
+  sha256: "0fa01328a0f3d10800623f7107fbcd654a60ec178fab1ef5b9779e94e0419e1a",
+  license: "Node.js 使用 MIT License",
+});
+
 export const NODE_RUNTIME_WINDOWS_X64 = Object.freeze({
   version: "22.17.0",
   abi: "127",

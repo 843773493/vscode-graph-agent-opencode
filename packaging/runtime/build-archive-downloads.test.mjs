@@ -76,6 +76,7 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots) {
     if (specifier === "./pinned-archive-download.mjs") {
       exports = Object.fromEntries([
         ["downloadPinnedLinuxPython", "linux-python"],
+        ["downloadPinnedLinuxNode", "linux-node"],
         ["downloadPinnedWindowsPython", "windows-python"],
         ["downloadPinnedWindowsNode", "windows-node"],
       ].map(([name, kind]) => [name, async (root) => {

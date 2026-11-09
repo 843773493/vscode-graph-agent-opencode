@@ -1,8 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import { readLauncherLock } from "./instance-lock.mjs";
 
 export function buildDoctorReport({ runtime, boxteamHome }) {
+  const nodeVersion = execFileSync(runtime.nodeExecutable, ["--version"], {
+    encoding: "utf8",
+  }).trim();
+  if (!nodeVersion) {
+    throw new Error(`Node --version 未返回版本: ${runtime.nodeExecutable}`);
+  }
   return {
     ok: true,
     distribution: runtime.distribution,
@@ -19,7 +26,7 @@ export function buildDoctorReport({ runtime, boxteamHome }) {
     node: {
       source: runtime.node.source,
       executable: runtime.nodeExecutable,
-      version: process.version,
+      version: nodeVersion,
       exists: existsSync(runtime.nodeExecutable),
     },
     web_assets:

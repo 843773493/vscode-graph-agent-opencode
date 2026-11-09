@@ -91,7 +91,7 @@ function sumDirectoryEntryBytes(root) {
 
 export function writeRuntimeSizeReport({ runtimePackageRoot, outputRoot, npmTarballs, assetGroups }) {
   const components = {};
-  for (const name of ["python", "application", "web", "chromium"]) {
+  for (const name of ["python", "node", "application", "web", "chromium"]) {
     components[name] = sumDirectoryEntryBytes(path.join(runtimePackageRoot, name));
   }
   const report = {

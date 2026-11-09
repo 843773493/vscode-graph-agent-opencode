@@ -15,6 +15,7 @@
   "files": [
     "runtime-manifest.json",
     "python",
+    "node",
     "application",
     "web",
     "chromium",

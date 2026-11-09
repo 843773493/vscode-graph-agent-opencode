@@ -128,7 +128,7 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
   }
 }
 
-async function installChromium(applicationRoot, chromiumRoot) {
+async function installChromium(applicationRoot, chromiumRoot, nodeExecutable) {
   const configuredCacheRoot =
     process.env.BOXTEAM_PLAYWRIGHT_BROWSERS_PATH?.trim() || null;
   const ownsChromiumCache = configuredCacheRoot === null;
@@ -161,7 +161,7 @@ async function installChromium(applicationRoot, chromiumRoot) {
     };
     try {
       run(
-        process.execPath,
+        nodeExecutable,
         [
           path.join(applicationRoot, "node_modules", "playwright", "cli.js"),
           "install",
@@ -180,7 +180,7 @@ async function installChromium(applicationRoot, chromiumRoot) {
   }
   if (lastError !== null) throw lastError;
   const executable = run(
-    process.execPath,
+    nodeExecutable,
     [
       "--input-type=module",
       "--eval",
@@ -218,10 +218,6 @@ function writeRuntimeMetadata({
   chromiumExecutable,
   chromiumExecutableRelative,
   distribution = "npm",
-  // TODO: npm runtime 仍使用 Launcher Node；源码外交付前须像 standalone 一样携带固定目标 Node。
-  nodeSource = "launcher",
-  nodeExecutable = null,
-  nodeRuntime = null,
 }) {
   const manifest = {
     schema_version: 1,
@@ -241,8 +237,8 @@ function writeRuntimeMetadata({
     chromium_executable:
       chromiumExecutableRelative ?? path.relative(runtimeRoot, chromiumExecutable),
     node: {
-      source: nodeSource,
-      executable: nodeExecutable,
+      source: "bundled",
+      executable: "node/node.exe",
     },
   };
   writeFileSync(
@@ -254,7 +250,7 @@ function writeRuntimeMetadata({
     `${JSON.stringify(
       {
         python: PYTHON_RUNTIME_WINDOWS_X64,
-        node_runtime: nodeRuntime,
+        node_runtime: NODE_RUNTIME_WINDOWS_X64,
         node_dependencies: NODE_RUNTIME_DEPENDENCIES,
         playwright: "Apache-2.0",
         chromium: "Chromium 项目随附许可文件，仅打包 manifest 指向的浏览器资源",
@@ -317,7 +313,7 @@ function writeStandaloneLauncherScripts(packageRoot) {
   );
 }
 
-function stageStandalonePackage(nodeExecutable) {
+function stageStandalonePackage() {
   const packageRoot = path.join(standaloneStageRoot, standaloneDirectoryName);
   const runtimeRoot = path.join(packageRoot, "runtime");
   const launcherRoot = path.join(packageRoot, "launcher");
@@ -329,9 +325,6 @@ function stageStandalonePackage(nodeExecutable) {
   rmSync(standaloneArchive, { force: true });
   mkdirSync(standaloneRoot, { recursive: true });
   cpSync(runtimePackageRoot, runtimeRoot, { recursive: true });
-  const bundledNodeRoot = path.join(runtimeRoot, "node");
-  mkdirSync(bundledNodeRoot, { recursive: true });
-  cpSync(nodeExecutable, path.join(bundledNodeRoot, "node.exe"));
 
   const npmManifest = JSON.parse(
     readFileSync(path.join(runtimePackageRoot, "runtime-manifest.json"), "utf8"),
@@ -340,9 +333,6 @@ function stageStandalonePackage(nodeExecutable) {
     runtimeRoot,
     chromiumExecutableRelative: npmManifest.chromium_executable,
     distribution: "standalone",
-    nodeSource: "bundled",
-    nodeExecutable: "node/node.exe",
-    nodeRuntime: NODE_RUNTIME_WINDOWS_X64,
   });
   cpSync(launcherPackageRoot, launcherRoot, { recursive: true });
   // 便携版已有内置 runtime，仅安装 Launcher 依赖及其 Windows 原生预构建。
@@ -467,12 +457,12 @@ async function main() {
   } else {
     run("tar", ["-xf", nodeArchive, "-C", nodeExtractRoot]);
   }
-  const nodeExecutable = path.join(
+  const extractedNodeExecutable = path.join(
     nodeExtractRoot,
     `node-v${NODE_RUNTIME_WINDOWS_X64.version}-win-x64`,
     "node.exe",
   );
-  if (!existsSync(nodeExecutable)) {
+  if (!existsSync(extractedNodeExecutable)) {
     throw new Error(`Windows Node 压缩包缺少 node.exe: ${nodeArchive}`);
   }
 
@@ -487,6 +477,11 @@ async function main() {
   //   在普通 Windows 机器上冷启动可能超过 120 秒，导致 Gateway 等待后端就绪超时退出。
   // - 这里提前用 compileall 生成字节码缓存并打进安装包，显著缩短用户首次启动时间。
   precompilePythonBytecode(pythonExecutable, applicationRoot);
+  const bundledNodeRoot = path.join(runtimePackageRoot, "node");
+  mkdirSync(bundledNodeRoot, { recursive: true });
+  cpSync(extractedNodeExecutable, path.join(bundledNodeRoot, "node.exe"));
+  cpSync(path.join(path.dirname(extractedNodeExecutable), "LICENSE"), path.join(bundledNodeRoot, "LICENSE"));
+  const nodeExecutable = path.join(bundledNodeRoot, "node.exe");
   const bunExecutable = Bun.which("bun");
   const uvExecutable = Bun.which("uv");
   if (!bunExecutable || !uvExecutable) {
@@ -537,6 +532,7 @@ async function main() {
   const chromiumExecutable = await installChromium(
     applicationRoot,
     path.join(runtimePackageRoot, "chromium"),
+    nodeExecutable,
   );
   writeRuntimeMetadata({ chromiumExecutable });
   stageRuntimeAndLauncherPackages({
@@ -560,7 +556,7 @@ async function main() {
     npmPack(downloader.packageRoot, tarballRoot),
     npmPack(launcherPackageRoot, tarballRoot),
   ];
-  const standaloneArchive = stageStandalonePackage(nodeExecutable);
+  const standaloneArchive = stageStandalonePackage();
   const installerArchive = buildWindowsInstaller(
     path.join(standaloneStageRoot, standaloneDirectoryName),
   );

@@ -86,7 +86,7 @@ function observeSizeReport(scenario) {
     const runtimePackageRoot = path.join(workspace, "runtime package");
     const outputRoot = path.join(workspace, "归档 输出");
     for (const [relative, content] of [
-      ["python/core.bin", Buffer.from([0, 1, 254, 255])],
+      ["python/core.bin", Buffer.from([0, 1, 254, 255])], ["node/bin/node", "fixed-node"],
       ["application/层 目录/main.py", "汉字\\n"], ["application/empty.txt", ""],
       ["web/index.html", "web bytes"], ["chromium/browser.exe", Buffer.alloc(17, 2)],
     ]) {
@@ -143,7 +143,7 @@ describe("两平台共用发布体积报告", () => {
     test(`${scenario}保留组件和平台产物字节，文件与stdout完全一致`, () => {
       const result = observeSizeReport(scenario);
       expect(result.report).toEqual({
-        components: { python: 4, application: 7, web: 9, chromium: 17 },
+        components: { python: 4, node: 10, application: 7, web: 9, chromium: 17 },
         npm_tarballs: { "npm下载器.tgz": 5, "launcher.tgz": 7 },
         release_assets: { "runtime.tgz": 29 },
         ...(scenario === "size-windows" ? {
@@ -188,9 +188,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   const launcherPackageRoot = path.join(outputRoot, "stage/launcher/package");
   const pythonExecutable = path.join(runtimePackageRoot, "python", mode === "linux" ? "bin/python3" : "python.exe");
   const toolchainRoot = path.join(fixtureRoot, "toolchain");
-  const nodeExecutable = mode === "linux"
-    ? path.join(toolchainRoot, "configured-node")
-    : path.join(outputRoot, "stage/build-node/node-v22.17.0-win-x64/node.exe");
+  const nodeExecutable = path.join(runtimePackageRoot, "node", mode === "linux" ? "bin/node" : "node.exe");
   const bunExecutable = path.join(toolchainRoot, "bun");
   const uvExecutable = path.join(toolchainRoot, "uv");
   const nodeGypEntrypoint = path.join(
@@ -214,7 +212,6 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   let buildStarts = 0;
   // 两份不同的旧产物用于识别构建、复制目录错配，不能由装具替构建入口选中来源。
   for (const client of ["web", "workbench"]) write(`src/clients/${client}/dist/index.html`, `stale-${client}`);
-  if (mode === "linux") write(path.relative(fixtureRoot, nodeExecutable), "fixture-node");
   process.env.BOXTEAM_PROJECT_ROOT = fixtureRoot;
   const context = createContext({ console, Buffer, process: {
     env: { BOXTEAM_PROJECT_ROOT: fixtureRoot }, cwd: () => fixtureRoot,
@@ -222,7 +219,6 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
     platform: mode === "windows-native" ? "win32" : "linux",
     argv: mode === "windows-cross" ? ["--cross"] : [],
   }, Bun: { which(name) {
-    if (name === "node") return nodeExecutable;
     if (name === "bun") return bunExecutable;
     if (name === "uv") return uvExecutable;
     return null;
@@ -233,6 +229,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
     let exports;
     if (specifier === "./pinned-archive-download.mjs") exports = {
       downloadPinnedLinuxPython: async () => { downloadCalls.push("linux-python"); return "fixture-python.tgz"; },
+      downloadPinnedLinuxNode: async () => { downloadCalls.push("linux-node"); return "fixture-node.tgz"; },
       downloadPinnedWindowsPython: async () => { downloadCalls.push("windows-python"); return "fixture-python.tgz"; },
       downloadPinnedWindowsNode: async () => { downloadCalls.push("windows-node"); return "fixture-node.zip"; },
     };
@@ -269,11 +266,18 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
         buildEvents.push(`${command} ${args.join(" ")}`);
         if (command === "tar" && args[0] === "-xzf") {
           archiveExtractionCalls.push({ command, args: [...args] });
-          write(path.relative(fixtureRoot, pythonExecutable), "fixture-python");
+          if (args[1] === "fixture-python.tgz") write(path.relative(fixtureRoot, pythonExecutable), "fixture-python");
+          else {
+            assert.equal(args[1], "fixture-node.tgz");
+            assert.deepEqual(Array.from(args.slice(2)), ["-C", path.join(runtimePackageRoot, "node"), "--strip-components=1", "node-v22.17.0-linux-x64/bin/node", "node-v22.17.0-linux-x64/LICENSE"]);
+            write(path.relative(fixtureRoot, nodeExecutable), "fixture-node");
+            write(path.relative(fixtureRoot, path.join(runtimePackageRoot, "node/LICENSE")), "fixture-license");
+          }
         }
         if (command === "tar" && args[0] === "-xf") {
           archiveExtractionCalls.push({ command, args: [...args] });
-          write(path.relative(fixtureRoot, nodeExecutable), "fixture-node");
+          write(path.relative(fixtureRoot, path.join(outputRoot, "stage/build-node/node-v22.17.0-win-x64/node.exe")), "fixture-node");
+          write(path.relative(fixtureRoot, path.join(outputRoot, "stage/build-node/node-v22.17.0-win-x64/LICENSE")), "fixture-license");
         }
         if (command === "unzip") {
           archiveExtractionCalls.push({ command, args: [...args] });
@@ -291,7 +295,7 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
           ]) write(path.join(relativeRoot, "dist", name), content);
           frontendBuilds.push({ command, args: [...args], cwd: options.cwd });
         }
-        if (command === process.execPath) {
+        if (command === nodeExecutable && args[0] !== "--print" && !args.includes("rebuild")) {
           const browserExecutable = path.join(options.env.PLAYWRIGHT_BROWSERS_PATH, "chromium-fixture", "browser.exe");
           if (args.includes("--eval")) return { status: 0, stdout: `${browserExecutable}\n` };
           write(path.relative(fixtureRoot, browserExecutable), "fixture-chromium");
@@ -365,9 +369,11 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtimePackageRoot, "package.json"), "utf8")), {
     name: `@boxteam/runtime-${target}`, version: fixtureVersion,
   });
-  const runtimeManifest = JSON.parse(
-    fs.readFileSync(path.join(runtimePackageRoot, "runtime-manifest.json"), "utf8"),
-  );
+  const runtimeManifest = JSON.parse(fs.readFileSync(path.join(runtimePackageRoot, "runtime-manifest.json"), "utf8"));
+  assert.deepEqual(runtimeManifest.node, { source: "bundled", executable: mode === "linux" ? "node/bin/node" : "node/node.exe" });
+  assert.equal(fs.readFileSync(nodeExecutable, "utf8"), "fixture-node");
+  assert.equal(fs.readFileSync(path.join(runtimePackageRoot, "node/LICENSE"), "utf8"), "fixture-license");
+  assert.deepEqual(downloadCalls, mode === "linux" ? ["linux-python", "linux-node"] : ["windows-python", "windows-node"]);
   assert.equal(runtimeManifest.installation_tools, undefined, "构建工具不进入运行时manifest");
   const expectedPluginOptions = [
     ["developer-tools", path.join(runtimePackageRoot, "application/resources/plugins/developer-tools.zip")],

@@ -8,6 +8,7 @@ import {
   PYTHON_RUNTIME,
   PYTHON_RUNTIME_WINDOWS_X64,
   NODE_RUNTIME_WINDOWS_X64,
+  NODE_RUNTIME_LINUX_X64,
 } from "./versions.mjs";
 import { sha256File } from "./runtime-release-assets.mjs";
 
@@ -117,35 +118,43 @@ export async function downloadPinnedWindowsPython(pythonDownloadRoot) {
   return archivePath;
 }
 
-export async function downloadPinnedWindowsNode(nodeDownloadRoot) {
+async function downloadPinnedNode(nodeDownloadRoot, runtime) {
   mkdirSync(nodeDownloadRoot, { recursive: true });
-  const archivePath = path.join(nodeDownloadRoot, NODE_RUNTIME_WINDOWS_X64.archive);
+  const archivePath = path.join(nodeDownloadRoot, runtime.archive);
   if (existsSync(archivePath)) {
     const existingDigest = await sha256File(archivePath);
-    if (existingDigest === NODE_RUNTIME_WINDOWS_X64.sha256) {
+    if (existingDigest === runtime.sha256) {
       return archivePath;
     }
   }
   const controller = new AbortController();
   try {
-    const response = await fetch(NODE_RUNTIME_WINDOWS_X64.url, {
+    const response = await fetch(runtime.url, {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
     });
     if (!response.ok) {
       throw new Error(
-        `下载 Windows Node 运行时失败: HTTP ${response.status} ${response.statusText}`,
+        `下载 Node 运行时失败: HTTP ${response.status} ${response.statusText}`,
       );
     }
-    if (response.body === null) throw new Error("下载 Windows Node 运行时响应没有 body");
+    if (response.body === null) throw new Error("下载 Node 运行时响应没有 body");
     await pipeline(Readable.fromWeb(response.body), createWriteStream(archivePath));
   } finally {
     controller.abort();
   }
   const digest = await sha256File(archivePath);
-  if (digest !== NODE_RUNTIME_WINDOWS_X64.sha256) {
+  if (digest !== runtime.sha256) {
     throw new Error(
-      `Windows Node 运行时摘要不匹配: expected=${NODE_RUNTIME_WINDOWS_X64.sha256} actual=${digest}`,
+      `Node 运行时摘要不匹配: expected=${runtime.sha256} actual=${digest}`,
     );
   }
   return archivePath;
+}
+
+export function downloadPinnedLinuxNode(nodeDownloadRoot) {
+  return downloadPinnedNode(nodeDownloadRoot, NODE_RUNTIME_LINUX_X64);
+}
+
+export function downloadPinnedWindowsNode(nodeDownloadRoot) {
+  return downloadPinnedNode(nodeDownloadRoot, NODE_RUNTIME_WINDOWS_X64);
 }
