@@ -49,6 +49,7 @@ from app.services.infrastructure.config_service.config_service_common import (
 from app.services.infrastructure.config_service.config_snapshot import (
     ConfigSnapshotMixin,
 )
+from configs.plugin_parameters import plugin_parameters
 from configs.runtime import validate_config_payload
 
 if TYPE_CHECKING:
@@ -396,11 +397,12 @@ class ConfigReloadMixin:
         bindings = workspace_plugin_bindings_for_root(
             candidate.to_dict(), workspace_root=self._workspace_root,
         )
-        if not bindings or bindings == previous_bindings:
+        parameters = plugin_parameters(candidate.to_dict())
+        if not bindings or (bindings == previous_bindings and parameters == plugin_parameters(previous.to_dict())):
             return
         if self._workspace_state_store is None:
             raise ConfigConflictError(
-                "Workspace 插件绑定变更必须先持久化配置 candidate"
+                "Workspace 插件候选校验需要已绑定的配置存储 owner"
             )
         workspace_id = bindings[0].workspace_id
         if not workspace_id or any(
@@ -417,7 +419,8 @@ class ConfigReloadMixin:
         ) as client:
             response = await client.post(
                 f"{gateway_url}/api/internal/service-plugins/workspaces/{workspace_id}/validate",
-                json=[binding.model_dump(mode="json") for binding in bindings],
+                json={"bindings": [binding.model_dump(mode="json") for binding in bindings],
+                      "parameters": parameters},
                 headers={
                     "X-Local-Token": get_gateway_local_token(),
                     "X-Request-ID": request_id,
@@ -465,7 +468,8 @@ class ConfigReloadMixin:
         candidate_bindings = workspace_plugin_bindings_for_root(
             candidate.to_dict(), workspace_root=self._workspace_root,
         )
-        if previous_bindings != candidate_bindings:
+        if (previous_bindings != candidate_bindings
+            or plugin_parameters(previous.to_dict()) != plugin_parameters(candidate.to_dict())):
             await self._notify_gateway_workspace_plugins(
                 workspace_id=(previous_bindings or candidate_bindings)[0].workspace_id,
                 candidate_id=candidate_id,

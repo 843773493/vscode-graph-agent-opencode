@@ -34,6 +34,7 @@ async def execute(arguments, context):
     if arguments['mode'] == 'error': raise ValueError('command-proof-error')
     if arguments['mode'] == 'bad-result': return {'wrong': True}
     if arguments['mode'] == 'null': return None
+    if arguments['mode'] == 'configured': return {'runtime': 'python', 'pid': os.getpid(), 'value': context.parameters['prefix'] + arguments['value']}
     return {'runtime': 'python', 'pid': os.getpid(), 'value': arguments['value']}
 async def shutdown(): server.should_exit = True
 app = FastAPI()
@@ -52,7 +53,7 @@ const logger = createRuntimeLogger('command-proof');
 const readJson = async req => { let text=''; for await (const part of req) text+=part; return text ? JSON.parse(text) : {}; };
 const management = createPluginRuntimeManagement({service:'command-proof', logger, readJson,
   shutdown: () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
-  commands: { execute: async (args, {signal, progress, requestId, call}) => {
+  commands: { execute: async (args, {signal, progress, requestId, call, parameters}) => {
     await progress(1, 2, requestId + ':' + call.call_id);
     if (args.mode === 'wait') await new Promise((resolve, reject) => {
       signal.throwIfAborted(); signal.addEventListener('abort', () => reject(signal.reason), {once:true});
@@ -60,6 +61,7 @@ const management = createPluginRuntimeManagement({service:'command-proof', logge
     if (args.mode === 'error') throw new Error('command-proof-error');
     if (args.mode === 'bad-result') return {wrong:true};
     if (args.mode === 'null') return null;
+    if (args.mode === 'configured') return {runtime:'node', pid:process.pid, value:parameters.prefix + args.value};
     return {runtime:'node', pid:process.pid, value:args.value};
   }} });
 const server = http.createServer(async(req,res) => {
@@ -96,14 +98,16 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
 def _archive(destination: Path) -> None:
     command = {"id": "execute", "title": "Execute", "handler": "execute", "required_capabilities": ["read"],
         "arguments_schema": {"type": "object", "additionalProperties": False, "required": ["mode", "value"],
-            "properties": {"mode": {"enum": ["return", "wait", "error", "bad-result", "null"]}, "value": {"type": "string"}}},
+            "properties": {"mode": {"enum": ["return", "wait", "error", "bad-result", "null", "configured"]}, "value": {"type": "string"}}},
         "result_schema": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": False, "required": ["runtime", "pid", "value"],
             "properties": {"runtime": {"enum": ["python", "node"]}, "pid": {"type": "integer"}, "value": {"type": "string"}}}
         ]}}
     manifest = {"package_id": "proof.commands", "version": "1.0.0", "name": "Command proof", "plugins": [
         {"id": runtime, "name": runtime, "instance_scope": "gateway", "runtime": runtime,
          "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"], "management_protocol_version": 1,
-         "requires": [{"extension_point": "commands", "version": 1}], "contributes": {"commands": [command]}}
+         "requires": [{"extension_point": "commands", "version": 1}, {"extension_point": "configuration", "version": 1}],
+         "contributes": {"commands": [command], "configuration": {"type": "object", "additionalProperties": False,
+             "properties": {"prefix": {"type": "string"}, "credentialValue": {"type": "string", "writeOnly": True}}}}}
         for runtime in ("python", "node")]}
     package = json.loads(Path("resources/plugins/developer-tools/package.json").read_text())
     package["name"] = "command-proof"
@@ -131,7 +135,6 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     plugin_gateway: tuple[httpx.Client, TestRunContext],
 ) -> None:
     client, context = plugin_gateway
-    client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
     package = context.artifacts_dir / "commands.zip"
     _archive(package)
@@ -140,16 +143,27 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     bindings = [{"package_id": "proof.commands", "plugin_id": runtime, "package_version": "1.0.0", "enabled": True}
                 for runtime in ("python", "node")]
 
-    def bind(enabled: bool) -> dict[str, dict]:
+    submission = 0
+
+    def bind(enabled: bool | None, *, parameters: dict[str, dict] | None = None,
+             expected_status: int = 200, preflight: bool = False) -> dict[str, dict]:
+        nonlocal submission
+        submission += 1
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
         document = client.get(source_path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": [{**item, "enabled": enabled} for item in bindings]}
-        client.put(source_path, json={"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+        source.setdefault("plugins", {})["runtime"] = {"entries": [] if enabled is None else [{**item, "enabled": enabled} for item in bindings]}
+        if parameters is not None:
+            source["plugins"]["configuration"] = {"values": {"proof.commands": parameters}}
+        intent = {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
             "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
-            "idempotency_key": f"commands-{enabled}"}).raise_for_status()
+            "idempotency_key": f"commands-{submission}"}
+        response = client.post(source_path + "/preflight", json=intent) if preflight else client.put(source_path, json=intent)
+        assert response.status_code == expected_status, response.text
+        if expected_status != 200:
+            assert client.get(source_path).raise_for_status().json()["data"]["jsonc"] == document["jsonc"]
         return {item["binding"]["plugin_id"]: item for item in client.post("/api/gateway/service-plugins/status",
             json={"gateway_id": gateway_id}).raise_for_status().json()["data"]["plugins"]}
 
@@ -219,4 +233,45 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     disabled = bind(False)
     assert all(state["state"] == "stopped" for state in disabled.values())
     assert client.post("/api/gateway/service-plugins/commands/call", json=last_call).status_code == 409
+
+    # 关闭状态仍严格校验参数；编辑不能隐式创建实例。
+    bind(False, parameters={"python": {"prefix": 7}}, expected_status=422, preflight=True)
+    bind(False, parameters={"python": {"credentialValue": "must-not-be-published"}}, expected_status=422, preflight=True)
+    configured = bind(False, parameters={runtime: {"prefix": runtime + ':'} for runtime in ("python", "node")})
+    assert all(item["state"] == "stopped" and item["instance"] is None for item in configured.values())
+    enabled = bind(True)
+
+    def configured_call(runtime: str, state: dict, value: str) -> str:
+        identity = {"gateway_id": gateway_id, "package_id": "proof.commands", "package_version": "1.0.0",
+            "plugin_id": runtime, "instance_id": state["instance"]["instance_id"]}
+        registration = client.post("/api/gateway/service-plugins/commands/registrations", json=identity).raise_for_status().json()["data"]["commands"][0]
+        response = client.post("/api/gateway/service-plugins/commands/call", json={**identity,
+            "registration_id": registration["registration_id"], "command_id": "execute",
+            "call_id": f"{runtime}-parameters-{submission}-{value}", "remaining_ms": 5000,
+            "arguments": {"mode": "configured", "value": value}}).raise_for_status()
+        return json.loads(list(response.iter_lines())[-1])["result"]["value"]
+
+    for runtime in ("python", "node"):
+        assert configured_call(runtime, enabled[runtime], "first") == runtime + ':first'
+    changed = bind(True, parameters={runtime: {"prefix": 'new:'} for runtime in ("python", "node")})
+    for runtime in ("python", "node"):
+        assert changed[runtime]["instance"]["instance_id"] != enabled[runtime]["instance"]["instance_id"]
+        assert configured_call(runtime, changed[runtime], "second") == 'new:second'
+        current = changed[runtime]
+        restarted = client.post("/api/gateway/service-plugins/restart", json={"gateway_id": gateway_id,
+            "package_id": "proof.commands", "package_version": "1.0.0", "plugin_id": runtime,
+            "revision": current["revision"]}).raise_for_status().json()["data"]
+        assert configured_call(runtime, restarted, "restart") == 'new:restart'
+
+    # 解绑残留不进入有效快照，不引用包；再绑定必须使用当前包 schema。
+    assert bind(None) == {}
+    bind(None, parameters={"python": {"prefix": 7}})
+    document = client.get("/api/gateway/config/sources/gateway_mutable_override").raise_for_status().json()["data"]
+    assert document["source_effective"]["plugins"]["configuration"]["values"]["proof.commands"]["python"]["prefix"] == 7
+    assert "configuration" not in document["effective"]["plugins"]
+    bind(True, expected_status=422, preflight=True)
+    client.post("/api/gateway/service-plugins/uninstall", json={"gateway_id": gateway_id,
+        "package_id": "proof.commands", "package_version": "1.0.0"}).raise_for_status()
+    retained = client.get("/api/gateway/config/sources/gateway_mutable_override").raise_for_status().json()["data"]
+    assert retained["jsonc"] == document["jsonc"] and "configuration" not in retained["effective"]["plugins"]
     (context.artifacts_dir / "command-events.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))

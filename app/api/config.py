@@ -139,7 +139,7 @@ async def preflight_config_source(
     request_id: str = Depends(get_request_id),
 ):
     try:
-        result = config_service.preflight_source_edit(source_key=source_key,
+        result = await config_service.preflight_source_edit(source_key=source_key,
             gateway_id=require_current_gateway_id("配置来源预检"), request=payload)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

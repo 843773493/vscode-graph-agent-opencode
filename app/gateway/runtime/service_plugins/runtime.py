@@ -19,8 +19,9 @@ from uuid import uuid4
 import httpx
 import psutil
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from app.core.config_sources import config_revision
 from app.core.env import get_project_root
 from app.core.file_permissions import restrict_private_path_access
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
@@ -46,6 +47,11 @@ from app.schemas.gateway.service_plugin import (
     PluginInstanceStatus,
     ServicePluginManifest,
 )
+from configs.plugin_parameters import (
+    PluginParameters,
+    PluginParameterValidator,
+    plugin_parameters,
+)
 
 logger = logging.getLogger(__name__)
 Slot = tuple[str, str, str | None]
@@ -57,6 +63,7 @@ class _ProcessRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     binding: PluginBinding
     revision: str
+    parameters_revision: str
     process_id: int = Field(gt=0)
     created_at: float
     instance_id: str
@@ -95,6 +102,8 @@ class PluginSlot:
     revision: str
     declaration: ServicePluginManifest
     gateway_id: str
+    parameters: dict[str, JsonValue] = field(default_factory=dict)
+    parameters_revision: str = field(init=False)
     process: ManagedProcess | AdoptedManagedProcess | None = None
     receipt: PluginInstanceStatus | None = None
     base_url: str | None = None
@@ -106,6 +115,7 @@ class PluginSlot:
     command_validators: dict[str, tuple[Draft202012Validator, Draft202012Validator]] = field(init=False)
 
     def __post_init__(self) -> None:
+        self.parameters_revision = config_revision({"parameters": self.parameters})
         self.command_validators = {command.id: (Draft202012Validator(command.arguments_schema),
                                               Draft202012Validator(command.result_schema))
                                    for command in self.declaration.contributes.commands}
@@ -150,7 +160,8 @@ class GatewayPluginRuntime:
         return plugin
 
     def validate(self, payload: dict[str, object]) -> None:
-        self.validate_bindings(gateway_plugin_bindings(payload), workspace_id=None)
+        self.validate_bindings(gateway_plugin_bindings(payload), workspace_id=None,
+                               parameters=plugin_parameters(payload))
         self.validate_defaults(payload)
 
     def validate_defaults(self, payload: dict[str, object]) -> None:
@@ -160,20 +171,36 @@ class GatewayPluginRuntime:
             if plugin is None or plugin.instance_scope != "workspace":
                 raise ValueError(f"新建工作区默认值只接受已安装的 workspace 插件: {binding.package_id}/{binding.plugin_id}")
 
-    def validate_bindings(self, bindings: list[PluginBinding], *, workspace_id: str | None) -> None:
+    def validate_bindings(self, bindings: list[PluginBinding], *, workspace_id: str | None,
+                          parameters: PluginParameters | None = None) -> None:
         for binding in bindings:
-            self.declaration(binding)
+            declaration = self.declaration(binding)
+            values = (parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {})
+            schema = declaration.contributes.configuration
+            if schema is None:
+                if values:
+                    raise ValueError(f"插件未声明参数: {binding.package_id}/{binding.plugin_id}")
+            else:
+                error = next(PluginParameterValidator(schema).iter_errors(values), None)
+                if error is not None:
+                    if error.validator == "writeOnly":
+                        raise ValueError("插件秘密参数尚未接入私有输入 owner，不能通过普通参数提交") from error
+                    raise ValueError(f"插件参数不符合 {binding.package_id}/{binding.plugin_id}"
+                                     f"@{binding.package_version} schema: field={list(error.absolute_path)}, "
+                                     f"constraint={error.validator}") from error
         self.skill_sources.validate_plugin_bindings(bindings, self.packages, workspace_id=workspace_id)
 
     async def apply(self, payload: dict[str, object], revision: str) -> None:
         self.validate_defaults(payload)
-        await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None)
+        await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None,
+                               parameters=plugin_parameters(payload))
 
-    async def apply_scope(self, entries: list[PluginBinding], *, revision: str, workspace_id: str | None) -> None:
+    async def apply_scope(self, entries: list[PluginBinding], *, revision: str, workspace_id: str | None,
+                          parameters: PluginParameters | None = None) -> None:
         bindings = {self.key(binding): binding for binding in entries}
         if len(bindings) != len(entries) or any(binding.workspace_id != workspace_id for binding in entries):
             raise ValueError("插件绑定必须唯一且属于当前配置 owner 的范围")
-        self.validate_bindings(entries, workspace_id=workspace_id)
+        self.validate_bindings(entries, workspace_id=workspace_id, parameters=parameters)
         # 配置已经提交；启动失败只改实际回执，不回滚 enabled。
         for key, slot in tuple(self.slots.items()):
             if slot.binding.workspace_id == workspace_id and key not in bindings:
@@ -187,17 +214,22 @@ class GatewayPluginRuntime:
                     else:
                         del self.slots[key]
         for binding in bindings.values():
-            await self.apply_binding(binding, revision=revision)
+            await self.apply_binding(binding, revision=revision,
+                parameters=(parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {}))
 
-    async def apply_binding(self, binding: PluginBinding, *, revision: str, restart: bool = False) -> dict[str, object]:
+    async def apply_binding(self, binding: PluginBinding, *, revision: str, restart: bool = False,
+                            parameters: dict[str, JsonValue]) -> dict[str, object]:
         key = self.key(binding)
         async with self._locks.setdefault(key, asyncio.Lock()):
             previous = self.slots.get(key)
+            values = parameters
+            parameters_revision = config_revision({"parameters": values})
             # revision 已由原配置 owner 核验；无关配置提交不要求给插件重复交接。
             if restart and (previous is None or previous.binding != binding):
                 raise ValueError("重启基线已失效，请读取原绑定")
-            if previous is not None and previous.binding == binding and not restart:
+            if previous is not None and previous.binding == binding and previous.parameters_revision == parameters_revision and not restart:
                 self.skill_sources.publish_plugin(binding, self.packages)
+                previous.parameters = values
                 previous.revision = revision
                 return previous.describe()
             declaration = self.declaration(binding)
@@ -212,7 +244,7 @@ class GatewayPluginRuntime:
                     previous.state, previous.error = "failed", str(error)
                     logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
                     return previous.describe()
-            slot = PluginSlot(binding, revision, declaration, self.gateway_id)
+            slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values)
             self.slots[key] = slot
             self.skill_sources.publish_plugin(binding, self.packages)
             if binding.enabled and declaration.runtime is not None:
@@ -268,6 +300,7 @@ class GatewayPluginRuntime:
         environment["BOXTEAM_PLUGIN_COMMANDS"] = json.dumps([
             command.model_dump(mode="json") for command in slot.declaration.contributes.commands
         ])
+        environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(slot.parameters, ensure_ascii=False)
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])
         root = self.packages.package_root(slot.binding.package_id, slot.binding.package_version)
         working_directory = self.directory / instance_id
@@ -309,7 +342,7 @@ class GatewayPluginRuntime:
                 temporary = record_path.with_suffix(".tmp")
                 with temporary.open("w", encoding="utf-8") as stream:
                     restrict_private_path_access(temporary, descriptor=stream.fileno())
-                    stream.write(_ProcessRecord(binding=slot.binding, revision=slot.revision,
+                    stream.write(_ProcessRecord(binding=slot.binding, revision=slot.revision, parameters_revision=slot.parameters_revision,
                         process_id=receipt.process_id, created_at=psutil.Process(receipt.process_id).create_time(),
                         instance_id=instance_id, base_url=slot.base_url, token=token).model_dump_json())
                 temporary.replace(record_path)
@@ -372,6 +405,7 @@ class GatewayPluginRuntime:
                 if path != self._record(key):
                     raise ValueError("插件进程发现记录与原槽位不符")
                 slot = PluginSlot(record.binding, record.revision, self.declaration(record.binding), self.gateway_id)
+                slot.parameters_revision = record.parameters_revision
                 if await self._adopt(slot, record):
                     adopted[key] = slot
                 else:

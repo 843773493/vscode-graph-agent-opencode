@@ -40,6 +40,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.resource_platform.observation.source_update_policy import (
     SourceUpdatePolicy,
 )
+from configs.plugin_parameters import PluginParameters, plugin_parameters
 from tests.support.processes.workspace import ensure_local_port_available
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
@@ -57,10 +58,11 @@ class TerminalPluginConfigSnapshot:
     revision: str
     bindings: tuple[PluginBinding, ...]
     referenced_bindings: tuple[PluginBinding, ...]
+    parameters: PluginParameters
 
 
 class ConfigSnapshotReader(Protocol):
-    def __call__(self, workspace_root: Path) -> TerminalPluginConfigSnapshot: ...
+    def __call__(self, workspace_root: Path, /) -> TerminalPluginConfigSnapshot: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +90,7 @@ class TerminalPluginGatewayComponents:
             active,
             revision=snapshot.revision,
             workspace_id=self.workspace_id,
+            parameters=snapshot.parameters,
         )
 
     async def apply_config_service(self, config_service: ConfigService) -> None:
@@ -104,6 +107,7 @@ class TerminalPluginGatewayComponents:
             revision=config_service.get_revision(),
             bindings=tuple(active),
             referenced_bindings=tuple(referenced),
+            parameters=plugin_parameters(config_service.get_snapshot().to_dict()),
         )
 
 
@@ -146,7 +150,8 @@ class TerminalPluginGateway:
     async def restart(self) -> None:
         """经原 Gateway 插件 owner 重启精确绑定。"""
 
-        await self.runtime.apply_binding(self.binding, revision=self.revision, restart=True)
+        await self.runtime.apply_binding(self.binding, revision=self.revision, restart=True,
+            parameters=self.runtime.slots[self.runtime.key(self.binding)].parameters)
         slot = self.runtime.slots[(self.binding.package_id, self.binding.plugin_id, self.workspace_id)]
         if slot.receipt is None or slot.state != "ready":
             raise RuntimeError(f"Terminal 插件重启未 ready: {slot.error}")
@@ -203,6 +208,7 @@ def _read_config_service_snapshot(workspace_root: Path) -> TerminalPluginConfigS
         revision=service.get_revision(),
         bindings=tuple(active),
         referenced_bindings=tuple(referenced),
+        parameters=plugin_parameters(service.get_snapshot().to_dict()),
     )
 
 
@@ -218,6 +224,7 @@ def _debug_plugin_snapshot(workspace_id: str) -> TerminalPluginConfigSnapshot:
             enabled=True,
         ),),
         referenced_bindings=(),
+        parameters={},
     )
 
 

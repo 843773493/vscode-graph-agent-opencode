@@ -25,6 +25,7 @@ from app.services.infrastructure.resource_platform.sources.skill_source_config i
     validate_skill_sources,
 )
 from configs.installer import resolve_config_resource_source
+from configs.plugin_parameters import bound_plugin_configuration
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
 
 from .connection_ids import _normalize_connection_ids
@@ -224,6 +225,7 @@ def load_gateway_config(
         schema_path=resolved_schema_path,
     )
     raw_workspaces = raw_gateway_config["workspaces"]
+    raw_gateway_config = bound_plugin_configuration(raw_gateway_config)
     if not isinstance(raw_workspaces, list):
         raise TypeError("Gateway workspaces 配置必须是数组")
     validated_workspaces = cast(list[dict[str, object]], raw_workspaces)

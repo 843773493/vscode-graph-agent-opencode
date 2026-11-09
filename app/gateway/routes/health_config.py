@@ -446,6 +446,8 @@ async def preflight_gateway_config_source(
     require_federation_capability(request, auth, "configuration_write")
     try:
         result = service.preflight_source_edit(source_key=source_key, request=payload)
+        if result.candidate.get("plugins") != service.config.payload.get("plugins"):
+            request.app.state.service_plugins.validate(result.candidate)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (TypeError, ValueError) as error:
@@ -487,15 +489,18 @@ async def save_gateway_config_source(
             gateway_plugin_bindings,
             workspace_default_bindings,
         )
+        from configs.plugin_parameters import plugin_parameters
 
         def authorize_plugins(candidate) -> None:
             nonlocal plugin_binding_changed
             plugin_binding_changed = (
                 gateway_plugin_bindings(candidate.payload) != gateway_plugin_bindings(service.config.payload)
                 or workspace_default_bindings(candidate.payload) != workspace_default_bindings(service.config.payload)
+                or plugin_parameters(candidate.payload) != plugin_parameters(service.config.payload)
             )
             if plugin_binding_changed:
                 require_federation_capability(request, auth, "service_plugin_runtime_manage")
+            if candidate.payload.get("plugins") != service.config.payload.get("plugins"):
                 request.app.state.service_plugins.validate(candidate.payload)
 
         result = await service.save_source_edit(source_key=source_key, request=payload,

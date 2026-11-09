@@ -71,6 +71,7 @@ function readPluginRuntimeEnvironment() {
     port,
     token: readRequiredEnvironment("BOXTEAM_RUNTIME_CONTROL_TOKEN"),
     identity: parseInstanceIdentity(readRequiredEnvironment("BOXTEAM_PLUGIN_INSTANCE")),
+    parameters: JSON.parse(process.env.BOXTEAM_PLUGIN_PARAMETERS ?? "{}"),
   });
 }
 
@@ -93,7 +94,10 @@ export function createPluginRuntimeManagement(options) {
     throw new TypeError("插件服务名必须是非空字符串");
   }
   if (typeof options.shutdown !== "function") throw new TypeError("插件必须提供原服务关闭函数");
-  const commands = createPluginCommands(environment.identity, options.commands);
+  if (!environment.parameters || typeof environment.parameters !== "object" || Array.isArray(environment.parameters)) {
+    invalidEnvironment("BOXTEAM_PLUGIN_PARAMETERS", "必须是 JSON 对象");
+  }
+  const commands = createPluginCommands(environment.identity, options.commands, environment.parameters);
 
   return Object.freeze({
     ...environment,

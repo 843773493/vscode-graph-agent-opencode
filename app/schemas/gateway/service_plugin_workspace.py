@@ -5,6 +5,14 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.gateway.service_plugin import PluginBinding
+from configs.plugin_parameters import PluginParameters
+
+
+class WorkspacePluginCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    bindings: list[PluginBinding]
+    parameters: PluginParameters = Field(default_factory=dict)
 
 
 class WorkspacePluginCreation(BaseModel):
@@ -24,14 +32,12 @@ class WorkspacePluginCreation(BaseModel):
         return self
 
 
-class WorkspacePluginSnapshot(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+class WorkspacePluginSnapshot(WorkspacePluginCandidate):
 
     workspace_id: str = Field(min_length=1)
     backend_id: str = Field(min_length=1)
     backend_generation: str = Field(min_length=1)
     revision: str = Field(min_length=1)
-    bindings: list[PluginBinding]
     referenced_bindings: list[PluginBinding]
 
     @model_validator(mode="after")
@@ -42,4 +48,4 @@ class WorkspacePluginSnapshot(BaseModel):
         return self
 
 
-__all__ = ["WorkspacePluginCreation", "WorkspacePluginSnapshot"]
+__all__ = ["WorkspacePluginCandidate", "WorkspacePluginCreation", "WorkspacePluginSnapshot"]

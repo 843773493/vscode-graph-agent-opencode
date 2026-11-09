@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from app.api.runtime_control import (
     verify_local_control_request,
@@ -45,6 +45,7 @@ class PluginCommandContext:
     call: PluginCommandCallRequest
     request_id: str
     progress: Progress
+    parameters: dict[str, JsonValue]
 
 
 CommandHandler = Callable[[dict[str, JsonValue], PluginCommandContext], Awaitable[JsonValue]]
@@ -56,6 +57,7 @@ def plugin_command_router(
 ) -> APIRouter:
     """handler 集合在启动边界冻结，必须逐项匹配 Gateway 交付的清单。"""
     handlers = dict(handlers)
+    parameters = TypeAdapter(dict[str, JsonValue]).validate_json(os.environ.get("BOXTEAM_PLUGIN_PARAMETERS", "{}"))
     identity = PluginInstanceStatus.model_validate({
         **json.loads(os.environ["BOXTEAM_PLUGIN_INSTANCE"]),
         "status": "ready", "process_id": os.getpid(), "capabilities": ["status", "shutdown", "commands"],
@@ -150,7 +152,7 @@ def plugin_command_router(
                     async with asyncio.timeout_at(deadline):
                         await emit("started")
                         result = await handlers[commands[payload.command_id].handler](payload.arguments,
-                            PluginCommandContext(payload, request_id, progress))
+                            PluginCommandContext(payload, request_id, progress, parameters))
                         result_validators[payload.command_id].validate(result)
                         await emit("result", result=result)
                 except asyncio.CancelledError:

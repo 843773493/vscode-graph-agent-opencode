@@ -15,7 +15,7 @@ function reject(message, statusCode = 409) {
   throw Object.assign(new Error(message), { statusCode });
 }
 
-export function createPluginCommands(identity, providedHandlers = {}) {
+export function createPluginCommands(identity, providedHandlers = {}, parameters = {}) {
   const handlers = Object.freeze({ ...providedHandlers });
   const raw = JSON.parse(process.env.BOXTEAM_PLUGIN_COMMANDS ?? "[]");
   if (!Array.isArray(raw)) throw new TypeError("BOXTEAM_PLUGIN_COMMANDS 必须是数组");
@@ -96,6 +96,7 @@ export function createPluginCommands(identity, providedHandlers = {}) {
         const result = await handlers[command.handler](value.arguments, {
           call: Object.freeze({ ...value }), requestId,
           signal: controller.signal,
+          parameters,
           progress: (completed, total, message) => emit("progress", { completed, total, message }),
         });
         controller.signal.throwIfAborted();

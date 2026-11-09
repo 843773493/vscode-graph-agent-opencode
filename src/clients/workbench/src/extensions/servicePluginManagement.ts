@@ -84,7 +84,8 @@ async function readWorkspaceBindings(target: GatewayWorkspaceRequestTarget): Pro
 }
 
 async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
-  quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null): Promise<void> {
+  quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null,
+  editParameters = false): Promise<void> {
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
   let document: ConfigDocument;
   let route: { gateway_id: string; workspace_id?: string };
@@ -111,20 +112,43 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
     document = await getConfigSourceDocument(0, workspaceTarget, source.source_key!);
   }
   if (!document.writable) throw new Error(`配置来源 ${source.source_key} 只读，未提交插件变更`);
-  const original = sourceBindings(document, path);
-  const index = original.findIndex(item => sameBinding(item, binding));
-  const updated = original.slice();
-  if (enabled === null) { if (index >= 0) updated.splice(index, 1); }
-  else if (index < 0) updated.push({ ...binding, enabled });
-  else updated[index] = { ...binding, enabled };
-  const jsonc = updateJsonc(document.jsonc, path, updated);
+  let jsonc: string;
+  if (editParameters) {
+    if (scope === 'defaults') throw new Error('新建工作区默认值只保存绑定；参数由目标工作区配置 owner 管理');
+    const parameterPath = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id];
+    let current: unknown = parse(document.jsonc);
+    for (const key of parameterPath) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
+    const operation = await quickInput.pick([{ label: '编辑此来源的参数', remove: false }, { label: '删除此来源的参数覆盖', remove: true }],
+      { title: `${binding.package_id}/${binding.plugin_id} · ${binding.package_version}`, placeHolder: '删除只影响当前来源；原 owner 计算下层有效值' });
+    if (!operation) return;
+    let values: unknown;
+    if (!operation.remove) {
+      const text = await quickInput.input({ title: '编辑插件参数 JSON 对象', prompt: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key}`,
+        value: JSON.stringify(current ?? {}), validateInput: async value => {
+          try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? null : '参数必须是 JSON 对象'; }
+          catch { return '请输入有效 JSON；确切版本 schema 由原配置 owner 预检'; }
+        } });
+      if (text === undefined) return;
+      values = JSON.parse(text);
+    }
+    jsonc = updateJsonc(document.jsonc, parameterPath, values);
+  } else {
+    const original = sourceBindings(document, path);
+    const index = original.findIndex(item => sameBinding(item, binding));
+    const updated = original.slice();
+    if (enabled === null) { if (index >= 0) updated.splice(index, 1); }
+    else if (index < 0) updated.push({ ...binding, enabled });
+    else updated[index] = { ...binding, enabled };
+    jsonc = updateJsonc(document.jsonc, path, updated);
+  }
   if (jsonc === document.jsonc) return;
   const intent = Object.freeze({ ...route, source_key: source.source_key!, jsonc,
     base_file_digest: document.file_digest, base_layer_revision: document.layer_revision, base_layer_digest: document.layer_digest,
     expected_active_revision: document.active_revision, expected_active_digest: document.active_digest,
     idempotency_key: crypto.randomUUID() }) as ConfigIntent;
   let saved: ConfigDocument;
-  const change = enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
+  const change = editParameters ? '修改参数' : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
+  const confirmation = editParameters ? '插件参数' : '插件绑定';
   if (gatewaySource) {
     const query = gatewayTarget.gateway_connection_id ? `?gateway_connection_id=${encodeURIComponent(gatewayTarget.gateway_connection_id)}` : '';
     const headers = targetHeader(gatewayTarget.gateway_id);
@@ -132,7 +156,7 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
     const preflight = await gateway.request<{ document?: GatewayConfigSourceDocumentDTO; changed_paths: string[] }>(
       `/api/gateway/config/sources/${key}/preflight${query}`, { method: 'POST', headers, body: JSON.stringify(intent) });
     if (!preflight.document || preflight.document.gateway_id !== gatewayTarget.gateway_id || preflight.document.source_key !== source.source_key) throw new Error('Gateway 配置预检回执归属不匹配');
-    const accepted = await quickInput.pick([{ label: '取消' }, { label: '确认保存 Gateway 插件绑定', save: true,
+    const accepted = await quickInput.pick([{ label: '取消' }, { label: `确认保存 Gateway ${confirmation}`, save: true,
       description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
     { title: '确认配置提交' });
     if (!accepted?.save) return;
@@ -142,7 +166,7 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
   } else {
     const workspace = workspaceTarget!;
     const preflight = await preflightConfigSource(0, workspace, intent as ConfigSourceEditRequest);
-    const accepted = await quickInput.pick([{ label: '取消' }, { label: '确认保存工作区插件绑定', save: true,
+    const accepted = await quickInput.pick([{ label: '取消' }, { label: `确认保存工作区${confirmation}`, save: true,
       description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
     { title: '确认配置提交' });
     if (!accepted?.save) return;
@@ -338,6 +362,20 @@ export class ServicePluginPackagesView extends ViewPane {
       const unbind = append(details, $('button'));
       unbind.textContent = '解除此范围绑定';
       unbind.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, null)));
+    }
+    if (scope !== 'defaults') {
+      append(details, $('p')).textContent = binding
+        ? `参数按 ${manifest.package_id}/${plugin.id}@${manifest.version} 校验；保存与实际运行分别报告。`
+        : '插件未绑定，参数仅留在原来源且未生效；绑定时按确切版本完整校验。';
+      const parameters = append(details, $('button'));
+      parameters.textContent = '编辑参数 JSON';
+      parameters.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
+        this.quickInput, this.notifications, bindingValue, null, true)));
+      if (plugin.contributes?.configuration) {
+        const schema = append(details, $('pre'));
+        schema.setAttribute('aria-label', '此安装版本的参数 schema');
+        schema.textContent = JSON.stringify(plugin.contributes.configuration, null, 2);
+      }
     }
     if (status?.revision && plugin.runtime) {
       const restart = append(details, $('button'));

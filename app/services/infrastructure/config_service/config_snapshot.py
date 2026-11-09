@@ -40,6 +40,7 @@ from app.services.infrastructure.config_service.config_service_common import (
 from app.services.infrastructure.resource_platform.sources.skill_source_config import (
     validate_skill_sources,
 )
+from configs.plugin_parameters import bound_plugin_configuration
 from configs.runtime import require_current_workspace_config, validate_config_payload
 
 if TYPE_CHECKING:
@@ -71,7 +72,10 @@ class ConfigSnapshotMixin:
         if validate_schema:
             validate_config_payload(config, schema=schema)
         workspace_plugin_bindings_for_root(config, workspace_root=cast("ConfigService", self)._workspace_root)
-        validate_skill_sources(config["resources"]["skill_sources"].get("sources", []))
+        config = bound_plugin_configuration(config)
+        resources = cast(dict[str, object], config["resources"])
+        skill_sources = cast(dict[str, object], resources["skill_sources"])
+        validate_skill_sources(skill_sources.get("sources", []))
         # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
         # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
         with self.use_snapshot(build_config_snapshot(

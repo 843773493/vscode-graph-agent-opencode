@@ -463,3 +463,25 @@ async def test_recovery_required_source_is_observed_without_reapplying(source_ow
         assert len(rebuilt.list_events()) == 1
     finally:
         await rebuilt.stop()
+
+
+@pytest.mark.parametrize("bound", [True, False])
+async def test_plugin_parameters_require_runtime_permission_only_when_bound(source_owner: SourceOwner, bound: bool) -> None:
+    case = source_owner
+    binding = {"package_id": "proof", "plugin_id": "probe", "package_version": "1.0.0", "enabled": False}
+    source = {"config_version": case.service.config.payload["config_version"], "plugins": {"runtime": {"entries": [binding] if bound else []},
+        "configuration": {"values": {"proof": {"probe": {"label": "before"}}}}}}
+    await case.service.save_source_edit(source_key=SOURCE, request=case.request(json.dumps(source), key="setup"))
+    case.allow("configuration_read", "configuration_write")
+    source["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] = "after"
+    request = case.request(json.dumps(source), key="parameters")
+    before = case.path.read_bytes()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://gateway") as client:
+        response = await client.put(f"/api/gateway/config/sources/{SOURCE}", json=request.model_dump(mode="json"))
+    assert response.status_code == (403 if bound else 200), response.text
+    if bound:
+        assert case.path.read_bytes() == before
+    else:
+        data = response.json()["data"]
+        assert "configuration" not in data["effective"]["plugins"]
+        assert data["source_effective"]["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] == "after"

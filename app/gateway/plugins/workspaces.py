@@ -164,7 +164,8 @@ class WorkspacePluginBindings:
         # 已提交期望与运行状态分开：非法包／启动失败不得修改原 enabled。
         self.snapshots[workspace_id] = snapshot
         try:
-            await self.runtime.apply_scope(snapshot.bindings, revision=snapshot.revision, workspace_id=workspace_id)
+            await self.runtime.apply_scope(snapshot.bindings, revision=snapshot.revision, workspace_id=workspace_id,
+                                           parameters=snapshot.parameters)
         except (ValueError, RuntimeError) as error:
             self.states[workspace_id] = WorkspacePluginConfigurationDTO(
                 workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=str(error))

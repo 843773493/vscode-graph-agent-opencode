@@ -337,7 +337,22 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "runtime": { "$ref": "#/$defs/workspacePluginRuntimeConfig" }
+        "runtime": { "$ref": "#/$defs/workspacePluginRuntimeConfig" },
+        "configuration": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "values": {
+              "type": "object", "default": {},
+              "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+                "additionalProperties": {"type": "object"}
+              },
+              "description": "按包 ID／插件 ID 保存参数。未绑定参数仅保留原来源，不生效；绑定时按确切版本 schema 校验。"
+            }
+          }
+        }
       }
     },
 

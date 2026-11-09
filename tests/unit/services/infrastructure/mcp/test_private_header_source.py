@@ -89,7 +89,7 @@ async def test_reference_survives_source_candidate_cas_save_and_cold_snapshot(pr
         base_layer_digest=original.layer_digest, expected_active_revision=original.active_revision,
         expected_active_digest=original.active_digest, idempotency_key="private-header-source",
     )
-    preview = service.preflight_source_edit(source_key=SOURCE, gateway_id=GATEWAY, request=request)
+    preview = await service.preflight_source_edit(source_key=SOURCE, gateway_id=GATEWAY, request=request)
     assert preview.candidate["mcp"]["servers"]["secure"]["headers"]["Authorization"] == reference.model_dump(mode="json")
     assert path.read_text() == "{}\n" and SECRET not in preview.model_dump_json()
     stale = request.model_copy(update={"expected_active_digest": "stale"})

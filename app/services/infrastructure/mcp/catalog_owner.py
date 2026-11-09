@@ -686,7 +686,7 @@ class McpCatalogOwner:
         text = set_source_value(request.source_edit.jsonc, ("mcp", "servers", request.server_id), expected)
         edit = request.source_edit.model_copy(update={"jsonc": text})
         assert actual_target.gateway_id is not None
-        preflight = config_service.preflight_source_edit(source_key=edit.source_key,
+        preflight = await config_service.preflight_source_edit(source_key=edit.source_key,
             gateway_id=actual_target.gateway_id, request=edit)
         return McpCandidateConfigurationDraftDTO(
             source_edit=edit.model_copy(update={"jsonc": redact_source_text(text)}), preflight=preflight)

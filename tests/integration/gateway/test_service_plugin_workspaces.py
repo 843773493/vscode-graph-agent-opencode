@@ -47,6 +47,9 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
     for workspace in [gateway_workspace, *workspaces]:
         config_path = workspace / ".boxteam/workspace.jsonc"
         payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
+        for provider in payload["llm"]["providers"]:
+            if "api_key" in provider:
+                provider["api_key"] = "plugin-workspace-unused-key"
         payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -74,8 +77,10 @@ def _package(path: Path, *, package_id: str, mode: str = "") -> Path:
             "id": "probe",
             "name": "Workspace 进程探针",
             "instance_scope": "workspace",
-            "requires": [{"extension_point": "services", "version": 1}],
-            "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]},
+            "requires": [{"extension_point": "services", "version": 1}, {"extension_point": "configuration", "version": 1}],
+            "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}],
+                "configuration": {"type": "object", "additionalProperties": False,
+                    "properties": {"label": {"type": "string"}, "credentialValue": {"type": "string", "writeOnly": True}}}},
             "runtime": "python",
             "entrypoint": ["nested/entry.py", mode] if mode else ["nested/entry.py"],
             "management_protocol_version": 1,
@@ -83,7 +88,9 @@ def _package(path: Path, *, package_id: str, mode: str = "") -> Path:
     }
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
-        archive.writestr("nested/entry.py", PYTHON_PLUGIN)
+        archive.writestr("nested/entry.py", PYTHON_PLUGIN.replace(
+            "'pid': os.getpid(), 'instance_id': identity['instance_id'],",
+            "'parameters': json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS']), 'pid': os.getpid(), 'instance_id': identity['instance_id'],"))
         archive.writestr("nested/local_module.py", "VALUE = 1\n")
     return path
 
@@ -138,12 +145,15 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
     def binding_for(package_id: str, *, enabled: bool = True) -> dict[str, object]:
         return {"package_id": package_id, "package_version": "1.0.0", "plugin_id": "probe", "enabled": enabled}
 
-    def write_binding(workspace_id: str, entries: list[dict[str, object]], key: str) -> None:
+    def write_binding(workspace_id: str, entries: list[dict[str, object]], key: str,
+                      parameters: dict[str, object] | None = None, expected_status: int = 200) -> None:
         path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
         headers = {"X-BoxTeam-Workspace-Id": workspace_id}
         document = exchange("GET", path, headers=headers).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
         source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        if parameters is not None:
+            source["plugins"]["configuration"] = {"values": {"probe.tools": {"probe": parameters}}}
         response = exchange("PUT", path, {
             "gateway_id": gateway_id(),
             "workspace_id": workspace_id,
@@ -156,7 +166,12 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
             "expected_active_digest": document["active_digest"],
             "idempotency_key": key,
         }, headers=headers)
-        response.raise_for_status()
+        assert response.status_code == expected_status, response.text
+        if expected_status != 200:
+            after = exchange("GET", path, headers=headers).raise_for_status().json()["data"]
+            assert after["jsonc"] == document["jsonc"]
+            assert after["effective"] == document["effective"]
+            return
         assert response.json()["data"]["edit"]["state"] == "active"
 
     def wait_binding(workspace_id: str, state: str) -> dict[str, object]:
@@ -215,19 +230,33 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
                 "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
             }).raise_for_status()
 
-        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-enable")
-        write_binding(workspace_b_id, [binding_for("probe.tools")], "workspace-b-plugin-enable")
+        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-enable", {"label": "A"})
+        write_binding(workspace_b_id, [binding_for("probe.tools")], "workspace-b-plugin-enable", {"label": "B"})
         ready_a, ready_b = wait_binding(workspace_a_id, "ready"), wait_binding(workspace_b_id, "ready")
         assert ready_a["instance"]["process_id"] != ready_b["instance"]["process_id"]
         assert ready_a["instance"]["instance_id"] != ready_b["instance"]["instance_id"]
         assert call(ready_a)["pid"] == ready_a["instance"]["process_id"]
         assert call(ready_b)["pid"] == ready_b["instance"]["process_id"]
+        assert call(ready_a)["parameters"] == {"label": "A"}
+        assert call(ready_b)["parameters"] == {"label": "B"}
+
+        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-private-parameters",
+            {"credentialValue": "must-not-reach-source"}, expected_status=409)
+
+        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-parameters", {"label": "A changed"})
+        changed_a = _wait_for(lambda value: (item := status_for(value, workspace_a_id)) is not None
+            and item["state"] == "ready" and item["instance"]["instance_id"] != ready_a["instance"]["instance_id"])
+        assert_process_exited(ready_a["instance"]["process_id"])
+        ready_a = status_for(changed_a, workspace_a_id)
+        assert ready_a is not None and call(ready_a)["parameters"] == {"label": "A changed"}
+        assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
         restarted = exchange("POST", f"/api/gateway/workspaces/{workspace_a_id}/runtime/restart-safe",
             timeout=150).raise_for_status()
         assert restarted.status_code == 200
         same_a = wait_binding(workspace_a_id, "ready")
         assert same_a["instance"]["instance_id"] == ready_a["instance"]["instance_id"]
+        assert call(same_a)["parameters"] == {"label": "A changed"}
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
         restarted_plugin = exchange("POST", "/api/gateway/service-plugins/restart", {
@@ -242,6 +271,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         assert_process_exited(same_a["instance"]["process_id"])
         assert call_response(same_a).status_code == 409, "插件重启后旧 instance_id 必须失效，不能改投新实例"
         ready_a = restarted_plugin
+        assert call(ready_a)["parameters"] == {"label": "A changed"}
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
         write_binding(workspace_a_id, [binding_for("probe.tools", enabled=False)], "workspace-a-plugin-disable")

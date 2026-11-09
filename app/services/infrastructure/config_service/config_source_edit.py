@@ -50,6 +50,7 @@ from app.services.infrastructure.config.workspace_plugins import (
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
 )
+from configs.plugin_parameters import plugin_parameters
 
 if TYPE_CHECKING:
     from app.services.infrastructure.config_service import ConfigService
@@ -218,11 +219,14 @@ class ConfigSourceEditMixin:
         verify_stable_config_file(file)
         return text, candidate
 
-    def preflight_source_edit(
+    async def preflight_source_edit(
         self, *, source_key: str, gateway_id: str, request: ConfigSourceEditRequest,
     ) -> ConfigSourcePreflightDTO:
         service = cast("ConfigService", self)
         _, candidate = self._preflight_source_edit(source_key, gateway_id, request)
+        await service._validate_gateway_workspace_plugin_bindings(
+            previous=service._require_snapshot(), candidate=candidate, candidate_id=request.idempotency_key,
+        )
         with service._mcp_configuration_guard(candidate.to_dict().get("mcp")):
             pass
         return ConfigSourcePreflightDTO(
@@ -250,6 +254,28 @@ class ConfigSourceEditMixin:
             if pending.state != "candidate_validated" or store.get_config_apply_claim(config_domain=service._CONFIG_DOMAIN) is not None:
                 return self.get_source_document(source_key=source_key, gateway_id=gateway_id, idempotency_key=request.idempotency_key)
         text, candidate = self._preflight_source_edit(source_key, gateway_id, request, pending)
+
+        def require_plugin_permission() -> None:
+            current = service._require_snapshot().to_dict()
+            desired = candidate.to_dict()
+            if not service_plugin_runtime_manage and (
+                workspace_plugin_bindings_for_root(current, workspace_root=service._workspace_root)
+                != workspace_plugin_bindings_for_root(desired, workspace_root=service._workspace_root)
+                or plugin_parameters(current) != plugin_parameters(desired)
+            ):
+                raise PermissionError("当前 Gateway 未授权修改 Workspace 插件运行绑定")
+
+        require_plugin_permission()
+        # 来源文件先于 applying 阶段写入；先拒绝非法/秘密参数，发布前仍核包引用并发。
+        previous = service._require_snapshot()
+        current, desired = previous.to_dict(), candidate.to_dict()
+        parameters = plugin_parameters(desired)
+        if plugin_parameters(current) != parameters or (parameters and
+            workspace_plugin_bindings_for_root(current, workspace_root=service._workspace_root)
+            != workspace_plugin_bindings_for_root(desired, workspace_root=service._workspace_root)):
+            await service._validate_gateway_workspace_plugin_bindings(
+                previous=previous, candidate=candidate, candidate_id=request.idempotency_key,
+            )
         intent: dict[str, object] = {"gateway_id": gateway_id, "workspace_id": request.workspace_id,
                   "source_key": source_key, "request_digest": request_digest, "file_digest": sha256(text.encode("utf-8")).hexdigest(),
                   "stage": "accepted", "base_file_digest": request.base_file_digest,
@@ -268,15 +294,7 @@ class ConfigSourceEditMixin:
                         return False
                 elif claim is not None:
                     raise ConfigConflictError("已有配置 apply claim，禁止接受另一来源 intent")
-                current_bindings = workspace_plugin_bindings_for_root(
-                    service._require_snapshot().to_dict(),
-                    workspace_root=service._workspace_root,
-                )
-                candidate_bindings = workspace_plugin_bindings_for_root(
-                    candidate.to_dict(), workspace_root=service._workspace_root,
-                )
-                if not service_plugin_runtime_manage and current_bindings != candidate_bindings:
-                    raise PermissionError("当前 Gateway 未授权修改 Workspace 插件运行绑定")
+                require_plugin_permission()
                 file = self._check_source_edit(source_key, gateway_id, request, accepted)
                 if accepted is None:
                     service._prepare_candidate(service._require_snapshot(), candidate, idempotency_key=request.idempotency_key, source_edit=intent)

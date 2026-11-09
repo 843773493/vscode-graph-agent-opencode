@@ -105,12 +105,36 @@ try {
   };
   await enable('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
   result.configOwners.push('gateway');
+  const editParameters = async (sourceKey, confirmation, label) => {
+    await view.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
+    await pick(sourceKey);
+    await pick('编辑此来源的参数');
+    await inputQuick(JSON.stringify({ label }));
+    const submitted = page.waitForResponse(response => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname.endsWith(`/config/sources/${sourceKey}`));
+    await pick(confirmation);
+    const response = await submitted;
+    assert.equal(response.status(), 200);
+    const receipt = await response.json();
+    assert.equal(receipt.data.edit.state, 'active');
+    assert.equal(receipt.data.edit.source_saved, true);
+    await expect(quick).not.toBeVisible();
+    await expect(view.getByRole('button', { name: '编辑参数 JSON', exact: true })).toBeVisible();
+  };
+  await editParameters('gateway_mutable_override', '确认保存 Gateway 插件参数', 'Gateway 独立参数');
 
   await view.getByLabel('插件管理范围').selectOption('workspace');
   await pick(workspaceName);
   await expect(view).toContainText('工作区偏好 · workspace-preference');
   await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
   result.configOwners.push('workspace');
+  await editParameters('workspace_root_mutable_override', '确认保存工作区插件参数', '工作区独立参数');
+  const gatewayDocument = await api('/api/gateway/config/sources/gateway_mutable_override');
+  const workspaceDocument = await api(`/api/v1/workspaces/${active.workspace_id}/config/sources/workspace_root_mutable_override`,
+    { headers: { 'X-BoxTeam-Workspace-Id': active.workspace_id } });
+  assert.equal(gatewayDocument.effective.plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, 'Gateway 独立参数');
+  assert.equal(workspaceDocument.effective.plugins.configuration.values['ui.preference-probe']['workspace-preference'].label, '工作区独立参数');
+  result.parametersEdited = true;
 
   await view.getByLabel('插件管理范围').selectOption('defaults');
   await expect(view).toContainText('工作区偏好 · workspace-preference');
@@ -133,6 +157,9 @@ try {
   await pick('卸载整包');
   await expect(view).toContainText('尚无插件包', { timeout: 30_000 });
   result.uninstalled = true;
+  const residual = await api('/api/gateway/config/sources/gateway_mutable_override');
+  assert.equal(parseJsonc(residual.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, 'Gateway 独立参数');
+  assert(!residual.effective.plugins.configuration);
   result.phase = 'mcp-search-entry';
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.search', '@mcp'));
   const mcpView = page.getByRole('button', { name: 'MCP Servers - MCP gallery not configured Section', exact: true });

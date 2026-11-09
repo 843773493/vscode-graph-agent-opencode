@@ -9,9 +9,13 @@ from pathlib import Path
 from threading import Event
 
 import pytest
+from pydantic import JsonValue
 
 from app.gateway.plugins.packages import PluginPackageStore
-from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
+from app.gateway.runtime.service_plugins.runtime import (
+    GatewayPluginRuntime,
+    _ProcessRecord,
+)
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
@@ -114,9 +118,43 @@ async def test_code_restart_preserves_static_skill_publication(
         slot.state = "stopped"
 
     monkeypatch.setattr(case.runtime, "_stop", stopped)
-    status = await case.runtime.apply_binding(binding, revision="restart", restart=True)
+    status = await case.runtime.apply_binding(binding, revision="restart", restart=True, parameters={})
     assert status["state"] == "ready"
     assert case.owner.snapshot(workspace_id=WORKSPACE_A) == accepted
+
+
+async def test_adopted_parameters_are_rehydrated_from_owner_without_restarting(
+    skill_case: SkillCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = skill_case
+    binding = case.install("proof.adopt", code=True)
+    from app.core.config_sources import config_revision
+
+    values: dict[str, JsonValue] = {"label": "owner-only-value"}
+    record = _ProcessRecord(binding=binding, revision="before-handoff",
+        parameters_revision=config_revision({"parameters": values}), process_id=1,
+        created_at=1.0, instance_id="same-instance", base_url="http://127.0.0.1:12345", token="private")
+    path = case.runtime._record(case.runtime.key(binding))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record.model_dump_json())
+    assert "owner-only-value" not in path.read_text()
+
+    async def adopted(slot, _record):
+        slot.state = "ready"
+        return True
+
+    async def unexpected_start(*_args):
+        pytest.fail("同参数的原 owner 交付不应重启已接管实例")
+
+    monkeypatch.setattr(case.runtime, "_adopt", adopted)
+    monkeypatch.setattr(case.runtime, "_start", unexpected_start)
+    await case.runtime.adopt()
+    original = case.runtime.slots[case.runtime.key(binding)]
+    assert original.parameters == {}
+    # 本例只验证接管表示与交付比较；schema 候选已由真实产品参数用例覆盖。
+    await case.runtime.apply_binding(binding, revision="after-handoff", parameters=values)
+    assert case.runtime.slots[case.runtime.key(binding)] is original
+    assert original.parameters == values and original.revision == "after-handoff"
 
 
 async def test_cancelled_read_holds_package_until_real_io_finishes_and_disable_revokes_result(

@@ -21,6 +21,7 @@ from app.schemas.gateway.service_plugin_workspace import (
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.config import ConfigSourceEditRequest
 from app.services.infrastructure.config.source_document import set_source_value
+from configs.plugin_parameters import plugin_parameters
 
 router = APIRouter(
     prefix="/api/internal/service-plugins",
@@ -45,6 +46,7 @@ async def workspace_plugin_bindings(
         active = config_service.get_snapshot()
         bindings, referenced_bindings = config_service.get_workspace_plugin_binding_snapshot()
         snapshot = WorkspacePluginSnapshot(
+            parameters=plugin_parameters(active.to_dict()),
             workspace_id=container.workspace_id,
             backend_id=backend_id,
             backend_generation=backend_generation,

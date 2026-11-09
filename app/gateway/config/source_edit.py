@@ -40,7 +40,8 @@ from app.services.infrastructure.config.state import (
     changed_json_paths,
     prepare_config_for_persistence,
 )
-from configs.runtime import read_jsonc_object
+from configs.plugin_parameters import plugin_parameters
+from configs.runtime import merge_json_objects, read_jsonc_object
 
 from .connection_ids import _connection_id_record
 from .loader import load_gateway_config
@@ -88,6 +89,15 @@ class GatewaySourceEditMixin:
         text = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
         payloads: dict[str, dict[str, object]] = {}
         source_config = self._source_config(payloads=payloads)
+        source_payload: dict[str, object] = {}
+        for payload in payloads.values():
+            source_payload = merge_json_objects(source_payload, payload)
+        parameters = plugin_parameters(source_payload)
+        source_payload = source_config.payload
+        if parameters:
+            source_payload = merge_json_objects(source_payload, {
+                "plugins": {"configuration": {"values": parameters}},
+            })
         verify_stable_config_file(file)
         if source_config.schema_path is None or service._gateway_id is None:
             raise RuntimeError("Gateway 来源 owner 缺少 schema 或目标身份")
@@ -115,12 +125,12 @@ class GatewaySourceEditMixin:
             active_revision=active.active_revision if active else None, active_digest=active.effective_digest if active else None,
             json_schema=read_jsonc_object(source_config.schema_path),
             effective=cast(dict[str, object], redact_source_payload(service.config.payload)),
-            source_effective=cast(dict[str, object], redact_source_payload(source_config.payload)),
+            source_effective=cast(dict[str, object], redact_source_payload(source_payload)),
             layers=[GatewayConfigSourceLayerViewDTO(
                 source_key=key, layer=_GATEWAY_SOURCE_LAYER_AUTHORITY[key][0], precedence=_GATEWAY_SOURCE_LAYER_AUTHORITY[key][1],
                 writable=key != "inline:0", payload=cast(dict[str, object], redact_source_payload(payload)),
             ) for key, payload in payloads.items()],
-            origins=[GatewayConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(payloads, source_config.payload)],
+            origins=[GatewayConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(payloads, source_payload)],
             status=self.get_reload_status_dto(), edit=edit,
         )
 

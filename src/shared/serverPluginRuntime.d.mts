@@ -18,12 +18,14 @@ export interface PluginRuntimeEnvironment {
   port: number;
   token: string;
   identity: PluginRuntimeIdentity;
+  parameters: Record<string, unknown>;
 }
 
 export interface PluginRuntimeManagement {
   readonly port: number;
   readonly token: string;
   readonly identity: PluginRuntimeIdentity;
+  readonly parameters: Readonly<Record<string, unknown>>;
   handleRequest(request: IncomingMessage, response: ServerResponse, pathname: string): Promise<boolean>;
 }
 
@@ -37,6 +39,7 @@ export function createPluginRuntimeManagement(options: {
     call: Readonly<PluginCommandCallRequest>;
     requestId: string;
     signal: AbortSignal;
+    parameters: Readonly<Record<string, unknown>>;
     progress(completed: number, total?: number, message?: string): Promise<void>;
   }) => Promise<unknown>>>;
 }): PluginRuntimeManagement;

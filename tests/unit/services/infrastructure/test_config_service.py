@@ -21,7 +21,7 @@ from app.core.lifecycle import LifetimeScope
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_workspace_config_path
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.schemas.internal_v2.config import ConfigUpdateRequest
+from app.schemas.internal_v2.config import ConfigSourceEditRequest, ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.snapshot import ConfigSnapshot
@@ -1902,7 +1902,7 @@ async def test_plugin_binding_candidate_is_validated_after_pending_and_before_pu
             assert pending.state == "applying"
             assert active is not None
             assert active.active_revision == previous_active.active_revision
-            assert json.loads(request.content) == [
+            assert json.loads(request.content) == {"bindings": [
                 {
                     "package_id": "sample",
                     "plugin_id": "sample-tool",
@@ -1910,7 +1910,7 @@ async def test_plugin_binding_candidate_is_validated_after_pending_and_before_pu
                     "workspace_id": load_or_create_workspace_id(workspace_root),
                     "enabled": True,
                 }
-            ]
+            ], "parameters": {}}
             if not gateway_accepts:
                 return httpx.Response(409, json={"detail": "未安装指定 Workspace 插件"})
             return httpx.Response(
@@ -3159,3 +3159,45 @@ async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
         finally:
             await service.close()
             store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version_change", [False, True])
+async def test_workspace_bound_parameters_are_checked_before_source_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version_change: bool,
+) -> None:
+    config_path = _write_workspace_config(tmp_path, _base_config())
+    root = tmp_path / "workspace"
+    workspace_id = load_or_create_workspace_id(root)
+    with WorkspaceStateStore(workspace_root=root) as store:
+        service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path,
+            workspace_root=root, workspace_state_store=store)
+        source = get_workspace_config_path(root)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        binding = {"package_id": "proof", "plugin_id": "probe", "package_version": "1.0.0", "enabled": False}
+        payload = {"plugins": {"runtime": {"entries": [binding]},
+            "configuration": {"values": {"proof": {"probe": {"label": "before"}}}}}}
+        source.write_text(json.dumps(payload))
+        service.validate_workspace_config()
+        document = service.get_source_document(source_key="workspace_root_mutable_override", gateway_id="gateway-proof")
+        if version_change:
+            # 值不变也须按新版本校验，不能先把来源写完再拒绝候选。
+            binding["package_version"] = "2.0.0"
+            async def reject_new_schema(**kwargs) -> None:
+                assert kwargs["candidate"].to_dict()["plugins"]["runtime"]["entries"][0]["package_version"] == "2.0.0"
+                raise ConfigConflictError("新版本 schema 拒绝参数")
+            monkeypatch.setattr(service, "_validate_gateway_workspace_plugin_bindings", reject_new_schema)
+        else:
+            payload["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] = "after"
+        request = ConfigSourceEditRequest(gateway_id="gateway-proof", workspace_id=workspace_id,
+            source_key=document.source_key, jsonc=json.dumps(payload), base_file_digest=document.file_digest,
+            base_layer_revision=document.layer_revision, base_layer_digest=document.layer_digest,
+            expected_active_revision=document.active_revision, expected_active_digest=document.active_digest,
+            idempotency_key="parameters-no-runtime-permission")
+        original = source.read_bytes()
+        with pytest.raises(ConfigConflictError if version_change else PermissionError,
+            match="新版本 schema" if version_change else "插件运行绑定"):
+            await service.save_source_edit(source_key=document.source_key, gateway_id="gateway-proof",
+                request=request, service_plugin_runtime_manage=version_change)
+        assert source.read_bytes() == original
+        assert service.get_revision() == document.active_digest
