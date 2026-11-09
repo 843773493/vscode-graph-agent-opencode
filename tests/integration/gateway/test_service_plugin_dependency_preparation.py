@@ -42,29 +42,24 @@ def _dependency_wheel() -> bytes:
 
 def _plugin_source() -> str:
     return '''
-import json, os, threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import asyncio, json, os, sys
+sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
+from fastapi import FastAPI, Request
+import uvicorn
+from app.core.logging_config import configure_application_logging
+from app.runtime.plugin_commands import plugin_command_router
 from plugin_dependency import VALUE
+configure_application_logging(service='dependency-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
-identity.update(status='ready', process_id=os.getpid(), capabilities=['status','shutdown'],
-    log_sink=json.loads(os.environ['BOXTEAM_RUNTIME_LOG_SINK']))
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
-            self.send_error(403); return
-        body = identity if self.path == '/internal/plugin/status' else {
-            'value': VALUE, 'instance_id': identity['instance_id'],
-            'request_id': self.headers.get('X-Request-ID')}
-        raw = json.dumps(body).encode()
-        self.send_response(200); self.send_header('Content-Type','application/json')
-        self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw)
-    def do_POST(self):
-        if self.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
-            self.send_error(403); return
-        self.send_response(200); self.send_header('Content-Length','2'); self.end_headers(); self.wfile.write(b'{}')
-        threading.Thread(target=server.shutdown).start()
-server = ThreadingHTTPServer(('127.0.0.1', int(os.environ['BOXTEAM_PLUGIN_PORT'])), Handler)
-server.serve_forever(); server.server_close()
+async def shutdown(): server.should_exit = True
+app = FastAPI()
+app.include_router(plugin_command_router({}, shutdown=shutdown))
+@app.get('/services/echo/value')
+async def echo(request: Request):
+    return {'value': VALUE, 'instance_id': identity['instance_id'],
+        'request_id': request.headers.get('X-Request-ID')}
+server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=int(os.environ['BOXTEAM_PLUGIN_PORT']), log_config=None))
+asyncio.run(server.serve())
 '''
 
 
@@ -180,6 +175,9 @@ def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_worksp
     gateway_url = f"http://127.0.0.1:{unused_tcp_port}"
     config_path = gateway_workspace / ".boxteam/workspace.jsonc"
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    for provider in payload["llm"]["providers"]:
+        if "api_key" in provider:
+            provider["api_key"] = "plugin-dependency-unused-key"
     payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(

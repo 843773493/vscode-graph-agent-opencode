@@ -20,51 +20,68 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.workspaces import install_test_workspace_config
 
 PYTHON_PLUGIN = '''
-import json, os, sys, threading
+import asyncio, json, os, sys
 import local_module
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uvicorn
+from app.core.logging_config import configure_application_logging
+from app.runtime.plugin_commands import plugin_command_router
+configure_application_logging(service='lifecycle-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
-identity.update(status='ready', process_id=os.getpid(), capabilities=['status','shutdown'],
-    log_sink=json.loads(os.environ['BOXTEAM_RUNTIME_LOG_SINK']))
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
-if mode == 'bad-ready': identity['plugin_id'] = 'wrong-plugin'
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
-            self.send_error(403); return
-        body = identity if self.path == '/internal/plugin/status' else {
-            'pid': os.getpid(), 'instance_id': identity['instance_id'],
+async def shutdown(): server.should_exit = True
+app = FastAPI()
+@app.middleware('http')
+async def controlled_fault(request, call_next):
+    if request.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
+        return JSONResponse({'detail': 'invalid token'}, status_code=403)
+    if request.url.path == '/internal/plugin/status' and mode in ('bad-ready', 'bad-capabilities'):
+        return JSONResponse({**identity, 'status': 'ready', 'process_id': os.getpid(),
+            'plugin_id': 'wrong-plugin' if mode == 'bad-ready' else identity['plugin_id'],
+            'capabilities': ['status', 'shutdown'], 'log_sink': json.loads(os.environ['BOXTEAM_RUNTIME_LOG_SINK'])})
+    if request.url.path == '/internal/plugin/shutdown' and mode == 'bad-shutdown':
+        return JSONResponse({'detail': 'probe refuses shutdown'}, status_code=500)
+    return await call_next(request)
+app.include_router(plugin_command_router({}, shutdown=shutdown))
+@app.get('/services/echo/{resource:path}')
+async def echo(request: Request, resource: str):
+    if resource == 'failure': return JSONResponse({'detail': 'probe failure'}, status_code=500)
+    return {'pid': os.getpid(), 'instance_id': identity['instance_id'],
             'version': identity['package_version'], 'cwd': os.getcwd(),
-            'request_id': self.headers.get('X-Request-ID')}
-        raw=json.dumps(body).encode()
-        self.send_response(200); self.send_header('Content-Type','application/json')
-        self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw)
-    def do_POST(self):
-        if self.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
-            self.send_error(403); return
-        if self.path.endswith('/crash'): os._exit(17)
-        if mode == 'bad-shutdown': self.send_error(500); return
-        self.send_response(200); self.send_header('Content-Length','2'); self.end_headers(); self.wfile.write(b'{}')
-        threading.Thread(target=server.shutdown).start()
-server=ThreadingHTTPServer(('127.0.0.1',int(os.environ['BOXTEAM_PLUGIN_PORT'])), Handler)
-server.serve_forever()
-server.server_close()
+            'request_id': request.headers.get('X-Request-ID')}
+@app.post('/services/echo/crash')
+async def crash(): os._exit(17)
+server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=int(os.environ['BOXTEAM_PLUGIN_PORT']), log_config=None))
+asyncio.run(server.serve())
 '''
 
 NODE_PLUGIN = '''
 import http from 'node:http';
-const identity={...JSON.parse(process.env.BOXTEAM_PLUGIN_INSTANCE),status:'ready',process_id:process.pid,
-  capabilities:['status','shutdown'],log_sink:JSON.parse(process.env.BOXTEAM_RUNTIME_LOG_SINK)};
-const server=http.createServer((req,res)=>{
-  if(req.headers['x-local-token']!==process.env.BOXTEAM_RUNTIME_CONTROL_TOKEN){res.writeHead(403);res.end();return;}
-  res.writeHead(200,{'Content-Type':'application/json'});
-  if(req.url==='/internal/plugin/shutdown'){res.end('{}');server.close();return;}
-  res.end(JSON.stringify(req.url==='/internal/plugin/status'?identity:{pid:process.pid,
-    instance_id:identity.instance_id,version:identity.package_version,request_id:req.headers['x-request-id']}));
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const source = name => pathToFileURL(path.join(process.env.BOXTEAM_PROJECT_ROOT, 'src/shared', name)).href;
+const { createPluginRuntimeManagement } = await import(source('serverPluginRuntime.mjs'));
+const { createRuntimeLogger } = await import(source('serverRuntimeLogging.mjs'));
+const logger = createRuntimeLogger('lifecycle-probe');
+const readJson = async request => { let body=''; for await(const chunk of request) body+=chunk; return body ? JSON.parse(body) : {}; };
+const management = createPluginRuntimeManagement({ service:'lifecycle-probe', logger, readJson,
+  shutdown: () => new Promise((resolve,reject) => server.close(error => error ? reject(error) : resolve())) });
+const identity = management.identity;
+const server = http.createServer(async(req,res) => {
+  try {
+    if(await management.handleRequest(req,res,new URL(req.url,'http://localhost').pathname)) return;
+    if(req.headers['x-local-token']!==management.token){res.writeHead(403);res.end();return;}
+    res.writeHead(200,{'Content-Type':'application/json'});
+    res.end(JSON.stringify({pid:process.pid,instance_id:identity.instance_id,
+      version:identity.package_version,request_id:req.headers['x-request-id']}));
+  } catch(error) { logger.error('probe request failed',error); res.writeHead(error.statusCode ?? 500);res.end('{}'); }
 });
-server.listen(Number(process.env.BOXTEAM_PLUGIN_PORT),'127.0.0.1');
+server.listen(management.port,'127.0.0.1');
 '''
 
 
@@ -72,7 +89,15 @@ server.listen(Number(process.env.BOXTEAM_PLUGIN_PORT),'127.0.0.1');
 def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int
 ) -> Iterator[tuple[httpx.Client, TestRunContext]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    gateway = start_gateway_process(workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
+    workspace = Path(integration_workspace_root_path)
+    config_path = install_test_workspace_config(workspace_root=workspace,
+        config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
+    config = commentjson.loads(config_path.read_text())
+    for provider in config["llm"]["providers"]:
+        if "api_key" in provider:
+            provider["api_key"] = "plugin-lifecycle-unused-key"
+    config_path.write_text(json.dumps(config))
+    gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
         port=unused_tcp_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
     try:
@@ -245,6 +270,12 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert failed["python"]["binding"]["enabled"] is True
         assert failed["node"]["state"] == "ready", "单个插件失败不能阻断兄弟启动"
         assert bind(entries("3.0.0"))["python"]["instance"] is None, "相同绑定读取或提交不得重试启动"
+        install("5.0.0", "bad-capabilities")
+        incomplete = bind(entries("5.0.0"))
+        assert incomplete["python"]["state"] == "failed" and incomplete["python"]["instance"] is None
+        assert "observation" in incomplete["python"]["error"]
+        assert incomplete["node"]["state"] == "ready", "缺少必需管理能力只拒绝原插件"
+        assert bind(entries("5.0.0"))["python"]["instance"] is None, "同绑定不自动重试协议拒绝"
         install("4.0.0", "bad-shutdown")
         running = bind(entries("4.0.0"))["python"]
         assert running["state"] == "ready"
@@ -253,7 +284,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert not psutil.pid_exists(running["instance"]["process_id"]), "管理响应失败也须核实实际进程退出"
         assert bind(entries("4.0.0", python_enabled=False))["python"]["state"] == "failed", "相同配置不能洗掉停止失败回执"
         assert bind([]) == {}, "解除全部绑定后不得继续展示幽灵插件"
-        for version in ("1.0.0", "2.0.0", "3.0.0", "4.0.0"):
+        for version in ("1.0.0", "2.0.0", "3.0.0", "4.0.0", "5.0.0"):
             exchange("POST", "/api/gateway/service-plugins/uninstall", {**target,
                 "package_id": "probe.tools", "package_version": version}).raise_for_status()
         assert inventory()["packages"] == []

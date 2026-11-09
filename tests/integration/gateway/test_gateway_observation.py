@@ -91,8 +91,7 @@ def test_gateway_collection_hot_switches_through_original_source_writer(
                                  "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]}}]}
         with zipfile.ZipFile(package, "w") as archive:
             archive.writestr("plugin.jsonc", json.dumps(manifest))
-            archive.writestr("main.py", PYTHON_PLUGIN.replace(
-                "        body = identity", "        if self.path.split('?', 1)[0] == '/services/echo/failure': self.send_error(500); return\n        body = identity"))
+            archive.writestr("main.py", PYTHON_PLUGIN)
             archive.writestr("local_module.py", "VALUE = 1\n")
         exchange("POST", "/api/gateway/service-plugins/install", json={
             "gateway_id": gateway_id, "path": str(package), "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),

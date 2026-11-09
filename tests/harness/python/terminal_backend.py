@@ -124,7 +124,7 @@ def start_terminal_plugin_service(
         expected = {
             **identity,
             "status": "ready",
-            "capabilities": ["status", "shutdown"],
+            "capabilities": ["status", "shutdown", "observation"],
         }
         for field, value in expected.items():
             if receipt.get(field) != value:

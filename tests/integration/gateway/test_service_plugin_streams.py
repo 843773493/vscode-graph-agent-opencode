@@ -23,13 +23,15 @@ from tests.integration.gateway.test_service_plugins import (
 from tests.support.plugin_package import native_plugin_target
 
 PLUGIN = '''
-import gzip, json, os
+import gzip, json, os, sys
+sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response, StreamingResponse
 import asyncio, uvicorn
+from app.core.logging_config import configure_application_logging
+from app.runtime.plugin_commands import plugin_command_router
+configure_application_logging(service='stream-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
-identity.update(status='ready', process_id=os.getpid(), capabilities=['status','shutdown'],
-    log_sink=json.loads(os.environ['BOXTEAM_RUNTIME_LOG_SINK']))
 app = FastAPI()
 @app.middleware('http')
 async def token(request, call_next):
@@ -37,12 +39,8 @@ async def token(request, call_next):
         from fastapi.responses import Response
         return Response(status_code=403)
     return await call_next(request)
-@app.get('/internal/plugin/status')
-async def status(): return identity
-@app.post('/internal/plugin/shutdown')
-async def shutdown():
-    server.should_exit = True
-    return {}
+async def shutdown(): server.should_exit = True
+app.include_router(plugin_command_router({}, shutdown=shutdown))
 @app.get('/services/events/stream')
 async def events(request: Request):
     async def data():
@@ -72,7 +70,7 @@ async def socket(websocket: WebSocket):
         if message.get('text') is not None: await websocket.send_text(message['text'])
         else: await websocket.send_bytes(message['bytes'])
 server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=int(os.environ['BOXTEAM_PLUGIN_PORT']),
-    log_level='warning',timeout_graceful_shutdown=1))
+    log_config=None,timeout_graceful_shutdown=1))
 server.run()
 '''
 

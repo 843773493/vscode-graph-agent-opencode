@@ -10,6 +10,7 @@
 - [ ] 1.2 冻结多插件包 plugin.jsonc／标准 .zip／已准备的显式开发目录：根包含package_id／包版本、合同及目标制品兼容信息，plugins 每项含作为外部plugin_id的稳定 id、固定 scope、requires／contributes 和条件必需运行入口；无根级运行入口兼容、components／component_id／modules／features 或贡献第二开关，纯声明插件无 runtime。
 - [ ] 1.3 冻结 package_id／plugin_id、唯一 gateway／workspace 生命周期槽位、当前包版本属性、service_id、instance_id 与业务资源身份；不按版本双起；插件管理回执服务清单可空，服务ID只作业务路由；同包插件独立进程，同插件跨工作区独立实例，不按端口／显示名合并。
 - [ ] 1.4 在现有协议 owner 完成 ready／status／shutdown／诊断 apply／status／统计能力，按第10组补扩展点版本、注册及具名命令输入／结果／进度／取消的真实序列化；迁齐 proto／OpenAPI／客户端生成与真实类型，不添加通用 method 或脚本接口。
+  - 2026-11-09 管理能力准入收口：启动与接管共用 ready 校验，缺 status／shutdown／observation 任一管理能力不发布实例；诊断请求删除重复能力检查。通用 Python／Node、依赖包及流式测试迁到正式公共管理实现，保留错误 ready、缺能力、关闭失败与业务流故障。精确候选真实 Gateway 双插件安装／私有参数／重启／换版／拒绝缺能力及无 uv 依赖包两项通过（59.35秒）；原流式与诊断两项通过，Terminal 真实停止短测通过。首轮两失败确认为测试配置缺失模型环境凭据，fixture 改用不调用模型的占位密钥后补验；不改产品或放宽断言。原件见 `out/tests/temp/2026/11/09/plugin_readiness/artifacts/`。1.4 含未完成的完整扩展注册范围，继续保持未勾选。
 - [ ] 1.5 登记独立 service_plugin_installation_manage／service_plugin_runtime_manage，迁齐默认拒绝、原生目标／Relay 判权与 schema；配置和业务访问仍使用原 owner 权限，旧三项安装／宿主能力消费者全部清理。
 - [ ] 1.6 核对两个已验收 release 基线和实际持久合同，给出受支持来源的显式迁移／不支持输入诊断；没有基线时记录缺口并使用隔离数据，不删除用户包／身份／凭据／会话，也不为开发残留新增兼容。
 

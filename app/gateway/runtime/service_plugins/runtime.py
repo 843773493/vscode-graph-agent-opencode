@@ -222,8 +222,6 @@ class GatewayPluginRuntime:
 
     async def _observation(self, slot: PluginSlot, *, apply: bool = False) -> RuntimeObservationStatus:
         assert slot.receipt is not None and slot.base_url is not None and slot.token is not None
-        if "observation" not in slot.receipt.capabilities:
-            raise ValueError("插件未声明统一诊断管理能力，无法应用或读取诊断配置")
         url = slot.base_url + "/internal/plugin/observation"
         headers = {"X-Local-Token": slot.token}
         desired = ({"instance_id": slot.receipt.instance_id,
@@ -364,6 +362,9 @@ class GatewayPluginRuntime:
             service.model_dump() for service in plugin.contributes.services
         ]:
             raise ValueError("插件 ready 身份、合同或服务清单与精确绑定不符")
+        missing = {"status", "shutdown", "observation"} - set(receipt.capabilities)
+        if missing:
+            raise ValueError("插件缺少必需管理能力: " + ", ".join(sorted(missing)))
 
     async def _start(
         self, key: Slot, slot: PluginSlot, *,
