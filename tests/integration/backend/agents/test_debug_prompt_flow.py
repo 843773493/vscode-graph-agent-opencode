@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
-from collections.abc import AsyncIterator, Generator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import cast
 
 import commentjson
 import httpx
+import psutil
 import pytest
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
@@ -25,16 +25,20 @@ from app.services.infrastructure.node_debug.session.session_store import (
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.run_context import TestRunContext
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import (
-    close_backend_process,
-    start_backend_process,
-    workspace_backend_id_for_root,
+from tests.support.processes.gateway import (
+    LOCAL_TOKEN_HEADERS,
+    GatewayProcess,
+    acquire_gateway_guest,
+    close_gateway_process,
+    start_gateway_process,
 )
+from tests.support.terminal_plugin import enable_developer_tools_plugins
 from tests.support.trace import get_trace_payload
 
 
@@ -54,17 +58,37 @@ class ScriptedModelState:
                 for call_id in self.call_ids]
 
 
+@dataclass(slots=True)
+class ScriptedGatewayState:
+    process: GatewayProcess
+    gateway_id: str
+    workspace_id: str
+
+
 def _json_object(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise TypeError(f"模型请求必须是 JSON object: {value!r}")
     return cast(dict[str, object], value)
 
 
+def _json_array(value: object) -> list[object]:
+    if not isinstance(value, list):
+        raise TypeError(f"模型请求必须是 JSON array: {value!r}")
+    return value
+
+
+def _string_array(value: object) -> list[str]:
+    values = _json_array(value)
+    if not all(isinstance(item, str) for item in values):
+        raise TypeError(f"调试输出必须由字符串组成: {value!r}")
+    return cast(list[str], values)
+
+
 def _tool_call(
     *,
     call_index: int,
     name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
 ) -> dict[str, object]:
     return {
         "id": f"debug-e2e-call-{call_index}",
@@ -77,10 +101,10 @@ def _tool_call(
 
 
 @pytest.fixture(scope="module")
-def scripted_model_replay(integration_workspace_root_path: str) -> Iterator[ScriptedModelState]:
+def scripted_model_replay(request: pytest.FixtureRequest) -> Iterator[ScriptedModelState]:
     """普通调试业务复用现有 model_stream，不监听模型端口或绕过真实 SDK。"""
-    output = Path(integration_workspace_root_path).parent
-    with model_stream_replay(output, runtime_root=output / "runtime", business_assertion="debug-prompt-flow") as replay:
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    with model_stream_replay(context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="debug-prompt-flow") as replay:
         yield ScriptedModelState(replay.control, replay.config_path, replay.artifacts)
 
 
@@ -167,7 +191,9 @@ def _plan_debug_calls(state: ScriptedModelState, session_id: str, thread_id: str
                 deltas=(delta,), finish_reason="tool_calls" if call is not None else "stop",
             ),
         )
-        interactions.append(cassette.raw["interactions"][0])
+        raw_cassette = _json_object(cassette.raw)
+        interaction = _json_array(raw_cassette["interactions"])[0]
+        interactions.append(_json_object(interaction))
     state.call_ids = state.control.plan_model_calls(session_id, thread_id, interactions)
     # 首次 Skill 真实返回后、下一模型响应前核验请求，保留原来的先验收再执行顺序。
     state.control.arm(state.call_ids[1], "model.response_ready")
@@ -180,26 +206,31 @@ def scripted_debug_backend_port(request: pytest.FixtureRequest) -> int:
 
 
 @pytest.fixture(scope="module")
+def scripted_debug_gateway_port(request: pytest.FixtureRequest) -> int:
+    return integration_port_block_for_file(Path(request.node.path)).port(21)
+
+
+@pytest.fixture(scope="module")
 def scripted_model_info() -> dict[str, bool]:
     return {"supports_function_calling": True, "supports_reasoning": True}
 
 
 @pytest.fixture(scope="module")
-def scripted_backend_process(
+def scripted_gateway_process(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     scripted_debug_backend_port: int,
+    scripted_debug_gateway_port: int,
     scripted_model_replay: ScriptedModelState,
     scripted_model_info: dict[str, bool],
-) -> Generator[subprocess.Popen[str], None, None]:
+) -> Generator[ScriptedGatewayState, None, None]:
     state = scripted_model_replay
     endpoint = "https://opencode.ai/zen/v1"
     config_path = Path(integration_workspace_config_path)
     config = _json_object(commentjson.loads(config_path.read_text(encoding="utf-8")))
-    providers = config["llm"]["providers"]
-    if not isinstance(providers, list):
-        raise TypeError("测试配置 llm.providers 必须是数组")
-    config["llm"]["providers"] = [
+    llm = _json_object(config["llm"])
+    providers = _json_array(llm["providers"])
+    llm["providers"] = [
         *providers,
         {
             "id": "debug-e2e",
@@ -214,62 +245,81 @@ def scripted_backend_process(
             },
         }
     ]
-    agents = config["agents"]
-    if not isinstance(agents, dict):
-        raise TypeError("测试配置 agents 必须是对象")
-    default_agent = agents["default"]
-    if not isinstance(default_agent, dict):
-        raise TypeError("测试配置 agents.default 必须是对象")
-    model = default_agent["model"]
-    if not isinstance(model, dict):
-        raise TypeError("测试配置 agents.default.model 必须是对象")
+    agents = _json_object(config["agents"])
+    default_agent = _json_object(agents["default"])
+    model = _json_object(default_agent["model"])
     model["primary_provider"] = "debug-e2e"
     model["fallback_providers"] = []
     workspace_root = Path(integration_workspace_root_path)
-    config.setdefault("runtime", {}).setdefault("debug", {}).setdefault("launch_profiles", {})[
-        "capability-entry"
-    ] = {
+    runtime = _json_object(config["runtime"])
+    debug = _json_object(runtime["debug"])
+    launch_profiles = _json_object(debug["launch_profiles"])
+    launch_profiles["capability-entry"] = {
         "adapter": "node_inspector", "runtime": "node",
         "program": str(workspace_root / "debug-prompt-fixture.mjs"),
         "working_directory": str(workspace_root), "args": [],
     }
+    gateway_port = scripted_debug_gateway_port
+    gateway_url = f"http://127.0.0.1:{gateway_port}"
+    gateway = _json_object(runtime["gateway"])
+    connection = _json_object(gateway["connection"])
+    connection.update(
+        {"url": gateway_url, "timeout_seconds": 5}
+    )
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
-    handle = start_backend_process(
-        workspace_root=integration_workspace_root_path,
-        port=scripted_debug_backend_port,
-        log_name="debug-prompt-e2e",
-        asgi_app="tests.support.e2e_control.backend_app:app",
-        env_overrides={
-            "BOXTEAM_DEFAULT_SKILL_GROUPS": '["debugging"]',
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    gateway = start_gateway_process(
+        workspace_root=workspace_root,
+        default_backend_url=None,
+        port=gateway_port,
+        boxteam_home=context.boxteam_home_for_node("debug-prompt-flow"),
+        artifacts_dir=context.artifacts_dir / "gateway",
+        extra_env={
+            "BOXTEAM_DEFAULT_BACKEND_PORT": str(scripted_debug_backend_port),
             "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(state.config_path),
             **state.control.environment,
         },
+        asgi_app="tests.support.e2e_control.gateway_app:app",
     )
     try:
-        yield handle.process
+        async def install_debugger() -> tuple[str, str]:
+            async with httpx.AsyncClient(
+                base_url=gateway_url, headers=LOCAL_TOKEN_HEADERS, timeout=90,
+            ) as client:
+                await acquire_gateway_guest(client)
+                response = await client.get("/api/gateway/workspaces")
+                response.raise_for_status()
+                active = response.json()["data"]["active_workspace"]
+                gateway_id = active["gateway_id"]
+                workspace_id = active["workspace_id"]
+                await enable_developer_tools_plugins(
+                    client, gateway_id=gateway_id, workspace_id=workspace_id,
+                    plugin_ids=("debugging",), artifacts_dir=context.artifacts_dir / "debug-plugin",
+                )
+                return gateway_id, workspace_id
+
+        gateway_id, workspace_id = asyncio.run(install_debugger())
+        yield ScriptedGatewayState(gateway, gateway_id, workspace_id)
     finally:
-        close_backend_process(handle)
+        close_gateway_process(gateway)
 
 
 @pytest.fixture
 async def scripted_client(
-    scripted_backend_process: subprocess.Popen[str],
-    scripted_debug_backend_port: int,
-    integration_workspace_root_path: str,
+    scripted_gateway_process: ScriptedGatewayState,
 ) -> AsyncIterator[httpx.AsyncClient]:
-    del scripted_backend_process
     async with httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{scripted_debug_backend_port}",
+        base_url=f"http://127.0.0.1:{scripted_gateway_process.process.port}",
         timeout=60,
         headers={
             "X-Local-Token": "local-dev-token",
-            "X-BoxTeam-Workspace-Id": workspace_backend_id_for_root(
-                integration_workspace_root_path
-            ),
+            "X-BoxTeam-Target-Gateway-Id": scripted_gateway_process.gateway_id,
+            "X-BoxTeam-Gateway-Id": scripted_gateway_process.gateway_id,
+            "X-BoxTeam-Workspace-Id": scripted_gateway_process.workspace_id,
         },
     ) as client:
         yield client
@@ -305,6 +355,27 @@ async def _session_main_thread_id(
     response = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
     assert response.status_code == 200, response.text
     return response.json()["data"]["thread_id"]
+
+
+async def _wait_for_debug_status(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    thread_id: str,
+    expected: str,
+) -> dict[str, object]:
+    async with asyncio.timeout(10):
+        while True:
+            response = await client.get(
+                "/api/v1/debug/node",
+                params={"session_id": session_id, "thread_id": thread_id},
+            )
+            assert response.status_code == 200, response.text
+            state = response.json()["data"]
+            if state["status"] == expected:
+                return state
+            assert state["status"] not in {"failed", "reconcile_required"}, state
+            await asyncio.sleep(0.05)
 
 
 @pytest.mark.asyncio
@@ -404,7 +475,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     state.worker_path = worker_path.relative_to(workspace_root).as_posix()
     state.working_directory = "."
 
-    skill_path = Path.cwd() / "resources" / "skills" / "debugging" / "SKILL.md"
+    skill_path = Path.cwd() / "resources" / "plugins" / "developer-tools" / "skills" / "debugging" / "SKILL.md"
     assert skill_path.is_file()
     skill_text = skill_path.read_text(encoding="utf-8")
     assert "start_debugging" in skill_text
@@ -580,7 +651,6 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert evaluation_state["status"] == "paused", evaluation_state
     assert evaluation_state["last_evaluation"]["expression"] == "state.counter += 1"
     assert evaluation_state["last_evaluation"]["value"] == "5"
-    assert decoded_results["continue_execution"]["state"]["status"] == "exited"
     successful_results = [
         str(get_trace_payload(trace)["result"])
         for trace in debug_end_traces
@@ -591,30 +661,24 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         '"status":"paused"' in result
         for result in successful_results
     )
-    assert any(
-        '"status":"exited"' in result
-        for result in successful_results
-    )
     for result in successful_results:
         assert "file://" not in result
         assert str(workspace_root) not in result
     assert any(file_paths.reference(fixture_path) in result for result in successful_results)
     assert any(file_paths.reference(worker_path) in result for result in successful_results)
 
-    debug_state_response = await scripted_client.get(
-        "/api/v1/debug/node",
-        params={"session_id": session_id},
+    debug_state = await _wait_for_debug_status(
+        scripted_client, session_id=session_id, thread_id=main_thread_id, expected="exited",
     )
-    assert debug_state_response.status_code == 200, debug_state_response.text
-    debug_state = debug_state_response.json()["data"]
     assert debug_state["thread_id"] == main_thread_id
-    assert debug_state["status"] == "exited"
     assert debug_state["active_configuration_name"] == "计数流程调试"
-    assert [item["value"] for item in debug_state["evaluations"]] == ["2", "5"]
-    assert debug_state["last_stopped_frame"]["path"] == worker_path.name
-    assert debug_state["last_stopped_frame"]["url"] == file_paths.reference(worker_path)
-    assert debug_state["last_stopped_frame"]["line"] == 2
-    assert any('{"result":15}' in line for line in debug_state["output"])
+    evaluations = [_json_object(item) for item in _json_array(debug_state["evaluations"])]
+    last_stopped_frame = _json_object(debug_state["last_stopped_frame"])
+    assert [item["value"] for item in evaluations] == ["2", "5"]
+    assert last_stopped_frame["path"] == worker_path.name
+    assert last_stopped_frame["url"] == file_paths.reference(worker_path)
+    assert last_stopped_frame["line"] == 2
+    assert any('{"result":15}' in line for line in _string_array(debug_state["output"]))
 
     model_requests = state.requests
     assert len(model_requests) >= len(expected_order) + 1
@@ -664,18 +728,20 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         },
     )
     assert human_start.status_code == 200, human_start.text
-    human_state = human_start.json()["data"]
+    human_state = _json_object(human_start.json()["data"])
     assert human_state["status"] == "paused"
-    assert human_state["call_stack"][0]["path"] == fixture_path.name
-    assert human_state["call_stack"][0]["url"] == file_paths.reference(fixture_path)
-    assert human_state["call_stack"][0]["line"] == 3
+    call_stack = [_json_object(item) for item in _json_array(human_state["call_stack"])]
+    assert call_stack[0]["path"] == fixture_path.name
+    assert call_stack[0]["url"] == file_paths.reference(fixture_path)
+    assert call_stack[0]["line"] == 3
 
-    for expected_path, expected_line in (
+    for index, (expected_path, expected_line) in enumerate((
         (fixture_path.name, 3),
         (worker_path.name, 2),
-    ):
-        assert human_state["call_stack"][0]["path"] == expected_path
-        assert human_state["call_stack"][0]["line"] == expected_line
+    )):
+        call_stack = [_json_object(item) for item in _json_array(human_state["call_stack"])]
+        assert call_stack[0]["path"] == expected_path
+        assert call_stack[0]["line"] == expected_line
         evaluation_response = await scripted_client.post(
             "/api/v1/debug/node/action",
             json={
@@ -686,7 +752,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             },
         )
         assert evaluation_response.status_code == 200, evaluation_response.text
-        human_state = evaluation_response.json()["data"]
+        human_state = _json_object(evaluation_response.json()["data"])
         continue_response = await scripted_client.post(
             "/api/v1/debug/node/action",
             json={
@@ -697,15 +763,23 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             },
         )
         assert continue_response.status_code == 200, continue_response.text
-        human_state = continue_response.json()["data"]
+        human_state = await _wait_for_debug_status(
+            scripted_client,
+            session_id=session_id,
+            thread_id=main_thread_id,
+            expected="paused" if index == 0 else "exited",
+        )
 
-    assert human_state["status"] == "exited"
-    assert [item["value"] for item in human_state["evaluations"]] == ["2", "5"]
-    assert human_state["last_stopped_frame"]["path"] == worker_path.name
-    assert any('{"result":15}' in line for line in human_state["output"])
+    evaluations = [_json_object(item) for item in _json_array(human_state["evaluations"])]
+    last_stopped_frame = _json_object(human_state["last_stopped_frame"])
+    assert [item["value"] for item in evaluations] == ["2", "5"]
+    assert last_stopped_frame["path"] == worker_path.name
+    output = _string_array(human_state["output"])
+    assert any('{"result":15}' in line for line in output)
+    actions = [_json_object(item) for item in _json_array(human_state["actions"])]
     human_debug_actions = [
         action
-        for action in human_state["actions"]
+        for action in actions
         if action["action"] in {"start", "evaluate", "continue"}
         and action["actor"] == "human"
     ]
@@ -716,3 +790,102 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         "evaluate",
         "continue",
     ]
+
+
+@pytest.mark.asyncio
+async def test_debug_run_recovers_after_backend_process_crash_without_relaunch(
+    scripted_client: httpx.AsyncClient,
+    scripted_gateway_process: ScriptedGatewayState,
+    integration_workspace_root_path: str,
+) -> None:
+    workspace_root = Path(integration_workspace_root_path).resolve()
+    script_path = workspace_root / "debug-backend-recovery.mjs"
+    script_path.write_text(
+        "const state = { value: 41 };\n"
+        "state.value += 1;\n"
+        "setInterval(() => {}, 1000);\n",
+        encoding="utf-8",
+    )
+    created = await scripted_client.post("/api/v1/sessions", json={"title": "Debug Backend 崩溃恢复"})
+    assert created.status_code == 200, created.text
+    session_id = created.json()["data"]["session_id"]
+    thread_id = await _session_main_thread_id(scripted_client, session_id)
+    owner = {"session_id": session_id, "thread_id": thread_id}
+    configured = await scripted_client.post("/api/v1/debug/node/configurations", json={
+        **owner,
+        "name": "Backend 崩溃恢复原 run",
+        "script_path": script_path.name,
+        "working_directory": ".",
+        "breakpoints": [{"path": script_path.name, "line": 2}],
+    })
+    assert configured.status_code == 200, configured.text
+    configuration_id = configured.json()["data"]["active_configuration_id"]
+    started = await scripted_client.post("/api/v1/debug/node/start", json={
+        **owner, "configuration_id": configuration_id, "path": script_path.name,
+    })
+    assert started.status_code == 200, started.text
+    original = started.json()["data"]
+    assert original["status"] == "paused", original
+    assert original["call_stack"][0]["line"] == 2
+    target_pid = original["pid"]
+    run_id = original["run_id"]
+    binding = original["debugger_binding"]
+    assert isinstance(target_pid, int) and isinstance(run_id, str) and isinstance(binding, dict)
+
+    health = await scripted_client.get("/api/v1/health")
+    assert health.status_code == 200, health.text
+    backend_pid = health.json()["process_id"]
+    backend_process = psutil.Process(backend_pid)
+    backend_started = backend_process.create_time()
+    assert backend_started > 0
+    backend_process.kill()
+    gone, alive = await asyncio.to_thread(psutil.wait_procs, [backend_process], timeout=10)
+    assert all(item.pid == backend_pid for item in gone)
+    assert all(item.status() == psutil.STATUS_ZOMBIE for item in alive), [
+        (item.pid, item.status()) for item in alive
+    ]
+
+    recovered_runtime = await scripted_client.post(
+        f"/api/gateway/workspaces/{scripted_gateway_process.workspace_id}/runtime/start",
+    )
+    assert recovered_runtime.status_code == 200, recovered_runtime.text
+    restarted_health = await scripted_client.get("/api/v1/health")
+    assert restarted_health.status_code == 200, restarted_health.text
+    assert restarted_health.json()["process_id"] != backend_pid
+    assert psutil.Process(restarted_health.json()["process_id"]).create_time() != backend_started
+
+    recovered = await _wait_for_debug_status(
+        scripted_client, session_id=session_id, thread_id=thread_id, expected="paused",
+    )
+    frames = cast(list[dict[str, object]], recovered["call_stack"])
+    variables = cast(list[dict[str, object]], frames[0]["variables"])
+    async with asyncio.timeout(10):
+        while not any(item["name"] == "state" for item in variables):
+            response = await scripted_client.get("/api/v1/debug/node", params=owner)
+            assert response.status_code == 200, response.text
+            recovered = _json_object(response.json()["data"])
+            assert recovered["status"] == "paused", recovered
+            frames = cast(list[dict[str, object]], recovered["call_stack"])
+            variables = cast(list[dict[str, object]], frames[0]["variables"])
+            await asyncio.sleep(0.05)
+    assert recovered["run_id"] == run_id
+    assert recovered["pid"] == target_pid
+    assert recovered["debugger_binding"] == binding
+    assert frames[0]["line"] == 2
+    assert recovered["evaluations"] == []
+
+    evaluated = await scripted_client.post("/api/v1/debug/node/action", json={
+        **owner,
+        "action": "evaluate",
+        "params": {"expression": "state.value += 1"},
+    })
+    assert evaluated.status_code == 200, evaluated.text
+    evaluation_state = evaluated.json()["data"]
+    assert evaluation_state["run_id"] == run_id
+    assert len(evaluation_state["evaluations"]) == 1
+    assert evaluation_state["evaluations"][0]["value"] == "42"
+
+    stopped = await scripted_client.post("/api/v1/debug/node/action", json={**owner, "action": "stop"})
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["data"]["status"] == "exited"
+    assert not psutil.pid_exists(target_pid)

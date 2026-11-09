@@ -1,360 +1,106 @@
-"""Node Debug 运行时输出与进程监控链路的单元测试。
-
-直接构造 NodeDebugRuntimeObserver，注入记录型假 command / 假进程与假回调，
-精确打靶 monitor_process 的 exited/failed 终态、read_stream 的 Inspector 地址、
-日志点输出/诊断归集与输出行数上限，以及 paused_at_breakpoint 判定矩阵。
-不依赖真实 Node 进程。
-"""
+"""Node Debug 插件事件到 Backend 状态与 DAP 输出的投影。"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from app.schemas.internal_v2.node_debug import (
-    NodeDebugBreakpointDTO,
-    NodeDebugStackFrameDTO,
-)
 from app.services.infrastructure.node_debug.process.observation import (
     NodeDebugRuntimeObserver,
 )
-from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
-from tests.support.node_debug_dependencies import TEST_THREAD_ID
+from app.services.infrastructure.node_debug.runtime_state import (
+    NodeDebugPluginRuntimeProtocol,
+    NodeDebugRuntime,
+)
+from tests.support.node_debug_dependencies import (
+    TEST_THREAD_ID,
+    node_debug_binding_snapshot,
+)
 
 
-class _FakeStream:
-    """按行返回预设字节，耗尽后返回空行结束读取。"""
+class PluginEvents:
+    def __init__(self, events: list[dict[str, object]]) -> None:
+        self._events = events
+        self.closed = 0
 
-    def __init__(self, lines: list[str], *, limit_error: bool = False) -> None:
-        self._lines = [line.encode("utf-8") + b"\n" for line in lines]
-        #: 模拟 asyncio StreamReader 在单行超过缓冲上限时抛出的 ValueError。
-        self._limit_error = limit_error
+    async def close(self) -> None:
+        self.closed += 1
 
-    async def readline(self) -> bytes:
-        if self._limit_error:
-            self._limit_error = False
-            raise ValueError("Separator is found, but chunk is longer than limit")
-        return self._lines.pop(0) if self._lines else b""
+    async def events(self) -> AsyncIterator[dict[str, object]]:
+        for event in self._events:
+            yield event
 
 
-class _FakeProcess:
-    def __init__(self, return_code: int, *, stdout: list[str] = (), stderr: list[str] = ()) -> None:
-        self.stdout = _FakeStream(list(stdout))
-        self.stderr = _FakeStream(list(stderr))
-        self._return_code = return_code
-        self.pid = 4242
-
-    async def wait(self) -> int:
-        return self._return_code
-
-
-class _Recorder:
+class Recorder:
     def __init__(self) -> None:
-        self.actions: list[tuple[str, str, str]] = []
-        self.claim_phases: list[tuple[str, str]] = []
-        self.cleared = 0
+        self.phases: list[tuple[str, str | None]] = []
+        self.actions: list[tuple[str, str]] = []
 
-    def append_action(self, runtime, action, message, *, actor="human", tool_name=None, tool_call_id=None, extension_catalog_binding=None, result="success"):
-        self.actions.append((action, message, result))
+    async def mark(self, runtime: NodeDebugRuntime, phase: str, reason: str | None = None) -> None:
+        self.phases.append((phase, reason))
 
-    async def mark_claim_phase(self, runtime, phase, reason=None):
-        self.claim_phases.append((phase, reason or ""))
+    def action(self, runtime: NodeDebugRuntime, action: str, message: str, **_kwargs: object) -> None:
+        self.actions.append((action, message))
 
-    def clear_stop_snapshot(self, runtime) -> None:
-        self.cleared += 1
-
-
-def _observer(
-    recorder: _Recorder,
-    *,
-    max_output_lines: int = 100,
-) -> NodeDebugRuntimeObserver:
-    return NodeDebugRuntimeObserver(
-        mark_claim_phase=recorder.mark_claim_phase,
-        clear_stop_snapshot=recorder.clear_stop_snapshot,
-        append_action=recorder.append_action,
-        max_output_lines=max_output_lines,
-    )
+    def clear(self, runtime: NodeDebugRuntime) -> None:
+        return None
 
 
-def _runtime(
-    workspace_root: Path,
-    process: _FakeProcess | None = None,
-) -> NodeDebugRuntime:
-    return NodeDebugRuntime(
+def runtime(tmp_path: Path, plugin: PluginEvents) -> NodeDebugRuntime:
+    binding = node_debug_binding_snapshot()
+    result = NodeDebugRuntime(
         session_id="ses_019bf141964978208ce9100774167f90",
         thread_id=TEST_THREAD_ID,
         configuration_id="dbgcfg_" + "1" * 32,
-        workspace_root=workspace_root,
-        script_path=workspace_root / "entry.mjs",
+        debugger_binding=binding,
+        workspace_root=tmp_path,
+        script_path=tmp_path / "entry.mjs",
         relative_script_path="entry.mjs",
-        process=process,  # type: ignore[arg-type]
+    )
+    result.plugin_runtime = cast(NodeDebugPluginRuntimeProtocol, plugin)
+    return result
+
+
+def observer(recorder: Recorder) -> NodeDebugRuntimeObserver:
+    return NodeDebugRuntimeObserver(
+        mark_claim_phase=recorder.mark,
+        clear_stop_snapshot=recorder.clear,
+        append_action=recorder.action,
+        max_output_lines=2,
     )
 
 
 @pytest.mark.asyncio
-async def test_monitor_process_marks_failed_and_reports_exit_code(
-    tmp_path: Path,
-) -> None:
-    """非零退出必须报 failed 且携带退出码；零退出才是 exited。"""
-    recorder = _Recorder()
-    observer = _observer(recorder)
+async def test_plugin_output_is_bounded_and_exit_settles_run(tmp_path: Path) -> None:
+    recorder = Recorder()
+    plugin = PluginEvents([
+        {"event": "stdout", "payload": {"text": "one\ntwo\nthree\n"}},
+        {"event": "process.exited", "payload": {"exit_code": 0}},
+    ])
+    target = runtime(tmp_path, plugin)
 
-    failed = _runtime(tmp_path, _FakeProcess(3))
-    await observer.monitor_process(failed)
-    assert failed.status == "failed"
-    assert failed.error_message == "Node 调试进程退出，退出码: 3"
-    assert recorder.claim_phases == [("settled", "进程已退出，退出码: 3")]
-    assert recorder.cleared == 1
+    await observer(recorder).monitor_process(target)
 
-    ok = _runtime(tmp_path, _FakeProcess(0))
-    await observer.monitor_process(ok)
-    assert ok.status == "exited"
-    assert ok.error_message is None
-
-
-@pytest.mark.asyncio
-async def test_monitor_process_prefers_logpoint_error_message(
-    tmp_path: Path,
-) -> None:
-    recorder = _Recorder()
-    observer = _observer(recorder)
-    runtime = _runtime(tmp_path, _FakeProcess(1))
-    runtime.logpoint_error_message = "日志点求值失败: boom"
-    await observer.monitor_process(runtime)
-    assert runtime.status == "failed"
-    assert runtime.error_message == "日志点求值失败: boom"
+    assert target.output == ["two", "three"]
+    assert target.status == "exited"
+    assert target.target_exit_code == 0
+    assert target.target_exited
+    assert target.plugin_runtime is plugin
+    assert plugin.closed == 0
+    assert recorder.phases == [("settled", "Debug 插件已确认目标进程退出")]
 
 
 @pytest.mark.asyncio
-async def test_monitor_process_skips_state_write_while_closing(
-    tmp_path: Path,
-) -> None:
-    """closing 期间只结清 claim，不再覆写终态（避免与停止路径互相覆盖）。"""
-    recorder = _Recorder()
-    observer = _observer(recorder)
-    runtime = _runtime(tmp_path, _FakeProcess(0))
-    runtime.closing = True
-    runtime.status = "stopping"
-    await observer.monitor_process(runtime)
-    assert runtime.status == "stopping"
-    assert recorder.claim_phases == [("settled", "进程已退出，退出码: 0")]
+async def test_lost_plugin_channel_does_not_claim_target_exit(tmp_path: Path) -> None:
+    recorder = Recorder()
+    target = runtime(tmp_path, PluginEvents([]))
 
+    await observer(recorder).monitor_process(target)
 
-@pytest.mark.asyncio
-async def test_read_stream_detects_inspector_url_and_logpoint_lines(
-    tmp_path: Path,
-) -> None:
-    recorder = _Recorder()
-    observer = _observer(recorder)
-    runtime = _runtime(
-        tmp_path,
-        _FakeProcess(
-            0,
-            stdout=[
-                "Debugger listening on ws://127.0.0.1:9229/abc",
-                "ordinary line",
-                "__BOXTEAM_NODE_LOGPOINT__value=23",
-                "__BOXTEAM_NODE_LOGPOINT_ERROR__\"ReferenceError: missing\"",
-            ],
-        )
-    )
-    await observer.read_stream(runtime, "stdout")
-    assert runtime.inspector.inspector_url == "ws://127.0.0.1:9229/abc"
-    assert runtime.inspector.inspector_ready.is_set()
-    assert runtime.output == [
-        "ordinary line",
-        "[日志点] value=23",
-        "[日志点错误] ReferenceError: missing",
-    ]
-    assert runtime.logpoint_error_message == "日志点求值失败: ReferenceError: missing"
-    assert runtime.error_message == runtime.logpoint_error_message
-    assert recorder.actions == [
-        (
-            "logpoint_error",
-            "日志点求值失败: ReferenceError: missing",
-            "error",
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_read_stream_ignores_stderr_logpoint_and_caps_output(
-    tmp_path: Path,
-) -> None:
-    recorder = _Recorder()
-    observer = _observer(recorder, max_output_lines=2)
-    runtime = _runtime(tmp_path, _FakeProcess(0, stdout=["a", "b", "c"]))
-    await observer.read_stream(runtime, "stdout")
-    assert runtime.output == ["b", "c"]
-
-    stderr_runtime = _runtime(
-        tmp_path,
-        _FakeProcess(0, stderr=["__BOXTEAM_NODE_LOGPOINT__x=1"]),
-    )
-    await observer.read_stream(stderr_runtime, "stderr")
-    assert stderr_runtime.output == ["__BOXTEAM_NODE_LOGPOINT__x=1"]
-    assert stderr_runtime.logpoint_error_message is None
-
-
-@pytest.mark.asyncio
-async def test_read_stream_returns_without_process(tmp_path: Path) -> None:
-    observer = _observer(_Recorder())
-    runtime = _runtime(tmp_path)
-    await observer.read_stream(runtime, "stdout")
-    assert runtime.output == []
-
-
-@pytest.mark.asyncio
-async def test_read_stream_logs_stderr_and_flags_inspector_failure(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-) -> None:
-    """stderr 诊断行不得丢弃：端口占用必须被识别并唤醒握手失败分支。"""
-    recorder = _Recorder()
-    observer = _observer(recorder)
-    runtime = _runtime(
-        tmp_path,
-        _FakeProcess(
-            1,
-            stderr=[
-                "Starting inspector on 127.0.0.1:9229 failed: address already in use",
-                "Debugger attached.",
-            ],
-        )
-    )
-    await observer.read_stream(runtime, "stderr")
-    assert runtime.inspector.inspector_failed.is_set()
-    assert "Starting inspector on 127.0.0.1:9229 failed: address already in use" in caplog.text
-    assert "Debugger attached." in caplog.text
-    assert runtime.session_id in caplog.text and runtime.thread_id in caplog.text
-    assert runtime.output == [
-        "Starting inspector on 127.0.0.1:9229 failed: address already in use", "Debugger attached.",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_stderr_diagnostics_preserve_every_line_in_order(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-) -> None:
-    observer = _observer(_Recorder())
-    lines = [f"{tmp_path}/trace-{index}.mjs:1:1" for index in range(120)]
-    runtime = _runtime(tmp_path, _FakeProcess(0, stderr=lines))
-    await observer.read_stream(runtime, "stderr")
-    messages = [record.getMessage() for record in caplog.records
-                if record.name == "app.services.infrastructure.node_debug.process.observation"]
-    assert len(messages) == len(lines)
-    assert [message.rsplit("；", 1)[1] for message in messages] == lines
-    assert runtime.output == lines[-100:] and runtime.error_message is None
-
-
-@pytest.mark.asyncio
-async def test_terminal_error_message_never_empty_on_failure(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-) -> None:
-    """非零退出保留简要摘要，原始堆栈可在有界输出排错；零退出才是 None。"""
-    observer = _observer(_Recorder())
-    private = f"at {tmp_path}/private.mjs:1:1"
-    runtime = _runtime(tmp_path, _FakeProcess(3, stderr=["Error: boom", private]))
-    await observer.read_stream(runtime, "stderr")
-    assert observer.terminal_error_message(runtime, 0) is None
-    failed = observer.terminal_error_message(runtime, 3)
-    assert failed == "Node 调试进程退出，退出码: 3"
-    assert runtime.output == ["Error: boom", private]
-    assert "Error: boom" in caplog.text and private in caplog.text
-
-    bare = _runtime(tmp_path)
-    assert observer.terminal_error_message(bare, 3) == "Node 调试进程退出，退出码: 3"
-
-    logpoint = _runtime(tmp_path)
-    logpoint.logpoint_error_message = "日志点求值失败: boom"
-    assert observer.terminal_error_message(logpoint, 1) == "日志点求值失败: boom"
-
-
-def test_handshake_timeout_message_never_empty(tmp_path: Path) -> None:
-    observer = _observer(_Recorder())
-    assert observer.handshake_timeout_message(3.0) == (
-        "等待 Node Inspector 就绪超时（3 秒）"
-    )
-
-
-@pytest.mark.asyncio
-async def test_read_stream_survives_oversized_line_with_visible_notice(
-    tmp_path: Path,
-) -> None:
-    """单行超限不得终止读取循环：必须显式标注截断并继续读取后续行。"""
-    recorder = _Recorder()
-    observer = _observer(recorder)
-    process = _FakeProcess(0, stdout=["after-oversize"])
-    process.stdout._limit_error = True
-    runtime = _runtime(tmp_path, process)
-    await observer.read_stream(runtime, "stdout")
-    assert runtime.output[0].startswith("[输出截断] ")
-    assert "stdout" in runtime.output[0]
-    # 超限之后的行仍必须被读到，绝不静默丢掉后续输出。
-    assert runtime.output[1] == "after-oversize"
-
-
-def _breakpoint(breakpoint_id: str, *, path: str = "entry.mjs", line: int = 1, condition=None, log_message=None) -> NodeDebugBreakpointDTO:
-    return NodeDebugBreakpointDTO(
-        breakpoint_id=breakpoint_id,
-        path=path,
-        line=line,
-        condition=condition,
-        log_message=log_message,
-        created_at=datetime.now(UTC),
-    )
-
-
-def test_paused_at_breakpoint_matrix(tmp_path: Path) -> None:
-    observer = _observer(_Recorder())
-    frame = NodeDebugStackFrameDTO(
-        call_frame_id="1", function_name="f", url="u", path="entry.mjs", line=1, column=1
-    )
-    plain = _breakpoint("node-bp-1")
-    conditional = _breakpoint("node-bp-2", condition="x > 0")
-    logpoint = _breakpoint("node-bp-3", log_message="x={x}")
-
-    def _rt(breakpoints, *, paused=(), inspector=None, call_stack=()) -> NodeDebugRuntime:
-        runtime = _runtime(tmp_path)
-        runtime.breakpoints = {b.breakpoint_id: b for b in breakpoints}
-        runtime.paused_breakpoint_ids = set(paused)
-        runtime.inspector_breakpoint_ids = dict(inspector or {})
-        runtime.call_stack = list(call_stack)
-        return runtime
-
-    # paused_breakpoint_ids 与已安装 Inspector 断点求交集。
-    assert observer.paused_at_breakpoint(
-        _rt([plain], paused=["i1"], inspector={"node-bp-1": "i1"})
-    ) is True
-    assert observer.paused_at_breakpoint(
-        _rt([plain], paused=["i9"], inspector={"node-bp-1": "i1"})
-    ) is False
-    # 无 paused id 时回退按帧位置匹配，且忽略条件/logpoint 断点。
-    assert observer.paused_at_breakpoint(_rt([plain], call_stack=[frame])) is True
-    assert observer.paused_at_breakpoint(_rt([conditional], call_stack=[frame])) is False
-    assert observer.paused_at_breakpoint(_rt([logpoint], call_stack=[frame])) is False
-    assert observer.paused_at_breakpoint(
-        _rt([_breakpoint("node-bp-4", path="other.mjs")], call_stack=[frame])
-    ) is False
-    assert observer.paused_at_breakpoint(_rt([plain])) is False
-
-
-@pytest.mark.asyncio
-async def test_stderr_log_failure_keeps_output_and_reading(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    blocker = tmp_path / "blocked-log"
-    blocker.write_text("不能作为日志目录", encoding="utf-8")
-    def failed_log(*_args: object, **_kwargs: object) -> None:
-        (blocker / "service.log").write_text("stderr", encoding="utf-8")
-    monkeypatch.setattr("app.services.infrastructure.node_debug.process.observation.logger.warning", failed_log)
-    lines = ["Cannot find module '/home/alice/project/missing.js'", "after-failure"]
-    runtime = _runtime(tmp_path, _FakeProcess(1, stderr=lines))
-    recorder = _Recorder()
-    observer = _observer(recorder)
-    await observer.read_stream(runtime, "stderr")
-    assert runtime.output[::2] == lines
-    assert all(line.startswith("[诊断日志输出失败] NotADirectoryError:") for line in runtime.output[1::2])
-    assert recorder.actions == []
+    assert target.status == "execution_lost"
+    assert target.target_exit_code is None
+    assert not target.target_exited
+    assert recorder.phases == [("execution_lost", target.error_message)]

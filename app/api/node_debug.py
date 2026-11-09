@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
 from app.api.errors import forbidden_http_error, state_conflict_http_error
+from app.core.async_channel import run_channel
 from app.core.exceptions import ForbiddenError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
+from app.core.trace_middleware import require_current_gateway_id
+from app.schemas.canonical_params import (
+    CanonicalSessionId,
+    CanonicalThreadId,
+    CanonicalWorkspaceId,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRequest,
@@ -20,10 +28,14 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationDTO,
     NodeDebugConfigurationImportRequest,
     NodeDebugConfigurationUpdateRequest,
+    NodeDebugDebuggerContributionsDTO,
     NodeDebugStartRequest,
     NodeDebugStateDTO,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session.dap_protocol import (
+    NodeDebugDAPSession,
+)
 
 # NodeDebug API 接收 Session-only 或显式 canonical SessionThread 身份；
 # Session-only owner 由 NodeDebugService 从权威 catalog 解析 main thread。
@@ -33,6 +45,95 @@ router = APIRouter(prefix="/debug/node", tags=["node-debug"])
 
 # 各入口共用同一异常闭集，与 _configuration_error 的判定分支一一对应。
 _CONFIGURATION_ERRORS = (FileNotFoundError, ForbiddenError, TypeError, ValueError, RuntimeError)
+
+
+@router.websocket("/runs/{run_id}/dap")
+async def node_debug_dap(
+    websocket: WebSocket,
+    run_id: str,
+    service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
+) -> None:
+    """将原 Debug UI 的 DAP 请求映射到同一 NodeDebugService run。"""
+
+    query = websocket.query_params
+    try:
+        verify_local_token(websocket.headers.get("x-local-token"))
+    except HTTPException:
+        await websocket.close(code=1008, reason="invalid local token")
+        return
+    gateway_id = query.get("gateway_id")
+    workspace_id = query.get("workspace_id")
+    session_id = query.get("session_id")
+    thread_id = query.get("thread_id")
+    expected_gateway = websocket.headers.get("x-boxteam-gateway-id")
+    expected_workspace = websocket.headers.get("x-boxteam-workspace-id")
+    if (not gateway_id or gateway_id != expected_gateway or not workspace_id
+            or workspace_id != expected_workspace or not session_id or not thread_id):
+        await websocket.close(code=1008, reason="debug owner identity mismatch")
+        return
+    if service._workspace_id != workspace_id:
+        await websocket.close(code=1008, reason="debug workspace owner unavailable")
+        return
+    runtime = service._runtimes.get((session_id, thread_id))
+    if (runtime is None or runtime.run_id != run_id or runtime.debugger_binding is None
+            or runtime.debugger_binding.gateway_id != gateway_id
+            or runtime.debugger_binding.workspace_id != workspace_id):
+        await websocket.close(code=1008, reason="debug run owner mismatch")
+        return
+    await websocket.accept()
+    dap = NodeDebugDAPSession(service, runtime)
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    runtime.dap_subscribers.add(queue)
+
+    async def receive_requests() -> None:
+        while True:
+            message = json.loads(await websocket.receive_text())
+            response = await dap.dispatch(message)
+            await websocket.send_json(response)
+            if isinstance(message, dict) and message.get("command") == "launch":
+                await websocket.send_json(dap.event("initialized", {}))
+
+    async def send_events() -> None:
+        while True:
+            event = await queue.get()
+            name = event.get("event")
+            body = event.get("body")
+            if isinstance(name, str) and isinstance(body, dict):
+                await websocket.send_json(dap.event(name, body))
+
+    try:
+        await run_channel(receive_requests(), send_events())
+    except WebSocketDisconnect:
+        return
+    except (json.JSONDecodeError, TypeError, ValueError, RuntimeError) as error:
+        if websocket.client_state.name == "CONNECTED":
+            await websocket.send_json({"seq": dap._next_seq(), "type": "event", "event": "output",
+                "body": {"category": "stderr", "output": f"DAP 请求失败：{error}\n"}})
+            await websocket.close(code=1008, reason="invalid DAP request")
+    finally:
+        runtime.dap_subscribers.discard(queue)
+
+
+@router.get(
+    "/debugger-contributions",
+    response_model=APIResponse[NodeDebugDebuggerContributionsDTO],
+    summary="获取当前工作区已就绪的 Debug 插件声明",
+)
+async def get_node_debugger_contributions(
+    workspace_id: CanonicalWorkspaceId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
+):
+    try:
+        result = await node_debug_service.get_debugger_contributions(
+            workspace_id=workspace_id,
+            gateway_id=require_current_gateway_id("Node Debug 调试器声明查询"),
+            request_id=request_id,
+        )
+    except (TypeError, ValueError, RuntimeError, ConnectionError) as error:
+        raise _configuration_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 def _configuration_error(error: Exception) -> HTTPException:
@@ -281,6 +382,10 @@ async def start_node_debug(
             breakpoints=payload.breakpoints,
             launch_profile_name=payload.launch_profile_name,
             working_directory=payload.working_directory,
+            debugger_registration_id=payload.debugger_registration_id,
+            defer_configuration_done=payload.defer_configuration_done,
+            gateway_id=require_current_gateway_id("Node Debug 启动"),
+            request_id=request_id,
         )
     except _CONFIGURATION_ERRORS as error:
         # 与配置类入口共用同一映射：404/403/400/409 分支逐字一致。

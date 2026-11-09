@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from app.core.failures import failure_detail
+from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRecordDTO,
+    NodeDebugBindingSnapshotDTO,
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
     NodeDebugConfigurationDTO,
+    NodeDebugSessionManifestDTO,
 )
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
 )
@@ -27,18 +31,16 @@ from app.services.infrastructure.node_debug.configuration.runtime_config import 
 )
 from app.services.infrastructure.node_debug.process.inspector import NodeDebugInspector
 from app.services.infrastructure.node_debug.process.launch_claim import (
-    claim_with_spawn_identity,
+    claim_with_target_pid,
     new_launch_claim,
 )
-from app.services.infrastructure.node_debug.process.process_identity import (
-    probe_process_identity,
+from app.services.infrastructure.node_debug.process.plugin_runtime import (
+    NodeDebugPluginRuntime,
 )
 from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
-    ACTIVE_NODE_DEBUG_RUNTIME_STATUSES,
-    MAX_NODE_DEBUG_LINE_BYTES,
     NodeDebugActionAppender,
     NodeDebugLaunchClaimWriter,
     NodeDebugRuntime,
@@ -61,6 +63,10 @@ class NodeDebugLaunchRequest:
     actor: Literal["human", "ai", "system"]
     tool_name: str | None
     tool_call_id: str | None
+    debugger_registration_id: str | None = None
+    defer_configuration_done: bool = False
+    debugger_binding: NodeDebugBindingSnapshotDTO | None = None
+    request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,14 +102,6 @@ class NodeDebugSourceReconciler(Protocol):
     ) -> None: ...
 
 
-class NodeDebugLaunchStreamReader(Protocol):
-    async def __call__(
-        self,
-        runtime: NodeDebugRuntime,
-        stream_name: Literal["stdout", "stderr"],
-    ) -> None: ...
-
-
 class NodeDebugLaunchProcessMonitor(Protocol):
     async def __call__(self, runtime: NodeDebugRuntime) -> None: ...
 
@@ -121,7 +119,9 @@ class NodeDebugLaunchHandshakeTimeoutMessage(Protocol):
 
 
 class NodeDebugLaunchSessionLoader(Protocol):
-    def __call__(self, session_id: str, thread_id: str) -> None: ...
+    def __call__(
+        self, session_id: str, thread_id: str
+    ) -> NodeDebugSessionManifestDTO | None: ...
 
 
 class NodeDebugLaunchConfigurationReader(Protocol):
@@ -158,7 +158,8 @@ class NodeDebugPausedBreakpointChecker(Protocol):
 @dataclass(slots=True)
 class NodeDebugLaunchContext:
     workspace_root: Path
-    node_bin: str | None
+    workspace_id: str | None
+    gateway_connection: GatewayTransportConnection
     configuration_factory: NodeDebugConfigurationFactory
     breakpoint_mutations: NodeDebugBreakpointMutations
     inspector: NodeDebugInspector
@@ -179,10 +180,8 @@ class NodeDebugLaunchContext:
     mark_claim_running: NodeDebugLaunchClaimMarker
     append_action: NodeDebugActionAppender
     is_paused_at_breakpoint: NodeDebugPausedBreakpointChecker
-    read_stream: NodeDebugLaunchStreamReader
     monitor_process: NodeDebugLaunchProcessMonitor
     terminal_error_message: NodeDebugLaunchTerminalErrorMessage
-    handshake_timeout_message: NodeDebugLaunchHandshakeTimeoutMessage
 
 
 class NodeDebugLaunchOrchestrator:
@@ -190,52 +189,6 @@ class NodeDebugLaunchOrchestrator:
 
     def __init__(self, context: NodeDebugLaunchContext) -> None:
         self._context = context
-
-    async def _await_inspector_ready(self, runtime: NodeDebugRuntime) -> None:
-        """等待 Inspector 就绪，并让进程终结与 Inspector 启动失败同样立即失败。
-
-        只等就绪事件会让"进程已崩溃退出"或"端口被占用"白等满超时；两者都必须在
-        发生时立刻带诊断信息抛出，绝不静默超时。
-        """
-        context = self._context
-        ready = asyncio.ensure_future(runtime.inspector.inspector_ready.wait())
-        failed = asyncio.ensure_future(runtime.inspector.inspector_failed.wait())
-        exited = asyncio.ensure_future(runtime.process_task) if runtime.process_task else None
-        waiters: list[asyncio.Task[object]] = [ready, failed]
-        if exited is not None:
-            waiters.append(exited)
-        try:
-            await asyncio.wait(
-                waiters,
-                timeout=runtime.command_timeout_seconds,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        finally:
-            for waiter in (ready, failed):
-                waiter.cancel()
-            await asyncio.gather(ready, failed, return_exceptions=True)
-        if runtime.inspector.inspector_ready.is_set():
-            return
-        process = runtime.process
-        return_code = process.returncode if process is not None else None
-        if return_code is not None:
-            await self._drain_stream_tasks(runtime)
-            raise RuntimeError(
-                context.terminal_error_message(runtime, return_code)
-                or f"Node 调试进程在握手期间退出，退出码: {return_code}"
-            )
-        if runtime.inspector.inspector_failed.is_set():
-            raise RuntimeError("Node Inspector 启动失败，原始诊断见服务日志")
-        raise RuntimeError(
-            context.handshake_timeout_message(runtime.command_timeout_seconds)
-        )
-
-    async def _drain_stream_tasks(self, runtime: NodeDebugRuntime) -> None:
-        """等待 stdout 归集及 stderr 原始诊断完成。"""
-        tasks = (runtime.stdout_task, runtime.stderr_task)
-        pending = [task for task in tasks if task is not None]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
 
     async def launch(self, request: NodeDebugLaunchRequest) -> NodeDebugLaunchResult:
         context = self._context
@@ -288,13 +241,7 @@ class NodeDebugLaunchOrchestrator:
         normalized_args = context.configuration_factory.normalize_args(
             selected_configuration.args or profile.args
         )
-        configured_node_bin = runtime_config.node.executable.strip()
-        node_bin = configured_node_bin or context.node_bin
-        if not node_bin:
-            raise RuntimeError(
-                "未找到 Node.js，可通过 runtime.debug.node.executable 或 "
-                "BOXTEAM_NODE_BIN 指定"
-            )
+        node_bin = runtime_config.node.executable.strip() or "node"
 
         pending_breakpoints = context.session_state.pending_breakpoints(request.owner)
         pending_actions = context.session_state.pending_actions(request.owner)
@@ -312,10 +259,7 @@ class NodeDebugLaunchOrchestrator:
                         action.model_copy(deep=True)
                         for action in previous.actions[-context.max_actions :]
                     ]
-            if (
-                previous is not None
-                and previous.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES
-            ):
+            if previous is not None:
                 previous_outcome = await context.lifecycle.stop_runtime(previous)
                 if previous_outcome == "reconcile_required":
                     raise RuntimeError(
@@ -327,15 +271,13 @@ class NodeDebugLaunchOrchestrator:
                 session_id=session_id,
                 thread_id=thread_id,
                 configuration_id=selected_configuration_id,
+                debugger_binding=request.debugger_binding,
                 workspace_root=context.workspace_root,
                 script_path=script_path,
                 relative_script_path=relative_path,
                 args=list(normalized_args),
                 working_directory=resolved_working_directory,
                 launch_profile_name=profile_name,
-                node_bin=node_bin,
-                inspector_host=runtime_config.node.inspector_host,
-                inspector_port=runtime_config.node.inspector_port,
                 command_timeout_seconds=runtime_config.command_timeout_seconds,
             )
             requested_breakpoints = [
@@ -389,12 +331,25 @@ class NodeDebugLaunchOrchestrator:
             runtime.loaded_source_digests = context.read_source_digests(runtime)
             context.persist_state(session_id, thread_id, runtime)
 
+        debugger_binding = runtime.debugger_binding
+        if debugger_binding is None:
+            raise RuntimeError("调试运行必须绑定当前 Gateway Workspace 的 ready Debug 插件")
         claim = new_launch_claim(
             session_id=session_id,
             thread_id=thread_id,
+            run_id=runtime.run_id,
             configuration_id=selected_configuration_id,
-            inspector_host=runtime.inspector_host,
-            inspector_port=runtime.inspector_port,
+            debugger_binding=debugger_binding,
+            script_path=relative_path,
+            args=normalized_args,
+            node_executable=node_bin,
+            working_directory=(
+                resolved_working_directory.relative_to(context.workspace_root).as_posix()
+                if resolved_working_directory != context.workspace_root
+                else ""
+            ),
+            launch_profile_name=profile_name,
+            breakpoints=list(runtime.breakpoints.values()),
         )
         runtime.process_instance_id = claim.process_instance_id
         try:
@@ -405,38 +360,33 @@ class NodeDebugLaunchOrchestrator:
                         "并发的停止请求已接管该调试运行时，取消 spawn: "
                         f"session_id={session_id}, thread_id={thread_id}"
                     )
-            runtime.process = await asyncio.create_subprocess_exec(
-                node_bin,
-                f"--inspect-brk={runtime.inspector_host}:{runtime.inspector_port}",
-                str(script_path),
-                *normalized_args,
-                cwd=str(resolved_working_directory),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                limit=MAX_NODE_DEBUG_LINE_BYTES,
+            if runtime.debugger_binding is None or context.workspace_id is None:
+                raise RuntimeError("调试运行必须绑定当前 Gateway Workspace 的 ready Debug 插件")
+            plugin_runtime = await NodeDebugPluginRuntime.connect(
+                binding=runtime.debugger_binding,
+                workspace_id=context.workspace_id,
+                connection=context.gateway_connection,
+                request_id=request.request_id or create_prefixed_id("req"),
+                run_id=runtime.run_id,
             )
-            runtime.stderr_task = asyncio.create_task(context.read_stream(runtime, "stderr"))
-            runtime.stdout_task = asyncio.create_task(context.read_stream(runtime, "stdout"))
+            runtime.plugin_runtime = plugin_runtime
+            plugin_result = await plugin_runtime.launch({
+                "node_executable": node_bin,
+                "inspector_host": runtime_config.node.inspector_host,
+                "inspector_port": runtime_config.node.inspector_port,
+                "script_path": str(script_path),
+                "working_directory": str(resolved_working_directory),
+                "args": normalized_args,
+                "process_instance_id": claim.process_instance_id,
+            })
+            pid = plugin_result["pid"]
+            if type(pid) is not int:
+                raise TypeError("Debug 插件 launch 回执 PID 无效")
+            runtime.target_pid = pid
+            runtime.process_instance_id = claim.process_instance_id
+            claim = claim_with_target_pid(claim, pid=pid)
+            await context.write_claim(claim)
             runtime.process_task = asyncio.create_task(context.monitor_process(runtime))
-            # monitor 可以观察真实退出，但不能越过此实例尚未完成的身份登记。
-            async with runtime.state_lock:
-                spawn_identity = probe_process_identity(runtime.process.pid)
-                if spawn_identity is None:
-                    raise RuntimeError(
-                        "spawn 后无法读取进程起始身份（进程可能已立即退出）: "
-                        f"pid={runtime.process.pid}"
-                    )
-                runtime.process_identity_source = spawn_identity.source
-                runtime.process_start_marker = spawn_identity.start_marker
-                await context.write_claim(
-                    claim_with_spawn_identity(
-                        claim,
-                        pid=runtime.process.pid,
-                        identity=spawn_identity,
-                    )
-                )
-            await self._await_inspector_ready(runtime)
             await context.inspector.connect(runtime)
             await context.inspector.command(runtime, "Runtime.enable")
             await context.inspector.command(runtime, "Debugger.enable")
@@ -451,11 +401,13 @@ class NodeDebugLaunchOrchestrator:
                     await context.breakpoint_mutations.install_breakpoint(runtime, breakpoint)
             async with runtime.state_lock:
                 runtime.status = "starting"
-            await context.inspector.command(runtime, "Runtime.runIfWaitingForDebugger")
+            if not request.defer_configuration_done:
+                await context.inspector.command(runtime, "Runtime.runIfWaitingForDebugger")
             await context.inspector.wait_for_execution_state(runtime)
             resume_initial_pause = False
             async with runtime.state_lock:
-                if runtime.status == "paused" and not context.is_paused_at_breakpoint(runtime):
+                if (not request.defer_configuration_done and runtime.status == "paused"
+                        and not context.is_paused_at_breakpoint(runtime)):
                     runtime.status = "running"
                     context.inspector.clear_paused_snapshot(runtime)
                     runtime.last_stopped_frame = None
@@ -464,11 +416,9 @@ class NodeDebugLaunchOrchestrator:
                 await context.inspector.command(runtime, "Debugger.resume")
                 await context.inspector.wait_for_execution_state(runtime)
             await context.inspector.wait_for_frame_variables(runtime)
-            process = runtime.process
-            return_code = process.returncode if process is not None else None
+            return_code = runtime.target_exit_code
             if return_code is not None and return_code != 0:
-                # 握手期间进程已失败退出：公开退出码，原始 stderr 保留在诊断中。
-                await self._drain_stream_tasks(runtime)
+                # Debug 插件已确认目标进程退出；输出由同一控制通道保存。
                 raise RuntimeError(
                     context.terminal_error_message(runtime, return_code)
                     or f"Node 调试进程在握手期间退出，退出码: {return_code}"

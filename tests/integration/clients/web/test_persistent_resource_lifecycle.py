@@ -30,7 +30,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.terminal_plugin import enable_terminal_plugin
+from tests.support.terminal_plugin import enable_developer_tools_plugins
 
 
 @pytest.mark.asyncio
@@ -81,9 +81,9 @@ async def test_persistent_resources_through_real_workbench(
             owner = reply.json()["data"]["active_workspace"]
             workspace_id = owner["workspace_id"]
             gateway_id = owner["gateway_id"]
-            await enable_terminal_plugin(
+            await enable_developer_tools_plugins(
                 client, gateway_id=gateway_id, workspace_id=workspace_id,
-                artifacts_dir=artifacts / "terminal-plugin",
+                plugin_ids=("terminal",), artifacts_dir=artifacts / "terminal-plugin",
             )
         environment = os.environ | temporary_environment | replay.environment | {
             "BOXTEAM_BROWSER_BASE_URL": base_url, "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,

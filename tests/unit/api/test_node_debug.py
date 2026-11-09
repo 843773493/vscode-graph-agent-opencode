@@ -12,6 +12,7 @@ from app.api.node_debug import (
     get_node_debug_capabilities,
     start_node_debug,
 )
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugCapabilitiesDTO,
     NodeDebugConfigurationActivateRequest,
@@ -107,12 +108,16 @@ async def test_start_endpoint_forwards_profile_and_working_directory(
         args=["23"],
     )
 
-    response = await start_node_debug(
-        payload=payload,
-        _="local-token",
-        request_id="req_start",
-        node_debug_service=node_debug_service,
-    )
+    gateway_token = set_current_gateway_id("gateway_789f146c159aa74461af8dacca7341ca")
+    try:
+        response = await start_node_debug(
+            payload=payload,
+            _="local-token",
+            request_id="req_start",
+            node_debug_service=node_debug_service,
+        )
+    finally:
+        reset_current_gateway_id(gateway_token)
 
     assert response.request_id == "req_start"
     node_debug_service.start.assert_awaited_once_with(
@@ -124,6 +129,10 @@ async def test_start_endpoint_forwards_profile_and_working_directory(
         breakpoints=[],
         launch_profile_name="node-test",
         working_directory="fixtures",
+        debugger_registration_id=None,
+        defer_configuration_done=False,
+        gateway_id="gateway_789f146c159aa74461af8dacca7341ca",
+        request_id="req_start",
     )
 
 

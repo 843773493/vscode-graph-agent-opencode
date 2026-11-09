@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
+import commentjson
 import httpx
 import pytest
 from langchain.agents import create_agent
@@ -21,6 +24,13 @@ from app.agents.tools.custom_invocation import (
     seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.debugging import create_debugging_tools
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugControlActionRequest,
@@ -33,11 +43,17 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    debug_plugin_gateway_for_workspace,
+)
 from tests.support.node_debug_dependencies import (
     TEST_THREAD_ID,
     node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
+from tests.support.ports import integration_port_block_for_file
 
 DEBUG_TARGET_NAMES = frozenset(
     {
@@ -87,8 +103,81 @@ FORBIDDEN_RUNTIME_FIELDS = frozenset(
     }
 )
 
-# 本文件中的 catalog 检查走真实后端 HTTP；下面直接调用工具 factory 的用例是
-# Node Inspector 适配器集成检查，不把它们当作“提示词驱动的完整 E2E”。
+
+@pytest.fixture(scope="module", autouse=True)
+def use_unused_model_provider(integration_workspace_config_path: str) -> None:
+    """本文件不调用模型；避免健康检查依赖宿主机 API 凭据。"""
+    config_path = Path(integration_workspace_config_path)
+    source = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    source["llm"]["providers"] = [{
+        "id": "primary", "endpoint": "http://127.0.0.1:1/v1", "model": "unused-debug-model",
+        "api_key": "unused-debug-test-key", "custom_llm_provider": "openai",
+        "api_mode": {"protocol": "chat_completions",
+            "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+            "supports_reasoning": {"reasoning_content": False}},
+    }]
+    for agent in source["agents"].values():
+        if "model" in agent:
+            agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+        for tool in agent.get("tools", {}).get("custom", []):
+            embedding = tool.get("options", {}).get("embedding")
+            if embedding is not None:
+                embedding["provider_id"] = "primary"
+    config_path.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+# 本文件的调试执行经真实 Gateway Debug 插件；工具 factory 仍保留适配器行为断言。
+
+
+@pytest.fixture
+async def debug_plugin_gateway(
+    integration_workspace_root_path: str,
+    request: pytest.FixtureRequest,
+    prepared_debug_plugin_package: Path,
+) -> AsyncIterator[TerminalPluginGateway]:
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    try:
+        async with debug_plugin_gateway_for_workspace(
+            Path(integration_workspace_root_path),
+            context.artifacts_dir / "debug-plugin",
+            integration_port_block_for_file(Path(__file__)).port(21),
+            context.boxteam_home_for_node(request.node.nodeid),
+            prepared_debug_plugin_package,
+        ) as gateway:
+            gateway_token = set_current_gateway_id(gateway.gateway_id)
+            try:
+                yield gateway
+            finally:
+                reset_current_gateway_id(gateway_token)
+    finally:
+        context.close()
+
+
+@pytest.fixture(autouse=True)
+def debug_tool_request_context() -> AsyncIterator[None]:
+    """为直接调用调试工具提供测试请求身份，不测 HTTP tracing。"""
+    request_token = set_current_request_id(f"test-debug-plugin-{uuid4().hex}")
+    try:
+        yield
+    finally:
+        reset_current_request_id(request_token)
+
+
+def _debug_service(
+    workspace_root: Path,
+    config_service: ConfigService,
+    gateway: TerminalPluginGateway,
+    *,
+    session_store: NodeDebugSessionStore | None = None,
+) -> NodeDebugService:
+    return NodeDebugService(
+        workspace_root=workspace_root,
+        workspace_id=gateway.workspace_id,
+        file_paths=node_debug_file_paths(workspace_root),
+        config_service=config_service,
+        session_store=session_store,
+        session_admission=permissive_node_debug_session_admission(),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
 
 
 class _SessionCatalogResolverStub:
@@ -299,6 +388,7 @@ def test_provider_model_schema_keeps_only_fixed_extension_envelope(
 async def test_node_inspector_tool_adapter_integration_session(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
@@ -310,6 +400,7 @@ async def test_node_inspector_tool_adapter_integration_session(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        workspace_id=debug_plugin_gateway.workspace_id,
         file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
@@ -415,6 +506,7 @@ async def test_node_inspector_tool_adapter_integration_session(
 async def test_node_inspector_tool_adapter_integration_isolation(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
@@ -424,13 +516,7 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = create_debugging_tools(
         session_id="ses_e2e_debug_isolated",
         node_debug_service=service,
@@ -594,6 +680,7 @@ async def test_node_inspector_tool_adapter_integration_isolation(
 async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     fixture_path, breakpoint_line = _write_special_breakpoint_fixture(workspace_root)
@@ -602,13 +689,7 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
         config_path=Path(integration_workspace_config_path),
         workspace_root=workspace_root,
     )
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = _debug_tools_by_name(service)
 
     try:
@@ -678,6 +759,7 @@ async def test_node_inspector_hit_count_and_logpoint_runtime_semantics(
 async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     fixture_path, breakpoint_line = _write_special_breakpoint_fixture(workspace_root)
@@ -686,13 +768,7 @@ async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
         config_path=Path(integration_workspace_config_path),
         workspace_root=workspace_root,
     )
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = _debug_tools_by_name(service)
 
     try:
@@ -745,6 +821,7 @@ async def test_node_logpoint_reports_invalid_interpolation_without_pausing(
 @pytest.mark.asyncio
 async def test_node_debug_rejects_unimplemented_adapter(
     integration_workspace_root_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve() / "adapter-fixture"
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -782,6 +859,7 @@ async def test_node_debug_rejects_unimplemented_adapter(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
+        workspace_id=load_or_create_workspace_id(workspace_root),
         file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),
@@ -823,6 +901,7 @@ async def test_node_debug_rejects_unimplemented_adapter(
 async def test_node_inspector_agent_results_enforce_least_privilege_and_redaction(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     fixture_path, breakpoint_line = _write_secret_debug_fixture(workspace_root)
@@ -832,13 +911,7 @@ async def test_node_inspector_agent_results_enforce_least_privilege_and_redactio
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = _debug_tools_by_name(service)
 
     try:
@@ -893,6 +966,7 @@ async def test_node_inspector_agent_results_enforce_least_privilege_and_redactio
 async def test_human_and_agent_share_cross_file_debug_runtime(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     entry_path, worker_path, entry_line, worker_line = _write_cross_file_debug_fixture(
@@ -904,13 +978,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = _debug_tools_by_name(service)
 
     try:
@@ -967,6 +1035,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
 async def test_active_debug_session_invalidates_changed_source_without_blocking_controls(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     entry_path, worker_path, _entry_line, worker_line = _write_cross_file_debug_fixture(
@@ -978,13 +1047,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = _debug_tools_by_name(service)
 
     try:
@@ -1054,6 +1117,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
 async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     entry_path, worker_path, entry_line, worker_line = _write_cross_file_debug_fixture(
@@ -1065,13 +1129,7 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
         workspace_root=workspace_root,
     )
     config_service.validate_workspace_config()
-    service = NodeDebugService(
-        workspace_root=workspace_root,
-        file_paths=node_debug_file_paths(workspace_root),
-        config_service=config_service,
-        session_admission=permissive_node_debug_session_admission(),
-        external_resource_leases=ExternalResourceLeaseLedger(),
-    )
+    service = _debug_service(workspace_root, config_service, debug_plugin_gateway)
     tools = _debug_tools_by_name(service)
 
     try:
@@ -1167,6 +1225,7 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
 async def test_session_launch_configuration_is_restored_after_service_restart(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    debug_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     workspace_root = Path(integration_workspace_root_path).resolve()
     entry_path, worker_path, _entry_line, worker_line = _write_cross_file_debug_fixture(
@@ -1185,6 +1244,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
     session_id = "ses_persisted_debug_configuration"
     first = NodeDebugService(
         workspace_root=workspace_root,
+        workspace_id=debug_plugin_gateway.workspace_id,
         file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_store=store,
@@ -1230,6 +1290,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
 
     restored = NodeDebugService(
         workspace_root=workspace_root,
+        workspace_id=debug_plugin_gateway.workspace_id,
         file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_store=store,

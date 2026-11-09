@@ -252,6 +252,7 @@ from tests.support.fork_deadline import (
     ForkDeadlineRegistry,
     ForkOperationDeadline,
 )
+from tests.support.node_debug_dependencies import node_debug_binding_snapshot
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
 from tests.support.session_navigation.catalog_intents import (
@@ -1403,14 +1404,17 @@ def _seed_debug_configurations(
             session_id=source_session_id,
             thread_id=source_thread_id,
             process_instance_id="node-debug-proc_source",
-            nonce="source-nonce",
             phase="running",
             configuration_id=active_id,
+            run_id="run_source",
+            debugger_binding=node_debug_binding_snapshot(),
+            script_path="entry.mjs",
+            args=[],
+            node_executable="node",
+            working_directory="",
+            launch_profile_name=None,
+            breakpoints=[],
             pid=4242,
-            process_identity_source="test",
-            process_start_marker="source-marker",
-            inspector_host="127.0.0.1",
-            inspector_port=9311,
             created_at=created_at,
             updated_at=created_at,
         )
@@ -2758,7 +2762,8 @@ async def test_public_fork_modes_copy_only_explicit_portable_debug_configuration
         assert proof["target_configuration_id_map"] == [[saved_id, configuration.configuration_id]]
         assert [item["configuration_id"] for item in proof["snapshot"]["configuration_artifacts"]] == [saved_id]
     claim = store.read_launch_claim(source.session_id, _main_thread_id(fork_context, source.session_id))
-    assert claim is not None and (claim.pid, claim.inspector_port, claim.phase) == (4242, 9311, "running")
+    assert claim is not None and (claim.pid, claim.run_id, claim.phase) == (4242, "run_source", "running")
+    assert claim.debugger_binding == node_debug_binding_snapshot()
 
 
 @pytest.mark.asyncio

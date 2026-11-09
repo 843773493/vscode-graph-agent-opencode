@@ -1,20 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
-import signal
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Literal
 
 from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.node_debug.process.launch_claim import (
     NodeDebugClaimRecoveryDecision,
     claim_marked,
-    decide_claim_recovery,
-)
-from app.services.infrastructure.node_debug.process.process_identity import (
-    probe_process_identity,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
     LIVE_NODE_DEBUG_RUNTIME_STATUSES,
@@ -24,21 +17,17 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugLaunchClaimWriter,
     NodeDebugPendingActionAppender,
     NodeDebugProcessLeaseSettler,
-    NodeDebugReleaseFailureNotifier,
     NodeDebugRuntime,
     NodeDebugSessionManifestWriter,
     NodeDebugStopSnapshotClearer,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 
-_TERMINATE_TIMEOUT_SECONDS = 3.0
-_KILL_TIMEOUT_SECONDS = 3.0
-_RECONCILE_TERMINATE_TIMEOUT_SECONDS = 5.0
-logger = logging.getLogger(__name__)
+RecoverNodeDebugRun = Callable[[object], Awaitable[NodeDebugClaimRecoveryDecision]]
 
 
 class NodeDebugProcessLifecycle:
-    """集中处理 launch claim 恢复、进程终止核实和 runtime 停止收口。"""
+    """由原 Debug 插件 run owner 停止与恢复目标进程。"""
 
     def __init__(
         self,
@@ -48,221 +37,69 @@ class NodeDebugProcessLifecycle:
         write_launch_claim: NodeDebugLaunchClaimWriter,
         mark_claim_phase: NodeDebugClaimPhaseMarker,
         settle_process_lease: NodeDebugProcessLeaseSettler,
-        notify_release_failed: NodeDebugReleaseFailureNotifier,
         append_action: NodeDebugActionAppender,
         append_pending_action: NodeDebugPendingActionAppender,
         write_session_manifest: NodeDebugSessionManifestWriter,
         clear_stop_snapshot: NodeDebugStopSnapshotClearer,
+        recover_run: RecoverNodeDebugRun,
     ) -> None:
         self._runtimes = runtimes
         self._read_launch_claim = read_launch_claim
         self._write_launch_claim = write_launch_claim
         self._mark_claim_phase = mark_claim_phase
         self._settle_process_lease = settle_process_lease
-        self._notify_release_failed = notify_release_failed
         self._append_action = append_action
         self._append_pending_action = append_pending_action
         self._write_session_manifest = write_session_manifest
         self._clear_stop_snapshot = clear_stop_snapshot
+        self._recover_run = recover_run
 
     async def assert_claim_recoverable(self, owner: NodeDebugOwner) -> None:
-        """启动前必须先核实并结清旧 claim；无法核实则拒绝启动新实例。"""
         decision = await self.reconcile_persisted_claim(owner)
-        if decision is not None and decision.outcome == "reconcile_required":
+        if decision is not None and decision.outcome == "execution_lost":
             raise RuntimeError(
-                "存在无法核实的旧调试实例登记，保持 reconcile_required；"
-                f"拒绝启动新实例: session_id={owner[0]}, thread_id={owner[1]}, "
-                f"reason={decision.reason}"
+                "原调试实例结果未知，结清前拒绝启动新实例: "
+                f"session_id={owner[0]}, thread_id={owner[1]}, reason={decision.reason}"
             )
 
     async def reconcile_persisted_claim(
-        self, owner: NodeDebugOwner
+        self, owner: NodeDebugOwner,
     ) -> NodeDebugClaimRecoveryDecision | None:
-        """按持久 claim 核实旧实例：能结清的定点结清，无法核实的保持阻断。"""
         if self._runtimes.get(owner) is not None:
             return None
         session_id, thread_id = owner
-        # 原 owner 锁覆盖读取、OS 核实及审计结算，取消不能遗弃原生访问。
         claim = await run_sync_shielded(self._read_launch_claim, session_id, thread_id)
         if claim is None or claim.phase == "settled":
             return None
-        decision = await run_sync_shielded(decide_claim_recovery, claim)
-        if decision.outcome == "reconcile_required":
-            if claim.phase != "reconcile_required":
-                # 只在“进入”该状态时写登记并留一条审计动作；状态本身可反复查询，
-                # 但读接口是轮询入口，绝不能每次轮询都追加动作并重写 manifest。
-                claim = claim_marked(
-                    claim, phase="reconcile_required", reason=decision.reason
-                )
-                await self._write_launch_claim(claim)
-                await run_sync_shielded(
-                    self._record_claim_action,
-                    owner,
-                    "reconcile_required",
-                    f"调试实例无法核实，需人工核实后才能继续: {decision.reason}",
-                    result="error",
-                )
-                self._notify_release_failed(
-                    session_id=claim.session_id,
-                    thread_id=claim.thread_id,
-                    process_instance_id=claim.process_instance_id,
-                )
+        if claim.phase == "execution_lost":
+            return NodeDebugClaimRecoveryDecision("execution_lost", claim.reconcile_reason or "原 Debug run 已失效")
+        try:
+            decision = await self._recover_run(claim)
+        except Exception as error:  # noqa: BLE001 - 冷恢复失败必须结算为明确 execution_lost
+            decision = NodeDebugClaimRecoveryDecision(
+                "execution_lost",
+                f"无法连接原 Debug run 查询状态: {type(error).__name__}: {error}",
+            )
+        if decision.outcome == "running":
             return decision
-        if decision.outcome == "terminate_then_settle":
-            terminated = await self.terminate_verified_instance(
-                pid=claim.pid,
-                recorded_source=claim.process_identity_source,
-                recorded_start_marker=claim.process_start_marker,
+        if decision.outcome == "settled":
+            await self._settle_process_lease(
+                session_id=claim.session_id,
+                thread_id=claim.thread_id,
+                process_instance_id=claim.process_instance_id,
             )
-            if not terminated:
-                failure = (
-                    "已核实为登记的同一实例但停止失败，保持 reconcile_required: "
-                    f"pid={claim.pid}"
-                )
-                await self._write_launch_claim(
-                    claim_marked(
-                        claim,
-                        phase="reconcile_required",
-                        reason=failure,
-                    )
-                )
-                await run_sync_shielded(
-                    self._record_claim_action,
-                    owner, "reconcile_required", failure, result="error"
-                )
-                self._notify_release_failed(
-                    session_id=claim.session_id,
-                    thread_id=claim.thread_id,
-                    process_instance_id=claim.process_instance_id,
-                )
-                return NodeDebugClaimRecoveryDecision(
-                    outcome="reconcile_required",
-                    reason=failure,
-                    identity=decision.identity,
-                )
-        # 已核实旧实例不存在（或已按 owner 策略定点停止）：结清账本占用后才写
-        # claim 终态；没有任何登记时账本保持原样、不重复 acquire。
-        await self._settle_process_lease(
-            session_id=claim.session_id,
-            thread_id=claim.thread_id,
-            process_instance_id=claim.process_instance_id,
-        )
+            await self._write_launch_claim(claim_marked(claim, phase="settled"))
+            await self._record_claim_action(owner, "execution_settled", decision.reason)
+            return decision
         await self._write_launch_claim(
-            claim_marked(claim, phase="settled", reason=decision.reason)
+            claim_marked(claim, phase="execution_lost", reason=decision.reason)
         )
-        await run_sync_shielded(
-            self._record_claim_action,
-            owner,
-            "reconcile_settled",
-            f"已结清遗留调试实例登记: {decision.reason}",
+        await self._record_claim_action(
+            owner, "execution_lost", decision.reason, result="error",
         )
-        return NodeDebugClaimRecoveryDecision(
-            outcome="settle",
-            reason=decision.reason,
-            identity=decision.identity,
-        )
+        return decision
 
-    async def wait_for_recorded_instance(
-        self,
-        *,
-        pid: int,
-        recorded_source: str | None,
-        recorded_start_marker: str,
-        timeout_seconds: float,
-    ) -> Literal["terminated", "reused", "incomparable", "same"]:
-        """轮询该 PID，直到身份事实可判定或超时。"""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_seconds
-        while True:
-            state = await run_sync_shielded(
-                self._recorded_instance_state,
-                pid=pid, recorded_source=recorded_source,
-                recorded_start_marker=recorded_start_marker,
-            )
-            if state != "same":
-                return state
-            if loop.time() >= deadline:
-                return "same"
-            await asyncio.sleep(0.01)
-
-    @staticmethod
-    def _recorded_instance_state(
-        *, pid: int, recorded_source: str | None, recorded_start_marker: str,
-    ) -> Literal["terminated", "reused", "incomparable", "same"]:
-        identity = probe_process_identity(pid)
-        if identity is None:
-            return "terminated"
-        comparison = identity.compare(
-            recorded_source=recorded_source, recorded_start_marker=recorded_start_marker,
-        )
-        if comparison == "match":
-            return "same"
-        return "reused" if comparison == "mismatch" else "incomparable"
-
-    def _signal_recorded_instance(
-        self, *, pid: int, recorded_source: str | None,
-        recorded_start_marker: str, signal_number: int,
-    ) -> Literal["terminated", "reused", "incomparable", "same"]:
-        # 核对和信号在同一 worker 内连续执行，不拿异步等待之前的身份去终止 PID。
-        state = self._recorded_instance_state(
-            pid=pid, recorded_source=recorded_source, recorded_start_marker=recorded_start_marker,
-        )
-        if state == "same":
-            try:
-                os.kill(pid, signal_number)
-            except ProcessLookupError:
-                return "terminated"
-        return state
-
-    async def terminate_verified_instance(
-        self,
-        *,
-        pid: int | None,
-        recorded_source: str | None,
-        recorded_start_marker: str | None,
-    ) -> bool:
-        """只终止再次核实为同一实例的进程；PID 复用和事实不足一律不碰。"""
-        if pid is None or recorded_start_marker is None:
-            return False
-        state = await run_sync_shielded(
-            self._signal_recorded_instance,
-            pid=pid,
-            recorded_source=recorded_source,
-            recorded_start_marker=recorded_start_marker,
-            signal_number=signal.SIGTERM,
-        )
-        if state == "terminated":
-            return True
-        if state == "reused":
-            return True
-        if state == "incomparable":
-            return False
-        state = await self.wait_for_recorded_instance(
-            pid=pid,
-            recorded_source=recorded_source,
-            recorded_start_marker=recorded_start_marker,
-            timeout_seconds=_RECONCILE_TERMINATE_TIMEOUT_SECONDS,
-        )
-        if state != "same":
-            return state in {"terminated", "reused"}
-        # Windows 的 SIGTERM 由 TerminateProcess 实现，没有独立的 SIGKILL。
-        state = await run_sync_shielded(
-            self._signal_recorded_instance,
-            pid=pid, recorded_source=recorded_source,
-            recorded_start_marker=recorded_start_marker,
-            signal_number=getattr(signal, "SIGKILL", signal.SIGTERM),
-        )
-        if state != "same":
-            return state in {"terminated", "reused"}
-        state = await self.wait_for_recorded_instance(
-            pid=pid,
-            recorded_source=recorded_source,
-            recorded_start_marker=recorded_start_marker,
-            timeout_seconds=_RECONCILE_TERMINATE_TIMEOUT_SECONDS,
-        )
-        return state in {"terminated", "reused"}
-
-    def _record_claim_action(
+    async def _record_claim_action(
         self,
         owner: NodeDebugOwner,
         action: str,
@@ -271,7 +108,8 @@ class NodeDebugProcessLifecycle:
         result: Literal["success", "error"] = "success",
     ) -> None:
         session_id, thread_id = owner
-        self._append_pending_action(
+        await run_sync_shielded(
+            self._append_pending_action,
             session_id,
             thread_id,
             action,
@@ -289,135 +127,76 @@ class NodeDebugProcessLifecycle:
         *,
         clear_error: bool = True,
     ) -> Literal["stopped", "reconcile_required"]:
-        """停止并核实进程终结；未核实终结时保持 reconcile_required 阻断。"""
+        already_settled = runtime.plugin_runtime is None and runtime.target_exited
+        if not already_settled and runtime.plugin_runtime is None:
+            claim = await run_sync_shielded(
+                self._read_launch_claim, runtime.session_id, runtime.thread_id,
+            )
+            already_settled = (
+                claim is not None
+                and claim.phase == "settled"
+                and claim.run_id == runtime.run_id
+                and claim.process_instance_id == runtime.process_instance_id
+            )
         async with runtime.state_lock:
             if runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES:
                 runtime.status = "stopping"
             runtime.closing = True
-        await self._mark_claim_phase(runtime, "stopping", "收到停止请求，等待进程终结")
-        socket = runtime.inspector.socket
-        if socket is not None:
-            await socket.close()
+        if already_settled:
+            failure_reason = None
+        else:
+            await self._mark_claim_phase(runtime, "stopping", "等待 Debug 插件核实目标进程退出")
+            failure_reason = await self.terminate_and_verify(runtime)
+        if failure_reason is None:
+            if runtime.plugin_runtime is not None:
+                await runtime.plugin_runtime.close()
+                runtime.plugin_runtime = None
             runtime.inspector.socket = None
-        failure_reason = await self.terminate_and_verify(runtime)
-        tasks = (
-            runtime.inspector.receiver_task,
-            runtime.stderr_task,
-            runtime.stdout_task,
-            runtime.process_task,
-        )
+        tasks = (runtime.inspector.receiver_task, runtime.process_task)
         current_task = asyncio.current_task()
         for task in tasks:
             if task is not None and task is not current_task and not task.done():
                 task.cancel()
-        pending = [
-            task for task in tasks if task is not None and task is not current_task
-        ]
+        pending = [task for task in tasks if task is not None and task is not current_task]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         async with runtime.state_lock:
             self._clear_stop_snapshot(runtime)
         if failure_reason is None:
-            await self._mark_claim_phase(runtime, "settled", "已核实进程终结并结清")
+            await self._mark_claim_phase(runtime, "settled", "Debug 插件已确认目标进程退出")
             async with runtime.state_lock:
                 if clear_error:
                     runtime.error_message = None
             return "stopped"
-        await self._mark_claim_phase(runtime, "reconcile_required", failure_reason)
+        await self._mark_claim_phase(runtime, "stopping", failure_reason)
         async with runtime.state_lock:
             runtime.status = "reconcile_required"
-            runtime.error_message = (
-                f"停止调试进程失败且无法核实终态: {failure_reason}"
-            )
+            runtime.error_message = f"停止调试进程失败，目标状态仍可通过原插件查询: {failure_reason}"
             self._append_action(
-                runtime,
-                "stop_reconcile_required",
-                f"停止调试进程失败且无法核实终态: {failure_reason}",
-                actor="system",
-                result="error",
+                runtime, "stop_result_unknown", runtime.error_message,
+                actor="system", result="error",
             )
         return "reconcile_required"
 
-    def _record_native_stop_failure(
-        self, runtime: NodeDebugRuntime, action: str, label: str, error: OSError,
-    ) -> None:
-        message = (
-            f"{label}: session_id={runtime.session_id}, thread_id={runtime.thread_id}, "
-            f"error_type={type(error).__name__}, errno={error.errno}, "
-            f"winerror={getattr(error, 'winerror', None)}"
-        )
-        logger.exception(message)
-        self._append_action(runtime, action, message, actor="system", result="error")
-
-    async def terminate_and_verify(
-        self, runtime: NodeDebugRuntime
-    ) -> str | None:
-        """终止 runtime 进程并核实终结；None 表示已核实不存在。"""
-        process = runtime.process
-        if process is None:
-            return None
-        if process.returncode is None:
+    async def terminate_and_verify(self, runtime: NodeDebugRuntime) -> str | None:
+        plugin = runtime.plugin_runtime
+        if plugin is None:
+            return "当前Backend没有原Debug插件run连接；拒绝按本机PID停止目标"
+        try:
+            result = await plugin.stop()
+        except (ConnectionError, TimeoutError, OSError) as error:
             try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            except OSError as error:
-                self._record_native_stop_failure(
-                    runtime, "stop_signal_failed", "发送终止信号失败", error,
+                result = await plugin.status()
+            except (ConnectionError, TimeoutError, OSError) as status_error:
+                return (
+                    "停止结果未知，且无法通过原Debug插件查询run状态: "
+                    f"stop={type(error).__name__}, status={type(status_error).__name__}"
                 )
-            try:
-                await asyncio.wait_for(
-                    process.wait(), timeout=_TERMINATE_TIMEOUT_SECONDS
-                )
-            except TimeoutError:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                except OSError as error:
-                    self._record_native_stop_failure(
-                        runtime, "stop_kill_failed", "强制终止调试进程失败", error,
-                    )
-                try:
-                    await asyncio.wait_for(
-                        process.wait(), timeout=_KILL_TIMEOUT_SECONDS
-                    )
-                except TimeoutError:
-                    pass
-            except OSError as error:
-                self._record_native_stop_failure(
-                    runtime, "stop_wait_failed", "等待调试进程退出失败", error,
-                )
-        if process.returncode is not None:
-            return None
-        return await run_sync_shielded(self.verify_process_gone, runtime)
-
-    def verify_process_gone(
-        self, runtime: NodeDebugRuntime
-    ) -> str | None:
-        """按已登记的 OS 起始身份核实进程是否终结。"""
-        process = runtime.process
-        pid = getattr(process, "pid", None)
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-            return "进程句柄未报告终态且缺少可用 PID"
-        identity = probe_process_identity(pid)
-        if identity is None:
-            return None
-        if runtime.process_start_marker is None:
-            return (
-                "缺少可核实的 OS 进程起始身份，不能判定终结: "
-                f"pid={pid}, source={identity.source}"
-            )
-        comparison = identity.compare(
-            recorded_source=runtime.process_identity_source,
-            recorded_start_marker=runtime.process_start_marker,
-        )
-        if comparison == "match":
-            return f"进程仍存活且起始身份匹配: pid={pid}"
-        if comparison == "incomparable":
-            return (
-                "PID 当前实例的起始身份与登记不可比对，无法核实是否同一实例: "
-                f"pid={pid}, recorded_source={runtime.process_identity_source}, "
-                f"actual_source={identity.source}"
-            )
+        if result.get("run_id") != runtime.run_id:
+            return "Debug插件状态回执不属于原run"
+        if result.get("status") != "exited":
+            return f"Debug插件未确认目标进程退出: status={result.get('status')!r}"
+        code = result.get("exit_code")
+        runtime.target_exit_code = code if type(code) is int else None
+        runtime.target_exited = True
         return None

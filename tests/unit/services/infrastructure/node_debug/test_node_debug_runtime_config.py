@@ -57,6 +57,26 @@ def test_debug_runtime_config_rejects_public_inspector_host(tmp_path: Path) -> N
         service.get_debug_runtime_config()
 
 
+def test_debug_runtime_config_preserves_target_node_executable(tmp_path: Path) -> None:
+    executable = str(tmp_path / "target-node")
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_config(tmp_path, {"node": {"executable": executable}}),
+    )
+
+    assert service.get_debug_runtime_config()["node"]["executable"] == executable
+
+
+def test_debug_runtime_config_rejects_non_string_node_executable(tmp_path: Path) -> None:
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_config(tmp_path, {"node": {"executable": 42}}),
+    )
+
+    with pytest.raises(ValueError, match="node.executable 必须是字符串"):
+        service.get_debug_runtime_config()
+
+
 def test_debug_runtime_config_reads_launch_profile_and_timeout(tmp_path: Path) -> None:
     service = ConfigService(
         config_dir=Path.cwd() / "configs",

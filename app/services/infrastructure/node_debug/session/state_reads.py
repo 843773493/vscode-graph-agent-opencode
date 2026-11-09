@@ -43,13 +43,13 @@ class NodeDebugStateReadMixin:
                 session_id=session_id,
                 thread_id=thread_id,
                 status=(
-                    "reconcile_required"
-                    if claim is not None and claim.phase == "reconcile_required"
+                    "execution_lost"
+                    if claim is not None and claim.phase == "execution_lost"
                     else "idle"
                 ),
                 error_message=(
                     claim.reconcile_reason
-                    if claim is not None and claim.phase == "reconcile_required"
+                    if claim is not None and claim.phase == "execution_lost"
                     else None
                 ),
                 active_configuration_id=self._configuration_registry.active_id(

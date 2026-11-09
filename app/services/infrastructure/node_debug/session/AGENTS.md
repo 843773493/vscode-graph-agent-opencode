@@ -17,6 +17,7 @@ session/
 │   └── snapshot.py              有界动作记录与 Node Debug 状态快照
 ├── 服务入口 mixin
 │   ├── action_dispatch.py       apply_action 调试动作分发
+│   ├── dap_protocol.py          原 Debug UI 的 DAP 到同一动作链的映射
 │   ├── tool_actions.py          record_tool_action 工具动作记录
 │   ├── launch_entry.py          start/restart 启动入口
 │   ├── state_reads.py           get_state/get_variables 只读入口
@@ -36,6 +37,7 @@ session/
 # 不可修改内容
 
 - 不得实现 API 路由、Agent 编排或进程生命周期控制。
+- DAP 先取得原 Session 准入再取 owner 锁；调用同一已准入动作核心，不重复取得准入或维护第二断点／运行状态。暂停句柄按 run 和暂停代际失效，未实现能力明确拒绝。
 - 入口 mixin 不得自建 owner 准入或 per-owner 临界区托管，必须复用宿主已有的 `_admit_mutation`、`_owner_lock`、`_runtimes_lock` 等能力；也不得反向依赖顶层 `service.py`。
 - 不得保留旧顶层模块路径、re-export wrapper 或兼容导入别名。
 - 不得拼接固定的会话/线程物理目录，必须通过统一会话路径解析器定位。

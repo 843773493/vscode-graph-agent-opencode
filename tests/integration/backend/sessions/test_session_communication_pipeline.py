@@ -54,7 +54,7 @@ from tests.support.processes.workspace import (
     start_backend_process,
     terminate_process,
 )
-from tests.support.terminal_plugin import enable_terminal_plugin
+from tests.support.terminal_plugin import enable_developer_tools_plugins
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -250,7 +250,7 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
                 assert health.status_code == 200, health.text
                 gateway_id = health.json()["data"]["gateway_id"]
                 if getattr(request, "param", {}).get("resources", False):
-                    await enable_terminal_plugin(client, gateway_id=gateway_id,
+                    await enable_developer_tools_plugins(client, plugin_ids=("terminal",), gateway_id=gateway_id,
                         workspace_id=load_or_create_workspace_id(workspace), artifacts_dir=artifacts)
                 case = CommunicationCase(client, replay, workspace, artifacts, backend, gateway, gateway_id, environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
                 case.startup_mount = mount

@@ -26,8 +26,7 @@ from app.schemas.internal_v2.node_debug import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from tests.harness.python.run_context import TestRunContext
-from tests.support.workspaces import prepare_test_workspace
+from tests.support.node_debug_dependencies import node_debug_binding_snapshot
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 _CONFIGURATION_ID = "dbgcfg_" + "1" * 32
@@ -58,14 +57,8 @@ class DebugStore:
 
 
 @pytest.fixture
-async def debug_store() -> AsyncIterator[DebugStore]:
-    run_context = TestRunContext.from_test_file(Path(__file__))
-    prepare_test_workspace(
-        workspace_root=run_context.workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
-        template_items=(),
-    )
-    with build_catalog_workspace(run_context.output_root) as workspace:
+async def debug_store(tmp_path: Path) -> AsyncIterator[DebugStore]:
+    with build_catalog_workspace(tmp_path) as workspace:
         session_id = await workspace.create_session("调试存储诊断")
         thread_id = workspace.resolver.main_thread_id(session_id)
         store = NodeDebugSessionStore(workspace.resolver)
@@ -78,7 +71,10 @@ async def debug_store() -> AsyncIterator[DebugStore]:
         ))
         store.write_launch_claim(NodeDebugLaunchClaimDTO(
             session_id=session_id, thread_id=thread_id, process_instance_id="process-1",
-            nonce="nonce-1", phase="settled", configuration_id=_CONFIGURATION_ID,
+            run_id="run_test", phase="settled", configuration_id=_CONFIGURATION_ID,
+            debugger_binding=node_debug_binding_snapshot(), script_path="entry.mjs",
+            args=[], node_executable="node", working_directory="", launch_profile_name=None,
+            breakpoints=[],
             created_at=now, updated_at=now,
         ))
         directory = native_io_path(workspace.resolver.resolve_thread_node(session_id, thread_id) / "debug/node")

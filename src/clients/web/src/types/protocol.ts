@@ -363,13 +363,14 @@ export type NodeDebugLaunchProfile = WorkspaceProtocol.NodeDebugLaunchProfileDTO
 export type NodeDebugStackFrame = WorkspaceProtocol.NodeDebugStackFrameDTO;
 export type NodeDebugStartRequest = Omit<
   WorkspaceProtocol.NodeDebugStartRequest,
-  "configuration_id" | "working_directory" | "launch_profile_name" | "args" | "breakpoints"
+  "configuration_id" | "working_directory" | "launch_profile_name" | "args" | "breakpoints" | "defer_configuration_done"
 > & {
   configuration_id?: string | null;
   working_directory?: string | null;
   launch_profile_name?: string | null;
   args?: string[];
   breakpoints?: NodeDebugBreakpointRequest[];
+  defer_configuration_done?: boolean;
 };
 export type NodeDebugState = Omit<WorkspaceProtocol.NodeDebugStateDTO, "status" | "active_configuration_id" | "active_configuration_name" | "script_path" | "working_directory" | "launch_profile_name" | "pid" | "paused_reason" | "error_message" | "call_stack" | "last_stopped_frame" | "breakpoints" | "last_evaluation" | "evaluations" | "actions" | "source_changed_paths"> & {
   status:

@@ -26,7 +26,7 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.terminal_plugin import enable_terminal_plugin
+from tests.support.terminal_plugin import enable_developer_tools_plugins
 
 
 def _active_group_members(groups: set[int]) -> dict[int, tuple[int, str]]:
@@ -162,10 +162,11 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
             target, = (item for item in data["items"]
                        if (item["gateway_id"], item["workspace_id"]) == (owner["gateway_id"], owner["workspace_id"]))
             assert target["connection_kind"] == "local"
-            terminal = await enable_terminal_plugin(
+            plugins = await enable_developer_tools_plugins(
                 client, gateway_id=owner["gateway_id"], workspace_id=owner["workspace_id"],
-                artifacts_dir=output,
+                plugin_ids=("terminal",), artifacts_dir=output,
             )
+            terminal = plugins["terminal"]
             pids["terminal"] = int(terminal["instance"]["process_id"])
             pid = pids["terminal"]
             pid_instances[pid] = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]

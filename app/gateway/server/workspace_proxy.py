@@ -9,9 +9,22 @@ from typing import Annotated
 from urllib.parse import unquote
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.requests import HTTPConnection
+from starlette.websockets import WebSocketState
+from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from app.core.async_channel import close_channel, run_channel
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
@@ -39,6 +52,8 @@ from app.gateway.proxy_upstream import (
     filter_hop_by_hop_headers,
     load_proxy_gateway_id,
     parse_target_gateway_id,
+    relay_websocket_client_to_upstream,
+    relay_websocket_upstream_to_client,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -49,6 +64,11 @@ from app.gateway.registry import (
     WorkspaceTarget,
 )
 from app.gateway.registry.owners import workspace_owner
+from app.schemas.canonical_params import (
+    CanonicalSessionId,
+    CanonicalThreadId,
+    CanonicalWorkspaceId,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (
@@ -78,7 +98,7 @@ MESSAGE_STREAM_RETRY_DELAYS_SECONDS = (0.05, 0.25, 0.75)
 WORKSPACE_RUNTIME_READY_WAIT_SECONDS = 120.0
 
 
-def _registry(request: Request) -> GatewayWorkspaceRegistry:
+def _registry(request: HTTPConnection) -> GatewayWorkspaceRegistry:
     registry = getattr(request.app.state, "registry", None)
     if not isinstance(registry, GatewayWorkspaceRegistry):
         raise RuntimeError("Gateway registry 尚未初始化")
@@ -183,7 +203,7 @@ def _navigation_actor(
 
 
 def _proxy_headers(
-    request: Request,
+    request: HTTPConnection,
     target: WorkspaceTarget | None = None,
     *,
     gateway_id: str,
@@ -297,7 +317,7 @@ async def _stream_proxy_response(
 
 
 async def _wait_for_workspace_runtime(
-    request: Request,
+    request: HTTPConnection,
     target: WorkspaceTarget,
 ) -> None:
     """等待启动恢复任务的有界结果，再解析本地工作区路由。"""
@@ -816,3 +836,150 @@ async def proxy_workspace_api(
         user_access=user_access,
         include_credentials=True,
     )
+
+
+@router.websocket("/api/v1/debug/node/runs/{run_id}/dap")
+async def proxy_node_debug_dap(
+    websocket: WebSocket,
+    run_id: str,
+    gateway_id: str,
+    workspace_id: CanonicalWorkspaceId,
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+) -> None:
+    """把冻结的 Debug run DAP 连接送到其 Workspace route owner。"""
+    registry = _registry(websocket)
+    route_lease: WorkspaceRouteLease | None = None
+    try:
+        if websocket.query_params.get("token") is not None:
+            auth = verify_gateway_access(
+                x_local_token=websocket.headers.get("x-local-token") or websocket.query_params["token"],
+                x_boxteam_federation_token=websocket.headers.get("x-boxteam-federation-token"),
+            )
+        else:
+            auth = verify_gateway_access(
+                x_local_token=websocket.headers.get("x-local-token"),
+                x_boxteam_federation_token=websocket.headers.get("x-boxteam-federation-token"),
+            )
+        require_federation_capability(websocket, auth, "send")
+        require_federation_capability(websocket, auth, "read")
+
+        requested_gateway_id = parse_target_gateway_id(gateway_id)
+        header_gateway_id = parse_target_gateway_id(websocket.headers.get(TARGET_GATEWAY_ID_HEADER))
+        if requested_gateway_id is None or (
+            header_gateway_id is not None and header_gateway_id != requested_gateway_id
+        ):
+            raise ValueError("Debug DAP 目标 Gateway 身份缺失或与请求头冲突")
+        header_workspace_id = websocket.headers.get("x-boxteam-workspace-id")
+        if header_workspace_id is not None and header_workspace_id != workspace_id:
+            raise ValueError("Debug DAP Workspace 身份与请求头冲突")
+        target = registry.resolve_request_target(workspace_id, requested_gateway_id)
+        if target.gateway_id != requested_gateway_id:
+            raise ValueError("Debug DAP Workspace 不属于指定 Gateway")
+        if auth.kind == "federation" and target.connection_kind != "local":
+            raise HTTPException(400, "联邦入站请求不能继续 Relay 到远端 Gateway")
+
+        connection_id = websocket.headers.get("X-BoxTeam-Gateway-Connection-Id")
+        if connection_id is not None and (
+            not connection_id or target.connection_kind != "remote_gateway"
+            or auth.kind == "federation"
+        ):
+            raise HTTPException(400, "明确 Gateway 连接只允许本机请求选择已关联的远端工作区")
+        route_lease = registry.acquire_route_reference(
+            target.key, streaming=True, gateway_connection_id=connection_id,
+        )
+        await _wait_for_workspace_runtime(websocket, target)
+        backend_url = registry.resolve_service_url(target.key, "workspace_api")
+        upstream_http_url = build_upstream_url(
+            backend_url,
+            ("api", "v1") if target.connection_kind == "local" else (),
+            f"debug/node/runs/{run_id}/dap" if target.connection_kind == "local"
+            else f"api/v1/debug/node/runs/{run_id}/dap",
+        ).copy_merge_params((
+            ("gateway_id", target.gateway_id),
+            ("workspace_id", target.workspace_id),
+            ("session_id", session_id),
+            ("thread_id", thread_id),
+        ))
+        upstream_url = str(upstream_http_url.copy_with(
+            scheme="wss" if upstream_http_url.scheme == "https" else "ws",
+        ))
+        headers = _proxy_headers(
+            websocket, target, gateway_id=registry.gateway_id,
+            navigation_actor=None,
+        )
+        # 本跳握手由 websockets 创建，不能把浏览器的 key／version 等再次加入。
+        headers = {key: value for key, value in headers.items()
+                   if not key.lower().startswith("sec-websocket-")}
+        headers["X-Request-ID"] = get_request_id(websocket)
+        protocols = websocket.scope.get("subprotocols", [])
+
+        async def relay() -> None:
+            async with connect(
+                upstream_url, additional_headers=headers, subprotocols=protocols,
+                compression=None, max_queue=1, write_limit=256 * 1024,
+                open_timeout=10, close_timeout=5,
+            ) as upstream:
+                await websocket.accept(subprotocol=upstream.subprotocol)
+                await run_channel(
+                    relay_websocket_client_to_upstream(websocket, upstream),
+                    relay_websocket_upstream_to_client(websocket, upstream),
+                )
+
+        async def watch_access() -> None:
+            async def retired() -> None:
+                assert route_lease is not None
+                await route_lease.invalidated.wait()
+
+            if auth.kind == "local":
+                await retired()
+            else:
+                policy_store = websocket.app.state.federation_policy_store
+
+                async def policy() -> None:
+                    while True:
+                        changed = policy_store.changed
+                        require_federation_capability(websocket, auth, "send")
+                        require_federation_capability(websocket, auth, "read")
+                        await changed.wait()
+
+                await run_channel(retired(), policy())
+            raise LookupError("Debug DAP Workspace route 已退役")
+
+        await run_channel(relay(), watch_access())
+    except PermissionError as error:
+        await websocket.send_denial_response(JSONResponse(
+            status_code=403, content={"detail": str(error), "request_id": get_request_id(websocket)},
+        ))
+    except HTTPException as error:
+        if websocket.application_state == WebSocketState.CONNECTING:
+            await websocket.send_denial_response(JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail, "request_id": get_request_id(websocket)},
+            ))
+        else:
+            await close_channel(websocket, code=1008, reason="debug_access_revoked")
+    except (LookupError, ValueError) as error:
+        if websocket.application_state == WebSocketState.CONNECTING:
+            await websocket.send_denial_response(JSONResponse(
+                status_code=409, content={"detail": str(error), "request_id": get_request_id(websocket)},
+            ))
+        else:
+            await close_channel(websocket, code=1008, reason="debug_target_retired")
+    except InvalidStatus as error:
+        await websocket.send_denial_response(Response(
+            bytes(error.response.body), status_code=error.response.status_code,
+            headers=filter_hop_by_hop_headers((key, value) for key, value in error.response.headers.raw_items()
+                if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS | {"set-cookie"}),
+        ))
+    except (ConnectionClosed, WebSocketDisconnect):
+        await close_channel(websocket)
+    except Exception:
+        logger.exception("Debug DAP Backend 连接失败: request_id=%s run_id=%s",
+            get_request_id(websocket), run_id)
+        await close_channel(websocket, code=1011, reason="debug_backend_unavailable")
+    finally:
+        if route_lease is not None:
+            registry.release_route_reference(
+                (route_lease.gateway_id, route_lease.workspace_id), streaming=True,
+            )

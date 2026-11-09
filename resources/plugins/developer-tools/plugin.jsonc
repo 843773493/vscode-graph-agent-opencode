@@ -11,16 +11,169 @@
       "name": "Terminal",
       "instance_scope": "workspace",
       "requires": [
-        { "extension_point": "services", "version": 1 }
+        {
+          "extension_point": "services",
+          "version": 1
+        }
       ],
       "contributes": {
         "services": [
-          { "service_id": "http", "service_type": "terminal", "protocol": "http" },
-          { "service_id": "socket", "service_type": "terminal", "protocol": "websocket" }
+          {
+            "service_id": "http",
+            "service_type": "terminal",
+            "protocol": "http"
+          },
+          {
+            "service_id": "socket",
+            "service_type": "terminal",
+            "protocol": "websocket"
+          }
         ]
       },
       "runtime": "node",
-      "entrypoint": ["src/workspace-services/terminal/server/backend.js"],
+      "entrypoint": [
+        "src/workspace-services/terminal/server/backend.js"
+      ],
+      "management_protocol_version": 1
+    },
+    {
+      "id": "debugging",
+      "name": "Node.js Debugger",
+      "instance_scope": "workspace",
+      "requires": [
+        {
+          "extension_point": "services",
+          "version": 1
+        },
+        {
+          "extension_point": "debuggers",
+          "version": 1
+        },
+        {
+          "extension_point": "skills",
+          "version": 1
+        }
+      ],
+      "contributes": {
+        "services": [
+          {
+            "service_id": "dap",
+            "service_type": "debug",
+            "protocol": "dap"
+          }
+        ],
+        "debuggers": [
+          {
+            "type": "node",
+            "label": "Node.js",
+            "configuration_schema": {
+              "type": "object",
+              "properties": {
+                "program": {
+                  "type": "string"
+                }
+              }
+            },
+            "service_id": "dap",
+            "dap_version": 1,
+            "capabilities": [
+              "supportsConfigurationDoneRequest"
+            ]
+          }
+        ],
+        "skills": [
+          {
+            "id": "debugging",
+            "path": "skills/debugging",
+            "tool_bindings": [
+              {
+                "tool_id": "activate_debug_configuration",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "add_breakpoint",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "add_logpoint",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "clear_all_breakpoints",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "continue_execution",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "create_debug_configuration",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "delete_debug_configuration",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "evaluate_expression",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "get_variables_values",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "list_breakpoints",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "list_debug_configurations",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "list_variable_names",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "pause_execution",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "remove_breakpoint",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "restart_debugging",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "start_debugging",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "step_into",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "step_out",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "step_over",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "stop_debugging",
+                "contract_version": 1
+              }
+            ]
+          }
+        ]
+      },
+      "runtime": "node",
+      "entrypoint": [
+        "src/workspace-services/debug/server/backend.js"
+      ],
       "management_protocol_version": 1
     }
   ]

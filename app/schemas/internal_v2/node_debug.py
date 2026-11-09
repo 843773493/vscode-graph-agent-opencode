@@ -7,7 +7,7 @@ from typing import Annotated, Generic, Literal, TypeVar
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.core.resource_uri import parse_resource_uri
-from app.schemas.canonical_params import CanonicalThreadId
+from app.schemas.canonical_params import CanonicalThreadId, CanonicalWorkspaceId
 
 NodeDebugStatus = Literal[
     "idle",
@@ -17,6 +17,7 @@ NodeDebugStatus = Literal[
     "stopping",
     "exited",
     "failed",
+    "execution_lost",
     # 任务 3.2/3.5 状态机：停止/重启无法核实旧实例终态时保持该可观察状态，绝不虚报
     # 终态。生产者与结清条件见 node_debug_service 的 claim 恢复路径。
     "reconcile_required",
@@ -156,6 +157,8 @@ class NodeDebugStartRequest(BaseModel):
         default_factory=list,
         max_length=50,
     )
+    debugger_registration_id: str | None = Field(default=None, min_length=1)
+    defer_configuration_done: bool = False
 
 
 def _portable_source_path(value: str) -> str:
@@ -325,6 +328,53 @@ class NodeDebugCapabilitiesDTO(BaseModel):
     launch_profiles: list[NodeDebugLaunchProfileDTO] = Field(default_factory=list)
 
 
+class NodeDebugDebuggerContributionDTO(BaseModel):
+    """一次已就绪 Debug 插件声明的冻结目标快照。"""
+
+    registration_id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    configuration_schema: dict[str, object]
+    service_id: str = Field(min_length=1)
+    dap_version: int = Field(gt=0)
+    capabilities: list[str] = Field(default_factory=list)
+    gateway_id: str = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId
+    package_id: str = Field(min_length=1)
+    plugin_id: str = Field(min_length=1)
+    package_version: str = Field(min_length=1)
+    package_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    instance_id: str = Field(min_length=1)
+    contract_version: int = Field(gt=0)
+    declaration_revision: str = Field(min_length=1)
+
+
+class NodeDebugDebuggerContributionsDTO(BaseModel):
+    """当前明确 workspace 的 ready Debug 声明集合。"""
+
+    gateway_id: str = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId
+    debuggers: list[NodeDebugDebuggerContributionDTO] = Field(default_factory=list)
+
+
+class NodeDebugBindingSnapshotDTO(BaseModel):
+    """一次运行绑定的完整目标身份，不从之后的焦点或配置推断。"""
+
+    registration_id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    gateway_id: str = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId
+    package_id: str = Field(min_length=1)
+    plugin_id: str = Field(min_length=1)
+    package_version: str = Field(min_length=1)
+    package_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    instance_id: str = Field(min_length=1)
+    service_id: str = Field(min_length=1)
+    contract_version: int = Field(gt=0)
+    declaration_revision: str = Field(min_length=1)
+    dap_version: int = Field(gt=0)
+
+
 class NodeDebugConfigurationSummaryDTO(BaseModel):
     configuration_id: str
     name: str
@@ -395,6 +445,8 @@ class NodeDebugStateDTO(BaseModel):
     configuration_revision: int = Field(default=0, ge=0)
     requires_restart: bool = False
     source_changed_paths: list[str] = Field(default_factory=list)
+    run_id: str | None = None
+    debugger_binding: NodeDebugBindingSnapshotDTO | None = None
 
 
 class NodeDebugSessionManifestDTO(BaseModel):
@@ -416,42 +468,33 @@ class NodeDebugSessionManifestDTO(BaseModel):
 
 NodeDebugLaunchPhase = Literal[
     "launch_pending",
-    "spawned",
     "running",
     "stopping",
-    "reconcile_required",
+    "execution_lost",
     "settled",
 ]
 
 
 class NodeDebugLaunchClaimDTO(BaseModel):
-    """thread 级 durable 启动登记；跨 Turn 保留，用于崩溃后的实例定点恢复。
-
-    门控语义：
-    - ``launch_pending``：已在 spawn 前登记 nonce，但尚未 spawn（无 PID），
-      崩溃后无法证明进程不存在，必须保持 ``reconcile_required``。
-    - ``spawned``：spawn 成功并记录了 OS 起始身份，用于崩溃后定点恢复；此时
-      PID/端口还不是权威运行属性。
-    - ``running``：OS 起始身份核对 + Inspector 握手都成功后才进入，PID/端口
-      作为可验证属性登记。
-    - ``stopping`` / ``settled``：停止中/已核实终结并结清。
-    - ``reconcile_required``：无法核实旧实例，必须阻断新启动直到人工/自动核实。
-    """
+    """Thread 当前 Node Debug run 的冻结启动记录，由原 Node Debug owner 持有。"""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1] = 1
     session_id: str
     thread_id: CanonicalThreadId
+    run_id: str = Field(min_length=1)
     process_instance_id: str = Field(min_length=1)
-    nonce: str = Field(min_length=1)
     phase: NodeDebugLaunchPhase
     configuration_id: str = Field(min_length=1)
+    debugger_binding: NodeDebugBindingSnapshotDTO
+    script_path: str = Field(min_length=1)
+    args: list[str] = Field(default_factory=list)
+    node_executable: str = Field(min_length=1)
+    working_directory: str = ""
+    launch_profile_name: str | None = None
+    breakpoints: list[NodeDebugBreakpointDTO] = Field(default_factory=list)
     pid: int | None = Field(default=None, ge=1)
-    process_identity_source: str | None = None
-    process_start_marker: str | None = None
-    inspector_host: str = ""
-    inspector_port: int = Field(default=0, ge=0)
     reconcile_reason: str | None = None
     created_at: datetime
     updated_at: datetime

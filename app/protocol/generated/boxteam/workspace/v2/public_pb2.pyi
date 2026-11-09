@@ -2145,6 +2145,82 @@ class NodeDebugCapabilitiesDTO(_message.Message):
     launch_profiles: _containers.RepeatedCompositeFieldContainer[NodeDebugLaunchProfileDTO]
     def __init__(self, enabled: _Optional[bool] = ..., default_adapter: _Optional[str] = ..., supported_adapters: _Optional[_Iterable[str]] = ..., launch_profiles: _Optional[_Iterable[_Union[NodeDebugLaunchProfileDTO, _Mapping]]] = ...) -> None: ...
 
+class NodeDebugDebuggerContributionDTO(_message.Message):
+    __slots__ = ("registration_id", "type", "label", "configuration_schema", "service_id", "dap_version", "capabilities", "gateway_id", "workspace_id", "package_id", "plugin_id", "package_version", "package_digest", "instance_id", "contract_version", "declaration_revision")
+    REGISTRATION_ID_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_ID_FIELD_NUMBER: _ClassVar[int]
+    DAP_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    DECLARATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    registration_id: str
+    type: str
+    label: str
+    configuration_schema: _struct_pb2.Struct
+    service_id: str
+    dap_version: int
+    capabilities: _containers.RepeatedScalarFieldContainer[str]
+    gateway_id: str
+    workspace_id: str
+    package_id: str
+    plugin_id: str
+    package_version: str
+    package_digest: str
+    instance_id: str
+    contract_version: int
+    declaration_revision: str
+    def __init__(self, registration_id: _Optional[str] = ..., type: _Optional[str] = ..., label: _Optional[str] = ..., configuration_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., service_id: _Optional[str] = ..., dap_version: _Optional[int] = ..., capabilities: _Optional[_Iterable[str]] = ..., gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., package_id: _Optional[str] = ..., plugin_id: _Optional[str] = ..., package_version: _Optional[str] = ..., package_digest: _Optional[str] = ..., instance_id: _Optional[str] = ..., contract_version: _Optional[int] = ..., declaration_revision: _Optional[str] = ...) -> None: ...
+
+class NodeDebugDebuggerContributionsDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "debuggers")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    DEBUGGERS_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    debuggers: _containers.RepeatedCompositeFieldContainer[NodeDebugDebuggerContributionDTO]
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., debuggers: _Optional[_Iterable[_Union[NodeDebugDebuggerContributionDTO, _Mapping]]] = ...) -> None: ...
+
+class NodeDebugBindingSnapshotDTO(_message.Message):
+    __slots__ = ("registration_id", "type", "gateway_id", "workspace_id", "package_id", "plugin_id", "package_version", "package_digest", "instance_id", "service_id", "contract_version", "declaration_revision", "dap_version")
+    REGISTRATION_ID_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    DECLARATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    DAP_VERSION_FIELD_NUMBER: _ClassVar[int]
+    registration_id: str
+    type: str
+    gateway_id: str
+    workspace_id: str
+    package_id: str
+    plugin_id: str
+    package_version: str
+    package_digest: str
+    instance_id: str
+    service_id: str
+    contract_version: int
+    declaration_revision: str
+    dap_version: int
+    def __init__(self, registration_id: _Optional[str] = ..., type: _Optional[str] = ..., gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., package_id: _Optional[str] = ..., plugin_id: _Optional[str] = ..., package_version: _Optional[str] = ..., package_digest: _Optional[str] = ..., instance_id: _Optional[str] = ..., service_id: _Optional[str] = ..., contract_version: _Optional[int] = ..., declaration_revision: _Optional[str] = ..., dap_version: _Optional[int] = ...) -> None: ...
+
 class NodeDebugConfigurationActivateRequest(_message.Message):
     __slots__ = ("session_id", "thread_id")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -2374,7 +2450,7 @@ class NodeDebugStackFrameDTO(_message.Message):
     def __init__(self, call_frame_id: _Optional[str] = ..., function_name: _Optional[str] = ..., url: _Optional[str] = ..., path: _Optional[str] = ..., line: _Optional[int] = ..., column: _Optional[int] = ..., scope_names: _Optional[_Iterable[str]] = ..., variables: _Optional[_Iterable[_Union[NodeDebugVariableDTO, _Mapping]]] = ...) -> None: ...
 
 class NodeDebugStartRequest(_message.Message):
-    __slots__ = ("session_id", "configuration_id", "path", "working_directory", "launch_profile_name", "args", "breakpoints", "thread_id")
+    __slots__ = ("session_id", "configuration_id", "path", "working_directory", "launch_profile_name", "args", "breakpoints", "thread_id", "debugger_registration_id", "defer_configuration_done")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     CONFIGURATION_ID_FIELD_NUMBER: _ClassVar[int]
     PATH_FIELD_NUMBER: _ClassVar[int]
@@ -2383,6 +2459,8 @@ class NodeDebugStartRequest(_message.Message):
     ARGS_FIELD_NUMBER: _ClassVar[int]
     BREAKPOINTS_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    DEBUGGER_REGISTRATION_ID_FIELD_NUMBER: _ClassVar[int]
+    DEFER_CONFIGURATION_DONE_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     configuration_id: str
     path: str
@@ -2391,10 +2469,12 @@ class NodeDebugStartRequest(_message.Message):
     args: _containers.RepeatedScalarFieldContainer[str]
     breakpoints: _containers.RepeatedCompositeFieldContainer[NodeDebugBreakpointRequest]
     thread_id: str
-    def __init__(self, session_id: _Optional[str] = ..., configuration_id: _Optional[str] = ..., path: _Optional[str] = ..., working_directory: _Optional[str] = ..., launch_profile_name: _Optional[str] = ..., args: _Optional[_Iterable[str]] = ..., breakpoints: _Optional[_Iterable[_Union[NodeDebugBreakpointRequest, _Mapping]]] = ..., thread_id: _Optional[str] = ...) -> None: ...
+    debugger_registration_id: str
+    defer_configuration_done: bool
+    def __init__(self, session_id: _Optional[str] = ..., configuration_id: _Optional[str] = ..., path: _Optional[str] = ..., working_directory: _Optional[str] = ..., launch_profile_name: _Optional[str] = ..., args: _Optional[_Iterable[str]] = ..., breakpoints: _Optional[_Iterable[_Union[NodeDebugBreakpointRequest, _Mapping]]] = ..., thread_id: _Optional[str] = ..., debugger_registration_id: _Optional[str] = ..., defer_configuration_done: _Optional[bool] = ...) -> None: ...
 
 class NodeDebugStateDTO(_message.Message):
-    __slots__ = ("session_id", "status", "active_configuration_id", "active_configuration_name", "configurations", "script_path", "working_directory", "launch_profile_name", "args", "pid", "paused_reason", "error_message", "call_stack", "last_stopped_frame", "breakpoints", "output", "last_evaluation", "evaluations", "actions", "configuration_revision", "requires_restart", "source_changed_paths", "thread_id")
+    __slots__ = ("session_id", "status", "active_configuration_id", "active_configuration_name", "configurations", "script_path", "working_directory", "launch_profile_name", "args", "pid", "paused_reason", "error_message", "call_stack", "last_stopped_frame", "breakpoints", "output", "last_evaluation", "evaluations", "actions", "configuration_revision", "requires_restart", "source_changed_paths", "thread_id", "run_id", "debugger_binding")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_CONFIGURATION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -2418,6 +2498,8 @@ class NodeDebugStateDTO(_message.Message):
     REQUIRES_RESTART_FIELD_NUMBER: _ClassVar[int]
     SOURCE_CHANGED_PATHS_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    DEBUGGER_BINDING_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     status: str
     active_configuration_id: str
@@ -2441,7 +2523,9 @@ class NodeDebugStateDTO(_message.Message):
     requires_restart: bool
     source_changed_paths: _containers.RepeatedScalarFieldContainer[str]
     thread_id: str
-    def __init__(self, session_id: _Optional[str] = ..., status: _Optional[str] = ..., active_configuration_id: _Optional[str] = ..., active_configuration_name: _Optional[str] = ..., configurations: _Optional[_Iterable[_Union[NodeDebugConfigurationSummaryDTO, _Mapping]]] = ..., script_path: _Optional[str] = ..., working_directory: _Optional[str] = ..., launch_profile_name: _Optional[str] = ..., args: _Optional[_Iterable[str]] = ..., pid: _Optional[int] = ..., paused_reason: _Optional[str] = ..., error_message: _Optional[str] = ..., call_stack: _Optional[_Iterable[_Union[NodeDebugStackFrameDTO, _Mapping]]] = ..., last_stopped_frame: _Optional[_Union[NodeDebugStackFrameDTO, _Mapping]] = ..., breakpoints: _Optional[_Iterable[_Union[NodeDebugBreakpointDTO, _Mapping]]] = ..., output: _Optional[_Iterable[str]] = ..., last_evaluation: _Optional[_Union[NodeDebugEvaluationDTO, _Mapping]] = ..., evaluations: _Optional[_Iterable[_Union[NodeDebugEvaluationDTO, _Mapping]]] = ..., actions: _Optional[_Iterable[_Union[NodeDebugActionRecordDTO, _Mapping]]] = ..., configuration_revision: _Optional[int] = ..., requires_restart: _Optional[bool] = ..., source_changed_paths: _Optional[_Iterable[str]] = ..., thread_id: _Optional[str] = ...) -> None: ...
+    run_id: str
+    debugger_binding: NodeDebugBindingSnapshotDTO
+    def __init__(self, session_id: _Optional[str] = ..., status: _Optional[str] = ..., active_configuration_id: _Optional[str] = ..., active_configuration_name: _Optional[str] = ..., configurations: _Optional[_Iterable[_Union[NodeDebugConfigurationSummaryDTO, _Mapping]]] = ..., script_path: _Optional[str] = ..., working_directory: _Optional[str] = ..., launch_profile_name: _Optional[str] = ..., args: _Optional[_Iterable[str]] = ..., pid: _Optional[int] = ..., paused_reason: _Optional[str] = ..., error_message: _Optional[str] = ..., call_stack: _Optional[_Iterable[_Union[NodeDebugStackFrameDTO, _Mapping]]] = ..., last_stopped_frame: _Optional[_Union[NodeDebugStackFrameDTO, _Mapping]] = ..., breakpoints: _Optional[_Iterable[_Union[NodeDebugBreakpointDTO, _Mapping]]] = ..., output: _Optional[_Iterable[str]] = ..., last_evaluation: _Optional[_Union[NodeDebugEvaluationDTO, _Mapping]] = ..., evaluations: _Optional[_Iterable[_Union[NodeDebugEvaluationDTO, _Mapping]]] = ..., actions: _Optional[_Iterable[_Union[NodeDebugActionRecordDTO, _Mapping]]] = ..., configuration_revision: _Optional[int] = ..., requires_restart: _Optional[bool] = ..., source_changed_paths: _Optional[_Iterable[str]] = ..., thread_id: _Optional[str] = ..., run_id: _Optional[str] = ..., debugger_binding: _Optional[_Union[NodeDebugBindingSnapshotDTO, _Mapping]] = ...) -> None: ...
 
 class NodeDebugVariableDTO(_message.Message):
     __slots__ = ("name", "value", "type", "object_id", "scope")

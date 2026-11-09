@@ -20,6 +20,7 @@ from app.gateway.auth import (
     verify_gateway_token,
 )
 from app.gateway.federation.policy import require_federation_capability
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
     gateway_plugin_bindings,
@@ -203,6 +204,71 @@ async def status(payload: PluginTarget, request: Request,
         "workspace_configurations": [state.model_dump(mode="json")
             for state in request.app.state.workspace_plugin_bindings.states.values()]})
     return APIResponse[PluginRuntimeStatusDTO](data=data, request_id=get_request_id(request))
+
+
+@router.get("/api/gateway/service-plugins/debugger-contributions", include_in_schema=False)
+async def debugger_contributions(
+    workspace_id: CanonicalWorkspaceId,
+    request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
+) -> APIResponse[dict[str, object]]:
+    """读取本机 Workspace 当前 ready 的 Debug 插件声明，不走管理状态接口。"""
+
+    verify_local_control_request(request)
+    if auth.kind != "local":
+        raise HTTPException(403, "调试器发现只接受本机 Workspace Backend")
+    if request.headers.get("X-BoxTeam-Workspace-Id") != workspace_id:
+        raise HTTPException(403, "调试器发现的 Workspace 身份不匹配")
+    gateway_id = request.app.state.registry.gateway_id
+    if parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER)) != gateway_id:
+        raise HTTPException(409, "调试器发现必须指向当前原生 Gateway")
+    try:
+        target = request.app.state.registry.resolve((gateway_id, workspace_id))
+    except LookupError as error:
+        raise HTTPException(409, "调试器发现的 Workspace 未登记在当前 Gateway") from error
+    if target.connection_kind != "local":
+        raise HTTPException(409, "调试器发现只支持当前 Gateway 的原生 Workspace")
+
+    debuggers: list[dict[str, object]] = []
+    for slot in owner.slots.values():
+        binding, receipt = slot.binding, slot.receipt
+        if (
+            binding.workspace_id != workspace_id
+            or not binding.enabled
+            or slot.state != "ready"
+            or slot.process is None
+            or not slot.process.is_alive()
+            or receipt is None
+            or receipt.status != "ready"
+            or receipt.workspace_id != workspace_id
+            or receipt.gateway_id != gateway_id
+            or slot.stopped.is_set()
+        ):
+            continue
+        package = owner.packages.get(binding.package_id, binding.package_version)
+        for debugger in slot.declaration.contributes.debuggers:
+            service = next((item for item in receipt.services if item.service_id == debugger.service_id), None)
+            if service is None or service.service_type != "debug" or service.protocol != "dap":
+                continue
+            debuggers.append({
+                **debugger.model_dump(mode="json"),
+                "registration_id": f"node-debugger:{receipt.instance_id}:{slot.revision}:{debugger.type}",
+                "gateway_id": gateway_id,
+                "workspace_id": workspace_id,
+                "package_id": binding.package_id,
+                "plugin_id": binding.plugin_id,
+                "package_version": binding.package_version,
+                "package_digest": package.digest,
+                "instance_id": receipt.instance_id,
+                "contract_version": 1,
+                "declaration_revision": slot.revision,
+            })
+    debuggers.sort(key=lambda item: (
+        str(item["package_id"]), str(item["plugin_id"]), str(item["type"]),
+    ))
+    data = {"gateway_id": gateway_id, "workspace_id": workspace_id, "debuggers": debuggers}
+    return APIResponse[dict[str, object]](data=data, request_id=get_request_id(request))
 
 
 @router.post("/api/gateway/service-plugins/restart")

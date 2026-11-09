@@ -72,22 +72,23 @@ def _breakpoint(path: str, line: int) -> NodeDebugBreakpointDTO:
     )
 
 
-class _BlockingProcess:
+class _BlockingPluginRun:
     def __init__(self) -> None:
-        self.returncode: int | None = None
-        self.terminate_called = asyncio.Event()
-        self.release_wait = asyncio.Event()
+        self.stop_called = asyncio.Event()
+        self.release_stop = asyncio.Event()
+        self.exited = False
 
-    def terminate(self) -> None:
-        self.terminate_called.set()
+    async def stop(self) -> dict[str, object]:
+        self.stop_called.set()
+        await self.release_stop.wait()
+        self.exited = True
+        return await self.status()
 
-    async def wait(self) -> int:
-        await self.release_wait.wait()
-        self.returncode = 0
-        return self.returncode
+    async def status(self) -> dict[str, object]:
+        return {"run_id": "op_stop", "status": "exited" if self.exited else "running", "exit_code": 0}
 
-    def kill(self) -> None:
-        self.release_wait.set()
+    async def close(self) -> None:
+        assert self.exited
 
 
 def test_breakpoint_becomes_invalid_after_lines_are_inserted(tmp_path: Path) -> None:
@@ -220,7 +221,7 @@ async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    process = _BlockingProcess()
+    plugin = _BlockingPluginRun()
     runtime = NodeDebugRuntime(
         session_id="session-stopping",
         thread_id=TEST_THREAD_ID,
@@ -228,15 +229,17 @@ async def test_stopping_state_remains_visible_until_process_exits(tmp_path: Path
         workspace_root=tmp_path,
         script_path=tmp_path / "entry.mjs",
         relative_script_path="entry.mjs",
-        process=process,  # type: ignore[arg-type]
+        run_id="op_stop",
+        plugin_runtime=plugin,  # type: ignore[arg-type]
         status="running",
     )
 
     stop_task = asyncio.create_task(service._lifecycle.stop_runtime(runtime))
-    await process.terminate_called.wait()
-    assert runtime.status == "stopping"
-    process.release_wait.set()
-    await stop_task
+    await asyncio.wait_for(plugin.stop_called.wait(), timeout=1)
+    assert runtime.status == "stopping" and not stop_task.done()
+    plugin.release_stop.set()
+    assert await stop_task == "stopped"
+    assert plugin.exited and runtime.plugin_runtime is None
     assert runtime.status == "stopping"
 
 

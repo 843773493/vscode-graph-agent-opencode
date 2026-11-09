@@ -8,8 +8,6 @@ from typing import Literal, cast
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from websockets.exceptions import ConnectionClosed
-
 from app.core.failures import failure_detail, report_failure
 from app.schemas.internal_v2.node_debug import (
     NodeDebugAction,
@@ -20,6 +18,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugActionAppender,
     NodeDebugRuntime,
     NodeDebugStopSnapshotClearer,
+    publish_dap_event,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
@@ -52,26 +51,9 @@ class NodeDebugInspector:
         self._clear_stop_snapshot = clear_stop_snapshot
 
     async def connect(self, runtime: NodeDebugRuntime) -> None:
-        inspector_url = runtime.inspector.inspector_url
-        if inspector_url is None:
-            raise RuntimeError("Node Inspector 已报告就绪，但缺少 WebSocket 地址")
-        import websockets
-
-        # Node Inspector 不兼容 websockets 默认的 20 秒 keepalive ping；
-        # 该 ping 会导致连接关闭，进而让暂停中的脚本继续执行。
-        try:
-            runtime.inspector.socket = await websockets.connect(
-                inspector_url,
-                ping_interval=None,
-            )
-        except Exception as error:
-            raise RuntimeError(failure_detail(
-                error, stage="node-debug-connect",
-                label=(
-                    f"连接 Node Inspector 失败: session_id={runtime.session_id}, "
-                    f"thread_id={runtime.thread_id}"
-                ),
-            )) from error
+        if runtime.plugin_runtime is None:
+            raise RuntimeError("Node Debug 插件运行通道尚未建立")
+        runtime.inspector.socket = runtime.plugin_runtime
         runtime.inspector.receiver_task = asyncio.create_task(
             self.receive_messages(runtime)
         )
@@ -99,6 +81,7 @@ class NodeDebugInspector:
             raise ValueError(f"不支持的 Node 调试动作: {action}")
         if action in {"continue", "step_over", "step_into", "step_out"}:
             async with runtime.state_lock:
+                runtime.pause_generation += 1
                 runtime.status = "running"
                 self.clear_paused_snapshot(runtime)
         await self.command(runtime, method)
@@ -127,8 +110,8 @@ class NodeDebugInspector:
         method: str,
         params: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        socket = runtime.inspector.socket
-        if socket is None:
+        transport = runtime.inspector.socket
+        if transport is None:
             raise RuntimeError("Node Inspector WebSocket 尚未连接")
         async with runtime.inspector.command_lock:
             command_id = runtime.inspector.next_command_id
@@ -138,7 +121,7 @@ class NodeDebugInspector:
             )
             runtime.inspector.pending_commands[command_id] = future
             try:
-                await socket.send(
+                await transport.send(
                     json.dumps(
                         {"id": command_id, "method": method, "params": params or {}},
                         ensure_ascii=False,
@@ -191,15 +174,12 @@ class NodeDebugInspector:
         return cast(dict[str, object], result)
 
     async def receive_messages(self, runtime: NodeDebugRuntime) -> None:
-        socket = runtime.inspector.socket
-        if socket is None:
+        transport = runtime.inspector.socket
+        if transport is None:
             return
         receive_error: RuntimeError | None = None
         try:
-            async for raw_message in socket:
-                payload = json.loads(raw_message)
-                if not isinstance(payload, dict):
-                    raise TypeError(f"Node Inspector 消息不是对象: {payload!r}")
+            async for payload in transport.messages():
                 command_id = payload.get("id")
                 if isinstance(command_id, int):
                     future = runtime.inspector.pending_commands.get(command_id)
@@ -210,19 +190,6 @@ class NodeDebugInspector:
                 params = payload.get("params")
                 if isinstance(method, str) and isinstance(params, dict):
                     await self._handle_event(runtime, method, params)
-        except ConnectionClosed:
-            if not runtime.closing:
-                async with runtime.state_lock:
-                    if runtime.process is not None and runtime.process.returncode == 0:
-                        runtime.status = "exited"
-                        runtime.error_message = runtime.logpoint_error_message
-                    else:
-                        runtime.status = "failed"
-                        runtime.error_message = (
-                            runtime.logpoint_error_message
-                            or "Node Inspector WebSocket 已断开"
-                        )
-                    self._clear_stop_snapshot(runtime)
         except Exception as error:  # noqa: BLE001 - 接收故障必须结算状态及所有等待命令
             # 传输异常与无效帧可能含原生位置；公开状态只记录目标和结构化原因。
             message = (
@@ -268,6 +235,7 @@ class NodeDebugInspector:
             frames = await asyncio.to_thread(self._parse_call_frames, runtime, call_frames)
             hit_breakpoints = params.get("hitBreakpoints")
             async with runtime.state_lock:
+                runtime.pause_generation += 1
                 runtime.status = "paused"
                 runtime.paused_reason = self._string_or_none(params.get("reason"))
                 runtime.paused_breakpoint_ids = (
@@ -301,21 +269,35 @@ class NodeDebugInspector:
                 runtime.inspector.variable_hydration_task = asyncio.create_task(
                     self._hydrate_frame_variables_safe(runtime, frames[0]),
                 )
+            if runtime.configuration_done and runtime.paused_breakpoint_ids:
+                publish_dap_event(runtime, "stopped", {
+                    "reason": "breakpoint",
+                    "threadId": 1,
+                    "allThreadsStopped": True,
+                })
+            elif runtime.configuration_done and runtime.status == "paused":
+                publish_dap_event(runtime, "stopped", {
+                    "reason": "step", "threadId": 1, "allThreadsStopped": True,
+                })
         elif method == "Debugger.resumed":
             async with runtime.state_lock:
+                runtime.pause_generation += 1
                 runtime.status = (
-                    "exited"
-                    if runtime.process is not None
-                    and runtime.process.returncode is not None
-                    else "running"
+                    "exited" if runtime.plugin_runtime is not None
+                    and runtime.plugin_runtime.exit_code is not None else "running"
                 )
                 runtime.error_message = runtime.logpoint_error_message
                 self.clear_paused_snapshot(runtime)
-        elif method == "NodeRuntime.waitingForDisconnect":
-            socket = runtime.inspector.socket
-            if socket is not None:
-                await socket.close()
-                runtime.inspector.socket = None
+            publish_dap_event(runtime, "continued", {
+                "threadId": 1, "allThreadsContinued": True,
+            })
+        elif method == "Runtime.consoleAPICalled":
+            args = params.get("args")
+            text = " ".join(
+                value for item in args if (value := self.remote_value(item)) is not None
+            ) if isinstance(args, list) else ""
+            if text:
+                publish_dap_event(runtime, "output", {"category": "console", "output": text + "\n"})
 
     async def _hydrate_frame_variables_safe(
         self,
@@ -350,6 +332,7 @@ class NodeDebugInspector:
     ) -> None:
         object_ids = runtime.inspector.scope_object_ids.get(frame.call_frame_id, {})
         variables: list[NodeDebugVariableDTO] = []
+        variables_by_scope: dict[str, list[NodeDebugVariableDTO]] = {}
         expired_object_count = 0
         for scope, scope_object_ids in object_ids.items():
             for object_id in scope_object_ids[:3]:
@@ -378,21 +361,24 @@ class NodeDebugInspector:
                     if not isinstance(name, str):
                         continue
                     remote_value = property_value.get("value")
-                    variables.append(
-                        NodeDebugVariableDTO(
+                    variable = NodeDebugVariableDTO(
                             name=name,
                             value=self.remote_value(remote_value) or "undefined",
                             type=self.remote_type(remote_value),
                             object_id=self.remote_object_id(remote_value),
-                            scope=scope,
+                            scope="global" if scope == "global" else "local",
                         )
-                    )
+                    variables.append(variable)
+                    variables_by_scope.setdefault(scope, []).append(variable)
         async with runtime.state_lock:
             if runtime.status != "paused" or not runtime.call_stack:
                 return
-            if runtime.call_stack[0].call_frame_id != frame.call_frame_id:
+            frame_index = next((index for index, item in enumerate(runtime.call_stack)
+                                if item.call_frame_id == frame.call_frame_id), None)
+            if frame_index is None:
                 return
-            runtime.call_stack[0] = frame.model_copy(update={"variables": variables})
+            runtime.call_stack[frame_index] = frame.model_copy(update={"variables": variables})
+            runtime.inspector.variables_by_scope[frame.call_frame_id] = variables_by_scope
             if variables:
                 runtime.error_message = runtime.logpoint_error_message
                 if expired_object_count:
@@ -414,6 +400,22 @@ class NodeDebugInspector:
                 if runtime.status in {"paused", "exited", "failed"}:
                     return
             await asyncio.sleep(0.01)
+
+    async def variables_for_frame(
+        self, runtime: NodeDebugRuntime, call_frame_id: str, scope: str,
+    ) -> list[NodeDebugVariableDTO]:
+        async with runtime.state_lock:
+            if runtime.status != "paused":
+                raise RuntimeError("DAP 变量引用已失效：线程当前未暂停")
+            frame = next((item for item in runtime.call_stack
+                          if item.call_frame_id == call_frame_id), None)
+            if frame is None:
+                raise RuntimeError("DAP 变量引用已失效：调用帧不属于当前暂停")
+            values = runtime.inspector.variables_by_scope.get(call_frame_id)
+        if values is None:
+            await self._hydrate_frame_variables(runtime, frame)
+            values = runtime.inspector.variables_by_scope.get(call_frame_id, {})
+        return [item.model_copy(deep=True) for item in values.get(scope, [])]
 
     async def wait_for_frame_variables(self, runtime: NodeDebugRuntime) -> None:
         for _ in range(100):
@@ -440,6 +442,7 @@ class NodeDebugInspector:
         runtime.paused_breakpoint_ids.clear()
         runtime.call_stack.clear()
         runtime.inspector.scope_object_ids.clear()
+        runtime.inspector.variables_by_scope.clear()
         # 求值结果跟随当前暂停上下文，继续执行后不再属于当前快照。
         runtime.last_evaluation = None
 
@@ -498,10 +501,7 @@ class NodeDebugInspector:
             scope_chain = raw_frame.get("scopeChain")
             if not isinstance(call_frame_id, str) or not isinstance(scope_chain, list):
                 continue
-            object_ids: dict[str, list[str]] = {
-                "local": [],
-                "global": [],
-            }
+            object_ids: dict[str, list[str]] = {}
             for scope in scope_chain:
                 if not isinstance(scope, dict):
                     continue
@@ -510,8 +510,9 @@ class NodeDebugInspector:
                     continue
                 object_id = scope_object.get("objectId")
                 if isinstance(object_id, str):
-                    scope_name = "global" if scope.get("type") == "global" else "local"
-                    object_ids[scope_name].append(object_id)
+                    scope_type = scope.get("type")
+                    if isinstance(scope_type, str):
+                        object_ids.setdefault(scope_type, []).append(object_id)
             result[call_frame_id] = object_ids
         return result
 
@@ -519,11 +520,10 @@ class NodeDebugInspector:
     def _scope_names(value: object) -> list[str]:
         if not isinstance(value, list):
             return []
-        return [
-            str(scope.get("name"))
-            for scope in value
-            if isinstance(scope, dict) and isinstance(scope.get("name"), str)
-        ]
+        known = {"local", "closure", "block", "script", "module", "global"}
+        return [scope["type"] for scope in value
+                if isinstance(scope, dict) and isinstance(scope.get("type"), str)
+                and scope["type"] in known]
 
     @staticmethod
     def _string_or_none(value: object) -> str | None:

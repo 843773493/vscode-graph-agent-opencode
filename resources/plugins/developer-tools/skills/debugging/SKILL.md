@@ -6,6 +6,8 @@ allowed-tools: list_debug_configurations, create_debug_configuration, activate_d
 
 # 源码调试工具
 
+本说明随目标工作区的 Debug 插件发布；原 Backend 保留方案、断点和审计，Gateway 托管的插件持有 Node 目标及 Inspector。工具与原调试界面共享同一 run，读取说明不会启动调试或授予工具权限。目标路径按目标机器解释；断流或回执未知时不要重放可能有副作用的求值。
+
 这是通过固定扩展入口 invoke_extension_tool 提供给 Agent 的源码级调试工具组。目标工具不会直接出现在 Agent 的模型工具列表中，也不是让模型连接 Inspector 的底层接口。所有动作都会进入 Agent 工具轨迹和调试 session 审计记录。
 
 ## 给模型的最短决策流程

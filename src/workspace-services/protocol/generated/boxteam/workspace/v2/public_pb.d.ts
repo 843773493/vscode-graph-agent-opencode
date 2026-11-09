@@ -5526,6 +5526,199 @@ export declare type NodeDebugCapabilitiesDTO = Message<"boxteam.workspace.v2.Nod
 export declare const NodeDebugCapabilitiesDTOSchema: GenMessage<NodeDebugCapabilitiesDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.NodeDebugDebuggerContributionDTO
+ */
+export declare type NodeDebugDebuggerContributionDTO = Message<"boxteam.workspace.v2.NodeDebugDebuggerContributionDTO"> & {
+  /**
+   * @generated from field: string registration_id = 1;
+   */
+  registrationId: string;
+
+  /**
+   * @generated from field: string type = 2;
+   */
+  type: string;
+
+  /**
+   * @generated from field: string label = 3;
+   */
+  label: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct configuration_schema = 4;
+   */
+  configurationSchema?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string service_id = 5;
+   */
+  serviceId: string;
+
+  /**
+   * @generated from field: int32 dap_version = 6;
+   */
+  dapVersion: number;
+
+  /**
+   * @generated from field: repeated string capabilities = 7;
+   */
+  capabilities: string[];
+
+  /**
+   * @generated from field: string gateway_id = 8;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 9;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string package_id = 10;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string plugin_id = 11;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string package_version = 12;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: string package_digest = 13;
+   */
+  packageDigest: string;
+
+  /**
+   * @generated from field: string instance_id = 14;
+   */
+  instanceId: string;
+
+  /**
+   * @generated from field: int32 contract_version = 15;
+   */
+  contractVersion: number;
+
+  /**
+   * @generated from field: string declaration_revision = 16;
+   */
+  declarationRevision: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugDebuggerContributionDTO.
+ * Use `create(NodeDebugDebuggerContributionDTOSchema)` to create a new message.
+ */
+export declare const NodeDebugDebuggerContributionDTOSchema: GenMessage<NodeDebugDebuggerContributionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NodeDebugDebuggerContributionsDTO
+ */
+export declare type NodeDebugDebuggerContributionsDTO = Message<"boxteam.workspace.v2.NodeDebugDebuggerContributionsDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.NodeDebugDebuggerContributionDTO debuggers = 3;
+   */
+  debuggers: NodeDebugDebuggerContributionDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugDebuggerContributionsDTO.
+ * Use `create(NodeDebugDebuggerContributionsDTOSchema)` to create a new message.
+ */
+export declare const NodeDebugDebuggerContributionsDTOSchema: GenMessage<NodeDebugDebuggerContributionsDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.NodeDebugBindingSnapshotDTO
+ */
+export declare type NodeDebugBindingSnapshotDTO = Message<"boxteam.workspace.v2.NodeDebugBindingSnapshotDTO"> & {
+  /**
+   * @generated from field: string registration_id = 1;
+   */
+  registrationId: string;
+
+  /**
+   * @generated from field: string type = 2;
+   */
+  type: string;
+
+  /**
+   * @generated from field: string gateway_id = 3;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 4;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string package_id = 5;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string plugin_id = 6;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string package_version = 7;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: string package_digest = 8;
+   */
+  packageDigest: string;
+
+  /**
+   * @generated from field: string instance_id = 9;
+   */
+  instanceId: string;
+
+  /**
+   * @generated from field: string service_id = 10;
+   */
+  serviceId: string;
+
+  /**
+   * @generated from field: int32 contract_version = 11;
+   */
+  contractVersion: number;
+
+  /**
+   * @generated from field: string declaration_revision = 12;
+   */
+  declarationRevision: string;
+
+  /**
+   * @generated from field: int32 dap_version = 13;
+   */
+  dapVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.NodeDebugBindingSnapshotDTO.
+ * Use `create(NodeDebugBindingSnapshotDTOSchema)` to create a new message.
+ */
+export declare const NodeDebugBindingSnapshotDTOSchema: GenMessage<NodeDebugBindingSnapshotDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.NodeDebugConfigurationActivateRequest
  */
 export declare type NodeDebugConfigurationActivateRequest = Message<"boxteam.workspace.v2.NodeDebugConfigurationActivateRequest"> & {
@@ -6150,6 +6343,16 @@ export declare type NodeDebugStartRequest = Message<"boxteam.workspace.v2.NodeDe
    * @generated from field: string thread_id = 8;
    */
   threadId: string;
+
+  /**
+   * @generated from field: optional string debugger_registration_id = 9;
+   */
+  debuggerRegistrationId?: string | undefined;
+
+  /**
+   * @generated from field: bool defer_configuration_done = 10;
+   */
+  deferConfigurationDone: boolean;
 };
 
 /**
@@ -6276,6 +6479,16 @@ export declare type NodeDebugStateDTO = Message<"boxteam.workspace.v2.NodeDebugS
    * @generated from field: string thread_id = 23;
    */
   threadId: string;
+
+  /**
+   * @generated from field: optional string run_id = 24;
+   */
+  runId?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.NodeDebugBindingSnapshotDTO debugger_binding = 25;
+   */
+  debuggerBinding?: NodeDebugBindingSnapshotDTO | undefined;
 };
 
 /**

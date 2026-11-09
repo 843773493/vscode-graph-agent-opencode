@@ -1,22 +1,19 @@
 # 目录用途
 
-存放 Agent 调试工具组的后端 E2E，覆盖 `/api/v1/tools` 暴露的 debugging 工具与真实 Node.js Inspector 进程之间的端到端链路，包括 Session 的 main/child owner 隔离与 owner 停启隔离。
+存放需要经过真实 Backend HTTP 的 Agent 后端 E2E。Debugging 工具的 Node Inspector 和 owner 隔离语义由 `tests/integration/backend/agents/test_debug_tools.py` 通过真实 Gateway Debug 插件验证；Workbench 的真实双 Thread／Agent 调试链另由客户端集成测试验收。
 
 ## 可修改内容
 
-- 基于真实 Node Inspector 的调试工具 E2E 用例，以及工具 schema 与 Session owner 解析断言。
-- 本目录专用的调试 fixture 源码、调试服务组装 helper 和证据收集代码。
+- 新增确实需要用户级后端 HTTP 路径的 Agent E2E。
+- 调整本目录后续 E2E 的隔离工作区、请求和用户可见断言。
 
 ## 不可修改内容
 
-- 生产调试服务、工具 factory 与 Session/catalog 解析实现。
-- 使用进程内 stub 或假 Node 进程冒充 Inspector；不通过真实后端 HTTP 端口验证的测试应下沉到 `tests/integration/backend/agents/`。
+- 不在本目录直连构造业务 service 来替代产品 Backend 入口。
+- 不以插件 fixture 或 Backend mock 冒充真实 Gateway、Node 进程或浏览器流程。
 
 ## 规范
 
-- 测试通过 `tests/e2e/conftest.py` 的 `client` fixture 走真实 HTTP 端口，并用 `e2e_workspace_root_path` / `e2e_workspace_config_path` 注入隔离工作区与配置。
-- 依赖注入统一用 pytest fixture；应用代码统一用 FastAPI Depends。
-- 依赖真实 `node` 可执行文件；`shutil.which("node")` 为 `None` 时以明确 reason `skip`，不得改用替身，也不得放宽断言掩盖缺陷。
-- 调试断点、变量与进程存活断言必须读取真实 Inspector 结果；owner 隔离测试必须验证一个 owner 的重启不改变其它 owner 的状态、方案、动作与 durable launch claim。
-- 正式产物写入 `out/tests/e2e/backend/agents/<测试文件名>/workspace/` 与 `artifacts/`；不得写入 `src/`、`app/`、`asset/` 或项目根，也不得在项目根产生 `.boxteam/`。
-- `asset/` 是只读模板目录，不得作为输出目录。
+- 使用 `tests/e2e/conftest.py` 的 `client` 与 `e2e_workspace_root_path` 隔离运行。
+- 需要调试插件时，经真实 Gateway 安装并调用 Debug 插件，不直接启动 Backend 内的旧调试实现。
+- 正式产物写入对应的 `out/tests/e2e/backend/agents/` 镜像目录；禁止在项目根或 `asset/` 写测试输出。

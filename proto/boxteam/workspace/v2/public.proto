@@ -1247,6 +1247,47 @@ message NodeDebugCapabilitiesDTO {
   repeated NodeDebugLaunchProfileDTO launch_profiles = 4;
 }
 
+message NodeDebugDebuggerContributionDTO {
+  string registration_id = 1;
+  string type = 2;
+  string label = 3;
+  google.protobuf.Struct configuration_schema = 4;
+  string service_id = 5;
+  int32 dap_version = 6;
+  repeated string capabilities = 7;
+  string gateway_id = 8;
+  string workspace_id = 9;
+  string package_id = 10;
+  string plugin_id = 11;
+  string package_version = 12;
+  string package_digest = 13;
+  string instance_id = 14;
+  int32 contract_version = 15;
+  string declaration_revision = 16;
+}
+
+message NodeDebugDebuggerContributionsDTO {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  repeated NodeDebugDebuggerContributionDTO debuggers = 3;
+}
+
+message NodeDebugBindingSnapshotDTO {
+  string registration_id = 1;
+  string type = 2;
+  string gateway_id = 3;
+  string workspace_id = 4;
+  string package_id = 5;
+  string plugin_id = 6;
+  string package_version = 7;
+  string package_digest = 8;
+  string instance_id = 9;
+  string service_id = 10;
+  int32 contract_version = 11;
+  string declaration_revision = 12;
+  int32 dap_version = 13;
+}
+
 message NodeDebugConfigurationActivateRequest {
   string session_id = 1;
   string thread_id = 2;
@@ -1382,6 +1423,8 @@ message NodeDebugStartRequest {
   repeated string args = 6;
   repeated NodeDebugBreakpointRequest breakpoints = 7;
   string thread_id = 8;
+  optional string debugger_registration_id = 9;
+  bool defer_configuration_done = 10;
 }
 
 message NodeDebugStateDTO {
@@ -1408,6 +1451,8 @@ message NodeDebugStateDTO {
   optional bool requires_restart = 21;
   repeated string source_changed_paths = 22;
   string thread_id = 23;
+  optional string run_id = 24;
+  optional NodeDebugBindingSnapshotDTO debugger_binding = 25;
 }
 
 message NodeDebugVariableDTO {

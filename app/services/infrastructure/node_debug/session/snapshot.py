@@ -82,11 +82,13 @@ def build_node_debug_snapshot(
     runtime: NodeDebugRuntime,
     registry: NodeDebugConfigurationRegistry,
 ) -> NodeDebugStateDTO:
-    process_id = runtime.process.pid if runtime.process is not None else None
+    process_id = runtime.target_pid
     return NodeDebugStateDTO(
         session_id=runtime.session_id,
         # 运行状态必须携带实际 thread 归属；child thread 的状态不能伪装成 main。
         thread_id=runtime.thread_id,
+        run_id=runtime.run_id,
+        debugger_binding=runtime.debugger_binding,
         status=runtime.status,
         active_configuration_id=runtime.configuration_id,
         active_configuration_name=registry.active_name(

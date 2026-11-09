@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.node_debug import NodeDebugBindingSnapshotDTO
 from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugThreadOwner,
     normalize_node_debug_owner,
@@ -14,6 +15,24 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 TEST_THREAD_ID = "thr_00000000000070008000000000000000"
+
+
+def node_debug_binding_snapshot() -> NodeDebugBindingSnapshotDTO:
+    return NodeDebugBindingSnapshotDTO(
+        registration_id="registration_test",
+        type="node_inspector",
+        gateway_id="gateway_test",
+        workspace_id="00000000-0000-4000-8000-000000000001",
+        package_id="boxteam.debugging",
+        plugin_id="debugging",
+        package_version="1.0.0",
+        package_digest="0" * 64,
+        instance_id="debug_instance_test",
+        service_id="dap",
+        contract_version=1,
+        declaration_revision="revision_test",
+        dap_version=1,
+    )
 
 
 def node_debug_file_paths(workspace_root: Path) -> WorkspaceFilePaths:

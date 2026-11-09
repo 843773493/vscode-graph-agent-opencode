@@ -1,42 +1,26 @@
-"""Node 调试运行时的输出与进程监控链路。
-
-承载单个 Node 调试运行时的可观察行为：读取 stdout/stderr 行并归集输出、
-识别日志点诊断与 Inspector 就绪地址，以及在进程终结时判定 exited/failed
-终态并结清 launch claim。由 :class:`NodeDebugService` 构造并注入启动编排器。
-"""
+"""汇总原 Debug 插件 run 的输出与进程终态。"""
 
 from __future__ import annotations
 
 import logging
-import re
 
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
     parse_logpoint_error,
     parse_logpoint_output,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
-    MAX_NODE_DEBUG_LINE_BYTES,
     NodeDebugActionAppender,
     NodeDebugClaimPhaseMarker,
     NodeDebugRuntime,
     NodeDebugStopSnapshotClearer,
+    publish_dap_event,
 )
 
 logger = logging.getLogger(__name__)
-
-#: Inspector 打印的就绪地址前缀。
-INSPECTOR_URL_PATTERN = re.compile(r"Debugger listening on (ws://\S+)")
-
-#: Node 在端口被占用等情况下打印的 Inspector 启动失败信号。
-INSPECTOR_FAILURE_PATTERN = re.compile(r"Starting inspector on \S+ failed: .+")
-
-#: 单个运行时保留的输出行上限。
 MAX_OUTPUT_LINES = 100
 
 
 class NodeDebugRuntimeObserver:
-    """读取调试进程输出并在进程终结时更新运行时终态。"""
-
     def __init__(
         self,
         *,
@@ -44,104 +28,80 @@ class NodeDebugRuntimeObserver:
         clear_stop_snapshot: NodeDebugStopSnapshotClearer,
         append_action: NodeDebugActionAppender,
         max_output_lines: int = MAX_OUTPUT_LINES,
-        max_line_bytes: int = MAX_NODE_DEBUG_LINE_BYTES,
     ) -> None:
         self._mark_claim_phase = mark_claim_phase
         self._clear_stop_snapshot = clear_stop_snapshot
         self._append_action = append_action
         self._max_output_lines = max_output_lines
-        self._max_line_bytes = max_line_bytes
 
-    async def read_stream(
-        self,
-        runtime: NodeDebugRuntime,
-        stream_name: str,
-    ) -> None:
-        process = runtime.process
-        if process is None:
-            return
-        stream = getattr(process, stream_name)
-        if stream is None:
-            return
-        while True:
-            try:
-                line = await stream.readline()
-            except ValueError as error:
-                # 单行超过 StreamReader 缓冲上限：asyncio 已清空内部缓冲，可以继续读。
-                # 必须显式暴露截断，绝不静默丢弃后续输出。
-                async with runtime.state_lock:
-                    runtime.output.append(
-                        f"[输出截断] {stream_name} 单行超过 {self._max_line_bytes} 字节: {error}"
-                    )
-                    del runtime.output[: -self._max_output_lines]
+    async def monitor_process(self, runtime: NodeDebugRuntime) -> None:
+        plugin = runtime.plugin_runtime
+        if plugin is None:
+            raise RuntimeError("Node Debug run 缺少原 Debug 插件连接")
+        async for frame in plugin.events():
+            event = frame.get("event")
+            payload = frame.get("payload")
+            if not isinstance(payload, dict):
                 continue
-            if not line:
-                return
-            text = line.decode("utf-8", errors="replace").rstrip()
-            match = INSPECTOR_URL_PATTERN.search(text)
-            if match:
-                runtime.inspector.inspector_url = match.group(1)
-                runtime.inspector.inspector_ready.set()
+            if event in {"stdout", "stderr"} and isinstance(event, str):
+                text = payload.get("text")
+                if isinstance(text, str) and text:
+                    self._record_output(runtime, event, text)
                 continue
-            if stream_name == "stdout" and text:
+            if event != "process.exited":
+                continue
+            exit_code = payload.get("exit_code")
+            runtime.target_exit_code = exit_code if type(exit_code) is int else None
+            runtime.target_exited = True
+            plugin.exit_code = runtime.target_exit_code
+            await self._mark_claim_phase(runtime, "settled", "Debug 插件已确认目标进程退出")
+            async with runtime.state_lock:
+                runtime.status = "exited" if runtime.target_exit_code == 0 else "failed"
+                runtime.error_message = self.terminal_error_message(
+                    runtime, runtime.target_exit_code if runtime.target_exit_code is not None else -1,
+                )
+                self._clear_stop_snapshot(runtime)
+            publish_dap_event(runtime, "terminated", {})
+            return
+        if not runtime.closing and runtime.status not in {"exited", "failed"}:
+            async with runtime.state_lock:
+                runtime.status = "execution_lost"
+                runtime.error_message = "Backend 与原 Debug 插件 run 的控制通道已断开；目标状态未知"
+            await self._mark_claim_phase(runtime, "execution_lost", runtime.error_message)
+            publish_dap_event(runtime, "terminated", {})
+
+    def _record_output(self, runtime: NodeDebugRuntime, stream: str, raw_text: str) -> None:
+        for line in raw_text.rstrip().splitlines() or [raw_text.rstrip()]:
+            text = line
+            if stream == "stdout":
                 logpoint_error = parse_logpoint_error(text)
                 if logpoint_error is not None:
                     text = f"[日志点错误] {logpoint_error}"
-                    async with runtime.state_lock:
-                        runtime.logpoint_error_message = (
-                            f"日志点求值失败: {logpoint_error}"
-                        )
-                        runtime.error_message = runtime.logpoint_error_message
-                        self._append_action(
-                            runtime,
-                            "logpoint_error",
-                            runtime.logpoint_error_message,
-                            actor="system",
-                            result="error",
-                        )
+                    runtime.logpoint_error_message = f"日志点求值失败: {logpoint_error}"
+                    runtime.error_message = runtime.logpoint_error_message
+                    self._append_action(
+                        runtime, "logpoint_error", runtime.logpoint_error_message,
+                        actor="system", result="error",
+                    )
                 else:
                     logpoint_output = parse_logpoint_output(text)
                     if logpoint_output is not None:
                         text = f"[日志点] {logpoint_output}"
             if text:
-                async with runtime.state_lock:
-                    runtime.output.append(text)
-                    del runtime.output[: -self._max_output_lines]
-            if stream_name == "stderr" and text:
-                if INSPECTOR_FAILURE_PATTERN.search(text) is not None:
-                    runtime.inspector.inspector_failed.set()
-                try:
-                    logger.warning(
-                        "Node stderr: session_id=%s, thread_id=%s, configuration_id=%s, pid=%s；%s",
-                        runtime.session_id, runtime.thread_id, runtime.configuration_id,
-                        process.pid, text,
-                    )
-                except Exception as error:  # noqa: BLE001 — 输出已保留，日志次错不能中断读取和原进程结算。
-                    async with runtime.state_lock:
-                        runtime.output.append(f"[诊断日志输出失败] {type(error).__name__}: {error}")
-                        del runtime.output[: -self._max_output_lines]
-
-    async def monitor_process(self, runtime: NodeDebugRuntime) -> None:
-        process = runtime.process
-        if process is None:
-            return
-        return_code = await process.wait()
-        # 进程句柄已报告终态：这是可核实的终结，结清本实例的 claim。
-        await self._mark_claim_phase(
-            runtime, "settled", f"进程已退出，退出码: {return_code}"
-        )
-        if runtime.closing:
-            return
-        async with runtime.state_lock:
-            runtime.status = "exited" if return_code == 0 else "failed"
-            self._clear_stop_snapshot(runtime)
-            runtime.error_message = self.terminal_error_message(runtime, return_code)
+                runtime.output.append(text)
+                del runtime.output[:-self._max_output_lines]
+            publish_dap_event(runtime, "output", {
+                "category": "stderr" if stream == "stderr" else "stdout",
+                "output": text + "\n",
+            })
+            if stream == "stderr" and text:
+                logger.warning(
+                    "Node stderr: session_id=%s, thread_id=%s, pid=%s; %s",
+                    runtime.session_id, runtime.thread_id, runtime.target_pid, text,
+                )
 
     @staticmethod
-    def terminal_error_message(
-        runtime: NodeDebugRuntime, return_code: int
-    ) -> str | None:
-        """失败摘要保留退出码，具体 stderr 由读取入口放入有界输出。"""
+    def terminal_error_message(runtime: NodeDebugRuntime, return_code: int) -> str | None:
         if runtime.logpoint_error_message is not None:
             return runtime.logpoint_error_message
         if return_code == 0:
@@ -149,19 +109,9 @@ class NodeDebugRuntimeObserver:
         return f"Node 调试进程退出，退出码: {return_code}"
 
     @staticmethod
-    def handshake_timeout_message(
-        timeout_seconds: float,
-    ) -> str:
-        """握手超时必须带超时值，不将原始诊断复制进公开消息。"""
-        return f"等待 Node Inspector 就绪超时（{timeout_seconds:g} 秒）"
-
-    @staticmethod
     def paused_at_breakpoint(runtime: NodeDebugRuntime) -> bool:
         if runtime.paused_breakpoint_ids:
-            return bool(
-                runtime.paused_breakpoint_ids
-                & set(runtime.inspector_breakpoint_ids.values())
-            )
+            return bool(runtime.paused_breakpoint_ids & set(runtime.inspector_breakpoint_ids.values()))
         frame = runtime.call_stack[0] if runtime.call_stack else None
         if frame is None or frame.path is None:
             return False
@@ -173,11 +123,3 @@ class NodeDebugRuntimeObserver:
             and frame.line in {breakpoint.line, breakpoint.actual_line}
             for breakpoint in runtime.breakpoints.values()
         )
-
-
-__all__ = [
-    "INSPECTOR_FAILURE_PATTERN",
-    "INSPECTOR_URL_PATTERN",
-    "MAX_OUTPUT_LINES",
-    "NodeDebugRuntimeObserver",
-]

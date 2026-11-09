@@ -1258,6 +1258,47 @@ export interface NodeDebugCapabilitiesDTO {
   launch_profiles: NodeDebugLaunchProfileDTO[];
 }
 
+export interface NodeDebugDebuggerContributionDTO {
+  registration_id: string;
+  type: string;
+  label: string;
+  configuration_schema: { [key: string]: any } | undefined;
+  service_id: string;
+  dap_version: number;
+  capabilities: string[];
+  gateway_id: string;
+  workspace_id: string;
+  package_id: string;
+  plugin_id: string;
+  package_version: string;
+  package_digest: string;
+  instance_id: string;
+  contract_version: number;
+  declaration_revision: string;
+}
+
+export interface NodeDebugDebuggerContributionsDTO {
+  gateway_id: string;
+  workspace_id: string;
+  debuggers: NodeDebugDebuggerContributionDTO[];
+}
+
+export interface NodeDebugBindingSnapshotDTO {
+  registration_id: string;
+  type: string;
+  gateway_id: string;
+  workspace_id: string;
+  package_id: string;
+  plugin_id: string;
+  package_version: string;
+  package_digest: string;
+  instance_id: string;
+  service_id: string;
+  contract_version: number;
+  declaration_revision: string;
+  dap_version: number;
+}
+
 export interface NodeDebugConfigurationActivateRequest {
   session_id: string;
   thread_id: string;
@@ -1393,6 +1434,8 @@ export interface NodeDebugStartRequest {
   args: string[];
   breakpoints: NodeDebugBreakpointRequest[];
   thread_id: string;
+  debugger_registration_id?: string | undefined;
+  defer_configuration_done: boolean;
 }
 
 export interface NodeDebugStateDTO {
@@ -1419,6 +1462,8 @@ export interface NodeDebugStateDTO {
   requires_restart?: boolean | undefined;
   source_changed_paths: string[];
   thread_id: string;
+  run_id?: string | undefined;
+  debugger_binding?: NodeDebugBindingSnapshotDTO | undefined;
 }
 
 export interface NodeDebugVariableDTO {
@@ -12218,6 +12263,281 @@ export const NodeDebugCapabilitiesDTO: MessageFns<NodeDebugCapabilitiesDTO> = {
   },
 };
 
+function createBaseNodeDebugDebuggerContributionDTO(): NodeDebugDebuggerContributionDTO {
+  return {
+    registration_id: "",
+    type: "",
+    label: "",
+    configuration_schema: undefined,
+    service_id: "",
+    dap_version: 0,
+    capabilities: [],
+    gateway_id: "",
+    workspace_id: "",
+    package_id: "",
+    plugin_id: "",
+    package_version: "",
+    package_digest: "",
+    instance_id: "",
+    contract_version: 0,
+    declaration_revision: "",
+  };
+}
+
+export const NodeDebugDebuggerContributionDTO: MessageFns<NodeDebugDebuggerContributionDTO> = {
+  fromJSON(object: any): NodeDebugDebuggerContributionDTO {
+    return {
+      registration_id: isSet(object.registration_id) ? globalThis.String(object.registration_id) : "",
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+      label: isSet(object.label) ? globalThis.String(object.label) : "",
+      configuration_schema: isObject(object.configuration_schema) ? object.configuration_schema : undefined,
+      service_id: isSet(object.service_id) ? globalThis.String(object.service_id) : "",
+      dap_version: isSet(object.dap_version) ? globalThis.Number(object.dap_version) : 0,
+      capabilities: globalThis.Array.isArray(object?.capabilities)
+        ? object.capabilities.map((e: any) => globalThis.String(e))
+        : [],
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      package_digest: isSet(object.package_digest) ? globalThis.String(object.package_digest) : "",
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : "",
+      contract_version: isSet(object.contract_version) ? globalThis.Number(object.contract_version) : 0,
+      declaration_revision: isSet(object.declaration_revision) ? globalThis.String(object.declaration_revision) : "",
+    };
+  },
+
+  toJSON(message: NodeDebugDebuggerContributionDTO): unknown {
+    const obj: any = {};
+    if (message.registration_id !== "") {
+      obj.registration_id = message.registration_id;
+    }
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    if (message.label !== "") {
+      obj.label = message.label;
+    }
+    if (message.configuration_schema !== undefined) {
+      obj.configuration_schema = message.configuration_schema;
+    }
+    if (message.service_id !== "") {
+      obj.service_id = message.service_id;
+    }
+    if (message.dap_version !== 0) {
+      obj.dap_version = Math.round(message.dap_version);
+    }
+    if (message.capabilities?.length) {
+      obj.capabilities = message.capabilities;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.package_digest !== "") {
+      obj.package_digest = message.package_digest;
+    }
+    if (message.instance_id !== "") {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.contract_version !== 0) {
+      obj.contract_version = Math.round(message.contract_version);
+    }
+    if (message.declaration_revision !== "") {
+      obj.declaration_revision = message.declaration_revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugDebuggerContributionDTO>, I>>(
+    base?: I,
+  ): NodeDebugDebuggerContributionDTO {
+    return NodeDebugDebuggerContributionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugDebuggerContributionDTO>, I>>(
+    object: I,
+  ): NodeDebugDebuggerContributionDTO {
+    const message = createBaseNodeDebugDebuggerContributionDTO();
+    message.registration_id = object.registration_id ?? "";
+    message.type = object.type ?? "";
+    message.label = object.label ?? "";
+    message.configuration_schema = object.configuration_schema ?? undefined;
+    message.service_id = object.service_id ?? "";
+    message.dap_version = object.dap_version ?? 0;
+    message.capabilities = object.capabilities?.map((e) => e) || [];
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.package_id = object.package_id ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.package_digest = object.package_digest ?? "";
+    message.instance_id = object.instance_id ?? "";
+    message.contract_version = object.contract_version ?? 0;
+    message.declaration_revision = object.declaration_revision ?? "";
+    return message;
+  },
+};
+
+function createBaseNodeDebugDebuggerContributionsDTO(): NodeDebugDebuggerContributionsDTO {
+  return { gateway_id: "", workspace_id: "", debuggers: [] };
+}
+
+export const NodeDebugDebuggerContributionsDTO: MessageFns<NodeDebugDebuggerContributionsDTO> = {
+  fromJSON(object: any): NodeDebugDebuggerContributionsDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      debuggers: globalThis.Array.isArray(object?.debuggers)
+        ? object.debuggers.map((e: any) => NodeDebugDebuggerContributionDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: NodeDebugDebuggerContributionsDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.debuggers?.length) {
+      obj.debuggers = message.debuggers.map((e) => NodeDebugDebuggerContributionDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugDebuggerContributionsDTO>, I>>(
+    base?: I,
+  ): NodeDebugDebuggerContributionsDTO {
+    return NodeDebugDebuggerContributionsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugDebuggerContributionsDTO>, I>>(
+    object: I,
+  ): NodeDebugDebuggerContributionsDTO {
+    const message = createBaseNodeDebugDebuggerContributionsDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.debuggers = object.debuggers?.map((e) => NodeDebugDebuggerContributionDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseNodeDebugBindingSnapshotDTO(): NodeDebugBindingSnapshotDTO {
+  return {
+    registration_id: "",
+    type: "",
+    gateway_id: "",
+    workspace_id: "",
+    package_id: "",
+    plugin_id: "",
+    package_version: "",
+    package_digest: "",
+    instance_id: "",
+    service_id: "",
+    contract_version: 0,
+    declaration_revision: "",
+    dap_version: 0,
+  };
+}
+
+export const NodeDebugBindingSnapshotDTO: MessageFns<NodeDebugBindingSnapshotDTO> = {
+  fromJSON(object: any): NodeDebugBindingSnapshotDTO {
+    return {
+      registration_id: isSet(object.registration_id) ? globalThis.String(object.registration_id) : "",
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      package_digest: isSet(object.package_digest) ? globalThis.String(object.package_digest) : "",
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : "",
+      service_id: isSet(object.service_id) ? globalThis.String(object.service_id) : "",
+      contract_version: isSet(object.contract_version) ? globalThis.Number(object.contract_version) : 0,
+      declaration_revision: isSet(object.declaration_revision) ? globalThis.String(object.declaration_revision) : "",
+      dap_version: isSet(object.dap_version) ? globalThis.Number(object.dap_version) : 0,
+    };
+  },
+
+  toJSON(message: NodeDebugBindingSnapshotDTO): unknown {
+    const obj: any = {};
+    if (message.registration_id !== "") {
+      obj.registration_id = message.registration_id;
+    }
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.package_digest !== "") {
+      obj.package_digest = message.package_digest;
+    }
+    if (message.instance_id !== "") {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.service_id !== "") {
+      obj.service_id = message.service_id;
+    }
+    if (message.contract_version !== 0) {
+      obj.contract_version = Math.round(message.contract_version);
+    }
+    if (message.declaration_revision !== "") {
+      obj.declaration_revision = message.declaration_revision;
+    }
+    if (message.dap_version !== 0) {
+      obj.dap_version = Math.round(message.dap_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeDebugBindingSnapshotDTO>, I>>(base?: I): NodeDebugBindingSnapshotDTO {
+    return NodeDebugBindingSnapshotDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeDebugBindingSnapshotDTO>, I>>(object: I): NodeDebugBindingSnapshotDTO {
+    const message = createBaseNodeDebugBindingSnapshotDTO();
+    message.registration_id = object.registration_id ?? "";
+    message.type = object.type ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.package_id = object.package_id ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.package_digest = object.package_digest ?? "";
+    message.instance_id = object.instance_id ?? "";
+    message.service_id = object.service_id ?? "";
+    message.contract_version = object.contract_version ?? 0;
+    message.declaration_revision = object.declaration_revision ?? "";
+    message.dap_version = object.dap_version ?? 0;
+    return message;
+  },
+};
+
 function createBaseNodeDebugConfigurationActivateRequest(): NodeDebugConfigurationActivateRequest {
   return { session_id: "", thread_id: "" };
 }
@@ -13116,6 +13436,8 @@ function createBaseNodeDebugStartRequest(): NodeDebugStartRequest {
     args: [],
     breakpoints: [],
     thread_id: "",
+    debugger_registration_id: undefined,
+    defer_configuration_done: false,
   };
 }
 
@@ -13134,6 +13456,12 @@ export const NodeDebugStartRequest: MessageFns<NodeDebugStartRequest> = {
         ? object.breakpoints.map((e: any) => NodeDebugBreakpointRequest.fromJSON(e))
         : [],
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      debugger_registration_id: isSet(object.debugger_registration_id)
+        ? globalThis.String(object.debugger_registration_id)
+        : undefined,
+      defer_configuration_done: isSet(object.defer_configuration_done)
+        ? globalThis.Boolean(object.defer_configuration_done)
+        : false,
     };
   },
 
@@ -13163,6 +13491,12 @@ export const NodeDebugStartRequest: MessageFns<NodeDebugStartRequest> = {
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
     }
+    if (message.debugger_registration_id !== undefined) {
+      obj.debugger_registration_id = message.debugger_registration_id;
+    }
+    if (message.defer_configuration_done !== false) {
+      obj.defer_configuration_done = message.defer_configuration_done;
+    }
     return obj;
   },
 
@@ -13179,6 +13513,8 @@ export const NodeDebugStartRequest: MessageFns<NodeDebugStartRequest> = {
     message.args = object.args?.map((e) => e) || [];
     message.breakpoints = object.breakpoints?.map((e) => NodeDebugBreakpointRequest.fromPartial(e)) || [];
     message.thread_id = object.thread_id ?? "";
+    message.debugger_registration_id = object.debugger_registration_id ?? undefined;
+    message.defer_configuration_done = object.defer_configuration_done ?? false;
     return message;
   },
 };
@@ -13208,6 +13544,8 @@ function createBaseNodeDebugStateDTO(): NodeDebugStateDTO {
     requires_restart: undefined,
     source_changed_paths: [],
     thread_id: "",
+    run_id: undefined,
+    debugger_binding: undefined,
   };
 }
 
@@ -13261,6 +13599,10 @@ export const NodeDebugStateDTO: MessageFns<NodeDebugStateDTO> = {
         ? object.source_changed_paths.map((e: any) => globalThis.String(e))
         : [],
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      run_id: isSet(object.run_id) ? globalThis.String(object.run_id) : undefined,
+      debugger_binding: isSet(object.debugger_binding)
+        ? NodeDebugBindingSnapshotDTO.fromJSON(object.debugger_binding)
+        : undefined,
     };
   },
 
@@ -13335,6 +13677,12 @@ export const NodeDebugStateDTO: MessageFns<NodeDebugStateDTO> = {
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
     }
+    if (message.run_id !== undefined) {
+      obj.run_id = message.run_id;
+    }
+    if (message.debugger_binding !== undefined) {
+      obj.debugger_binding = NodeDebugBindingSnapshotDTO.toJSON(message.debugger_binding);
+    }
     return obj;
   },
 
@@ -13370,6 +13718,10 @@ export const NodeDebugStateDTO: MessageFns<NodeDebugStateDTO> = {
     message.requires_restart = object.requires_restart ?? undefined;
     message.source_changed_paths = object.source_changed_paths?.map((e) => e) || [];
     message.thread_id = object.thread_id ?? "";
+    message.run_id = object.run_id ?? undefined;
+    message.debugger_binding = (object.debugger_binding !== undefined && object.debugger_binding !== null)
+      ? NodeDebugBindingSnapshotDTO.fromPartial(object.debugger_binding)
+      : undefined;
     return message;
   },
 };

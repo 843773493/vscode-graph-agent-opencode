@@ -902,6 +902,7 @@ def _build_app_container(
     thread_residency_tracker.add_unload_listener(release_attachment_runtime)
     node_debug_service = NodeDebugService(
         workspace_root=resolved_workspace_root,
+        workspace_id=workspace_id,
         file_paths=workspace_service.file_paths,
         config_service=config_service,
         session_store=NodeDebugSessionStore(session_path_resolver),

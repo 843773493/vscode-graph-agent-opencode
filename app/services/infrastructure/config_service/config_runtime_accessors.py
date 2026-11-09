@@ -139,7 +139,8 @@ class ConfigRuntimeAccessorsMixin:
             port_key="inspector_port",
             default_host="127.0.0.1",
         )
-        executable = node.get("executable", "")
+        raw_node = raw_debug.get("node")
+        executable = raw_node.get("executable", "") if raw_node is not None else ""
         if not isinstance(executable, str):
             raise ValueError("runtime.debug.node.executable 必须是字符串")
         node["executable"] = executable

@@ -1,23 +1,34 @@
-"""启动原生错误不得进入调试公开状态和持久动作正文。"""
+"""Node Debug 插件运行链的启动拒绝、未知结果和失效实例边界。"""
 
 from __future__ import annotations
 
 import asyncio
-import errno
-import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.schemas.internal_v2.node_debug import NodeDebugDebuggerContributionDTO
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.process import (
-    launch_orchestrator,
-    process_lifecycle,
+from app.services.infrastructure.node_debug.process.claim_runtime import (
+    NodeDebugProcessLeaseIdentity,
+)
+from app.services.infrastructure.node_debug.process.launch_claim import (
+    NodeDebugClaimRecoveryDecision,
+    claim_marked,
+    claim_running,
+    claim_with_target_pid,
+    new_launch_claim,
+)
+from app.services.infrastructure.node_debug.process.plugin_runtime import (
+    NodeDebugPluginRuntime,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -25,6 +36,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from tests.support.node_debug_dependencies import (
+    node_debug_binding_snapshot,
     node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
@@ -48,7 +60,7 @@ class DebugLaunchContext:
             workspace_root=root, file_paths=node_debug_file_paths(root),
             config_service=ConfigService(workspace_root=root),
             session_store=self.store,
-            session_admission=permissive_node_debug_session_admission(),
+            session_admission=permissive_node_debug_session_admission(),  # type: ignore[arg-type]
             external_resource_leases=ExternalResourceLeaseLedger(),
         )
 
@@ -63,158 +75,461 @@ async def debug_launch_context(tmp_path: Path) -> AsyncIterator[DebugLaunchConte
             workspace, store, session_id, workspace.resolver.main_thread_id(session_id),
         )
         fixture.service = fixture.cold_service()
-        fixture.service._node_bin = "unit-node"
         try:
             yield fixture
         finally:
             await fixture.service.close()
 
 
-@pytest.fixture(params=["/private/native-launch-secret", r"C:\private\native-launch-secret", r"\\server\private\native-launch-secret"])
-def native_launch_error(request: pytest.FixtureRequest) -> PermissionError:
-    error = PermissionError(errno.EACCES, f"原生错误: {request.param}", request.param)
-    error.winerror = 5
-    return error
+@pytest.mark.asyncio
+async def test_plugin_launch_rejection_is_not_replayed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = object.__new__(NodeDebugPluginRuntime)
+    calls: list[str] = []
+    rejection = RuntimeError("Debug 插件拒绝 launch")
+
+    async def request(operation: str, _payload: dict[str, object]) -> dict[str, object]:
+        calls.append(operation)
+        raise rejection
+
+    monkeypatch.setattr(runtime, "request", request)
+    with pytest.raises(RuntimeError, match="拒绝 launch") as caught:
+        await runtime.launch({"process_instance_id": "node-debug-proc-test"})
+    assert caught.value is rejection
+    assert calls == ["launch"]
 
 
 @pytest.mark.asyncio
-async def test_native_launch_error_keeps_cause_and_cold_history_without_native_path(
-    debug_launch_context: DebugLaunchContext, native_launch_error: PermissionError,
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    launch_log_failure: OSError | None,
+async def test_unknown_plugin_launch_result_is_not_replayed(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fixture = debug_launch_context
-    attempts = []
+    runtime = object.__new__(NodeDebugPluginRuntime)
+    runtime.run_id = "run_test"
+    calls: list[str] = []
 
-    async def fail_spawn(*args: object, **kwargs: object) -> None:
-        attempts.append((args, kwargs))
-        raise native_launch_error
+    async def request(operation: str, _payload: dict[str, object]) -> dict[str, object]:
+        calls.append(operation)
+        if operation == "launch":
+            raise TimeoutError("launch response lost")
+        return {"run_id": "other_run", "status": "running"}
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_spawn)
-    with caplog.at_level(logging.ERROR, logger=launch_orchestrator.__name__), pytest.raises(RuntimeError) as caught:
-        await fixture.service.start(
-            session_id=fixture.session_id, thread_id=fixture.thread_id,
-            path="entry.mjs", args=[], breakpoints=[],
-        )
-    message = str(caught.value)
-    assert caught.value.__cause__ is native_launch_error
-    assert fixture.session_id in message and fixture.thread_id in message
-    assert "PermissionError" in message and f"errno={errno.EACCES}" in message
-    assert "winerror=5" in message
-    assert native_launch_error.filename not in message and "native-launch-secret" not in message
-    assert len(attempts) == 1 and attempts[0][0][0] == "unit-node"
-    assert Path(attempts[0][1]["cwd"]) == fixture.workspace.workspace_root
-    assert any(record.exc_info and record.exc_info[1] is native_launch_error for record in caplog.records)
-    if launch_log_failure is not None:
-        assert "diagnostic_sink_error=OSError" in message
-        assert any(str(launch_log_failure) in note for note in native_launch_error.__notes__)
-        assert "launch-log-secret" not in message
-    else:
-        assert "diagnostic_sink_error" not in message
+    monkeypatch.setattr(runtime, "request", request)
+    with pytest.raises(RuntimeError, match="结果未知.*没有重放"):
+        await runtime.launch({"process_instance_id": "node-debug-proc-test"})
+    assert calls == ["launch", "status"]
 
-    state = await fixture.service.get_state(fixture.session_id, fixture.thread_id)
-    assert state.status == "failed" and state.pid is None and state.error_message == message
-    failures = [action for action in state.actions if action.action == "start_failed"]
-    assert len(failures) == 1 and failures[0].message == message and failures[0].result == "error"
-    manifest_bytes, manifest = fixture.store.read_manifest_payload(fixture.session_id, fixture.thread_id)
-    assert manifest_bytes is not None and manifest is not None
-    assert "native-launch-secret" not in manifest_bytes.decode()
-    assert [action for action in manifest.actions if action.action == "start_failed"] == failures
-    claim = fixture.store.read_launch_claim(fixture.session_id, fixture.thread_id)
-    assert claim is not None and claim.phase == "settled" and claim.pid is None
 
-    cold = fixture.cold_service()
+@pytest.mark.asyncio
+async def test_cancelled_wait_for_plugin_request_lock_leaves_no_pending_response() -> None:
+    runtime = object.__new__(NodeDebugPluginRuntime)
+    runtime._request_lock = asyncio.Lock()
+    runtime._responses = {}
+    runtime._socket = object()  # type: ignore[assignment]
+    runtime.run_id = "run_test"
+    runtime._request_id = "request_test"
+    await runtime._request_lock.acquire()
+    request = asyncio.create_task(runtime.request("status", {}))
     try:
-        restored = await cold.get_state(fixture.session_id, fixture.thread_id)
-        assert restored.status == "idle" and restored.pid is None
-        assert restored.active_configuration_id == state.active_configuration_id
-        assert [action for action in restored.actions if action.action == "start_failed"] == failures
-        assert "native-launch-secret" not in restored.model_dump_json()
+        await asyncio.sleep(0)
+        assert not runtime._responses
+        request.cancel("等待插件连接锁")
+        with pytest.raises(asyncio.CancelledError, match="等待插件连接锁"):
+            await request
+        assert not runtime._responses
     finally:
-        await cold.close()
-
-
-@pytest.fixture(params=[False, True], ids=["log-ok", "log-failed"])
-def launch_log_failure(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
-) -> OSError | None:
-    if not request.param:
-        return None
-    failure = OSError("日志输出失败 /private/launch-log-secret")
-    original = logging.Logger.callHandlers
-
-    def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
-        original(logger, record)
-        if record.getMessage().startswith("启动 Node Inspector 失败:"):
-            raise failure
-
-    monkeypatch.setattr(logging.Logger, "callHandlers", call_handlers)
-    return failure
+        runtime._request_lock.release()
 
 
 @pytest.mark.asyncio
-async def test_non_native_launch_failure_keeps_existing_message_and_cause(
-    debug_launch_context: DebugLaunchContext, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("failure_stage", ["status", "inspector"])
+async def test_failed_recovery_closes_backend_connection_without_stopping_target(
+    debug_launch_context: DebugLaunchContext,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    from app.services.infrastructure.node_debug import (
+        service as node_debug_service_module,
+    )
+
+    fixture = debug_launch_context
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": fixture.workspace.workspace_id}
+    )
+    claim = new_launch_claim(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        run_id="run_recovery_test",
+        configuration_id="dbgcfg_" + "1" * 32,
+        debugger_binding=binding,
+        script_path="entry.mjs",
+        args=[],
+        node_executable="node",
+        working_directory="",
+        launch_profile_name=None,
+        breakpoints=[],
+    )
+
+    class RuntimeConnection:
+        closed = 0
+        stopped = 0
+
+        async def status(self) -> dict[str, object]:
+            if failure_stage == "status":
+                raise ConnectionError("状态查询断开")
+            return {
+                "run_id": claim.run_id,
+                "process_instance_id": claim.process_instance_id,
+                "status": "running",
+                "pid": 43210,
+            }
+
+        async def close(self) -> None:
+            self.closed += 1
+
+        async def stop(self) -> dict[str, object]:
+            self.stopped += 1
+            return {"status": "exited"}
+
+    connection = RuntimeConnection()
+
+    async def connect(cls, **_kwargs: object) -> RuntimeConnection:
+        return connection
+
+    async def fail_inspector(_runtime: object) -> None:
+        raise ConnectionError("Inspector 初始化失败")
+
+    monkeypatch.setattr(
+        NodeDebugPluginRuntime, "connect", classmethod(connect),
+    )
+    monkeypatch.setattr(
+        node_debug_service_module, "require_current_request_id", lambda _label: "request_test",
+    )
+    if failure_stage == "inspector":
+        monkeypatch.setattr(fixture.service._inspector, "connect", fail_inspector)
+    with pytest.raises(ConnectionError):
+        await fixture.service._recover_debug_run(claim)
+    assert connection.closed == 1
+    assert connection.stopped == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome,claim_phase,lease_status,audit_action",
+    [
+        ("execution_lost", "execution_lost", "active", "execution_lost"),
+        ("settled", "settled", "settled", "execution_settled"),
+    ],
+)
+async def test_plugin_run_recovery_records_audit_and_preserves_owner_lease(
+    debug_launch_context: DebugLaunchContext,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: Literal["execution_lost", "settled"],
+    claim_phase: Literal["execution_lost", "settled"],
+    lease_status: Literal["active", "settled"],
+    audit_action: Literal["execution_lost", "execution_settled"],
 ) -> None:
     fixture = debug_launch_context
-    error = RuntimeError("原有启动协议拒绝")
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": fixture.workspace.workspace_id}
+    )
+    claim = new_launch_claim(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        run_id="run_test",
+        configuration_id="dbgcfg_" + "1" * 32,
+        debugger_binding=binding,
+        script_path="entry.mjs",
+        args=[],
+        node_executable="node",
+        working_directory="",
+        launch_profile_name=None,
+        breakpoints=[],
+    )
+    claim = claim_running(claim_with_target_pid(claim, pid=43210))
+    await fixture.service._claim_runtime.write_launch_claim(claim)
+    lease = NodeDebugProcessLeaseIdentity.for_process_instance(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        process_instance_id=claim.process_instance_id,
+    )
+    leases = fixture.service._external_resource_leases
+    leases.register_external(
+        resource_id=lease.resource_id, kind="node_debug_process", lifetime_scope="session",
+    )
+    leases.acquire(
+        resource_id=lease.resource_id, turn_stream_id=lease.holder_id,
+        lease_id=lease.lease_id, operation_id=lease.operation_id,
+    )
 
-    async def fail_spawn(*args: object, **kwargs: object) -> None:
-        raise error
+    async def missing_original_run(_claim: object) -> NodeDebugClaimRecoveryDecision:
+        return NodeDebugClaimRecoveryDecision(outcome, "原 Debug run 已不存在")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_spawn)
-    with pytest.raises(RuntimeError, match="启动 Node Inspector 失败: 原有启动协议拒绝") as caught:
+    monkeypatch.setattr(fixture.service._lifecycle, "_recover_run", missing_original_run)
+    decision = await fixture.service._lifecycle.reconcile_persisted_claim(
+        (fixture.session_id, fixture.thread_id)
+    )
+    assert decision == NodeDebugClaimRecoveryDecision(outcome, "原 Debug run 已不存在")
+    persisted = fixture.store.read_launch_claim(fixture.session_id, fixture.thread_id)
+    assert persisted is not None and persisted.phase == claim_phase
+    assert persisted.process_instance_id == claim.process_instance_id
+    lease_record = leases.get_lease(lease.lease_id)
+    assert lease_record is not None and lease_record.status == lease_status
+    manifest = fixture.store.read_manifest(fixture.session_id, fixture.thread_id)
+    assert manifest is not None
+    assert any(item.action == audit_action for item in manifest.actions)
+    if outcome == "execution_lost":
+        with pytest.raises(RuntimeError, match="phase=execution_lost"):
+            fixture.service._assert_no_unsettled_claim(
+                (fixture.session_id, fixture.thread_id), operation="启动新调试实例",
+            )
+    else:
+        fixture.service._assert_no_unsettled_claim(
+            (fixture.session_id, fixture.thread_id), operation="启动新调试实例",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_lost", [False, True])
+async def test_start_does_not_replace_an_unrecoverable_original_run(
+    debug_launch_context: DebugLaunchContext,
+    monkeypatch: pytest.MonkeyPatch,
+    already_lost: bool,
+) -> None:
+    fixture = debug_launch_context
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": fixture.workspace.workspace_id}
+    )
+    claim = new_launch_claim(
+        session_id=fixture.session_id, thread_id=fixture.thread_id,
+        run_id="run_unrecoverable", configuration_id="dbgcfg_" + "1" * 32,
+        debugger_binding=binding, script_path="entry.mjs", args=[],
+        node_executable="node", working_directory="", launch_profile_name=None,
+        breakpoints=[],
+    )
+    reason = "原 Debug 插件状态无法核实"
+    if already_lost:
+        claim = claim_marked(claim, phase="execution_lost", reason=reason)
+    await fixture.service._claim_runtime.write_launch_claim(claim)
+    recovery = AsyncMock(return_value=NodeDebugClaimRecoveryDecision("execution_lost", reason))
+    connect = AsyncMock()
+    monkeypatch.setattr(fixture.service._lifecycle, "_recover_run", recovery)
+    monkeypatch.setattr(NodeDebugPluginRuntime, "connect", connect)
+    monkeypatch.setattr(fixture.service, "resolve_node_debugger_binding", AsyncMock(
+        return_value=NodeDebugDebuggerContributionDTO(
+            **binding.model_dump(), label="Node Inspector", configuration_schema={}, capabilities=[],
+        ),
+    ))
+
+    with pytest.raises(RuntimeError, match="结果未知，结清前拒绝启动新实例"):
         await fixture.service.start(
             session_id=fixture.session_id, thread_id=fixture.thread_id,
             path="entry.mjs", args=[], breakpoints=[],
+            gateway_id=binding.gateway_id, request_id="request_unrecoverable",
         )
-    assert caught.value.__cause__ is error
+
+    persisted = fixture.store.read_launch_claim(fixture.session_id, fixture.thread_id)
+    assert persisted is not None and persisted.phase == "execution_lost"
+    assert persisted.run_id == claim.run_id
+    assert persisted.process_instance_id == claim.process_instance_id
+    assert persisted.reconcile_reason == reason
+    assert not fixture.service._runtimes
+    assert recovery.await_count == (0 if already_lost else 1)
+    connect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase,action", [
-    ("signal", "stop_signal_failed"), ("kill", "stop_kill_failed"), ("wait", "stop_wait_failed"),
-])
-async def test_native_stop_errors_do_not_publish_paths_into_durable_actions(
-    debug_launch_context: DebugLaunchContext, phase: str, action: str,
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize("previous_status", ["execution_lost", "exited", "failed"])
+async def test_start_cannot_replace_a_disconnected_runtime_with_unknown_target(
+    debug_launch_context: DebugLaunchContext,
+    monkeypatch: pytest.MonkeyPatch,
+    previous_status: Literal["execution_lost", "exited", "failed"],
 ) -> None:
     fixture = debug_launch_context
-    raw_error = PermissionError(errno.EACCES, "原生停止故障", "/private/native-stop-secret")
-
-    class StopProcess:
-        returncode: int | None = None
-        waits = 0
-
-        def terminate(self) -> None:
-            if phase == "signal":
-                raise raw_error
-
-        def kill(self) -> None:
-            raise raw_error
-
-        async def wait(self) -> int:
-            self.waits += 1
-            if phase == "kill" and self.waits == 1:
-                raise TimeoutError
-            self.returncode = 0
-            if phase == "wait":
-                raise raw_error
-            return 0
-
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": fixture.workspace.workspace_id}
+    )
+    owner = (fixture.session_id, fixture.thread_id)
     runtime = NodeDebugRuntime(
-        session_id=fixture.session_id, thread_id=fixture.thread_id,
+        session_id=owner[0], thread_id=owner[1], configuration_id="dbgcfg_" + "1" * 32,
+        debugger_binding=binding, workspace_root=fixture.workspace.workspace_root,
+        script_path=fixture.workspace.workspace_root / "entry.mjs", relative_script_path="entry.mjs",
+        status=previous_status, target_exited=previous_status != "execution_lost",
+    )
+    stop = AsyncMock(side_effect=ConnectionError("原控制通道已断开"))
+    status = AsyncMock(side_effect=ConnectionError("无法核实原目标"))
+    runtime.plugin_runtime = SimpleNamespace(stop=stop, status=status)  # type: ignore[assignment]
+    fixture.service._runtimes[owner] = runtime
+    connect = AsyncMock()
+    monkeypatch.setattr(NodeDebugPluginRuntime, "connect", connect)
+    monkeypatch.setattr(fixture.service, "resolve_node_debugger_binding", AsyncMock(
+        return_value=NodeDebugDebuggerContributionDTO(
+            **binding.model_dump(), label="Node Inspector", configuration_schema={}, capabilities=[],
+        ),
+    ))
+    try:
+        with pytest.raises(RuntimeError, match="旧调试实例无法核实终态"):
+            await fixture.service.start(
+                session_id=owner[0], thread_id=owner[1], path="entry.mjs",
+                args=[], breakpoints=[], gateway_id=binding.gateway_id,
+                request_id="request_disconnected",
+            )
+        assert fixture.service._runtimes[owner] is runtime
+        assert runtime.status == "reconcile_required"
+        assert runtime.target_exited == (previous_status != "execution_lost")
+        stop.assert_awaited_once()
+        status.assert_awaited_once()
+        connect.assert_not_awaited()
+        assert fixture.store.read_launch_claim(*owner) is None
+    finally:
+        fixture.service._runtimes.pop(owner)
+
+
+@pytest.mark.asyncio
+async def test_plugin_stop_rejection_keeps_run_claim_and_lease_until_exit_is_confirmed(
+    debug_launch_context: DebugLaunchContext,
+) -> None:
+    fixture = debug_launch_context
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": fixture.workspace.workspace_id}
+    )
+    claim = new_launch_claim(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        run_id="run_stop_rejection",
+        configuration_id="dbgcfg_" + "1" * 32,
+        debugger_binding=binding,
+        script_path="entry.mjs",
+        args=[],
+        node_executable="node",
+        working_directory="",
+        launch_profile_name=None,
+        breakpoints=[],
+    )
+    claim = claim_running(claim_with_target_pid(claim, pid=43210))
+    fixture.store.write_launch_claim(claim)
+    runtime = NodeDebugRuntime(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        configuration_id=claim.configuration_id,
+        debugger_binding=binding,
         workspace_root=fixture.workspace.workspace_root,
         script_path=fixture.workspace.workspace_root / "entry.mjs",
-        relative_script_path="entry.mjs", configuration_id="dbgcfg_" + "1" * 32,
-        process=StopProcess(),  # type: ignore[arg-type]
+        relative_script_path="entry.mjs",
+        status="running",
     )
-    with caplog.at_level(logging.ERROR, logger=process_lifecycle.__name__):
-        assert await fixture.service._lifecycle.terminate_and_verify(runtime) is None
-    assert len(runtime.actions) == 1
-    recorded = runtime.actions[0]
-    assert recorded.action == action and recorded.actor == "system" and recorded.result == "error"
-    assert fixture.session_id in recorded.message and fixture.thread_id in recorded.message
-    assert "PermissionError" in recorded.message and f"errno={errno.EACCES}" in recorded.message
-    assert "native-stop-secret" not in recorded.message
-    assert any(record.exc_info and record.exc_info[1] is raw_error for record in caplog.records)
+    runtime.run_id = claim.run_id
+    runtime.process_instance_id = claim.process_instance_id
+
+    class DebugPluginRun:
+        rejection: RuntimeError | None = RuntimeError("原 Debug run 当前不存在")
+
+        async def stop(self) -> dict[str, object]:
+            if self.rejection is not None:
+                raise self.rejection
+            return {"run_id": claim.run_id, "status": "exited", "exit_code": 0}
+
+        async def close(self) -> None:
+            return None
+
+    plugin = DebugPluginRun()
+    runtime.plugin_runtime = plugin  # type: ignore[assignment]
+    owner = (fixture.session_id, fixture.thread_id)
+    fixture.service._runtimes[owner] = runtime
+    identity = NodeDebugProcessLeaseIdentity.for_process_instance(
+        session_id=claim.session_id,
+        thread_id=claim.thread_id,
+        process_instance_id=claim.process_instance_id,
+    )
+    leases = fixture.service._external_resource_leases
+    leases.register_external(
+        resource_id=identity.resource_id,
+        kind="node_debug_process",
+        lifetime_scope="session",
+    )
+    leases.acquire(
+        resource_id=identity.resource_id,
+        turn_stream_id=identity.holder_id,
+        lease_id=identity.lease_id,
+        operation_id=identity.operation_id,
+    )
+
+    with pytest.raises(RuntimeError, match="原 Debug run 当前不存在"):
+        await fixture.service._lifecycle.stop_runtime(runtime)
+    persisted = fixture.store.read_launch_claim(*owner)
+    lease = leases.get_lease(identity.lease_id)
+    assert persisted is not None and persisted.phase == "stopping"
+    assert lease is not None and lease.status == "active"
+    assert runtime.status == "stopping"
+
+    plugin.rejection = None
+    assert await fixture.service._lifecycle.stop_runtime(runtime) == "stopped"
+    settled = fixture.store.read_launch_claim(*owner)
+    lease = leases.get_lease(identity.lease_id)
+    assert settled is not None and settled.phase == "settled"
+    assert lease is not None and lease.status == "settled"
+    runtime.status = "exited"
+    fixture.service._runtimes.pop(owner)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "claim_phase,same_run,expected,final_claim_phase",
+    [
+        ("settled", True, "stopped", "settled"),
+        ("running", True, "reconcile_required", "stopping"),
+        ("settled", False, "reconcile_required", "settled"),
+    ],
+)
+async def test_pluginless_stop_reuses_only_matching_settled_run_claim(
+    debug_launch_context: DebugLaunchContext,
+    claim_phase: Literal["settled", "running"],
+    same_run: bool,
+    expected: Literal["stopped", "reconcile_required"],
+    final_claim_phase: Literal["settled", "stopping"],
+) -> None:
+    fixture = debug_launch_context
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": fixture.workspace.workspace_id}
+    )
+    claim = claim_running(claim_with_target_pid(new_launch_claim(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        run_id="run_repeat_stop",
+        configuration_id="dbgcfg_" + "1" * 32,
+        debugger_binding=binding,
+        script_path="entry.mjs",
+        args=[],
+        node_executable="node",
+        working_directory="",
+        launch_profile_name=None,
+        breakpoints=[],
+    ), pid=43210))
+    if claim_phase == "settled":
+        claim = claim_marked(claim, phase="settled")
+    fixture.store.write_launch_claim(claim)
+    runtime = NodeDebugRuntime(
+        session_id=fixture.session_id,
+        thread_id=fixture.thread_id,
+        configuration_id=claim.configuration_id,
+        debugger_binding=binding,
+        workspace_root=fixture.workspace.workspace_root,
+        script_path=fixture.workspace.workspace_root / "entry.mjs",
+        relative_script_path="entry.mjs",
+        status="stopping",
+    )
+    runtime.run_id = claim.run_id
+    runtime.process_instance_id = (
+        claim.process_instance_id if same_run else "node-debug-proc_other_run"
+    )
+    owner = (fixture.session_id, fixture.thread_id)
+    fixture.service._runtimes[owner] = runtime
+    try:
+        assert await fixture.service._lifecycle.stop_runtime(runtime) == expected
+        persisted = fixture.store.read_launch_claim(*owner)
+        assert persisted is not None and persisted.phase == final_claim_phase
+        assert persisted.run_id == claim.run_id
+        if expected == "reconcile_required":
+            assert runtime.status == "reconcile_required"
+    finally:
+        fixture.service._runtimes.pop(owner)

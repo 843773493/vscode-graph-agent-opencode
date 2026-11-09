@@ -1,31 +1,85 @@
 """Node Debug 启动/重启入口链路。
 
 承载 start/restart 两条产品入口与启动编排器的构造：owner 准入后在 per-owner
-临界区内执行整段启动序列（核实旧登记 → durable 登记 → spawn → 身份核对 → 握手）。
+临界区内执行整段启动序列（核实旧 run → 登记 claim → 插件 launch → Inspector 握手）。
 由 NodeDebugService 继承（宿主必须提供全部协作者与装配字段），不反向依赖顶层
 service.py。
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 from typing import Literal
 
+from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
 from app.schemas.internal_v2.node_debug import (
+    NodeDebugBindingSnapshotDTO,
     NodeDebugBreakpointRequest,
+    NodeDebugDebuggerContributionDTO,
     NodeDebugStateDTO,
 )
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
+    NodeDebugBreakpointMutations,
+)
+from app.services.infrastructure.node_debug.configuration.configuration_factory import (
+    NodeDebugConfigurationFactory,
+)
+from app.services.infrastructure.node_debug.configuration.configuration_registry import (
+    NodeDebugConfigurationRegistry,
+)
+from app.services.infrastructure.node_debug.process.claim_runtime import (
+    NodeDebugClaimRuntime,
+)
+from app.services.infrastructure.node_debug.process.inspector import NodeDebugInspector
 from app.services.infrastructure.node_debug.process.launch_orchestrator import (
     NodeDebugLaunchContext,
     NodeDebugLaunchOrchestrator,
     NodeDebugLaunchRequest,
 )
+from app.services.infrastructure.node_debug.process.observation import (
+    NodeDebugRuntimeObserver,
+)
+from app.services.infrastructure.node_debug.process.process_lifecycle import (
+    NodeDebugProcessLifecycle,
+)
+from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.session.session_state import (
+    NodeDebugSessionState,
+)
 from app.services.infrastructure.node_debug.session.snapshot import (
     MAX_NODE_DEBUG_ACTIONS,
 )
+from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 
 
 class NodeDebugLaunchEntryMixin:
     """启动/重启入口链路的方法族（由 NodeDebugService 继承）。"""
+
+    _workspace_root: Path
+    _workspace_id: str | None
+    _gateway_connection: GatewayTransportConnection
+    _configuration_factory: NodeDebugConfigurationFactory
+    _breakpoint_mutations: NodeDebugBreakpointMutations
+    _inspector: NodeDebugInspector
+    _lifecycle: NodeDebugProcessLifecycle
+    _runtimes: dict[NodeDebugOwner, NodeDebugRuntime]
+    _session_state: NodeDebugSessionState
+    _configuration_registry: NodeDebugConfigurationRegistry
+    _runtimes_lock: asyncio.Lock
+    _claim_runtime: NodeDebugClaimRuntime
+    _observer: NodeDebugRuntimeObserver
+    _admit_mutation: Callable[
+        [str, str | None], AbstractAsyncContextManager[NodeDebugOwner]
+    ]
+    _get_state_admitted: Callable[[str, str], Awaitable[NodeDebugStateDTO]]
+
+    async def resolve_node_debugger_binding(
+        self, *, registration_id: str | None, gateway_id: str, request_id: str,
+    ) -> NodeDebugDebuggerContributionDTO: ...
 
     async def start(
         self,
@@ -41,14 +95,16 @@ class NodeDebugLaunchEntryMixin:
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
+        debugger_registration_id: str | None = None,
+        defer_configuration_done: bool = False,
+        gateway_id: str | None = None,
+        request_id: str | None = None,
     ) -> NodeDebugStateDTO:
         """公开启动入口：Session 准入后，按 owner 串行执行整段启动序列。
 
-        per-owner 临界区覆盖"核实旧登记 → durable 登记 → spawn → 身份核对 → 握手 → running"。
-        并发 start（Web 与 Agent 同时按下）否则会各自登记一代 claim 并各自 spawn 进程：
-        后写的登记会覆盖先启动实例的登记，先启动的进程随之游离，Inspector 端口也被抢。
-        R5b 起同一临界区也覆盖 ``apply_action("stop")``、``restart()`` 与 ``close()`` 的
-        停止路径：stop 落在 spawn 窗口不会再产生"exited + 进程存活"的假终态。临界区内
+        per-owner 临界区覆盖 claim、插件 launch、Inspector 握手与 running 发布。
+        同一临界区也覆盖 ``apply_action("stop")``、``restart()`` 与 ``close()``，
+        避免并发操作覆盖同一 owner 的 run 登记或在真实退出前发布终态。临界区内
         等待覆盖原副作用和账本worker的真实结算，不能提前释放锁或伪报停止。
         TODO(5.4)：原生I/O抢占及整个启动/关闭期限尚未收口。
         锁序保持 ``_owner_lock → _runtimes_lock → runtime.state_lock``。
@@ -56,6 +112,18 @@ class NodeDebugLaunchEntryMixin:
         async with self._admit_mutation(session_id, thread_id) as admitted_owner:
             session_id, thread_id = admitted_owner
             owner = self._owner_key(session_id, thread_id)
+            gateway_id = gateway_id or get_current_gateway_id()
+            request_id = request_id or get_current_request_id()
+            if not gateway_id or not request_id:
+                raise RuntimeError("Node Debug 启动缺少当前 Gateway 或 request_id")
+            contribution = await self.resolve_node_debugger_binding(
+                registration_id=debugger_registration_id,
+                gateway_id=gateway_id,
+                request_id=request_id,
+            )
+            debugger_binding = NodeDebugBindingSnapshotDTO.model_validate(
+                contribution.model_dump(mode="json")
+            )
             async with self._owner_lock(owner):
                 result = await self._create_launch_orchestrator().launch(
                     NodeDebugLaunchRequest(
@@ -69,6 +137,10 @@ class NodeDebugLaunchEntryMixin:
                         actor=actor,
                         tool_name=tool_name,
                         tool_call_id=tool_call_id,
+                        debugger_registration_id=contribution.registration_id,
+                        defer_configuration_done=defer_configuration_done,
+                        debugger_binding=debugger_binding,
+                        request_id=request_id,
                     )
                 )
                 return await self._get_state_admitted(*result.owner)
@@ -81,6 +153,8 @@ class NodeDebugLaunchEntryMixin:
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
+        gateway_id: str | None = None,
+        request_id: str | None = None,
     ) -> NodeDebugStateDTO:
         async with self._admit_mutation(session_id, thread_id) as admitted_owner:
             session_id, thread_id = admitted_owner
@@ -97,6 +171,23 @@ class NodeDebugLaunchEntryMixin:
                     raise RuntimeError(
                         f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
                     )
+                frozen_binding = runtime.debugger_binding
+                if frozen_binding is None:
+                    raise RuntimeError("无法从原 Node Debug run 恢复冻结的插件绑定")
+                resolved_gateway_id = gateway_id or frozen_binding.gateway_id
+                resolved_request_id = request_id or get_current_request_id()
+                if not resolved_request_id:
+                    raise RuntimeError("Node Debug 重启缺少当前 request_id")
+                contribution = await self.resolve_node_debugger_binding(
+                    registration_id=frozen_binding.registration_id,
+                    gateway_id=resolved_gateway_id,
+                    request_id=resolved_request_id,
+                )
+                if contribution.gateway_id != frozen_binding.gateway_id:
+                    raise RuntimeError("Node Debug 重启目标 Gateway 与原 run 不匹配")
+                debugger_binding = NodeDebugBindingSnapshotDTO.model_validate(
+                    contribution.model_dump(mode="json")
+                )
                 async with runtime.state_lock:
                     path = runtime.relative_script_path
                     args = list(runtime.args)
@@ -143,6 +234,9 @@ class NodeDebugLaunchEntryMixin:
                         actor=actor,
                         tool_name=tool_name,
                         tool_call_id=tool_call_id,
+                        debugger_registration_id=debugger_binding.registration_id,
+                        debugger_binding=debugger_binding,
+                        request_id=resolved_request_id,
                     )
                 )
                 return await self._get_state_admitted(*result.owner)
@@ -152,7 +246,8 @@ class NodeDebugLaunchEntryMixin:
         return NodeDebugLaunchOrchestrator(
             NodeDebugLaunchContext(
                 workspace_root=self._workspace_root,
-                node_bin=self._node_bin,
+                workspace_id=self._workspace_id,
+                gateway_connection=self._gateway_connection,
                 configuration_factory=self._configuration_factory,
                 breakpoint_mutations=self._breakpoint_mutations,
                 inspector=self._inspector,
@@ -173,9 +268,7 @@ class NodeDebugLaunchEntryMixin:
                 mark_claim_running=self._claim_runtime.mark_claim_running,
                 append_action=self._append_action,
                 is_paused_at_breakpoint=self._observer.paused_at_breakpoint,
-                read_stream=self._observer.read_stream,
                 monitor_process=self._observer.monitor_process,
                 terminal_error_message=self._observer.terminal_error_message,
-                handshake_timeout_message=self._observer.handshake_timeout_message,
             )
         )

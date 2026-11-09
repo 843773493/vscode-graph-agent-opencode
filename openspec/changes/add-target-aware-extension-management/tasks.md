@@ -105,14 +105,18 @@
 
 ## 11. 源码调试插件与原版 Debug UI
 
-- [ ] 11.1 清点现有 NodeDebugService、20个 debugging 工具、`/debug/node`、配置／断点／动作历史／源码版本／变量脱敏及所有消费者，冻结原公开合同；Agent 执行暂停／快照另属原 Backend，不混入 DAP。
-- [ ] 11.2 定义 plugins[].contributes.debuggers 和独立 workspace Debug 插件入口／DAP 真实能力；首批 Node Inspector JavaScript，不依赖 VSIX、不虚报 Python调试；插件开启启动管理进程，调试 launch 是业务动作而非插件激活。
-- [ ] 11.3 将 adapter／Inspector 连接、Node 目标创建和子进程退出管理迁至 workspace Debug 插件，复用 Gateway 托管与精确实例路由；保留独立 run 和暂停代际，Backend 不再启动目标。
-- [ ] 11.4 Backend 原 owner 统一受理工具和 DAP 调试操作，保持配置、断点、时间线、原 call ID、准入和 `(session_id, thread_id)`；Session-only 从 catalog 解析真实 main_thread_id，不另建 launch.json 权威或第二调试运行。
+- [x] 11.1 清点现有 NodeDebugService、20个 debugging 工具、`/debug/node`、配置／断点／动作历史／源码版本／变量脱敏及所有消费者，冻结原公开合同；Agent 执行暂停／快照另属原 Backend，不混入 DAP。
+- [x] 11.2 定义 plugins[].contributes.debuggers 和独立 workspace Debug 插件入口／DAP 真实能力；首批 Node Inspector JavaScript，不依赖 VSIX、不虚报 Python调试；插件开启启动管理进程，调试 launch 是业务动作而非插件激活。
+- [x] 11.3 将 adapter／Inspector 连接、Node 目标创建和子进程退出管理迁至 workspace Debug 插件，复用 Gateway 托管与精确实例路由；保留独立 run 和暂停代际，Backend 不再启动目标。
+- [x] 11.4 Backend 原 owner 统一受理工具和 DAP 调试操作，保持配置、断点、时间线、原 call ID、准入和 `(session_id, thread_id)`；Session-only 从 catalog 解析真实 main_thread_id，不另建 launch.json 权威或第二调试运行。
 - [ ] 11.5 在原 Debug Registry／服务／UI 接入自有声明与经 Gateway 的 Backend DAP 入口；同逻辑type单factory，目标／版本在首次异步解析前冻结并贯穿变量替换／session创建／后续factory入口；标签／schema按目标版本投影，核解析中切焦点／变更绑定拒绝改投、双目标不同声明及解除A不删B，零扩展描述伪造或第二调试owner；实现初始化／configurationDone时序、按源替换断点／logpoint、栈／变量／单步／求值及原事件，源码沿原URI／版本，取消及不支持项真实返回。
 - [ ] 11.6 统一 UI／Agent 竞争动作及旧暂停引用失效；区分断流、disconnect、detach、stop、restart 和实际退出，旧 run／frame／变量句柄不改投，launch／continue／有副作用 evaluate 结果未知零重放；如实现 runInTerminal 仅走 Terminal 插件，外部 attach 目标不当自有进程强杀。
-- [ ] 11.7 用真实 Gateway／Workbench 和 Node 脚本验证原 Debug UI 断点停住、单步、变量及 Agent 操作同一 run、双 Thread 隔离、继续后旧引用拒绝、响应丢失求值不重复、显式停止实际退出；协议反例用最小定向合同检查，不以 DAP mock 或旧扩展 API 拒绝测试代替真实产品。
+- [x] 11.7 用真实 Gateway／Workbench 和 Node 脚本验证原 Debug UI 断点停住、单步、变量及 Agent 操作同一 run、双 Thread 隔离、继续后旧引用拒绝、响应丢失求值不重复、显式停止实际退出；协议反例用最小定向合同检查，不以 DAP mock 或旧扩展 API 拒绝测试代替真实产品。
 - [ ] 11.8 迁齐上述全链消费者、生成类型、测试和发行后物理删除 Backend 调试进程创建／旧直连，原配置与20个工具 API 保持；记录普通调试状态／变量读取暖请求总耗时，执行耗时不伪装内部处理开销。
+
+2026-11-09 Debug 插件收口：精确隔离候选的真实 Gateway／托管 Backend／正式 Workbench 与 Node Inspector 流程通过（`debug-candidate-product-v6.log`，1 passed／137.42秒）；相同输入覆盖双 Thread、原 UI 与 Agent 共用 run、求值回执丢失零重放及实际退出。原 registry 转换类的双目标不同标签／schema、释放 A 保留 B、引用计数及冲突检查为3 passed／27断言；它是注册边界 Integration，不冒充双 Gateway 网络验收。暖状态读取3次为76.55／66.41／64.22ms，DAP变量读取3次为12.40／9.50／17.30ms，均为入口至结果的总耗时。剩余旧 Backend 进程测试迁到插件run／claim边界，候选定向336项通过；删除排空遇到manifest提交取消后重复停止的缺口，现仅复用身份完全匹配的settled claim，原9个删除／取消场景全部通过。旧原生进程身份实现及专属测试随调用方迁齐删除，未扩为第二恢复器。原始命令、指纹及成功／失败输出保存在 `out/tests/temp/2026/11/08/debug_plugin/artifacts/`，删除排空原件在 `out/tests/runner/run-tests/artifacts/2026/11/09/run-a879a81ea3ff/integration-debug-delete-io/`；11.5／11.6／11.8及跨平台宽项继续按未验范围保留。
+
+2026-11-09 Debug 最终边界：新安装链的完整 Gateway／Workbench／Inspector 流程 1 passed／150.57秒，暖状态读取82.61／101.22／84.68ms、DAP变量读取16.30／46.80／15.00ms。最后的真实 Gateway 托管重启单项 1 passed／54.83秒，覆盖 ENOENT 原因与动作历史、restart-safe 后冷读、重取当前注册代际、原配置重试及停止结清。最终 NodeDebug 定向325项、Gateway路由9项、registry3项／27断言分别通过，配置相关149项可按未变依赖复用，各批不相加；6份受影响恢复源码类型零诊断，完整owner类型163条为既存且无新增，Ruff及Node语法通过。真实插件探针清空PATH后默认Node仍启动目标，根自然退出须等持有的后代全部退出才发布终态，ENOENT身份、重复stop和正常shutdown通过；它不代替Gateway产品验收。原生Backend进程链及失效专属测试已删除。终态小记录仍随run保留到插件关闭，安全回收保留具名TODO；Windows／SSH、源码外发行与未覆盖的竞争／多目标场景继续保留未验，不勾完11.5／11.6／11.8。准确命令、指纹及原始输出见 `out/tests/temp/2026/11/09/bun_plugin_install/artifacts/`、`out/tests/temp/2026/11/09/debug_natural_exit/artifacts/` 和 `debug_plugin/artifacts/v8-managed-restart-safe-single-r6.log`。
 
 ## 12. 工具覆盖与明确保留边界
 

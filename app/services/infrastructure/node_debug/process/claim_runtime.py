@@ -5,7 +5,6 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlparse
 
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.thread_residency_contracts import ResidencyBlocker
@@ -19,7 +18,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.node_debug.process.launch_claim import (
-    ACTIVE_CLAIM_PHASES,
+    UNSETTLED_CLAIM_PHASES,
     claim_marked,
     claim_running,
 )
@@ -39,10 +38,9 @@ logger = logging.getLogger(__name__)
 
 _NODE_DEBUG_BLOCKER_REASON: dict[str, str] = {
     "launch_pending": "Node 调试进程已登记启动，等待 spawn 与握手核实",
-    "spawned": "Node 调试进程已启动，等待 Inspector 握手核实",
     "running": "Node 调试进程运行中",
     "stopping": "Node 调试进程停止中，等待核实终结",
-    "reconcile_required": "Node 调试实例无法核实终态，需核实后才能解除占用",
+    "execution_lost": "原 Node 调试实例结果未知，阻止启动新实例",
 }
 
 
@@ -183,7 +181,7 @@ class NodeDebugClaimRuntime:
         thread_id: str,
     ) -> NodeDebugLaunchClaimDTO | None:
         claim = self.read_launch_claim(session_id, thread_id)
-        if claim is None or claim.phase not in ACTIVE_CLAIM_PHASES:
+        if claim is None or claim.phase not in UNSETTLED_CLAIM_PHASES:
             return None
         return claim
 
@@ -208,7 +206,6 @@ class NodeDebugClaimRuntime:
                 await self.write_launch_claim(
                     claim_running(
                         claim,
-                        inspector_port=self._authoritative_inspector_port(runtime),
                     )
                 )
             identity = NodeDebugProcessLeaseIdentity.for_process_instance(
@@ -237,19 +234,10 @@ class NodeDebugClaimRuntime:
                     raise original from failure
                 raise
 
-    @staticmethod
-    def _authoritative_inspector_port(runtime: NodeDebugRuntime) -> int:
-        inspector_url = runtime.inspector.inspector_url
-        if inspector_url is not None:
-            port = urlparse(inspector_url).port
-            if isinstance(port, int) and port > 0:
-                return port
-        return runtime.inspector_port
-
     async def mark_claim_phase(
         self,
         runtime: NodeDebugRuntime,
-        phase: Literal["stopping", "reconcile_required", "settled"],
+        phase: Literal["stopping", "execution_lost", "settled"],
         reason: str | None = None,
     ) -> None:
         async with runtime.state_lock:
@@ -257,7 +245,7 @@ class NodeDebugClaimRuntime:
             claim = await run_sync_shielded(self.claim_for_runtime, runtime)
             if claim is None or claim.phase == "settled":
                 return
-            if phase == "reconcile_required":
+            if phase == "execution_lost":
                 self.notify_release_failed(
                     session_id=claim.session_id,
                     thread_id=claim.thread_id,

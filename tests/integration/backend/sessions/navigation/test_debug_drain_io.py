@@ -1,4 +1,4 @@
-"""真实调试进程在删除排空时，原生状态访问结算前不得归还删除gate。"""
+"""删除排空在 Debug 插件 run 的 claim、manifest 与核验读取结算前不得归还 gate。"""
 
 from __future__ import annotations
 
@@ -20,8 +20,9 @@ from app.core.identifier import create_prefixed_id
 from app.core.session_control_store import SessionControlStore
 from app.schemas.internal_v2.node_debug import NodeDebugConfigurationCreateRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.infrastructure.node_debug.process.process_identity import (
-    probe_process_identity,
+from app.services.infrastructure.node_debug.process.launch_claim import (
+    claim_with_target_pid,
+    new_launch_claim,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.session.session_store import (
@@ -37,6 +38,7 @@ from tests.integration.backend.sessions.navigation.test_public_errors import (
 from tests.integration.backend.sessions.navigation.test_public_errors import (
     startup_container as startup_container,  # noqa: PLC0414
 )
+from tests.support.node_debug_dependencies import node_debug_binding_snapshot
 from tests.unit.core.session_deletion.test_operation_replay_gc import (
     NativeStep,
     _entered,
@@ -68,15 +70,46 @@ async def test_debug_delete_wait_preserves_owner_until_original_io_settles(
     configured = await service.create_configuration(NodeDebugConfigurationCreateRequest(
         session_id=owner[0], thread_id=owner[1], name="删除前实际运行", script_path=script.name,
     ))
-    started = await service.start(
-        session_id=owner[0], thread_id=owner[1], configuration_id=configured.active_configuration_id,
-        path=script.name, args=[], breakpoints=[],
-    )
-    assert started.status == "running" and started.pid is not None
+    configuration_id = configured.active_configuration_id
+    assert configuration_id is not None
     store = service._session_store
     assert store is not None
+    binding = node_debug_binding_snapshot().model_copy(
+        update={"workspace_id": service._workspace_id}
+    )
+    claim = new_launch_claim(
+        session_id=owner[0], thread_id=owner[1], run_id=create_prefixed_id("op"),
+        configuration_id=configuration_id, debugger_binding=binding,
+        script_path=script.name, args=[], node_executable="node", working_directory="",
+        launch_profile_name=None, breakpoints=[],
+    )
+
+    class ExitedPluginRun:
+        async def stop(self) -> dict[str, object]:
+            return {"run_id": claim.run_id, "status": "exited", "exit_code": 0}
+
+        async def status(self) -> dict[str, object]:
+            return {"run_id": claim.run_id, "status": "exited", "exit_code": 0}
+
+        async def close(self) -> None:
+            return None
+
+    runtime = NodeDebugRuntime(
+        session_id=owner[0], thread_id=owner[1], configuration_id=configuration_id,
+        debugger_binding=binding, workspace_root=container.workspace_root,
+        script_path=script, relative_script_path=script.name, status="running",
+    )
+    runtime.run_id = claim.run_id
+    runtime.process_instance_id = claim.process_instance_id
+    runtime.plugin_runtime = ExitedPluginRun()  # type: ignore[assignment]
+    service._runtimes[owner] = runtime
+    service._session_state.persist_runtime_state(*owner, runtime)
+    await service._claim_runtime.write_launch_claim(claim)
+    claim = claim_with_target_pid(claim, pid=4242)
+    await service._claim_runtime.write_launch_claim(claim)
+    await service._claim_runtime.mark_claim_running(runtime)
     claim = store.read_launch_claim(*owner)
-    assert claim is not None and claim.phase == "running" and claim.pid == started.pid
+    assert claim is not None and claim.phase == "running" and claim.run_id == runtime.run_id
     manifest = store.read_manifest(*owner)
     assert manifest is not None
     operation_id = create_prefixed_id("op")
@@ -97,7 +130,7 @@ async def test_debug_delete_wait_preserves_owner_until_original_io_settles(
 
     async def observed_mark(
         runtime: NodeDebugRuntime,
-        value: Literal["stopping", "reconcile_required", "settled"], reason: str | None = None,
+        value: Literal["stopping", "execution_lost", "settled"], reason: str | None = None,
     ) -> None:
         token = phase.set(value)
         try:
@@ -160,7 +193,7 @@ async def test_debug_delete_wait_preserves_owner_until_original_io_settles(
         current = store.read_launch_claim(*owner)
         assert current is not None and current.process_instance_id == claim.process_instance_id
         assert current.phase == ("running" if stage == "stopping" else "settled")
-        assert (probe_process_identity(started.pid) is not None) == (stage == "stopping")
+        assert current.run_id == claim.run_id
         if outcome == "cancel":
             stopping = asyncio.create_task(operations.stop())
             await _turns()
@@ -194,11 +227,11 @@ async def test_debug_delete_wait_preserves_owner_until_original_io_settles(
         completed = resolver.catalog_store.get_subtree_delete_record(operation_id)
         assert completed.state == "completed" and completed.drained_session_ids == (owner[0],)
         assert completed.frozen_session_locators == record.frozen_session_locators
-        assert probe_process_identity(started.pid) is None and len(native_step.calls) == 1
+        assert len(native_step.calls) == 1
         # 从实际隔离位置核原实例结算和方案，不通过已删除catalog重新定位。
         claim_path, = target.rglob(NodeDebugSessionStore.LAUNCH_CLAIM_FILE_NAME)
         final_claim = type(claim).model_validate_json(claim_path.read_bytes())
-        assert final_claim.phase == "settled" and final_claim.process_instance_id == claim.process_instance_id
+        assert final_claim.phase == "settled" and final_claim.run_id == claim.run_id
         manifest_path, = target.rglob(NodeDebugSessionStore.MANIFEST_FILE_NAME)
         final_manifest = type(manifest).model_validate_json(manifest_path.read_bytes())
         assert final_manifest.active_configuration_id == manifest.active_configuration_id

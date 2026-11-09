@@ -6,6 +6,7 @@ import yazl from "yazl";
 import { parse as parseJsonc } from "jsonc-parser";
 
 const SOURCE_FILES = [
+  "src/workspace-services/debug/server/backend.js",
   "src/shared/serverHttpShutdown.mjs",
   "src/shared/serverJsonRequest.mjs",
   "src/shared/serverPluginRuntime.mjs",
@@ -34,6 +35,7 @@ const SOURCE_FILES = [
 ];
 
 const PACKAGE_FILES = [
+  ["resources/plugins/developer-tools/skills/debugging/SKILL.md", "skills/debugging/SKILL.md"],
   ["resources/plugins/developer-tools/plugin.jsonc", "plugin.jsonc"],
   ["resources/plugins/developer-tools/package.json", "package.json"],
   ["resources/plugins/developer-tools/bun.lock", "bun.lock"],

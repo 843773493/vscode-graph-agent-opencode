@@ -336,7 +336,7 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9-]{1,63}$"
               },
-              "default": ["browser-control", "gateway-context", "web-search-fetch", "debugging"]
+              "default": ["browser-control", "gateway-context", "web-search-fetch"]
             }
           }
         }

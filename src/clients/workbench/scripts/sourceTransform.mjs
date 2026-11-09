@@ -28,6 +28,7 @@ import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEd
 import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
 import { extensionTerminalSourcePaths, transformExtensionTerminal } from './extensions/extensionTerminalTransform.mjs';
 import { extensionDebugSourcePaths, transformExtensionDebug } from './extensions/extensionDebugTransform.mjs';
+import { pluginDebugSourcePaths, transformPluginDebug } from './pluginDebugTransform.mjs';
 import { extensionTasksSourcePaths, transformExtensionTasks } from './extensions/extensionTasksTransform.mjs';
 import { extensionNotebookSourcePaths, transformExtensionNotebookApi, transformExtensionNotebooks } from './extensions/extensionNotebookTransform.mjs';
 
@@ -89,6 +90,7 @@ export const transformedSourcePaths = [...new Set([
   ...extensionTerminalSourcePaths,
   // 带原生进程依赖的入口由下面的 Node 清单及其真实 tsconfig 检查。
   ...extensionDebugSourcePaths.filter(path => !path.includes('/node/')),
+  ...pluginDebugSourcePaths,
   ...extensionTasksSourcePaths.filter(path => !path.includes('/node/')),
   ...extensionConfigurationSourcePaths, ...configurationContributionSourcePaths, ...configurationRegistrySourcePaths,
   ...extensionFileEventsSourcePaths,
@@ -137,6 +139,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionStorage(root, path, contents, replaceOnce, runtime);
     contents = transformExtensionTerminal(root, path, contents, replaceOnce);
     contents = transformExtensionDebug(root, path, contents, replaceOnce);
+    contents = transformPluginDebug(root, path, contents, replaceOnce);
     contents = transformExtensionTasks(root, path, contents, replaceOnce);
     contents = transformExtensionNotebookApi(root, path, contents);
     contents = transformMcpProviders(root, path, contents, replaceOnce);

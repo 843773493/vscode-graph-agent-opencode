@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import httpx
+
+from app.core.trace_middleware import GATEWAY_ID_HEADER, require_current_request_id
+from app.gateway.auth import get_gateway_local_token
 from app.schemas.internal_v2.node_debug import (
+    NodeDebugDebuggerContributionsDTO,
     NodeDebugStateDTO,
 )
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_mutations import (
     NodeDebugBreakpointMutations,
 )
@@ -42,8 +50,14 @@ from app.services.infrastructure.node_debug.process.evaluation import (
 from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
 )
+from app.services.infrastructure.node_debug.process.launch_claim import (
+    NodeDebugClaimRecoveryDecision,
+)
 from app.services.infrastructure.node_debug.process.observation import (
     NodeDebugRuntimeObserver,
+)
+from app.services.infrastructure.node_debug.process.plugin_runtime import (
+    NodeDebugPluginRuntime,
 )
 from app.services.infrastructure.node_debug.process.process_lifecycle import (
     NodeDebugProcessLifecycle,
@@ -64,6 +78,13 @@ from app.services.infrastructure.node_debug.session.session_admission import (
 from app.services.infrastructure.node_debug.session.session_state import (
     NodeDebugSessionState,
 )
+from app.services.infrastructure.node_debug.session.session_store import (
+    NodeDebugSessionStore,
+)
+from app.services.infrastructure.node_debug.session.snapshot import (
+    MAX_NODE_DEBUG_ACTIONS,
+    append_runtime_debug_action,
+)
 from app.services.infrastructure.node_debug.session.state_reads import (
     NodeDebugStateReadMixin,
 )
@@ -83,16 +104,8 @@ from app.services.orchestration.thread_residency import (
 
 if TYPE_CHECKING:
     from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.external_resource_leases import (
-    ExternalResourceLeaseLedger,
-)
-from app.services.infrastructure.node_debug.session.session_store import (
-    NodeDebugSessionStore,
-)
-from app.services.infrastructure.node_debug.session.snapshot import (
-    MAX_NODE_DEBUG_ACTIONS,
-    append_runtime_debug_action,
-)
+
+logger = logging.getLogger(__name__)
 
 
 class NodeDebugService(
@@ -122,9 +135,13 @@ class NodeDebugService(
         external_resource_leases: ExternalResourceLeaseLedger,
         residency_tracker: ThreadResidencyTracker | None = None,
         state_events: ResourceStateEventPublisher | None = None,
+        workspace_id: str | None = None,
     ) -> None:
         self._workspace_root = workspace_root.resolve()
+        self._file_paths = file_paths
+        self._workspace_id = workspace_id
         self._config_service = config_service
+        self._gateway_connection = GatewayTransportConnection(config_service=config_service)
         self._session_store = session_store
         #: 唯一 external_resource_leases 账本。只登记/结清 typed ``node_debug_process``
         #: 占用，不参与任何进程状态判断（见 claim_runtime 的职责说明）。
@@ -166,7 +183,6 @@ class NodeDebugService(
             session_store.path_resolver if session_store is not None else None
         )
         self._runtimes_lock = asyncio.Lock()
-        self._node_bin = os.environ.get("BOXTEAM_NODE_BIN") or shutil.which("node")
         self._inspector = NodeDebugInspector(
             workspace_root=self._workspace_root,
             file_paths=file_paths,
@@ -204,17 +220,160 @@ class NodeDebugService(
             write_launch_claim=self._claim_runtime.write_launch_claim,
             mark_claim_phase=self._claim_runtime.mark_claim_phase,
             settle_process_lease=self._claim_runtime.settle_process_lease,
-            notify_release_failed=self._claim_runtime.notify_release_failed,
             append_action=self._append_action,
             append_pending_action=self._session_state.append_pending_action,
             write_session_manifest=self._session_state.write_session_manifest,
             clear_stop_snapshot=self._clear_stop_snapshot,
+            recover_run=self._recover_debug_run,
         )
         self._observer = NodeDebugRuntimeObserver(
             mark_claim_phase=self._claim_runtime.mark_claim_phase,
             clear_stop_snapshot=self._clear_stop_snapshot,
             append_action=self._append_action,
         )
+
+    async def _recover_debug_run(self, claim) -> NodeDebugClaimRecoveryDecision:
+        runtime = await NodeDebugPluginRuntime.connect(
+            binding=claim.debugger_binding,
+            workspace_id=claim.debugger_binding.workspace_id,
+            connection=self._gateway_connection,
+            request_id=require_current_request_id("Node Debug run 恢复"),
+            run_id=claim.run_id,
+        )
+        attached = False
+        try:
+            status = await runtime.status()
+            if (status.get("run_id") != claim.run_id
+                    or status.get("process_instance_id") != claim.process_instance_id):
+                return NodeDebugClaimRecoveryDecision(
+                    "execution_lost", "原 Debug 插件状态与冻结的 run/process_instance 不匹配"
+                )
+            if status.get("status") == "exited":
+                return NodeDebugClaimRecoveryDecision("settled", "原 Debug 插件确认目标 run 已退出")
+            if status.get("status") != "running":
+                return NodeDebugClaimRecoveryDecision(
+                    "execution_lost", f"原 Debug 插件返回未知 run 状态: {status.get('status')!r}"
+                )
+
+            script_path, relative_path = self._configuration_factory.resolve_script_path(claim.script_path)
+            working_directory = self._configuration_factory.resolve_working_directory(claim.working_directory)
+            target_pid = status.get("pid")
+            if not isinstance(target_pid, int) or isinstance(target_pid, bool):
+                target_pid = claim.pid
+            recovered = NodeDebugRuntime(
+                session_id=claim.session_id,
+                thread_id=claim.thread_id,
+                configuration_id=claim.configuration_id,
+                debugger_binding=claim.debugger_binding,
+                workspace_root=self._workspace_root,
+                script_path=script_path,
+                relative_script_path=relative_path,
+                run_id=claim.run_id,
+                args=list(claim.args),
+                working_directory=working_directory,
+                launch_profile_name=claim.launch_profile_name,
+                plugin_runtime=runtime,
+                target_pid=target_pid,
+                process_instance_id=claim.process_instance_id,
+                status="running",
+            )
+            recovered.breakpoints = {
+                item.breakpoint_id: item.model_copy(deep=True) for item in claim.breakpoints
+            }
+            await self._inspector.connect(recovered)
+            await self._inspector.command(recovered, "Runtime.enable")
+            await self._inspector.command(recovered, "Debugger.enable")
+            await self._inspector.command(
+                recovered,
+                "NodeRuntime.notifyWhenWaitingForDisconnect",
+                {"enabled": True},
+            )
+            inspector_state = status.get("inspector_state")
+            if isinstance(inspector_state, dict):
+                method = inspector_state.get("method")
+                params = inspector_state.get("params")
+                if method == "Debugger.paused" and isinstance(params, dict):
+                    await self._inspector._handle_event(recovered, method, params)
+            recovered.process_task = asyncio.create_task(self._observer.monitor_process(recovered))
+            owner = (claim.session_id, claim.thread_id)
+            async with self._runtimes_lock:
+                self._runtimes[owner] = recovered
+            attached = True
+            return NodeDebugClaimRecoveryDecision("running", "已按冻结绑定重新接入原 Debug run")
+        finally:
+            if not attached:
+                await runtime.close()
+
+    async def get_debugger_contributions(
+        self, *, workspace_id: str, gateway_id: str, request_id: str,
+    ) -> NodeDebugDebuggerContributionsDTO:
+        if self._workspace_id is None or workspace_id != self._workspace_id:
+            raise ValueError("Debug 声明查询 workspace_id 与当前 Backend owner 不匹配")
+        base_url = self._gateway_connection.resolve_gateway_url()
+        url = f"{base_url}/api/gateway/service-plugins/debugger-contributions"
+        headers = {
+            "X-Local-Token": get_gateway_local_token(),
+            "X-BoxTeam-Workspace-Id": workspace_id,
+            "X-BoxTeam-Target-Gateway-Id": gateway_id,
+            GATEWAY_ID_HEADER: gateway_id,
+            "X-Request-ID": request_id,
+        }
+        try:
+            async with httpx.AsyncClient(
+                trust_env=False,
+                timeout=self._gateway_connection.resolve_timeout_seconds(),
+                follow_redirects=False,
+            ) as client:
+                response = await client.get(
+                    url,
+                    params={"workspace_id": workspace_id},
+                    headers=headers,
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            detail = error.response.text
+            raise RuntimeError(
+                "读取 Gateway Debug 声明失败: "
+                f"status={error.response.status_code}, request_id={request_id}, detail={detail}"
+            ) from error
+        except httpx.RequestError as error:
+            raise ConnectionError(
+                f"连接 Workspace Gateway 读取 Debug 声明失败: request_id={request_id}, "
+                f"error_type={type(error).__name__}"
+            ) from error
+        try:
+            envelope = response.json()
+        except ValueError as error:
+            raise TypeError("Gateway Debug 声明响应不是合法 JSON") from error
+        if not isinstance(envelope, dict) or envelope.get("request_id") != request_id:
+            raise ValueError("Gateway Debug 声明响应缺少原 request_id")
+        raw_data = envelope.get("data")
+        result = NodeDebugDebuggerContributionsDTO.model_validate(raw_data)
+        if result.gateway_id != gateway_id or result.workspace_id != workspace_id:
+            raise ValueError("Gateway Debug 声明响应目标身份与请求不匹配")
+        return result
+
+    async def resolve_node_debugger_binding(
+        self, *, gateway_id: str, request_id: str, registration_id: str | None = None,
+    ):
+        if self._workspace_id is None:
+            raise RuntimeError("当前 Backend 未绑定 workspace，不能选择 Debug 插件")
+        contributions = await self.get_debugger_contributions(
+            workspace_id=self._workspace_id,
+            gateway_id=gateway_id,
+            request_id=request_id,
+        )
+        candidates = [item for item in contributions.debuggers if item.type == "node"]
+        if registration_id is not None:
+            candidates = [item for item in candidates if item.registration_id == registration_id]
+            if not candidates:
+                raise ValueError("冻结的 Node Debug 插件注册已失效或不属于当前 Gateway／Workspace")
+        if len(candidates) != 1:
+            raise ValueError(
+                "Node Debug 插件必须恰有一个 ready 目标；"
+                f"gateway_id={gateway_id}, workspace_id={self._workspace_id}, count={len(candidates)}"
+            )
+        return candidates[0]
 
     def _owner_lock(self, owner: NodeDebugOwner) -> asyncio.Lock:
         """取（或懒建）该 owner 的临界区：串行化 start/stop/restart/close 的整段序列。

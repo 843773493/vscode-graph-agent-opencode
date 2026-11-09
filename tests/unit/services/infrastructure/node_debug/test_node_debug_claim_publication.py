@@ -19,7 +19,10 @@ from app.services.infrastructure.external_resource_leases import (
 from app.services.infrastructure.node_debug.process.claim_runtime import (
     NodeDebugClaimRuntime,
 )
-from app.services.infrastructure.node_debug.process.launch_claim import claim_marked
+from app.services.infrastructure.node_debug.process.launch_claim import (
+    claim_marked,
+    new_launch_claim,
+)
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
@@ -27,15 +30,31 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
     SessionNodePathResolver,
 )
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
+from tests.support.node_debug_dependencies import node_debug_binding_snapshot
 from tests.unit.services.orchestration.test_thread_residency import (
     _OWNER,
     _FakeMonotonicClock,
-    _launch_pending_claim,
     _resident_runtime,
 )
 from tests.unit.services.orchestration.test_thread_residency import (
     session_tree as session_tree,  # noqa: PLC0414 - 复用原 catalog 装具
 )
+
+
+def _launch_pending_claim():
+    return new_launch_claim(
+        session_id=_OWNER[0],
+        thread_id=_OWNER[1],
+        run_id="op_claim_publication_test",
+        configuration_id="dbgcfg_33333333333333333333333333333333",
+        debugger_binding=node_debug_binding_snapshot(),
+        script_path="entry.mjs",
+        args=[],
+        node_executable="node",
+        working_directory="",
+        launch_profile_name=None,
+        breakpoints=[],
+    )
 
 
 @dataclass

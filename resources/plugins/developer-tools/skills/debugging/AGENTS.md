@@ -1,6 +1,6 @@
 # 目录用途
 
-resources/skills/debugging/ 存放 Agent 源码调试工具组的产品级 Skill 说明，帮助模型在 JavaScript/Node.js 调试请求中遵循可审计的断点、检查和结束流程。
+resources/plugins/developer-tools/skills/debugging/ 存放 Agent 源码调试工具组的产品级 Skill 说明，帮助模型在 JavaScript/Node.js 调试请求中遵循可审计的断点、检查和结束流程。
 
 # 可修改内容
 
@@ -14,7 +14,7 @@ resources/skills/debugging/ 存放 Agent 源码调试工具组的产品级 Skill
 
 # 规范
 
-- Skill 名称必须保持为 debugging，并与 Gateway 默认 Skill 组 ID 一致。
+- Skill 名称必须保持为 debugging，由 debugging 插件的 contributes.skills 显式发布。
 - 工具参数契约使用 tool_name + arguments_schema JSON 对象描述。
 - Skill 中的工具名称必须与 Agent 工具注册表一致；不向模型暴露 Inspector 端口、WebSocket 地址、threadId 或 frameId。
 - 模板示例；在整理 AGENTS.md 时请保留此行。

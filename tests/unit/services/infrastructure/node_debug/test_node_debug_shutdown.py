@@ -11,7 +11,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugDebuggerContributionDTO,
+    NodeDebugStateDTO,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -23,6 +26,7 @@ from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugThreadOwner,
 )
 from tests.support.node_debug_dependencies import (
+    node_debug_binding_snapshot,
     node_debug_file_paths,
     permissive_node_debug_session_admission,
 )
@@ -35,12 +39,22 @@ _OTHER = ("ses_00000000400070008000000000000002", "thr_0000000040007000800000000
 def service(tmp_path: Path) -> NodeDebugService:
     configuration = tmp_path / "workspace.jsonc"
     configuration.write_text("{}", encoding="utf-8")
-    return NodeDebugService(
+    service = NodeDebugService(
         workspace_root=tmp_path, file_paths=node_debug_file_paths(tmp_path),
         config_service=ConfigService(config_dir=Path.cwd() / "configs", config_path=configuration),
         session_admission=permissive_node_debug_session_admission(),  # type: ignore[arg-type]
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
+    binding = node_debug_binding_snapshot()
+    service.resolve_node_debugger_binding = AsyncMock(  # type: ignore[method-assign]
+        return_value=NodeDebugDebuggerContributionDTO(
+            **binding.model_dump(),
+            label="Node Inspector",
+            configuration_schema={},
+            capabilities=[],
+        )
+    )
+    return service
 
 
 @pytest.fixture
@@ -54,7 +68,46 @@ def runtimes(tmp_path: Path) -> tuple[NodeDebugRuntime, NodeDebugRuntime]:
 
 async def _start(service: NodeDebugService, owner: tuple[str, str] = _OWNER) -> NodeDebugStateDTO:
     return await service.start(session_id=owner[0], thread_id=owner[1], path="entry.mjs",
-                               args=[], breakpoints=[])
+                               args=[], breakpoints=[], gateway_id="gateway_test",
+                               request_id="request_shutdown_test")
+
+
+@pytest.mark.parametrize("exit_code", [0, None])
+async def test_close_reuses_confirmed_exit_without_persistent_claim(
+    service: NodeDebugService, runtimes: tuple[NodeDebugRuntime, NodeDebugRuntime],
+    exit_code: int | None,
+) -> None:
+    """实际退出回执可供重复关闭使用，信号退出也不依赖退出码。"""
+    runtime = runtimes[0]
+    plugin = SimpleNamespace(
+        stop=AsyncMock(return_value={
+            "run_id": runtime.run_id, "status": "exited", "exit_code": exit_code,
+        }),
+        close=AsyncMock(),
+    )
+    runtime.plugin_runtime = plugin
+    service._runtimes[_OWNER] = runtime
+
+    assert await service._lifecycle.stop_runtime(runtime) == "stopped"
+    assert runtime.target_exited and runtime.target_exit_code == exit_code
+    assert runtime.plugin_runtime is None
+    await service.close()
+
+    plugin.stop.assert_awaited_once()
+    plugin.close.assert_awaited_once()
+
+
+async def test_close_without_exit_observation_still_rejects_unknown_target(
+    service: NodeDebugService, runtimes: tuple[NodeDebugRuntime, NodeDebugRuntime],
+) -> None:
+    runtime = runtimes[0]
+    service._runtimes[_OWNER] = runtime
+
+    with pytest.raises(RuntimeError, match="未能核实进程终态"):
+        await service.close()
+
+    assert not runtime.target_exited
+    assert runtime.status == "reconcile_required"
 
 
 async def test_close_captures_start_before_runtime_exists_and_drains_other_owner(
