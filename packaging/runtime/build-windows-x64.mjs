@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 
 import {
   BOXTEAM_VERSION,
+  PLUGIN_INSTALLATION_TOOLS,
   NODE_RUNTIME_WINDOWS_X64,
   NODE_RUNTIME_DEPENDENCIES,
   PYTHON_RUNTIME_WINDOWS_X64,
@@ -108,10 +109,10 @@ function installNodeDependencies(applicationRoot) {
     path.join(projectRoot, "packaging", "runtime", "node-package.json"),
     path.join(applicationRoot, "package.json"),
   );
-  const installArguments = ["install", "--production", "--exact"];
+  const installArguments = ["install", "--production", "--exact", "--ignore-scripts"];
   if (crossBuild) {
     // Bun 只负责解析和下载目标平台依赖；node-pty 的 Windows prebuild 已随 npm 包提供，不执行 Linux 安装脚本。
-    installArguments.push("--os", "win32", "--cpu", "x64", "--ignore-scripts");
+    installArguments.push("--os", "win32", "--cpu", "x64");
   }
   run("bun", installArguments, {
     cwd: applicationRoot,
@@ -120,6 +121,12 @@ function installNodeDependencies(applicationRoot) {
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
     },
   });
+  if (!crossBuild) {
+    // Windows 原生构建只运行受控 node-gyp，不允许任何依赖安装 hook。
+    run(process.env.BOXTEAM_NODE_BIN ?? "node", [path.join(applicationRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
+      cwd: path.join(applicationRoot, "node_modules/node-pty"),
+    });
+  }
 }
 
 async function installChromium(applicationRoot, chromiumRoot) {
@@ -223,6 +230,11 @@ function writeRuntimeMetadata({
     // npm pack 会排除包内符号链接，因此必须指向实际解释器文件。
     python_executable: "python/python.exe",
     application_root: "application",
+    installation_tools: {
+      bun_executable: "application/node_modules/@oven/bun-windows-x64/bin/bun.exe",
+      uv_executable: "python/Scripts/uv.exe",
+      node_gyp_entrypoint: "application/node_modules/node-gyp/bin/node-gyp.js",
+    },
     config_resources: {
       gateway_inline: "application/configs/gateway_inline.jsonc",
       gateway_schema: "application/configs/gateway_schema.jsonc",

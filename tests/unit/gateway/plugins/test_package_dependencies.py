@@ -9,15 +9,15 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import threading
 import zipfile
+from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 
 import pytest
 
-from app.gateway.plugins.dependencies import _node_headers_root, _npm_runtime
+from app.gateway.plugins.dependencies import _installation_tool, _node_headers_root
 from app.gateway.plugins.packages import PluginPackageStore
 
 
@@ -51,10 +51,12 @@ class _RegistryHandler(http.server.BaseHTTPRequestHandler):
     npm_archive: bytes
     port: int
     requests: list[str]
+    authorizations: list[str | None]
     fail_wheel: bool
 
     def do_HEAD(self) -> None:
         self.requests.append(self.path)
+        self.authorizations.append(self.headers.get("Authorization"))
         if self.path == "/plugin_dependency-1.0.0-py3-none-any.whl":
             body = self.wheel
         elif self.path == "/plugin-dependency-1.0.0.tgz":
@@ -68,6 +70,7 @@ class _RegistryHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self.requests.append(self.path)
+        self.authorizations.append(self.headers.get("Authorization"))
         if self.path == "/plugin_dependency-1.0.0-py3-none-any.whl" and self.fail_wheel:
             self.send_error(404)
             return
@@ -104,15 +107,15 @@ class _RegistryHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *_args: object) -> None:
         return
 
 
 @pytest.fixture
-def local_registry() -> str:
+def local_registry() -> Iterator[tuple[str, list[str], type[_RegistryHandler]]]:
     handler = type("LocalRegistryHandler", (_RegistryHandler,), {
         "wheel": _wheel(), "npm_archive": _npm_archive(), "port": 0,
-        "requests": [], "fail_wheel": False,
+        "requests": [], "authorizations": [], "fail_wheel": False,
     })
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     handler.port = server.server_port
@@ -160,7 +163,7 @@ def _make_python_archive(workspace: Path, registry: str) -> Path:
         and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}}
     subprocess.run([
         shutil.which("uv") or "uv", "--no-config", "--project", str(project), "lock",
-        "--python", sys.executable, "--no-python-downloads", "--no-managed-python",
+        "--python", sys.executable, "--no-python-downloads", "--no-managed-python", "--no-cache",
         "--default-index", registry + "/simple",
     ], cwd=project, env=environment, capture_output=True, text=True, timeout=45, check=True)
     (project / "plugin.jsonc").write_text(json.dumps(_plugin_manifest("python", "entry.py")), encoding="utf-8")
@@ -176,23 +179,20 @@ def _make_node_archive(workspace: Path, registry: str, monkeypatch: pytest.Monke
     configured_node = shutil.which("node")
     assert configured_node is not None
     monkeypatch.setenv("BOXTEAM_NODE_BIN", configured_node)
-    node, npm = _npm_runtime()
+    node = Path(configured_node).resolve(strict=True)
+    bun = _installation_tool("BOXTEAM_BUN_BIN", "bun")
     project = workspace / "node"
     project.mkdir()
     (project / "package.json").write_text(json.dumps({
         "name": "locked-node-fixture", "version": "1.0.0", "private": True,
         "type": "module", "dependencies": {"plugin-dependency": "1.0.0"},
+        "trustedDependencies": ["plugin-dependency"],
+        "scripts": {"preinstall": "node -e \"require('node:fs').writeFileSync('hook-ran', '')\""},
     }), encoding="utf-8")
-    with tempfile.TemporaryDirectory(dir=workspace) as temporary:
-        config = Path(temporary)
-        (config / "user.npmrc").touch()
-        (config / "global.npmrc").touch()
-        subprocess.run([
-            str(node), str(npm), "--prefix", str(project), "--registry", registry,
-            "--userconfig", str(config / "user.npmrc"), "--globalconfig", str(config / "global.npmrc"),
-            "--cache", str(config / "cache"), "--ignore-scripts", "--no-audit", "--no-fund",
-            "install", "--package-lock-only",
-        ], cwd=project, capture_output=True, text=True, timeout=45, check=True)
+    subprocess.run([
+        bun, "--no-env-file", "install", "--registry", registry,
+        "--ignore-scripts", "--lockfile-only",
+    ], cwd=project, capture_output=True, text=True, timeout=45, check=True)
     (project / "plugin.jsonc").write_text(json.dumps(_plugin_manifest("node", "entry.mjs")), encoding="utf-8")
     (project / "entry.mjs").write_text(
         "import { value } from 'plugin-dependency'; console.log(value);\n", encoding="utf-8",
@@ -208,8 +208,18 @@ def test_locked_python_and_node_dependencies_are_prepared_before_atomic_publish(
     tmp_path: Path, local_registry: tuple[str, list[str], type[_RegistryHandler]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, requests, registry_state = local_registry
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))
+    monkeypatch.setenv("BUN_INSTALL_CACHE_DIR", str(tmp_path / "bun-cache"))
     python_archive = _make_python_archive(tmp_path, registry)
     node_archive, node = _make_node_archive(tmp_path, registry, monkeypatch)
+    user_config = tmp_path / "user-home"
+    user_config.mkdir()
+    authority = registry.removeprefix("http://")
+    (user_config / ".npmrc").write_text(f"//{authority}/:_authToken=private-user-canary\n", encoding="utf-8")
+    (user_config / ".bunfig.toml").write_text(f'[install]\nregistry = "{registry}/user-registry"\n', encoding="utf-8")
+    for key in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(key, str(user_config))
+    monkeypatch.setenv("NPM_CONFIG_TOKEN", "private-environment-canary")
     store = PluginPackageStore(tmp_path / "installed")
 
     failed_archive = tmp_path / "failed-plugin.zip"
@@ -238,13 +248,21 @@ def test_locked_python_and_node_dependencies_are_prepared_before_atomic_publish(
     )
     assert python_result.stdout.strip() == "private-python-dependency"
 
+    bun_requests_start = len(requests)
     node_package = store.install_zip(node_archive)
     node_result = subprocess.run(
         [str(node), str(node_package.root / "entry.mjs")],
         capture_output=True, text=True, timeout=15, check=True,
     )
     assert node_result.stdout.strip() == "private-node-dependency"
+    assert not (node_package.root / "hook-ran").exists()
     assert (node_package.root / "node_modules/plugin-dependency/package.json").is_file()
+    node_downloads = requests.count("/plugin-dependency-1.0.0.tgz")
+    cached_store = PluginPackageStore(tmp_path / "another-home")
+    cached_store.install_zip(node_archive)
+    assert requests.count("/plugin-dependency-1.0.0.tgz") == node_downloads, "不同 Home 的安装应复用 Bun 正常缓存"
+    assert all(value is None for value in registry_state.authorizations[bun_requests_start:]), "Bun 安装不得继承用户凭据"
+    assert not any(path.startswith("/user-registry") for path in requests)
 
     before = python_package.root / ".venv"
     assert before.is_dir()
@@ -257,14 +275,15 @@ def test_dependency_lock_mismatch_rejects_package_before_publish(tmp_path: Path)
     manifest = _plugin_manifest("node", "entry.mjs")
     package_json = {"name": "locked-node-fixture", "version": "1.0.0", "dependencies": {"one": "1.0.0"}}
     package_lock = {
-        "name": "locked-node-fixture", "version": "1.0.0", "lockfileVersion": 3,
-        "packages": {"": {"name": "locked-node-fixture", "version": "1.0.0", "dependencies": {"one": "2.0.0"}}},
+        "name": "locked-node-fixture", "version": "1.0.0", "lockfileVersion": 1,
+        "workspaces": {"": {"name": "locked-node-fixture", "dependencies": {"one": "2.0.0"}}},
+        "packages": {},
     }
     archive = tmp_path / "conflict.zip"
     with zipfile.ZipFile(archive, "w") as output:
         output.writestr("plugin.jsonc", json.dumps(manifest))
         output.writestr("package.json", json.dumps(package_json))
-        output.writestr("package-lock.json", json.dumps(package_lock))
+        output.writestr("bun.lock", json.dumps(package_lock))
         output.writestr("entry.mjs", "export {}\n")
 
     store = PluginPackageStore(tmp_path / "installed")

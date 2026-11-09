@@ -64,3 +64,6 @@ export const NODE_RUNTIME_DEPENDENCIES = Object.freeze({
   playwright: "1.61.1",
   ws: "8.18.0",
 });
+
+// 插件安装工具与插件运行 Node 分开；发行包携带固定 Bun 和 uv。
+export const PLUGIN_INSTALLATION_TOOLS = Object.freeze({ bun: "1.3.11", uv: "0.11.26", nodeGyp: "10.3.1" });

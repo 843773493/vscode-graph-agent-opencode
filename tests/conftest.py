@@ -245,6 +245,15 @@ def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
         encoding="utf-8",
     )
     # 会话级注入先于模块级服务启动；个别用例仍可显式移除以验证缺失配置。
+    tool_paths = {
+        "BOXTEAM_BUN_BIN": shutil.which("bun"),
+        "BOXTEAM_UV_BIN": shutil.which("uv"),
+        "BOXTEAM_NODE_GYP_JS": str(Path.cwd() / "node_modules/node-gyp/bin/node-gyp.js"),
+    }
+    previous_tools = {key: os.environ.get(key) for key in tool_paths}
+    for key, value in tool_paths.items():
+        if value is not None:
+            os.environ[key] = value
     previous_manifest = os.environ.get("BOXTEAM_RUNTIME_MANIFEST")
     os.environ["BOXTEAM_RUNTIME_MANIFEST"] = str(manifest)
     try:
@@ -254,3 +263,8 @@ def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
             os.environ.pop("BOXTEAM_RUNTIME_MANIFEST", None)
         else:
             os.environ["BOXTEAM_RUNTIME_MANIFEST"] = previous_manifest
+        for key, value in previous_tools.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

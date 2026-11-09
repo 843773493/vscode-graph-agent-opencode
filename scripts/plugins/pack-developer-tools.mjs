@@ -3,6 +3,7 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import yazl from "yazl";
+import { parse as parseJsonc } from "jsonc-parser";
 
 const SOURCE_FILES = [
   "src/shared/serverHttpShutdown.mjs",
@@ -35,7 +36,7 @@ const SOURCE_FILES = [
 const PACKAGE_FILES = [
   ["resources/plugins/developer-tools/plugin.jsonc", "plugin.jsonc"],
   ["resources/plugins/developer-tools/package.json", "package.json"],
-  ["resources/plugins/developer-tools/package-lock.json", "package-lock.json"],
+  ["resources/plugins/developer-tools/bun.lock", "bun.lock"],
   ...SOURCE_FILES.map((file) => [file, file]),
 ];
 
@@ -58,9 +59,11 @@ function assertRepositoryRoot(root) {
 
 function packageDependencies(root) {
   const manifest = JSON.parse(readFileSync(path.join(root, "resources/plugins/developer-tools/package.json"), "utf8"));
-  const lock = JSON.parse(readFileSync(path.join(root, "resources/plugins/developer-tools/package-lock.json"), "utf8"));
-  if (lock.lockfileVersion !== 3 || JSON.stringify(manifest.dependencies) !== JSON.stringify(lock.packages?.[""]?.dependencies)) {
-    throw new Error("developer-tools package.json 与 npm package-lock v3 根依赖不一致");
+  const errors = [];
+  const lock = parseJsonc(readFileSync(path.join(root, "resources/plugins/developer-tools/bun.lock"), "utf8"), errors, { allowTrailingComma: true });
+  if (errors.length) throw new Error("developer-tools bun.lock 不是合法的 Bun 文本锁文件");
+  if (lock.lockfileVersion !== 1 || JSON.stringify(manifest.dependencies) !== JSON.stringify(lock.workspaces?.[""]?.dependencies)) {
+    throw new Error("developer-tools package.json 与 Bun 文本锁文件 根依赖不一致");
   }
   return new Set(Object.keys(manifest.dependencies));
 }

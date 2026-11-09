@@ -56,6 +56,20 @@ describe("runtime manifest", () => {
     );
   });
 
+  test("安装工具只从 manifest 的明确位置解析", () => {
+    const installation_tools = {
+      bun_executable: "tools/bun",
+      uv_executable: "tools/uv",
+      node_gyp_entrypoint: "tools/node-gyp.js",
+    };
+    const manifest = resolveRuntimeManifest(runtimeManifestPath, { ...baseManifest, installation_tools });
+    expect(manifest.installationTools).toEqual(Object.fromEntries(
+      Object.entries(installation_tools).map(([key, value]) => [key, path.resolve(runtimeDirectory, value)]),
+    ));
+    expect(() => validateRuntimeManifest({ ...baseManifest,
+      installation_tools: { ...installation_tools, bun_executable: "" } })).toThrow();
+  });
+
   test("拒绝未知 schema", () => {
     expect(() =>
       validateRuntimeManifest({ ...baseManifest, schema_version: 2 }),

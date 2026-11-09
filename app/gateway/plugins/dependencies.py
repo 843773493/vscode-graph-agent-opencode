@@ -11,6 +11,8 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import commentjson
+
 from app.core.child_process import OwnedChildProcess
 from app.core.identifier import create_uuid_hex
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -25,7 +27,7 @@ def has_python_lock(root: Path) -> bool:
 
 
 def has_node_lock(root: Path) -> bool:
-    if (root / "package-lock.json").is_file():
+    if (root / "bun.lock").is_file():
         return True
     manifest = root / "package.json"
     if not manifest.is_file():
@@ -53,15 +55,18 @@ def validate_dependency_inputs(root: Path, *, runtimes: set[str]) -> None:
     for unsupported in ("requirements.txt", "requirements.lock", "poetry.lock", "Pipfile", "Pipfile.lock"):
         if (root / unsupported).exists():
             raise ValueError(f"Python 插件不支持 {unsupported}；请提供 pyproject.toml 与 uv.lock")
-    node_manifest, node_lock = root / "package.json", root / "package-lock.json"
+    for obsolete in ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "bun.lockb"):
+        if (root / obsolete).exists():
+            raise ValueError(f"Node 插件不支持 {obsolete}；请提供 package.json 与 bun.lock")
+    node_manifest, node_lock = root / "package.json", root / "bun.lock"
     if node_manifest.is_file():
         package = json.loads(node_manifest.read_text(encoding="utf-8"))
         dependencies = any(package.get(field) for field in ("dependencies", "optionalDependencies", "peerDependencies"))
         if dependencies and ("node" not in runtimes or not node_lock.is_file()):
-            raise ValueError("声明 Node 运行依赖时必须由 Node 代码插件同时提供 package-lock.json")
+            raise ValueError("声明 Node 运行依赖时必须由 Node 代码插件同时提供 bun.lock")
     if node_lock.is_file():
         if "node" not in runtimes or not node_manifest.is_file():
-            raise ValueError("仅 Node 代码插件可包含 package-lock.json，且必须同时提供 package.json")
+            raise ValueError("仅 Node 代码插件可包含 bun.lock，且必须同时提供 package.json")
         _validate_node_lock(node_manifest, node_lock)
 
 
@@ -93,25 +98,33 @@ def _validate_python_lock(project_file: Path, lock_file: Path) -> None:
 
 def _validate_node_lock(manifest_path: Path, lock_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    if lock.get("lockfileVersion") != 3 or not isinstance(lock.get("packages", {}).get(""), dict):
-        raise ValueError("Node 插件仅支持标准 npm package-lock v3")
-    root_package = lock["packages"][""]
-    for dependency_field in ("dependencies", "optionalDependencies", "devDependencies"):
+    lock = commentjson.loads(lock_path.read_text(encoding="utf-8"))
+    if lock.get("lockfileVersion") != 1 or not isinstance(lock.get("workspaces", {}).get(""), dict):
+        raise ValueError("Node 插件仅支持标准 Bun 文本锁文件 v1")
+    if set(lock["workspaces"]) != {""}:
+        raise ValueError("插件包必须有单一根 package.json，不支持 workspace 链接")
+    root_package = lock["workspaces"][""]
+    for dependency_field in ("dependencies", "optionalDependencies", "devDependencies", "peerDependencies"):
         if manifest.get(dependency_field, {}) != root_package.get(dependency_field, {}):
-            raise ValueError(f"Node package-lock 根 {dependency_field} 与 package.json 不一致")
-    for location, package in lock["packages"].items():
-        if not location:
-            continue
-        resolved = package.get("resolved")
-        parsed = urlsplit(resolved) if isinstance(resolved, str) else None
-        loopback_http = parsed is not None and parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-        if (not location.startswith("node_modules/") or package.get("link")
-                or parsed is None or (parsed.scheme != "https" and not loopback_http)
-                or not parsed.hostname or parsed.username or parsed.password or not package.get("integrity")):
-            raise ValueError("Node 插件锁文件包含非 HTTPS、链接或缺少 integrity 的依赖")
-        if package.get("hasInstallScript") and location != "node_modules/node-pty":
-            raise ValueError("Node 插件依赖需要 install hook，但仅支持内建 node-pty 工具链准备")
+            raise ValueError(f"Bun 锁文件根 {dependency_field} 与 package.json 不一致")
+    for package in lock.get("packages", {}).values():
+        if not isinstance(package, list) or len(package) != 4 or not isinstance(package[0], str):
+            raise ValueError("Bun 锁文件只允许带完整性摘要的 registry 依赖")
+        name, separator, version = package[0].rpartition("@")
+        source = package[1]
+        if not separator or not name or not version or not isinstance(source, str) or not isinstance(package[3], str) or not package[3].startswith("sha512-"):
+            raise ValueError("Bun 锁文件依赖缺少明确版本或 integrity")
+        # Bun 的默认 registry 用空字符串表示；显式 tarball／registry 只允许 HTTPS 或 loopback。
+        for location in (version, source):
+            if not location:
+                continue
+            parsed = urlsplit(location)
+            if parsed.scheme:
+                if (parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password
+                        or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
+                    raise ValueError("Bun 锁文件不支持路径、Git、链接或携带凭据的依赖")
+            elif "/" in location or location.startswith((".", "workspace:", "file:", "link:")):
+                raise ValueError("Bun 锁文件不支持本机路径或 workspace 依赖")
 
 
 async def _run(command: list[str], *, cwd: Path, env: dict[str, str], stage: str) -> str:
@@ -142,84 +155,87 @@ async def _run(command: list[str], *, cwd: Path, env: dict[str, str], stage: str
 
 
 def _python_environment() -> dict[str, str]:
-    return {
+    environment = {
         key: value
         for key, value in os.environ.items()
         if not key.upper().startswith(("UV_", "PIP_", "PYTHON"))
         and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}
     }
+    if "UV_CACHE_DIR" in os.environ:
+        environment["UV_CACHE_DIR"] = os.environ["UV_CACHE_DIR"]
+    return environment
 
 
 async def _prepare_python(root: Path) -> None:
-    uv = shutil.which("uv")
-    if uv is None:
-        raise RuntimeError("准备 Python 插件依赖需要目标已有 uv")
-    command_prefix = [uv, "--no-config", "--no-cache", "--project", str(root)]
+    uv = _installation_tool("BOXTEAM_UV_BIN", "uv")
+    command_prefix = [uv, "--no-config", "--project", str(root)]
     options = ["--python", str(resolve_python_executable()), "--no-python-downloads", "--no-managed-python", "--no-build"]
     await _run([*command_prefix, "sync", "--locked", "--no-dev", "--no-default-groups",
         "--no-install-project", "--link-mode", "copy", *options], cwd=root,
         env=_python_environment(), stage="python-sync")
 
 
-def _npm_runtime() -> tuple[Path, Path]:
-    configured = os.environ.get("BOXTEAM_NODE_BIN")
-    if not configured:
-        raise RuntimeError("准备 Node 插件依赖需要明确配置 BOXTEAM_NODE_BIN")
-    node_path = shutil.which(configured)
-    if node_path is None:
-        raise RuntimeError("准备 Node 插件依赖需要目标已有 Node")
-    node = Path(node_path).resolve(strict=True)
-    npm = shutil.which("npm")
-    candidates = [node.parent / "node_modules/npm/bin/npm-cli.js", node.parent.parent / "lib/node_modules/npm/bin/npm-cli.js"]
-    if npm is not None:
-        npm_path = Path(npm).resolve(strict=True)
-        candidates.append(npm_path if npm_path.name == "npm-cli.js" else npm_path.parent / "node_modules/npm/bin/npm-cli.js")
-    cli = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
-    if cli is None:
-        raise RuntimeError("目标已有 Node 缺少标准 npm CLI")
-    return node, cli
+def _installation_tool(variable: str, source_command: str) -> str:
+    configured = os.environ.get(variable)
+    if not configured and not os.environ.get("BOXTEAM_RUNTIME_MANIFEST"):
+        configured = shutil.which(source_command)
+    if not configured or not Path(configured).is_absolute() or not Path(configured).is_file():
+        raise RuntimeError(f"插件安装需要目标运行时提供明确的 {variable}")
+    return str(Path(configured).resolve(strict=True))
 
 
-def _node_headers_root(node: Path) -> Path:
+def _node_headers_root(node: Path) -> Path | None:
     for root in (node.parent, node.parent.parent):
         if (root / "include/node/node.h").is_file():
             return root
-    raise RuntimeError("目标 Node 未提供本机 headers，不能离线构建 node-pty")
+    return None
 
 
 async def _prepare_node(root: Path) -> None:
-    lock_path = root / "package-lock.json"
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    node, npm_cli = _npm_runtime()
+    lock_path = root / "bun.lock"
+    bun = _installation_tool("BOXTEAM_BUN_BIN", "bun")
     environment = {key: value for key, value in os.environ.items()
-        if not key.upper().startswith(("NPM_", "NODE_"))}
+        if not key.upper().startswith(("NPM_", "NODE_", "BUN_"))}
+    # 保留正常缓存位置，隔离认证与配置；不再为每次安装创建空缓存。
+    environment["BUN_INSTALL_CACHE_DIR"] = os.environ.get("BUN_INSTALL_CACHE_DIR", str(Path.home() / ".bun/install/cache"))
+    for key in ("XDG_CACHE_HOME",):
+        if key in os.environ:
+            environment[key] = os.environ[key]
     before = lock_path.read_bytes()
-    with tempfile.TemporaryDirectory(prefix=".npm-prepare-", dir=root.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".bun-prepare-", dir=root.parent) as temporary:
         configuration = Path(temporary)
-        empty_user, empty_global = configuration / "user.npmrc", configuration / "global.npmrc"
-        empty_user.touch()
-        empty_global.touch()
-        command = [str(node), str(npm_cli), "--prefix", str(root), "--userconfig", str(empty_user),
-            "--globalconfig", str(empty_global), "--cache", str(configuration / "cache"),
-            "--ignore-scripts", "--no-audit", "--no-fund", "ci"]
-        await _run(command, cwd=root, env=environment, stage="npm-ci")
+        install_environment = dict(environment)
+        for key in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME"):
+            install_environment[key] = str(configuration)
+        empty_config = configuration / "bunfig.toml"
+        empty_config.touch()
+        for key in ("NPM_CONFIG_USERCONFIG", "NPM_CONFIG_GLOBALCONFIG"):
+            file = configuration / (key.lower() + ".npmrc")
+            file.touch()
+            install_environment[key] = str(file)
+        await _run([bun, "--no-env-file", f"--config={empty_config}", "install",
+            "--frozen-lockfile", "--production", "--ignore-scripts", "--backend", "copyfile"],
+            cwd=root, env=install_environment, stage="bun-install")
     if lock_path.read_bytes() != before:
-        raise RuntimeError("npm ci 改写了锁文件；插件包未发布")
-    if any(package.get("hasInstallScript") for location, package in lock["packages"].items()
-        if location and package.get("hasInstallScript")):
-        await _build_node_pty(root, node, npm_cli, environment)
+        raise RuntimeError("Bun 安装改写了锁文件；插件包未发布")
+    if (root / "node_modules/node-pty/package.json").is_file():
+        await _build_node_pty(root, environment)
 
 
-async def _build_node_pty(root: Path, node: Path, npm_cli: Path, environment: dict[str, str]) -> None:
+async def _build_node_pty(root: Path, environment: dict[str, str]) -> None:
     package_root = root / "node_modules/node-pty"
     if not (package_root / "binding.gyp").is_file():
         raise ValueError("node-pty 缺少 binding.gyp，拒绝运行包提供的安装脚本")
-    npm_root = npm_cli.parent.parent
-    node_gyp = npm_root / "node_modules/node-gyp/bin/node-gyp.js"
-    if not node_gyp.is_file():
-        raise RuntimeError("目标 npm 未携带 node-gyp，不能构建 node-pty 原生依赖")
+    node = Path(_installation_tool("BOXTEAM_NODE_BIN", "node"))
+    configured_gyp = os.environ.get("BOXTEAM_NODE_GYP_JS")
+    if not configured_gyp and os.environ.get("BOXTEAM_RUNTIME_MANIFEST"):
+        raise RuntimeError("目标运行时未提供 BOXTEAM_NODE_GYP_JS")
+    node_gyp = Path(configured_gyp) if configured_gyp else Path.cwd() / "node_modules/node-gyp/bin/node-gyp.js"
+    if not node_gyp.is_absolute() or not node_gyp.is_file():
+        raise RuntimeError("目标运行时缺少明确的 BOXTEAM_NODE_GYP_JS，不能构建 node-pty")
+    command = [str(node), str(node_gyp), "rebuild", f"--python={resolve_python_executable()}"]
+    # 同一 Node 发行版的 headers 优先复用；缺少时 node-gyp 按执行它的目标 Node 版本取标准缓存。
     node_root = _node_headers_root(node)
-    python = str(resolve_python_executable())
-    await _run([str(node), str(node_gyp), "rebuild", f"--nodedir={node_root}"], cwd=package_root,
-        env={**environment, "PYTHON": python}, stage="node-pty-native-build")
-
+    if node_root is not None:
+        command.append(f"--nodedir={node_root}")
+    await _run(command, cwd=package_root, env=environment, stage="node-pty-native-build")

@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 
 import {
   BOXTEAM_VERSION,
+  PLUGIN_INSTALLATION_TOOLS,
   NODE_RUNTIME_DEPENDENCIES,
   PYTHON_RUNTIME,
 } from "./versions.mjs";
@@ -38,7 +39,6 @@ const runtimePackageRoot = path.join(stageRoot, "runtime-linux-x64", "package");
 const launcherPackageRoot = path.join(stageRoot, "launcher", "package");
 const tarballRoot = path.join(outputRoot, "tarballs");
 const releaseAssetRoot = path.join(outputRoot, "release-assets");
-const NODE_GYP_VERSION = "10.3.1";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -67,6 +67,7 @@ function installPythonDependencies(pythonExecutable) {
     "requirements-txt",
     "--output-file",
     requirementsPath,
+    `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`,
   ]);
   run("uv", [
     "pip",
@@ -75,6 +76,7 @@ function installPythonDependencies(pythonExecutable) {
     pythonExecutable,
     "--requirements",
     requirementsPath,
+    `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`,
   ]);
 }
 
@@ -83,20 +85,14 @@ function installNodeDependencies(applicationRoot) {
     path.join(projectRoot, "packaging", "runtime", "node-package.json"),
     path.join(applicationRoot, "package.json"),
   );
-  // Bun 不会像 npm 一样为 node-pty 安装脚本提供 node-gyp；先跳过生命周期脚本，
-  // 再用 Bun 的 x 命令调用 node-gyp 编译 Linux 原生模块，避免把构建工具打进运行时。
   run("bun", ["install", "--production", "--exact", "--ignore-scripts"], {
     cwd: applicationRoot,
-    env: {
-      ...process.env,
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
-    },
+    env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
   });
   const nodePtyRoot = path.join(applicationRoot, "node_modules", "node-pty");
-  run("bun", ["x", `node-gyp@${NODE_GYP_VERSION}`, "rebuild"], {
+  run(process.env.BOXTEAM_NODE_BIN ?? "node", [path.join(applicationRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
     cwd: nodePtyRoot,
   });
-  run("bun", ["scripts/post-install.js"], { cwd: nodePtyRoot });
 }
 
 function installChromium(applicationRoot, chromiumRoot) {
@@ -157,6 +153,11 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     // npm pack 会排除包内符号链接，因此必须指向实际解释器文件。
     python_executable: "python/bin/python3.12",
     application_root: "application",
+    installation_tools: {
+      bun_executable: "application/node_modules/@oven/bun-linux-x64/bin/bun",
+      uv_executable: "python/bin/uv",
+      node_gyp_entrypoint: "application/node_modules/node-gyp/bin/node-gyp.js",
+    },
     config_resources: {
       gateway_inline: "application/configs/gateway_inline.jsonc",
       gateway_schema: "application/configs/gateway_schema.jsonc",

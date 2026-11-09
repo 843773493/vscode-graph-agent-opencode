@@ -39,7 +39,7 @@ async function observeDependencies(moduleUrl, scenario) {
   const { syncBuiltinESMExports } = await import("node:module");
   syncBuiltinESMExports();
   const { installWindowsPythonDependencies } = await import(moduleUrl);
-  const { PYTHON_RUNTIME_WINDOWS_X64 } = await import(new URL("./versions.mjs", moduleUrl));
+  const { PYTHON_RUNTIME_WINDOWS_X64, PLUGIN_INSTALLATION_TOOLS } = await import(new URL("./versions.mjs", moduleUrl));
   const write = (relative, body) => {
     const file = path.join(sitePackagesRoot, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body);
@@ -67,6 +67,8 @@ async function observeDependencies(moduleUrl, scenario) {
           fs.writeFileSync(requirementsPath, locked);
         } else if (args.includes("--no-build")) {
           for (const file of oldPackageFiles) write(file, "old wheel");
+          write("bin/uv.exe", "target uv");
+          write("bin/uvx.exe", "target uvx");
           write("litellm_extra/__init__.py", "unrelated package");
           write("litellm_extra-1.0.0.dist-info/METADATA", "unrelated metadata");
           write("other/native.pyd", "Windows extension");
@@ -94,12 +96,12 @@ async function observeDependencies(moduleUrl, scenario) {
   } catch (error) { failure = error; }
   const exportCommand = ["uv", ["export", "--locked", "--no-dev", "--format", "requirements-txt", "--output-file", requirementsPath]];
   const targetCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--python-version",
-    PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath]];
+    PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath, `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`]];
   const sourceCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--no-deps",
     "commentjson==0.9.0", "lark_parser==0.12.0", "litellm==1.2.0"]];
   if (scenario === "native") {
     assert.equal(failure, undefined);
-    assert.deepEqual(calls, [exportCommand, ["uv", ["pip", "install", "--python", pythonExecutable, "--requirements", requirementsPath]]]);
+    assert.deepEqual(calls, [exportCommand, ["uv", ["pip", "install", "--python", pythonExecutable, "--requirements", requirementsPath, `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`]]]);
     assert.equal(fs.existsSync(crossRequirementsPath), false);
     assert.equal(fs.readFileSync(path.join(sitePackagesRoot, "preexisting.so"), "utf8"), "native build leaves package content alone");
   } else {
@@ -115,6 +117,8 @@ async function observeDependencies(moduleUrl, scenario) {
     } else assert.equal(failure, undefined);
     if (scenario !== "export-failure") assert.equal(fs.readFileSync(crossRequirementsPath, "utf8"), [...header, ...targetBlock].join("\n") + "\n");
     if (["cross", "unexpected-native"].includes(scenario)) {
+      assert.equal(fs.readFileSync(path.join(runtimePackageRoot, "python/Scripts/uv.exe"), "utf8"), "target uv");
+      assert.equal(fs.existsSync(path.join(sitePackagesRoot, "bin/uv.exe")), false);
       for (const root of ["commentjson", "lark", "litellm"]) {
         assert.equal(fs.existsSync(path.join(sitePackagesRoot, root, "nested/native.so")), false);
         assert.equal(fs.readFileSync(path.join(sitePackagesRoot, root, "nested/module.py"), "utf8"), "source body");
@@ -124,7 +128,7 @@ async function observeDependencies(moduleUrl, scenario) {
     }
   }
   if (["cross", "unexpected-native"].includes(scenario)) {
-    const expectedDirectories = [".", "litellm_extra", "litellm_extra-1.0.0.dist-info", "other",
+    const expectedDirectories = [".", "bin", "litellm_extra", "litellm_extra-1.0.0.dist-info", "other",
       ...["commentjson", "lark", "litellm"].flatMap((root) => [root, `${root}/nested`])];
     if (scenario === "unexpected-native") expectedDirectories.push("unrelated", "litellm_extra/nested");
     assert.deepEqual([...new Set(cleanupDirectories)].sort(), expectedDirectories.sort());
@@ -144,9 +148,9 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   for (const relative of ["app", "configs", "resources", "src/shared", "src/clients/web", "src/clients/workbench",
     "src/workspace-services/protocol",
     "src/workspace-services/terminal/server", "src/workspace-services/terminal/protocol",
-    "src/workspace-services/terminal/shared",
+    "src/workspace-services/terminal/shared", "src/workspace-services/terminal/client",
     "src/workspace-services/browser/server", "src/workspace-services/browser/protocol",
-    "packages/launcher", "packaging/runtime"]) {
+    "packages/launcher", "packaging/runtime", "scripts/plugins"]) {
     fs.mkdirSync(path.join(projectRoot, relative), { recursive: true });
     fs.writeFileSync(path.join(projectRoot, relative, "fixture.txt"), relative);
   }
@@ -159,6 +163,12 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
     const file = path.join(projectRoot, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content);
+  }
+  for (const relative of ["node_modules/@xterm/xterm/css/xterm.css", "node_modules/@xterm/xterm/lib/xterm.js",
+    "node_modules/@xterm/addon-fit/lib/addon-fit.js", "node_modules/@xterm/addon-search/lib/addon-search.js",
+    "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css", "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf"]) {
+    const file = path.join(projectRoot, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, relative);
   }
   const outputRoot = path.join(projectRoot, "out/packaging/windows-x64");
   const runtimePackageRoot = path.join(outputRoot, "stage/runtime-windows-x64/package");
@@ -177,6 +187,9 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
     if (specifier === "./pinned-archive-download.mjs") exports = {
       downloadPinnedWindowsPython: async () => path.join(projectRoot, "python.tgz"),
       downloadPinnedWindowsNode: async () => path.join(projectRoot, "node.zip"),
+    };
+    else if (specifier === "../../scripts/plugins/pack-developer-tools.mjs") exports = {
+      packDeveloperTools: async () => {},
     };
     else if (specifier === "./windows-python-dependencies.mjs") exports = {
       installWindowsPythonDependencies(options) {

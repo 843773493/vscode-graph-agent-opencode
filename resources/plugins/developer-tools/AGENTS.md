@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 可以维护 `plugin.jsonc`、`package.json` 和对应 npm lock。
+- 可以维护 `plugin.jsonc`、`package.json` 和对应 Bun lock。
 - 可以修改与包身份、入口或依赖解析直接相关的元数据。
 
 # 不可修改内容
@@ -16,6 +16,6 @@
 # 规范
 
 - 包身份固定为 `boxteam.developer-tools@0.1.0`，包内 `terminal` 插件固定为 workspace scope。
-- 依赖以 `package-lock.json` 为准；发布 ZIP 由 `scripts/plugins/pack-developer-tools.mjs` 从仓库根目录组装。
+- 依赖以 `bun.lock` 为准；发布 ZIP 由 `scripts/plugins/pack-developer-tools.mjs` 从仓库根目录组装。
 - 包源码路径保持与仓库源目录相同，打包显式文件清单由真实标准插件 ZIP 启动验收验证入口可运行。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

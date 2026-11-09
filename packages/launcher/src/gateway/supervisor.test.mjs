@@ -88,6 +88,20 @@ describe("gateway supervisor", () => {
     expect(environment.BOXTEAM_GATEWAY_URL).toBe("http://127.0.0.1:8014");
   });
 
+  test("安装工具环境由 runtime 覆盖且不继承外部工具", () => {
+    const inherited = { BOXTEAM_BUN_BIN: "/ambient/bun", BOXTEAM_UV_BIN: "/ambient/uv", BOXTEAM_NODE_GYP_JS: "/ambient/gyp" };
+    const empty = gatewayEnvironment(runtime, inherited);
+    expect(empty.BOXTEAM_BUN_BIN).toBeUndefined();
+    expect(empty.BOXTEAM_UV_BIN).toBeUndefined();
+    expect(empty.BOXTEAM_NODE_GYP_JS).toBeUndefined();
+    const installationTools = { bun_executable: "/runtime/bun", uv_executable: "/runtime/uv", node_gyp_entrypoint: "/runtime/gyp.js" };
+    const environment = gatewayEnvironment({ ...runtime, installationTools }, inherited);
+    expect(environment.BOXTEAM_BUN_BIN).toBe(installationTools.bun_executable);
+    expect(environment.BOXTEAM_UV_BIN).toBe(installationTools.uv_executable);
+    expect(environment.BOXTEAM_NODE_GYP_JS).toBe(installationTools.node_gyp_entrypoint);
+    expect(environment.BOXTEAM_NODE_BIN).toBe(runtime.nodeExecutable);
+  });
+
   test("普通恢复只加载 active，pending 启动只传递不透明三元组", () => {
     const active = gatewayStartupContract({});
     expect(active.loadedSource).toBe("active");
