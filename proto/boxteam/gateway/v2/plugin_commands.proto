@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package boxteam.gateway.v2;
 
-import "google/protobuf/struct.proto";
 import "boxteam/gateway/v2/service_plugin.proto";
+import "google/protobuf/struct.proto";
 
 message PluginContributionTarget {
   string gateway_id = 1;
