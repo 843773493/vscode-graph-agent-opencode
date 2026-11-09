@@ -7,6 +7,23 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.gateway.service_plugin import PluginBinding
 
 
+class WorkspacePluginCreation(BaseModel):
+    """创建 owner 冻结的非秘密模板；交接后由工作区原配置接替引用。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    intent_id: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    bindings: list[PluginBinding]
+
+    @model_validator(mode="after")
+    def template_has_no_workspace(self) -> WorkspacePluginCreation:
+        keys = [(binding.package_id, binding.plugin_id) for binding in self.bindings]
+        if len(keys) != len(set(keys)) or any(binding.workspace_id is not None for binding in self.bindings):
+            raise ValueError("创建模板必须是唯一且不含 workspace_id 的插件绑定")
+        return self
+
+
 class WorkspacePluginSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -25,4 +42,4 @@ class WorkspacePluginSnapshot(BaseModel):
         return self
 
 
-__all__ = ["WorkspacePluginSnapshot"]
+__all__ = ["WorkspacePluginCreation", "WorkspacePluginSnapshot"]

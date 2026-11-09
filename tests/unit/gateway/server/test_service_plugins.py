@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -16,6 +17,8 @@ from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.plugins.packages import PluginPackageStore
+from app.gateway.plugins.workspaces import WorkspacePluginBindings
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.server.service_plugin_proxy import router
@@ -77,3 +80,39 @@ async def test_service_path_cannot_escape_declared_service(plugin_proxy: tuple[F
             "/api/gateway/service-plugins/probe.tools/probe/instances/original/services/echo/%252e%252e/internal?package_version=1.0.0")
     assert response.status_code == 422
     assert calls == []
+
+
+async def test_creation_handoff_observes_completed_start_before_marking_signature_processed() -> None:
+    """启动持拓扑锁时收到创建通知，不能把尚未交接的启动完成误记为已处理。"""
+    target = WorkspaceTarget(gateway_id="gateway_" + "a" * 32,
+        workspace_id="12345678-1234-5678-1234-567812345678", name="new", root_path="/new",
+        backend_url="", connection_kind="local", managed=True,
+        plugin_creation={"intent_id": "create-original", "revision": "template-v1", "bindings": []})
+    registry = Mock(spec=GatewayWorkspaceRegistry)
+    registry.gateway_id = target.gateway_id
+    registry.backend_topology_lock = asyncio.Lock()
+    registry.targets.return_value = (target,)
+    registry.backend_owner.return_value = None
+    runtime = Mock(spec=GatewayPluginRuntime)
+    runtime.slots = {}
+    coordinator = WorkspacePluginBindings(registry, runtime)
+    coordinator._task = asyncio.current_task()
+
+    async def initialized(current, creation):
+        assert current.desired_running
+        assert creation.intent_id == "create-original"
+        current.plugin_creation = None
+
+    async def refreshed(current):
+        assert current.plugin_creation is None
+
+    coordinator._initialize_creation = AsyncMock(side_effect=initialized)
+    coordinator._refresh = AsyncMock(side_effect=refreshed)
+    async with registry.backend_topology_lock:
+        reconciliation = asyncio.create_task(coordinator.reconcile())
+        await asyncio.sleep(0)
+        target.desired_running = True
+        target.backend_url = "http://127.0.0.1:49152"
+    await reconciliation
+    coordinator._initialize_creation.assert_awaited_once()
+    coordinator._refresh.assert_awaited_once()

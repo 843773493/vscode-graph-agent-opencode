@@ -199,6 +199,8 @@ async def add_local_workspace(
                 name=payload.name,
                 create_directory=False,
                 request_id=request_id,
+                config=request.app.state.gateway_config_reload,
+                plugins=request.app.state.service_plugins,
             )
         else:
             backend_url = payload.backend_url.rstrip("/")

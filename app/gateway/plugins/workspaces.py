@@ -16,7 +16,10 @@ from app.schemas.gateway.service_plugin import (
     PluginBinding,
     WorkspacePluginConfigurationDTO,
 )
-from app.schemas.gateway.service_plugin_workspace import WorkspacePluginSnapshot
+from app.schemas.gateway.service_plugin_workspace import (
+    WorkspacePluginCreation,
+    WorkspacePluginSnapshot,
+)
 from app.schemas.internal_v2.common import APIResponse
 
 logger = logging.getLogger(__name__)
@@ -31,6 +34,7 @@ class WorkspacePluginBindings:
         self.states: dict[str, WorkspacePluginConfigurationDTO] = {}
         self._signatures: dict[str, tuple[object, ...]] = {}
         self._changed = asyncio.Event()
+        self._handoff_lock = asyncio.Lock()
         self._pending: set[str] = set()
         self._task: asyncio.Task[None] | None = None
 
@@ -84,24 +88,48 @@ class WorkspacePluginBindings:
         # 启动恢复也会调用 controller 回调；先完成旧实例接管，才处理绑定。
         if self._task is None:
             return
-        async with self.registry.backend_topology_lock:
-            targets = self._targets()
-            removed = (set(self._signatures) | set(self.snapshots)
-                       | {slot.binding.workspace_id for slot in self.runtime.slots.values()
-                          if slot.binding.workspace_id is not None}) - targets.keys()
-            for workspace_id in removed:
-                await self.runtime.apply_scope([], revision="workspace-removed", workspace_id=workspace_id)
-                if self._stop_failure(workspace_id, revision="workspace-removed"):
+        async with self._handoff_lock:
+            # 初始化经过 Workspace 的原候选验证，会回到 Gateway 核包；不能持拓扑锁等待它。
+            # 冻结创建 intent 在此期间保护包版本，验证后由工作区 active/pending 接替。
+            async with self.registry.backend_topology_lock:
+                targets = self._targets()
+                observed_signatures = {key: self._signature(target) for key, target in targets.items()}
+            failed_initializations: set[str] = set()
+            for workspace_id, target in targets.items():
+                if (target.plugin_creation is None or not target.desired_running
+                    or (self._signatures.get(workspace_id) == self._signature(target)
+                        and workspace_id not in self._pending)):
                     continue
-                self.snapshots.pop(workspace_id, None)
-                self.states.pop(workspace_id, None)
-                self._pending.discard(workspace_id)
-            signatures = {key: self._signature(target) for key, target in targets.items()}
-            for workspace_id, signature in signatures.items():
-                if self._signatures.get(workspace_id) != signature or workspace_id in self._pending:
+                try:
+                    await self._initialize_creation(target, WorkspacePluginCreation.model_validate(target.plugin_creation))
+                except (httpx.HTTPError, LookupError, ValueError, RuntimeError) as error:
+                    self.states[workspace_id] = WorkspacePluginConfigurationDTO(
+                        workspace_id=workspace_id, state="failed", error=str(error))
+                    failed_initializations.add(workspace_id)
+                    logger.exception("新建工作区插件初始化失败: workspace_id=%s", workspace_id)
+            async with self.registry.backend_topology_lock:
+                targets = self._targets()
+                removed = (set(self._signatures) | set(self.snapshots)
+                           | {slot.binding.workspace_id for slot in self.runtime.slots.values()
+                              if slot.binding.workspace_id is not None}) - targets.keys()
+                for workspace_id in removed:
+                    await self.runtime.apply_scope([], revision="workspace-removed", workspace_id=workspace_id)
+                    if self._stop_failure(workspace_id, revision="workspace-removed"):
+                        continue
+                    self.snapshots.pop(workspace_id, None)
+                    self.states.pop(workspace_id, None)
                     self._pending.discard(workspace_id)
-                    await self._refresh(targets[workspace_id])
-            self._signatures = signatures
+                signatures = {key: self._signature(target) for key, target in targets.items()}
+                for workspace_id, signature in signatures.items():
+                    # 等待初始化／拓扑锁时原启动可能完成；新输入留给下一次交接，不能误记为已处理。
+                    if observed_signatures.get(workspace_id) != signature:
+                        self._changed.set()
+                        continue
+                    if self._signatures.get(workspace_id) != signature or workspace_id in self._pending:
+                        self._pending.discard(workspace_id)
+                        if workspace_id not in failed_initializations:
+                            await self._refresh(targets[workspace_id])
+                self._signatures = {key: signature for key, signature in observed_signatures.items() if key in targets}
 
     async def _observe(self) -> None:
         while True:
@@ -152,6 +180,26 @@ class WorkspacePluginBindings:
             self.states[workspace_id] = WorkspacePluginConfigurationDTO(workspace_id=workspace_id,
                 state="failed", revision=revision, error="; ".join(errors))
         return bool(errors)
+
+    async def _initialize_creation(self, target: WorkspaceTarget, creation: WorkspacePluginCreation) -> None:
+        """创建通知只调用原工作区 writer；失败保留冻结模板供显式重试。"""
+        request_id = get_current_request_id() or creation.intent_id
+        with self.registry.backend_management_routes(workspace_ids=(target.workspace_id,)) as routes:
+            route, = routes
+            response = await self.runtime.client.post(route.base_url + "/api/internal/service-plugins/initialize",
+                json=creation.model_dump(mode="json"),
+                headers={"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id,
+                         "X-BoxTeam-Workspace-Id": target.workspace_id,
+                         "X-BoxTeam-Gateway-Id": self.registry.gateway_id})
+            response.raise_for_status()
+            result = APIResponse[bool].model_validate_json(response.content)
+            if result.code != 0 or result.data is not True or result.request_id != request_id:
+                raise ValueError("工作区默认插件初始化未获得原 writer 的提交回执")
+        async with self.registry.backend_topology_lock:
+            current = self.registry.resolve(target.key)
+            snapshot = await self.read(current)
+            self.snapshots[target.workspace_id] = snapshot
+            self.registry.complete_plugin_creation(target.workspace_id, creation.intent_id)
 
     async def read(self, target: WorkspaceTarget) -> WorkspacePluginSnapshot:
         if target.connection_kind != "local" or target.gateway_id != self.registry.gateway_id:

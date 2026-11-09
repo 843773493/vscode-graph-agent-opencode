@@ -293,3 +293,34 @@ class ConfigSourceEditMixin:
             # 来源保存已完成；pending/restart 仍由原状态机持有，不伪造 active。
             pass
         return self.get_source_document(source_key=source_key, gateway_id=gateway_id, idempotency_key=request.idempotency_key)
+
+    async def retry_source_edit(
+        self, *, source_key: str, gateway_id: str, idempotency_key: str,
+    ) -> ConfigSourceDocumentDTO:
+        """显式重试原来源候选；不改写文件，也不重放结果未知的副作用。"""
+        service = cast("ConfigService", self)
+        _, root, store = self._source_target(source_key)
+        pending = store.get_pending_config_candidate(config_domain=service._CONFIG_DOMAIN, idempotency_key=idempotency_key)
+        if pending is None or pending.source_edit is None or pending.state not in {"rejected", "candidate_validated"}:
+            raise ConfigConflictError("仅可显式重试原来源的未应用候选")
+        intent = pending.source_edit
+        if (intent.get("gateway_id"), intent.get("workspace_id"), intent.get("source_key")) != (gateway_id, read_workspace_id(root), source_key):
+            raise ConfigConflictError("来源重试不属于请求的 Gateway／工作区／来源")
+
+        def retry() -> bool:
+            if store.get_config_apply_claim(config_domain=service._CONFIG_DOMAIN) is not None:
+                raise ConfigConflictError("已有配置 apply claim，不能重试来源候选")
+            snapshot = service._build_candidate_snapshot(import_sources=False)
+            saved = self._saved_source_edit_candidate(snapshot)
+            if saved is None or saved.candidate_id != pending.candidate_id:
+                raise ConfigConflictError("原来源候选的文件、层或 active 基线已改变，不能重试")
+            if saved.state == "rejected":
+                store.update_pending_config_candidate_state(config_domain=service._CONFIG_DOMAIN,
+                    candidate_id=saved.candidate_id, expected_state="rejected", state="candidate_validated", last_error=None)
+            elif saved.state != "candidate_validated":
+                raise ConfigConflictError("原来源候选状态已改变，不能重试")
+            return True
+
+        await service.reload(candidate_applier=service._candidate_applier, idempotency_key=idempotency_key,
+            before_build=retry, source_edit=intent)
+        return self.get_source_document(source_key=source_key, gateway_id=gateway_id, idempotency_key=idempotency_key)

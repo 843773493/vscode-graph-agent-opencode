@@ -225,6 +225,8 @@ async def create_federation_managed_workspace(
             name=payload.name,
             create_directory=payload.create_directory,
             request_id=request_id,
+            config=request.app.state.gateway_config_reload,
+            plugins=request.app.state.service_plugins,
         )
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error

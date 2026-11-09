@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from app.core.failures import failure_detail
@@ -16,8 +16,20 @@ from .core import (
     WorkspaceTarget,
 )
 
+if TYPE_CHECKING:
+    from app.gateway.registry import GatewayWorkspaceRegistry
+
 
 class RegistryCrudMixin:
+    def complete_plugin_creation(self, workspace_id: str, intent_id: str) -> None:
+        """原创建 intent 在配置 owner 已交接后释放；不改工作区 enabled。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        target = registry.resolve((registry.gateway_id, workspace_id))
+        if target.plugin_creation is None or target.plugin_creation["intent_id"] != intent_id:
+            raise ValueError("工作区创建 intent 已变化")
+        target.plugin_creation = None
+        registry._save(owner="manual_crud")
+
     def upsert(
         self,
         target: WorkspaceTarget,

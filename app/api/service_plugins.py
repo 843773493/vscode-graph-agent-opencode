@@ -14,8 +14,13 @@ from app.api.runtime_control import (
 )
 from app.container import AppContainer
 from app.core.trace_middleware import get_request_id, require_current_gateway_id
-from app.schemas.gateway.service_plugin_workspace import WorkspacePluginSnapshot
+from app.schemas.gateway.service_plugin_workspace import (
+    WorkspacePluginCreation,
+    WorkspacePluginSnapshot,
+)
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.config import ConfigSourceEditRequest
+from app.services.infrastructure.config.source_document import set_source_value
 
 router = APIRouter(
     prefix="/api/internal/service-plugins",
@@ -48,3 +53,38 @@ async def workspace_plugin_bindings(
             referenced_bindings=referenced_bindings,
         )
     return APIResponse(data=snapshot, request_id=request_id)
+
+
+@router.post("/initialize", response_model=APIResponse[bool])
+async def initialize_workspace_plugins(
+    payload: WorkspacePluginCreation,
+    request_id: Annotated[str, Depends(get_request_id)],
+    container: Annotated[AppContainer, Depends(get_workspace_container)],
+) -> APIResponse[bool]:
+    """只在创建交接中初始化；同一 intent 复用原候选链，绝不覆盖后续编辑。"""
+    gateway_id = require_current_gateway_id("Workspace 创建默认插件")
+    service = container.config_service
+    source_key = "workspace_root_mutable_override"
+    document = service.get_source_document(source_key=source_key, gateway_id=gateway_id,
+        idempotency_key=payload.intent_id)
+    if document.edit is not None:
+        if document.edit.state == "active":
+            return APIResponse(data=True, request_id=request_id)
+        if document.edit.state not in {"rejected", "candidate_validated"}:
+            raise HTTPException(409, "工作区创建默认插件尚未提交，沿原配置候选处理后重试")
+        saved = await service.retry_source_edit(source_key=source_key, gateway_id=gateway_id,
+            idempotency_key=payload.intent_id)
+    else:
+        entries = [binding.model_dump(mode="json", exclude={"workspace_id"}) for binding in payload.bindings]
+        text = set_source_value(document.jsonc, ("plugins", "runtime", "entries"), entries)
+        saved = await service.save_source_edit(source_key=source_key, gateway_id=gateway_id,
+            request=ConfigSourceEditRequest(
+                gateway_id=gateway_id, workspace_id=container.workspace_id, source_key=source_key,
+                jsonc=text, base_file_digest=document.file_digest,
+                base_layer_revision=document.layer_revision, base_layer_digest=document.layer_digest,
+                expected_active_revision=document.active_revision, expected_active_digest=document.active_digest,
+                idempotency_key=payload.intent_id,
+            ))
+    if saved.edit is None or saved.edit.state != "active":
+        raise HTTPException(409, "工作区创建默认插件未完成 active 提交")
+    return APIResponse(data=True, request_id=request_id)

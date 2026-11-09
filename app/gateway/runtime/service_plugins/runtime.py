@@ -78,6 +78,17 @@ def gateway_plugin_bindings(payload: dict[str, object]) -> list[PluginBinding]:
     return bindings
 
 
+def workspace_default_bindings(payload: dict[str, object]) -> list[PluginBinding]:
+    """模板沿原配置数组替换，不充当当前工作区绑定。"""
+    plugins = payload.get("plugins", {})
+    if not isinstance(plugins, dict):
+        raise TypeError("plugins 必须是对象")
+    defaults = plugins.get("workspace_defaults", {})
+    if not isinstance(defaults, dict):
+        raise TypeError("plugins.workspace_defaults 必须是对象")
+    return gateway_plugin_bindings({"plugins": {"runtime": defaults}})
+
+
 @dataclass(slots=True)
 class PluginSlot:
     binding: PluginBinding
@@ -140,6 +151,14 @@ class GatewayPluginRuntime:
 
     def validate(self, payload: dict[str, object]) -> None:
         self.validate_bindings(gateway_plugin_bindings(payload), workspace_id=None)
+        self.validate_defaults(payload)
+
+    def validate_defaults(self, payload: dict[str, object]) -> None:
+        for binding in workspace_default_bindings(payload):
+            package = self.packages.get(binding.package_id, binding.package_version)
+            plugin = next((entry for entry in package.manifest.plugins if entry.id == binding.plugin_id), None)
+            if plugin is None or plugin.instance_scope != "workspace":
+                raise ValueError(f"新建工作区默认值只接受已安装的 workspace 插件: {binding.package_id}/{binding.plugin_id}")
 
     def validate_bindings(self, bindings: list[PluginBinding], *, workspace_id: str | None) -> None:
         for binding in bindings:
@@ -147,6 +166,7 @@ class GatewayPluginRuntime:
         self.skill_sources.validate_plugin_bindings(bindings, self.packages, workspace_id=workspace_id)
 
     async def apply(self, payload: dict[str, object], revision: str) -> None:
+        self.validate_defaults(payload)
         await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None)
 
     async def apply_scope(self, entries: list[PluginBinding], *, revision: str, workspace_id: str | None) -> None:

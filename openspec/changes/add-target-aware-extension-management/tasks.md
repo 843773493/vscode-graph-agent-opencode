@@ -54,6 +54,7 @@
 ## 6. 配置、日志、遥测与统计
 
 - [ ] 6.1 沿原Gateway／Workspace来源owner定义精确插件绑定／enabled／秘密引用及正式登记的package_id／plugin_id参数容器；参数与版本绑定分离，未绑定残留仅原来源保留且未生效，不占引用／提供失效schema表单，重绑定按确切版本完整验证；域外未知仍拒绝，无影子schema；Gateway持有模板、workspace绑定认证交付，不读写.boxteam、不增配置域或账本。
+  - 2026-11-09 D19 默认模板切片：原 Gateway 配置 owner 验证已安装的 workspace 插件与唯一绑定，原创建 intent 冻结 revision／条目；只新建目录应用，经 Workspace 原 JSONC writer／CAS 提交及认证绑定交接，已有目录不套模板。原安装互斥保护模板、pending 与未结清 intent 引用，不建第二账本；交接不持拓扑锁往返，取消身份创建仍完成原登记。独立审查发现首次初始化 rejected 后重试被截断，现显式复用原来源候选及 reload 锁，核文件／层／active 基线后再验证；结果未知及有副作用的恢复状态不重放。精确候选的创建与配置批164项通过，最终故障用例2项复验通过，证明首次HTTP503后同candidate新apply成功、用户改文件后拒绝覆盖；真实Gateway创建／已有工作区、模板独立、引用阻塞及解绑后卸载最终1 passed／57.92秒。13份原生产文件Pyright110→110、相关Ruff43→43逐条无新增，新增重试API／writer／测试类型和Ruff零诊断，整个配置服务Ruff27→27无新增。首次真实运行因候选当前用户租约合同缺Cookie而401，装具经正式首载入口取得Cookie后通过；共享树另一会话删除该体系的独有差异保留。准确命令、最终指纹、失败／成功原件及静态对照见 `out/tests/temp/2026/11/09/plugin_defaults/artifacts/`。真实Gateway崩溃重试、管理UI、远端及Windows未由本片验收，6.1等宽项不勾选。
 - [ ] 6.2 在现有 logging.runtime 热应用基础上添加 telemetry.runtime／statistics.runtime，冻结默认关闭、采样／缓冲／间隔边界及 schema，沿原 JSONC 族和合法覆盖层加载，不硬编码环境值。
 - [ ] 6.3 迁齐 Python／Node 的启动诊断初始化和运行期 apply／status，核 instance_id 与实际 revision；部分失败逐项展示，不用全局事务、无效补偿或重启强迫成功。
 - [ ] 6.4 实现 Gateway 代理／现有进程指标与插件内部可选指标，使用有界低成本采样／聚合；不按 Thread／调用 ID 建无限常驻标签，不采秘密和正文，不新增公网上报或独立监控服务。

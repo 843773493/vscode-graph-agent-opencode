@@ -24,6 +24,7 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_ga
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
     gateway_plugin_bindings,
+    workspace_default_bindings,
 )
 from app.gateway.server.management_routes import (
     check_management_route,
@@ -43,6 +44,7 @@ from app.schemas.gateway.service_plugin import (
     RestartPluginRequest,
     WorkspacePluginConfigurationDTO,
 )
+from app.schemas.gateway.service_plugin_workspace import WorkspacePluginCreation
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter()
@@ -162,6 +164,20 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
             bindings = gateway_plugin_bindings(request.app.state.gateway_config_reload.config.payload)
             references = owner.references(payload.package_id, payload.package_version)
             references.extend(request.app.state.skill_source_owner.read_references(payload.package_id, payload.package_version))
+            references.extend(f"workspace-default:{binding.plugin_id}"
+                for binding in workspace_default_bindings(request.app.state.gateway_config_reload.config.payload)
+                if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
+            for target in request.app.state.registry.targets():
+                if target.plugin_creation is not None:
+                    creation = WorkspacePluginCreation.model_validate(target.plugin_creation)
+                    references.extend(f"workspace-create:{target.workspace_id}:{creation.intent_id}:{binding.plugin_id}"
+                        for binding in creation.bindings
+                        if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
+            pending = request.app.state.gateway_state.get_pending_config_candidate(config_domain="gateway")
+            if pending is not None and pending.state not in {"active", "discarded", "rejected"}:
+                references.extend(f"candidate:{pending.candidate_id}:{binding.plugin_id}"
+                    for binding in [*gateway_plugin_bindings(pending.payload), *workspace_default_bindings(pending.payload)]
+                    if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             coordinator = request.app.state.workspace_plugin_bindings
             package = owner.packages.get(payload.package_id, payload.package_version)
             workspace_bindings = (await coordinator.read_references()
@@ -172,11 +188,6 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
                 if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             references.extend(f"configuration:{binding.plugin_id}" for binding in bindings
                 if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
-            pending = request.app.state.gateway_state.get_pending_config_candidate(config_domain="gateway")
-            if pending is not None and pending.state not in {"active", "discarded", "rejected"}:
-                references.extend(f"candidate:{pending.candidate_id}:{binding.plugin_id}"
-                    for binding in gateway_plugin_bindings(pending.payload)
-                    if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             await run_sync_shielded(owner.packages.uninstall, payload.package_id, payload.package_version,
                 references=references)
     except (ValueError, RuntimeError, LookupError, httpx.HTTPError) as error:

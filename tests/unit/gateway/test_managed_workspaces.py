@@ -1,6 +1,8 @@
 import asyncio
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import Event
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -16,7 +18,7 @@ from app.gateway.auth import (
     verify_gateway_access,
     verify_gateway_token,
 )
-from app.gateway.config import GatewayConfig
+from app.gateway.config import GatewayConfig, GatewayConfigReloadService
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import request_remote_gateway_management
@@ -29,6 +31,7 @@ from app.gateway.routes import federation, workspaces_lifecycle, workspaces_mana
 from app.gateway.routes._shared import get_registry, get_workspace_runtime_controller
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.managed_backend import ManagedBackendOwner
+from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from tests.support.gateway_managed_backends import ProcessProbe
@@ -90,12 +93,23 @@ def creation_registry(tmp_path: Path):
 
 
 @pytest.fixture
-def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def creation_inputs():
+    config = Mock(spec=GatewayConfigReloadService)
+    config.config = GatewayConfig(revision="template-empty", payload={})
+    lock = asyncio.Lock()
+    config.mutation_guard = lambda: lock
+    plugins = Mock(spec=GatewayPluginRuntime)
+    return config, plugins
+
+
+@pytest.fixture
+def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, creation_inputs):
     from app.gateway.main import gateway_http_exception_handler
 
     application = FastAPI()
     application.state.gateway_id = creation_registry.gateway_id
     application.state.registry = creation_registry
+    application.state.gateway_config_reload, application.state.service_plugins = creation_inputs
     application.add_middleware(TraceMiddleware)
     application.exception_handler(HTTPException)(gateway_http_exception_handler)
     application.dependency_overrides[verify_gateway_token] = lambda: "local-token"
@@ -155,7 +169,7 @@ async def test_external_registration_confirms_health_installation_domain_without
 @pytest.mark.parametrize("damage", ["missing", "mismatch", "root_missing"])
 async def test_reregister_known_root_never_reinitializes_or_rebinds_identity(
     creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry,
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, external: bool, damage: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, external: bool, damage: str, creation_inputs,
 ) -> None:
     root = tmp_path / "registered"
     root.mkdir()
@@ -202,6 +216,7 @@ async def test_reregister_known_root_never_reinitializes_or_rebinds_identity(
     else:
         with pytest.raises((RuntimeError, ValueError, FileNotFoundError)):
             await create_direct_managed_workspace(
+                config=creation_inputs[0], plugins=creation_inputs[1],
                 registry=creation_registry, project_root=Path.cwd(), log_dir=tmp_path / "logs",
                 root_path=str(root), name=None, create_directory=True, request_id="known-root-reregister",
             )
@@ -402,7 +417,7 @@ def controlled_controller_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    controlled_controller_factory,
+    controlled_controller_factory, creation_inputs,
 ) -> None:
     registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
@@ -432,6 +447,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     monkeypatch.setattr(registry, "list_dtos", listed)
 
     target = await create_direct_managed_workspace(
+        config=creation_inputs[0], plugins=creation_inputs[1],
         registry=registry,
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
@@ -453,6 +469,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
 
     with pytest.raises(ValueError, match="已经由当前 Gateway 托管") as duplicate:
         await create_direct_managed_workspace(
+            config=creation_inputs[0], plugins=creation_inputs[1],
             registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
             root_path=str(workspace_root), name=None, create_directory=False,
             request_id="req_create_duplicate",
@@ -485,12 +502,13 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
 
 @pytest.mark.asyncio
 async def test_create_direct_managed_workspace_requires_existing_directory_when_disabled(
-    tmp_path: Path,
+    tmp_path: Path, creation_inputs,
 ) -> None:
     registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
 
     with pytest.raises(FileNotFoundError, match="目录不存在"):
         await create_direct_managed_workspace(
+            config=creation_inputs[0], plugins=creation_inputs[1],
             registry=registry,
             project_root=tmp_path,
             log_dir=tmp_path / "logs",
@@ -502,6 +520,7 @@ async def test_create_direct_managed_workspace_requires_existing_directory_when_
 
     with pytest.raises(ValueError, match="绝对路径"):
         await create_direct_managed_workspace(
+            config=creation_inputs[0], plugins=creation_inputs[1],
             registry=registry,
             project_root=tmp_path,
             log_dir=tmp_path / "logs",
@@ -609,3 +628,63 @@ async def test_remote_management_request_forwards_federation_and_request_ids(
     assert request.headers["X-Request-ID"] == "request-test"
     assert request.content == b'{"root_path":"/srv/project"}'
     assert request.extensions["timeout"] == {"connect": 45, "read": 45, "write": 45, "pool": 45}
+
+
+@pytest.mark.asyncio
+async def test_creation_keeps_frozen_template_after_failed_start_and_cold_reload(
+    creation_registry, creation_boundary, creation_inputs, tmp_path,
+):
+    config, plugins = creation_inputs
+    binding = {"package_id": "probe.frozen", "plugin_id": "debug", "package_version": "1", "enabled": False}
+    config.config = GatewayConfig(revision="revision-v1", payload={"plugins": {"workspace_defaults": {"entries": [binding]}}})
+    creation_boundary.error = RuntimeError("controlled start failure")
+    root = tmp_path / "frozen-project"
+    with pytest.raises(RuntimeError, match="controlled start failure"):
+        await create_direct_managed_workspace(registry=creation_registry, project_root=tmp_path,
+            log_dir=tmp_path / "logs", root_path=str(root), name=None, create_directory=True,
+            request_id="create-frozen", config=config, plugins=plugins)
+    target, = creation_registry.targets()
+    frozen = target.plugin_creation
+    assert frozen is not None and frozen["revision"] == "revision-v1"
+    assert frozen["bindings"] == [{**binding, "workspace_id": None}]
+    config.config = GatewayConfig(revision="revision-v2", payload={})
+    cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json",
+        state_store=creation_registry._state_store)
+    assert cold.resolve(target.workspace_id).plugin_creation == frozen
+    with pytest.raises(ValueError, match="intent"):
+        cold.complete_plugin_creation(target.workspace_id, "other-intent")
+    assert cold.resolve(target.workspace_id).plugin_creation == frozen
+
+
+@pytest.mark.asyncio
+async def test_cancelled_identity_creation_finishes_registration_with_original_template(
+    creation_registry, creation_inputs, tmp_path, monkeypatch,
+):
+    config, plugins = creation_inputs
+    entered, release = Event(), Event()
+    root = tmp_path / "cancelled-create"
+
+    def identity(*_, **__):
+        root.mkdir()
+        entered.set()
+        if not release.wait(5):
+            raise TimeoutError("测试未释放身份创建")
+        return "00000000-0000-4000-8000-000000000001"
+
+    monkeypatch.setattr(creation_registry, "resolve_local_workspace_identity", identity)
+    creation = asyncio.create_task(create_direct_managed_workspace(registry=creation_registry,
+        project_root=tmp_path, log_dir=tmp_path / "logs", root_path=str(root), name=None,
+        create_directory=True, request_id="cancel-identity", config=config, plugins=plugins))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        creation.cancel()
+        await asyncio.sleep(0)
+        assert not creation.done()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await creation
+    target, = creation_registry.targets()
+    assert target.root_path == str(root) and not target.desired_running
+    assert target.plugin_creation is not None
+    assert target.plugin_creation["revision"] == "template-empty"

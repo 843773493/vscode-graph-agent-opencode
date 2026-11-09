@@ -483,11 +483,17 @@ async def save_gateway_config_source(
 
     require_write()
     try:
-        from app.gateway.runtime.service_plugins.runtime import gateway_plugin_bindings
+        from app.gateway.runtime.service_plugins.runtime import (
+            gateway_plugin_bindings,
+            workspace_default_bindings,
+        )
 
         def authorize_plugins(candidate) -> None:
             nonlocal plugin_binding_changed
-            plugin_binding_changed = gateway_plugin_bindings(candidate.payload) != gateway_plugin_bindings(service.config.payload)
+            plugin_binding_changed = (
+                gateway_plugin_bindings(candidate.payload) != gateway_plugin_bindings(service.config.payload)
+                or workspace_default_bindings(candidate.payload) != workspace_default_bindings(service.config.payload)
+            )
             if plugin_binding_changed:
                 require_federation_capability(request, auth, "service_plugin_runtime_manage")
                 request.app.state.service_plugins.validate(candidate.payload)
@@ -496,7 +502,7 @@ async def save_gateway_config_source(
             before_write=require_write, authorize_candidate=authorize_plugins)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     require_federation_capability(request, auth, "configuration_read")
     return APIResponse(data=result, request_id=request_id)

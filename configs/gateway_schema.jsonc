@@ -53,8 +53,8 @@
         },
         "workspace_defaults": {
           "type": "object", "additionalProperties": false,
-          "properties": {"entries": {"type": "array", "default": [], "maxItems": 0,
-            "description": "工作区创建模板尚待接入创建 intent，当前明确拒绝非空模板。"}}
+          "properties": {"entries": {"type": "array", "default": [], "items": {"$ref": "#/$defs/pluginBinding"},
+            "description": "仅用于新建工作区的冻结插件默认值；数组整体替换，已有工作区不追随修改。"}}
         }
       }
     },

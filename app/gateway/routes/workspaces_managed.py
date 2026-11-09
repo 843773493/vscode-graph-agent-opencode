@@ -211,6 +211,8 @@ async def create_gateway_managed_workspace(
                 name=payload.name,
                 create_directory=payload.create_directory,
                 request_id=request_id,
+                config=request.app.state.gateway_config_reload,
+                plugins=request.app.state.service_plugins,
             )
         else:
             remote_data = await request_remote_gateway_management(

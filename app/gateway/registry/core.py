@@ -71,6 +71,7 @@ class WorkspaceTarget:
     local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
     backend_id: str | None = None
+    plugin_creation: dict[str, object] | None = None
 
     @property
     def key(self) -> WorkspaceKey:

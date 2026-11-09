@@ -56,6 +56,8 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=30, trust_env=False) as client:
+            # 当前提交的 Gateway 业务代理要求正式游客会话；沿公开首载入口取得 Cookie。
+            client.get("/api/gateway/users/current").raise_for_status()
             yield client, context, workspaces
     finally:
         close_gateway_process(gateway)
@@ -274,3 +276,109 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
     finally:
         (context.artifacts_dir / "workspace-plugin-flow.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(workspace_plugin_case, request: pytest.FixtureRequest) -> None:
+    """模板提交、创建、配置交接与卸载引用均经过真实产品入口。"""
+    client, context, workspaces = workspace_plugin_case
+    gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+    evidence: list[dict[str, object]] = []
+
+    def exchange(method: str, path: str, body=None):
+        request_id = f"workspace-default-{len(evidence)}"
+        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id}, timeout=75)
+        assert response.headers["X-Request-ID"] == request_id
+        evidence.append({"method": method, "path": path, "status": response.status_code, "body": response.json()})
+        return response
+
+    def defaults(entries):
+        path = "/api/gateway/config/sources/gateway_mutable_override"
+        document = exchange("GET", path).raise_for_status().json()["data"]
+        source = commentjson.loads(document["jsonc"])
+        source.setdefault("plugins", {})["workspace_defaults"] = {"entries": entries}
+        return exchange("PUT", path, {
+            "gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+            "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
+            "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+            "idempotency_key": f"defaults-{len(evidence)}",
+        })
+
+    def create(root, name, *, new):
+        response = exchange("POST", "/api/gateway/managed-workspaces", {
+            "root_path": str(root), "name": name, "create_directory": new,
+        }).raise_for_status().json()["data"]
+        return next(item["workspace_id"] for item in response["items"] if item["name"] == name)
+
+    def document(workspace_id):
+        return exchange("GET", f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override").raise_for_status().json()["data"]
+
+    binding = {"package_id": "probe.defaults", "package_version": "1.0.0", "plugin_id": "probe", "enabled": True}
+    try:
+        # 新目录尚无配置；只给用户配置提供本测试的服务地址及不调用模型的依赖。
+        config_path = context.boxteam_home_for_node(request.node.nodeid) / "config/workspace.jsonc"
+        source = commentjson.loads((workspaces[0] / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
+        source["llm"]["providers"] = [{"id": "primary", "model": "unused", "endpoint": "http://127.0.0.1:1/v1",
+            "api_key": "unused", "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions",
+                "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+                "supports_reasoning": {"reasoning_content": False}}}]
+        for agent in source["agents"].values():
+            if "model" in agent:
+                agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+            for tool in agent.get("tools", {}).get("custom", []):
+                if tool.get("name") == "fetch_webpage":
+                    tool.setdefault("embedding", {})["provider_id"] = "primary"
+        config_path.write_text(json.dumps(source), encoding="utf-8")
+
+        missing = defaults([binding])
+        assert missing.status_code == 422, missing.text
+        archive = _package(context.artifacts_dir / "defaults.zip", package_id="probe.defaults")
+        exchange("POST", "/api/gateway/service-plugins/install", {"gateway_id": gateway_id,
+            "path": str(archive), "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest()}).raise_for_status()
+        saved = defaults([binding]).raise_for_status().json()["data"]
+        assert saved["edit"]["state"] == "active"
+        assert defaults([binding, binding]).status_code == 422
+        template_denied = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": "probe.defaults", "package_version": "1.0.0"})
+        assert template_denied.status_code == 409 and "workspace-default" in template_denied.text, template_denied.text
+        existing_id = create(workspaces[0], "Existing", new=False)
+        assert document(existing_id)["effective"]["plugins"]["runtime"]["entries"] == []
+        new_root = context.workspace_root / f"new-project-{context.run_root.name}"
+        assert not new_root.exists()
+        new_id = create(new_root, "New", new=True)
+        deadline = time.monotonic() + 45
+        while True:
+            state = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]
+            slot = next((item for item in state["plugins"] if item["binding"].get("workspace_id") == new_id), None)
+            if slot is not None and slot["state"] == "ready":
+                break
+            assert time.monotonic() < deadline, state
+            time.sleep(0.1)
+        assert document(new_id)["effective"]["plugins"]["runtime"]["entries"] == [binding]
+        defaults([]).raise_for_status()
+        assert document(new_id)["effective"]["plugins"]["runtime"]["entries"] == [binding]
+        assert document(existing_id)["effective"]["plugins"]["runtime"]["entries"] == []
+        denied = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": "probe.defaults", "package_version": "1.0.0"})
+        assert denied.status_code == 409 and new_id in denied.text, denied.text
+        source_doc = document(new_id)
+        config = commentjson.loads(source_doc["jsonc"])
+        config["plugins"]["runtime"]["entries"] = []
+        exchange("PUT", f"/api/v1/workspaces/{new_id}/config/sources/workspace_root_mutable_override", {
+            "gateway_id": gateway_id, "workspace_id": new_id, "source_key": "workspace_root_mutable_override",
+            "jsonc": json.dumps(config), "base_file_digest": source_doc["file_digest"],
+            "base_layer_revision": source_doc["layer_revision"], "base_layer_digest": source_doc["layer_digest"],
+            "expected_active_revision": source_doc["active_revision"], "expected_active_digest": source_doc["active_digest"],
+            "idempotency_key": "remove-created-binding",
+        }).raise_for_status()
+        deadline = time.monotonic() + 20
+        while True:
+            state = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]
+            if not any(item["binding"].get("workspace_id") == new_id for item in state["plugins"]):
+                break
+            assert time.monotonic() < deadline, state
+            time.sleep(0.1)
+        exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": "probe.defaults", "package_version": "1.0.0"}).raise_for_status()
+    finally:
+        (context.artifacts_dir / "workspace-defaults-evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")

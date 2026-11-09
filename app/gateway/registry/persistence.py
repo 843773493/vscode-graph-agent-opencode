@@ -18,6 +18,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
+from app.schemas.gateway.service_plugin_workspace import WorkspacePluginCreation
 
 from .core import (
     _REGISTRY_SCHEMA_VERSION,
@@ -95,6 +96,10 @@ class RegistryPersistenceMixin:
                 record[field] = tuple(value)
             record.setdefault("root_path", None)
             target = WorkspaceTarget(**record)
+            if target.plugin_creation is not None:
+                if target.connection_kind != "local" or not target.managed:
+                    raise ValueError("工作区创建模板只能属于原生托管目标")
+                target.plugin_creation = WorkspacePluginCreation.model_validate(target.plugin_creation).model_dump(mode="json")
             self._validate_target_identity(target)
             if not target.target_generation:
                 raise ValueError(f"Gateway registry target_generation 缺失: {target.key}")
