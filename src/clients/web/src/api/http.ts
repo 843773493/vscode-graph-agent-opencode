@@ -232,6 +232,20 @@ export function getApiBaseUrl(port: number): string {
 }
 
 const gatewayTokenByPort = new Map<number, Promise<string>>();
+const gatewayTokenInvalidations = new Map<number, Set<() => void>>();
+
+/** 撤销依赖旧凭据的在途展示，凭据刷新仍由唯一 HTTP 入口负责。 */
+export function onGatewayTokenInvalidated(port: number, listener: () => void): () => void {
+  const listeners = gatewayTokenInvalidations.get(port) ?? new Set<() => void>();
+  gatewayTokenInvalidations.set(port, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) gatewayTokenInvalidations.delete(port);
+  };
+}
+
+
 type GatewayUserSessionInitializer = (
   port: number,
   signal?: AbortSignal,
@@ -297,6 +311,7 @@ export function onGatewayUserSessionInvalidated(port: number, listener: () => vo
  */
 export function invalidateGatewayToken(port: number): void {
   gatewayTokenByPort.delete(port);
+  for (const listener of gatewayTokenInvalidations.get(port) ?? []) listener();
 }
 
 async function initializeGatewayUserSessionFallback(
@@ -464,7 +479,7 @@ async function runGatewayRequest<T>(
           if (canRefreshToken && unauthorizedResponse.invalidLocalToken) {
             tokenRefreshed = true;
             if (gatewayTokenByPort.get(port) === tokenPromise) {
-              gatewayTokenByPort.delete(port);
+              invalidateGatewayToken(port);
             }
             tokenPromise = getGatewayToken(port);
             continue;

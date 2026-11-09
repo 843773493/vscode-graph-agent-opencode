@@ -6,12 +6,39 @@ import {
   getGatewayToken,
   HttpRequestError,
   invalidateGatewayToken,
+  onGatewayTokenInvalidated,
   normalizePageResult,
   requestJson,
 } from "./http";
 import { restoreGlobalDescriptor } from "../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
+
+test("刷新失效凭据撤销原连接，释放后的监听不再接收后续失效", async () => {
+  const port = 49_398;
+  invalidateGatewayToken(port);
+  let credentialCalls = 0;
+  let invalidations = 0;
+  const release = onGatewayTokenInvalidated(port, () => { invalidations += 1; });
+  globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).pathname;
+    if (path === "/api/gateway/auth/local-credential") {
+      return Response.json({ data: { token: ++credentialCalls === 1 ? "stale" : "fresh" } });
+    }
+    return new Headers(init?.headers).get("X-Local-Token") === "stale"
+      ? Response.json({ detail: "invalid local token" }, { status: 401 })
+      : Response.json({ value: "ok" });
+  }, { preconnect: originalFetch.preconnect });
+  try {
+    await expect(requestJson(port, "/api/gateway/health")).resolves.toEqual({ value: "ok" });
+    expect(credentialCalls).toBe(2);
+    expect(invalidations).toBe(1);
+    release();
+    invalidateGatewayToken(port);
+    expect(invalidations).toBe(1);
+  } finally { release(); globalThis.fetch = originalFetch; invalidateGatewayToken(port); }
+});
+
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 function installWindow(
