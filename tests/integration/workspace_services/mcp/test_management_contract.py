@@ -17,7 +17,7 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 from tests.integration.workspace_services.mcp.oauth_server import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 唯一标准 OAuth HTTP 资产
 )
-from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
+from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一 schema MCP HTTP 资产
 )
 

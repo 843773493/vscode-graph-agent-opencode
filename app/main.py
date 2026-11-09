@@ -21,7 +21,6 @@ from app.api.extension_configuration import router as extension_configuration_ro
 from app.api.extension_host import router as extension_host_router
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
-from app.api.mcp_installation import router as mcp_installation_router
 from app.api.message_stream import router as message_stream_router
 from app.api.messages import router as messages_router
 from app.api.node_debug import router as node_debug_router
@@ -109,7 +108,11 @@ async def lifespan(application: FastAPI):
                         workspace_id, time.monotonic() - mount_started)
         logger.info("已启动全部挂载工作区: workspace_ids=%s elapsed=%.3fs",
                     registry.workspace_ids, time.monotonic() - startup_started)
-        yield
+        async def after_http_startup() -> None:
+            lifecycle.activate_after_http_startup()
+            await lifecycle.wait_business_ready()
+
+        yield {"after_http_startup": after_http_startup}
     except BaseException as failure:
         error = failure
         raise
@@ -213,7 +216,6 @@ async def workspace_http_exception_handler(
 app.add_exception_handler(RequestValidationError, request_validation_error_response)
 
 
-app.include_router(mcp_installation_router, prefix="/api/v1")
 app.include_router(extension_host_router)
 app.include_router(runtime_control_router)
 app.include_router(service_plugins_router)
@@ -284,4 +286,6 @@ install_sse_openapi_components(app)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8010)
+    from app.runtime.http_server import ManagedHTTPServer
+
+    ManagedHTTPServer(uvicorn.Config(app, host="127.0.0.1", port=8010)).run()

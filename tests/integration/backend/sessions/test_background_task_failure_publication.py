@@ -81,7 +81,8 @@ async def test_failure_publishes_facts_and_preserves_recovery(
     # 此片不创建终端或浏览器；只替代两个辅助服务的清单响应，保留真实 owner/聚合/投影。
     monkeypatch.setattr(container_module.TerminalManagerClient, "list_resources", no_native_resources)
     monkeypatch.setattr(container_module.BrowserManagerClient, "list_resources", no_native_resources)
-    async with main.lifespan(main.app):
+    async with main.lifespan(main.app) as _main_lifespan_state_84:
+        await _main_lifespan_state_84["after_http_startup"]()
         owner, peer = mounted_case.containers
         base = f"/api/v1/workspaces/{owner.workspace_id}"
         async with httpx.AsyncClient(

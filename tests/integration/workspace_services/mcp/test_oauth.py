@@ -40,15 +40,17 @@ from tests.integration.workspace_services.mcp.oauth_server import (
 
 
 @pytest.fixture
-def owner_factory():
+def owner_factory(mcp_gateway_config):
     def create(endpoint: OAuthEndpoint, *, provider: McpOAuthProvider | None = None):
         factory = None if provider is None else partial(
             production_mcp_session_factory, workspace_root=endpoint.context.workspace_root, oauth_provider=provider,
+            config_service=mcp_gateway_config,
         )
         return McpCatalogOwner(
             raw_config={"servers": {"secure": endpoint.configuration()}},
             workspace_root=endpoint.context.workspace_root,
             event_service=EventChannelService(), leases=ExternalResourceLeaseLedger(), session_factory=factory,
+            config_service=mcp_gateway_config,
         )
     return create
 

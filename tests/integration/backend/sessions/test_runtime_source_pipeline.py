@@ -378,7 +378,8 @@ async def source_case(
                 assert controller is not None
                 lifespan.push_async_callback(controller.aclose)
                 monkeypatch.setattr(main, "_model_stream_controller", controller)
-                await lifespan.enter_async_context(main.lifespan(main.app))
+                _main_lifespan_state = await lifespan.enter_async_context(main.lifespan(main.app))
+                await _main_lifespan_state["after_http_startup"]()
                 registry = main.app.state.workspace_container_registry
                 container = registry.get(workspace_id)
                 async with httpx.AsyncClient(

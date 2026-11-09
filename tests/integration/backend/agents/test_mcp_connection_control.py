@@ -22,11 +22,11 @@ from tests.integration.backend.sessions.test_mcp_config_recovery import (
 from tests.integration.workspace_services.mcp.oauth_server import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 唯一 OAuth/MCP HTTP 资产
 )
-from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用 MCP handler
-)
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用 MCP handler
+)
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -77,40 +77,42 @@ def product_case(recovery_case, free_tcp_port_factory):
             default["tools"].setdefault("policy", {})["restrictions"] = tool_restrictions
         if confirmation_required is not None:
             default["tools"]["confirmation_required"] = confirmation_required
+        gateway_url = f"http://127.0.0.1:{gateway_port}"
+        payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         path.write_text(json.dumps(payload), encoding="utf-8")
         with model_stream_replay(
             case.context.artifacts_dir / "model-replay", runtime_root=case.context.artifacts_dir / "replay-runtime",
             business_assertion="mcp-first-authorization-local-control",
         ) as replay:
-            backend = await asyncio.to_thread(
-                start_backend_process, workspace_root=str(case.mount.workspace_root), port=backend_port,
-                log_name="mcp-local-control", asgi_app=backend_app,
-                startup_mount=startup_mount,
-                env_overrides={**replay.environment, "BOXTEAM_HOME": str(home), "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}"},
-            )
             owned_backends = backend_processes if backend_processes is not None else []
-            owned_backends.append(backend)
+            gateway = await asyncio.to_thread(
+                start_gateway_process, workspace_root=case.mount.workspace_root,
+                default_backend_url=f"http://127.0.0.1:{backend_port}", port=gateway_port,
+                boxteam_home=home,
+                artifacts_dir=case.context.artifacts_dir / "gateway",
+                extra_env=gateway_environment or {},
+            )
             try:
-                gateway = await asyncio.to_thread(
-                    start_gateway_process, workspace_root=case.mount.workspace_root,
-                    default_backend_url=f"http://127.0.0.1:{backend_port}", port=gateway_port,
-                    boxteam_home=home,
-                    artifacts_dir=case.context.artifacts_dir / "gateway",
-                    extra_env=gateway_environment or {},
+                backend = await asyncio.to_thread(
+                    start_backend_process, workspace_root=str(case.mount.workspace_root), port=backend_port,
+                    log_name="mcp-local-control", asgi_app=backend_app,
+                    startup_mount=startup_mount,
+                    env_overrides={**replay.environment, "BOXTEAM_HOME": str(home), "BOXTEAM_GATEWAY_URL": gateway_url},
                 )
+                owned_backends.append(backend)
+                async with httpx.AsyncClient(
+                    base_url=gateway_url, timeout=30,
+                    headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": case.mount.workspace_id},
+                ) as client:
+                    await acquire_gateway_guest(client)
+                    yield client, replay, case
+            finally:
                 try:
-                    async with httpx.AsyncClient(
-                        base_url=f"http://127.0.0.1:{gateway_port}", timeout=30,
-                        headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": case.mount.workspace_id},
-                    ) as client:
-                        await acquire_gateway_guest(client)
-                        yield client, replay, case
+                    for owned in reversed(owned_backends):
+                        await asyncio.to_thread(close_backend_process, owned)
+                    shutil.copytree(case.mount.workspace_root / ".boxteam/logs", case.context.artifacts_dir / "backend-logs")
                 finally:
                     await asyncio.to_thread(close_gateway_process, gateway)
-            finally:
-                for owned in reversed(owned_backends):
-                    await asyncio.to_thread(close_backend_process, owned)
-                shutil.copytree(case.mount.workspace_root / ".boxteam/logs", case.context.artifacts_dir / "backend-logs")
     return start
 
 

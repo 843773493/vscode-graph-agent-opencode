@@ -31,6 +31,9 @@ class BackendManagementRoute:
     backend_id: str | None
     owner: ManagedBackendOwner | None = None
     target: WorkspaceTarget | None = None
+    backend_generation: str | None = None
+    member_targets: tuple[WorkspaceTarget, ...] = ()
+    member_owners: tuple[ManagedBackendOwner | None, ...] = ()
 
 
 class RegistryRoutesMixin:
@@ -44,26 +47,39 @@ class RegistryRoutesMixin:
 
     @contextmanager
     def backend_management_routes(self, *, backend_id: str | None = None,
-                                  workspace_ids: tuple[str, ...] = (), streaming: bool = False) -> Iterator[tuple[BackendManagementRoute, ...]]:
-        """从原 owner 合同取得管理入口，不借用活动工作区或按 URL 合并身份。"""
+                                  workspace_ids: tuple[str, ...] = (), streaming: bool = False,
+                                  allow_starting: bool = False) -> Iterator[tuple[BackendManagementRoute, ...]]:
+        """从正式或启动合同取得管理入口，不借用活动工作区或按 URL 合并身份。"""
         registry = cast("GatewayWorkspaceRegistry", self)
         owners = registry.backend_owners()
         owned_members = {member_id for owner in owners for member_id in owner.contract.workspace_ids}
-        candidates: list[tuple[ManagedBackendOwner | None, tuple[WorkspaceTarget, ...], str | None, str]] = []
+        starting_owners = {
+            member_id: owner
+            for owner in owners if allow_starting and owner.starting_contract is not None
+            for member_id in owner.starting_contract.workspace_ids
+        }
+        candidates: list[tuple[
+            ManagedBackendOwner | None, tuple[WorkspaceTarget, ...], str | None, str, str | None,
+        ]] = []
         for owner in owners:
+            contract = owner.starting_contract if allow_starting and owner.starting_contract is not None else owner.contract
+            if allow_starting and owner.starting_contract is not None:
+                owned_members.update(owner.starting_contract.workspace_ids)
+            if any(starting_owners.get(member_id) not in (None, owner) for member_id in workspace_ids):
+                continue
             if backend_id is not None and owner.backend_id != backend_id:
                 continue
-            if not set(workspace_ids).issubset(owner.contract.workspace_ids):
+            if not set(workspace_ids).issubset(contract.workspace_ids):
                 continue
-            candidates.append((owner, tuple(registry.resolve(member_id) for member_id in owner.contract.workspace_ids),
-                owner.backend_id, owner.contract.backend_url))
+            members = tuple(registry.resolve(member_id) for member_id in contract.workspace_ids)
+            candidates.append((owner, members, owner.backend_id, contract.backend_url, contract.generation))
         for target in registry.targets():
             if (target.gateway_id != registry.gateway_id or target.connection_kind != "local"
                 or target.workspace_id in owned_members or backend_id is not None and target.backend_id != backend_id):
                 continue
             if workspace_ids and not set(workspace_ids).issubset((target.workspace_id,)):
                 continue
-            candidates.append((None, (target,), target.backend_id, target.backend_url))
+            candidates.append((None, (target,), target.backend_id, target.backend_url, None))
         if backend_id is not None and len(candidates) > 1:
             preferred = [candidate for candidate in candidates if any(member.system_default for member in candidate[1])]
             if len(preferred) != 1:
@@ -73,9 +89,9 @@ class RegistryRoutesMixin:
             raise LookupError("原 Gateway 未登记请求的稳定 Backend 安装域或来源上下文；请先显式发现目标")
         with ExitStack() as references:
             routes = []
-            for owner, members, confirmed_id, base_url in candidates:
+            for owner, members, confirmed_id, base_url, generation in candidates:
                 if owner is not None:
-                    if owner.lock.locked():
+                    if owner.lock.locked() and not (allow_starting and owner.starting_contract is not None):
                         raise LookupError("Backend 完整组正在切换管理路由")
                     owner.assert_healthy()
                 elif members[0].managed:
@@ -86,8 +102,10 @@ class RegistryRoutesMixin:
                 for member in members:
                     leases.append(registry.acquire_route_reference(member.key, streaming=streaming))
                     references.callback(registry.release_route_reference, member.key, streaming=streaming)
+                member_owners = tuple(registry.backend_owner(member.key) for member in members)
                 routes.append(BackendManagementRoute(base_url, any(member.system_default for member in members),
-                    tuple(leases), confirmed_id, owner, None if owner is not None else members[0]))
+                    tuple(leases), confirmed_id, owner, None if owner is not None else members[0], generation,
+                    members, member_owners))
             yield tuple(routes)
 
     def confirm_backend_management_identity(self, route: BackendManagementRoute, backend_id: object) -> None:
@@ -97,14 +115,22 @@ class RegistryRoutesMixin:
         if any(lease.invalidated.is_set() for lease in route.leases):
             raise LookupError("Backend 管理路由在身份确认前已失效")
         if route.owner is not None:
-            if any(registry.backend_owner((lease.gateway_id, lease.workspace_id)) is not route.owner for lease in route.leases):
+            if route.owner not in registry.backend_owners():
                 raise LookupError("Backend 原 owner 在身份确认前已替换")
+            if len(route.member_targets) != len(route.leases) or len(route.member_owners) != len(route.leases):
+                raise RuntimeError("Backend 管理路由缺少冻结成员身份")
+            for lease, target, owner in zip(route.leases, route.member_targets, route.member_owners, strict=True):
+                key = (lease.gateway_id, lease.workspace_id)
+                if registry.resolve(key) is not target or registry.backend_owner(key) is not owner:
+                    raise LookupError("Backend 原目标或成员 owner 在身份确认前已替换")
             previous = route.owner.backend_id
             if previous is not None and previous != confirmed_id:
                 raise ValueError("Backend 安装域身份与原 owner 不匹配")
             route.owner.backend_id = confirmed_id
         elif route.target is not None:
-            if registry.resolve(route.target.key) is not route.target:
+            if (registry.resolve(route.target.key) is not route.target
+                    or not any((lease.gateway_id, lease.workspace_id) == route.target.key
+                               for lease in route.leases)):
                 raise LookupError("外部 Backend 登记在身份确认前已替换")
             previous = route.target.backend_id
             if previous is not None and previous != confirmed_id:

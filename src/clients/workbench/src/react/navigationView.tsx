@@ -32,18 +32,25 @@ import { useManagedBackendConfirmation } from '../../../web/src/hooks/gatewayWor
 import { sessionScopeKey } from '../../../web/src/state/session/sessionScope.js';
 import style from './navigationView.css?text';
 import type { CatalogRevealRequest } from '../../../web/src/hooks/sessionResourceExplorer/useCatalogReveal.js';
+import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHandlers } from '../search/workspaceActions.js';
 
-function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, onTheme, catalogReveal }: {
+function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, onTheme, catalogReveal, diagnosticLocation }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   commands: ICommandService;
   bindWorkspaceActions: (actions?: WorkspaceActionHandlers) => void;
   onTheme: (theme: GatewayResolvedThemeConfig) => void;
   catalogReveal?: CatalogRevealRequest;
+  diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
 }) {
   const confirm = useWarmConfirm();
   const [gatewayOpen, setGatewayOpen] = useState(false);
+  const [dismissedLocation, setDismissedLocation] = useState<GatewayDiagnosticLogLocateRequest>();
+  const logLocation = diagnosticLocation !== dismissedLocation ? diagnosticLocation : undefined;
+  useEffect(() => {
+    if (diagnosticLocation) setGatewayOpen(true);
+  }, [diagnosticLocation]);
   const [diagnostic, setDiagnostic] = useState<{ title: string; detail: string } | null>(null);
   const [activeEditor, setActiveEditor] = useState(() => editors.activeEditor);
   const gesture = useRef({ pinned: false, sideBySide: false });
@@ -182,12 +189,13 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       confirmText="保存" submitting={actions.nameDialogSubmitting} error={actions.nameDialogError} onCancel={actions.closeNameDialog} onSubmit={actions.submitNameDialog} />
     <SessionContextForkDialog state={actions.forkDialog} onCancel={actions.closeForkDialog} onSubmit={actions.submitForkDialog} onSelectionChange={actions.updateForkDialogSelection} />
     {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label="Gateway 控制中心">
-      <button type="button" className="sidebar-icon-button" aria-label="关闭 Gateway 控制中心" onClick={() => setGatewayOpen(false)}><span className="codicon codicon-close" /></button>
+      <button type="button" className="sidebar-icon-button" aria-label="关闭 Gateway 控制中心" onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
       <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onStart={startWorkspace} onStop={backendActions.stop}
         onSafeRestart={backendActions.safeRestart} onForceRestart={backendActions.forceRestart}
-        uiSettings={state.uiSettings} onUpdateUiSettings={runtime.updateUiSettings} />
+        uiSettings={state.uiSettings} onUpdateUiSettings={runtime.updateUiSettings}
+        diagnosticLocation={logLocation} onCloseDiagnosticLocation={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }} />
     </div> : null}
     {diagnostic ? <div className="native-navigation-dialog" role="dialog" aria-label={diagnostic.title}>
       <button type="button" className="sidebar-icon-button" aria-label="关闭诊断" onClick={() => setDiagnostic(null)}><span className="codicon codicon-close" /></button>
@@ -198,7 +206,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
 
 export class NavigationSurface {
   private readonly surface: ReactSurface;
-  private readonly render: (request?: CatalogRevealRequest) => void;
+  private readonly render: (request?: CatalogRevealRequest, diagnostic?: GatewayDiagnosticLogLocateRequest) => void;
   private reveal?: AbortController;
   private workspaceActions?: WorkspaceActionHandlers;
   private actionsReady?: DeferredPromise<WorkspaceActionHandlers>;
@@ -208,8 +216,9 @@ export class NavigationSurface {
       this.workspaceActions = actions;
       if (actions && this.actionsReady) { void this.actionsReady.complete(actions); this.actionsReady = undefined; }
     };
-    this.render = catalogReveal => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
-      notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} catalogReveal={catalogReveal} onTheme={theme => this.surface.applyTheme(theme, notifications)} /></WarmConfirmProvider>);
+    this.render = (catalogReveal, diagnosticLocation) => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
+      notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} catalogReveal={catalogReveal}
+      onTheme={theme => this.surface.applyTheme(theme, notifications)} diagnosticLocation={diagnosticLocation} /></WarmConfirmProvider>);
     this.render();
   }
   focus(): void { this.surface.focus('.session-resource-main-action, button'); }
@@ -219,6 +228,7 @@ export class NavigationSurface {
     if (!this.workspaceActions) throw new Error('工作区导航已关闭，原动作尚未执行');
     await this.workspaceActions[action](workspaceKey);
   }
+  revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void { this.render(undefined, request); }
   revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
     this.reveal?.abort(new Error('文件夹定位已被新的导航替换'));
     const controller = this.reveal = new AbortController();

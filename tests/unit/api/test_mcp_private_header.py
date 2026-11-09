@@ -1,4 +1,4 @@
-"""原私有写入口只回精确引用；不启动连接，也不写普通配置。"""
+"""工作区私有 header 只保存不可见值并返回绑定引用。"""
 
 from __future__ import annotations
 
@@ -71,23 +71,6 @@ def test_private_write_returns_only_bound_ref_and_preserves_existing_configurati
     assert not (root / ".boxteam/workspace.jsonc").exists()
     second = client.post("/api/v1/mcp/private-headers", json={**payload, "value": "Bearer rotated"})
     assert second.status_code == 200 and second.json()["data"]["version"] != reference["version"]
-
-
-def test_manual_env_uses_same_private_owner_and_cannot_bypass_candidate_route(private_api):
-    client, header, root = private_api
-    payload = {"target": header["target"], "server_id": "secure", "input_key": "API_KEY",
-               "launch": {"command": "/tools/server", "args": ["--serve"]}, "value": "private-env-api-only"}
-    response = client.post("/api/v1/mcp/private-env", json=payload)
-    assert response.status_code == 200, response.text
-    reference = response.json()["data"]
-    assert reference["workspace_id"] == payload["target"]["workspace_id"]
-    assert reference["server_id"] == "secure" and reference["input_key"] == "API_KEY"
-    assert payload["value"] not in response.text and "value" not in reference
-    assert response.headers["Cache-Control"] == "no-store"
-    before = list((root / ".boxteam/credentials/mcp-inputs").glob("*.json"))
-    rejected = client.post("/api/v1/mcp/candidate-plans/private-env", json=payload)
-    assert rejected.status_code == 422 and payload["value"] not in rejected.text
-    assert list((root / ".boxteam/credentials/mcp-inputs").glob("*.json")) == before
 
 
 @pytest.mark.parametrize("change", [

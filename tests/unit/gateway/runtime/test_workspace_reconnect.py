@@ -820,12 +820,19 @@ async def test_backend_restart_keeps_process_exit_budget_separate_from_http_drai
     single_workspace_graph, process_boundary, tmp_path, single_workspace_registry,
     monkeypatch: pytest.MonkeyPatch, http_drain_seconds: float,
 ) -> None:
+    from threading import Event
+
     owner = single_workspace_graph.owner
     original = owner.process
     waits: list[float] = []
+    loop = asyncio.get_running_loop()
+    gateway_responded = Event()
 
     def finish_process(*, timeout_seconds: float = 8) -> None:
         waits.append(timeout_seconds)
+        # Backend 的 MCP 关闭请求仍需 Gateway 响应，等待退出时不能阻塞其事件循环。
+        loop.call_soon_threadsafe(gateway_responded.set)
+        assert gateway_responded.wait(1), "Gateway 在等待 Backend 退出时无法处理其关闭请求"
         # Windows实测：lifespan已完成，解释器仍需约2秒才能真正退出。
         if timeout_seconds <= 2:
             raise TimeoutError("解释器退出仍在进行")
@@ -1090,7 +1097,7 @@ async def test_commit_observer_error_keeps_published_contract_and_running_unique
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
     if action == "start":
-        registry.stop_backend_owner(graph.owner)
+        await registry.stop_backend_owner(graph.owner)
     old_contract = graph.owner.contract
     failure = RuntimeError("提交观察者失败")
     def observer() -> None:

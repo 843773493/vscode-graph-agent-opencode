@@ -4,15 +4,13 @@
 
 # 可修改内容
 
-- MCP stdio 与 Streamable HTTP Client 配置解析。
-- `candidate_plans.py` 是安装与工作区配置共用的候选读取、variant 选择和解析实现。安装候选由原 `McpInstallationOwner` 消费，只解析制品字段；配置由 `McpCatalogOwner` 按精确工作区解析运行输入与私有引用，不反向代理安装、不复制解析或安装账本。
+- `config.py` 只解析插件服务与外部 Streamable HTTP MCP 配置；Backend 不启动第三方 stdio 子进程，也不拥有 MCP 包安装器。
 - `oauth.py` 通过官方 OAuthClientProvider 完成 discovery、PKCE、state、交换与刷新；只将已确认的授权需求交给 Owner。OAuth 专属 SDK 日志及异常不可携带 token、state 或响应正文；未知401与混合清理异常仍明确失败。
 - `oauth_credentials.py` 实现官方 TokenStorage，凭据按工作区／Server／endpoint／回调隔离，使用既有跨平台私有权限和原子文件原语；冷启动恢复原绝对过期时间与 discovery endpoint，不写入会话正文或普通状态表。
-- MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。
+- MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。插件 MCP 通过 Gateway 已登记的插件服务连接，不直接创建 stdio 子进程。
 - `connection_service.py` 协调持久连接意图、短观察、deadline、取消与私有 OAuth 回调；实际网络及目录仍由原 Owner 发布。`operation_store.py` 只使用唯一 WorkspaceStateStore，持久幂等 alias 与安全状态，不保存授权 URL、code、state 或 token。运行时断开不改 JSONC，重启仍按已启用配置创建新连接；遗留操作只对账，不重放交换。
-- `session_runtime.py` 在每个 Server 的原 task 中创建、初始化并关闭 SDK session；现有 LifetimeScope 持有关闭与排空回调，外层启动／关闭 task 不拥有 SDK CancelScope。目录发布和通知 fencing 仍只由 `McpCatalogOwner` 决定。
-- 原 session task 在创建前先经原资源账本预留 connection_ref，真实 spawn 后登记原 PID／创建时刻，初始化成功后才登记 running 并通知就绪；退出经原 Process.wait 与原容器核实后投影原记录。各次写入仍在同一原 task 的受保护 worker 中串行结算，不持目录 publication 锁；启动取消排空原 task，不在三个连接入口重新登记。
-- `transport/stdio.py` 是唯一 stdio transport，使用官方 StdioServerParameters、JSONRPCMessage／SessionMessage 编解码并持有通用 Process 边界；Streamable HTTP 沿原 SDK transport。两者继续共用原 `CancellableMcpClientSession`，不保留第二 stdio 分路。`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease；取消通知投递成功不代表远端停止。
+- `session_runtime.py` 在每个 Server 的原 task 中创建、初始化并关闭 SDK session；现有 LifetimeScope 持有关闭与排空回调，外层启动／关闭 task 不拥有 SDK CancelScope。插件 MCP 经 Gateway 精确路由到插件实例，插件进程由 Gateway 插件运行时持有；MCP owner 不登记插件 PID。目录发布和通知 fencing 仍只由 `McpCatalogOwner` 决定。
+- `plugin_bridge/` 是自有 MCP stdio 插件唯一 stdio transport bridge；Backend 沿 Gateway Streamable HTTP 接入。`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease；取消通知投递成功不代表远端停止。
 - 管理视图在原 runtime 失败／关闭期间保留唯一已知 descriptors，执行准入与 connection_ref 仍只来自真实 running；主动断开依唯一 publication.definitions 的 disconnected readiness 保持工具列表为空，不建立第二目录或状态源。
 - `mcp.catalog/*` 目录事件合同的发布接线。
 - MCP Tool 名称映射和 LangChain 适配。
@@ -25,7 +23,7 @@
 - `execution_handles.py` 属于原目录 Owner，只保留精确连接的短期对象引用；模型发送前经冻结 activation 登记有界资格，响应后保留实际输出的信封调用，既有 HITL edit 仍可选择原封存目录内的目标。期限由同一 MCP 配置族的 `supervision.sealed_call_timeout_seconds` 控制，不在重试中续期。
 - 启动直接等待原异步冷资格回收；内存handle和asyncio定时器仍在原循环清理，旧MCP账本扫描与资格释放进入同一受保护worker且不持目录publication锁。只撤销失去handle的prepared/execution资格，不结清真实invocation或其它领域占用。取消等原写入结算并保留首次取消与迟到cause；失败保留先前提交，同入口重试不重写已释放资格。同实例close及其它同步资格writer的锁隔离仍TODO。
 - MCP 执行目标沿 `execution_handles.execution_target` 核对原资格并占用唯一 ExternalResourceLeaseLedger；typed resource-use 来自受信调用上下文。SDK 确认结果后才释放，未知操作保留 reconcile_required，资格到期／连接关闭与远端副作用分别核实，禁止自动重放同一 operation。
-- 配置候选只在原 Owner 内准备，使用其每 Server 子 scope；配置 shadow 只回收未提交候选，不能在后续无关配置更新时关闭 active 连接。HTTP 先建后换；旧 stdio 停止前经原配置 recorder 写 journal，并同步撤销准入，等待原 task 关闭后再启动候选。无法保留旧运行态的失败沿原配置 owner 报 recovery_required。
+- 配置候选只在原 Owner 内准备，使用其每 Server 子 scope；配置 shadow 只回收未提交候选，不能在后续无关配置更新时关闭 active 连接。HTTP 先建后换；服务绑定替换经原配置 recorder 写 journal，并同步撤销准入，等待原 task 关闭后再启动候选。无法保留旧运行态的失败沿原配置 owner 报 recovery_required。
 - `retirement.py` 是原 Owner 的退役排空组件，只保留 runtime 引用并读取原账本；正常替换保留已有资格，禁用／移除同时撤销更早代际的新准入。排空和关闭各自使用原封存资格秒数作为上限；关闭 socket 不结清结果未知操作。
 
 # 不可修改内容
@@ -42,7 +40,7 @@
 # 规范
 
 - MCP Server 配置错误、连接失败和协议错误必须直接抛出详细异常。
-- stdio Server 必须使用命令与参数数组启动，不得通过 shell 字符串执行。
+- MCP stdio 仅由自有插件运行时启动，并使用参数数组，不得通过 shell 字符串执行。
 - MCP 工具名称必须带 Server 命名空间，禁止同名工具静默覆盖。
 - 目录 relist 必须完整读取并验证；连续 relist payload 不变时不得推进 revision；增删改发布新 immutable revision，删除以 tombstone 事件标记；目录为空也发布固定 envelope/revision。
 - 目录 generation 只在 revision 实际推进时递增；binding ref 的 binding_id/binding_hash 必须可重算核对。

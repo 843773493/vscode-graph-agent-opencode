@@ -1,12 +1,15 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { pinnedUpstreamCommit, transformedSourcePaths } from './sourceTransform.mjs';
 import { extensionDependencies } from './dependencies.mjs';
 import { projectTypecheckSources } from './typecheckProjection.mjs';
+import { parseArgs } from 'node:util';
 
 const root = process.cwd();
-const repository = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' }).trim();
+const { values, positionals } = parseArgs({ args: process.argv.slice(2), options: { 'project-root': { type: 'string' }, 'noEmit': { type: 'boolean' } }, allowPositionals: true });
+if (values['project-root'] !== undefined && !isAbsolute(values['project-root'])) throw new Error('--project-root 必须是绝对路径');
+const repository = values['project-root'] ?? execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' }).trim();
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(root, 'upstream'), encoding: 'utf8' }).trim();
 if (commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：${commit}`);
 // 放在统一构建产物目录，避免 Bun 发现镜像中的测试，也不与生产 build 清理 dist 竞态。
@@ -45,7 +48,7 @@ console.log(`类型检查包含 ${targets.length} 份实际 sourceTransform 源�
 for (const { path: configuration, compiler } of configurations) {
   const code = await new Promise((resolve, reject) => {
     const child = spawn(join(root, 'node_modules/.bin', compiler), ['--project', configuration, '--noEmit',
-      ...(compiler === 'tsgo' ? ['--singleThreaded'] : []), ...process.argv.slice(2)], { cwd: root, stdio: 'inherit' });
+      ...(compiler === 'tsgo' ? ['--singleThreaded'] : []), ...positionals], { cwd: root, stdio: 'inherit' });
     child.on('error', reject);
     child.on('exit', (code, signal) => signal ? reject(new Error(`类型检查被 ${signal} 终止`)) : resolve(code ?? 1));
   });

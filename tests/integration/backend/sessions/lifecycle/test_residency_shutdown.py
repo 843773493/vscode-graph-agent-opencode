@@ -90,7 +90,8 @@ async def test_residency_shutdown_keeps_owner_and_dependencies_until_original_sc
 ) -> None:
     entered, finish, failures, calls = residency_scan_boundary
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     closing = observer = None
     selected = maintenance_case.containers[-1]
     service = selected.agent_execution_service

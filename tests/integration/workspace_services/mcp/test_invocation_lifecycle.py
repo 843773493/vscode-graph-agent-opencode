@@ -1,26 +1,15 @@
-"""真实 stdio 的进度、原请求取消与断线，不以本地取消冒充远端回滚。"""
+"""正式 stdio 桥的进度、原请求取消与断线，不以本地取消冒充远端回滚。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import socket
-from collections.abc import Callable
-from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, create_autospec
 
 import pytest
-import uvicorn
 from mcp import types as mcp_types
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
-from sse_starlette.sse import AppStatus
-from starlette.applications import Starlette
-from starlette.datastructures import Headers
-from starlette.responses import Response
-from starlette.routing import Mount
 
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
@@ -46,18 +35,21 @@ from app.services.infrastructure.mcp.invocation import (
     mcp_cancelled_receipt,
     mcp_progress_scope,
 )
+from app.services.infrastructure.message_stream_store import MessageStreamWriter
 from app.services.orchestration.activity_runtime import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )
-from tests.harness.python.run_context import TestRunContext
-from tests.integration.workspace_services.mcp.schema_server import build_server
 from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
     SchemaServerCase,
 )
 from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
     schema_server_case as schema_server_case,  # noqa: PLC0414 - fixture 使用当前正式测试输出目录
 )
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用唯一 HTTP MCP 资产
+)
+from tests.support.mcp.http_endpoint import sdk_http_session_factory
 
 
 def call(invoker, call_id: str, mode: str):
@@ -98,12 +90,16 @@ async def test_real_progress_and_cancel_only_the_original_parallel_request(
         assert receipt.retryable is False
         result = await asyncio.wait_for(sibling, 5)
         assert result.status == "success" and result.tool_call_id == "sibling"
+        cancelled_rows: list[dict[str, object]] = []
         for _ in range(100):
-            if any(row.get("cancelled") for row in case.received()):
+            cancelled_rows = [row for row in case.received() if row.get("cancelled")]
+            if cancelled_rows:
                 break
             await asyncio.sleep(0.01)
-        assert len([row for row in case.received() if row.get("cancelled")]) == 1
-        assert [row["arguments"]["call_mode"] for row in case.received() if row.get("cancelled")] == ["wait"]
+        assert len(cancelled_rows) == 1
+        cancelled_arguments = cancelled_rows[0]["arguments"]
+        assert isinstance(cancelled_arguments, dict)
+        assert cancelled_arguments["call_mode"] == "wait"
         assert progress_case.values == [(1, 2)]
 
 
@@ -164,12 +160,14 @@ async def test_direct_dictionary_unknown_result_does_not_release_original_occupa
 
 @pytest.fixture
 def activity_case():
-    writer = SimpleNamespace(commit=AsyncMock())
+    writer = create_autospec(MessageStreamWriter, instance=True, spec_set=True)
+    commit = AsyncMock()
+    writer.commit = commit
     runtime = ActivityRuntime(writer, ActivityHandlerRegistry())
     sink = create_autospec(ModelDeltaSink, instance=True)
     sink.activities = runtime
     context = ToolInvocationContext(thread_binding=ThreadRuntimeBinding("session", f"thr_{create_uuid_hex()}"))
-    return SimpleNamespace(writer=writer, sink=sink, context=context)
+    return SimpleNamespace(writer=writer, commit=commit, sink=sink, context=context)
 
 
 @pytest.mark.parametrize("mode, expected", [("progress", "success"), ("disconnect", "outcome_unknown")])
@@ -198,7 +196,7 @@ async def test_envelope_publishes_real_progress_and_terminal_activity(
         finally:
             reset_current_model_delta_sink(sink_token)
             context.reset_tool_call_id(context_token)
-        commits = activity_case.writer.commit.await_args_list
+        commits = activity_case.commit.await_args_list
         assert commits[0].args[0] == "activity.started"
         assert commits[-1].args[1]["outcome"] == expected
         assert {entry.args[1]["activity_id"] for entry in commits} == {commits[0].args[1]["activity_id"]}
@@ -269,62 +267,6 @@ async def test_progress_writer_failure_is_reported_instead_of_sdk_swallowing_it(
         assert sibling.status == "success"
 
 
-@pytest.fixture
-def http_schema_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
-    # 同一 pytest 进程连续启动独立 Server 时，不能继承上一实例的 SSE 退出标志。
-    monkeypatch.setattr(AppStatus, "should_exit", False)
-
-    @asynccontextmanager
-    async def endpoint(
-        label: str, *, required_headers: dict[str, str] | None = None,
-        request_observer: Callable[[Headers], None] | None = None,
-        call_observer: Callable[[str, dict[str, object], Headers], None] | None = None,
-    ):
-        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-        definitions = context.artifacts_dir / f"{label}-definitions.json"
-        definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
-        receipts = context.artifacts_dir / f"{label}-receipts.jsonl"
-        manager = StreamableHTTPSessionManager(app=build_server(definitions, receipts, call_observer=call_observer))
-
-        @asynccontextmanager
-        async def lifespan(_app):
-            async with manager.run():
-                yield
-
-        async def handle_request(scope, receive, send):
-            if scope["type"] == "http":
-                headers = Headers(scope=scope)
-                if request_observer is not None:
-                    request_observer(headers)
-                if required_headers is not None and any(headers.get(key) != value for key, value in required_headers.items()):
-                    await Response(status_code=401)(scope, receive, send)
-                    return
-            await manager.handle_request(scope, receive, send)
-
-        app = Starlette(routes=[Mount("/mcp", app=handle_request)], lifespan=lifespan)
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            listener.listen()
-            port = listener.getsockname()[1]
-            server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
-            task = asyncio.create_task(server.serve(sockets=[listener]))
-            try:
-                for _ in range(100):
-                    if server.started:
-                        break
-                    if task.done():
-                        await task
-                        raise RuntimeError("HTTP Server 提前退出")
-                    await asyncio.sleep(0.01)
-                if not server.started:
-                    raise TimeoutError("HTTP Server 未就绪")
-                yield SimpleNamespace(url=f"http://127.0.0.1:{port}/mcp/", context=context,
-                                      definitions=definitions, receipts=receipts)
-            finally:
-                server.should_exit = True
-                await asyncio.wait_for(task, 5)
-    return endpoint
-
 
 @pytest.fixture
 async def http_schema_server_case(http_schema_endpoint_factory):
@@ -333,6 +275,7 @@ async def http_schema_server_case(http_schema_endpoint_factory):
             leases=ExternalResourceLeaseLedger(state_path=endpoint.context.workspace_root / ".boxteam/resources.json"),
             raw_config={"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": endpoint.url}}},
             workspace_root=endpoint.context.workspace_root, event_service=EventChannelService(),
+            session_factory=sdk_http_session_factory,
         )
         async with SchemaServerCase(owner, endpoint.definitions, endpoint.receipts, endpoint.context.workspace_root).started() as case:
             yield case
@@ -353,7 +296,8 @@ async def test_real_http_progress_cancel_and_following_request(http_schema_serve
     pending.cancel()
     with pytest.raises(asyncio.CancelledError) as cancelled:
         await pending
-    assert mcp_cancelled_receipt(cancelled.value).cancellation_delivery == "sent"
+    receipt = mcp_cancelled_receipt(cancelled.value)
+    assert receipt is not None and receipt.cancellation_delivery == "sent"
     result = await call(case.invoker(), "http-following", "progress")
     assert result.status == "success" and result.tool_call_id == "http-following"
     assert progress_case.values == [(1, 2)]
@@ -396,7 +340,7 @@ async def test_real_http_protocol_error_is_confirmed_in_activity_and_lease(
         "mode": "url", "message": "先完成远端授权", "url": "https://example.invalid/authorize",
         "elicitationId": "protocol-error-authorization",
     }]}
-    commits = activity_case.writer.commit.await_args_list
+    commits = activity_case.commit.await_args_list
     assert [entry.args[0] for entry in commits] == ["activity.started", "activity.failed"]
     assert {entry.args[1]["activity_id"] for entry in commits} == {operation_id}
     terminal = commits[-1].args[1]

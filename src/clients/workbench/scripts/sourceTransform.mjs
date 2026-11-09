@@ -4,7 +4,6 @@ import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTr
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
-import { mcpProviderSourcePaths, transformMcpProviders } from './mcpProviderTransform.mjs';
 import { extensionHostStateSourcePaths, transformExtensionHostState } from './extensionHostStateTransform.mjs';
 import { extensionInstanceSourcePaths, transformExtensionInstances } from './extensions/extensionInstanceTransform.mjs';
 import { extensionRunningSourcePaths, transformExtensionRunning } from './extensions/extensionRunningTransform.mjs';
@@ -72,7 +71,6 @@ export const transformedSourcePaths = [...new Set([
   ...outlineSourcePaths,
   ...fileDialogSourcePaths,
   ...mcpSourcePaths,
-  ...mcpProviderSourcePaths,
   ...extensionHostStateSourcePaths,
   ...extensionInstanceSourcePaths,
   ...extensionRunningSourcePaths,
@@ -142,7 +140,6 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformPluginDebug(root, path, contents, replaceOnce);
     contents = transformExtensionTasks(root, path, contents, replaceOnce);
     contents = transformExtensionNotebookApi(root, path, contents);
-    contents = transformMcpProviders(root, path, contents, replaceOnce);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
       // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
       contents = replaceOnce(contents, '} catch (error) {\n\t\t\tconst getAllDepsAndPacks =',
@@ -188,7 +185,12 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
         'if (this._initData.isTargetExtensionHost) await retainNodeExtensionVersions(myRegistry.getAllExtensionDescriptions());\n      const searchTree = await this._createExtensionPathIndex(myRegistry.getAllExtensionDescriptions());');
     }
     // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
-    if (runtime === 'node') return transformNativeManagement(root, path, contents, replaceOnce);
+    if (runtime === 'node') {
+      if (path === join(upstream, 'src/vs/workbench/api/common/extHost.api.impl.ts')) {
+        contents = transformMcp(root, path, contents, replaceOnce);
+      }
+      return transformNativeManagement(root, path, contents, replaceOnce);
+    }
     contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
     contents = transformConfigurationContributions(root, path, contents, replaceOnce);

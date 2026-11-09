@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from app.services.infrastructure.config_service import ConfigService
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:8014"
 DEFAULT_GATEWAY_TIMEOUT_SECONDS = 30

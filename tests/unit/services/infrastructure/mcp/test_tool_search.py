@@ -69,7 +69,9 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
     factory.session.description = "查找 CI 失败记录与日志"
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "controlled-server"}}},
+        raw_config={"servers": {"mini": {
+            "enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/mini/mcp",
+        }}},
         workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
     )
     calls = []

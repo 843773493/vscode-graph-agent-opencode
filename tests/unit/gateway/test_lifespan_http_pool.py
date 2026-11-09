@@ -82,7 +82,8 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     registry.targets.return_value = ()
     registry.close.side_effect = lambda **kwargs: drain("registry")
     config = GatewayConfig(
-        payload={"logging": {"runtime": {"level": "info", "pretty": True}}}, revision="pool-lifecycle-config", default_workspace_skill_groups=[],
+        payload={"logging": {"runtime": {"level": "info", "pretty": True}}, "plugins": {}},
+        revision="pool-lifecycle-config", default_workspace_skill_groups=[],
         gateway_process_health_poll_interval_seconds=1,
         gateway_process_health_request_timeout_seconds=1,
         gateway_process_connection_drain_timeout_seconds=1,
@@ -107,7 +108,9 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
         promote=lambda: None, rollback=lambda: None,
     )
     monkeypatch.setattr(gateway_lifespan, "RuntimeLoggingConsumer", Mock(return_value=SimpleNamespace(stage=lambda: logging_stage)))
-    monkeypatch.setattr(gateway_lifespan, "GatewayConfigReloadService", Mock(return_value=service("config")))
+    config_reload = service("config")
+    config_reload.config = config
+    monkeypatch.setattr(gateway_lifespan, "GatewayConfigReloadService", Mock(return_value=config_reload))
     monkeypatch.setattr(gateway_lifespan, "_gateway_federation_policy_payload", Mock(return_value={}))
     monkeypatch.setattr(gateway_lifespan, "FederationControlStore", _ControlStore)
     monkeypatch.setattr(gateway_lifespan, "federation_control_database", Mock(return_value=object()))
@@ -126,6 +129,10 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
         ("GatewaySessionCatalogSearchService", "catalog"),
     ):
         monkeypatch.setattr(gateway_lifespan, name, Mock(return_value=service(label)))
+    workspace_plugin_bindings = Mock(start=Mock(), close=AsyncMock(), reconcile=AsyncMock())
+    monkeypatch.setattr(
+        gateway_lifespan, "WorkspacePluginBindings", Mock(return_value=workspace_plugin_bindings),
+    )
     monkeypatch.setattr(gateway_lifespan, "_cleanup_user_access_periodically", AsyncMock())
     monkeypatch.setattr(gateway_lifespan, "_restore_managed_local_runtimes", AsyncMock())
     monkeypatch.setattr(gateway_lifespan, "_should_preserve_gateway_generation_for_handoff", Mock(return_value=False))
@@ -155,13 +162,16 @@ async def test_gateway_pool_closes_once_on_startup_failure(
 @pytest.mark.asyncio
 async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: _LifespanCase) -> None:
     async with gateway_lifespan.lifespan(lifespan_case.app) as state:
-        assert state["extension_management"] is lifespan_case.app.state.extension_management
         assert lifespan_case.app.state.http_client is lifespan_case.clients[0]
         assert lifespan_case.app.state.federation_rpc_service.session_main._http_client is lifespan_case.clients[0]
+        after_http_startup = state["after_http_startup"]
+        assert after_http_startup is not None
+        await after_http_startup()
         assert not lifespan_case.clients[0].is_closed
     assert all(client.is_closed for client in lifespan_case.clients)
     assert all(transport.close_calls == 1 for transport in lifespan_case.transports)
     assert lifespan_case.events[-1] == "pool-close-0"
+    assert lifespan_case.events.count("pool-close-0") == 1
     assert {"catalog", "channel", "ssh", "registry", "config", "state"} <= set(lifespan_case.events)
 
 
@@ -198,8 +208,10 @@ async def test_extension_management_handoff_uses_gateway_state_before_close(
     )
 
     async with gateway_lifespan.lifespan(lifespan_case.app) as state:
-        assert state["extension_management"] is owner
         assert lifespan_case.app.state.extension_management is owner
+        after_http_startup = state["after_http_startup"]
+        assert after_http_startup is not None
+        await after_http_startup()
 
     assert preserve_checks == [True]
     assert extension_cleanup == [True]

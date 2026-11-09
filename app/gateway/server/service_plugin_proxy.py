@@ -85,7 +85,7 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
         query = [(key, value) for key, value in connection.query_params.multi_items()
                  if key not in {"token", "target_gateway_id"}]
         headers = {key: value for key, value in connection.headers.items()
-                   if key.lower() in {"content-type", "content-encoding", "accept", "last-event-id", "mcp-session-id", "mcp-protocol-version"}}
+                   if key.lower() in {"content-type", "content-encoding", "accept", "last-event-id", "mcp-session-id", "mcp-protocol-version", "x-boxteam-plugin-instance-id"}}
         if remote is not None:
             headers.update(remote.headers)
             url = build_upstream_url(remote.base_url, (), connection.url.path.lstrip("/"))
@@ -108,7 +108,10 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             if target.connection_kind != "local":
                 raise LookupError("插件服务不属于原生工作区")
         owner = connection.app.state.service_plugins
-        selected_instance = instance_id
+        header_instance = connection.headers.get("X-BoxTeam-Plugin-Instance-Id")
+        if instance_id is not None and header_instance is not None and instance_id != header_instance:
+            raise ValueError("插件实例路径与请求头身份冲突")
+        selected_instance = instance_id or header_instance
         if selected_instance is None:
             slot = owner.slots.get(owner.key(binding))
             if slot is None or slot.receipt is None:

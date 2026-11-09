@@ -23,9 +23,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
 from tests.integration.backend.agents.test_mcp_connection_control import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用真实 MCP
-)
-from tests.integration.backend.agents.test_mcp_connection_control import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 复用真实 OAuth
 )
 from tests.integration.backend.agents.test_mcp_connection_control import (
@@ -37,6 +34,9 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用真实 MCP
+)
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.processes.workspace import start_backend_process, terminate_process
 

@@ -40,8 +40,8 @@ def test_oauth_cannot_override_an_explicit_authorization_header(workspace_root):
         parse_mcp_server_configs({"servers": {"secure": raw}}, workspace_root=workspace_root)
 
 
-def test_stdio_does_not_accept_http_oauth_configuration(workspace_root):
-    with pytest.raises(ValueError, match="不支持的字段"):
+def test_backend_rejects_direct_stdio_configuration(workspace_root):
+    with pytest.raises(ValueError, match="仅支持 plugin 或 streamable_http"):
         parse_mcp_server_configs({"servers": {"secure": {"transport": "stdio", "command": "server", "oauth": {}}}},
                                  workspace_root=workspace_root)
 
@@ -65,36 +65,23 @@ def test_sealed_call_timeout_rejects_unknown_supervision_fields(workspace_root):
         parse_mcp_server_configs({"supervision": {"timeout": 1}}, workspace_root=workspace_root)
 
 
-def test_parse_stdio_config_expands_workspace_and_environment(
-    workspace_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MCP_TEST_TOKEN", "secret-value")
-
-    servers = parse_mcp_server_configs(
-        {
-            "servers": {
-                "mini": {
-                    "enabled": True,
-                    "transport": "stdio",
-                    "command": "${workspaceRoot}/bin/server",
-                    "args": ["--root", "${workspaceRoot}"],
-                    "env": {"TOKEN": "${MCP_TEST_TOKEN}"},
-                }
-            }
+def test_plugin_config_uses_gateway_service_reference(workspace_root: Path) -> None:
+    server, = parse_mcp_server_configs({"servers": {"mini": {
+        "enabled": True,
+        "transport": "plugin",
+        "service": {
+            "gateway_id": "gateway_00000000000000000000000000000001",
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "package_id": "boxteam.mcp-stdio",
+            "package_version": "1.0.0",
+            "plugin_id": "stdio",
+            "service_id": "mcp",
         },
-        workspace_root=workspace_root,
-    )
-
-    assert len(servers) == 1
-    server = servers[0]
-    assert server.enabled is True
-    connection = server.connection
-    assert connection["transport"] == "stdio"
-    assert connection["command"] == f"{workspace_root}/bin/server"
-    assert connection["args"] == ["--root", str(workspace_root)]
-    assert connection.get("env") == {"TOKEN": "secret-value"}
-    assert str(connection.get("cwd")) == str(workspace_root)
+    }}}, workspace_root=workspace_root)
+    assert server.enabled and server.transport == "plugin"
+    assert server.connection is None
+    assert server.service is not None
+    assert server.service.package_version == "1.0.0"
 
 
 def test_parse_config_rejects_missing_environment_variable(

@@ -77,7 +77,8 @@ async def test_terminal_monitor_failure_blocks_dependencies_then_retries_same_wo
 ) -> None:
     entered, release, errors, calls = terminal_snapshot_fault
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     closing = observer = None
     try:
         peer, selected = maintenance_case.containers
@@ -152,7 +153,8 @@ async def test_terminal_monitor_default_deadline_preserves_workspace_until_origi
 ) -> None:
     entered, release, errors, calls = terminal_snapshot_fault
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     closing = observer = None
     try:
         selected = maintenance_case.containers[-1]

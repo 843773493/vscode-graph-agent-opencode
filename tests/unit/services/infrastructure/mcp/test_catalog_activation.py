@@ -54,7 +54,6 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
     extension_schema_hash,
 )
-from app.services.infrastructure.mcp.session_runtime import McpSessionLifecycle
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
     ResourceRegistryCapture,
@@ -113,7 +112,7 @@ class CatalogSessionFactory:
 
     @asynccontextmanager
     async def __call__(
-        self, server: McpServerConfig, notify: Callable[[], None], lifecycle: McpSessionLifecycle,
+        self, server: McpServerConfig, notify: Callable[[], None],
     ) -> AsyncIterator[CatalogSession]:
         assert server.server_id == "mini"
         self.notify = notify
@@ -139,7 +138,9 @@ async def catalog_runtime(catalog_workspace, catalog_selection):
     factory = CatalogSessionFactory()
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "controlled-server"}}},
+        raw_config={"servers": {"mini": {
+            "enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/mini/mcp",
+        }}},
         workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
     )
     await owner.start()

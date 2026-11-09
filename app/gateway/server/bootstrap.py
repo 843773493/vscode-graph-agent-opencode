@@ -14,6 +14,7 @@ from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.config import (
     ConfiguredRemoteGateway,
     GatewayConfig,
@@ -119,22 +120,35 @@ async def _restore_managed_local_runtimes(
 ) -> None:
     resolved = gateway_config or load_gateway_config()
     await asyncio.to_thread(registry.validate_local_root_bindings, get_project_root())
+    default = registry.resolve(default_workspace_id)
+    if (not default.managed and (only_workspace_ids is None or default_workspace_id in only_workspace_ids)
+            and (exclude_workspace_ids is None or default_workspace_id not in exclude_workspace_ids)):
+        health = await wait_for_workspace_health(
+            f"{default.backend_url}/api/v1/health", default_workspace_id,
+            request_timeout_seconds=resolved.gateway_process_health_request_timeout_seconds,
+            poll_interval_seconds=resolved.gateway_process_health_poll_interval_seconds,
+        )
+        backend_id = validate_backend_id(health.get("backend_id"))
+        if default.backend_id is not None and default.backend_id != backend_id:
+            raise ValueError("外部默认 Backend 安装域与原登记不匹配，不能隐式改绑")
+        default.backend_id = backend_id
     for owner in registry.backend_owners():
         ids = set(owner.contract.workspace_ids)
         if (only_workspace_ids is not None and not ids.intersection(only_workspace_ids)) or (
             exclude_workspace_ids is not None and ids.intersection(exclude_workspace_ids)
-        ) or default_workspace_id in ids or not all(registry.resolve(member_id).desired_running for member_id in ids):
+        ) or not all(registry.resolve(member_id).desired_running for member_id in ids):
             continue
         async with registry.backend_topology_lock, owner.lock:
             if owner.process is not None and owner.process.is_alive() and owner.error is None:
                 continue
             contract: ManagedBackendContract | None = None
             try:
-                owner.close()
+                await run_sync_shielded(owner.close)
                 reusable = {member_id: registry.managed_runtime(member_id) for member_id in ids if registry.has_runtime(member_id)}
                 contract, runtimes = await start_managed_backend_runtime(
                     owner=owner, registry=registry, project_root=get_project_root(), log_dir=get_runtime_log_root(),
                     reusable_runtimes=reusable,
+                    preferred_backend_port=_default_backend_port() if default_workspace_id in ids else None,
                     adopt_existing_backend=preserve_existing_managed_runtimes,
                     health_request_timeout_seconds=resolved.gateway_process_health_request_timeout_seconds,
                     health_poll_interval_seconds=resolved.gateway_process_health_poll_interval_seconds,
@@ -150,6 +164,8 @@ async def _restore_managed_local_runtimes(
                     error, stage="backend_restore",
                     label=f"Gateway 启动恢复完整 Backend 失败: owner={owner.contract.owner_id}",
                 ))
+                if default_workspace_id in ids:
+                    raise
                 if registry.active_workspace in {(registry.gateway_id, member_id) for member_id in ids} and registry.has_target(default_workspace_id):
                     registry.activate(default_workspace_id)
                     logger.warning("Gateway 完整组恢复失败，已回退到默认工作区: owner=%s", owner.contract.owner_id)
@@ -209,8 +225,8 @@ async def create_registry(
         )
     except BaseException as startup_error:
         try:
-            registry.close(
-                detach_adopted_managed_processes=preserve_existing_managed_runtimes
+            await run_sync_shielded(
+                registry.close, detach_adopted_managed_processes=preserve_existing_managed_runtimes,
             )
         except BaseException as cleanup_error:  # noqa: BLE001 - 取消与清理错误必须完整保留
             raise BaseExceptionGroup(
@@ -251,52 +267,14 @@ async def _complete_registry_startup(
             local_service_urls=persisted_default.local_service_urls if persisted_default is not None else {},
         ), activate=persisted_active_workspace is None,
     )
-    if external_backend_url is None:
-        if owner is None:
-            owner = ManagedBackendOwner(ManagedBackendContract(
-                gateway_id=registry.gateway_id, owner_id=f"backend_owner_{uuid4().hex}", generation=f"backend_generation_{uuid4().hex}",
-                members=(ManagedBackendMember(workspace_id=default_workspace_id),),
-                backend_url=persisted_default.backend_url if persisted_default is not None else "",
-                debug_port=_default_backend_debug_port(),
-            ))
-            registry.register_backend_owner(owner)
-        contract, runtimes = await start_managed_backend_runtime(
-            owner=owner, registry=registry, project_root=get_project_root(), log_dir=get_runtime_log_root(),
-            preferred_backend_port=_default_backend_port(), adopt_existing_backend=preserve_existing_managed_runtimes,
-            health_request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
-            health_poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
-            connection_drain_timeout_seconds=resolved_gateway_config.gateway_process_connection_drain_timeout_seconds,
-            default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
-            preserve_adopted_processes_on_failure=preserve_existing_managed_runtimes,
-        )
-        try:
-            registry.publish_backend_runtime(owner, contract, runtimes)
-        except BaseException as error:
-            if owner.contract is contract:
-                raise
-            try:
-                if preserve_existing_managed_runtimes and owner.adopted:
-                    owner.detach()
-                    for runtime in runtimes.values():
-                        runtime.detach_adopted_processes()
-                else:
-                    owner.close()
-                for runtime in runtimes.values():
-                    runtime.close()
-            except BaseException as cleanup_error:  # noqa: BLE001 — 保留原注册失败并暴露清理失败。
-                error.add_note(str(cleanup_error))
-            raise
-    else:
-        health = await wait_for_workspace_health(
-            f"{external_backend_url}/api/v1/health", default_workspace_id,
-            request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
-            poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
-        )
-        backend_id = validate_backend_id(health.get("backend_id"))
-        target = registry.resolve(default_workspace_id)
-        if target.backend_id is not None and target.backend_id != backend_id:
-            raise ValueError("外部默认 Backend 安装域与原登记不匹配，不能隐式改绑")
-        target.backend_id = backend_id
+    if external_backend_url is None and owner is None:
+        owner = ManagedBackendOwner(ManagedBackendContract(
+            gateway_id=registry.gateway_id, owner_id=f"backend_owner_{uuid4().hex}", generation=f"backend_generation_{uuid4().hex}",
+            members=(ManagedBackendMember(workspace_id=default_workspace_id),),
+            backend_url=persisted_default.backend_url if persisted_default is not None else "",
+            debug_port=_default_backend_debug_port(),
+        ))
+        registry.register_backend_owner(owner)
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )

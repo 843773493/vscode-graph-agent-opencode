@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime
 
 from app.core.sqlite_state import utc_now_text
@@ -95,7 +96,7 @@ class WorkspaceConfigSourceLayerMixin:
         if (enforce_active_cas or expected_active_revision is not None) and not config_domain:
             raise ValueError("active CAS 必须声明 config_domain")
 
-        with self._mcp_config_write(payload) as connection:
+        with closing(self._database.connection()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             if enforce_active_cas or expected_active_revision is not None:
                 active = connection.execute(

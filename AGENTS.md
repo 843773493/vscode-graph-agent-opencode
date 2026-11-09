@@ -233,7 +233,7 @@
 3. `scripts/launch/dev.mjs` 启动前会清理 8010–8016 以及调试端口 8002 的旧监听进程，其中包括 Gateway。需要验证完整 Web 产品时必须通过该脚本统一重启，不要只手动重启 8010 后端而保留旧 Gateway 或旧前端。
 4. `bun run dev` 在完整服务就绪后返回，`bun run dev:status` 查看状态，`bun run dev:stop` 停止并回收对应平台的服务组。只有需要前台调试整组进程时才使用 `bun run dev:foreground`；任一关键进程退出时仍会停止其余进程。
 5. 验证 Web 可用性不能只检查 8010 健康接口或 8011 HTML。至少应通过 8011 实际请求 `/api/gateway/health`、`/api/gateway/workspaces` 和 `/api/v1/workspace`，确认页面初始化链路、激活工作区以及响应头/响应体 `request_id` 均正确；涉及交互时还应进行真实浏览器测试。
-6. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。仅调试单个工作区后端时可使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8010`，但这不代表 Gateway 和 Web 全链路已经启动。
+6. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。仅调试单个工作区后端时使用 `uv run python -m app.runtime.http_server app.main:app --host 127.0.0.1 --port 8010`，但这不代表 Gateway 和 Web 全链路已经启动。
 7. 工作区后端 API 文档位于 http://127.0.0.1:8010/api/v1/docs；Gateway API 文档位于 http://127.0.0.1:8014/api/gateway/docs。
 
 ### 配置

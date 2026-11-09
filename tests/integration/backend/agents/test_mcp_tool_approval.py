@@ -15,9 +15,6 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from configs.runtime import read_jsonc_object
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
 from tests.integration.backend.agents.test_mcp_connection_control import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 MCP 资产
-)
-from tests.integration.backend.agents.test_mcp_connection_control import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 产品装具的未授权兄弟连接
 )
 from tests.integration.backend.agents.test_mcp_connection_control import (
@@ -28,6 +25,9 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 MCP 资产
+)
 
 
 @pytest.fixture

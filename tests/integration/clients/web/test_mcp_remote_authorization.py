@@ -25,15 +25,15 @@ from tests.integration.clients.web.test_mcp_connection_authorization import (
     discovery_plan as discovery_plan,  # noqa: PLC0414 - 同一 model_stream 响应资产
 )
 from tests.integration.clients.web.test_mcp_connection_authorization import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原 MCP handler
-)
-from tests.integration.clients.web.test_mcp_connection_authorization import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 原 OAuth/PKCE 服务
 )
 from tests.integration.clients.web.test_mcp_connection_authorization import (
     test_web_authorization_reaches_original_owner_then_discovers_and_executes as _verify_web_authorization,
 )
 from tests.support.communication.federation import open_communication_triad
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原 MCP handler
+)
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 

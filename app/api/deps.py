@@ -11,11 +11,9 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.core.path_utils import SessionCatalogComponents, workspace_context
 from app.core.trace_middleware import (
     get_request_id,  # noqa: F401
-    require_current_gateway_id,
 )
 from app.core.workspace_identity import validate_workspace_id
 from app.runtime.session_orchestrator import SessionOrchestrator
-from app.schemas.internal_v2.mcp import McpInstallationTargetDTO
 from app.services.business.agent_service import AgentService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
@@ -55,7 +53,6 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
-from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.bootstrap import ResourcePlatform
@@ -138,9 +135,6 @@ class _AppContainerProtocol(Protocol):
 
 
 class _WorkspaceContainerRegistryProtocol(Protocol):
-    @property
-    def mcp_installations(self) -> McpInstallationOwner: ...
-
     def get(self, workspace_id: str) -> _AppContainerProtocol: ...
 
 
@@ -236,6 +230,9 @@ async def workspace_container_scope(
     """在 HTTP 或 WebSocket 连接期间绑定显式工作区上下文。"""
 
     container = get_workspace_container(request)
+    lifecycle = getattr(request.app.state, "workspace_lifespan", None)
+    if lifecycle is not None:
+        await lifecycle.wait_business_ready(container.workspace_id)
     with workspace_context(
         container.workspace_id,
         container.workspace_root,
@@ -373,22 +370,6 @@ def get_tool_test_service(request: Request) -> ToolTestService:
 
 def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
     return _require_service(request, "mcp_catalog_owner", McpCatalogOwner, "McpCatalogOwner 尚未在应用启动阶段初始化")
-
-
-def get_mcp_installation_owner(request: Request) -> McpInstallationOwner:
-    registry = cast(_WorkspaceContainerRegistryProtocol | None, getattr(request.app.state, "workspace_container_registry", None))
-    if registry is None:
-        raise RuntimeError("Backend 工作区注册表尚未初始化，不能管理 MCP 制品")
-    return registry.mcp_installations
-
-
-def get_mcp_installation_target(request: Request) -> McpInstallationTargetDTO:
-    backend_id = getattr(request.app.state, "backend_id", None)
-    if backend_id is None:
-        raise RuntimeError("MCP 安装候选需要原生 Backend 已初始化的稳定身份")
-    return McpInstallationTargetDTO(
-        gateway_id=require_current_gateway_id("MCP 安装候选"), backend_id=backend_id,
-    )
 
 
 def get_mcp_connection_service(request: Request) -> McpConnectionService:

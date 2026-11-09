@@ -20,12 +20,6 @@ from app.core.resource_uri import resource_display_uri
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
-from tests.integration.gateway.test_mcp_artifact_installation import (
-    InstallationCase,
-)
-from tests.integration.gateway.test_mcp_artifact_installation import (
-    installation_case as installation_case,  # noqa: PLC0414
-)
 from tests.integration.test_shared_managed_backend_lifecycle import (
     SharedBackendCase,
     _join_group,
@@ -58,23 +52,25 @@ def settings_management_component(management_runtime, runtime_manifest_path: Pat
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
 
 
-async def test_settings_editor_saves_target_json_and_restores_same_profile(installation_case: InstallationCase, vsix_factory) -> None:
-    case = installation_case
+async def test_settings_editor_saves_target_json_and_restores_same_profile(
+    shared_backend_case: SharedBackendCase, vsix_factory,
+) -> None:
+    case = shared_backend_case
+    workspace = case.roots[0]
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "设置编辑器验收需要真实 Chromium"
-    workspace_config = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
-    vsix = vsix_factory(case.workspace, "1.0.0", "settings-only", manifest_overrides={
+    workspace_config = (workspace / ".boxteam/workspace.jsonc").read_bytes()
+    vsix = vsix_factory(workspace, "1.0.0", "settings-only", manifest_overrides={
         "contributes": {"configuration": {"title": "独立安装设置", "properties": {
             "schemaProbe.independent": {"type": "string", "default": "schema-default", "scope": "window",
                 "description": "无需运行扩展宿主即可发现与保存"}}},
             "configurationDefaults": {"editor.tabSize": 3, "[typescript]": {"editor.tabSize": 5}}},
     })
-    listing = case.client.get("/api/gateway/workspaces")
-    listing.raise_for_status()
-    target = listing.json()["data"]["active_workspace"]
-    directory = case.client.post("/api/gateway/extension-configurations/targets", json={"protocol_version": 1, "gateway_id": target["gateway_id"]})
-    directory.raise_for_status()
-    backend_id, = directory.json()["data"]["backend_ids"]
+    listing = await case.data("GET", "/api/gateway/workspaces")
+    target = listing["active_workspace"]
+    directory = await case.data("POST", "/api/gateway/extension-configurations/targets",
+        json={"protocol_version": 1, "gateway_id": target["gateway_id"]})
+    backend_id, = directory["backend_ids"]
     install = {"protocol_version": 1, "gateway_id": target["gateway_id"], "backend_id": backend_id,
         "workspace_ids": [target["workspace_id"]], "source_uri": resource_display_uri(scope="workspace",
             scope_id=target["workspace_id"], kind="files", tail_segments=("root", vsix.name), gateway_authority=target["gateway_id"])}
@@ -103,9 +99,9 @@ async def test_settings_editor_saves_target_json_and_restores_same_profile(insta
     uri = urlsplit(binding["context"]["remote_settings"]["native_uri"])
     assert uri.scheme == "file" and not uri.netloc
     native = Path(url2pathname(uri.path)).resolve()
-    assert native.is_relative_to(case.home.resolve())
+    assert native.is_relative_to(case.boxteam_home.resolve())
     assert commentjson.loads(native.read_text(encoding="utf-8")) == {"http.proxy": "http://target.invalid:8080", "http.proxyStrictSSL": False}
-    assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == workspace_config
+    assert (workspace / ".boxteam/workspace.jsonc").read_bytes() == workspace_config
     assert all(write["gateway_id"] == binding["gateway_id"] and write["backend_id"] == binding["backend_id"]
         and write["profile_id"] == binding["profile_id"] for write in browser["writes"])
 

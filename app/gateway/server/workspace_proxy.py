@@ -423,25 +423,14 @@ async def _proxy_workspace_request(
         raise HTTPException(400, "明确 Gateway 连接只允许当前页面选择已关联的远端工作区")
     segments = _workspace_path_segments(path)
     private_input_request = len(segments) >= 2 and segments[0] == "mcp" and (
-        segments[1] in {"private-headers", "private-env", "candidate-configurations"}
-        or segments[1:] == ["candidate-plans", "private-env"])
+        segments[1] == "private-headers")
     configuration_request = (bool(segments) and segments[0] == "config") or private_input_request
-    if len(segments) >= 2 and segments[0] == "mcp" and (segments[1] in {
-        "candidate-manifests", "installations", "installation-operations", "installation-capabilities",
-    } or segments[1] == "candidate-plans" and segments[2:] != ["private-env"]):
-        raise HTTPException(410, "MCP 制品管理已移至明确 Gateway／Backend 的管理入口")
-    installation_request = len(segments) >= 2 and segments[0] == "mcp" and (
-        segments[1] == "candidate-configurations" or segments[1:] == ["candidate-plans", "private-env"])
     if configuration_request:
         if auth is None:
             raise RuntimeError("配置代理请求缺少已认证 Gateway 主体")
         require_federation_capability(request, auth, "configuration_read")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             require_federation_capability(request, auth, "configuration_write")
-    if installation_request:
-        if auth is None:
-            raise RuntimeError("MCP 安装候选请求缺少已认证 Gateway 主体")
-        require_federation_capability(request, auth, "mcp_installation_manage")
     client = _http_client(
         request,
         streaming=_is_streaming_workspace_path(path),
@@ -473,7 +462,11 @@ async def _proxy_workspace_request(
         if retry_availability
         else ()
     )
-    # 路由引用从获取到释放必须构成配对作用域：header 构造、运行时等待、重试解析
+    # 恢复发布需要原路由引用排空；等待就绪时不能先占用待发布路由。
+    if target.connection_kind == "local":
+        await _wait_for_workspace_runtime(request, target)
+        target = registry.resolve(target.key)
+    # 路由引用从获取到释放必须构成配对作用域：header 构造、重试解析
     # 中任何一步抛错，以及客户端在等待响应头时断连触发的取消，都必须归还这一份
     # 引用。整个处理流程包在一个 try 里，由 finally 兜底释放；同步闭包无需 shield
     # （finally 内的同步调用不可被取消打断），流式响应则把租约移交给响应体生成器
@@ -502,10 +495,13 @@ async def _proxy_workspace_request(
     try:
         for attempt in range(len(retry_delays) + 1):
             if attempt > 0:
+                release_route_reference()
                 await asyncio.sleep(retry_delays[attempt - 1])
                 target = registry.resolve(route_workspace_id)
+                if target.connection_kind == "local":
+                    await _wait_for_workspace_runtime(request, target)
+                    target = registry.resolve(route_workspace_id)
                 route_workspace_id = target.key
-                release_route_reference()
                 route_lease = registry.acquire_route_reference(
                     route_workspace_id,
                     streaming=False, gateway_connection_id=connection_id,
@@ -529,7 +525,6 @@ async def _proxy_workspace_request(
                         detail=str(error),
                     ) from error
             else:
-                await _wait_for_workspace_runtime(request, target)
                 try:
                     backend_url = registry.resolve_service_url(
                         target.key,
@@ -592,9 +587,6 @@ async def _proxy_workspace_request(
                 require_federation_capability(request, auth, "configuration_read")
                 if request.method not in {"GET", "HEAD", "OPTIONS"}:
                     require_federation_capability(request, auth, "configuration_write")
-            if installation_request:
-                assert auth is not None
-                require_federation_capability(request, auth, "mcp_installation_manage")
             try:
                 response = await send_upstream_request(client, forwarded)
                 if retry_availability:
@@ -655,17 +647,15 @@ async def _proxy_workspace_request(
                 detail=f"工作区 availability 请求未获得响应: {target_url}",
             )
         media_type = response.headers.get("content-type")
-        if (configuration_request or installation_request) and not (media_type and "text/event-stream" in media_type):
+        if configuration_request and not (media_type and "text/event-stream" in media_type):
             try:
                 body = await response.aread()
             finally:
                 await response.aclose()
             assert auth is not None
-            require_federation_capability(request, auth, "configuration_read" if configuration_request else "mcp_installation_manage")
+            require_federation_capability(request, auth, "configuration_read")
             if private_input_request:
                 require_federation_capability(request, auth, "configuration_write")
-            if installation_request:
-                require_federation_capability(request, auth, "mcp_installation_manage")
             return Response(content=body, status_code=response.status_code,
                             headers=_response_headers(response), media_type=media_type)
         if navigation_deadline_at is not None:
@@ -885,10 +875,12 @@ async def proxy_node_debug_dap(
             or auth.kind == "federation"
         ):
             raise HTTPException(400, "明确 Gateway 连接只允许本机请求选择已关联的远端工作区")
+        if target.connection_kind == "local":
+            await _wait_for_workspace_runtime(websocket, target)
+            target = registry.resolve_request_target(workspace_id, requested_gateway_id)
         route_lease = registry.acquire_route_reference(
             target.key, streaming=True, gateway_connection_id=connection_id,
         )
-        await _wait_for_workspace_runtime(websocket, target)
         backend_url = registry.resolve_service_url(target.key, "workspace_api")
         upstream_http_url = build_upstream_url(
             backend_url,

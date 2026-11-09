@@ -442,8 +442,7 @@ async function runGatewayRequest<T>(
   const abortState = createRequestAbortState(signal, timeoutMs, timeoutErrorMessage);
 
   try {
-    if (!skipGatewayUserSession && (path.startsWith("/api/v1/") || path.startsWith("/api/gateway/mcp/")
-      || path === "/api/gateway/mcp-installation-targets")) {
+    if (!skipGatewayUserSession && (path.startsWith("/api/v1/") || path.startsWith("/api/gateway/mcp/"))) {
       await ensureGatewayUserSession(port, abortState.signal);
     }
     // Gateway 重启会轮换本地凭据；同一个 SPA 进程不能永久复用旧 token。

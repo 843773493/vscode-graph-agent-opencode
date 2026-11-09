@@ -20,13 +20,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from _thread import RLock
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import ExitStack, contextmanager, nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool
@@ -37,34 +37,21 @@ from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
-from app.domain.mcp_candidates import (
-    McpCandidateConflict,
-    secret_env_input_keys,
-)
-from app.schemas.internal_v2.config import ConfigSourceDocumentDTO, McpCleanupDTO
+from app.schemas.gateway.service_plugin import PluginBinding
+from app.schemas.internal_v2.config import McpCleanupDTO
 from app.schemas.internal_v2.mcp import (
-    McpCandidateConfigurationDraftDTO,
-    McpCandidateConfigurationDraftRequestDTO,
-    McpCandidateConfigurationRequestDTO,
-    McpCandidatePlanDTO,
-    McpCandidatePlanRequestDTO,
-    McpInstallationTargetDTO,
-    McpPrivateEnvRefDTO,
-    McpPrivateEnvWriteRequestDTO,
     McpPrivateHeaderRefDTO,
     McpPrivateHeaderWriteRequestDTO,
-    McpProviderDefinitionRefDTO,
+    McpServiceReferenceDTO,
     McpWorkspaceTargetDTO,
 )
 from app.services.infrastructure.config.contracts import (
     ConfigApplyRecorder,
     ConfigPublication,
 )
-from app.services.infrastructure.config.source_document import (
-    parse_source_text,
-    redact_source_text,
-    restore_source_text,
-    set_source_value,
+from app.services.infrastructure.config.state import ConfigConflictError
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings_for_root,
 )
 from app.services.infrastructure.events.channel_events import (
     McpCatalogEventPublisher,
@@ -73,10 +60,6 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
-)
-from app.services.infrastructure.mcp.candidate_plans import (
-    read_installation_candidate,
-    resolve_candidate,
 )
 from app.services.infrastructure.mcp.config import (
     McpServerConfig,
@@ -96,23 +79,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     payload_digest,
 )
-from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
-from app.services.infrastructure.mcp.installation.runtime import InstallationUnavailable
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from app.services.infrastructure.mcp.oauth import (
     McpOAuthProvider,
     is_authorization_required,
 )
-from app.services.infrastructure.mcp.private_inputs import (
-    McpPrivateInputStore,
-    candidate_env_definition,
-    stdio_env_definition,
-)
-from app.services.infrastructure.mcp.provider import (
-    McpDefinitionResolver,
-    McpProviderUnavailable,
-    is_provider_unavailable,
-)
+from app.services.infrastructure.mcp.private_inputs import McpPrivateInputStore
 from app.services.infrastructure.mcp.retirement import McpConnectionRetirement
 from app.services.infrastructure.mcp.session_runtime import (
     McpChangeNotifyCallback,
@@ -124,6 +96,7 @@ from app.services.infrastructure.mcp.tool_definitions import (
     ToolDefinition,
     definition_from_tool,
 )
+from configs.plugin_parameters import plugin_parameters
 from mcp.shared.exceptions import McpError
 
 if TYPE_CHECKING:
@@ -153,14 +126,14 @@ class McpToolDescriptor:
 @dataclass(frozen=True, slots=True)
 class McpServerSnapshot:
     server_id: str
-    transport: Literal["stdio", "streamable_http"]
+    transport: Literal["streamable_http"]
     enabled: bool
     status: Literal["disabled", "ready", "failed", "authorization_required", "unavailable"]
     tools: tuple[McpToolDescriptor, ...]
     # 最近一次 relist 的错误事实；原始异常仅留诊断，成功 relist 后清空。
     last_relist_error: str | None = None
     connection_ref: str | None = None
-    provider_definition: McpProviderDefinitionRefDTO | None = None
+    service: McpServiceReferenceDTO | None = None
     unavailable_reason: str | None = None
 
 
@@ -321,17 +294,12 @@ class McpCatalogOwner:
         leases: ExternalResourceLeaseLedger,
         publication_lock: RLock | None = None,
         session_factory: McpSessionFactory | None = None,
-        installation_owner: McpInstallationOwner | None = None,
-        provider_resolver: McpDefinitionResolver | None = None,
+        config_service: ConfigService | None = None,
+        plugin_bindings: Sequence[PluginBinding] = (),
     ) -> None:
-        self._installation_owner = installation_owner
-        self._provider_resolver = provider_resolver
-        self._installation_resolver = installation_owner.artifact if installation_owner is not None else None
-        self._servers = parse_mcp_server_configs(
-            raw_config,
-            workspace_root=workspace_root,
-            installation_resolver=self._installation_resolver,
-        )
+        self._config_service = config_service
+        self._plugin_bindings = tuple(plugin_bindings)
+        self._servers = parse_mcp_server_configs(raw_config, workspace_root=workspace_root)
         self._publisher = McpCatalogEventPublisher(event_service=event_service)
         self._workspace_root = workspace_root
         self._leases = leases
@@ -384,7 +352,7 @@ class McpCatalogOwner:
         failed_server_id: str | None = None
         try:
             for server in self._servers:
-                if not server.enabled:
+                if not server.enabled or self._plugin_unavailable_reason(server, self._plugin_bindings) is not None:
                     continue
                 failed_server_id = server.server_id
                 runtime = self._new_runtime(server)
@@ -394,13 +362,9 @@ class McpCatalogOwner:
                     await runtime.start()
                     await self._apply_relist((runtime,), source="startup")
                 except Exception as error:
-                    if not is_authorization_required(error) and not is_provider_unavailable(error):
+                    if not is_authorization_required(error):
                         raise
-                    # 原动态来源失效保留配置与 unavailable；真实协议或清理失败仍向外报错。
                     await runtime.scope.close()
-                    if is_provider_unavailable(error):
-                        runtime.last_relist_error = None
-                        self._dirty_servers.discard(server.server_id)
                     continue
             if self._snapshot is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
@@ -570,7 +534,7 @@ class McpCatalogOwner:
         runtime = self._runtimes.get(binding.server_id or "")
         target = self._tools_by_id.get(binding.target_id)
         if (binding.origin != "mcp" or not self._started or runtime is None
-                or self._retirement.switching_version(runtime.server.server_id)
+                or self._retirement.switching_plugin_service(runtime.server.server_id)
                 or not runtime.running or target is None
                 or binding.connection_ref != self._connection_ref(runtime)
                 or (target.metadata or {}).get("mcp_connection_ref") != binding.connection_ref):
@@ -582,7 +546,9 @@ class McpCatalogOwner:
         with self._publication_lock:
             retained = self._retirement.retained(binding.connection_ref)
             if (self._started and retained is not None and retained.running
-                    and any(server.server_id == binding.server_id and server.enabled for server in self._servers)):
+                    and any(server.server_id == binding.server_id and server.enabled
+                            and self._plugin_unavailable_reason(server, self._plugin_bindings) is None
+                            for server in self._servers)):
                 return None
             active = self._active_execution_handle(binding)
             if active is None:
@@ -595,136 +561,22 @@ class McpCatalogOwner:
         self, request: McpPrivateHeaderWriteRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
     ) -> McpPrivateHeaderRefDTO:
         """私有写入只分配不可变引用，配置生效仍由原来源候选/CAS 链负责。"""
-        if request.target != actual_target or actual_target.workspace_id != read_workspace_id(self._workspace_root):
-            raise McpCandidateConflict("MCP 私有 header 写入目标已改变，必须重新读取原工作区")
         return await asyncio.to_thread(
             McpPrivateInputStore(workspace_root=self._workspace_root).write,
             server_id=request.server_id, header_name=request.header_name,
             endpoint=request.endpoint, value=request.value,
         )
 
-    async def write_private_env(
-        self, request: McpPrivateEnvWriteRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
-        installation_target: McpInstallationTargetDTO | None, candidate_required: bool,
-    ) -> McpPrivateEnvRefDTO:
-        if request.target != actual_target or actual_target.workspace_id != read_workspace_id(self._workspace_root):
-            raise McpCandidateConflict("MCP 私有 env 写入目标已改变，必须重新读取原工作区")
-        if candidate_required != (request.candidate is not None):
-            raise ValueError("MCP 私有 env 路由与手动／目录定义不匹配")
-        if request.candidate is not None:
-            if request.candidate.source.kind != "gallery":
-                raise ValueError("目录私有 env 路由必须使用原 gallery 来源；手动命令使用 stdio launch")
-            if installation_target is None or request.candidate.server_id != request.server_id:
-                raise McpCandidateConflict("MCP 私有 env 候选缺少原 Backend 或精确 Server")
-            manifest, source = await read_installation_candidate(request.candidate, installation_target)
-            selected = request.candidate.variant
-            variant = manifest.select(request.candidate.manifest_digest, selected.kind, selected.index, selected.digest)
-            if request.input_key not in secret_env_input_keys(variant):
-                raise ValueError("所选 MCP variant 未声明该 secret env 输入")
-            definition = candidate_env_definition(source, manifest.digest, selected)
-        else:
-            assert request.launch is not None
-            server, = parse_mcp_server_configs({"servers": {request.server_id: {
-                "transport": "stdio", **request.launch.model_dump(exclude_none=True),
-            }}}, workspace_root=self._workspace_root)
-            assert server.connection is not None
-            definition = stdio_env_definition(server.connection)
-        return await asyncio.to_thread(McpPrivateInputStore(workspace_root=self._workspace_root).write_env,
-            server_id=request.server_id, input_key=request.input_key, definition_digest=definition, value=request.value)
-
-    @property
-    def installations(self) -> McpInstallationOwner:
-        if self._installation_owner is None:
-            raise InstallationUnavailable("当前 Backend 未装配目标制品安装 owner，不能把动态命令视为安装")
-        return self._installation_owner
-
-    async def prepare_candidate_configuration(
-        self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
-    ) -> McpCandidatePlanDTO:
-        plan, _ = await resolve_candidate(request, actual_target=actual_target,
-            workspace_root=self._workspace_root, installation_resolver=self._installation_resolver)
-        return plan
-
-    async def _candidate_configuration_parameters(
-        self, request: McpCandidateConfigurationRequestDTO | McpCandidateConfigurationDraftRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
-        installation_target: McpInstallationTargetDTO,
-    ) -> dict[str, object]:
-        """候选和制品由原 owner 重新消费，绝不保存展示 parameters。"""
-        if request.target != actual_target or actual_target.workspace_id != read_workspace_id(self._workspace_root):
-            raise McpCandidateConflict("MCP 配置目标已改变，必须重新读取原工作区")
-        if actual_target.gateway_id is None:
-            raise ValueError("MCP 候选配置保存必须显式指定原 Gateway")
-        if request.plan.candidate.server_id != request.server_id:
-            raise McpCandidateConflict("MCP 配置候选必须绑定同一精确 Server")
-        plan, parameters = await resolve_candidate(request.plan.candidate, actual_target=installation_target,
-            workspace_root=self._workspace_root, installation_resolver=self._installation_resolver)
-        if plan.plan_digest != request.plan.plan_digest:
-            raise McpCandidateConflict("MCP 配置候选的来源、平台或输入已改变，必须重新生成计划")
-        if plan.disposition == "requires_artifact":
-            if request.managed_launch is None:
-                raise ValueError("MCP package 配置必须引用已发布制品")
-            artifact = self.installations.artifact(request.managed_launch)
-            if candidate_env_definition(artifact.source, artifact.manifest_digest, artifact.variant) != candidate_env_definition(
-                plan.source, plan.manifest_digest, plan.variant,
-            ) or (artifact.identifier, artifact.version) != (parameters["identifier"], parameters["version"]):
-                raise McpCandidateConflict("MCP 配置引用的已发布制品不属于原候选来源")
-            expected = {"transport": "stdio", "managed_launch": request.managed_launch.model_dump(mode="json"),
-                        "args": parameters["arguments"], "env": parameters["env"]}
-        else:
-            if request.managed_launch is not None:
-                raise ValueError("显式命令或 HTTP 候选不能附加另一受管制品")
-            expected = dict(parameters)
-        return expected
-
-    async def draft_candidate_configuration(
-        self, request: McpCandidateConfigurationDraftRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
-        installation_target: McpInstallationTargetDTO, config_service: ConfigService,
-    ) -> McpCandidateConfigurationDraftDTO:
-        expected = await self._candidate_configuration_parameters(request, actual_target=actual_target,
-            installation_target=installation_target)
-        expected["enabled"] = request.enabled
-        text = set_source_value(request.source_edit.jsonc, ("mcp", "servers", request.server_id), expected)
-        edit = request.source_edit.model_copy(update={"jsonc": text})
-        assert actual_target.gateway_id is not None
-        preflight = await config_service.preflight_source_edit(source_key=edit.source_key,
-            gateway_id=actual_target.gateway_id, request=edit)
-        return McpCandidateConfigurationDraftDTO(
-            source_edit=edit.model_copy(update={"jsonc": redact_source_text(text)}), preflight=preflight)
-
-    async def save_candidate_configuration(
-        self, request: McpCandidateConfigurationRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
-        installation_target: McpInstallationTargetDTO, config_service: ConfigService,
-    ) -> ConfigSourceDocumentDTO:
-        expected = await self._candidate_configuration_parameters(request, actual_target=actual_target,
-            installation_target=installation_target)
-        source = parse_source_text(request.source_edit.jsonc)
-        servers = cast(dict[str, object], cast(dict[str, object], source.get("mcp", {})).get("servers", {}))
-        actual = servers.get(request.server_id)
-        if not isinstance(actual, dict):
-            raise TypeError("MCP 来源编辑缺少精确 Server 配置")
-        expected["enabled"] = actual.get("enabled", False)
-        # 新候选的遮罩仅以已验证的原候选还原；其它来源占位仍交原文件 writer 处理。
-        original = set_source_value(request.source_edit.jsonc, ("mcp", "servers", request.server_id), expected)
-        text = restore_source_text(request.source_edit.jsonc, original)
-        edit = request.source_edit.model_copy(update={"jsonc": text})
-        assert actual_target.gateway_id is not None
-        source = parse_source_text(text)
-        actual = cast(dict[str, object], cast(dict[str, object], source["mcp"])["servers"])[request.server_id]
-        normalize = partial(parse_mcp_server_configs, workspace_root=self._workspace_root,
-                            installation_resolver=self._installation_resolver)
-        if normalize({"servers": {request.server_id: actual}}) != normalize({"servers": {request.server_id: expected}}):
-            raise McpCandidateConflict("MCP 来源编辑与原候选实际 launch 或输入不一致，不能保存展示投影")
-        return await config_service.save_source_edit(source_key=edit.source_key,
-            gateway_id=actual_target.gateway_id, request=edit)
-
     async def prepare_config(
-        self, raw_config: object, scope: LifetimeScope, record_side_effect: ConfigApplyRecorder,
+        self, raw_config: object, scope: LifetimeScope, _record_side_effect: ConfigApplyRecorder,
+        *, plugin_bindings: Sequence[PluginBinding],
+        reconnect_server_ids: frozenset[str] = frozenset(),
     ) -> tuple[ConfigPublication, frozenset[str]]:
-        """按 Server 准备；stdio 先记录停止意图，全部验证后共同激活。"""
+        """按 Server 准备候选 Gateway 服务连接，再共同发布。"""
         self._require_started()
-        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root,
-            installation_resolver=self._installation_resolver)
+        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root)
         proposed = {server.server_id: server for server in servers}
+        bindings = tuple(plugin_bindings)
         prepared: dict[str, McpServerRuntime] = {}
         tools: dict[str, BaseTool] = {}
         descriptors: dict[str, tuple[McpToolDescriptor, ...]] = {}
@@ -758,30 +610,33 @@ class McpCatalogOwner:
         with self._publication_lock:
             self._require_started()
             previous = {server.server_id: server for server in self._servers}
-            changed = {key for key in previous.keys() | proposed.keys() if previous.get(key) != proposed.get(key)}
-            switch_guard.enter_context(self._retirement.reserve_version_switch(self._servers, servers))
+            changed = {key for key in previous.keys() | proposed.keys()
+                       if previous.get(key) != proposed.get(key)
+                       or (key in proposed and self._plugin_unavailable_reason(proposed[key], self._plugin_bindings)
+                           != self._plugin_unavailable_reason(proposed[key], bindings))}
+            candidate_bindings = {(item.package_id, item.plugin_id, item.workspace_id): item for item in bindings}
+            for server_id in reconnect_server_ids:
+                server = proposed.get(server_id)
+                if server is None or server.service is None or not server.enabled:
+                    continue
+                service = server.service
+                binding = candidate_bindings.get((service.package_id, service.plugin_id, service.workspace_id))
+                if binding is None or not binding.enabled or binding.package_version != service.package_version:
+                    raise ConfigConflictError(f"MCP Server {server_id} 的候选插件绑定已关闭或版本不匹配")
+            changed.update(reconnect_server_ids)
+            switch_guard.enter_context(self._retirement.reserve_plugin_service_switch(
+                self._servers, servers, affected_server_ids=reconnect_server_ids,
+                require_settled_server_ids=reconnect_server_ids,
+            ))
             self._retirement.require_replaceable(changed)
             unchanged_ids = {key for key, tool in self._tools_by_id.items()
                              if (tool.metadata or {}).get("mcp_server_id") not in changed}
         assert self._session_scope is not None
         owner_scope = self._session_scope
-        # 可以并行准备的连接先验证，尽量在破坏旧 stdio 之前暴露其它候选错误。
-        stop_first = {key for key in changed if (runtime := self._runtimes.get(key)) is not None
-                      and runtime.server.transport == "stdio" and not runtime.scope.is_closed}
-        for key in sorted(changed, key=lambda key: (key in stop_first, key)):
-            if key in stop_first:
-                runtime = self._runtimes[key]
-                record_side_effect({"resource": "mcp_connection", "action": "stop",
-                                    "server_id": key, "connection_ref": self._connection_ref(runtime)})
-                with self._publication_lock:
-                    self._dirty_servers.add(key)
-                    self._retirement.revoke_server(key)
-                    self._publish_readiness_locked("unavailable", f"MCP stdio 正在停后再启: server_id={key}")
-                    runtime.request_close()
-                async with asyncio.timeout(self._retirement.timeout_seconds):
-                    await runtime.scope.close()
+        for key in sorted(changed):
             server = proposed.get(key)
-            if server is None or not server.enabled:
+            if (server is None or not server.enabled
+                    or self._plugin_unavailable_reason(server, bindings) is not None):
                 continue
             runtime = self._new_runtime(server)
             prepared[key] = runtime
@@ -793,9 +648,6 @@ class McpCatalogOwner:
                     key, remote_tools, connection_ref=self._connection_ref(runtime), foreign_tool_ids=unchanged_ids | tools.keys(),
                 )
             except Exception as error:
-                if is_provider_unavailable(error):
-                    await runtime.scope.close()
-                    continue
                 logger.exception("MCP 配置候选连接准备失败: server_id=%s", key)
                 raise McpCatalogError(_catalog_failure_text(error, server_id=key, stage="configuration")) from error
             tools.update(server_tools)
@@ -820,11 +672,9 @@ class McpCatalogOwner:
                 candidate_tools.update(tools)
                 candidate_descriptors = {key: value for key, value in self._descriptors_by_server.items() if key not in changed}
                 candidate_descriptors.update(descriptors)
-                for runtime in prepared.values():
-                    if runtime.running:
-                        runtime.admit_provider()
                 self._runtimes = {key: value for key, value in self._runtimes.items() if key not in changed} | prepared
                 self._servers = servers
+                self._plugin_bindings = bindings
                 self._dirty_servers.difference_update(changed)
                 invalidated = {key for key, runtime in prepared.items()
                                if runtime.running and runtime.relist_sequence != sequences[key]}
@@ -833,7 +683,8 @@ class McpCatalogOwner:
                 # 所有权始终属于原 Owner 的每 Server scope；后续任意配置 shadow
                 # 释放只能回收未提交候选，不能关闭未变化的 active 连接。
                 for key in changed:
-                    if key not in proposed or not proposed[key].enabled:
+                    if (key not in proposed or not proposed[key].enabled
+                            or self._plugin_unavailable_reason(proposed[key], bindings) is not None):
                         self._retirement.revoke_server(key)
                 for runtime in replaced:
                     if not runtime.scope.is_closed:
@@ -841,8 +692,6 @@ class McpCatalogOwner:
                             admits_sealed=runtime.server.server_id in prepared, owner_scope=owner_scope)
                 self._publish_snapshot_locked(server_id=None, candidate_tools=candidate_tools,
                                               candidate_descriptors=candidate_descriptors)
-                for runtime in prepared.values():
-                    runtime.commit_provider()
                 for key in invalidated:
                     runtime = prepared[key]
                     if runtime.running:
@@ -851,15 +700,94 @@ class McpCatalogOwner:
         return publish, frozenset(unchanged_ids | tools.keys())
 
     @contextmanager
-    def guard_configuration(self, raw_config: object) -> Iterator[None]:
-        """来源写入前核原版本占用；锁外保存及准备期间拒绝新资格。"""
-        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root,
-            installation_resolver=self._installation_resolver)
+    def guard_configuration(self, previous_config: object, candidate_config: object) -> Iterator[None]:
+        """来源候选准备期间冻结受影响代际；关闭不等待旧调用，替换要求结清。"""
+        if not isinstance(previous_config, Mapping) or not isinstance(candidate_config, Mapping):
+            raise TypeError("MCP 配置 guard 必须取得完整 Workspace 配置")
+        previous_document = previous_config
+        candidate_document = candidate_config
+        previous_servers = parse_mcp_server_configs(previous_document.get("mcp"), workspace_root=self._workspace_root)
+        servers = parse_mcp_server_configs(candidate_document.get("mcp"), workspace_root=self._workspace_root)
+        affected_server_ids, require_settled_server_ids = self._plugin_configuration_switches(
+            previous_document, candidate_document, previous_servers, servers,
+        )
         with ExitStack() as guard:
             with self._publication_lock:
                 self._require_started()
-                guard.enter_context(self._retirement.reserve_version_switch(self._servers, servers))
+                guard.enter_context(self._retirement.reserve_plugin_service_switch(
+                    previous_servers, servers, affected_server_ids=affected_server_ids,
+                    require_settled_server_ids=require_settled_server_ids,
+                ))
             yield
+
+    def plugin_configuration_switches(self, previous_config: Mapping[str, object],
+                                      candidate_config: Mapping[str, object]) -> tuple[set[str], set[str]]:
+        previous_servers = parse_mcp_server_configs(previous_config.get("mcp"), workspace_root=self._workspace_root)
+        candidate_servers = parse_mcp_server_configs(candidate_config.get("mcp"), workspace_root=self._workspace_root)
+        return self._plugin_configuration_switches(
+            previous_config, candidate_config, previous_servers, candidate_servers,
+        )
+
+    def _plugin_configuration_switches(
+        self, previous_config: Mapping[str, object], candidate_config: Mapping[str, object],
+        previous_servers: Sequence[McpServerConfig], candidate_servers: Sequence[McpServerConfig],
+    ) -> tuple[set[str], set[str]]:
+        previous_bindings = workspace_plugin_bindings_for_root(
+            previous_config, workspace_root=self._workspace_root,
+        )
+        candidate_bindings = workspace_plugin_bindings_for_root(
+            candidate_config, workspace_root=self._workspace_root,
+        )
+        previous_by_key = {(item.package_id, item.plugin_id, item.workspace_id): item for item in previous_bindings}
+        candidate_by_key = {(item.package_id, item.plugin_id, item.workspace_id): item for item in candidate_bindings}
+        previous_parameters = plugin_parameters(previous_config)
+        candidate_parameters = plugin_parameters(candidate_config)
+        parameter_keys = {
+            (package_id, plugin_id)
+            for package_id in previous_parameters.keys() | candidate_parameters.keys()
+            for plugin_id in (
+                previous_parameters.get(package_id, {}).keys()
+                | candidate_parameters.get(package_id, {}).keys()
+            )
+            if previous_parameters.get(package_id, {}).get(plugin_id)
+            != candidate_parameters.get(package_id, {}).get(plugin_id)
+        }
+        changed_binding_keys = {
+            key for key in previous_by_key.keys() | candidate_by_key.keys()
+            if previous_by_key.get(key) != candidate_by_key.get(key)
+        }
+        workspace_id = read_workspace_id(self._workspace_root) if self._workspace_root is not None else None
+        affected_keys = changed_binding_keys | {
+            (package_id, plugin_id, workspace_id)
+            for package_id, plugin_id in parameter_keys
+            if workspace_id is not None
+        }
+        before_servers = {server.server_id: server for server in previous_servers}
+        after_servers = {server.server_id: server for server in candidate_servers}
+        affected: set[str] = set()
+        require_settled: set[str] = set()
+        for server_id in before_servers.keys() | after_servers.keys():
+            server = after_servers.get(server_id) or before_servers[server_id]
+            service = server.service
+            if service is None:
+                continue
+            key = (service.package_id, service.plugin_id, service.workspace_id)
+            if key not in affected_keys:
+                continue
+            affected.add(server_id)
+            old_binding, new_binding = previous_by_key.get(key), candidate_by_key.get(key)
+            parameter_changed = (service.package_id, service.plugin_id) in parameter_keys
+            binding_version_changed = (
+                old_binding is not None and new_binding is not None
+                and old_binding.package_version != new_binding.package_version
+            )
+            if (parameter_changed and old_binding is not None and new_binding is not None
+                    and old_binding.enabled and new_binding.enabled) or (
+                    binding_version_changed and old_binding is not None and new_binding is not None
+                    and old_binding.enabled and new_binding.enabled
+            ):
+                require_settled.add(server_id)
+        return affected, require_settled
 
     def server_configuration(self, server_id: str) -> McpServerConfig:
         with self._publication_lock:
@@ -870,9 +798,11 @@ class McpCatalogOwner:
         raise LookupError("MCP Server 未配置")
 
     def oauth_session_factory(self, provider: McpOAuthProvider | None) -> McpSessionFactory:
-        """交互授权只覆盖本次回调，其余启动依赖始终来自同一 Owner。"""
-        return partial(production_mcp_session_factory, workspace_root=self._workspace_root,
-            installation_owner=self._installation_owner, provider_resolver=self._provider_resolver, oauth_provider=provider)
+        """交互授权只覆盖本次回调，其余连接依赖仍来自同一 owner。"""
+        return partial(
+            production_mcp_session_factory, workspace_root=self._workspace_root,
+            config_service=self._config_service, oauth_provider=provider,
+        )
 
     def _new_runtime(self, server: McpServerConfig, session_factory: McpSessionFactory | None = None) -> McpServerRuntime:
         """启动、配置替换和显式连接共用唯一 task／scope 创建入口。"""
@@ -898,6 +828,9 @@ class McpCatalogOwner:
         server = self.server_configuration(server_id)
         if not server.enabled:
             raise PermissionError("MCP Server 已在配置中禁用")
+        unavailable = self._plugin_unavailable_reason(server, self._plugin_bindings)
+        if unavailable is not None:
+            raise PermissionError(unavailable)
         with self._publication_lock:
             admit()
             original = self._runtimes.get(server_id)
@@ -924,6 +857,7 @@ class McpCatalogOwner:
                 with self._publication_lock:
                     admit()
                     if (self.server_configuration(server_id) != server or self._runtimes.get(server_id) is not original
+                            or self._plugin_unavailable_reason(server, self._plugin_bindings) is not None
                             or not runtime.running or sequence != runtime.relist_sequence):
                         raise McpCatalogError("MCP connect 的配置、连接或完整目录准备已过期")
                     self._retirement.require_replaceable({server_id})
@@ -933,13 +867,11 @@ class McpCatalogOwner:
                         server_id, remote_tools, connection_ref=self._connection_ref(runtime), foreign_tool_ids=set(tools),
                     )
                     tools.update(added)
-                    runtime.admit_provider()
                     self._runtimes[server_id] = runtime
                     self._dirty_servers.discard(server_id)
                     published = True
                     self._publish_snapshot_locked(server_id=server_id, candidate_tools=tools,
                         candidate_descriptors={**self._descriptors_by_server, server_id: descriptors})
-                    runtime.commit_provider()
         except BaseException as original:
             if not published:
                 try:
@@ -997,37 +929,26 @@ class McpCatalogOwner:
             )
 
     async def _handle_session_preparing(self, runtime: McpServerRuntime) -> None:
-        # 原session task串行登记和关闭；不跨worker持有目录publication锁。
-        # TODO(5.4)：封存资格/调用占用等同步访问及整个operation/shutdown期限仍须收口。
-        def commit() -> None:
-            resource_id = self._connection_ref(runtime)
-            binding = runtime.server.managed_launch
-            if binding is not None and self._installation_owner is None:
-                raise ValueError("受管 MCP connection generation 缺少原生安装准入")
-            guard = self._installation_owner.reference_write((binding,)) if binding is not None and self._installation_owner is not None else nullcontext()
-            with guard:
-                self._leases.register_external(resource_id=resource_id, kind="mcp_connection",
-                    lifetime_scope="workspace", initial_status="unknown", process=runtime.process_state,
-                    mcp_server_id=runtime.server.server_id, managed_launch=binding)
-                self._leases.update_external_state(resource_id, lifetime_scope="workspace", status="unknown", process=runtime.process_state)
-
-        await run_sync_shielded(commit)
+        await run_sync_shielded(
+            self._leases.register_external, resource_id=self._connection_ref(runtime),
+            kind="mcp_connection", lifetime_scope="workspace", initial_status="unknown",
+            mcp_server_id=runtime.server.server_id,
+        )
 
     async def _handle_session_started(self, runtime: McpServerRuntime) -> None:
-        await run_sync_shielded(self._leases.update_external_state, self._connection_ref(runtime),
-            lifetime_scope="workspace", status="running", process=runtime.process_state)
+        await run_sync_shielded(
+            self._leases.update_external_state, self._connection_ref(runtime),
+            lifetime_scope="workspace", status="running",
+        )
 
     async def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)
-
-        def commit() -> None:
-            if self._leases.get(resource_id) is not None:
-                self._leases.update_external_state(
-                    resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown", process=runtime.process_state,
-                    cleanup_failed=runtime.cleanup_failed,
-                )
-
-        await run_sync_shielded(commit)
+        if self._leases.get(resource_id) is not None:
+            await run_sync_shielded(
+                self._leases.update_external_state, resource_id,
+                lifetime_scope="workspace", status="stopped" if verified else "unknown",
+                cleanup_failed=runtime.cleanup_failed,
+            )
 
     def _connection_ref(self, runtime: McpServerRuntime) -> str:
         return runtime.connection_ref
@@ -1192,8 +1113,6 @@ class McpCatalogOwner:
                         )
                         candidate_tools.update(server_tools)
                         candidate_descriptors[server_id] = descriptors
-                    for runtime in runtimes:
-                        runtime.admit_provider()
                     self._dirty_servers.difference_update(server_ids)
                     self._publish_snapshot_locked(
                         server_id=server_ids[0] if len(server_ids) == 1 else None,
@@ -1201,12 +1120,9 @@ class McpCatalogOwner:
                         candidate_descriptors=candidate_descriptors,
                     )
                     for runtime in runtimes:
-                        runtime.commit_provider()
                         runtime.last_relist_error = None
             except Exception as error:
                 with self._publication_lock:
-                    if source == "startup" and (is_provider_unavailable(error) or any(runtime.provider_unavailable for runtime in runtimes)):
-                        raise McpProviderUnavailable("Provider 在初次目录发布前已失效") from error
                     if not current():
                         if source == "notification":
                             logger.info("MCP relist 过期结果已丢弃: servers=%s", server_ids)
@@ -1368,6 +1284,23 @@ class McpCatalogOwner:
                     server_id, sorted(removed_ids), new_revision,
                 )
 
+    @staticmethod
+    def _plugin_unavailable_reason(server: McpServerConfig, bindings: Sequence[PluginBinding]) -> str | None:
+        """沿同次配置发布的精确绑定判准入；配置存在不代表插件已经开启。"""
+        service = server.service
+        if service is None:
+            return None
+        binding = next((item for item in bindings
+                        if (item.package_id, item.plugin_id, item.workspace_id)
+                        == (service.package_id, service.plugin_id, service.workspace_id)), None)
+        if binding is None:
+            return "MCP 服务对应的工作区插件尚未绑定"
+        if not binding.enabled:
+            return "MCP 服务对应的工作区插件已关闭"
+        if binding.package_version != service.package_version:
+            return "MCP 服务版本与工作区插件绑定不一致"
+        return None
+
     def _build_server_snapshots(self) -> tuple[McpServerSnapshot, ...]:
         """现读 server 连接状态视图（不属于不可变目录语义）。"""
         snapshots: list[McpServerSnapshot] = []
@@ -1375,17 +1308,7 @@ class McpCatalogOwner:
             runtime = self._runtimes.get(server.server_id)
             connection_ref = self._connection_ref(runtime) if runtime is not None and runtime.running else None
             connected = connection_ref is not None
-            unavailable_reason = None
-            if server.enabled and not connected and server.provider_definition is not None:
-                try:
-                    if self._provider_resolver is None:
-                        raise McpProviderUnavailable("工作区没有原 Provider 宿主")
-                    self._provider_resolver.check_mcp_definition(server.provider_definition,
-                        workspace_id=read_workspace_id(self._workspace_root), transport=server.transport)
-                    if runtime is None or runtime.provider_unavailable:
-                        unavailable_reason = "原 Provider 尚未连接或启动前解析未完成，请显式重新连接"
-                except McpProviderUnavailable as error:
-                    unavailable_reason = str(error)
+            unavailable_reason = self._plugin_unavailable_reason(server, self._plugin_bindings)
             descriptors = self._descriptors_by_server.get(server.server_id, ())
             known_readiness = {
                 self._publication.definitions[descriptor.tool_id].readiness
@@ -1394,7 +1317,7 @@ class McpCatalogOwner:
             snapshots.append(
                 McpServerSnapshot(
                     server_id=server.server_id,
-                    transport=server.transport,
+                    transport="streamable_http",
                     enabled=server.enabled,
                     status=(
                         "disabled" if not server.enabled else
@@ -1407,7 +1330,7 @@ class McpCatalogOwner:
                     last_relist_error=
                     runtime.last_relist_error if runtime is not None else None,
                     connection_ref=connection_ref,
-                    provider_definition=server.provider_definition,
+                    service=server.service,
                     unavailable_reason=unavailable_reason,
                 )
             )

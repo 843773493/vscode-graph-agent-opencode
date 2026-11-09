@@ -13,8 +13,8 @@
   //   已经运行中的 Job 会继续使用启动时的配置快照。
   // - default_agent 支持热重载，但只影响后续新建会话；已有会话保持其 agent_id。
   // - ui 配置支持热重载，后续配置读取使用新值。
-  // - mcp.servers 沿受控候选热替换：HTTP 先建后换，已有 stdio 停后再启；
-  //   supervision 等需重启字段使混合候选整体待重启，清理失败独立于已应用事实报告。
+  // - mcp.servers 使用 Gateway 插件服务引用或外部 Streamable HTTP endpoint，运行时由原 MCP owner 管理。
+  //   MCP supervision 参数需重启工作区。
   // - 用户级配置与工作区级配置深度合并；被高优先级值遮蔽的低优先级变化
   //   不会触发有效配置 revision 变化。
   // ============================================================
@@ -37,26 +37,14 @@
     { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
+    { "pattern": "/mcp/supervision", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
+    { "pattern": "/mcp/supervision/**", "policy": "restart_workspace", "activation_scope": "restart_workspace", "identity_key": null },
     { "pattern": "/mcp/servers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/enabled", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/transport", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/command", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/managed_launch", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/managed_launch/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/provider_definition", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/provider_definition/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/args", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*/kind", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*/workspace_id", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*/server_id", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*/input_key", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*/definition_digest", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/env/*/version", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/cwd", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/service", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/service/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/url", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/headers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/headers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -640,118 +628,33 @@
 
     "mcpServer": {
       "oneOf": [
-        {
-          "$ref": "#/$defs/mcpStdioServer"
-        },
-        {
-          "$ref": "#/$defs/mcpStreamableHttpServer"
-        },
-        {
-          "$ref": "#/$defs/mcpProviderServer"
-        }
+        { "$ref": "#/$defs/mcpPluginServer" },
+        { "$ref": "#/$defs/mcpStreamableHttpServer" }
       ]
     },
 
-    "mcpProviderServer": {
+    "mcpPluginServer": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["transport", "provider_definition"],
-      "description": "只保存目标 VSIX Provider 的非秘密原定义引用；连接前由原宿主解析，离线不缓存 launch。",
+      "required": ["transport", "service"],
       "properties": {
         "enabled": { "type": "boolean", "default": false },
-        "transport": { "enum": ["stdio", "streamable_http"] },
-        "provider_definition": { "$ref": "#/$defs/mcpProviderDefinitionRef" }
+        "transport": { "const": "plugin" },
+        "service": { "$ref": "#/$defs/mcpServiceReference" }
       }
     },
 
-    "mcpProviderDefinitionRef": {
+    "mcpServiceReference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["gateway_id", "backend_id", "client_id", "view_id", "host_generation", "host_kind", "extension_id", "extension_key", "collection_id", "provider_ref", "definition_ref"],
+      "required": ["gateway_id", "workspace_id", "package_id", "package_version", "plugin_id", "service_id"],
       "properties": {
         "gateway_id": { "type": "string", "pattern": "^gateway_[0-9a-f]{32}$" },
-        "backend_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
-        "client_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "view_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "host_generation": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "host_kind": { "enum": ["node", "web"] },
-        "extension_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "extension_key": { "type": "string", "minLength": 1, "maxLength": 512 },
-        "collection_id": { "type": "string", "minLength": 1, "maxLength": 512 },
-        "provider_ref": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "definition_ref": { "type": "string", "minLength": 1, "maxLength": 128 }
-      }
-    },
-
-    "mcpStdioServer": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "transport"
-      ],
-      "oneOf": [
-        { "required": ["command"], "not": { "required": ["managed_launch"] } },
-        { "required": ["managed_launch"], "not": { "required": ["command"] } }
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "transport": {
-          "const": "stdio"
-        },
-        "command": {
-          "type": "string",
-          "minLength": 1
-        },
-        "managed_launch": { "$ref": "#/$defs/mcpManagedLaunch" },
-        "args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/mcpPrivateEnvRef" }]
-          },
-          "default": {}
-        },
-        "cwd": {
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
-
-    "mcpManagedLaunch": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["backend_id", "installation_id", "generation", "artifact_digest"],
-      "description": "引用当前 Backend 唯一安装 owner 已发布的精确 generation；可执行路径不由工作区配置提供。安装记录与工作区连接事实分别保存。",
-      "properties": {
-        "backend_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
-        "installation_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
-        "generation": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
-        "artifact_digest": { "type": "string", "pattern": "^sha256:jcs:v1:[0-9a-f]{64}$" }
-      }
-    },
-
-    "mcpPrivateEnvRef": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "workspace_id", "server_id", "input_key", "definition_digest", "version"],
-      "description": "私有 env 仅引用本工作区不可变版本；原来源和 manifest/variant 或手动启动定义由消费端核对，不按安装 generation 借用秘密。",
-      "properties": {
-        "kind": { "const": "mcp_private_env" },
         "workspace_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
-        "server_id": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$" },
-        "input_key": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
-        "definition_digest": { "type": "string", "pattern": "^sha256:jcs:v1:[0-9a-f]{64}$" },
-        "version": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
+        "package_id": { "type": "string", "minLength": 1 },
+        "package_version": { "type": "string", "minLength": 1 },
+        "plugin_id": { "type": "string", "minLength": 1 },
+        "service_id": { "type": "string", "minLength": 1 }
       }
     },
 

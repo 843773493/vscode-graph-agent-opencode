@@ -36,8 +36,8 @@ def lifecycle_factory():
             self.cleanup_entered = asyncio.Event()
             self.cleanup_release = asyncio.Event()
 
-        def __call__(self, server, on_change, lifecycle):
-            original = super().__call__(server, on_change, lifecycle)
+        def __call__(self, server, on_change):
+            original = super().__call__(server, on_change)
 
             async def crash_when_requested():
                 await self.crash.wait()
@@ -78,8 +78,9 @@ def lifecycle_factory():
 def lifecycle_owner(tmp_path, event_channel_service, lifecycle_factory):
     return McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": {name: {"enabled": True, "transport": "stdio", "command": "fixture"}
-                               for name in ("alpha", "beta")}},
+        raw_config={"servers": {name: {
+            "enabled": True, "transport": "streamable_http", "url": f"http://127.0.0.1:1/{name}/mcp",
+        } for name in ("alpha", "beta")}},
         workspace_root=tmp_path, event_service=event_channel_service, session_factory=lifecycle_factory,
     )
 
@@ -181,15 +182,13 @@ async def test_connection_identity_is_persisted_before_factory_admission(lifecyc
     runtime = owner._runtimes["alpha"]
     record = owner._leases.get(runtime.connection_ref)
     assert record is not None and record.status == "unknown"
-    assert record.process is not None and record.process.instance_id == runtime.connection_ref
-    assert record.process.phase == "reserved" and record.process.pid is None
-    assert not record.process.exit_verified
+    assert record.process is None
     starting.cancel()
     with pytest.raises(asyncio.CancelledError):
         await starting
     record = owner._leases.get(runtime.connection_ref)
-    assert record is not None and record.process is not None
-    assert record.process.phase == "not_started" and record.process.exit_verified
+    assert record is not None and record.status == "stopped"
+    assert record.process is None and not record.cleanup_failed
 
 
 @pytest.mark.parametrize("request_close_first", [False, True])
@@ -244,10 +243,9 @@ async def test_startup_and_cleanup_failures_keep_both_causes(lifecycle_owner, li
     assert lifecycle_owner._session_scope is not None
     assert lifecycle_owner._session_scope.state == "close_failed"
     records = lifecycle_owner._leases.records_by_kind("mcp_connection")
-    assert {record.status for record in records} == {"stopped"}
-    # 显式 session 替身未创建进程；物理事实不抹除上面的 cleanup_failed 与原异常。
-    assert all(record.process is not None and record.process.phase == "not_started" and record.process.exit_verified
-               for record in records)
+    assert {record.status for record in records} == {"unknown"}
+    assert all(record.process is None for record in records)
+    assert {record.mcp_server_id for record in records if record.cleanup_failed} == {"alpha"}
 
 
 async def test_sdk_task_failure_invalidates_publication_and_rejects_late_notification(
@@ -278,7 +276,11 @@ async def test_sdk_task_failure_invalidates_publication_and_rejects_late_notific
         assert not owner._pending_relist_tasks
     finally:
         unsubscribe()
-        await owner.shutdown()
+        with pytest.raises(ExceptionGroup, match="MCP Owner 关闭失败"):
+            await owner.shutdown()
+    records = owner._leases.records_by_kind("mcp_connection")
+    assert {record.status for record in records} == {"unknown"}
+    assert all(record.process is None and record.cleanup_failed for record in records)
     assert factory.closed == factory.entered
 
 

@@ -64,7 +64,8 @@ async def test_backend_keeps_original_watcher_during_close_timeout_and_retry(
 
     monkeypatch.setattr(inspect.getmodule(BackendLifespan), "timeout", deadline)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     waiting: asyncio.Task[None] | None = None
     watcher_wait: asyncio.Task[None] | None = None
     try:

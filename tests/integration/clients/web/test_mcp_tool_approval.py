@@ -21,9 +21,6 @@ from tests.integration.backend.agents.test_mcp_tool_approval import (
     approval_plan as approval_plan,  # noqa: PLC0414 - 同一模型响应资产
 )
 from tests.integration.backend.agents.test_mcp_tool_approval import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一真实 HTTP MCP
-)
-from tests.integration.backend.agents.test_mcp_tool_approval import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 同一未授权兄弟 Server
 )
 from tests.integration.backend.agents.test_mcp_tool_approval import (
@@ -34,6 +31,9 @@ from tests.integration.backend.agents.test_mcp_tool_approval import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一真实 HTTP MCP
+)
 from tests.support.paths import chromium_temporary_environment
 
 

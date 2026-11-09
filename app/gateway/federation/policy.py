@@ -24,7 +24,7 @@ from starlette.requests import HTTPConnection
 from app.gateway.auth import GatewayAuthContext
 from app.gateway.federation.ports import principal_ref_for_gateway
 
-Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "mcp_installation_manage", "extension_installation_manage", "extension_host_manage", "service_plugin_installation_manage", "service_plugin_runtime_manage"]
+Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write", "extension_installation_manage", "extension_host_manage", "service_plugin_installation_manage", "service_plugin_runtime_manage"]
 Effect = Literal["allow", "deny"]
 
 CORE_CAPABILITIES: tuple[Capability, ...] = (
@@ -40,7 +40,7 @@ CORE_CAPABILITIES: tuple[Capability, ...] = (
 )
 
 ADMINISTRATIVE_CAPABILITIES: tuple[Capability, ...] = (
-    "managed_workspace_admin", "configuration_read", "configuration_write", "mcp_installation_manage",
+    "managed_workspace_admin", "configuration_read", "configuration_write",
     "extension_installation_manage", "extension_host_manage",
     "service_plugin_installation_manage", "service_plugin_runtime_manage",
 )

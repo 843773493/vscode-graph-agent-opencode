@@ -62,7 +62,7 @@ def _base_config() -> dict:
                 }
             ]
         },
-        "mcp": {"servers": {"sample": {"transport": "stdio", "command": "info"}}},
+        "mcp": {"supervision": {"sealed_call_timeout_seconds": 1800}, "servers": {}},
         "default_agent": "default",
         "agents": {
             "default": {
@@ -617,13 +617,13 @@ def test_workspace_local_config_is_merged_before_workspace_override(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["mcp"]["servers"]["sample"]["command"] = "warning"
+    config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
     config_path = _write_workspace_config(tmp_path, config)
     local_path = tmp_path / "workspace_local.jsonc"
     local_path.write_text(
         json.dumps(
             {
-                "mcp": {"servers": {"sample": {"transport": "stdio", "command": "debug"}}},
+                "mcp": {"supervision": {"sealed_call_timeout_seconds": 2000}},
                 "agents": {"default": {"name": "Local Agent"}},
             }
         ),
@@ -647,7 +647,7 @@ def test_workspace_local_config_is_merged_before_workspace_override(
         workspace_root=workspace_root,
     )
 
-    assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
+    assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
     assert service.list_agents()["default"]["name"] == "Workspace Agent"
     assert service.get_snapshot().source_paths == (
         Path("configs/workspace_inline.jsonc").resolve(),
@@ -670,10 +670,10 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["mcp"]["servers"]["sample"]["command"] = "warning"
+    config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
     config_path = _write_workspace_config(tmp_path, config)
     local_path = tmp_path / "workspace_local.jsonc"
-    local_path.write_text(json.dumps({"mcp": {"servers": {"sample": {"transport": "stdio", "command": "debug"}}}}), encoding="utf-8")
+    local_path.write_text(json.dumps({"mcp": {"supervision": {"sealed_call_timeout_seconds": 2000}}}), encoding="utf-8")
     workspace_root = tmp_path / "workspace"
     workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_path.parent.mkdir(parents=True)
@@ -690,7 +690,7 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
             workspace_state_store=store,
         )
 
-        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
+        assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
         assert service.list_agents()["default"]["name"] == "Workspace Agent"
         assert [source.layer for source in service.get_source_details()] == [
             "inline",
@@ -713,8 +713,8 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
         assert local_path.with_name("workspace_local.jsonc.migrated.bak").is_file()
         assert workspace_path.with_name("workspace.jsonc.migrated.bak").is_file()
 
-        config_path.write_text(json.dumps({"mcp": {"servers": {"sample": {"transport": "stdio", "command": "ERROR"}}}}), encoding="utf-8")
-        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
+        config_path.write_text(json.dumps({"mcp": {"supervision": {"sealed_call_timeout_seconds": 2500}}}), encoding="utf-8")
+        assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
     finally:
         store.close()
 
@@ -739,7 +739,7 @@ def test_config_source_layer_consistent_across_read_paths(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        first.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"]
+        first.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"]
         first.validate_workspace_config()
         assert store.get_active_config_snapshot("workspace") is not None
 
@@ -809,7 +809,7 @@ def test_workspace_config_restarts_from_active_snapshot_after_source_json_change
         )
         first.validate_workspace_config()
         assert store.get_active_config_snapshot("workspace") is not None
-        assert first.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
+        assert first.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
         config_path.write_text("{ this is not valid jsonc", encoding="utf-8")
         second = ConfigService(
             config_dir=Path.cwd() / "configs",
@@ -817,7 +817,7 @@ def test_workspace_config_restarts_from_active_snapshot_after_source_json_change
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        assert second.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
+        assert second.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
     finally:
         store.close()
 
@@ -838,7 +838,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
             workspace_root=workspace_root, workspace_state_store=store,
         )
         # 来源已导入、active 尚未发布，模拟首次启动在两者之间退出。
-        assert first.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
+        assert first.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
         source = store.get_source_layer("workspace_mutable_override")
         assert source is not None
         assert store.get_active_config_snapshot("workspace") is None
@@ -851,7 +851,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
         )
         for _ in range(2):
             with pytest.raises(exception):
-                recovered.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"]
+                recovered.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"]
             unchanged = store.get_source_layer("workspace_mutable_override")
             assert unchanged is not None
             # 既有秘密迁移会刷新更新时间，但不得发布损坏来源的任何业务字段。
@@ -860,10 +860,10 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
             assert store.get_pending_config_candidate(config_domain="workspace") is None
         # 修复源文件后，原 owner 可以从真实新内容建立唯一 active。
         fixed = _base_config()
-        fixed["mcp"]["servers"]["sample"]["command"] = "debug"
+        fixed["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(fixed), encoding="utf-8")
         recovered.validate_workspace_config()
-        assert recovered.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
+        assert recovered.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
         assert store.get_active_config_snapshot("workspace") is not None
         changed = store.get_source_layer("workspace_mutable_override")
         assert changed.layer_revision == source.layer_revision + 1
@@ -1205,7 +1205,7 @@ def test_workspace_config_overrides_user_global_config(
     tmp_path: Path,
 ) -> None:
     global_config = _base_config()
-    global_config["mcp"]["servers"]["sample"]["command"] = "warning"
+    global_config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
     global_path = tmp_path / "home" / ".boxteam" / "workspace.jsonc"
     global_path.parent.mkdir(parents=True)
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
@@ -1639,7 +1639,7 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config_path.parent.mkdir(parents=True)
     workspace_config_path.write_text(
-        json.dumps({"mcp": {"servers": {"sample": {"transport": "stdio", "command": "warning"}}}}),
+        json.dumps({"mcp": {"supervision": {"sealed_call_timeout_seconds": 1900}}}),
         encoding="utf-8",
     )
     service = ConfigService(
@@ -1649,7 +1649,7 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     )
 
     original_revision = service.get_revision()
-    global_config["mcp"]["servers"]["sample"]["command"] = "debug"
+    global_config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
 
     assert await service.reload() is False
@@ -2237,7 +2237,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
             if snapshot.path == config_path and not mutated:
                 mutated = True
                 changed = _base_config()
-                changed["mcp"]["servers"]["sample"]["command"] = "debug"
+                changed["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
                 config_path.write_text(json.dumps(changed), encoding="utf-8")
             return payload
 
@@ -2266,7 +2266,7 @@ async def test_restart_required_failure_exposes_changed_sections(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
-    config["mcp"]["servers"]["sample"]["command"] = "debug"
+    config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     async def require_restart(*_args) -> NoReturn:
@@ -2433,14 +2433,14 @@ async def test_sqlite_migrated_source_change_is_imported_on_reload(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
+        assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
         config = _base_config()
-        config["mcp"]["servers"]["sample"]["command"] = "error"
+        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2500
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "info"
+        assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
         assert await service.reload() is True
-        assert service.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "error"
+        assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2500
         source = store.get_source_layer("workspace_mutable_override")
         assert source is not None
         assert source.presence == "present"
@@ -2651,7 +2651,7 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         service.validate_workspace_config()
         active_before = store.get_active_config_snapshot("workspace")
         assert active_before is not None
-        config["mcp"]["servers"]["sample"]["command"] = "debug"
+        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2671,7 +2671,7 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         )
         assert pending is not None
         assert pending.state == "pending_restart"
-        assert pending.payload["mcp"]["servers"]["sample"]["command"] == "debug"
+        assert pending.payload["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
         with closing(store.connection()) as connection:
             persisted = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
         assert "persistence_location" not in persisted
@@ -2704,7 +2704,7 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["servers"]["sample"]["command"] = "debug"
+        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2759,7 +2759,7 @@ async def test_workspace_recovery_pending_requires_matching_proof_before_resolve
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["servers"]["sample"]["command"] = "debug"
+        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2829,7 +2829,7 @@ async def test_workspace_pending_discard_requires_active_and_source_baseline(
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["servers"]["sample"]["command"] = "debug"
+        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2897,7 +2897,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["servers"]["sample"]["command"] = "debug"
+        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2934,7 +2934,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
             workspace_state_store=restored_store,
             startup_mount=startup_mount,
         )
-        assert restored.get_snapshot().to_dict()["mcp"]["servers"]["sample"]["command"] == "debug"
+        assert restored.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
         proof = restored.get_loaded_config_proof()
         assert proof["loaded_source"] == "pending"
         assert proof["candidate_id"] == pending.candidate_id

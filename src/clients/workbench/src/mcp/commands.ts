@@ -3,13 +3,10 @@ import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiat
 import { IMcpService } from '../../upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
 import { WorkspaceMcpService } from './service.js';
 import { WorkspaceMcpServer } from './server.js';
-import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
-import { IProgressService } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
-import { managementGateway, mcpManagementTarget, type ManagementTarget } from '../managementTarget.js';
+import { managementGateway } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { manageMcpArtifacts } from './artifacts.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { addMcpConfiguration } from './addConfiguration.js';
 import { mcpConfigurationErrorMessage } from './configuration.js';
@@ -18,7 +15,9 @@ import { mcpConfigurationErrorMessage } from './configuration.js';
 export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, configUri?: URI | string): Promise<void> {
   const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
   try {
+    if (workspaceContext.getSnapshot().loading) await workspaceContext.refresh();
     const initial = workspaceContext.getSnapshot();
+    if (initial.error) throw new Error(initial.error);
     if (!initial.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
     const selected = Object.freeze({ ...managementGateway('mcp') });
     const controller = new AbortController();
@@ -32,10 +31,7 @@ export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, c
       controller.signal.throwIfAborted();
     };
     try {
-      const target = await mcpManagementTarget(selected, controller.signal);
-      assertAccess();
-      await addMcpConfiguration({ kind: 'backend', gateway_id: target.gateway_id, backend_id: target.backend_id,
-        gateway_connection_id: target.gateway_connection_id }, target.name, quickInput, notifications, assertAccess, controller.signal, configUri);
+      await addMcpConfiguration(selected, selected.name, quickInput, notifications, assertAccess, controller.signal, configUri);
     } finally { releaseUser(); releaseContext(); controller.abort(); }
   } catch (cause) { notifications.error(mcpConfigurationErrorMessage(cause)); }
 }
@@ -70,30 +66,3 @@ export async function showWorkspaceMcpOptions(accessor: ServicesAccessor, id: st
   const pick = await accessor.get(IQuickInputService).pick(items, { placeHolder: `${server.label} · ${server.catalog.label} · ${server.statusLabel}` });
   await pick?.run();
 }
-
-registerAction2(class extends Action2 {
-  constructor() { super({ id: 'boxteam.mcp.manageArtifacts', title: { value: '管理目标制品', original: 'Manage Target Artifacts' },
-    category: { value: 'MCP', original: 'MCP' }, f1: true }); }
-  async run(accessor: ServicesAccessor, explicit?: ManagementTarget): Promise<void> {
-    const quickInput = accessor.get(IQuickInputService), progress = accessor.get(IProgressService), notifications = accessor.get(INotificationService);
-    const initial = workspaceContext.getSnapshot();
-    if (!initial.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
-    const selected = Object.freeze({ ...(explicit ?? managementGateway('mcp')) });
-    const controller = new AbortController();
-    const invalidate = () => controller.abort(new Error('Gateway 或用户身份已改变，请重新选择 MCP 制品目标'));
-    const release = onGatewayUserSessionInvalidated(0, invalidate);
-    const releaseContext = workspaceContext.subscribe(() => {
-      if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
-    });
-    const assertAccess = () => {
-      if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
-      controller.signal.throwIfAborted();
-    };
-    try {
-      const owner = await mcpManagementTarget(selected, controller.signal);
-      assertAccess();
-      await manageMcpArtifacts({ kind: 'backend', gateway_id: owner.gateway_id, backend_id: owner.backend_id,
-        gateway_connection_id: owner.gateway_connection_id }, owner.name, quickInput, progress, notifications, assertAccess, controller.signal);
-    } finally { release(); releaseContext(); controller.abort(); }
-  }
-});

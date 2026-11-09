@@ -14,7 +14,7 @@ mcp/
 ├── test_naming.py                      # MCP server/tool 命名合同
 ├── test_session_lifecycle.py           # Server 原 task、取消、失败关闭及通知失效
 ├── test_stdio_transport.py             # 关闭原进程后排空阻塞管道读取
-├── test_config_replacement.py          # HTTP 候选隔离、stdio 停启、共同切换与退役资格排空
+├── test_config_replacement.py          # HTTP 与插件服务候选隔离、共同切换、退役资格排空和清理失败
 ├── test_invocation_leases.py           # 精确调用占用、冷启动核对与写盘失败
 ├── test_tool_adapter.py                # SDK 完整分页、原参数与协议结果转换
 ├── test_tool_definition_recovery.py    # 发现、压缩、策略、冷读与 rewind 边界

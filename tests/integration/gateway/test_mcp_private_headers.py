@@ -17,11 +17,11 @@ from starlette.datastructures import Headers
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
-from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 沿当前文件正式输出路径复用原 HTTP MCP
-)
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 沿当前文件正式输出路径复用原 HTTP MCP
+)
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (

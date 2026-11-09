@@ -86,7 +86,8 @@ async def test_backend_maintenance_conflict_precedes_all_business_initialization
         AttachmentMaintenanceLock(roots[blocked_mount] / ".boxteam/attachments", exclusive=True),
         pytest.raises(AttachmentMaintenanceBusyError, match="在线访问"),
     ):
-        async with main.lifespan(main.app):
+        async with main.lifespan(main.app) as _main_lifespan_state_89:
+            await _main_lifespan_state_89["after_http_startup"]()
             pytest.fail("维护占用时后端不能就绪")
     assert not calls
     assert main.app.state.workspace_container_registry is None
@@ -154,7 +155,8 @@ async def test_real_double_mount_holds_access_through_writer_shutdown(
 
     # lifespan 登记的是绑定方法，必须在进入真实 lifespan 前观察关闭入口。
     monkeypatch.setattr(AttachmentBlobStore, "close", checked_close)
-    async with main.lifespan(main.app):
+    async with main.lifespan(main.app) as _main_lifespan_state_157:
+        await _main_lifespan_state_157["after_http_startup"]()
         for container in case.containers:
             root = container.workspace_root / ".boxteam/attachments"
             with pytest.raises(AttachmentMaintenanceBusyError), AttachmentMaintenanceLock(root, exclusive=True):
@@ -204,7 +206,8 @@ async def test_maintenance_native_release_keeps_close_owner_and_diagnostics_resp
     token = secrets.token_hex(32)
     monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     backend = main.app.state.workspace_lifespan
     registry = backend.registry
     selected = maintenance_case.containers[-1]

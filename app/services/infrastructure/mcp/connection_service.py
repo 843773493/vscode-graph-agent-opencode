@@ -30,7 +30,7 @@ _CANCEL_WAIT_SECONDS = 30
 class McpConnectionSummary(TypedDict):
     connection_id: str
     server_id: str
-    transport: Literal["stdio", "streamable_http"]
+    transport: Literal["plugin", "streamable_http"]
     enabled: bool
     status: Literal["disabled", "ready", "failed", "authorization_required", "unavailable"]
 
@@ -61,17 +61,11 @@ class McpConnectionService:
     def _configuration_ref(self, server_id: str) -> str:
         server = self._owner.server_configuration(server_id)
         payload = asdict(server)
-        # 可选输入只在实际存在时参与身份，空集合不改变已持久化操作的原指纹合同。
         payload.pop("private_headers")
-        payload.pop("private_env")
-        payload.pop("provider_definition")
-        if server.provider_definition is not None:
-            payload["provider_definition"] = server.provider_definition.model_dump(mode="json")
-        payload["managed_launch"] = server.managed_launch.model_dump(mode="json") if server.managed_launch is not None else None
+        if server.service is not None:
+            payload["service"] = server.service.model_dump(mode="json")
         if server.private_headers:
             payload["private_headers"] = [reference.model_dump(mode="json") for reference in server.private_headers]
-        if server.private_env:
-            payload["private_env"] = [reference.model_dump(mode="json") for reference in server.private_env]
         return sha256_jcs(payload)
 
     def _connection_id(self, server_id: str) -> str:

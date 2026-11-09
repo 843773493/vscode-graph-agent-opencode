@@ -5,6 +5,7 @@ WorkspaceStateStoreSnapshotMixin 只承载本族方法，由 WorkspaceStateStore
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
@@ -148,7 +149,7 @@ class WorkspaceStateStoreSnapshotMixin:
         existing = self.get_active_config_snapshot(config_domain)
         if existing is not None:
             return existing
-        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
+        with closing(cast("WorkspaceStateStore", self)._database.connection()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             existing_row = connection.execute(
                 "SELECT 1 FROM config_active_snapshot WHERE config_domain = ?",
@@ -215,7 +216,7 @@ class WorkspaceStateStoreSnapshotMixin:
         expected_fencing_token: str | None = None,
         event: ConfigEventInput | None = None,
     ) -> ConfigActiveSnapshotRecord:
-        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
+        with closing(cast("WorkspaceStateStore", self)._database.connection()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             active_row = connection.execute(
                 "SELECT active_revision FROM config_active_snapshot WHERE config_domain = ?",

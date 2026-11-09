@@ -4,10 +4,9 @@ import { resolve, join } from 'node:path';
 import ts from 'typescript';
 import { sourceTransform, pinnedUpstreamCommit } from './sourceTransform.mjs';
 import { mcpSourcePaths } from './mcpTransform.mjs';
-import { CancellationToken, CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
+import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError, isCancellationError, getErrorMessage } from '../upstream/src/vs/base/common/errors.js';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
-import { PagedModel } from '../upstream/src/vs/base/common/paging.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
@@ -211,6 +210,41 @@ test('实际转换只注册一个项目 MCP 服务，原列表／详情继续注
   expect(source('mcp.contribution.ts').text).toContain('EditorPaneDescriptor.create(');
 });
 
+test('动态MCP Provider的扩展API在浏览器与Node宿主拒绝注册，不发布到原MCP注册表', async () => {
+  const apiSource = source('extHost.api.impl.ts');
+  const nodeRuntimeTransform = sourceTransform(root, { commit: pinnedUpstreamCommit }, [], { runtime: 'node' });
+  const apiPath = join(root, 'upstream/src/vs/workbench/api/common/extHost.api.impl.ts');
+  const nodeRuntimeSource = ts.createSourceFile(apiPath,
+    await nodeRuntimeTransform(apiPath, await readFile(apiPath, 'utf8')),
+    ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const getBody = (parsed: ts.SourceFile): string => {
+    let body: ts.Block | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isMethodDeclaration(node) && node.name.getText(parsed) === 'registerMcpServerDefinitionProvider') body = node.body;
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+    if (!body) throw new Error('动态 MCP Provider API 入口缺失');
+    return body.getText(parsed);
+  };
+  const browserBody = getBody(apiSource);
+  const nodeBody = getBody(nodeRuntimeSource);
+  expect(browserBody).not.toContain('registerMcpConfigurationProvider');
+  expect(nodeBody).not.toContain('registerMcpConfigurationProvider');
+
+  for (const body of [browserBody, nodeBody]) {
+    const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(
+      'function registerMcpServerDefinitionProvider(id: string, _provider: object) ' + body,
+    );
+    let registryCalls = 0;
+    const register = new Function('extHostMcp', javascript + '\nreturn registerMcpServerDefinitionProvider;')(
+      { registerMcpConfigurationProvider() { registryCalls += 1; } },
+    ) as (id: string, provider: object) => never;
+    expect(() => register('legacy-provider', {})).toThrow('已停用');
+    expect(registryCalls).toBe(0);
+  }
+});
+
 test.each(['InstallFromManifestAction', 'OpenUserMcpResourceCommand', 'OpenRemoteUserMcpResourceCommand', 'OpenWorkspaceMcpResourceCommand', 'OpenWorkspaceFolderMcpResourceCommand', 'SetOAuthClientSecret', 'RemoveStoredInput', 'EditStoredInput'])(
   '原 %s 命令 run 实际拒绝，不能触达旧配置、安装或凭据 writer', async kind => {
     const body = methodBody('mcpCommands.ts', kind, 'run');
@@ -393,27 +427,6 @@ test('原活动栏进度结束时只清理自身，原查询 Promise 仍拒绝�
   expect(await rejection).toBe(failure);
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(events).toEqual(['show', 'dispose']);
-});
-
-test('原列表把唯一 manifest 的未配置状态作为提示展示，不发目录查询也不伪装无匹配', async () => {
-  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function query(text: string, token: object) ${methodBody('mcpServersView.ts', 'McpServersListView', 'query')}`);
-  const query = new Function('DisposableStore', 'CancellationError', 'PagedModel', 'localize', 'Severity', javascript + '\nreturn query;')(
-    DisposableStore, CancellationError, PagedModel, (_key: string, message: string) => message, { Info: 1 },
-  ) as (this: object, text: string, token: CancellationToken) => Promise<{ model: PagedModel<unknown>; disposables: DisposableStore; message: { text: string; severity: number } }>;
-  let queried = false;
-  const input = await query.call({
-    mcpGalleryManifestService: { getMcpGalleryManifest: async () => null },
-    updateTitleDescription: () => undefined,
-    mcpWorkbenchService: { queryGallery: async () => { queried = true; throw new Error('未配置不得进入查询'); } },
-  }, '@mcp', CancellationToken.None);
-  expect(queried).toBe(false);
-  expect(input.model.length).toBe(0);
-  expect(input.message).toEqual({ text: "The MCP gallery is not configured. Configure 'chat.mcp.gallery.serviceUrl'.", severity: 1 });
-  const render = new Function(`return function() ${methodBody('mcpServersView.ts', 'McpServersListView', 'renderInput')};`)() as (this: object) => void;
-  const displayed: unknown[] = [];
-  render.call({ input, list: null, updateBody: (message: unknown) => { displayed.push(message); } });
-  expect(displayed).toEqual([input.message]);
-  input.disposables.dispose();
 });
 
 test.each(['当前续页失败', '已取消查询', '已替换模型', '取消错误', '旧条目晚到'])(

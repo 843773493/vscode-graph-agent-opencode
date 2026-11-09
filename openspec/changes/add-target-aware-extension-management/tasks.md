@@ -44,13 +44,15 @@
 
 ## 5. MCP 纵向迁移
 
-- [ ] 5.1 使 stdio MCP 由自有插件持有管道和实际子进程，通过标准 Streamable HTTP 暴露；测试初始化、完整目录、通知、进度、取消、结构化／媒体及已声明双向能力，未支持能力如实报告。
-- [ ] 5.2 将 Backend 原 MCP client、目录 owner、OAuth、执行资格和资源 lease 接到 Gateway；保留每工作区唯一逻辑连接，区分插件 instance_id 与 client connection generation，不建立第二目录或工具历史。
-- [ ] 5.3 迁齐 Backend stdio／managed_launch、旧 Registry variant／私有输入和动态 VSIX Provider 的配置、协议与消费者；输入改为 service binding 和原 private-input owner 的认证交付，删除旧 SDK 创建链和 fallback。
-- [ ] 5.4 外部原生 HTTP MCP 经相同 Gateway 路由使用，不额外启动包装服务；核精确端点、工作区 OAuth、原错误与调用身份，不让服务范围变成凭据共享。
+- [x] 5.1 使 stdio MCP 由自有插件持有管道和实际子进程，通过标准 Streamable HTTP 暴露；测试初始化、完整目录、通知、进度、取消、结构化／媒体及已声明双向能力，未支持能力如实报告。
+- [x] 5.2 将 Backend 原 MCP client、目录 owner、OAuth、执行资格和资源 lease 接到 Gateway；保留每工作区唯一逻辑连接，区分插件 instance_id 与 client connection generation，不建立第二目录或工具历史。
+- [x] 5.3 迁齐 Backend stdio／managed_launch、旧 Registry variant／私有输入和动态 VSIX Provider 的配置、协议与消费者；输入改为 service binding 和原 private-input owner 的认证交付，删除旧 SDK 创建链和 fallback。
+- [x] 5.4 外部原生 HTTP MCP 经相同 Gateway 路由使用，不额外启动包装服务；核精确端点、工作区 OAuth、原错误与调用身份，不让服务范围变成凭据共享。
 - [ ] 5.5 沿唯一Backend原journal／claim→MCP候选准备→必要Gateway单插件生命周期→完整目录验证→active promotion／publication链迁齐；进程ready不发布半目录，破坏前失败保留可保持旧运行，停旧后失败记录实际阶段并结束，清理仅本次拥有资源，Gateway无第二候选状态机、自动回滚或续完候选。
 - [ ] 5.6 验Backend崩溃／重连、插件崩溃／显式重启、同schema替换、旧资格到期及迟到回执；仅原journal判事实及重建连接，保留execution_lost／未知结果及原call ID，recovery_required仅诊断，零自动恢复旧进程或重放副作用。
 - [ ] 5.7 仅回归原执行owner已显式配置的可选人工确认；普通会话和插件管理零新增审批请求／入口／等待状态／轮询，仅原等待事件／快照进入既有读取；原checkpoint／control inbox／结果owner处理执行中断，旧确认不恢复调用，不新增审批存储、终态事务、检查点修复、消息重组或续跑；OAuth及管理权限不转换人工审批。
+
+  - 2026-11-09 MCP 纵向切片：Backend stdio／managed_launch、Registry 安装／候选和动态 VSIX Provider 的配置、API、协议及调用方迁齐后删除；stdio 由 Gateway 自有插件持有，经标准 Streamable HTTP 接回原工作区 MCP owner，外部 HTTP 同经 Gateway 且零包装进程。真实 Gateway／Thread 工具循环覆盖完整分页、并发成功／isError、媒体、进度及 canonical 冷读；Backend safe restart 保留插件进程并更新 connection_ref。参数切换与显式重启的根工作树产品验证为2 passed／110.65秒，确认旧子进程退出先于新进程、坏目录不半发布、原 journal 记录副作用及显式修复；正式 Workbench Add 的取消零写入、插件服务与外部 HTTP 保存和目录展示为1 passed／89.67秒。预配置 MCP 冷启动的 Gateway／Backend 就绪循环已消除：listener-ready 回调由原生命周期 owner 启动业务，恢复完成前不占待发布路由引用；同 Home 完整重启、旧 stdio 子进程退出、冷启动 Thread、Backend safe restart 及外部 HTTP 的完整进度／媒体／canonical 结果最终1 passed／115.57秒。外部 HTTP 的进度资产按 SDK 正式合同关联原 request ID，取消后同连接后继请求收到完整两条进度，定向1 passed／7.32秒。根工作树 Agent 结果与冷检查点2 passed／61.84秒，双挂载生命周期及启动裁剪2 passed／22.57秒，runner／Backend关闭23 passed／19.61秒；协议生成一致性通过。目录错误／原 HTTP 恢复定向1 passed／13.27秒；最后清理旧 auxiliary 代理测试后，候选 workspace 流与失败矩阵分别30 passed／1.75秒、29 passed／2.93秒，相关Ruff通过；桥接简化后的目录与HTTP协议6 passed／8.59秒，配置策略与来源43 passed／0.59秒。最终候选183份实际转换源码类型及79扩展正式Web构建通过；旧VSIX动态MCP Provider的Browser／Node公开注册入口明确拒绝，不进入原Registry发布；最终候选转换与共享HTTP组合78 passed、0 failed，分别执行两个宿主的真实转换方法并核零注册。本轮候选147份 Python 的 Ruff 对照48→34、启动相关6份类型对照44→44，均无新增诊断。旧配置消费者组合候选204 passed／23 failed，其中旧错误文本与插件预检参数形状两类代表在 git archive HEAD 基线均复现；另1项因误夹其它会话的显式迁移测试已从精确候选移除，根树原件保留，未重跑全批、未改产品或放宽断言。Launcher 完整换代验证仍卡旧日志装具的固定进程数，启动／真实 Thread／热改部分已过但不计完整换代验收。5.5 的关闭竞争与5.6／5.7的全部边界未验，不据局部结果勾完；源码外预构建交付仍属第3／15组待办。准确命令、源码指纹、成功及失败输出在 `out/tests/temp/2026/11/09/mcp_delivery/artifacts/`，UI原件为 `out/tests/integration/clients/web/test_mcp_plugin_configuration_ui/runs/run-9c93a45638e9/`。
 
 ## 6. 配置、日志、遥测与统计
 

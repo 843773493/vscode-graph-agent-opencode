@@ -55,7 +55,8 @@ async def test_attachment_close_retains_original_owner_until_sync_work_finishes(
 
     monkeypatch.setattr(backend_lifecycle, "timeout", capture_deadline)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="attachment-close-queue")
     previous_executor = getattr(loop, "_default_executor", None)

@@ -11,6 +11,9 @@ from app.protocol.generated.boxteam.gateway.v2 import (
     service_plugin_pb2,
 )
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.gateway.v2 import (
+    skill_sources_pb2 as gateway_skill_sources_pb2,
+)
 from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
@@ -23,26 +26,6 @@ from app.protocol.generated.boxteam.workspace.v2 import (
     trace_pb2,
 )
 from app.protocol.schema import assert_public_schema
-from app.schemas.gateway.extension_host import (
-    ExtensionHostConnectionDTO,
-    ExtensionHostOpenRequest,
-)
-from app.schemas.gateway.extension_web import (
-    ExtensionWebHostConnectionDTO,
-    ExtensionWebHostOpenRequest,
-)
-from app.schemas.gateway.mcp_definitions import (
-    ExtensionMcpDefinitionChannelDTO,
-    ExtensionMcpDefinitionChannelRequest,
-    McpProviderCancelDTO,
-    McpProviderDefinitionDTO,
-    McpProviderHttpLaunchDTO,
-    McpProviderInvalidateDTO,
-    McpProviderResolvedDTO,
-    McpProviderResolveDTO,
-    McpProviderSnapshotDTO,
-    McpProviderStdioLaunchDTO,
-)
 from app.schemas.gateway.plugin_commands import (
     PluginCommandCallRequest,
     PluginCommandCancelDTO,
@@ -82,11 +65,6 @@ from app.schemas.gateway.service_plugin import (
     RestartPluginRequest,
     ServicePluginManifest,
     WorkspacePluginConfigurationDTO,
-)
-from app.schemas.gateway.skill_sources import (
-    GatewaySkillSourceEntryDTO,
-    GatewaySkillSourcesDTO,
-    PluginSkillSourceDTO,
 )
 
 # HTTP 根登记完整消息名，在发布时从本次 descriptor 解析；新增消息不依赖旧生成绑定。
@@ -149,18 +127,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
         "McpAuthorizationDTO", "McpAuthorizationCallbackDTO",
         "McpPrivateHeaderRefDTO", "McpPrivateHeaderWriteRequestDTO", "McpPrivateHeaderWriteResponseDTO",
-        "McpStdioLaunchDefinitionDTO", "McpPrivateEnvRefDTO", "McpPrivateEnvWriteRequestDTO", "McpPrivateEnvWriteResponseDTO",
-        "McpCandidateConfigurationRequestDTO", "McpCandidateConfigurationResponseDTO",
-        "McpCandidateConfigurationDraftRequestDTO", "McpCandidateConfigurationDraftDTO",
-        "McpCandidateConfigurationDraftResponseDTO",
         "McpServerListResponseDTO", "McpConnectionOperationListResponseDTO",
         "McpConnectionOperationResponseDTO", "McpAuthorizationResponseDTO",
-        "McpCandidateInspectRequestDTO", "McpCandidatePlanRequestDTO", "McpCandidatePlanValidationRequestDTO",
-        "McpCandidateInspectResponseDTO", "McpCandidatePlanResponseDTO",
-        "McpManagedLaunchDTO", "McpInstallationRequestDTO", "McpInstalledArtifactDTO",
-        "McpInstallationOperationDTO", "McpInstallationOperationResponseDTO", "McpInstalledArtifactListResponseDTO",
-        "McpInstallationCapabilitiesDTO", "McpInstallationCapabilitiesResponseDTO",
-        "McpUninstallationRequestDTO", "McpArtifactReferenceDTO", "McpArtifactReferencesDTO", "McpArtifactReferencesResponseDTO",
         "ToolDTO", "ToolSelectionPatchRequest", "ToolTestStartRequest", "ToolTestRunDTO", "ToolTestRunListDTO",
         "PersistentTaskCreateRequest", "PersistentTaskUpdateRequest", "PersistentTaskControlRequest",
         "PersistentTaskCheckRequest", "PersistentTaskNotificationRequest", "SessionGeneratorImportRequest",
@@ -224,17 +192,6 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
-# MCP 制品属于Backend协议；Gateway只公布并校验同一组原请求和回执。
-GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
-    name: f"{public_pb2.DESCRIPTOR.package}.{name}" for name in (
-        "McpInstallationTargetListRequestDTO", "McpInstallationTargetListResponseDTO",
-        "McpCandidateInspectRequestDTO", "McpCandidateInspectResponseDTO",
-        "McpCandidatePlanRequestDTO", "McpCandidatePlanResponseDTO", "McpCandidatePlanValidationRequestDTO",
-        "McpInstallationCapabilitiesResponseDTO", "McpInstallationOperationResponseDTO",
-        "McpInstallationRequestDTO", "McpInstalledArtifactListResponseDTO",
-        "McpArtifactReferencesResponseDTO", "McpUninstallationRequestDTO",
-    )
-}
 
 # 插件合同从独立 proto 文件生成；Pydantic 只保留业务校验，不重复维护跨语言字段结构。
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
@@ -251,6 +208,11 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     name: f"{plugin_commands_pb2.DESCRIPTOR.package}.{name}"
     for name in ("PluginCommandCallRequest", "PluginCommandCancelRequest", "PluginCommandCancelDTO",
                  "PluginCommandInstanceRequest", "PluginCommandRegistrationsDTO")
+}
+
+GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
+    name: f"{gateway_skill_sources_pb2.DESCRIPTOR.package}.{name}"
+    for name in ("PluginSkillSourceDTO", "GatewaySkillSourceEntryDTO", "GatewaySkillSourcesDTO")
 }
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
@@ -301,14 +263,7 @@ def _assert_http_schemas(
 def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool | None = None) -> None:
     """核对 Gateway 控制面公开结构，保留原生目录输入及 URI 业务校验。"""
     _assert_http_schemas(document, GATEWAY_HTTP_JSON_DESCRIPTORS, pool)
-    # 独立 WS 的首帧不进入 HTTP OpenAPI，但与生成产物一同核对唯一 proto。
     descriptor_pool = pool if pool is not None else Default()
-    for model in (ExtensionHostOpenRequest, ExtensionHostConnectionDTO, ExtensionWebHostOpenRequest, ExtensionWebHostConnectionDTO,
-                  ExtensionMcpDefinitionChannelRequest, ExtensionMcpDefinitionChannelDTO, McpProviderDefinitionDTO,
-                  McpProviderSnapshotDTO, McpProviderInvalidateDTO, McpProviderResolveDTO, McpProviderCancelDTO,
-                  McpProviderStdioLaunchDTO, McpProviderHttpLaunchDTO):
-        message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
-        assert_public_schema(model.model_json_schema(), message)
     for model in (
         PluginExtensionRequirement, PluginServiceContribution, PluginToolBinding, PluginSkillContribution,
         PluginCommandContribution, PluginMenuContribution, PluginKeybindingContribution,
@@ -318,20 +273,12 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginPrivateInputReference, PluginPrivateInputWriteRequest,
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
         PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
-        PluginSkillSourceDTO, GatewaySkillSourceEntryDTO, GatewaySkillSourcesDTO,
         PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,
         PluginCommandInstanceRequest, PluginCommandRegistration, PluginCommandRegistrationsDTO,
         PluginCommandEventDTO,
     ):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)
-    # wire 的 launch 是 typed superset；运行时的两种互斥 DTO 已逐一核对。
-    # 此处只把同一 union 的字段合并到 proto 外形，继续核 resolved 根及全部 launch 字段。
-    resolved = McpProviderResolvedDTO.model_json_schema()
-    launch_properties = (resolved["$defs"]["McpProviderStdioLaunchDTO"]["properties"]
-                         | resolved["$defs"]["McpProviderHttpLaunchDTO"]["properties"])
-    resolved["properties"]["launch"] = {"type": "object", "properties": launch_properties}
-    assert_public_schema(resolved, descriptor_pool.FindMessageTypeByName("boxteam.gateway.v2.McpProviderResolvedDTO"))
     name = "GatewayRuntimeGroupRequest"
     components = document["components"]
     schemas = components["schemas"]

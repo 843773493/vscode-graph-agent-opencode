@@ -11,9 +11,6 @@ from tests.integration.clients.web.test_mcp_connection_authorization import (
     browser_runner as browser_runner,  # noqa: PLC0414 - 复用同一 Chromium 场景和初始化校验
 )
 from tests.integration.clients.web.test_mcp_connection_authorization import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原 MCP handler
-)
-from tests.integration.clients.web.test_mcp_connection_authorization import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 同一 OAuth/PKCE HTTP 资产
 )
 from tests.integration.clients.web.test_mcp_connection_authorization import (
@@ -23,6 +20,9 @@ from tests.integration.clients.web.test_mcp_connection_authorization import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 按本文件隔离的正式工作区
 )
 from tests.support.api_helpers import create_session
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原 MCP handler
+)
 
 
 async def test_web_denial_original_deadline_and_disconnect_keep_authoritative_state(

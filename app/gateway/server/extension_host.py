@@ -90,14 +90,6 @@ from app.schemas.gateway.extension_web import (
     ExtensionWebHostConnectionDTO,
     ExtensionWebHostOpenRequest,
 )
-from app.schemas.gateway.mcp_definitions import (
-    MCP_PROVIDER_CHANNEL_BINDING,
-    MCP_PROVIDER_CHANNEL_REQUEST,
-    MCP_PROVIDER_INBOUND,
-    MCP_PROVIDER_OUTBOUND,
-    ExtensionMcpDefinitionChannelRequest,
-    validate_provider_frame,
-)
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.extension_host.management import (
     ExtensionManagementError,
@@ -212,10 +204,12 @@ def _target_route(connection: HTTPConnection, *, gateway_id: str, workspace_ids:
                 raise ValueError("Node 宿主目标不属于原生 Gateway")
             headers.update({"X-Local-Token": get_gateway_local_token(), "X-BoxTeam-Gateway-Id": registry.gateway_id})
         base_url = urls.pop()
+        member_owners = tuple(registry.backend_owner(target.key) for target in targets)
         management_routes = () if remote else tuple(
             BackendManagementRoute(base_url, target.system_default, tuple(leases), None,
-                registry.backend_owner(target.key), target if registry.backend_owner(target.key) is None else None)
-            for target in targets
+                owner, target if owner is None else None,
+                owner.contract.generation if owner is not None else None, tuple(targets), member_owners)
+            for target, owner in zip(targets, member_owners, strict=True)
         )
         yield GatewayManagementRoute(base_url, remote, headers, leases, management_routes=management_routes)
 
@@ -757,79 +751,3 @@ async def extension_host_channel(websocket: WebSocket) -> None:
     except Exception:
         logger.exception("Gateway Node 宿主通道失败: request_id=%s", request_id)
         await close_channel(websocket, code=1011, reason="extension_host_channel_failed")
-
-
-async def _provider_upstream(websocket: WebSocket, *, route: GatewayManagementRoute,
-    payload: ExtensionMcpDefinitionChannelRequest, auth: GatewayAuthContext, access: UserAccessContext | None,
-    client_id: str) -> None:
-    path = "api/gateway/extension-hosts/mcp-definitions" if route.remote else "api/internal/extension-hosts/mcp-definitions"
-    expected_client = f"peer:{websocket.app.state.registry.gateway_id}:{client_id}" if route.remote else client_id
-    async with connect(build_upstream_websocket_url(route.base_url, path), additional_headers={**route.headers, CLIENT_HEADER: client_id},
-                       compression=None, open_timeout=10, close_timeout=10) as upstream:
-        await upstream.send(payload.model_dump_json(exclude={"gateway_connection_id"}))
-        async with asyncio.timeout(15):
-            raw = await upstream.recv()
-        if not isinstance(raw, str):
-            raise TypeError("Provider 控制通道缺少具名身份握手")
-        binding = validate_provider_frame(MCP_PROVIDER_CHANNEL_BINDING, raw)
-        fields = set(ExtensionMcpDefinitionChannelRequest.model_fields) - {"gateway_connection_id"}
-        if (binding.model_dump(include=fields) != payload.model_dump(include=fields)
-            or binding.client_id != expected_client or binding.request_id != get_request_id(websocket)):
-            raise ValueError("Provider 控制通道返回了不同的原宿主身份")
-        _check(websocket, auth, access, route.leases, capability="extension_host_manage")
-        check_management_route(websocket, route)
-        await websocket.send_text(binding.model_dump_json(exclude_none=True))
-
-        async def relay(outbound: bool) -> None:
-            while True:
-                if outbound:
-                    message = await websocket.receive()
-                    if message["type"] == "websocket.disconnect":
-                        return
-                    data = message.get("text")
-                else:
-                    data = await upstream.recv()
-                _check(websocket, auth, access, route.leases, capability="extension_host_manage")
-                check_management_route(websocket, route)
-                if not isinstance(data, str):
-                    raise TypeError("Provider 控制通道只接受正式具名 JSON 帧")
-                validate_provider_frame(MCP_PROVIDER_INBOUND if outbound else MCP_PROVIDER_OUTBOUND, data)
-                if outbound:
-                    await upstream.send(data)
-                else:
-                    await websocket.send_text(data)
-
-        await run_channel(relay(True), relay(False))
-
-
-@router.websocket("/api/gateway/extension-hosts/mcp-definitions")
-async def extension_mcp_definitions(websocket: WebSocket) -> None:
-    request_id = get_request_id(websocket)
-    try:
-        auth, access, client_id = _access(websocket)
-    except HTTPException as error:
-        await websocket.send_denial_response(JSONResponse(status_code=error.status_code,
-            content={"detail": error.detail, "request_id": request_id}, headers={"X-Request-ID": request_id}))
-        return
-    await websocket.accept()
-    payload = None
-    try:
-        async with asyncio.timeout(10):
-            payload = validate_provider_frame(MCP_PROVIDER_CHANNEL_REQUEST, await websocket.receive_text())
-        with _installation_route(websocket, payload, auth, streaming=True) as route:
-            _check(websocket, auth, access, route.leases, capability="extension_host_manage")
-            operations = [_provider_upstream(websocket, route=route, payload=payload, auth=auth, access=access, client_id=client_id),
-                _watch_policy(websocket, auth), _watch_management_route(websocket, route),
-                *(_watch_route(lease) for lease in route.leases)]
-            if access is not None:
-                operations.append(_watch_user(websocket, access))
-            await run_channel(*operations)
-        await close_channel(websocket)
-    except WebSocketDisconnect:
-        return
-    except ConnectionClosed:
-        await close_channel(websocket, code=1011, reason="mcp_provider_upstream_closed")
-    except Exception:
-        logger.exception("Gateway Provider 控制通道失败: request_id=%s gateway_id=%s backend_id=%s generation=%s", request_id,
-            payload.gateway_id if payload else None, payload.backend_id if payload else None, payload.generation if payload else None)
-        await close_channel(websocket, code=1011, reason="mcp_provider_channel_failed")

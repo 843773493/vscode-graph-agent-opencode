@@ -1,0 +1,38 @@
+{
+  "manifest_version": 1,
+  "package_id": "boxteam.mcp-stdio",
+  "version": "0.1.0",
+  "name": "BoxTeam MCP stdio bridge",
+  "description": "在 Gateway 管理的插件实例中运行 stdio MCP server，并通过 Streamable HTTP 提供服务。",
+  "extension_contract_version": 1,
+  "plugins": [
+    {
+      "id": "stdio",
+      "name": "MCP stdio bridge",
+      "instance_scope": "workspace",
+      "runtime": "python",
+      "entrypoint": ["bridge.py"],
+      "management_protocol_version": 1,
+      "requires": [
+        { "extension_point": "services", "version": 1 },
+        { "extension_point": "configuration", "version": 1 }
+      ],
+      "contributes": {
+        "services": [
+          { "service_id": "mcp", "service_type": "mcp", "protocol": "streamable-http" }
+        ],
+        "configuration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "args", "cwd"],
+          "properties": {
+            "command": { "type": "string", "minLength": 1 },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "cwd": { "type": "string", "minLength": 1 },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        }
+      }
+    }
+  ]
+}

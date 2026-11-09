@@ -220,7 +220,8 @@ class GatewayPluginRuntime:
                 parameters=(parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {}))
 
     async def apply_binding(self, binding: PluginBinding, *, revision: str, restart: bool = False,
-                            parameters: dict[str, JsonValue]) -> dict[str, object]:
+                            parameters: dict[str, JsonValue],
+                            delivered_parameters: dict[str, JsonValue] | None = None) -> dict[str, object]:
         key = self.key(binding)
         async with self._locks.setdefault(key, asyncio.Lock()):
             previous = self.slots.get(key)
@@ -229,7 +230,8 @@ class GatewayPluginRuntime:
             # revision 已由原配置 owner 核验；无关配置提交不要求给插件重复交接。
             if restart and (previous is None or previous.binding != binding):
                 raise ValueError("重启基线已失效，请读取原绑定")
-            if previous is not None and previous.binding == binding and previous.parameters_revision == parameters_revision and not restart:
+            if (previous is not None and previous.binding == binding
+                    and previous.parameters_revision == parameters_revision and not restart):
                 self.skill_sources.publish_plugin(binding, self.packages)
                 previous.parameters = values
                 previous.revision = revision
@@ -251,7 +253,7 @@ class GatewayPluginRuntime:
             self.skill_sources.publish_plugin(binding, self.packages)
             if binding.enabled and declaration.runtime is not None:
                 try:
-                    await self._start(key, slot)
+                    await self._start(key, slot, delivered_parameters=delivered_parameters)
                 except asyncio.CancelledError:
                     slot.state, slot.error = "failed", "启动被取消；已结算原进程，需显式重启"
                     raise
@@ -279,7 +281,10 @@ class GatewayPluginRuntime:
         ]:
             raise ValueError("插件 ready 身份、合同或服务清单与精确绑定不符")
 
-    async def _start(self, key: Slot, slot: PluginSlot) -> None:
+    async def _start(
+        self, key: Slot, slot: PluginSlot, *,
+        delivered_parameters: dict[str, JsonValue] | None = None,
+    ) -> None:
         record_path = self._record(key)
         if record_path.exists():
             raise RuntimeError("原插件进程发现记录尚未接管，拒绝重复启动；需重启所属运行时")
@@ -307,9 +312,12 @@ class GatewayPluginRuntime:
             values = self.private_inputs.resolve(values, package_id=slot.binding.package_id,
                 plugin_id=slot.binding.plugin_id, schema=slot.declaration.contributes.configuration)
         elif requires_private_delivery(values, slot.declaration.contributes.configuration):
-            if self.workspace_parameters is None:
-                raise RuntimeError("Workspace 插件私有参数尚未接入原配置 owner")
-            values = await self.workspace_parameters(slot.binding, slot.revision)
+            if delivered_parameters is not None:
+                values = delivered_parameters
+            else:
+                if self.workspace_parameters is None:
+                    raise RuntimeError("Workspace 插件私有参数尚未接入原配置 owner")
+                values = await self.workspace_parameters(slot.binding, slot.revision)
         validate_plugin_parameters(slot.declaration.contributes.configuration, slot.parameters, values)
         environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(values, ensure_ascii=False)
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])

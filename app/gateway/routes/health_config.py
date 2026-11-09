@@ -264,6 +264,9 @@ async def health(
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
+    startup_ready = getattr(request.app.state, "http_startup_ready", None)
+    if isinstance(startup_ready, asyncio.Future):
+        await asyncio.shield(startup_ready)
     request.app.state.federation_channel_owner.assert_healthy()
     extension_management = request.app.state.extension_management
     if extension_management is not None:

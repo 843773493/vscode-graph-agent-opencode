@@ -248,14 +248,16 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
     persisted.activate(running[1].workspace_id)
     registry = await bootstrap.create_registry()
     assert startup_case.validated_roots == [(expected_roots, False)]
-    assert len(startup_case.started) == 1
-    assert registry.has_runtime(defaults[0].workspace_id)
-    assert all(not registry.has_runtime(target.workspace_id) for target in running)
+    assert not startup_case.started
+    assert all(not registry.has_runtime(target.workspace_id) for target in defaults + running)
+    assert all(registry.backend_owner(target.workspace_id) is not None for target in defaults + running)
+    # 模拟 ManagedHTTPServer 在 listener 就绪后调用恢复阶段。
     await bootstrap._restore_managed_local_runtimes(
         registry=registry, default_workspace_id=defaults[0].workspace_id,
     )
     assert startup_case.validated_roots == [(expected_roots, False)] * 2
     assert len(startup_case.started) == 2
+    assert registry.has_runtime(defaults[0].workspace_id)
     restored_owner = registry.backend_owner(running[0].workspace_id)
     assert restored_owner is registry.backend_owner(running[1].workspace_id)
     assert all(registry.managed_runtime(target.workspace_id).backend_owner is restored_owner for target in running)
@@ -684,24 +686,28 @@ async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(star
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 @pytest.mark.parametrize("preserve_existing_managed_runtimes", [False, True])
-async def test_create_registry_closes_runtime_when_later_startup_fails(startup_case, monkeypatch, cleanup_fails, preserve_existing_managed_runtimes) -> None:
+async def test_registry_close_reclaims_runtimes_restored_after_listener_startup(
+    startup_case, cleanup_fails, preserve_existing_managed_runtimes,
+) -> None:
     startup_case.backend_adopted = True
-    startup_error = RuntimeError("configured remote Gateway reconciliation failed")
     if cleanup_fails:
         startup_case.auxiliary_failure = RuntimeError("owned workspace runtime close failed")
-    async def fail_reconciliation(**_):
-        raise startup_error
-    monkeypatch.setattr(bootstrap, "reconcile_configured_remote_gateways", fail_reconciliation)
-    if cleanup_fails:
-        with pytest.raises(BaseExceptionGroup) as raised:
-            await bootstrap.create_registry(preserve_existing_managed_runtimes=preserve_existing_managed_runtimes)
-        assert raised.value.exceptions[0] is startup_error
-        assert "owned workspace runtime close failed" in str(raised.value.exceptions[1])
-    else:
-        with pytest.raises(RuntimeError) as raised:
-            await bootstrap.create_registry(preserve_existing_managed_runtimes=preserve_existing_managed_runtimes)
-        assert raised.value is startup_error
+    registry = await bootstrap.create_registry(
+        preserve_existing_managed_runtimes=preserve_existing_managed_runtimes,
+    )
+    assert not startup_case.started and not startup_case.handles
+    default_workspace_id = next(target.workspace_id for target in registry.targets() if target.system_default)
+    await bootstrap._restore_managed_local_runtimes(
+        registry=registry, default_workspace_id=default_workspace_id,
+        preserve_existing_managed_runtimes=preserve_existing_managed_runtimes,
+    )
+    assert len(startup_case.started) == 1
     backend, browser = startup_case.handles[0]
+    if cleanup_fails:
+        with pytest.raises(RuntimeError, match="owned workspace runtime close failed"):
+            registry.close(detach_adopted_managed_processes=preserve_existing_managed_runtimes)
+    else:
+        registry.close(detach_adopted_managed_processes=preserve_existing_managed_runtimes)
     assert browser.events.count("close:browser") == 1 and not browser.detached
     assert backend.detached is preserve_existing_managed_runtimes
     assert backend.closed is not preserve_existing_managed_runtimes
@@ -717,8 +723,13 @@ async def test_candidate_default_runtime_failure_detaches_adopted_processes(star
         def fail_publish(*_):
             raise error
         monkeypatch.setattr(GatewayWorkspaceRegistry, "publish_backend_runtime", fail_publish)
+    registry = await bootstrap.create_registry(preserve_existing_managed_runtimes=True)
+    default_workspace_id = next(target.workspace_id for target in registry.targets() if target.system_default)
     with pytest.raises(RuntimeError) as raised:
-        await bootstrap.create_registry(preserve_existing_managed_runtimes=True)
+        await bootstrap._restore_managed_local_runtimes(
+            registry=registry, default_workspace_id=default_workspace_id,
+            preserve_existing_managed_runtimes=True,
+        )
     if failure_point == "registry_publish":
         assert raised.value is error
     else:
@@ -727,6 +738,7 @@ async def test_candidate_default_runtime_failure_detaches_adopted_processes(star
     assert backend.detached and not backend.closed
     assert browser.closed and not browser.detached
     assert browser.events.count("close:browser") == 1
+    registry.close(detach_adopted_managed_processes=True)
 
 
 @pytest.mark.asyncio
@@ -740,6 +752,10 @@ async def test_default_external_backend_discards_only_stopped_singleton_owner(st
     registry = await bootstrap.create_registry()
     assert registry.backend_owner(defaults[0].workspace_id) is None
     assert registry.resolve(defaults[0].workspace_id).managed is False
+    assert registry.resolve(defaults[0].workspace_id).backend_id is None
+    await bootstrap._restore_managed_local_runtimes(
+        registry=registry, default_workspace_id=defaults[0].workspace_id,
+    )
     assert registry.resolve(defaults[0].workspace_id).backend_id == "00000000-0000-4000-8000-000000000099"
     assert not startup_case.started
 
@@ -775,6 +791,7 @@ async def test_restore_commit_observer_error_keeps_published_unique_owner(
         with pytest.raises(RuntimeError) as raised:
             await bootstrap._restore_managed_local_runtimes(
                 registry=registry, default_workspace_id=defaults[0].workspace_id,
+                only_workspace_ids=set(graph.owner.contract.workspace_ids),
             )
         assert raised.value is failure
         assert graph.owner.contract is not old_contract
@@ -807,12 +824,9 @@ async def test_default_publication_observer_error_defers_cleanup_to_startup_owne
     registry.add_commit_observer(observer)
     try:
         with pytest.raises(RuntimeError) as raised:
-            await bootstrap._complete_registry_startup(
-                resolved_gateway_config=GatewayConfig(), registry=registry,
-                persisted_default=target, persisted_active_workspace=target.key,
-                default_root_path=startup_case.default_root, root_path=target.root_path,
-                default_workspace_id=target.workspace_id,
-                preserve_existing_managed_runtimes=False,
+            await bootstrap._restore_managed_local_runtimes(
+                registry=registry, default_workspace_id=target.workspace_id,
+                only_workspace_ids={target.workspace_id},
             )
         assert raised.value is failure
         backend, browser = startup_case.handles[0]

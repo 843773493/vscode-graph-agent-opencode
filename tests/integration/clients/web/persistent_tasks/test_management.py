@@ -15,9 +15,6 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
 )
 from tests.integration.backend.agents.test_mcp_connection_control import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原产品装具依赖
-)
-from tests.integration.backend.agents.test_mcp_connection_control import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 原产品装具依赖
 )
 from tests.integration.backend.agents.test_mcp_connection_control import (
@@ -27,6 +24,9 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 当前文件正式隔离目录
 )
 from tests.support.api_helpers import create_session
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原产品装具依赖
+)
 
 
 @pytest.fixture

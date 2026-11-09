@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -25,8 +27,18 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from app.services.infrastructure.mcp import connection_service
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
+from app.services.infrastructure.mcp.oauth import (
+    McpAuthorizationRequired,
+    McpOAuthProvider,
+)
 from app.services.infrastructure.mcp.operation_store import McpConnectionOperationStore
+from app.services.infrastructure.mcp.session_runtime import (
+    McpChangeNotifyCallback,
+    McpServerSessionPort,
+    McpSessionFactory,
+)
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.mcp.oauth_server import (
@@ -36,11 +48,17 @@ from tests.support.workspaces import prepare_test_workspace
 
 
 @pytest.fixture
-def connection_case(request: pytest.FixtureRequest):
+def connection_case(request: pytest.FixtureRequest, mcp_gateway_config):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     root = prepare_test_workspace(
         workspace_root=context.workspace_root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=(),
     )
+
+    def require_initial_authorization(
+        _server: McpServerConfig,
+        _on_tools_list_changed: McpChangeNotifyCallback,
+    ) -> NoReturn:
+        raise McpAuthorizationRequired("MCP Server 需要用户完成 OAuth 授权")
 
     @asynccontextmanager
     async def create(endpoint):
@@ -50,6 +68,7 @@ def connection_case(request: pytest.FixtureRequest):
             owner = McpCatalogOwner(
                 raw_config={"servers": {"secure": endpoint.configuration()}}, workspace_root=root,
                 event_service=EventChannelService(), leases=ExternalResourceLeaseLedger(),
+                config_service=mcp_gateway_config, session_factory=require_initial_authorization,
             )
             service = McpConnectionService(owner=owner, store=store, workspace_id="test-workspace")
             await owner.start()
@@ -73,7 +92,7 @@ async def test_real_authorization_deadline_closes_candidate_without_publishing(
     oauth_endpoint_factory, connection_case, monkeypatch: pytest.MonkeyPatch,
 ):
     async with oauth_endpoint_factory() as endpoint, connection_case(endpoint) as (service, owner, _store):
-        monkeypatch.setattr("app.services.infrastructure.mcp.connection_service._OPERATION_TIMEOUT_SECONDS", 0.3)
+        monkeypatch.setattr("app.services.infrastructure.mcp.connection_service._OPERATION_TIMEOUT_SECONDS", 2.0)
         operation = await service.submit(McpConnectionRequestDTO(operation_id="expires", server_id="secure", action="connect"))
         await observe(service, "expires", "waiting_user")
         authorization = service.authorization("expires")
@@ -124,7 +143,7 @@ async def test_changed_configuration_fences_late_authorization_before_exchange(
         authorization = service.authorization(operation.operation_id)
         scope = LifetimeScope("mcp-config-change")
         try:
-            publish, _ = await owner.prepare_config({"servers": {}}, scope, lambda _effect: None)
+            publish, _ = await owner.prepare_config({"servers": {}}, scope, lambda _effect: None, plugin_bindings=())
             publish()
             state = parse_qs(urlparse(authorization.authorization_url).query)["state"][0]
             with pytest.raises(LookupError):
@@ -165,19 +184,30 @@ async def test_disconnect_cleanup_failure_preserves_unavailable_catalog_and_stag
 def held_connection_cleanup(monkeypatch: pytest.MonkeyPatch):
     """只暂停真实 SDK 的清理交付，不替产品创建或结束连接操作。"""
     entered, release = asyncio.Event(), asyncio.Event()
-    original = connection_service.production_mcp_session_factory
+    original = McpCatalogOwner.oauth_session_factory
 
-    @asynccontextmanager
-    async def held(*args, **kwargs):
-        try:
-            async with original(*args, **kwargs) as session:
-                yield session
-        finally:
-            entered.set()
-            await release.wait()
+    def factory(owner: McpCatalogOwner, provider: McpOAuthProvider | None) -> McpSessionFactory:
+        session_factory = original(owner, provider)
 
-    monkeypatch.setattr(connection_service, "production_mcp_session_factory", held)
-    return entered, release
+        @asynccontextmanager
+        async def held(
+            server: McpServerConfig,
+            on_tools_list_changed: McpChangeNotifyCallback,
+        ) -> AsyncIterator[McpServerSessionPort]:
+            try:
+                async with session_factory(server, on_tools_list_changed) as session:
+                    yield session
+            finally:
+                entered.set()
+                await release.wait()
+
+        return held
+
+    monkeypatch.setattr(McpCatalogOwner, "oauth_session_factory", factory)
+    try:
+        yield entered, release
+    finally:
+        release.set()
 
 
 @pytest.fixture
@@ -247,23 +277,28 @@ async def test_cancel_request_interruption_preserves_original_cleanup(
 async def test_failed_cleanup_retains_handle_and_blocks_new_connection(
     oauth_endpoint_factory, connection_case, monkeypatch: pytest.MonkeyPatch, outcome: str,
 ):
-    original = connection_service.production_mcp_session_factory
+    original = McpCatalogOwner.oauth_session_factory
 
-    @asynccontextmanager
-    async def failing(*args, **kwargs):
-        try:
-            async with original(*args, **kwargs) as session:
-                yield session
-        finally:
-            raise RuntimeError("private-cleanup-marker")
+    def factory(owner, provider):
+        session_factory = original(owner, provider)
+
+        @asynccontextmanager
+        async def failing(*args, **kwargs):
+            try:
+                async with session_factory(*args, **kwargs) as session:
+                    yield session
+            finally:
+                raise RuntimeError("private-cleanup-marker")
+
+        return failing
 
     async with oauth_endpoint_factory() as endpoint:
         case = connection_case(endpoint)
         service, owner, store = await case.__aenter__()
         try:
-            monkeypatch.setattr(connection_service, "production_mcp_session_factory", failing)
+            monkeypatch.setattr(McpCatalogOwner, "oauth_session_factory", factory)
             if outcome == "expired":
-                monkeypatch.setattr(connection_service, "_OPERATION_TIMEOUT_SECONDS", 1.0)
+                monkeypatch.setattr(connection_service, "_OPERATION_TIMEOUT_SECONDS", 2.0)
             await service.submit(McpConnectionRequestDTO(operation_id="failed-cleanup", server_id="secure", action="connect"))
             await observe(service, "failed-cleanup", "waiting_user")
             if outcome == "expired":

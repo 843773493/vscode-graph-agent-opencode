@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sqlite3
@@ -11,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import httpx
@@ -35,6 +37,11 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from configs.runtime import read_jsonc_object
+from tests.integration.gateway.test_mcp_plugin_lifecycle import (
+    _package,
+    _plugin,
+    _publish,
+)
 from tests.support.api_helpers import create_session
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -91,13 +98,10 @@ async def provider_case(
     # 保留既有 Provider 请求设置；测试不增加采样、reasoning 或输出限制。
     config["agents"]["default"]["tools"]["custom"] = [{"tool_id": "connections.manage"}]
     config["agents"]["default"]["tools"]["confirmation_required"] = []
-    config["mcp"] = {"servers": {"schema": {
-        "enabled": True, "transport": "stdio", "command": sys.executable,
-        "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"),
-                 str(definitions), str(receipts)], "cwd": str(Path.cwd()),
-    }}}
+    config["mcp"] = {"servers": {}}
     _save(config_path, config)
     gateway_port = integration_backend_port + 1
+    package = _package(artifacts / "mcp-bridge.zip")
     backend = await asyncio.to_thread(
         start_backend_process, workspace_root=str(workspace), port=integration_backend_port,
         log_name="real-provider-discovery",
@@ -115,12 +119,40 @@ async def provider_case(
                 headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": backend.workspace_id},
             ) as client:
                 await acquire_gateway_guest(client)
+                health = await client.get("/api/gateway/health")
+                health.raise_for_status()
+                gateway_id = health.json()["data"]["gateway_id"]
+                workspace_id = backend.workspace_id
+                target = ProviderCase(client, workspace, artifacts, receipts)
+                plugin_target = SimpleNamespace(client=client, gateway_id=gateway_id, workspace_id=workspace_id)
+                installed = await client.post("/api/gateway/service-plugins/install", json={
+                    "gateway_id": gateway_id, "path": str(package),
+                    "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
+                })
+                installed.raise_for_status()
+                await _publish(plugin_target, {"plugins": {
+                    "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+                                               "plugin_id": "stdio", "enabled": True}]},
+                    "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
+                        "command": sys.executable,
+                        "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"),
+                                 str(definitions), str(receipts)],
+                        "cwd": str(Path.cwd()),
+                    }}}},
+                }, "mcp": {"servers": {"schema": {
+                    "enabled": True, "transport": "plugin", "service": {
+                        "gateway_id": gateway_id, "workspace_id": workspace_id,
+                        "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+                        "plugin_id": "stdio", "service_id": "mcp",
+                    },
+                }}}}, "mcp-provider-discovery-plugin")
+                await _plugin(plugin_target, state="ready")
                 for endpoint in ("/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"):
                     response = await client.get(endpoint)
                     assert response.status_code == 200, response.text
                     assert response.headers["x-request-id"] == response.json()["request_id"]
                     _save(artifacts / f"initial-{endpoint.rsplit('/', 1)[1]}.json", response.json())
-                yield ProviderCase(client, workspace, artifacts, receipts)
+                yield target
         finally:
             await asyncio.to_thread(close_gateway_process, gateway)
     finally:

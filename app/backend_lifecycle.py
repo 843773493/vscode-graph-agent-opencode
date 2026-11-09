@@ -86,6 +86,25 @@ class BackendLifespan:
                 f"pending_workspaces=[{pending}]；原关闭owner与未释放依赖继续保留"
             ) from error
 
+    def activate_after_http_startup(self, workspace_id: str | None = None) -> None:
+        selected = [
+            workspace for workspace in self.workspaces
+            if workspace_id is None or workspace.container.workspace_id == workspace_id
+        ]
+        if not selected:
+            raise LookupError(f"Backend 尚未挂载 Workspace: {workspace_id}")
+        for workspace in selected:
+            workspace.activate_after_http_startup()
+
+    async def wait_business_ready(self, workspace_id: str | None = None) -> None:
+        selected = [
+            workspace for workspace in self.workspaces
+            if workspace_id is None or workspace.container.workspace_id == workspace_id
+        ]
+        if not selected:
+            raise LookupError(f"Backend 尚未挂载 Workspace: {workspace_id}")
+        await asyncio.gather(*(workspace.wait_business_ready() for workspace in selected))
+
     def _report_close_failure(self, task: asyncio.Task[None]) -> None:
         try:
             task.result()
@@ -123,7 +142,6 @@ class BackendLifespan:
         # TODO(5.4)：原生线程终止、其它同步关闭及生产进程退出仍须单独核实。
         if self.registry is not None:
             self.registry.close_admission()
-            await self.registry.close_installations()
             await run_sync_shielded(self.registry.close)
 
     async def _close_model_stream(self) -> None:

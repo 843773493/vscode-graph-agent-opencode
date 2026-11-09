@@ -43,43 +43,47 @@ class McpConnectionRetirement:
         self._timeout_seconds = timeout_seconds
         self._retired: dict[str, _RetiredConnection] = {}
         self._publisher = publisher
-        self._version_switches: dict[str, int] = {}
+        self._configuration_switches: dict[str, int] = {}
 
     @contextmanager
-    def reserve_version_switch(
+    def reserve_plugin_service_switch(
         self, previous: Sequence[McpServerConfig], proposed: Sequence[McpServerConfig],
+        *, affected_server_ids: set[str] | frozenset[str] = frozenset(),
+        require_settled_server_ids: set[str] | frozenset[str] = frozenset(),
     ) -> Iterator[None]:
-        """只冻结当前配置事务的新准入，持有事实仍以原资源账本为准。"""
+        """冻结受影响服务准入；只有破坏性更换要求原资格结清。"""
         with self._lock:
             before = {server.server_id: server for server in previous}
-            switching = {server.server_id for server in proposed
-                         if server.enabled and (old := before.get(server.server_id)) is not None
-                         and old.managed_launch != server.managed_launch
-                         and (old.managed_launch is not None or server.managed_launch is not None)}
-            if switching:
+            destructive = {server.server_id for server in proposed
+                         if server.enabled and server.transport == "plugin"
+                         and (old := before.get(server.server_id)) is not None
+                         and old.transport == "plugin" and old.service != server.service}
+            switching = destructive | set(affected_server_ids)
+            require_settled = destructive | set(require_settled_server_ids)
+            if require_settled:
                 records = [record for record in self._leases.records_by_kind("mcp_connection")
-                           if record.mcp_server_id in switching]
+                           if record.mcp_server_id in require_settled]
                 leases = self._leases.leases_for_resources([record.resource_id for record in records])
                 conflicts = [record.resource_id for record in records
                              if record.cleanup_failed or leases[record.resource_id]]
                 if conflicts:
-                    raise ConfigConflictError(f"MCP 旧版本仍有未结清资格、调用或清理失败，拒绝切换: {conflicts}")
-                for server_id in switching:
-                    self._version_switches[server_id] = self._version_switches.get(server_id, 0) + 1
+                    raise ConfigConflictError(f"MCP 插件服务仍有未结清资格、调用或清理失败，拒绝切换: {conflicts}")
+            for server_id in switching:
+                self._configuration_switches[server_id] = self._configuration_switches.get(server_id, 0) + 1
         try:
             yield
         finally:
             with self._lock:
                 for server_id in switching:
-                    remaining = self._version_switches[server_id] - 1
+                    remaining = self._configuration_switches[server_id] - 1
                     if remaining:
-                        self._version_switches[server_id] = remaining
+                        self._configuration_switches[server_id] = remaining
                     else:
-                        del self._version_switches[server_id]
+                        del self._configuration_switches[server_id]
 
-    def switching_version(self, server_id: str) -> bool:
+    def switching_plugin_service(self, server_id: str) -> bool:
         with self._lock:
-            return server_id in self._version_switches
+            return server_id in self._configuration_switches
 
     @property
     def timeout_seconds(self) -> int:

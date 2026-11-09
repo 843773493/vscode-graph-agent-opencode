@@ -2233,7 +2233,8 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
         lifespan_patch.setattr(platform_type, "close", close_platform)
         lifespan_patch.setattr(main, "configure_application_logging", lambda **_: None)
         lifespan_patch.setattr(main, "_model_stream_controller", None)
-        async with main.lifespan(main.app):
+        async with main.lifespan(main.app) as _main_lifespan_state_2236:
+            await _main_lifespan_state_2236["after_http_startup"]()
             assert service._sweep_task is not None and not service._sweep_task.done()
             assert case.tracker.snapshot(session_id, thread_id).residency == "cold"
             assert case.tracker.snapshot(session_id, thread_id).generation == 0

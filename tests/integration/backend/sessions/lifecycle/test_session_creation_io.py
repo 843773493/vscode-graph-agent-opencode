@@ -105,12 +105,13 @@ async def test_product_session_creation_cancel_preserves_original_record_and_rec
             if blocker.in_transaction:
                 blocker.execute("ROLLBACK")
 
-    async with main.lifespan(main.app), httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state_108, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": source.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84",
                  "X-Request-ID": "session-creation-io"},
     ) as client:
+        await _main_lifespan_state_108["after_http_startup"]()
         url = f"/api/v1/sessions/{source.session_id}/fork-context"
         tasks: list[Awaitable[object]] = []
         try:

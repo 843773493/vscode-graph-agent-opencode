@@ -70,7 +70,8 @@ async def test_periodic_prune_wait_keeps_original_task_and_dependencies(
 
     monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", capture_deadline)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     selected = mounted_case.containers[-1]
     activity = selected.workspace_activity_service
     backend = main.app.state.workspace_lifespan
@@ -205,7 +206,8 @@ async def test_startup_prune_runs_outside_event_loop(
 
     monkeypatch.setattr(WorkspaceActivityService, "prune", prune)
     lifetime = main.lifespan(main.app)
-    starting = asyncio.create_task(lifetime.__aenter__())
+    _main_lifespan_state = await lifetime.__aenter__()
+    starting = asyncio.create_task(_main_lifespan_state["after_http_startup"]())
     try:
         async with asyncio.timeout(15):
             while not entered.is_set():

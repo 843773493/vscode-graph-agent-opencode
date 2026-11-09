@@ -26,7 +26,6 @@ from pydantic import ConfigDict, TypeAdapter
 from app.core.child_process import ChildProcessState
 from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
-from app.schemas.internal_v2.mcp import McpManagedLaunchDTO
 from app.services.infrastructure.events.channel_events import (
     RESOURCE_STATE_STATES,
     ResourceStateEventPublisher,
@@ -48,7 +47,6 @@ class ResourceRecord:
     updated_at: str = ""
     process: ChildProcessState | None = None
     mcp_server_id: str | None = None
-    managed_launch: McpManagedLaunchDTO | None = None
     cleanup_failed: bool = False
 
 
@@ -120,7 +118,6 @@ class ExternalResourceLeaseLedger:
         initial_status: Literal["running", "unknown"] = "running",
         process: ChildProcessState | None = None,
         mcp_server_id: str | None = None,
-        managed_launch: McpManagedLaunchDTO | None = None,
     ) -> ResourceRecord:
         """幂等登记身份；已有资源的状态与保留范围由实际 owner 发布。"""
         with self._write_lock:
@@ -138,7 +135,6 @@ class ExternalResourceLeaseLedger:
                     status=initial_status,
                     process=process,
                     mcp_server_id=mcp_server_id,
-                    managed_launch=managed_launch,
                     updated_at=self._now(),
                 )
             else:
@@ -147,8 +143,8 @@ class ExternalResourceLeaseLedger:
                         f"资源类型发生冲突: resource_id={resource_id} "
                         f"existing={record.kind} incoming={kind}"
                     )
-                if (record.mcp_server_id, record.managed_launch) != (mcp_server_id, managed_launch):
-                    raise RuntimeError(f"资源的原 MCP Server／制品绑定不可改变: resource_id={resource_id}")
+                if record.mcp_server_id != mcp_server_id:
+                    raise RuntimeError(f"资源的原 MCP Server 绑定不可改变: resource_id={resource_id}")
                 # 重复登记不是续期或运行观察，不重写时间戳及整个持久账本。
                 return self._copy_record(record)
             self._commit(records=(record,))
@@ -216,7 +212,6 @@ class ExternalResourceLeaseLedger:
         initial_status: Literal["running", "unknown"] = "running",
         process: ChildProcessState | None = None,
         mcp_server_id: str | None = None,
-        managed_launch: McpManagedLaunchDTO | None = None,
     ) -> ResourceRecord:
         """登记外部 owner 已核实的资源身份，不创建或停止资源。"""
         if kind not in self.EXTERNAL_RESOURCE_KINDS:
@@ -229,7 +224,6 @@ class ExternalResourceLeaseLedger:
             initial_status=initial_status,
             process=process,
             mcp_server_id=mcp_server_id,
-            managed_launch=managed_launch,
         )
 
     def acquire_operation(

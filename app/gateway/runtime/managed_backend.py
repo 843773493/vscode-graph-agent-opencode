@@ -69,6 +69,8 @@ class ManagedBackendOwner:
 
     def __init__(self, contract: ManagedBackendContract) -> None:
         self.contract = contract
+        # 仅供启动中的认证配置交接；健康验证后仍由 registry 发布正式合同。
+        self.starting_contract: ManagedBackendContract | None = None
         self.process: ManagedProcessHandle | None = None
         self.adopted = False
         self.gateway_generation: str | None = None

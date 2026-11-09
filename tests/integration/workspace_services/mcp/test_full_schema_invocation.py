@@ -1,10 +1,9 @@
-"""真实 SDK、stdio owner、固定信封与 Server 收据，不使用模型或替换执行链。"""
+"""真实 HTTP SDK、正式 stdio 桥、固定信封与 Server 收据。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -49,7 +48,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径的 Saver fixture
 )
@@ -57,6 +55,7 @@ from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
+from tests.support.mcp.http_endpoint import sdk_http_session_factory
 
 
 @dataclass
@@ -65,6 +64,7 @@ class SchemaServerCase:
     definitions: Path
     receipts: Path
     workspace_root: Path
+    expected_shutdown_failure: ExceptionGroup[Exception] | None = None
 
     @asynccontextmanager
     async def started(self) -> AsyncIterator[SchemaServerCase]:
@@ -108,25 +108,48 @@ class SchemaServerCase:
 
 
 @pytest.fixture
-def schema_server_case(request: pytest.FixtureRequest) -> SchemaServerCase:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    definitions = context.artifacts_dir / "definitions.json"
-    receipts = context.artifacts_dir / "receipts.jsonl"
-    definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
-    owner = McpCatalogOwner(
-        leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
-        raw_config={"supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)}, "servers": {"schema": {
-            "enabled": True, "transport": "stdio", "command": sys.executable,
-            "args": [str(context.project_root / "tests/integration/workspace_services/mcp/schema_server.py"),
-                     str(definitions), str(receipts)],
-            "cwd": str(context.project_root),
-        }}},
-        workspace_root=context.workspace_root, event_service=EventChannelService(),
-    )
-    return SchemaServerCase(owner, definitions, receipts, context.workspace_root)
+async def schema_server_case(request: pytest.FixtureRequest, bridge_endpoint_factory) -> AsyncIterator[SchemaServerCase]:
+    async with bridge_endpoint_factory() as (endpoint, token):
+        root = endpoint.context.workspace_root
+        owner = McpCatalogOwner(
+            leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json"),
+            raw_config={"supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)}, "servers": {"schema": {
+                "enabled": True, "transport": "streamable_http", "url": endpoint.url,
+                "headers": {"X-Local-Token": token},
+            }}},
+            workspace_root=root, event_service=EventChannelService(), session_factory=sdk_http_session_factory,
+        )
+        case = SchemaServerCase(owner, endpoint.definitions, endpoint.receipts, root)
+        try:
+            yield case
+        finally:
+            try:
+                await owner.shutdown()
+            except ExceptionGroup as error:
+                expected = case.expected_shutdown_failure
+                if expected is None or _exception_leaf_ids(error) != _exception_leaf_ids(expected):
+                    raise
 
 
-async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
+def contains_error(error: BaseException, expected: BaseException) -> bool:
+    if error is expected:
+        return True
+    if isinstance(error, BaseExceptionGroup) and any(contains_error(child, expected) for child in error.exceptions):
+        return True
+    return error.__cause__ is not None and contains_error(error.__cause__, expected)
+
+
+def _exception_leaf_ids(error: BaseException) -> tuple[int, ...]:
+    if isinstance(error, BaseExceptionGroup):
+        return tuple(sorted(
+            identity for child in error.exceptions for identity in _exception_leaf_ids(child)
+        ))
+    if error.__cause__ is not None:
+        return _exception_leaf_ids(error.__cause__)
+    return (id(error),)
+
+
+async def test_real_http_lifecycle_is_owned_across_distinct_caller_tasks(
     schema_server_case: SchemaServerCase,
 ) -> None:
     case = schema_server_case
@@ -134,11 +157,8 @@ async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
     runtimes = tuple(case.owner._runtimes.values())
     try:
         for runtime in runtimes:
-            process = runtime.lifecycle.process.process
-            assert process is not None and runtime.process_state is not None
-            assert runtime.process_state.pid == process.pid and runtime.process_state.created_at is not None
             record = case.owner._leases.get(runtime.connection_ref)
-            assert record is not None and record.status == "running" and record.process == runtime.process_state
+            assert record is not None and record.status == "running" and record.process is None
             cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
             assert cold.get(runtime.connection_ref) == record
         case.publish({"type": "object", "required": ["text"]})
@@ -153,14 +173,12 @@ async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
     assert not case.owner.started
     for runtime in runtimes:
         assert runtime._task is not None and runtime._task.done() and not runtime.running
-        assert runtime.process_state is not None and runtime.process_state.phase == "exited"
-        assert runtime.process_state.exit_verified and runtime.process_state.returncode == 0
         record = case.owner._leases.get(runtime.connection_ref)
-        assert record is not None and record.status == "stopped" and record.process == runtime.process_state
+        assert record is not None and record.status == "stopped" and record.process is None
 
 
 @pytest.mark.parametrize("result_mode", ["success", "error"])
-async def test_real_stdio_envelope_keeps_protocol_status_media_and_structured_content(
+async def test_real_bridge_envelope_keeps_protocol_status_media_and_structured_content(
     schema_server_case: SchemaServerCase, result_mode: str,
 ) -> None:
     async with schema_server_case.started() as case:
@@ -176,14 +194,22 @@ async def test_real_stdio_envelope_keeps_protocol_status_media_and_structured_co
         assert [(event["event"], event["name"]) for event in events] == [
             ("on_tool_start", invoker.name), ("on_tool_end", invoker.name),
         ]
-        result = events[-1]["data"]["output"]
-        assert isinstance(result, ToolMessage)
+        output = events[-1]["data"].get("output")
+        assert isinstance(output, ToolMessage)
+        result = output
         assert result.status == result_mode and result.tool_call_id == "protocol-result"
         assert result.name == invoker.name
         assert result.artifact == {"structured_content": {"receipt": {"name": "probe", "arguments": arguments}}}
-        assert [block["type"] for block in result.content] == ["text", "image", "audio", "file", "text"]
-        assert result.content[1]["base64"] == RESULT_IMAGE_BASE64 and result.content[2]["base64"] == RESULT_AUDIO_BASE64
-        assert result.content[3]["url"] == "https://example.invalid/report" and result.content[4]["text"] == "嵌入正文"
+        assert isinstance(result.content, list)
+        content = result.content
+        assert [block.get("type") if isinstance(block, dict) else "text" for block in content] == [
+            "text", "image", "audio", "file", "text",
+        ]
+        image, audio, file, embedded_text = content[1:]
+        assert isinstance(image, dict) and image["base64"] == RESULT_IMAGE_BASE64
+        assert isinstance(audio, dict) and audio["base64"] == RESULT_AUDIO_BASE64
+        assert isinstance(file, dict) and file["url"] == "https://example.invalid/report"
+        assert isinstance(embedded_text, dict) and embedded_text["text"] == "嵌入正文"
         assert case.received() == [{"name": "probe", "arguments": arguments}]
 
 
@@ -284,7 +310,7 @@ async def test_invalid_schema_refresh_fails_without_partial_publication(
 
 
 @pytest.mark.parametrize("large_schema", [False, True])
-async def test_search_frozen_full_definition_then_execute_real_stdio(
+async def test_search_frozen_full_definition_then_execute_real_bridge(
     schema_server_case: SchemaServerCase, registry_db, frozen_provider_activation, large_schema: bool,
     extension_catalog_policy_resolver,
 ) -> None:
@@ -336,6 +362,7 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
             found = await search.ainvoke({"type": "tool_call", "id": "search-stdio", "name": search.name,
                                          "args": {"query": "probe"}})
             assert isinstance(found, ToolMessage) and found.tool_call_id == "search-stdio"
+            assert isinstance(found.content, str)
             entry, = json.loads(found.content)["results"]
             target = case.owner.get_tools()[0]
             if large_schema:
@@ -370,7 +397,7 @@ async def test_search_frozen_full_definition_then_execute_real_stdio(
             await scope.close()
 
 
-async def test_real_stdio_restart_rejects_sealed_old_handle_and_executes_fresh_binding(
+async def test_real_http_reconnect_rejects_sealed_old_handle_and_executes_fresh_binding(
     schema_server_case: SchemaServerCase,
 ) -> None:
     async with schema_server_case.started() as case:

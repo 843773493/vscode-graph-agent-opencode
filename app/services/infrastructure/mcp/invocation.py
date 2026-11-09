@@ -105,6 +105,16 @@ def mcp_cancelled_receipt(error: BaseException | None) -> McpInvocationReceipt |
 class CancellableMcpClientSession(ClientSession):
     """复用 SDK 请求分配／读写，仅补原请求的取消通知。"""
 
+    async def _receive_loop(self) -> None:
+        try:
+            await super()._receive_loop()
+        finally:
+            # SDK 在已取消的 scope 中发送 Connection closed 可能再次被取消。
+            # 同步关闭原响应通道，让外部等待者收到 EOF；已缓冲结果仍可读取。
+            # TODO: 上游保证取消时结清 pending requests 后，删除此生命周期补齐。
+            for stream in tuple(self._response_streams.values()):
+                stream.close()
+
     async def send_request(
         self, request: types.ClientRequest, result_type: type[_Result],
         request_read_timeout_seconds: timedelta | None = None,

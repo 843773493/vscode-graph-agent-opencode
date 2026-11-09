@@ -110,6 +110,9 @@ from app.services.infrastructure.background_work_handlers import (
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config import WorkspaceSourceOwner
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings_for_root,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
@@ -136,7 +139,6 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
-from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.fork import (
@@ -453,7 +455,6 @@ class WorkspaceContainerRegistry:
         self._project_root = project_root
         self._clock_ports = clock_ports
         node_host_runtime = load_node_host_runtime() if backend_id is not None else None
-        self._mcp_installations = McpInstallationOwner(home=get_boxteam_home(), backend_id=backend_id) if backend_id is not None else None
         extension_management = ExtensionManagementClient.from_environment(backend_id) if backend_id is not None else None
         self._extension_hosts = NodeExtensionHostOwner(backend_id=backend_id, mounted_workspaces=mounted_workspaces,
             runtime=node_host_runtime, home=get_boxteam_home(), environment=os.environ,
@@ -478,13 +479,6 @@ class WorkspaceContainerRegistry:
         if self._extension_hosts is None:
             raise RuntimeError("Backend 尚未绑定稳定身份，不能管理 Node 宿主")
         return self._extension_hosts
-
-    @property
-    def mcp_installations(self) -> McpInstallationOwner:
-        self._require_open()
-        if self._mcp_installations is None:
-            raise RuntimeError("Backend 尚未绑定稳定身份，不能管理 MCP 制品")
-        return self._mcp_installations
 
     def _require_open(self) -> None:
         if self._closed:
@@ -529,7 +523,6 @@ class WorkspaceContainerRegistry:
                             workspace_root=mount.workspace_root,
                             startup_mount=mount,
                             clock_ports=self._clock_ports,
-                            mcp_installations=self._mcp_installations,
                             extension_hosts=self._extension_hosts,
                         )
                     components = self.get_catalog_components(
@@ -572,11 +565,6 @@ class WorkspaceContainerRegistry:
         self._closed = True
         if self._extension_hosts is not None:
             self._extension_hosts.close_admission()
-
-    async def close_installations(self) -> None:
-        """工作区连接排空后等待原安装子进程，关闭唯一 Backend 安装域。"""
-        if self._mcp_installations is not None:
-            await self._mcp_installations.close()
 
     async def close_extension_hosts(self) -> None:
         """工作区服务开始排空前，停止宿主准入并核实原进程退出。"""
@@ -628,7 +616,6 @@ def _build_app_container(
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
     construction: ExitStack,
-    mcp_installations: McpInstallationOwner | None = None,
     extension_hosts: NodeExtensionHostOwner | None = None,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
@@ -676,9 +663,6 @@ def _build_app_container(
         state_path=resolved_boxteam_root / "resources.json",
         state_events=external_resource_state_events,
     )
-    if mcp_installations is not None:
-        mcp_installations.register_workspace(resolved_workspace_root, external_resource_leases)
-        workspace_activity_service.store.bind_mcp_installations(mcp_installations)
     def native_directories() -> GatewayNativeDirectoryClient:
         return GatewayNativeDirectoryClient(
             workspace_id=workspace_id,
@@ -750,12 +734,14 @@ def _build_app_container(
 
     mcp_catalog_owner = McpCatalogOwner(
         raw_config=config_service.get_mcp_config(),
+        plugin_bindings=workspace_plugin_bindings_for_root(
+            config_service.get_snapshot().to_dict(), workspace_root=resolved_workspace_root,
+        ),
         workspace_root=resolved_workspace_root,
         event_service=job_event_bus.event_channel_service,
         leases=external_resource_leases,
         publication_lock=config_service.publication_lock,
-        installation_owner=mcp_installations,
-        provider_resolver=extension_hosts,
+        config_service=config_service,
     )
     config_service.set_mcp_cleanup_provider(mcp_catalog_owner.cleanup_diagnostics)
     mcp_connection_service = McpConnectionService(
@@ -1279,7 +1265,6 @@ def build_app_container(
     workspace_root: str | Path,
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
-    mcp_installations: McpInstallationOwner | None = None,
     extension_hosts: NodeExtensionHostOwner | None = None,
 ) -> AppContainer:
     """在显式工作区上下文中装配唯一完整服务图。"""
@@ -1296,7 +1281,6 @@ def build_app_container(
                 startup_mount=startup_mount,
                 clock_ports=clock_ports,
                 construction=construction,
-                mcp_installations=mcp_installations,
                 extension_hosts=extension_hosts,
             )
             # 未发布服务图的持久owner由构造作用域回收；成功后交给原WorkspaceLifespan。

@@ -11,7 +11,9 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 
 from app.core.lifecycle import LifetimeScope
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.services.infrastructure.events.channel_events import (
     resource_state_channel_name,
 )
@@ -32,6 +34,30 @@ def config(version: str, *, beta: bool = True):
                         for name in (("alpha", "beta") if beta else ("alpha",))}}
 
 
+def plugin_binding(version: str, *, enabled: bool = True) -> PluginBinding:
+    return PluginBinding(
+        package_id="boxteam.mcp-stdio", plugin_id="stdio", package_version=version,
+        workspace_id="00000000-0000-4000-8000-000000000001", enabled=enabled,
+    )
+
+
+def plugin_config(version: str, *, workspace_id: str = "00000000-0000-4000-8000-000000000001"):
+    payload = config("unchanged")
+    payload["servers"]["alpha"] = {
+        "enabled": True,
+        "transport": "plugin",
+        "service": {
+            "gateway_id": "gateway_00000000000000000000000000000001",
+            "workspace_id": workspace_id,
+            "package_id": "boxteam.mcp-stdio",
+            "package_version": version,
+            "plugin_id": "stdio",
+            "service_id": "mcp",
+        },
+    }
+    return payload
+
+
 class ReplacementFactory(FakeMcpSessionFactory):
     def __init__(self):
         super().__init__({"alpha": ["echo"], "beta": ["echo"]})
@@ -41,9 +67,9 @@ class ReplacementFactory(FakeMcpSessionFactory):
         self.fail_server = None
         self.notify_during_list = False
 
-    def __call__(self, server, notify, lifecycle):
-        original = super().__call__(server, notify, lifecycle)
-        address = server.connection["command"] if server.transport == "stdio" else server.connection["url"]
+    def __call__(self, server, notify):
+        original = super().__call__(server, notify)
+        address = server.service.package_version if server.service is not None else server.connection["url"]
         session = self.sessions[server.server_id]
 
         async def list_tools() -> list[BaseTool]:
@@ -86,7 +112,7 @@ class ReplacementCase:
     async def prepare(self, payload):
         scope = LifetimeScope("test-config-candidate")
         self.scopes.append(scope)
-        return await self.owner.prepare_config(payload, scope, self.effects.append)
+        return await self.owner.prepare_config(payload, scope, self.effects.append, plugin_bindings=())
 
     def reserve(self, model_id: str = "model"):
         binding = self.owner.binding_snapshot()
@@ -100,9 +126,7 @@ class ReplacementCase:
 async def replacement_case(tmp_path, event_channel_service, request):
     factory = ReplacementFactory()
     option = getattr(request, "param", 1800)
-    payload = {**config("old"), "supervision": {"sealed_call_timeout_seconds": 1800 if option == "stdio" else option}}
-    if option == "stdio":
-        payload["servers"]["alpha"] = {"transport": "stdio", "command": "stdio-old", "enabled": True}
+    payload = {**config("old"), "supervision": {"sealed_call_timeout_seconds": option}}
     owner = McpCatalogOwner(raw_config=payload, workspace_root=tmp_path,
                             event_service=event_channel_service, leases=ExternalResourceLeaseLedger(), session_factory=factory)
     case = ReplacementCase(factory, owner)
@@ -353,62 +377,132 @@ async def test_cleanup_timeout_retains_failure_until_release_is_verified(replace
     publish()
 
 
-async def test_new_stdio_server_prepares_without_stopping_the_old_http_connection(replacement_case):
-    case = replacement_case
-    before = case.owner.publication_snapshot()
-    payload = config("new")
-    payload["servers"]["beta"] = {"transport": "stdio", "command": "single-instance", "enabled": True}
-    publish, _ = await case.prepare(payload)
-    assert case.owner.publication_snapshot() is before and len(case.factory.opened) == 4
-    assert not case.effects
-    publish()
-    assert case.owner._runtimes["beta"].server.transport == "stdio"
+async def test_plugin_service_version_switch_freezes_new_qualification_until_publication(
+    tmp_path, event_channel_service,
+):
+    workspace_id = load_or_create_workspace_id(tmp_path)
+    old_plugin_binding = plugin_binding("1.0.0").model_copy(update={"workspace_id": workspace_id})
+    new_plugin_binding = plugin_binding("2.0.0").model_copy(update={"workspace_id": workspace_id})
+
+    def complete_config(version: str, binding: PluginBinding) -> dict[str, object]:
+        return {
+            "mcp": plugin_config(version, workspace_id=workspace_id),
+            "plugins": {"runtime": {"entries": [binding.model_dump(exclude={"workspace_id"})]}},
+        }
+
+    factory = ReplacementFactory()
+    owner = McpCatalogOwner(
+        raw_config=plugin_config("1.0.0", workspace_id=workspace_id),
+        plugin_bindings=(old_plugin_binding,),
+        workspace_root=tmp_path,
+        event_service=event_channel_service,
+        leases=ExternalResourceLeaseLedger(),
+        session_factory=factory,
+    )
+    await owner.start()
+    old_binding = owner.binding_snapshot()
+    try:
+        with owner.guard_configuration(
+            complete_config("1.0.0", old_plugin_binding),
+            complete_config("2.0.0", new_plugin_binding),
+        ), pytest.raises(ExtensionTargetResolutionError), owner.execution_handles.reserve_model_call(
+            old_binding,
+            session_id="session",
+            thread_id="thread",
+            model_call_id="during-plugin-switch",
+        ):
+            pytest.fail("插件服务版本切换期间不得增加旧代际准入")
+        scope = LifetimeScope("plugin-service-version-switch")
+        publish, _ = await owner.prepare_config(
+            plugin_config("2.0.0", workspace_id=workspace_id), scope, lambda _effect: None,
+            plugin_bindings=(new_plugin_binding,),
+        )
+        publish()
+        assert owner.server_configuration("alpha").service.package_version == "2.0.0"
+        assert owner.binding_snapshot().resolve("mcp__alpha__echo").connection_ref != old_binding.resolve(
+            "mcp__alpha__echo"
+        ).connection_ref
+        await wait_closed(owner._retirement.runtimes_for_server("alpha")[0])
+        await scope.close()
+    finally:
+        await owner.shutdown()
 
 
-@pytest.mark.parametrize("replacement_case", ["stdio"], indirect=True)
-async def test_stdio_stop_is_journaled_before_close_and_replacement_cannot_reuse_old_qualification(replacement_case, monkeypatch):
-    case = replacement_case
-    binding, use = case.reserve()
-    old = case.owner._runtimes["alpha"]
-    old_close = old.scope.close
+@pytest.mark.parametrize("bindings", [(), (plugin_binding("1.0.0", enabled=False),), (plugin_binding("2.0.0"),)])
+async def test_plugin_binding_controls_initialization_publication_and_old_qualification(
+    tmp_path, event_channel_service, bindings,
+):
+    factory = ReplacementFactory()
+    owner = McpCatalogOwner(
+        raw_config=plugin_config("1.0.0"), plugin_bindings=bindings,
+        workspace_root=tmp_path, event_service=event_channel_service,
+        leases=ExternalResourceLeaseLedger(), session_factory=factory,
+    )
+    scope = LifetimeScope("plugin-toggle")
+    await owner.start()
+    try:
+        offline = next(row for row in owner.list_servers() if row.server_id == "alpha")
+        assert offline.enabled and offline.status == "unavailable" and not offline.tools
+        assert offline.connection_ref is None and offline.unavailable_reason
+        assert len(factory.opened) == 1  # 无关 HTTP Server 仍正常启动。
+        with pytest.raises(PermissionError):
+            await owner.connect_server("alpha", admit=lambda: None, on_initialized=lambda: None)
+        publish, _ = await owner.prepare_config(
+            plugin_config("1.0.0"), scope, lambda _effect: None,
+            plugin_bindings=(plugin_binding("1.0.0"),),
+        )
+        assert len(factory.opened) == 2 and offline == owner.list_servers()[0]
+        publish()
+        binding, use = ReplacementCase(factory, owner).reserve()
+        original = owner._runtimes["alpha"]
+        disable, ids = await owner.prepare_config(
+            plugin_config("1.0.0"), scope, lambda _effect: None,
+            plugin_bindings=(plugin_binding("1.0.0", enabled=False),),
+        )
+        assert ids == {"mcp__beta__echo"} and original.running
+        disable()
+        disabled = owner.list_servers()[0]
+        assert disabled.enabled and disabled.status == "unavailable" and not disabled.tools
+        assert len(factory.opened) == 2
+        with pytest.raises(ExtensionTargetResolutionError), owner.execution_handles.execution_target(binding, use):
+            pytest.fail("关闭插件必须撤销原封存资格")
+        assert owner._leases.leases_for_resource(binding.connection_ref)
+    finally:
+        await scope.close()
+        await owner.shutdown()
 
-    async def observe_close():
-        assert case.effects == [{"resource": "mcp_connection", "action": "stop", "server_id": "alpha", "connection_ref": binding.connection_ref}]
-        assert case.owner.publication_snapshot().status == "unavailable"
-        assert not old.running
-        snapshot = next(server for server in case.owner.list_servers() if server.server_id == "alpha")
-        assert snapshot.status == "failed" and snapshot.connection_ref is None
-        assert [tool.tool_id for tool in snapshot.tools] == ["mcp__alpha__echo"]
-        with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.execution_target(binding, use):
-            pytest.fail("停止准入后不能派发原调用")
-        await old_close()
 
-    # 只观察真实关闭回调的顺序，不代替 scope 或 session 生命周期。
-    payload = config("old")
-    payload["servers"]["alpha"] = {"transport": "stdio", "command": "stdio-new", "enabled": True}
-    with monkeypatch.context() as patch:
-        patch.setattr(old.scope, "close", observe_close)
-        publish, _ = await case.prepare(payload)
-    assert old.scope.is_closed and case.factory.history.index(("close", "stdio-old")) < case.factory.history.index(("open", "stdio-new"))
-    publish()
-    assert case.owner.publication_snapshot().status == "available"
-    assert case.owner.binding_snapshot().resolve(binding.target_id).connection_ref != binding.connection_ref
-    with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.execution_target(binding, use):
-        pytest.fail("新 stdio 不能接管原封存调用")
-
-
-@pytest.mark.parametrize("replacement_case", ["stdio"], indirect=True)
-async def test_http_candidate_failure_does_not_stop_unchanged_or_replaced_stdio(replacement_case):
-    case = replacement_case
-    before = case.owner.publication_snapshot()
-    old = case.owner._runtimes["alpha"]
-    case.factory.fail_server = "beta"
-    payload = config("new")
-    payload["servers"]["alpha"] = {"transport": "stdio", "command": "stdio-new", "enabled": True}
-    with pytest.raises(McpCatalogError, match="server_id=beta"):
-        await case.prepare(payload)
-    await case.scopes[-1].close()
-    assert old.running and case.owner.publication_snapshot() is before and not case.effects
+async def test_plugin_disable_freezes_new_qualification_without_waiting_for_old_lease(
+    tmp_path, event_channel_service,
+):
+    workspace_id = load_or_create_workspace_id(tmp_path)
+    binding = plugin_binding("1.0.0").model_copy(update={"workspace_id": workspace_id})
+    factory = ReplacementFactory()
+    owner = McpCatalogOwner(raw_config=plugin_config("1.0.0", workspace_id=workspace_id), plugin_bindings=(binding,),
+        workspace_root=tmp_path, event_service=event_channel_service,
+        leases=ExternalResourceLeaseLedger(), session_factory=factory)
+    scope = LifetimeScope("plugin-disable-with-lease")
+    await owner.start()
+    try:
+        original, use = ReplacementCase(factory, owner).reserve()
+        assert owner._leases.leases_for_resource(original.connection_ref)
+        proposed = plugin_config("1.0.0", workspace_id=workspace_id)
+        previous_config = {"mcp": proposed, "plugins": {"runtime": {"entries": [
+            binding.model_dump(exclude={"workspace_id"}),
+        ]}}}
+        candidate_config = {"mcp": proposed, "plugins": {"runtime": {"entries": [
+            binding.model_copy(update={"enabled": False}).model_dump(exclude={"workspace_id"}),
+        ]}}}
+        with owner.guard_configuration(previous_config, candidate_config), pytest.raises(
+            ExtensionTargetResolutionError,
+        ), owner.execution_handles.execution_target(original, use):
+            pytest.fail("插件关闭后不得接受新资格")
+        disable, _ = await owner.prepare_config(plugin_config("1.0.0", workspace_id=workspace_id), scope, lambda _effect: None,
+            plugin_bindings=(binding.model_copy(update={"enabled": False}),))
+        disable()
+    finally:
+        await scope.close()
+        await owner.shutdown()
 
 
 async def test_turn_inherits_original_qualification_without_granting_another_execution(replacement_case):

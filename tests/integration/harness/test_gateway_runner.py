@@ -62,8 +62,24 @@ async def lifespan(app):
         raise RuntimeError("original-startup-failure")
     app.state.extension_management = owner
     record("startup")
+
+    async def after_http_startup():
+        if mode == "after_http_startup_error":
+            record("after-http-startup-enter")
+            raise RuntimeError("original-after-http-startup-failure")
+        if mode == "after_http_startup_wait":
+            record("after-http-startup-enter")
+            async with asyncio.timeout(5):
+                while not (artifacts / "release").exists():
+                    await asyncio.sleep(0.01)
+            record("after-http-startup-finish")
+
     try:
-        yield {"extension_management": owner, "before_http_shutdown": owner.quiesce}
+        yield {
+            "extension_management": owner,
+            "after_http_startup": after_http_startup,
+            "before_http_shutdown": owner.quiesce,
+        }
     finally:
         record("lifespan-exit")
 
@@ -185,6 +201,51 @@ def test_runner_keeps_listener_until_original_owner_quiesces(runner_process: Run
     ensure_local_port_available(port, service_name="已关闭的 Gateway runner")
     with httpx.Client(trust_env=False, timeout=1) as client, pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
         client.post(runner.url + "/callback")
+
+
+@pytest.mark.parametrize("runner_process", [("after_http_startup_wait", "eof")], indirect=True)
+def test_listener_serves_requests_before_after_http_startup_finishes(
+    runner_process: RunnerProcess,
+) -> None:
+    runner = runner_process
+    wait_for_http_ok(runner.url + "/health", runner.process, timeout_seconds=5)
+    runner.wait_for_event("after-http-startup-enter")
+
+    with httpx.Client(trust_env=False, timeout=2) as client:
+        response = client.post(runner.url + "/callback")
+        assert response.status_code == 200
+        assert response.json() == {"original_owner": True}
+    assert "after-http-startup-finish" not in runner.events()
+    assert runner.process.poll() is None
+
+    (runner.artifacts / "release").touch()
+    runner.wait_for_event("after-http-startup-finish")
+    with httpx.Client(trust_env=False, timeout=2) as client:
+        assert client.get(runner.url + "/health").raise_for_status().json()["ready"] is True
+    terminate_process(runner.process, stdin_eof=True, timeout_seconds=5)
+    assert runner.process.returncode == 0
+    assert runner.events() == [
+        "startup", "after-http-startup-enter", "callback", "after-http-startup-finish",
+        "quiesce-enter", "quiesce-finish", "lifespan-exit",
+    ]
+
+
+@pytest.mark.parametrize("runner_process", [("after_http_startup_error", "eof")], indirect=True)
+def test_after_http_startup_failure_runs_lifespan_cleanup_and_exits_nonzero(
+    runner_process: RunnerProcess,
+) -> None:
+    runner = runner_process
+    wait_for_http_ok(runner.url + "/health", runner.process, timeout_seconds=5)
+    runner.wait_for_event("after-http-startup-enter")
+    runner.wait_for_event("quiesce-enter")
+    assert runner.process.poll() is None
+
+    (runner.artifacts / "release").touch()
+    assert runner.process.wait(timeout=5) != 0
+    assert runner.events() == [
+        "startup", "after-http-startup-enter", "quiesce-enter", "quiesce-finish", "lifespan-exit",
+    ]
+    assert "original-after-http-startup-failure" in runner.stderr()
 
 
 @pytest.mark.parametrize("runner_process", [

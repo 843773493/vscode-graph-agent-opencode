@@ -73,11 +73,12 @@ async def fallback_backend(
         "workspace_id": workspace_id, "workspace_root": str(workspace),
         "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
     }]))
-    async with main.lifespan(main.app), httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state_76, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id},
         timeout=30,
     ) as client:
+        await _main_lifespan_state_76["after_http_startup"]()
         yield client, workspace, context, state
 
 

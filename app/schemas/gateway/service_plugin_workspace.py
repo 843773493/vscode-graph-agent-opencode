@@ -21,6 +21,21 @@ class WorkspacePluginValidation(WorkspacePluginCandidate):
     delivery: PluginParameterDelivery
 
 
+class WorkspacePluginCandidateApply(WorkspacePluginValidation):
+    """原 Workspace claim 内对一个插件执行一次性参数替换。"""
+
+    expected_revision: str = Field(min_length=1)
+    candidate_revision: str = Field(min_length=1)
+    expected_binding: PluginBinding | None = None
+    binding: PluginBinding
+
+    @model_validator(mode="after")
+    def candidate_binding_is_current(self) -> WorkspacePluginCandidateApply:
+        if self.binding not in self.bindings:
+            raise ValueError("插件参数替换必须绑定当前候选中的精确插件")
+        return self
+
+
 class WorkspacePluginCreation(BaseModel):
     """创建 owner 冻结的非秘密模板；交接后由工作区原配置接替引用。"""
 
@@ -54,4 +69,4 @@ class WorkspacePluginSnapshot(WorkspacePluginCandidate):
         return self
 
 
-__all__ = ["WorkspacePluginCandidate", "WorkspacePluginCreation", "WorkspacePluginSnapshot"]
+__all__ = ["WorkspacePluginCandidate", "WorkspacePluginCandidateApply", "WorkspacePluginCreation", "WorkspacePluginSnapshot"]

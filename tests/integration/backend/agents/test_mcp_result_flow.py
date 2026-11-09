@@ -1,11 +1,13 @@
-"""真实 Gateway／Session／Agent／stdio 结果链，模型响应复用 model_stream。"""
+"""真实 Gateway／Session／Agent／MCP 插件结果链，模型响应复用 model_stream。"""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import commentjson
 import httpx
@@ -26,23 +28,23 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents import test_debug_prompt_flow as replay_case
+from tests.integration.gateway.test_mcp_plugin_lifecycle import (
+    _package,
+    _plugin,
+    _publish,
+)
 from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.processes.gateway import (
-    LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
-    close_gateway_process,
-    start_gateway_process,
-)
-from tests.support.processes.workspace import workspace_backend_id_for_root
 
 scripted_model_replay = replay_case.scripted_model_replay
 scripted_debug_backend_port = replay_case.scripted_debug_backend_port
-scripted_backend_process = replay_case.scripted_backend_process
+scripted_debug_gateway_port = replay_case.scripted_debug_gateway_port
+scripted_gateway_process = replay_case.scripted_gateway_process
+scripted_client = replay_case.scripted_client
 
 
 @pytest.fixture(scope="module")
@@ -63,23 +65,21 @@ def integration_workspace_config_path(
     integration_workspace_config_path: str, result_server_receipts_path: Path,
     scripted_debug_backend_port: int,
 ) -> Iterator[str]:
-    """在原工作区配置安装后、真实后端启动前登记测试 stdio Server。"""
+    """在原工作区配置安装后、真实后端启动前清空 MCP 配置。"""
     definitions = result_server_receipts_path.with_name("definitions.json")
     definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    # 原 scripted_backend_process 会登记本组唯一回放 Provider；不解析无关真实密钥。
+    # 会话测试的 Gateway 装具登记本组唯一回放 Provider；不解析无关真实密钥。
     config["llm"]["providers"] = []
     for target in config["agents"]["default"]["tools"]["custom"]:
         if target.get("tool_id") == "fetch_webpage":
             # 网页扩展使用无 embedding 的默认模式，移除旧 Provider 引用。
             target["options"] = {}
-    config["mcp"] = {"servers": {"result": {
-        "enabled": True, "transport": "stdio", "command": sys.executable,
-        "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"),
-                 str(definitions), str(result_server_receipts_path)],
-        "cwd": str(Path.cwd()),
-    }}}
+    config["mcp"] = {"servers": {}}
+    runtime = config.setdefault("runtime", {})
+    runtime.setdefault("debug", {}).setdefault("launch_profiles", {})
+    runtime.setdefault("gateway", {}).setdefault("connection", {})
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # 目标后端反向查询 Gateway Skill 来源也必须指向本测试控制面。
     with pytest.MonkeyPatch.context() as environment:
@@ -89,26 +89,41 @@ def integration_workspace_config_path(
 
 @pytest.fixture
 async def result_client(
-    scripted_backend_process, scripted_debug_backend_port: int,
-    integration_workspace_root_path: str, request: pytest.FixtureRequest,
+    scripted_gateway_process: replay_case.ScriptedGatewayState,
+    scripted_client: httpx.AsyncClient,
+    request: pytest.FixtureRequest,
+    result_server_receipts_path: Path,
 ) -> AsyncIterator[httpx.AsyncClient]:
-    del scripted_backend_process
+    client = scripted_client
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    gateway_port = scripted_debug_backend_port + 1
-    handle = start_gateway_process(
-        workspace_root=Path(integration_workspace_root_path),
-        default_backend_url=f"http://127.0.0.1:{scripted_debug_backend_port}",
-        port=gateway_port, artifacts_dir=context.artifacts_dir / "gateway",
-    )
-    try:
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{gateway_port}", timeout=60,
-            headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": workspace_backend_id_for_root(integration_workspace_root_path)},
-        ) as client:
-            await acquire_gateway_guest(client)
-            yield client
-    finally:
-        close_gateway_process(handle)
+    package = _package(context.artifacts_dir / "mcp-bridge.zip")
+    gateway_id, workspace_id = scripted_gateway_process.gateway_id, scripted_gateway_process.workspace_id
+    target = SimpleNamespace(client=client, gateway_id=gateway_id, workspace_id=workspace_id)
+    installed = await client.post("/api/gateway/service-plugins/install", json={
+        "gateway_id": gateway_id, "path": str(package),
+        "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
+    })
+    installed.raise_for_status()
+    definitions = result_server_receipts_path.with_name("definitions.json")
+    plugin_configuration = {
+        "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+                                   "plugin_id": "stdio", "enabled": True}]},
+        "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
+            "command": sys.executable,
+            "args": [str(Path.cwd() / "tests/integration/workspace_services/mcp/schema_server.py"),
+                     str(definitions), str(result_server_receipts_path)],
+            "cwd": str(Path.cwd()),
+        }}}},
+    }
+    await _publish(target, {"plugins": plugin_configuration, "mcp": {"servers": {"result": {
+        "enabled": True, "transport": "plugin", "service": {
+            "gateway_id": gateway_id, "workspace_id": workspace_id,
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
+            "plugin_id": "stdio", "service_id": "mcp",
+        },
+    }}}}, f"mcp-result-plugin-{request.node.name}")
+    await _plugin(target, state="ready")
+    yield client
 
 
 async def test_product_discovery_parallel_results_and_cold_checkpoint(

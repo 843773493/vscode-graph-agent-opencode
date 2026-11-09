@@ -32,9 +32,9 @@ from app.gateway.server.extension_management import (
     router as extension_management_router,
 )
 from app.gateway.server.extension_package import router as extension_package_router
-from app.gateway.server.mcp_installation import router as mcp_installation_router
-from app.gateway.server.port_forwarding import router as port_forwards_router
+from app.gateway.server.mcp_upstream_proxy import router as mcp_upstream_proxy_router
 from app.gateway.server.plugin_commands import router as plugin_commands_router
+from app.gateway.server.port_forwarding import router as port_forwards_router
 from app.gateway.server.resource_navigation import router as resource_navigation_router
 from app.gateway.server.service_plugin_proxy import (
     router as service_plugin_proxy_router,
@@ -71,7 +71,7 @@ def register_gateway_routes(app: FastAPI) -> None:
     app.include_router(gateway_control_router)
     app.include_router(device_connections_router)
     app.include_router(port_forwards_router)
-    app.include_router(mcp_installation_router)
+    app.include_router(mcp_upstream_proxy_router)
     app.include_router(service_plugins_router)
     app.include_router(plugin_commands_router)
     app.include_router(service_plugin_proxy_router)

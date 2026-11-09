@@ -1,19 +1,23 @@
-"""私有引用持久化、身份拒绝与原 HTTP session 消费边界；不连接外部服务。"""
+"""私有引用持久化、身份拒绝与生产 Gateway HTTP session 边界。"""
 
 from __future__ import annotations
 
 import json
 import os
-from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import Mock
 
 import httpx
 import pytest
+from fastapi import FastAPI, Request
 from pydantic import SecretStr, ValidationError
 
+from app.api.runtime_control import verify_local_control_request
 from app.core.failures import failure_detail
+from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.server import mcp_upstream_proxy
 from app.schemas.internal_v2.mcp import McpPrivateHeaderRefDTO
 from app.services.infrastructure.config.source_document import (
     parse_source_text,
@@ -89,18 +93,27 @@ def test_reference_cannot_cross_workspace_or_borrow_unknown_version(private_head
 def test_handwritten_reference_rejects_public_endpoint_credentials_and_fragments(private_header, endpoint):
     root, _, reference = private_header
     raw_reference = {**reference.model_dump(mode="json"), "endpoint": endpoint}
-    raw = {"servers": {"secure": {"transport": "streamable_http", "url": endpoint,
+    raw = {"servers": {"secure": {"transport": "streamable_http", "url": ENDPOINT,
                                   "headers": {HEADER: raw_reference}}}}
     with pytest.raises(ValidationError, match="不得包含凭据或 fragment") as caught:
         parse_mcp_server_configs(raw, workspace_root=root)
     assert "private-url-password" not in str(caught.value)
     redacted = redact_source_payload({"mcp": raw})
-    assert "private-url-password" not in json.dumps(redacted["mcp"]["servers"]["secure"]["headers"])
+    assert isinstance(redacted, dict)
+    mcp = redacted["mcp"]
+    assert isinstance(mcp, dict)
+    servers = mcp["servers"]
+    assert isinstance(servers, dict)
+    secure = servers["secure"]
+    assert isinstance(secure, dict)
+    assert "private-url-password" not in json.dumps(secure["headers"])
     # 新引用的公开身份约束不改变旧明文 HTTP 配置合同。
     original, = parse_mcp_server_configs({"servers": {"secure": {
-        "transport": "streamable_http", "url": endpoint, "headers": {HEADER: "existing"},
+        "transport": "streamable_http", "url": ENDPOINT, "headers": {HEADER: "existing"},
     }}}, workspace_root=root)
-    assert original.connection["url"] == endpoint
+    assert original.connection is not None
+    assert original.connection["transport"] == "streamable_http"
+    assert original.connection["url"] == ENDPOINT
 
 
 @pytest.mark.parametrize("invalid_value", [SECRET + "\r\ninvalid", " " + SECRET, SECRET + " "])
@@ -130,6 +143,8 @@ def test_config_keeps_reference_identity_and_never_materializes_private_value(pr
         HEADER: reference.model_dump(mode="json"), "X-Env": "${MCP_PRIVATE_PLAIN}",
     }), workspace_root=root)
     assert server.private_headers == (reference,)
+    assert server.connection is not None
+    assert server.connection["transport"] == "streamable_http"
     assert server.connection.get("headers") == {"X-Env": "expanded-old-contract"}
     assert SECRET not in repr(asdict(server))
     rotated = store.write(server_id="secure", header_name=HEADER, endpoint=ENDPOINT, value=SecretStr(SECRET))
@@ -142,6 +157,75 @@ def test_config_keeps_reference_identity_and_never_materializes_private_value(pr
         parse_mcp_server_configs(_config(reference, oauth={"redirect_uri": "https://owner.test/callback"}), workspace_root=root)
 
 
+async def test_production_session_sends_private_header_through_gateway_without_leaking_local_token(
+    private_header, monkeypatch,
+):
+    root, _, reference = private_header
+    local_token = "gateway-local-only"
+    monkeypatch.setattr(session_runtime, "get_gateway_local_token", lambda: local_token)
+    server, = parse_mcp_server_configs(_config(reference), workspace_root=root)
+    config_service = Mock()
+    config_service.get_gateway_connection_url.return_value = "http://gateway.test"
+
+    upstream_requests: list[httpx.Request] = []
+
+    async def fake_upstream(request: httpx.Request) -> httpx.Response:
+        upstream_requests.append(request)
+        message = json.loads(request.content)
+        if message["method"] == "initialize":
+            return httpx.Response(200, json={
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "serverInfo": {"name": "header-probe", "version": "1"},
+                },
+            })
+        assert message["method"] == "notifications/initialized"
+        return httpx.Response(202)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake_upstream)) as upstream_client:
+        gateway_app = FastAPI()
+        gateway_app.add_middleware(TraceMiddleware)
+        gateway_app.include_router(mcp_upstream_proxy.router)
+        gateway_app.state.http_client = upstream_client
+
+        async def authenticate_gateway_request(request: Request) -> str:
+            assert request.headers["x-local-token"] == local_token
+            return local_token
+
+        gateway_app.dependency_overrides[mcp_upstream_proxy.verify_gateway_token] = authenticate_gateway_request
+        gateway_app.dependency_overrides[verify_local_control_request] = lambda: None
+        real_gateway_transport = session_runtime._GatewayMcpTransport
+
+        def gateway_transport(*, gateway_url, endpoint_url, endpoint_headers, transport=None):
+            return real_gateway_transport(
+                gateway_url=gateway_url,
+                endpoint_url=endpoint_url,
+                endpoint_headers=endpoint_headers,
+                transport=httpx.ASGITransport(app=gateway_app),
+            )
+
+        monkeypatch.setattr(
+            session_runtime, "_GatewayMcpTransport", gateway_transport,
+        )
+
+        async with session_runtime.production_mcp_session_factory(
+            server, lambda: None, workspace_root=root, config_service=config_service,
+        ):
+            pass
+
+    assert [json.loads(request.content)["method"] for request in upstream_requests] == [
+        "initialize", "notifications/initialized",
+    ]
+    assert all(str(request.url) == ENDPOINT for request in upstream_requests)
+    assert all(request.headers["authorization"] == SECRET for request in upstream_requests)
+    assert all("x-local-token" not in request.headers for request in upstream_requests)
+    assert all("x-boxteam-mcp-endpoint" not in request.headers for request in upstream_requests)
+    assert all(request.headers.get("x-request-id") for request in upstream_requests)
+
+
 def test_source_jsonc_round_trip_exposes_reference_and_masks_existing_literals(private_header):
     _, _, reference = private_header
     payload = {"mcp": _config(reference)}
@@ -150,42 +234,19 @@ def test_source_jsonc_round_trip_exposes_reference_and_masks_existing_literals(p
     parsed = parse_source_text(redacted)
     assert SECRET not in redacted and "unchanged" not in redacted
     assert parsed == redact_source_payload(payload)
-    assert parsed["mcp"]["servers"]["secure"]["headers"][HEADER] == reference.model_dump(mode="json")
+    assert isinstance(parsed, dict)
+    mcp = parsed["mcp"]
+    assert isinstance(mcp, dict)
+    servers = mcp["servers"]
+    assert isinstance(servers, dict)
+    secure = servers["secure"]
+    assert isinstance(secure, dict)
+    headers = secure["headers"]
+    assert isinstance(headers, dict)
+    assert headers[HEADER] == reference.model_dump(mode="json")
     assert restore_source_text(redacted, text) == text
     moved = redacted.replace(ENDPOINT, "https://other.test/mcp")
     with pytest.raises(ValueError, match="地址已改变"):
         restore_source_text(moved, text)
     invalid = {"mcp": {"servers": {"secure": {"headers": {"X-Bad": {"kind": "mcp_private_header", "value": SECRET}}}}}}
     assert SECRET not in json.dumps(redact_source_payload(invalid))
-
-
-async def test_original_http_session_resolves_immediately_before_transport_without_redirects(private_header, monkeypatch, mcp_session_lifecycle):
-    root, _, reference = private_header
-    server, = parse_mcp_server_configs(_config(reference), workspace_root=root)
-    observed: list[httpx.AsyncClient] = []
-
-    class TransportReached(Exception):
-        pass
-
-    @asynccontextmanager
-    async def transport(url: str, *, http_client: httpx.AsyncClient):
-        assert url == ENDPOINT
-        assert http_client.headers[HEADER] == SECRET
-        assert http_client.headers["X-Plain"] == "unchanged"
-        assert not http_client.follow_redirects
-        observed.append(http_client)
-        raise TransportReached
-        yield  # 原 HTTP transport 边界停止，不伪造 SDK initialize 成功。
-
-    monkeypatch.setattr(session_runtime, "streamable_http_client", transport)
-    with pytest.raises(TransportReached):
-        async with session_runtime.production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, workspace_root=root):
-            pytest.fail("不应越过 transport 探针")
-    assert len(observed) == 1 and observed[0].is_closed
-    assert SECRET not in repr(server)
-    path, = (root / ".boxteam/credentials/mcp-headers").glob("*.json")
-    path.unlink()
-    with pytest.raises(ValueError, match="版本不存在"):
-        async with session_runtime.production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, workspace_root=root):
-            pytest.fail("缺失版本不能启动 transport")
-    assert len(observed) == 1

@@ -233,8 +233,8 @@ async def pointer_event_owner(tmp_path: Path, test_config_path: str, request: py
     config["config_version"] = 2
     config.setdefault("ui", {})["max_concurrent_agents"] = 4
     config["mcp"] = {"servers": {"pointer_probe": {
-        "transport": "stdio", "enabled": False, "command": "unused-pointer-probe",
-        "env": {"ROOT/~": "before"},
+        "transport": "streamable_http", "enabled": False, "url": "https://example.invalid/mcp",
+        "headers": {"ROOT~": "before"},
     }}}
     config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -275,7 +275,7 @@ async def test_real_config_diff_persists_and_serializes_json_pointers(pointer_ev
     service, store, client, config_path, config, workspace_root = pointer_event_owner
     # 配置值可以是原生路径；事件位置字段必须表达 JSON 键，保留 / 与 ~ 的 Pointer 转义。
     native_value = str(workspace_root / "native-target")
-    config["mcp"]["servers"]["pointer_probe"]["env"]["ROOT/~"] = native_value
+    config["mcp"]["servers"]["pointer_probe"]["headers"]["ROOT~"] = native_value
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     async def require_restart(*_snapshots: object) -> NoReturn:
@@ -290,7 +290,7 @@ async def test_real_config_diff_persists_and_serializes_json_pointers(pointer_ev
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "pointer-event"
     event, = response.json()["data"]["events"]
-    expected = ["/mcp/servers/pointer_probe/env/ROOT~1~0"]
+    expected = ["/mcp/servers/pointer_probe/headers/ROOT~0"]
     assert event["changed_paths"] == expected
     assert event["applied_paths"] == ([] if pending_restart else expected)
     assert event["deferred_paths"] == (expected if pending_restart else [])
@@ -320,7 +320,7 @@ async def test_workspace_reload_status_rejects_without_echoing_config(
     elif damage == "key":
         config[marker] = "unknown"
     else:
-        config["mcp"]["servers"]["pointer_probe"]["env"] = {marker: 7}
+        config["mcp"]["servers"]["pointer_probe"]["headers"] = {marker: 7}
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     with pytest.raises(ValueError, match="配置验证失败") as failure:

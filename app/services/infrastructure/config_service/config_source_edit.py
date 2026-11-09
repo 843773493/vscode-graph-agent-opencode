@@ -228,7 +228,7 @@ class ConfigSourceEditMixin:
             previous=service._require_snapshot(), candidate=candidate, candidate_id=request.idempotency_key,
             gateway_id=gateway_id,
         )
-        with service._mcp_configuration_guard(candidate.to_dict().get("mcp")):
+        with service._mcp_configuration_guard(service._require_snapshot().to_dict(), candidate.to_dict()):
             pass
         return ConfigSourcePreflightDTO(
             document=self.get_source_document(source_key=source_key, gateway_id=gateway_id),
@@ -306,7 +306,7 @@ class ConfigSourceEditMixin:
                 return True
 
         try:
-            with service._mcp_configuration_guard(candidate.to_dict().get("mcp")):
+            with service._mcp_configuration_guard(previous.to_dict(), candidate.to_dict()):
                 await service.reload(candidate_applier=service._candidate_applier, idempotency_key=request.idempotency_key,
                                   before_build=save, source_edit=intent)
         except ConfigRestartRequiredError:

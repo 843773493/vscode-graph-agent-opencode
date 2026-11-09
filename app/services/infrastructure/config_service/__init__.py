@@ -156,7 +156,7 @@ class ConfigService(ConfigSourceLayersMixin,
         )
         self._mcp_tool_names: frozenset[str] | None = None
         self._mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None = None
-        self._mcp_configuration_guard: Callable[[object], AbstractContextManager[None]] = lambda _config: nullcontext()
+        self._mcp_configuration_guard: Callable[[object, object], AbstractContextManager[None]] = lambda _previous, _candidate: nullcontext()
         self._instruction_inputs = InstructionFileInputs(instruction_file_resolver)
         self._snapshot_store = ConfigSnapshotStore(
             candidate_builder=self._build_candidate_snapshot,

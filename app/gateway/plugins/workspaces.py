@@ -68,6 +68,41 @@ class WorkspacePluginBindings:
         return WorkspacePluginConfigurationDTO(workspace_id=workspace_id, state="waiting",
             revision=previous.revision if previous else None)
 
+    async def refresh_startup(self, workspace_id: str, backend_generation: str) -> WorkspacePluginConfigurationDTO:
+        """原 Backend 开放内部入口后交接；不等待它尚未就绪的 MCP 业务。"""
+        target = self.registry.resolve((self.registry.gateway_id, workspace_id))
+        if target.connection_kind != "local" or not backend_generation:
+            raise ValueError("启动交接必须指定原生 Backend generation")
+        await self._refresh(target, startup_generation=backend_generation)
+        return self.states[workspace_id]
+
+    async def apply_candidate(
+        self, *, binding: PluginBinding, candidate_revision: str,
+        expected_revision: str, expected_binding: PluginBinding | None,
+        bindings: list[PluginBinding],
+        parameters: dict[str, JsonValue], delivered_parameters: dict[str, JsonValue],
+    ) -> dict[str, object]:
+        """串行应用原 Workspace claim 交付的单插件候选；密参只传给本次启动。"""
+        if binding.workspace_id is None:
+            raise ValueError("插件参数候选缺少原生 Workspace 身份")
+        async with self._handoff_lock:
+            async with self.registry.backend_topology_lock:
+                target = self.registry.resolve((self.registry.gateway_id, binding.workspace_id))
+                if target.connection_kind != "local":
+                    raise ValueError("插件参数候选必须属于原生 Workspace")
+                snapshot = await self.read(target)
+                active_binding = next((item for item in snapshot.bindings if (
+                    item.package_id, item.plugin_id, item.workspace_id,
+                ) == (binding.package_id, binding.plugin_id, binding.workspace_id)), None)
+                if snapshot.revision != expected_revision or active_binding != expected_binding:
+                    raise ValueError("插件候选的原绑定或 Workspace revision 已失效")
+                if binding not in bindings or not binding.enabled:
+                    raise ValueError("插件候选必须是已开启的精确绑定")
+            return await self.runtime.apply_binding(
+                binding, revision=candidate_revision, parameters=parameters,
+                delivered_parameters=delivered_parameters,
+            )
+
     def start(self) -> None:
         self.registry.add_commit_observer(self._on_commit)
         self._task = asyncio.create_task(self._observe(), name="workspace-plugin-bindings")
@@ -143,7 +178,7 @@ class WorkspacePluginBindings:
             self._changed.clear()
             await self.reconcile()
 
-    async def _refresh(self, target: WorkspaceTarget) -> None:
+    async def _refresh(self, target: WorkspaceTarget, *, startup_generation: str | None = None) -> None:
         workspace_id = target.workspace_id
         previous = self.snapshots.get(workspace_id)
         revision = previous.revision if previous else None
@@ -155,7 +190,7 @@ class WorkspacePluginBindings:
                 workspace_id=workspace_id, state="stopped", revision=revision)
             return
         try:
-            snapshot = await self.read(target)
+            snapshot = await self.read(target, startup_generation=startup_generation)
         except (httpx.RequestError, LookupError) as error:
             # owner 暂不可达不代表停用；保留已接管实例，等原提交／显式交接。
             self.states[workspace_id] = WorkspacePluginConfigurationDTO(
@@ -177,6 +212,29 @@ class WorkspacePluginBindings:
                 workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=str(error))
             logger.exception("Workspace 插件绑定应用失败: workspace_id=%s", workspace_id)
             return
+        if startup_generation is not None:
+            failures = []
+            for slot in self.runtime.slots.values():
+                if slot.binding.workspace_id != workspace_id:
+                    continue
+                status = slot.describe()
+                state = status["state"]
+                requires_process = slot.binding.enabled and slot.declaration.runtime is not None
+                ready = (
+                    state == "ready" and slot.process is not None
+                    if requires_process
+                    else state in ("stopped", "ready")
+                )
+                if not ready:
+                    failures.append(
+                        f"{slot.binding.package_id}/{slot.binding.plugin_id}: {slot.error or state}"
+                    )
+            if failures:
+                error = "; ".join(failures)
+                self.states[workspace_id] = WorkspacePluginConfigurationDTO(
+                    workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=error)
+                logger.error("Workspace 插件启动交接未就绪: workspace_id=%s error=%s", workspace_id, error)
+                return
         self.states[workspace_id] = WorkspacePluginConfigurationDTO(
             workspace_id=workspace_id, state="ready", revision=snapshot.revision)
 
@@ -208,11 +266,12 @@ class WorkspacePluginBindings:
             self.snapshots[target.workspace_id] = snapshot
             self.registry.complete_plugin_creation(target.workspace_id, creation.intent_id)
 
-    async def read(self, target: WorkspaceTarget) -> WorkspacePluginSnapshot:
+    async def read(self, target: WorkspaceTarget, *, startup_generation: str | None = None) -> WorkspacePluginSnapshot:
         if target.connection_kind != "local" or target.gateway_id != self.registry.gateway_id:
             raise ValueError("工作区插件配置只能从原生 owner 交接")
         request_id = get_current_request_id() or f"workspace-plugin-handoff-{uuid4().hex}"
-        with self.registry.backend_management_routes(workspace_ids=(target.workspace_id,)) as routes:
+        with self.registry.backend_management_routes(workspace_ids=(target.workspace_id,),
+                allow_starting=startup_generation is not None) as routes:
             if len(routes) != 1:
                 raise ValueError("工作区插件交接必须有唯一原配置 owner")
             route = routes[0]
@@ -226,7 +285,8 @@ class WorkspacePluginBindings:
             if (result.code != 0 or result.request_id != request_id or snapshot is None
                 or snapshot.workspace_id != target.workspace_id):
                 raise ValueError("工作区配置交接回执与原目标／请求不符")
-            if route.owner is not None and snapshot.backend_generation != route.owner.contract.generation:
+            expected_generation = startup_generation or route.backend_generation
+            if expected_generation is not None and snapshot.backend_generation != expected_generation:
                 raise ValueError("工作区配置交接来自已失效 Backend generation")
             self.registry.confirm_backend_management_identity(route, snapshot.backend_id)
             return snapshot
@@ -235,7 +295,7 @@ class WorkspacePluginBindings:
         """只在新实例启动时读取原 owner；不缓存或写入接管材料。"""
         assert binding.workspace_id is not None
         request_id = get_current_request_id() or f"plugin-parameters-{uuid4().hex}"
-        with self.registry.backend_management_routes(workspace_ids=(binding.workspace_id,)) as routes:
+        with self.registry.backend_management_routes(workspace_ids=(binding.workspace_id,), allow_starting=True) as routes:
             route, = routes
             response = await self.runtime.client.post(route.base_url + "/api/internal/service-plugins/parameters",
                 json=PluginParameterDeliveryRequest(binding=binding, revision=revision,

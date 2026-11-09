@@ -65,4 +65,4 @@ app/runtime/
 
 命令保护由持久任务脚本检查、测试matrix及Windows开发目标按平台复用；Windows原生库只在Windows入口加载，不在测试支持目录保留副本。
 
-- `http_server.py` 是 Gateway 与受管 Backend 共用的 Uvicorn 入口；原 lifespan 只交付关闭前钩子，不在 runner 构造业务 owner。请求退出只改变原 server 状态，实际排空和 lifespan 仍由 Uvicorn 完成，不能将 ACK 当作进程退出。
+- `http_server.py` 是 Gateway 与受管 Backend 共用的 Uvicorn 入口；lifespan 可交付 listener-ready 启动回调与关闭前钩子，不在 runner 构造业务 owner。请求退出只改变原 server 状态，实际排空和 lifespan 仍由 Uvicorn 完成，不能将 ACK 当作进程退出。

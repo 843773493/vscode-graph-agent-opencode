@@ -18,17 +18,8 @@ from mcp.os.win32.utilities import get_windows_executable_command
 from pydantic import ValidationError
 
 from app.core.child_process import OwnedChildProcess
-from app.services.infrastructure.external_resource_leases import (
-    ExternalResourceLeaseLedger,
-)
 from app.services.infrastructure.mcp.transport.stdio import mcp_stdio_transport
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
-    SchemaServerCase,
-)
-from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
-    schema_server_case as schema_server_case,  # noqa: PLC0414 - 原真实 SDK／stdio 工作区装具
-)
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="需要真实 Windows Process 与 Job Object")
 
@@ -106,27 +97,36 @@ def native_observations(monkeypatch: pytest.MonkeyPatch, windows_context: TestRu
 
 
 async def test_native_stdio_assigns_before_resume_and_waits_original_process(
-    schema_server_case: SchemaServerCase, windows_context: TestRunContext, native_observations,
+    windows_context: TestRunContext, native_observations,
 ):
-    case = schema_server_case
-    await case.owner.start()
-    runtime = case.owner._runtimes["schema"]
-    process = runtime.lifecycle.process.process
-    assert process is not None and runtime.process_state is not None
-    try:
+    context = windows_context
+    definitions, receipts = (context.artifacts_dir / name for name in ("definitions.json", "receipts.jsonl"))
+    definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
+    owner = OwnedChildProcess("mcp-plugin:windows-native-transport")
+    parameters = StdioServerParameters(command=sys.executable, args=[
+        str(context.project_root / "tests/integration/workspace_services/mcp/schema_server.py"),
+        str(definitions), str(receipts),
+    ], cwd=str(context.project_root))
+
+    async def started() -> None:
+        return None
+
+    # 直接验证插件复用的公共 stdio 原语；Backend 不再持有 Server 子进程。
+    async with mcp_stdio_transport(parameters, owner, started) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        process = owner.process
+        assert process is not None
         assert [event["stage"] for event in native_observations[:3]] == ["create_suspended", "assigned", "resumed"]
-        assert native_observations[0]["pid"] == process.pid == runtime.process_state.pid
-        assert runtime.process_state.created_at is not None
-        result = await case.invoker().ainvoke({"tool_name": "mcp__schema__probe", "arguments": {"text": "Windows 原调用"}})
-        assert result and case.received() == [{"name": "probe", "arguments": {"text": "Windows 原调用"}}]
-    finally:
-        await case.owner.shutdown()
-    state = runtime.process_state
-    assert state is not None and state.phase == "exited" and state.exit_verified and state.returncode == 0
+        assert native_observations[0]["pid"] == process.pid == owner.state.pid
+        assert owner.state.created_at is not None
+        result = await session.call_tool("probe", arguments={"text": "Windows 原调用"})
+        assert not result.isError
+        assert [json.loads(line) for line in receipts.read_text(encoding="utf-8").splitlines()] == [
+            {"name": "probe", "arguments": {"text": "Windows 原调用"}},
+        ]
+    state = owner.state
+    assert state.phase == "exited" and state.exit_verified and state.returncode == 0
     assert await process.wait() == 0 and process.returncode == 0
-    record = case.owner._leases.get(runtime.connection_ref)
-    assert record is not None and record.status == "stopped" and record.process == state
-    assert ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json").get(runtime.connection_ref) == record
     original_handle = native_observations[0]["process"]
     assert any(event["stage"] == "wait_exited" and event["process"] == original_handle for event in native_observations)
     assert any(event["stage"] == "job_count" and event["active"] == 0 for event in native_observations)

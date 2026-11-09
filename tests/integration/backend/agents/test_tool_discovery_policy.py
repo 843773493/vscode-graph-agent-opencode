@@ -18,9 +18,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
 from tests.integration.backend.agents.test_mcp_connection_control import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一真实 MCP Server
-)
-from tests.integration.backend.agents.test_mcp_connection_control import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 同一真实 OAuth Server
 )
 from tests.integration.backend.agents.test_mcp_connection_control import (
@@ -32,6 +29,9 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 from tests.integration.backend.agents.test_mcp_connection_wait import authorize
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一真实 MCP Server
+)
 
 
 @pytest.fixture

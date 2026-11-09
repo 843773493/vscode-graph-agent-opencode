@@ -13,11 +13,6 @@ from fastapi import FastAPI, HTTPException
 
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
-from app.gateway.auxiliary_proxy import (
-    proxy_attach_frontend,
-    proxy_auxiliary_http,
-)
-from app.gateway.auxiliary_proxy import router as auxiliary_router
 from app.gateway.control.user_access import UserAccessContext
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import (
@@ -47,26 +42,19 @@ def registry(tmp_path: Path) -> Iterator[GatewayWorkspaceRegistry]:
         gateway_id=registry.gateway_id, workspace_id=WORKSPACE_ID, name="上游错误诊断",
         root_path=str(tmp_path / "workspace"), backend_url="http://127.0.0.1:41001",
         connection_kind="local",
-    ), runtime=WorkspaceRuntime(service_urls={
-        "workspace_api": "http://127.0.0.1:41001", "browser_manager": "http://127.0.0.1:41002",
-    }), activate=False)
+    ), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://127.0.0.1:41001"}), activate=False)
     try:
         yield registry
     finally:
         registry.close()
 
 
-@pytest.mark.parametrize("entry,error_type,status,stage", [
-    (entry, error_type, status, stage)
-    for entry in ("workspace", "auxiliary", "attach")
-    for error_type, status, stage in [
-        (httpx.ConnectError, 502, "upstream_request"),
-        (httpx.ReadError, 502, "upstream_request"),
-        (httpx.RemoteProtocolError, 502, "upstream_request"),
-        (httpx.PoolTimeout, 502, "upstream_request"),
-        (TimeoutError, 504, "upstream_headers"),
-    ]
-    if entry != "attach" or error_type is not TimeoutError
+@pytest.mark.parametrize("error_type,status,stage", [
+    (httpx.ConnectError, 502, "upstream_request"),
+    (httpx.ReadError, 502, "upstream_request"),
+    (httpx.RemoteProtocolError, 502, "upstream_request"),
+    (httpx.PoolTimeout, 502, "upstream_request"),
+    (TimeoutError, 504, "upstream_headers"),
 ])
 @pytest.mark.parametrize("native_path", [
     "/private/proxy-native-marker/socket", r"C:\private\proxy-native-marker\socket",
@@ -74,7 +62,7 @@ def registry(tmp_path: Path) -> Iterator[GatewayWorkspaceRegistry]:
 ])
 async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
     registry: GatewayWorkspaceRegistry, caplog: pytest.LogCaptureFixture,
-    entry: str, error_type: type[Exception], status: int, stage: str, native_path: str,
+    error_type: type[Exception], status: int, stage: str, native_path: str,
 ) -> None:
     cause = OSError(111, "测试底层连接诊断")
     failure = error_type(f"测试上游请求故障: {native_path}")
@@ -92,18 +80,10 @@ async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
         app.state.registry = registry
         app.state.http_client = client
         app.state.streaming_http_client = client
-        app.state.attach_frontend_urls = {"browser": "http://127.0.0.1:41003"}
         request = _make_request(app, method="GET", path="/api/v1/jobs/job_1", workspace_id=WORKSPACE_ID)
         request._body = b""
         with pytest.raises(HTTPException) as caught:
-            if entry == "workspace":
-                await _proxy_workspace_request("jobs/job_1", request, auth=None, user_access=None, include_credentials=False)
-            elif entry == "auxiliary":
-                await proxy_auxiliary_http(
-                    WORKSPACE_ID, "browser-manager", "health", request, GatewayAuthContext(kind="local"),
-                )
-            else:
-                await proxy_attach_frontend("browser", "index.html", request)
+            await _proxy_workspace_request("jobs/job_1", request, auth=None, user_access=None, include_credentials=False)
 
     assert caught.value.status_code == status
     assert caught.value.__cause__ is failure and failure.__cause__ is cause
@@ -114,25 +94,20 @@ async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
     key = registry.gateway_id, WORKSPACE_ID
     assert registry.route_reference_counts(key) == (0, 0)
     registry._assert_route_references_drained(key)
-    logger_name = "app.gateway.server.workspace_proxy" if entry == "workspace" else "app.gateway.auxiliary_proxy"
-    diagnostics = [record for record in caplog.records if record.name == logger_name]
+    diagnostics = [record for record in caplog.records if record.name == "app.gateway.server.workspace_proxy"]
     assert len(diagnostics) == 1
     assert diagnostics[0].exc_info is not None and diagnostics[0].exc_info[1] is failure
     for expected in ("req_route_ref", "GET", f"stage={stage}", str(cause), str(failure)):
         assert expected in caplog.text
-    assert ("kind=browser" if entry == "attach" else WORKSPACE_ID) in caplog.text
+    assert WORKSPACE_ID in caplog.text
 
 
-@pytest.mark.parametrize("path", [
-    "/api/v1/jobs/job_1", f"/api/gateway/workspaces/{WORKSPACE_ID}/browser-manager/health",
-    "/api/gateway/attach/browser/index.html",
-])
 @pytest.mark.parametrize("native_path", [
     "/private/proxy-native-marker/socket", r"C:\private\proxy-native-marker\socket",
     r"\\server\proxy-native-marker\socket",
 ])
 async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
-    registry: GatewayWorkspaceRegistry, caplog: pytest.LogCaptureFixture, path: str, native_path: str,
+    registry: GatewayWorkspaceRegistry, caplog: pytest.LogCaptureFixture, native_path: str,
 ) -> None:
     """真实ASGI路由和序列化；认证与上游网络是显式单元测试边界。"""
     failure = httpx.ConnectError(f"连接底层文件失败: {native_path}")
@@ -148,7 +123,6 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
     app.add_middleware(TraceMiddleware)
     app.exception_handler(HTTPException)(gateway_http_exception_handler)
     app.include_router(workspace_router)
-    app.include_router(auxiliary_router)
     # 单测在认证依赖边界提供已验证上下文，不替生产创建业务或资源状态。
     access = UserAccessContext(
         kind="guest", user_id=None, access_session_id="proxy-unit", lease_generation=1,
@@ -157,13 +131,12 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
     app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
     app.dependency_overrides[verify_user_access_for_proxy] = lambda: access
     app.state.registry = registry
-    app.state.attach_frontend_urls = {"browser": "http://127.0.0.1:41003"}
     caplog.set_level(logging.ERROR)
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as transport:
         app.state.http_client = transport
         app.state.streaming_http_client = transport
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://gateway.test", trust_env=False) as client:
-            failed = await client.get(path, headers={
+            failed = await client.get("/api/v1/jobs/job_1", headers={
                 "X-Request-ID": "proxy-serialized-failure", "X-BoxTeam-Workspace-Id": WORKSPACE_ID,
             })
             assert failed.status_code == 502, failed.text
@@ -172,7 +145,7 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
             assert "proxy-native-marker" not in failed.text and native_path not in failed.text
             assert "http://127.0.0.1:4100" not in failed.text
             assert len(calls) == 1 and registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
-            recovered = await client.get(path, headers={
+            recovered = await client.get("/api/v1/jobs/job_1", headers={
                 "X-Request-ID": "proxy-serialized-retry", "X-BoxTeam-Workspace-Id": WORKSPACE_ID,
             })
             assert recovered.status_code == 200 and recovered.json() == {"ok": True, "request_id": "proxy-serialized-retry"}

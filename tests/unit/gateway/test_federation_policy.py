@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -98,7 +99,7 @@ def test_workspace_admin_requires_explicit_authenticated_peer_principal(rules, e
     assert snapshot.evaluate(capability="managed_workspace_admin", origin_gateway_id="peer", principal_ref="peer-principal") is expected
 
 
-@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write", "mcp_installation_manage", "extension_installation_manage", "extension_host_manage"])
+@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write", "extension_installation_manage", "extension_host_manage"])
 @pytest.mark.parametrize("binding,expected", [
     ({}, False),
     ({"origin_gateway_id": "peer"}, False),
@@ -111,13 +112,12 @@ def test_configuration_management_requires_exact_authenticated_principal(
     rules = [{"capability": capability, "effect": "allow", **binding}]
     snapshot = normalize_policy({"default_effect": "allow", "rules": rules})
     assert snapshot.evaluate(capability=capability, origin_gateway_id="peer", principal_ref="peer-principal") is expected
-    other: Capability = {
+    other = cast(Capability, {
         "configuration_read": "configuration_write",
         "configuration_write": "configuration_read",
-        "mcp_installation_manage": "configuration_write",
         "extension_installation_manage": "extension_host_manage",
         "extension_host_manage": "extension_installation_manage",
-    }[capability]
+    }[capability])
     assert not snapshot.evaluate(capability=other, origin_gateway_id="peer", principal_ref="peer-principal")
     revoked = normalize_policy({"rules": [*rules, {"capability": capability, "effect": "deny"}]})
     assert not revoked.evaluate(capability=capability, origin_gateway_id="peer", principal_ref="peer-principal")

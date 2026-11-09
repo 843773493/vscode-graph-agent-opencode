@@ -9,15 +9,9 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
-    model_validator,
 )
 
 from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
-from app.schemas.internal_v2.config import (
-    ConfigSourceDocumentDTO,
-    ConfigSourceEditRequest,
-    ConfigSourcePreflightDTO,
-)
 
 
 class McpInvocationReceipt(BaseModel):
@@ -51,32 +45,27 @@ class McpToolDTO(BaseModel):
     description: str
 
 
-class McpProviderDefinitionRefDTO(BaseModel):
-    """只保存原宿主和原定义的非秘密引用；显示名与版本不构成对象身份。"""
+class McpServiceReferenceDTO(BaseModel):
+    """MCP 配置中的稳定插件服务定位，不包含运行实例或网络地址。"""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     gateway_id: CanonicalGatewayId
-    backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-    client_id: str = Field(min_length=1, max_length=256)
-    view_id: str = Field(min_length=1, max_length=128)
-    host_generation: str = Field(min_length=1, max_length=128)
-    host_kind: Literal["node", "web"]
-    extension_id: str = Field(min_length=1, max_length=256)
-    extension_key: str = Field(min_length=1, max_length=512)
-    collection_id: str = Field(min_length=1, max_length=512)
-    provider_ref: str = Field(min_length=1, max_length=128)
-    definition_ref: str = Field(min_length=1, max_length=128)
+    workspace_id: CanonicalWorkspaceId
+    package_id: str = Field(min_length=1)
+    package_version: str = Field(min_length=1)
+    plugin_id: str = Field(min_length=1)
+    service_id: str = Field(min_length=1)
 
 
 class McpServerDTO(BaseModel):
     server_id: str
-    transport: Literal["stdio", "streamable_http"]
+    transport: Literal["streamable_http"]
     enabled: bool
     status: Literal["disabled", "ready", "failed", "authorization_required", "unavailable"]
     tools: list[McpToolDTO] = Field(default_factory=list)
     connection_ref: str | None = Field(default=None, pattern=r"^mcp-connection:v1:[0-9a-f]{32}:[1-9][0-9]*$")
-    provider_definition: McpProviderDefinitionRefDTO | None = None
+    service: McpServiceReferenceDTO | None = None
     unavailable_reason: str | None = None
 
 
@@ -218,343 +207,3 @@ class McpConnectionOperationResponseDTO(_McpResponse):
 
 class McpAuthorizationResponseDTO(_McpResponse):
     data: McpAuthorizationDTO
-
-
-class _McpCandidateModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-
-class McpInstallationTargetDTO(_McpCandidateModel):
-    """安装域来自原生 Backend 身份，不借用工作区或进程代际。"""
-
-    kind: Literal["backend"] = "backend"
-    gateway_id: CanonicalGatewayId
-    backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-
-
-class McpInstallationTargetListRequestDTO(_McpCandidateModel):
-    protocol_version: Literal[1] = 1
-    gateway_id: CanonicalGatewayId
-    gateway_connection_id: str | None = Field(default=None, min_length=1)
-
-
-class McpInstallationTargetListResponseDTO(_McpCandidateModel):
-    code: int = 0
-    message: str = "ok"
-    data: list[McpInstallationTargetDTO]
-    request_id: str
-    protocol_version: Literal[1] = 1
-    gateway_id: CanonicalGatewayId
-    source: Literal["live"] = "live"
-
-
-class McpCandidateSourceDTO(_McpCandidateModel):
-    kind: Literal["gallery", "manual"]
-    name: str = Field(min_length=1, max_length=512)
-    version: str = Field(min_length=1, max_length=128)
-    endpoint: str | None = None
-    protocol: Literal["v0.1", "v0"] | None = None
-    entry_url: str | None = None
-    entry_id: str | None = None
-    definition: dict[str, object] | None = Field(default=None, repr=False,
-        description="手动来源的 packages/remotes manifest，或原 stdio/streamable_http 配置；不接受秘密输入。")
-
-    @model_validator(mode="before")
-    @classmethod
-    def default_gallery_protocol(cls, value: object) -> object:
-        if isinstance(value, dict) and value.get("kind") == "gallery" and "protocol" not in value:
-            return {**value, "protocol": "v0.1"}
-        return value
-
-    @model_validator(mode="after")
-    def validate_source(self) -> McpCandidateSourceDTO:
-        if self.kind == "gallery":
-            if not self.endpoint or not self.entry_url or self.protocol is None or self.definition is not None:
-                raise ValueError("目录来源必须指定 endpoint、协议和精确 entry_url，不能附带手动定义")
-        elif self.definition is None or any(value is not None for value in (self.endpoint, self.protocol, self.entry_url, self.entry_id)):
-            raise ValueError("手动来源必须只携带明确 definition，不得借用目录身份")
-        return self
-
-
-class McpCandidateProvenanceDTO(_McpCandidateModel):
-    kind: Literal["gallery", "manual"]
-    name: str
-    version: str
-    endpoint: str | None = None
-    protocol: Literal["v0.1", "v0"] | None = None
-    entry_url: str | None = None
-    entry_id: str | None = None
-
-
-class McpTargetPlatformDTO(_McpCandidateModel):
-    operating_system: str
-    architecture: str
-
-
-class McpCandidateVariantRefDTO(_McpCandidateModel):
-    kind: Literal["package", "remote", "manual"]
-    index: int = Field(ge=0)
-    digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-
-
-class McpCandidateInputDTO(_McpCandidateModel):
-    key: str = Field(min_length=1)
-    description: str | None = None
-    is_required: bool = False
-    format: Literal["string", "number", "boolean", "filepath"] = "string"
-    default_value: str | list[str] | None = None
-    choices: list[str] | None = None
-    is_secret: bool = False
-    is_repeated: bool = False
-    can_skip: bool = True
-
-
-class McpCandidateVariantDTO(_McpCandidateModel):
-    ref: McpCandidateVariantRefDTO
-    transport: str
-    registry_type: str | None = None
-    identifier: str | None = None
-    version: str | None = None
-    configuration_inputs: list[McpCandidateInputDTO] = Field(default_factory=list)
-    configuration_unavailable_reason: str | None = None
-
-
-class McpCandidateInspectRequestDTO(_McpCandidateModel):
-    target: McpInstallationTargetDTO
-    source: McpCandidateSourceDTO
-
-
-class McpCandidateInspectDTO(_McpCandidateModel):
-    source: McpCandidateProvenanceDTO
-    manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-    platform: McpTargetPlatformDTO
-    variants: list[McpCandidateVariantDTO]
-
-
-class McpCandidatePlanRequestDTO(McpCandidateInspectRequestDTO):
-    manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-    variant: McpCandidateVariantRefDTO
-    inputs: dict[str, object] = Field(default_factory=dict, repr=False)
-    server_id: str | None = Field(default=None, pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
-
-
-class McpCandidatePlanDTO(_McpCandidateModel):
-    source: McpCandidateProvenanceDTO
-    manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-    variant: McpCandidateVariantRefDTO
-    platform: McpTargetPlatformDTO
-    plan_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-    disposition: Literal["requires_artifact", "configuration_only", "explicit_command"]
-    download_required: bool
-    parameters: dict[str, object] = Field(description="冻结参数的脱敏展示；实际消费须由原 owner 重新验证原请求，不能保存此投影作 launch 配置。")
-
-
-class McpCandidatePlanValidationRequestDTO(_McpCandidateModel):
-    candidate: McpCandidatePlanRequestDTO
-    plan_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-
-
-class _McpCandidateResponse(_McpCandidateModel):
-    code: int = 0
-    message: str = "ok"
-    request_id: str
-    target: McpInstallationTargetDTO
-    protocol_version: Literal[1] = 1
-
-
-class McpCandidateInspectResponseDTO(_McpCandidateResponse):
-    data: McpCandidateInspectDTO
-
-
-class McpCandidatePlanResponseDTO(_McpCandidateResponse):
-    data: McpCandidatePlanDTO
-
-
-class McpManagedLaunchDTO(_McpCandidateModel):
-    """工作区只引用已发布制品；可执行路径由原生安装 owner 解析。"""
-
-    backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-    installation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-    generation: str = Field(pattern=r"^[0-9a-f]{32}$")
-    artifact_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-
-
-class McpStdioLaunchDefinitionDTO(_McpCandidateModel):
-    command: str = Field(min_length=1)
-    args: list[str] = Field(default_factory=list)
-    cwd: str | None = Field(default=None, min_length=1)
-
-
-class McpPrivateEnvRefDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    kind: Literal["mcp_private_env"] = "mcp_private_env"
-    workspace_id: CanonicalWorkspaceId
-    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
-    input_key: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-    definition_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
-    version: str = Field(pattern=r"^[0-9a-f]{32}$")
-
-
-def _private_env_value(value: SecretStr) -> SecretStr:
-    if any(char == "\x00" or 0xD800 <= ord(char) <= 0xDFFF for char in value.get_secret_value()):
-        raise ValueError("MCP 私有 env 值必须可编码为 UTF-8 且不得包含 NUL")
-    return value
-
-
-McpPrivateEnvValue = Annotated[SecretStr, Field(min_length=1), AfterValidator(_private_env_value)]
-
-
-class McpPrivateEnvWriteRequestDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    target: McpWorkspaceTargetDTO
-    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
-    input_key: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-    candidate: McpCandidatePlanRequestDTO | None = None
-    launch: McpStdioLaunchDefinitionDTO | None = None
-    value: McpPrivateEnvValue = Field(repr=False)
-
-    @model_validator(mode="after")
-    def require_definition(self) -> McpPrivateEnvWriteRequestDTO:
-        if (self.candidate is None) == (self.launch is None):
-            raise ValueError("MCP 私有 env 必须明确选择原 candidate 或手动 stdio launch")
-        return self
-
-
-class McpPrivateEnvWriteResponseDTO(_McpResponse):
-    data: McpPrivateEnvRefDTO
-
-
-class McpCandidateConfigurationRequestDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    target: McpWorkspaceTargetDTO
-    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
-    plan: McpCandidatePlanValidationRequestDTO
-    managed_launch: McpManagedLaunchDTO | None = None
-    source_edit: ConfigSourceEditRequest
-
-
-class McpCandidateConfigurationResponseDTO(_McpResponse):
-    data: ConfigSourceDocumentDTO
-
-
-class McpCandidateConfigurationDraftRequestDTO(_McpCandidateModel):
-    target: McpWorkspaceTargetDTO
-    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
-    plan: McpCandidatePlanValidationRequestDTO
-    managed_launch: McpManagedLaunchDTO | None = None
-    enabled: bool
-    source_edit: ConfigSourceEditRequest
-
-
-class McpCandidateConfigurationDraftDTO(_McpCandidateModel):
-    source_edit: ConfigSourceEditRequest
-    preflight: ConfigSourcePreflightDTO
-
-
-class McpCandidateConfigurationDraftResponseDTO(_McpResponse):
-    data: McpCandidateConfigurationDraftDTO
-
-
-class McpInstallationRequestDTO(McpCandidatePlanValidationRequestDTO):
-    operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_:-]+$")
-    entrypoint: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
-
-
-class McpInstalledArtifactDTO(_McpCandidateModel):
-    binding: McpManagedLaunchDTO
-    source: McpCandidateProvenanceDTO
-    manifest_digest: str
-    variant: McpCandidateVariantRefDTO
-    platform: McpTargetPlatformDTO
-    registry_type: Literal["pypi", "npm"] = "pypi"
-    identifier: str
-    version: str
-    entrypoint: str
-    command: str
-    lock_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    installed_distributions: dict[str, str]
-    runtime_executable: str | None = Field(default=None, min_length=1)
-    runtime_version: str | None = Field(default=None, min_length=1)
-    state: Literal["published", "removing", "removal_failed", "removed"] = "published"
-    removal_operation_id: str | None = None
-    removal_error: str | None = None
-
-    @model_validator(mode="after")
-    def require_npm_runtime(self) -> McpInstalledArtifactDTO:
-        if self.registry_type == "npm" and (self.runtime_executable is None or self.runtime_version is None):
-            raise ValueError("已发布 npm 制品必须记录目标实际 Node 路径及版本")
-        return self
-
-
-class McpInstallationOperationDTO(_McpCandidateModel):
-    operation_id: str
-    intent_digest: str
-    status: Literal["running", "succeeded", "failed", "interrupted", "cancelled"]
-    stage: Literal["prepare", "lock", "install", "verify", "publish", "remove", "complete"]
-    created_at: float
-    updated_at: float
-    artifact: McpInstalledArtifactDTO | None = None
-    error: str | None = None
-    log: str = Field(default="", max_length=65536)
-    kind: Literal["install", "uninstall"] = "install"
-    cancellation_requested: bool = False
-
-
-class McpUninstallationRequestDTO(_McpCandidateModel):
-    target: McpInstallationTargetDTO
-    binding: McpManagedLaunchDTO
-    operation_id: str = Field(min_length=1)
-
-
-class McpArtifactReferenceDTO(_McpCandidateModel):
-    workspace_id: str
-    kind: Literal["source_layer", "active", "pending", "connection", "lease", "unavailable"]
-    status: str
-    reason: str
-    server_id: str | None = None
-    source_key: str | None = None
-    candidate_id: str | None = None
-    connection_ref: str | None = None
-    lease_id: str | None = None
-    operation_id: str | None = None
-
-
-class McpArtifactReferencesDTO(_McpCandidateModel):
-    binding: McpManagedLaunchDTO
-    references: list[McpArtifactReferenceDTO]
-
-
-class McpArtifactReferencesResponseDTO(_McpCandidateResponse):
-    data: McpArtifactReferencesDTO
-
-
-class McpInstallationOperationResponseDTO(_McpCandidateResponse):
-    data: McpInstallationOperationDTO
-
-
-class McpInstalledArtifactListResponseDTO(_McpCandidateResponse):
-    data: list[McpInstalledArtifactDTO]
-
-
-class McpInstallationCapabilitiesDTO(_McpCandidateModel):
-    platform: McpTargetPlatformDTO
-    pypi_wheel_available: bool
-    unavailable_reason: str | None = None
-    npm_available: bool
-    npm_unavailable_reason: str | None = None
-    unsupported_registry_types: list[str] = Field(default_factory=lambda: ["oci", "nuget"])
-    limitations: list[str] = Field(default_factory=lambda: [
-        "仅使用目标已有 uv／Python 或 Node／npm，不自动安装系统 runtime",
-        "PyPI 只安装 wheel，不运行 sdist 构建；入口须为根 distribution 的 console entry point",
-        "npm 使用标准 registry 与 package-lock v3／ci；入口须为根 package 的 JavaScript bin",
-        "npm 不执行 install scripts，需要构建的依赖明确拒绝",
-        "不执行自定义 runtimeArguments，锁定依赖校验暂不支持目录单文件 fileSha256",
-        "安装不写入工作区配置、不等于连接 ready；物理卸载须先结清全部实际引用",
-    ])
-
-
-class McpInstallationCapabilitiesResponseDTO(_McpCandidateResponse):
-    data: McpInstallationCapabilitiesDTO

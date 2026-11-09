@@ -489,7 +489,7 @@ async function main() {
         pythonBin,
         [
           "-m",
-          "uvicorn",
+          "app.runtime.http_server",
           "app.main:app",
           "--host",
           host,

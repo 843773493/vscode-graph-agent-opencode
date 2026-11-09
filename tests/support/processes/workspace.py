@@ -390,7 +390,7 @@ def start_backend_process(
     cmd.extend(
         [
             "-m",
-            "uvicorn",
+            "app.runtime.http_server",
             asgi_app,
             "--host",
             "127.0.0.1",

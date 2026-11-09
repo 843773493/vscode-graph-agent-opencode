@@ -103,7 +103,8 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
 
     monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", backend_deadline, raising=False)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     exited = False
     entered, finish = asyncio.Event(), asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -272,7 +273,8 @@ async def test_backend_close_retains_cancelled_file_stop_writer_and_retries_orig
 
     monkeypatch.setattr(inspect.getmodule(main.BackendLifespan), "timeout", backend_deadline, raising=False)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     entered, release, settled = Event(), Event(), Event()
     waiters = []
     try:
@@ -368,7 +370,8 @@ async def test_catalog_transaction_wait_keeps_diagnostics_and_original_close_own
     token = secrets.token_hex(32)
     monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     begin, entered, release, settled = Event(), Event(), Event(), Event()
     failures: list[BaseException] = []
     attempts: list[SessionCatalogStore] = []
@@ -485,7 +488,8 @@ async def test_file_store_transaction_wait_keeps_peer_and_diagnostics_responsive
     token = secrets.token_hex(32)
     monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     begin, entered, release, settled = Event(), Event(), Event(), Event()
     failures: list[BaseException] = []
     attempts: list[WorkspaceFileStore] = []

@@ -23,9 +23,9 @@ from configs.runtime import merge_json_objects
 class ConfigAgentToolsMixin:
     if TYPE_CHECKING:
         _mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None
-        _mcp_configuration_guard: Callable[[object], AbstractContextManager[None]]
+        _mcp_configuration_guard: Callable[[object, object], AbstractContextManager[None]]
 
-    def set_mcp_configuration_guard(self, guard: Callable[[object], AbstractContextManager[None]]) -> None:
+    def set_mcp_configuration_guard(self, guard: Callable[[object, object], AbstractContextManager[None]]) -> None:
         """来源 writer 复用原 MCP owner 的版本切换准入，不持有第二份连接状态。"""
         self._mcp_configuration_guard = guard
 

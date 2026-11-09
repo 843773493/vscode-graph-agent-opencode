@@ -268,9 +268,11 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         )
         workspace_sources_url = f"http://127.0.0.1:{port}/api/v1/config/sources"
         workspace_events_url = f"http://127.0.0.1:{port}/api/v1/config/events"
-        initial_config = _get_json(
+        initial_config = _wait_for_json(
             workspace_config_url,
             token,
+            process,
+            lambda payload: payload.get("code") == 0,
             cookie=guest_cookie,
         )
         initial_config_data = initial_config.get("data")

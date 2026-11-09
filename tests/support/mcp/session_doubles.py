@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.config import McpServerConfig
-from app.services.infrastructure.mcp.session_runtime import McpSessionLifecycle
 
 
 class EchoToolInput(BaseModel):
@@ -69,7 +68,6 @@ class FakeMcpSessionFactory:
         self,
         server: McpServerConfig,
         on_tools_list_changed: Callable[[], None],
-        lifecycle: McpSessionLifecycle,
     ) -> AbstractAsyncContextManager[FakeMcpSession]:
         session = FakeMcpSession(
             tool_names=list(self._initial_tools.get(server.server_id, [])),

@@ -104,6 +104,12 @@ def test_changed_json_paths_uses_declared_array_identity_or_array_root():
     }
 
 
+def test_changed_json_paths_escapes_slashes_and_tildes_in_member_names():
+    previous = {"values": {"ROOT/~": "before"}}
+    current = {"values": {"ROOT/~": "after"}}
+    assert changed_json_paths(previous, current) == ("/values/ROOT~1~0",)
+
+
 def test_config_policy_rejects_duplicate_patterns():
     with pytest.raises(ValueError, match="重复登记"):
         ConfigPolicyRegistry(
@@ -144,8 +150,9 @@ def test_single_level_policy_does_not_admit_unknown_server_fields():
 
 
 @pytest.mark.parametrize("field", [
-    "enabled", "transport", "command", "args", "env", "cwd", "url", "headers",
-    "env/ROOT~1~0", "headers/Authorization",
+    "enabled", "transport", "service", "service/gateway_id", "service/workspace_id",
+    "service/package_id", "service/package_version", "service/plugin_id", "service/service_id",
+    "url", "headers", "headers/Authorization",
 ])
 def test_supported_mcp_connection_changes_use_declared_hot_policy(field):
     path = f"/mcp/servers/alpha/{field}"
@@ -156,8 +163,7 @@ def test_supported_mcp_connection_changes_use_declared_hot_policy(field):
 
 @pytest.mark.parametrize("path", [
     "/mcp/servers/alpha/unknown", "/mcp/servers/alpha/auth",
-    "/mcp/servers/alpha/url/nested", "/mcp/servers/alpha/env/ROOT/nested",
-    "/mcp/supervision/sealed_call_timeout_seconds",
+    "/mcp/servers/alpha/url/nested", "/mcp/servers/alpha/transport/nested",
 ])
 def test_unverified_mcp_paths_keep_restart_classification(path):
     registry = workspace_config_policy()
@@ -166,9 +172,14 @@ def test_unverified_mcp_paths_keep_restart_classification(path):
     assert registry.activation_scope_for(("/mcp/servers/alpha/url", path)) == "restart_workspace"
 
 
+def test_mcp_supervision_timeout_is_declared_restart_configuration():
+    decision, = workspace_config_policy().classify(("/mcp/supervision/sealed_call_timeout_seconds",))
+    assert decision.policy == "restart_workspace" and not decision.policy_missing
+
+
 def test_mcp_server_add_remove_uses_the_real_diff_without_recursive_admission():
-    before = {"mcp": {"servers": {"alpha": {"transport": "stdio", "command": "old"}}}}
-    after = {"mcp": {"servers": {"beta": {"transport": "stdio", "command": "new"}}}}
+    before = {"mcp": {"servers": {"alpha": {"transport": "streamable_http", "url": "https://old.example/mcp"}}}}
+    after = {"mcp": {"servers": {"beta": {"transport": "streamable_http", "url": "https://new.example/mcp"}}}}
     paths = changed_json_paths(before, after)
     assert paths == ("/mcp/servers/alpha", "/mcp/servers/beta")
     assert workspace_config_policy().restart_paths(paths) == ()

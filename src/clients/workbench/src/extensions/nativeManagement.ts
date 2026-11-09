@@ -24,7 +24,6 @@ import { extensionManagementTarget, managementGateway, onDidChangeExtensionManag
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { currentExtensionPackageUri, nativeInventoryDescriptions, type NativeExtensionTarget } from './nativeInventory.js';
-import { invalidateMcpProviderInstallations } from '../mcp/providerBridge.js';
 
 type TargetOptions = InstallOptions & { readonly nativeTarget?: ReturnType<typeof managementGateway>; readonly nativeProfileId?: string };
 const targetKey = (target: NativeExtensionTarget) => JSON.stringify([installationTargetKey(target), target.gatewayConnectionId]);
@@ -119,7 +118,6 @@ export class WebExtensionManagementService extends AbstractExtensionManagementSe
 
   private acceptInventory(value: ExtensionInstallationInventoryDTO, target: NativeExtensionTarget): ILocalExtension[] {
     const descriptions = nativeInventoryDescriptions(value, target);
-    invalidateMcpProviderInstallations(target.gatewayId, target.backendId, new Set(descriptions.map(item => item.extensionKey!)));
     const locals = descriptions.map((description, index) => {
       const entry = value.inventory!.extensions[index], metadata = entry.metadata as Metadata;
       const original = toExtension(description), location = currentExtensionPackageUri(target, description.installationProfileId!, description.extensionKey!, description.identifier.value);

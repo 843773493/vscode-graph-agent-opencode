@@ -8,7 +8,6 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
 import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
-import { listMcpInstallationTargets } from '../../web/src/api/mcpConnections.js';
 import type { ExtensionTargetListDTO, ExtensionConfigurationTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -61,8 +60,7 @@ function updateMcpTitle(): void {
   mcpTitle.value = MenuRegistry.appendMenuItem(MenuId.ViewTitle, {
     command: { id: selectMcpManagementTargetCommand, title: `目标：${target?.name ?? '本地'}`,
       tooltip: target ? `${target.gateway_id}${target.backend_id ? ` · ${target.backend_id}` : ''}` : '选择 MCP 管理目标' },
-    when: ContextKeyExpr.or(...['boxteam.mcp.view', 'workbench.views.mcp.installed', 'workbench.views.mcp.marketplace']
-      .map(view => ContextKeyExpr.equals('view', view))), group: 'navigation', order: 0,
+    when: ContextKeyExpr.equals('view', 'boxteam.mcp.view'), group: 'navigation', order: 0,
   });
 }
 updateExtensionTitle();
@@ -159,27 +157,6 @@ export async function extensionManagementTarget(target: ManagementTarget, signal
   return resolved;
 }
 
-async function mcpDomains(target: ManagementTarget, signal: AbortSignal) {
-  const domains = await listMcpInstallationTargets(0, target, signal);
-  signal.throwIfAborted();
-  if (!domains.length) throw new Error('所选 Gateway 没有可用的 MCP 安装域，请显式启动目标安装服务');
-  return domains;
-}
-
-/** 安装目标独立于工作区焦点；默认单域直接使用，多域只由标题动作明确选择。 */
-export async function mcpManagementTarget(target: ManagementTarget, signal: AbortSignal): Promise<ManagementTarget & { backend_id: string }> {
-  if (target.backend_id) return { ...target, backend_id: target.backend_id };
-  const previous = selections.get('mcp'), entryGatewayId = workspaceContext.getSnapshot().gatewayId!;
-  const domains = await mcpDomains(target, signal);
-  if (domains.length !== 1) throw new Error('当前 Gateway 有多个安装域，请从 MCP 视图标题工具栏选择安装域');
-  const resolved = { ...target, backend_id: domains[0].backend_id };
-  if (selections.get('mcp') === previous && workspaceContext.getSnapshot().gatewayId === entryGatewayId) {
-    selections.set('mcp', { entryGatewayId, target: resolved });
-    updateMcpTitle();
-  }
-  return resolved;
-}
-
 for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(class extends Action2 {
   constructor() {
     super({ id: scope === 'extensions' ? selectExtensionManagementTargetCommand : scope === 'mcp' ? selectMcpManagementTargetCommand : selectSettingsManagementTargetCommand,
@@ -210,15 +187,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
       controller.signal.throwIfAborted();
       if (!picked) return;
       let target: ManagementTarget = { ...picked.target, gateway_connection_id: picked.target.gateway_connection_id ?? undefined };
-      if (scope === 'mcp') {
-        const domains = await mcpDomains(target, controller.signal);
-        const domain = domains.length === 1 ? domains[0] : (await quickInput.pick(domains.map(domain => ({
-          label: domain.backend_id, description: target.name, target: domain,
-        })), { title: `选择 MCP 安装域 · ${target.name}`, placeHolder: '该选择用于后续制品安装、查询和卸载' }, cancellation.token))?.target;
-        controller.signal.throwIfAborted();
-        if (!domain) return;
-        target = { ...target, backend_id: domain.backend_id };
-      } else if (scope === 'settings') {
+      if (scope === 'settings') {
         const directory = await gateway.request<ExtensionConfigurationTargetListDTO>('/api/gateway/extension-configurations/targets', {
           method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
             gateway_connection_id: target.gateway_connection_id }), signal: controller.signal,

@@ -1,14 +1,15 @@
 import { join } from 'node:path';
-import { mcpGallerySourcePaths, transformMcpGallery } from './mcpGalleryTransform.mjs';
+import { mcpWorkbenchViewSourcePaths, transformMcpWorkbenchView } from './mcpWorkbenchViewTransform.mjs';
 
 export const mcpSourcePaths = [
+  'src/vs/workbench/api/common/extHost.api.impl.ts',
   'src/vs/workbench/contrib/mcp/browser/mcp.contribution.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpCommands.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpServerActions.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpServerEditor.ts',
-  'src/vs/workbench/contrib/mcp/browser/mcpServersView.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpWorkbenchService.ts',
-  ...mcpGallerySourcePaths,
+  'src/vs/workbench/contrib/extensions/browser/extensionsViewlet.ts',
+  ...mcpWorkbenchViewSourcePaths,
 ];
 
 function replaceSection(source, from, to, replacement, replaceOnce) {
@@ -23,6 +24,11 @@ export function transformMcp(root, path, source, replaceOnce) {
   if (!relative) return source;
   const serverImport = `import { WorkspaceMcpServer } from ${JSON.stringify(join(root, 'src/mcp/server.js'))};\n`;
   let contents = source;
+  if (relative.endsWith('/api/common/extHost.api.impl.ts')) {
+    contents = replaceOnce(contents,
+      '\t\t\tregisterMcpServerDefinitionProvider(id, provider) {\n\t\t\t\treturn extHostMcp.registerMcpConfigurationProvider(extension, id, provider);\n\t\t\t},',
+      '\t\t\tregisterMcpServerDefinitionProvider(id, _provider) {\n\t\t\t\tthrow new Error(`MCP Provider "${id}" 已停用，请通过目标插件包管理器配置服务`);\n\t\t\t},');
+  }
   if (relative.endsWith('/mcp.contribution.ts')) {
     contents = replaceOnce(contents, "import { McpService } from '../common/mcpService.js';", `import { WorkspaceMcpService, WorkspaceMcpWorkbenchService } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};`);
     contents = replaceOnce(contents, "import { MCPContextsInitialisation, McpWorkbenchService } from './mcpWorkbenchService.js';", "import { MCPContextsInitialisation } from './mcpWorkbenchService.js';");
@@ -79,7 +85,7 @@ export function transformMcp(root, path, source, replaceOnce) {
     // 项目 MCP 不依赖原 Chat setup；旧文件菜单尚无精确 writer，不提供换来源的假动作。
     contents = replaceOnce(contents, originalAdd, `export class AddConfigurationAction extends Action2 {
   constructor() { super({ id: McpCommandIds.AddConfiguration, title: localize2('mcp.addConfiguration', 'Add Server...'), category, f1: true,
-    metadata: { description: localize2('mcp.addConfiguration.description', 'Adds a manual stdio or Streamable HTTP server to the selected workspace configuration') } }); }
+    metadata: { description: localize2('mcp.addConfiguration.description', 'Adds a plugin service or external HTTP server to the selected workspace configuration') } }); }
   override run(accessor: ServicesAccessor, configUri?: URI | string): Promise<void> { return addWorkspaceMcpConfiguration(accessor, configUri); }
 }
 
@@ -255,5 +261,5 @@ this._register(this.mcpWorkbenchService.onReset(() => {
     // Context key 复用唯一 owner 已处理真实错误的初次读取，避免另起查询留下未处理拒绝。
     contents = replaceOnce(contents, 'mcpWorkbenchService.queryLocal().finally(() => {', 'mcpWorkbenchService.whenInitialLocalMcpServersLoaded.then(() => {');
   }
-  return transformMcpGallery(relative, contents, replaceOnce, replaceSection);
+  return transformMcpWorkbenchView(relative, contents, replaceOnce, replaceSection);
 }

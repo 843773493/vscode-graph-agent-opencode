@@ -51,6 +51,7 @@ from app.schemas.gateway.service_plugin import (
     WorkspacePluginConfigurationDTO,
 )
 from app.schemas.gateway.service_plugin_workspace import (
+    WorkspacePluginCandidateApply,
     WorkspacePluginCreation,
     WorkspacePluginValidation,
 )
@@ -85,9 +86,18 @@ async def workspace_parameter_schemas(workspace_id: CanonicalWorkspaceId, bindin
 
 @router.post("/api/internal/service-plugins/workspaces/{workspace_id}/refresh", include_in_schema=False,
     dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
-async def refresh_workspace(workspace_id: CanonicalWorkspaceId, request: Request) -> APIResponse[WorkspacePluginConfigurationDTO]:
+async def refresh_workspace(workspace_id: CanonicalWorkspaceId, request: Request,
+    wait_for_ready: bool = False,
+) -> APIResponse[WorkspacePluginConfigurationDTO]:
     try:
-        state = request.app.state.workspace_plugin_bindings.request_refresh(workspace_id)
+        if wait_for_ready:
+            state = await request.app.state.workspace_plugin_bindings.refresh_startup(
+                workspace_id, request.headers.get("X-BoxTeam-Backend-Generation", ""),
+            )
+            if state.state != "ready":
+                raise ValueError(state.error or "Workspace 插件启动交接未就绪")
+        else:
+            state = request.app.state.workspace_plugin_bindings.request_refresh(workspace_id)
     except (ValueError, LookupError) as error:
         raise HTTPException(409, str(error)) from error
     return APIResponse(data=state, request_id=get_request_id(request))
@@ -114,6 +124,38 @@ async def validate_workspace_bindings(workspace_id: CanonicalWorkspaceId, candid
     except (ValueError, LookupError, FileNotFoundError) as error:
         raise HTTPException(409, str(error)) from error
     return APIResponse(data=True, request_id=get_request_id(request))
+
+
+@router.post("/api/internal/service-plugins/workspaces/{workspace_id}/apply-candidate", include_in_schema=False,
+    dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
+async def apply_workspace_candidate(workspace_id: CanonicalWorkspaceId, candidate: WorkspacePluginCandidateApply,
+    request: Request,
+) -> APIResponse[PluginSlotStatusDTO]:
+    try:
+        if candidate.binding.workspace_id != workspace_id:
+            raise ValueError("插件参数候选必须属于认证交付的原生工作区")
+        bindings = candidate.bindings
+        if (len({(item.package_id, item.plugin_id) for item in bindings}) != len(bindings)
+                or any(item.workspace_id != workspace_id for item in bindings)):
+            raise ValueError("插件候选绑定必须唯一且属于认证工作区")
+        request.app.state.service_plugins.validate_bindings(
+            bindings, workspace_id=workspace_id, parameters=candidate.parameters,
+            delivered=candidate.delivery.values.get_secret_value(),
+        )
+        parameters = candidate.parameters.get(candidate.binding.package_id, {}).get(candidate.binding.plugin_id, {})
+        delivered_parameters = candidate.delivery.values.get_secret_value().get(
+            candidate.binding.package_id, {}
+        ).get(candidate.binding.plugin_id, {})
+        result = await request.app.state.workspace_plugin_bindings.apply_candidate(
+            binding=candidate.binding, candidate_revision=candidate.candidate_revision,
+            expected_revision=candidate.expected_revision, expected_binding=candidate.expected_binding,
+            bindings=bindings, parameters=parameters, delivered_parameters=delivered_parameters,
+        )
+        if result["state"] != "ready":
+            raise RuntimeError("插件参数候选未启动就绪；原 apply journal 保留实际失败")
+    except (ValueError, LookupError, RuntimeError, FileNotFoundError) as error:
+        raise HTTPException(409, str(error)) from error
+    return APIResponse(data=PluginSlotStatusDTO.model_validate(result), request_id=get_request_id(request))
 
 
 def plugin_owner(request: Request) -> GatewayPluginRuntime:
@@ -366,19 +408,35 @@ async def restart(payload: RestartPluginRequest, request: Request,
             async with request.app.state.registry.backend_topology_lock:
                 coordinator = request.app.state.workspace_plugin_bindings
                 target = request.app.state.registry.resolve((payload.gateway_id, payload.workspace_id))
+                slot = owner.slots.get(owner.key(binding))
+                if slot is None or payload.revision != slot.revision or slot.binding != binding:
+                    raise ValueError("插件实例 revision 已变化，拒绝重启")
                 snapshot = await coordinator.read(target)
-                if payload.revision != snapshot.revision or binding not in snapshot.bindings:
-                    raise ValueError("工作区原配置已停用或版本／revision 已变化，拒绝重启")
+                key = (binding.package_id, binding.plugin_id, binding.workspace_id)
+                current_binding = next((item for item in snapshot.bindings if (
+                    item.package_id, item.plugin_id, item.workspace_id,
+                ) == key), None)
+                if (current_binding is None or not current_binding.enabled
+                        or (current_binding.package_id, current_binding.plugin_id,
+                            current_binding.package_version, current_binding.workspace_id)
+                        != (binding.package_id, binding.plugin_id, binding.package_version, binding.workspace_id)):
+                    raise ValueError("插件实例 revision 已变化或 Workspace 原配置绑定已停用，拒绝重启")
                 require_federation_capability(request, auth, "service_plugin_runtime_manage")
-                result = await owner.apply_binding(binding, revision=payload.revision, restart=True,
+                result = await owner.apply_binding(current_binding, revision=snapshot.revision, restart=True,
                     parameters=snapshot.parameters.get(binding.package_id, {}).get(binding.plugin_id, {}))
             return APIResponse(data=PluginSlotStatusDTO.model_validate(result), request_id=get_request_id(request))
         async with request.app.state.gateway_config_reload.mutation_guard():
             require_federation_capability(request, auth, "service_plugin_runtime_manage")
             config = request.app.state.gateway_config_reload.config
-            if payload.revision != config.revision or binding not in gateway_plugin_bindings(config.payload):
+            slot = owner.slots.get(owner.key(binding))
+            current_bindings = gateway_plugin_bindings(config.payload)
+            current_binding = next((item for item in current_bindings if (
+                item.package_id, item.plugin_id, item.workspace_id,
+            ) == (binding.package_id, binding.plugin_id, binding.workspace_id)), None)
+            if (slot is None or slot.revision != payload.revision or slot.binding != binding
+                    or current_binding != binding):
                 raise ValueError("原配置绑定已停用或版本／revision 已变化，拒绝重启")
-            result = await owner.apply_binding(binding, revision=payload.revision, restart=True,
+            result = await owner.apply_binding(binding, revision=config.revision, restart=True,
                 parameters=plugin_parameters(config.payload).get(binding.package_id, {}).get(binding.plugin_id, {}))
     except (ValueError, LookupError) as error:
         raise HTTPException(409, str(error)) from error

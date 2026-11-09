@@ -13,7 +13,7 @@ import {
 import { WorkspaceMcpCatalog, pendingMcpOperation } from './catalog.js';
 
 const statusLabels: Readonly<Record<string, string>> = {
-  ready: '连接可用', disabled: '配置已禁用', failed: '原连接不可用', authorization_required: '需要授权', unavailable: '原 Provider 不可用',
+  ready: '连接可用', disabled: '配置已禁用', failed: '原连接不可用', authorization_required: '需要授权', unavailable: '原服务不可用',
   pending: '已排队', waiting_user: '等待用户授权', verifying: '正在验证连接与目录',
   succeeded: '操作已完成', expired: '已过期', cancelled: '已取消',
 };
@@ -116,12 +116,11 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     if (snapshot.actionError) line('管理请求错误', snapshot.actionError);
     if (snapshot.catalog) { line('目录 revision', snapshot.catalog.catalog_revision); line('目录 generation', String(snapshot.catalog.catalog_generation)); }
     if (this.data?.connection_ref) line('连接', this.data.connection_ref);
-    if (this.data?.provider_definition) {
-      const source = this.data.provider_definition;
-      line('扩展来源', `${source.extension_id} · ${source.extension_key}`);
-      line('Provider', `${source.collection_id} · ${source.provider_ref}`);
-      line('原定义', source.definition_ref);
-      line('宿主代际', `${source.host_kind} · ${source.host_generation}`);
+    if (this.data?.service) {
+      const source = this.data.service;
+      line('插件服务', `${source.package_id}@${source.package_version} · ${source.plugin_id} · ${source.service_id}`);
+      line('Gateway', source.gateway_id);
+      line('工作区', source.workspace_id);
     }
     if (this.data?.unavailable_reason) line('来源不可用', this.data.unavailable_reason);
     if (this.operation) {
@@ -132,7 +131,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     }
     document.appendMarkdown('### 目标工具摘要\n\n');
     for (const tool of this.data?.tools ?? []) line(tool.remote_name, tool.description);
-    document.appendText('工具执行仍使用此工作区的 Agent MCP owner；新工具在允许的上下文边界生效。制品按安装域独立管理，已有动态命令不表示已安装制品。');
+    document.appendText('工具执行仍使用此工作区的 Agent MCP owner；新工具在允许的上下文边界生效。插件服务由原安装域管理，连接及工具目录由工作区 owner 管理。');
     return document.value;
   }
   dispose(): void { /* 对象只是后端镜像；关闭详情不关闭目标连接。 */ }

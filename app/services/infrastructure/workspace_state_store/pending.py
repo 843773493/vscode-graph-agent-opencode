@@ -5,6 +5,7 @@ WorkspaceStateStorePendingMixin 只承载本族方法，由 WorkspaceStateStore 
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
@@ -173,7 +174,7 @@ class WorkspaceStateStorePendingMixin:
     ) -> ConfigPendingCandidateRecord:
         if state != "candidate_validated":
             validate_state_transition("none", state)
-        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
+        with closing(cast("WorkspaceStateStore", self)._database.connection()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
@@ -399,7 +400,7 @@ class WorkspaceStateStorePendingMixin:
     ) -> ConfigPendingCandidateRecord:
         """原来源 intent 绑定导入结果；尚未取得 claim 时才能推进同一候选行。"""
         store = cast("WorkspaceStateStore", self)
-        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
+        with closing(cast("WorkspaceStateStore", self)._database.connection()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT state, source_edit_json FROM config_pending_candidate WHERE config_domain=? AND candidate_id=?",

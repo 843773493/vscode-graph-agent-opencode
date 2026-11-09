@@ -12,7 +12,7 @@ from lark import Token, Tree
 from pydantic import ValidationError
 
 from app.core.config_sources import StableConfigFile, parse_stable_config_file
-from app.schemas.internal_v2.mcp import McpPrivateEnvRefDTO, McpPrivateHeaderRefDTO
+from app.schemas.internal_v2.mcp import McpPrivateHeaderRefDTO
 from app.services.infrastructure.config.state import redact_config_payload
 
 _MASK_PREFIX = "boxteam-redacted:"
@@ -103,10 +103,9 @@ def _secret(path: tuple[str, ...], value: str) -> bool:
 
 def redact_source_payload(value: object, path: tuple[str, ...] = ()) -> object:
     if isinstance(value, dict):
-        if len(path) == 5 and path[:2] == ("mcp", "servers") and path[3] in {"env", "headers"}:
+        if len(path) == 5 and path[:2] == ("mcp", "servers") and path[3] == "headers":
             try:
-                model = McpPrivateEnvRefDTO if path[3] == "env" else McpPrivateHeaderRefDTO
-                reference = model.model_validate(value)
+                reference = McpPrivateHeaderRefDTO.model_validate(value)
             except ValidationError:
                 pass  # 非引用对象继续逐叶脱敏，不能借对象外形公开任意秘密。
             else:

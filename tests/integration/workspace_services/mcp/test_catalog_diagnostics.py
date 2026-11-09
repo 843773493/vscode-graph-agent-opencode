@@ -1,15 +1,35 @@
-"""真实后端 HTTP 与本地 stdio MCP 协议失败；不替换目录 owner。"""
+"""真实后端 HTTP 与 Streamable HTTP MCP 协议失败；不替换目录 owner。"""
 
 from __future__ import annotations
 
+import asyncio
 import json
-import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
 import pytest
+from mcp import types
+from mcp.shared.exceptions import McpError
 
 from tests.support.mcp.configuration import write_mcp_config
+from tests.support.mcp.http_endpoint import HttpSchemaEndpoint
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+    workspace_backend_id_for_root,
+)
+
+
+@pytest.fixture(autouse=True)
+def use_test_gateway_home(
+    integration_workspace_root_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boxteam_home = (
+        Path(integration_workspace_root_path).resolve().parent / "boxteam-home"
+    )
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
 
 
 @pytest.fixture(scope="module")
@@ -19,53 +39,125 @@ def catalog_artifacts(integration_workspace_root_path: str) -> Path:
     return artifacts
 
 
-@pytest.fixture(scope="module")
-def integration_config_path(integration_workspace_root_path: str, catalog_artifacts: Path) -> str:
-    project = Path.cwd()
-    return write_mcp_config(
-        workspace_root=Path(integration_workspace_root_path),
-        servers={"mini": {
-            "enabled": True, "transport": "stdio", "command": sys.executable,
-            "args": [
-                str(project / "tests/integration/workspace_services/mcp/catalog_failure_server.py"),
-                str(catalog_artifacts / "failure.json"),
-                str(catalog_artifacts / "protocol.jsonl"),
-            ],
-            "cwd": str(project),
-        }},
-        allowed_mcp_tools=["mcp__mini__echo"],
-    )
+@pytest.fixture
+async def catalog_case(
+    integration_workspace_root_path: str,
+    integration_workspace_config_path: str,
+    integration_backend_port: int,
+    catalog_artifacts: Path,
+    http_schema_endpoint_factory,
+    mcp_gateway_config,
+) -> AsyncIterator[tuple[httpx.AsyncClient, HttpSchemaEndpoint, Path, Path]]:
+    workspace_root = Path(integration_workspace_root_path)
+    failure_path = catalog_artifacts / "failure.json"
+    protocol_path = catalog_artifacts / "protocol.jsonl"
+    failure_path.unlink(missing_ok=True)
+    protocol_path.unlink(missing_ok=True)
+
+    def observe_tool_list() -> None:
+        failure = (
+            json.loads(failure_path.read_text(encoding="utf-8"))
+            if failure_path.exists()
+            else None
+        )
+        with protocol_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps({"method": "tools/list", "failure": failure}) + "\n"
+            )
+        if failure is not None:
+            raise McpError(
+                types.ErrorData(
+                    code=-32603,
+                    message=failure["message"],
+                    data={"path": failure["path"]},
+                )
+            )
+
+    async with http_schema_endpoint_factory(
+        "catalog",
+        tool_definitions={"echo": {"type": "object", "properties": {}}},
+        list_tools_observer=observe_tool_list,
+    ) as endpoint:
+        generated_config = Path(
+            write_mcp_config(
+                workspace_root=workspace_root,
+                servers={
+                    "mini": {
+                        "enabled": True,
+                        "transport": "streamable_http",
+                        "url": endpoint.url,
+                    }
+                },
+                allowed_mcp_tools=["mcp__mini__echo"],
+            )
+        )
+        workspace_config = Path(integration_workspace_config_path)
+        workspace_config.write_text(
+            generated_config.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        backend = await asyncio.to_thread(
+            start_backend_process,
+            workspace_root=integration_workspace_root_path,
+            port=integration_backend_port,
+            log_name="integration-backend",
+            boxteam_home=workspace_root.resolve().parent / "boxteam-home",
+            env_overrides={
+                "BOXTEAM_GATEWAY_URL": mcp_gateway_config.get_gateway_connection_url(),
+            },
+        )
+        try:
+            async with httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{integration_backend_port}",
+                timeout=60,
+                headers={
+                    "X-Local-Token": "local-dev-token",
+                    "X-BoxTeam-Workspace-Id": workspace_backend_id_for_root(
+                        integration_workspace_root_path
+                    ),
+                },
+            ) as client:
+                yield client, endpoint, failure_path, protocol_path
+        finally:
+            await asyncio.to_thread(close_backend_process, backend)
 
 
-async def test_stdio_catalog_errors_are_facts_and_http_recovers(
-    integration_client: httpx.AsyncClient, catalog_artifacts: Path,
+async def test_streamable_http_catalog_errors_are_facts_and_http_recovers(
+    catalog_case: tuple[httpx.AsyncClient, HttpSchemaEndpoint, Path, Path],
+    catalog_artifacts: Path,
     integration_workspace_root_path: str,
 ) -> None:
+    integration_client, _endpoint, failure_path, protocol_path = catalog_case
     before = await integration_client.get("/api/v1/mcp/servers")
     assert before.status_code == 200
     original = before.json()["data"]
     assert original[0]["server_id"] == "mini"
     assert original[0]["tools"][0]["tool_id"] == "mcp__mini__echo"
     evidence: list[dict[str, object]] = []
-    failure_path = catalog_artifacts / "failure.json"
-    protocol_path = catalog_artifacts / "protocol.jsonl"
     protocol_before = protocol_path.read_bytes()
     for _ in range(3):
-        passive = await integration_client.get("/api/v1/mcp/servers", params={"refresh": "false"})
+        passive = await integration_client.get(
+            "/api/v1/mcp/servers", params={"refresh": "false"}
+        )
         assert passive.status_code == 200
         assert passive.json()["data"] == original
         assert passive.json()["catalog_revision"] == before.json()["catalog_revision"]
-        assert passive.json()["catalog_generation"] == before.json()["catalog_generation"]
+        assert (
+            passive.json()["catalog_generation"] == before.json()["catalog_generation"]
+        )
         assert passive.headers["x-request-id"] == passive.json()["request_id"]
         assert protocol_path.read_bytes() == protocol_before
     native_paths = [
-        "/private/mcp/catalog.json", r"C:\private\mcp\catalog.json",
-        r"\\server\private\mcp\catalog.json", r"\\?\UNC\server\private\mcp\catalog.json",
+        "/private/mcp/catalog.json",
+        r"C:\private\mcp\catalog.json",
+        r"\\server\private\mcp\catalog.json",
+        r"\\?\UNC\server\private\mcp\catalog.json",
     ]
     try:
         for native_path in native_paths:
             message = f"private protocol failure: {native_path}"
-            failure_path.write_text(json.dumps({"message": message, "path": native_path}), encoding="utf-8")
+            failure_path.write_text(
+                json.dumps({"message": message, "path": native_path}), encoding="utf-8"
+            )
             previous_lists = len(protocol_path.read_text().splitlines())
             response = await integration_client.get("/api/v1/mcp/servers")
             evidence.append({"status": response.status_code, "body": response.json()})
@@ -77,44 +169,88 @@ async def test_stdio_catalog_errors_are_facts_and_http_recovers(
             assert "rpc_code=-32603" in public_error
             assert "private" not in response.text
             assert response.headers["x-request-id"] == response.json()["request_id"]
-            protocol = [json.loads(line) for line in protocol_path.read_text().splitlines()]
+            protocol = [
+                json.loads(line) for line in protocol_path.read_text().splitlines()
+            ]
             assert len(protocol) == previous_lists + 1
-            assert protocol[-1] == {"method": "tools/list", "failure": {"message": message, "path": native_path}}
+            assert protocol[-1] == {
+                "method": "tools/list",
+                "failure": {"message": message, "path": native_path},
+            }
             protocol_before = protocol_path.read_bytes()
             for _ in range(2):
-                passive = await integration_client.get("/api/v1/mcp/servers", params={"refresh": "false"})
-                evidence.append({"phase": "passive-unavailable", "status": passive.status_code, "body": passive.json()})
+                passive = await integration_client.get(
+                    "/api/v1/mcp/servers", params={"refresh": "false"}
+                )
+                evidence.append(
+                    {
+                        "phase": "passive-unavailable",
+                        "status": passive.status_code,
+                        "body": passive.json(),
+                    }
+                )
                 assert passive.status_code == 503
                 assert passive.json()["detail"] == public_error
                 assert "private" not in passive.text
                 assert passive.headers["x-request-id"] == passive.json()["request_id"]
                 assert protocol_path.read_bytes() == protocol_before
             log_root = Path(integration_workspace_root_path) / ".boxteam/logs"
-            logs = "\n".join(path.read_text(encoding="utf-8") for path in log_root.glob("integration-backend.*.log"))
+            logs = "\n".join(
+                path.read_text(encoding="utf-8")
+                for path in log_root.glob("integration-backend.*.log")
+            )
             assert message in logs
             failure_path.unlink()
-            passive = await integration_client.get("/api/v1/mcp/servers", params={"refresh": "false"})
-            evidence.append({"phase": "passive-before-recovery", "status": passive.status_code, "body": passive.json()})
+            passive = await integration_client.get(
+                "/api/v1/mcp/servers", params={"refresh": "false"}
+            )
+            evidence.append(
+                {
+                    "phase": "passive-before-recovery",
+                    "status": passive.status_code,
+                    "body": passive.json(),
+                }
+            )
             assert passive.status_code == 503
             assert passive.json()["detail"] == public_error
             assert passive.headers["x-request-id"] == passive.json()["request_id"]
             assert protocol_path.read_bytes() == protocol_before
-            recovered = await integration_client.get("/api/v1/mcp/servers", params={"refresh": "true"})
-            evidence.append({"phase": "active-recovery", "status": recovered.status_code, "body": recovered.json()})
+            recovered = await integration_client.get(
+                "/api/v1/mcp/servers", params={"refresh": "true"}
+            )
+            evidence.append(
+                {
+                    "phase": "active-recovery",
+                    "status": recovered.status_code,
+                    "body": recovered.json(),
+                }
+            )
             assert recovered.status_code == 200
             assert recovered.json()["data"] == original
             assert recovered.headers["x-request-id"] == recovered.json()["request_id"]
-            protocol = [json.loads(line) for line in protocol_path.read_text().splitlines()]
+            protocol = [
+                json.loads(line) for line in protocol_path.read_text().splitlines()
+            ]
             assert len(protocol) == previous_lists + 2
             assert protocol[-1] == {"method": "tools/list", "failure": None}
             protocol_before = protocol_path.read_bytes()
-            passive = await integration_client.get("/api/v1/mcp/servers", params={"refresh": "false"})
+            passive = await integration_client.get(
+                "/api/v1/mcp/servers", params={"refresh": "false"}
+            )
             assert passive.status_code == 200
             assert passive.json()["data"] == original
-            assert passive.json()["catalog_revision"] == recovered.json()["catalog_revision"]
-            assert passive.json()["catalog_generation"] == recovered.json()["catalog_generation"]
+            assert (
+                passive.json()["catalog_revision"]
+                == recovered.json()["catalog_revision"]
+            )
+            assert (
+                passive.json()["catalog_generation"]
+                == recovered.json()["catalog_generation"]
+            )
             assert passive.headers["x-request-id"] == passive.json()["request_id"]
             assert protocol_path.read_bytes() == protocol_before
     finally:
         failure_path.unlink(missing_ok=True)
-        (catalog_artifacts / "http-failures.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+        (catalog_artifacts / "http-failures.json").write_text(
+            json.dumps(evidence, indent=2), encoding="utf-8"
+        )

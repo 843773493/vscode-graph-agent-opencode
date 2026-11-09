@@ -16,7 +16,7 @@ from tests.integration.backend.sessions.test_mcp_config_recovery import (
 from tests.integration.workspace_services.mcp.oauth_server import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 复用唯一 HTTP OAuth 资产
 )
-from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
+from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用原 MCP handler
 )
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS

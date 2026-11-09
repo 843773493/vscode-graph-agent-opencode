@@ -10,6 +10,7 @@ from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -288,20 +289,20 @@ class RegistryRuntimeMixin:
 
         self._save(owner="system", targets=staged_targets, publish=publish)
 
-    def stop_backend_owner(self, owner: ManagedBackendOwner) -> None:
+    async def stop_backend_owner(self, owner: ManagedBackendOwner) -> None:
         for workspace_id in owner.contract.workspace_ids:
             target = self.resolve(workspace_id)
             if target.system_default or not target.removable:
                 raise PermissionError(f"默认工作区不能关闭: {target.name}")
             self._assert_route_references_drained(workspace_id)
-        owner.close()
+        await run_sync_shielded(owner.close)
         errors: list[Exception] = []
         details: list[str] = []
         for workspace_id in owner.contract.workspace_ids:
             runtime = self._runtimes.get(workspace_id)
             if runtime is not None:
                 try:
-                    runtime.close()
+                    await run_sync_shielded(runtime.close)
                 except Exception as error:  # noqa: BLE001 — 尝试全部成员，失败 runtime 留待整组 start 或关闭重试。
                     errors.append(error)
                     details.append(failure_detail(

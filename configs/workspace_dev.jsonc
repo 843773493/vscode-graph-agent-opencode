@@ -497,15 +497,6 @@
   "mcp": {
     "supervision": { "sealed_call_timeout_seconds": 1800 },
     "servers": {
-      "tui-mcp": {
-        "enabled": true,
-        "transport": "stdio",
-        "command": "npx",
-        "args": [
-          "--yes",
-          "tui-mcp"
-        ]
-      }
     }
   },
   "runtime": {

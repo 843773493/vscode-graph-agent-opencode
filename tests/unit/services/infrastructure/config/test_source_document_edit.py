@@ -18,7 +18,8 @@ from app.services.infrastructure.config.source_document import (
     '# 顶部\r\n{\r\n  "other": true, // 尾注释\r\n}\r\n',
 ])
 def test_insert_member_preserves_original_outside_new_fragment(text: str) -> None:
-    value = {"enabled": False, "args": ["escaped\\path", "\"literal"], "env": {"MODE": "value"}}
+    value = {"enabled": False, "transport": "streamable_http", "url": "https://mcp.example/server",
+             "headers": {"Authorization": "test-value"}}
     result = set_source_value(text, ("mcp", "servers", "new"), value)
     payload = parse_source_text(result)
     assert payload["mcp"] == {"servers": {"new": value}}
@@ -30,28 +31,34 @@ def test_insert_member_preserves_original_outside_new_fragment(text: str) -> Non
 
 
 def test_replace_only_exact_member_preserves_other_server_and_secret_tokens() -> None:
-    prefix = '// 保留\n{"mcp":{"servers":{"other":{"env":{"SECRET":"\\u0061"}},"target":'
+    prefix = '// 保留\n{"mcp":{"servers":{"other":{"transport":"streamable_http","url":"https://other.example/mcp","headers":{"X-Secret":"\\u0061"}},"target":'
     suffix = ',},"supervision":{}},"ui":{}}\n'
-    original = prefix + '{"args":["old"], "env":{"KEY":"old"}}' + suffix
-    expected = {"transport": "stdio", "command": "/target/python", "env": {"KEY": "${TARGET_KEY}"}}
+    original = prefix + '{"transport":"streamable_http","url":"https://mcp.example/old"}' + suffix
+    expected = {"transport": "streamable_http", "url": "https://mcp.example/target",
+                "headers": {"Authorization": "${TARGET_KEY}"}}
     result = set_source_value(original, ("mcp", "servers", "target"), expected)
     assert result.startswith(prefix) and result.endswith(suffix)
     public = redact_source_text(result)
     synthetic = set_source_value(public, ("mcp", "servers", "target"), expected)
     restored_candidate = restore_source_text(public, synthetic)
-    assert '${TARGET_KEY}' in restored_candidate and 'boxteam-redacted:/mcp/servers/other/env/SECRET' in restored_candidate
+    assert '${TARGET_KEY}' in restored_candidate and 'boxteam-redacted:/mcp/servers/other/headers/X-Secret' in restored_candidate
     assert restore_source_text(restored_candidate, original) == result
     with pytest.raises(ValueError, match="地址已改变"):
-        restore_source_text(public.replace('/target/python', '/other/python'), synthetic)
+        restore_source_text(public.replace('https://mcp.example/target', 'https://mcp.example/other'), synthetic)
 
 
 def test_replace_existing_server_keeps_crlf_and_member_indentation() -> None:
     before = '{\r\n  "mcp": {\r\n    "servers": {\r\n      "target": {},\r\n      "other": {}, // 原注释\r\n    },\r\n  },\r\n}\r\n'
-    result = set_source_value(before, ("mcp", "servers", "target"), {"enabled": False, "args": ["value"]})
+    result = set_source_value(before, ("mcp", "servers", "target"), {
+        "enabled": False, "transport": "streamable_http", "url": "https://mcp.example/target",
+    })
     assert '\n' not in result.replace('\r\n', '')
-    assert '      "target": {\r\n        "enabled": false,\r\n        "args": [\r\n          "value"\r\n        ]\r\n      },' in result
+    assert '      "target": {\r\n        "enabled": false,\r\n        "transport": "streamable_http",\r\n        "url": "https://mcp.example/target"\r\n      },' in result
     assert result.endswith('      "other": {}, // 原注释\r\n    },\r\n  },\r\n}\r\n')
-    assert parse_source_text(result)["mcp"] == {"servers": {"target": {"enabled": False, "args": ["value"]}, "other": {}}}
+    assert parse_source_text(result)["mcp"] == {"servers": {
+        "target": {"enabled": False, "transport": "streamable_http", "url": "https://mcp.example/target"},
+        "other": {},
+    }}
 
 
 @pytest.mark.parametrize("text", ['{"mcp":null}', '{"mcp":[]}', '{"mcp":{},"mcp":{}}'])

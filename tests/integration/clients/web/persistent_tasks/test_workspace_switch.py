@@ -16,9 +16,6 @@ from tests.integration.clients.web.persistent_tasks.test_management import (
     browser_runner as browser_runner,  # noqa: PLC0414 - 复用唯一浏览器入口
 )
 from tests.integration.clients.web.persistent_tasks.test_management import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414
-)
-from tests.integration.clients.web.persistent_tasks.test_management import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414
 )
 from tests.integration.clients.web.persistent_tasks.test_management import (
@@ -28,6 +25,9 @@ from tests.integration.clients.web.persistent_tasks.test_management import (
     recovery_case as recovery_case,  # noqa: PLC0414
 )
 from tests.support.api_helpers import create_session
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414
+)
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,

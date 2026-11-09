@@ -2325,7 +2325,7 @@ async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_r
     factory = FakeMcpSessionFactory(initial_tools={"mini": []})
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fake"}}},
+        raw_config={"servers": {"mini": {"enabled": True, "transport": "streamable_http", "url": "https://mini.example/mcp"}}},
         workspace_root=agent_execution_dependencies["workspace_root"],
         event_service=EventChannelService(), session_factory=factory,
     )

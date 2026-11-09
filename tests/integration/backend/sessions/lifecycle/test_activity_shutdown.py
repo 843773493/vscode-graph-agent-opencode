@@ -72,7 +72,8 @@ async def test_activity_close_wait_preserves_owner_and_dependencies(
 
     monkeypatch.setattr(McpConnectionService, "close", close_mcp)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     attempts: list[int] = []
     closing = None
     previous_pool = getattr(loop, "_default_executor")  # noqa: B009 - 测试恢复原池，公开事件循环类型未声明该属性。
@@ -185,7 +186,8 @@ async def test_activity_native_close_failure_retries_original_stage(
     mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     selected = mounted_case.containers[-1]
     backend = main.app.state.workspace_lifespan
     workspace = next(item for item in backend.workspaces if item.container is selected)
@@ -236,7 +238,8 @@ async def test_failed_periodic_prune_is_reported_and_blocks_dependency_release(
 
     monkeypatch.setattr(workspace_lifecycle.asyncio, "sleep", sleep)
     lifetime = main.lifespan(main.app)
-    await lifetime.__aenter__()
+    _main_lifespan_state = await lifetime.__aenter__()
+    await _main_lifespan_state["after_http_startup"]()
     try:
         selected = mounted_case.containers[-1]
         backend = main.app.state.workspace_lifespan

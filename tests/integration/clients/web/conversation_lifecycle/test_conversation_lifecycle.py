@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import zipfile
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from dataclasses import replace
@@ -26,6 +27,9 @@ from app.services.business.session_context_resource import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式工作台构建装具
+)
+from tests.integration.gateway.test_mcp_plugin_lifecycle import (
+    _publish as publish_mcp_plugin,
 )
 from tests.support.communication.federation import (
     CommunicationNode,
@@ -47,6 +51,36 @@ from tests.support.workspaces import (
 )
 
 SECTION8_NODE_PORT_OFFSETS = (0, 10, 40)
+MCP_PLUGIN_VERSION = "0.1.0"
+
+
+def _section8_mcp_plugin_package(path: Path, server_id: str) -> str:
+    package_root = Path.cwd() / "resources/plugins/mcp-stdio"
+    manifest = json.loads((package_root / "plugin.jsonc").read_text(encoding="utf-8"))
+    manifest["package_id"] = f"boxteam.mcp-e2e-{server_id.replace('_', '-')}"
+    manifest["name"] = f"BoxTeam MCP {server_id} test bridge"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        archive.write(package_root / "bridge.py", "bridge.py")
+    return manifest["package_id"]
+
+
+async def _wait_section8_mcp_plugins(node: CommunicationNode, package_ids: set[str]) -> None:
+    async with asyncio.timeout(60):
+        while True:
+            response = await node.client.post("/api/gateway/service-plugins/status", json={
+                "gateway_id": node.gateway_id,
+            })
+            response.raise_for_status()
+            plugins = response.json()["data"]["plugins"]
+            states = {plugin["binding"]["package_id"]: plugin["state"] for plugin in plugins
+                      if plugin["binding"].get("workspace_id") == node.workspace_id}
+            failed = {package_id: states[package_id] for package_id in package_ids
+                      if states.get(package_id) == "failed"}
+            assert not failed, f"MCP 测试插件启动失败: {failed}"
+            if all(states.get(package_id) == "ready" for package_id in package_ids):
+                return
+            await asyncio.sleep(0.1)
 
 
 @pytest.fixture(scope="module")
@@ -229,15 +263,7 @@ async def section8_product_nodes(
             config.setdefault("context", {}).setdefault("resource_activation", {}).setdefault("overrides", {}).update({
                 "team_state": "model_call", "mcp_tool_catalog": "model_call",
             })
-        node = node_context.workspace_root.parent.name
-        if node in section8_mcp_catalogs:
-            config["mcp"] = {"servers": {
-                server: {"enabled": True, "transport": "stdio", "command": sys.executable,
-                         "args": ["-m", "tests.support.e2e_control.mcp_stdio_server", "--catalog", str(path),
-                                  *(["--notifications"] if server == "notify" else [])],
-                         "cwd": str(project), "env": section8_control.environment}
-                for server, path in section8_mcp_catalogs[node].items()
-            }}
+        config["mcp"] = {"servers": {}}
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
         return workspace
 
@@ -257,6 +283,44 @@ async def section8_product_nodes(
             "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
         },
     ) as nodes:
+        for name in ("a", "c"):
+            node = nodes[name]
+            node.client.headers.update({
+                "X-BoxTeam-Target-Gateway-Id": node.gateway_id,
+                "X-BoxTeam-Gateway-Id": node.gateway_id,
+                "X-BoxTeam-Workspace-Id": node.workspace_id,
+            })
+            packages: dict[str, str] = {}
+            runtime_entries = []
+            plugin_values = {}
+            mcp_servers = {}
+            for server, catalog in section8_mcp_catalogs[name].items():
+                package_id = _section8_mcp_plugin_package(section8_runtime / f"mcp-{name}-{server}.zip", f"{name}-{server}")
+                packages[package_id] = server
+                runtime_entries.append({"package_id": package_id, "package_version": MCP_PLUGIN_VERSION,
+                                        "plugin_id": "stdio", "enabled": True})
+                plugin_values[package_id] = {"stdio": {
+                    "command": sys.executable,
+                    "args": [str(project / "tests/support/e2e_control/mcp_stdio_server.py"),
+                             "--catalog", str(catalog), *(["--notifications"] if server == "notify" else [])],
+                    "cwd": str(project), "env": section8_control.environment,
+                }}
+                package = section8_runtime / f"mcp-{name}-{server}.zip"
+                installed = await node.client.post("/api/gateway/service-plugins/install", json={
+                    "gateway_id": node.gateway_id, "path": str(package),
+                    "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
+                })
+                installed.raise_for_status()
+                mcp_servers[server] = {"enabled": True, "transport": "plugin", "service": {
+                    "gateway_id": node.gateway_id, "workspace_id": node.workspace_id,
+                    "package_id": package_id, "package_version": MCP_PLUGIN_VERSION,
+                    "plugin_id": "stdio", "service_id": "mcp",
+                }}
+            await publish_mcp_plugin(node, {"plugins": {
+                "runtime": {"entries": runtime_entries},
+                "configuration": {"values": plugin_values},
+            }, "mcp": {"servers": mcp_servers}}, f"section8-mcp-plugin-{name}")
+            await _wait_section8_mcp_plugins(node, set(packages))
         for name, node in nodes.items():
             section8_control.bind_process_control(name, node.restart_backend)
             section8_control.bind_trace_root(name, node.workspace)

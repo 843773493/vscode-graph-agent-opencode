@@ -21,7 +21,6 @@ from app.gateway.server.workspace_proxy import (
     _is_streaming_workspace_path,
     _proxy_workspace_request,
     _stream_proxy_response,
-    _wait_for_workspace_runtime,
 )
 from tests.support.gateway_managed_backends import ProcessProbe
 
@@ -473,7 +472,7 @@ async def test_message_stream_hides_initial_upstream_404_until_stream_is_created
 
 
 @pytest.mark.asyncio
-async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
+async def test_proxy_waits_for_workspace_publication_before_acquiring_route_references(
     registry: GatewayWorkspaceRegistry, managed_backend_factory,
 ) -> None:
     application = FastAPI()
@@ -488,6 +487,7 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
 
     async def restore() -> None:
         await asyncio.sleep(0.01)
+        assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
         registry.upsert(target, activate=False)
         graph.publish(registry)
 
@@ -499,20 +499,34 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
             "type": "http",
             "method": "GET",
             "path": "/api/v1/workspace",
+            "query_string": b"",
             "headers": [],
             "app": application,
         }
     )
+    request.state.request_id = "req_restore_before_route"
+    forwarded: list[str] = []
 
-    try:
-        await _wait_for_workspace_runtime(request, registry.resolve(WORKSPACE_ID))
-    finally:
-        await asyncio.gather(
-            *application.state.managed_runtime_restore_tasks.values(),
-            return_exceptions=True,
-        )
+    async def handler(upstream_request: httpx.Request) -> httpx.Response:
+        forwarded.append(str(upstream_request.url))
+        return httpx.Response(200, content=b"restored-workspace")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        application.state.registry = registry
+        application.state.http_client = client
+        responses = await asyncio.gather(*(
+            _proxy_workspace_request("workspace", request, auth=GatewayAuthContext(kind="local"),
+                                     user_access=None, include_credentials=True)
+            for _ in range(5)
+        ))
+        for response in responses:
+            assert isinstance(response, StreamingResponse)
+            assert response.status_code == 200
+            assert [chunk async for chunk in response.body_iterator] == [b"restored-workspace"]
 
     assert registry.has_runtime(WORKSPACE_ID) is True
+    assert forwarded == ["http://127.0.0.1:41003/api/v1/workspace"] * 5
+    assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -595,84 +609,6 @@ async def test_proxy_bounds_hung_upstream_response_headers_and_releases_connecti
     assert "有限等待时间内未返回响应头" in str(captured.value.detail)
     assert entered.is_set() is True
     # 取消必须传导到上游请求，否则挂起的上游连接会随代理任务一起泄漏。
-    await asyncio.wait_for(released.wait(), timeout=1)
-
-
-@pytest.mark.asyncio
-async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
-    registry: GatewayWorkspaceRegistry,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """辅助服务代理与工作区 API 代理共用同一响应头上限，不能各自漏掉。"""
-
-    from app.gateway.auxiliary_proxy import proxy_auxiliary_http
-
-    application = FastAPI()
-    registry.upsert(
-        WorkspaceTarget(
-            gateway_id=GATEWAY_ID,
-            workspace_id=WORKSPACE_ID,
-            name="stream",
-            root_path=registry.resolve(WORKSPACE_ID).root_path,
-            backend_url="http://127.0.0.1:41001",
-            connection_kind="local",
-        ),
-        runtime=WorkspaceRuntime(
-            service_urls={
-                "workspace_api": "http://127.0.0.1:41001",
-                "browser_manager": "http://127.0.0.1:41002",
-            }
-        ),
-        activate=False,
-    )
-
-    released = asyncio.Event()
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        try:
-            await asyncio.Event().wait()
-        finally:
-            released.set()
-        raise AssertionError("上游挂起分支不应返回响应")
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    application.state.registry = registry
-    application.state.http_client = client
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/browser-manager/health",
-            "query_string": b"",
-            "headers": [],
-            "app": application,
-        }
-    )
-    # 辅助代理会读取请求体；这里显式给出空体，避免依赖 ASGI receive 通道。
-    request._body = b""
-    request.state.request_id = "req_hung_auxiliary"
-    monkeypatch.setattr(
-        "app.gateway.proxy_upstream.UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
-        0.2,
-    )
-
-    try:
-        with pytest.raises(HTTPException) as captured:
-            await asyncio.wait_for(
-                proxy_auxiliary_http(
-                    workspace_id=WORKSPACE_ID,
-                    service_path="browser-manager",
-                    path="health",
-                    request=request,
-                    auth=GatewayAuthContext(kind="local"),
-                ),
-                timeout=2,
-            )
-    finally:
-        await client.aclose()
-
-    assert captured.value.status_code == 504
-    assert "辅助服务在有限等待时间内未返回响应头" in str(captured.value.detail)
     await asyncio.wait_for(released.wait(), timeout=1)
 
 

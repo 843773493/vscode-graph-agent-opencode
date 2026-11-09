@@ -24,24 +24,25 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from configs.installer import install_user_configuration
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
+from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用唯一 HTTP/MCP 夹具
 )
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
-from tests.support.processes.scope import register_test_process, unregister_test_process
+from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
 from tests.support.workspaces import prepare_default_test_workspace
 
 _PROCESS = r'''
 import asyncio, json, os, sys
 from pathlib import Path
-import uvicorn
 from app import main
+from app.runtime.http_server import ManagedHTTPServer
+import uvicorn
 
 async def run():
     mode, identity, port, report_dir = sys.argv[1:]
     report_dir = Path(report_dir)
-    server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=int(port), log_level="warning"))
+    server = ManagedHTTPServer(uvicorn.Config(main.app, host="127.0.0.1", port=int(port), log_level="warning"))
     task = asyncio.create_task(server.serve())
     try:
         while not server.started:
@@ -49,6 +50,7 @@ async def run():
                 await task
                 raise RuntimeError("Backend 尚未就绪即退出")
             await asyncio.sleep(0.02)
+        await main.app.state.workspace_lifespan.wait_business_ready()
         container = main.app.state.workspace_container_registry.get(identity)
         service, owner = container.config_service, container.mcp_catalog_owner
 
@@ -86,13 +88,6 @@ async def run():
                     channel.unsubscribe(subscription)
 
             asyncio.create_task(record_cleanup_event())
-        elif mode == "after_stdio_stop":
-            close = owner._runtimes["schema"].scope.close
-            async def exit_after_stdio_stop():
-                await close()
-                report("fault.json")
-                os._exit(83)
-            owner._runtimes["schema"].scope.close = exit_after_stdio_stop
         elif mode != "recover":
             persist = service._persist_active_snapshot
             def exit_at_promotion(*args, **kwargs):
@@ -136,7 +131,6 @@ class RecoveryCase:
                 yield process, reports, f"http://127.0.0.1:{port}"
             finally:
                 await asyncio.to_thread(terminate_process, process)
-                unregister_test_process(process)
 
     def facts(self) -> dict[str, list[dict[str, object]]]:
         path = self.mount.workspace_root / ".boxteam/state/workspace.sqlite"

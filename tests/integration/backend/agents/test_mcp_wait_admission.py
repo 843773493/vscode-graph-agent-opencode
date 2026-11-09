@@ -28,9 +28,6 @@ from tests.integration.backend.agents.test_mcp_connection_wait import (
     task_resource,
 )
 from tests.integration.backend.agents.test_mcp_connection_wait import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414
-)
-from tests.integration.backend.agents.test_mcp_connection_wait import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414
 )
 from tests.integration.backend.agents.test_mcp_connection_wait import (
@@ -49,6 +46,9 @@ from tests.integration.backend.sessions.test_mcp_config_recovery import Recovery
 from tests.integration.workspace_services.mcp.oauth_server import OAuthEndpoint
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414
+)
 from tests.support.model_stream.config import ModelStreamReplay
 
 

@@ -40,11 +40,6 @@ from app.schemas.gateway.extension_installation import (
 from app.schemas.gateway.extension_web import (
     ExtensionWebHostOpenRequest,
 )
-from app.schemas.gateway.mcp_definitions import (
-    ExtensionMcpDefinitionChannelRequest,
-    McpProviderSnapshotDTO,
-)
-from app.schemas.internal_v2.mcp import McpProviderDefinitionRefDTO
 from app.services.infrastructure.config.source_uri import extension_configuration_uri
 from app.services.infrastructure.extension_host.configuration import (
     ExtensionConfigurationFiles,
@@ -61,16 +56,9 @@ from app.services.infrastructure.extension_host.management import (
     NativeManagementEnvironment,
     NativeReferenceService,
 )
-from app.services.infrastructure.extension_host.mcp_definitions import (
-    McpDefinitionChannel,
-)
 from app.services.infrastructure.extension_host.package_files import publication_file
 from app.services.infrastructure.extension_host.process import NodeExtensionHost
 from app.services.infrastructure.extension_host.runtime import NodeHostRuntime
-from app.services.infrastructure.mcp.provider import (
-    McpProviderAdmission,
-    McpProviderUnavailable,
-)
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -128,7 +116,6 @@ class _HostSession:
         self.host: NodeExtensionHost | None = None
         self.configuration: ExtensionConfigurationFiles | None = None
         self.reference: tuple[NativeReferenceService, NativeHostReference] | None = None
-        self.mcp_definitions: McpDefinitionChannel | None = None
         self.closed = False
         self.stopping = asyncio.Event()
         self.transport_settled = asyncio.Event()
@@ -172,7 +159,6 @@ class _WebHostSession:
         self.reference: tuple[NativeReferenceService, NativeHostReference] | None = None
         self.publications: dict[str, NativeExtensionPublication] = {}
         self.configuration: ExtensionConfigurationFiles | None = None
-        self.mcp_definitions: McpDefinitionChannel | None = None
         self._lock = asyncio.Lock()
         self.pending_reads = 0
         self.reads_settled = asyncio.Event()
@@ -223,9 +209,6 @@ class NodeExtensionHostOwner:
     def close_admission(self) -> None:
         self._admission_closed = True
         self._configuration_stopping.set()
-        for session in self._sessions.values():
-            if session.mcp_definitions is not None:
-                session.mcp_definitions.close()
         if self._management is not None:
             self._management.close_admission()
 
@@ -306,86 +289,6 @@ class NodeExtensionHostOwner:
             raise ValueError("配置请求不属于当前已认证的宿主代际和明确工作区视图")
         return session.configuration
 
-    def _mcp_session(self, request: ExtensionMcpDefinitionChannelRequest, *, client_id: str) -> _HostSession | _WebHostSession:
-        session = self._sessions.get(request.generation)
-        if (self._admission_closed or session is None or session.closed or session.stopping.is_set()
-            or session.identity != NodeHostIdentity(request.gateway_id, request.backend_id, client_id,
-                request.view_id, tuple(request.workspace_ids), request.generation, request.host_kind)):
-            raise McpProviderUnavailable("Provider 通道不属于原已认证宿主代际和工作区视图")
-        return session
-
-    @asynccontextmanager
-    async def mcp_definition_channel(self, request: ExtensionMcpDefinitionChannelRequest, *, client_id: str) -> AsyncIterator[tuple[McpDefinitionChannel, asyncio.Event]]:
-        session = self._mcp_session(request, client_id=client_id)
-        if session.mcp_definitions is not None:
-            raise ValueError("该宿主代际已有 Provider 控制通道，不能覆盖")
-        channel = McpDefinitionChannel()
-        session.mcp_definitions = channel
-        try:
-            yield channel, session.stopping
-        finally:
-            channel.close()
-            session.mcp_definitions = None
-
-    async def validate_mcp_snapshot(self, request: ExtensionMcpDefinitionChannelRequest, snapshot: McpProviderSnapshotDTO, *, client_id: str) -> None:
-        session = self._mcp_session(request, client_id=client_id)
-        inventory = await self.management.inventory()
-        self._mcp_session(request, client_id=client_id)
-        entry = next((item for item in inventory.extensions if item.extension_key == snapshot.extension_key and item.is_valid), None)
-        description = entry.description if entry is not None else None
-        if not isinstance(description, dict):
-            raise McpProviderUnavailable("Provider 原 VSIX 安装实例已不可用")
-        identifier = description.get("identifier")
-        contributes = description.get("contributes")
-        providers = contributes.get("mcpServerDefinitionProviders") if isinstance(contributes, dict) else None
-        extension_id = identifier.get("value") if isinstance(identifier, dict) else None
-        if (not isinstance(extension_id, str) or extension_id.lower() != snapshot.extension_id.lower()
-            or not isinstance(providers, list) or not any(isinstance(item, dict)
-                and f"{extension_id.lower()}/{item.get('id')}" == snapshot.collection_id for item in providers)
-            or isinstance(session, _WebHostSession) and snapshot.extension_key not in session.publications):
-            raise McpProviderUnavailable("Provider 不属于原 VSIX 的声明与宿主安装实例")
-
-    def check_mcp_definition(self, reference: McpProviderDefinitionRefDTO, *, workspace_id: str,
-                             transport: Literal["stdio", "streamable_http"]) -> None:
-        session = self._sessions.get(reference.host_generation)
-        if (self._admission_closed or session is None or session.closed or session.stopping.is_set()
-            or (session.identity.gateway_id, session.identity.backend_id, session.identity.client_id,
-                session.identity.view_id, session.identity.host_kind) != (reference.gateway_id, reference.backend_id,
-                reference.client_id, reference.view_id, reference.host_kind)
-            or workspace_id not in session.identity.workspace_ids or session.mcp_definitions is None):
-            raise McpProviderUnavailable("原 Provider 宿主离线、身份已撤销或工作区不属于原目标")
-        snapshot = session.mcp_definitions.definition(reference.provider_ref, reference.definition_ref).value
-        definition = next(item for item in snapshot.definitions if item.definition_ref == reference.definition_ref)
-        if ((snapshot.extension_id, snapshot.extension_key, snapshot.collection_id) != (reference.extension_id,
-                reference.extension_key, reference.collection_id) or definition.transport != transport
-            or reference.host_kind == "web" and transport == "stdio"):
-            raise McpProviderUnavailable("Provider 原定义、安装实例或执行上下文不匹配")
-
-    async def resolve_mcp_definition(self, reference: McpProviderDefinitionRefDTO, *, workspace_id: str,
-                                     transport: Literal["stdio", "streamable_http"]) -> McpProviderAdmission:
-        self.check_mcp_definition(reference, workspace_id=workspace_id, transport=transport)
-        session = self._sessions[reference.host_generation]
-        channel = session.mcp_definitions
-        assert channel is not None
-        snapshot = channel.definition(reference.provider_ref, reference.definition_ref)
-        request = ExtensionMcpDefinitionChannelRequest(protocol_version=1, gateway_id=reference.gateway_id,
-            backend_id=reference.backend_id, view_id=reference.view_id, generation=reference.host_generation,
-            workspace_ids=list(session.identity.workspace_ids), host_kind=reference.host_kind)
-
-        def check() -> None:
-            self.check_mcp_definition(reference, workspace_id=workspace_id, transport=transport)
-            if snapshot.invalidated.is_set() or channel.definition(reference.provider_ref, reference.definition_ref) is not snapshot:
-                raise McpProviderUnavailable("Provider 原快照已变化，拒绝迟到启动")
-
-        await self.validate_mcp_snapshot(request, snapshot.value, client_id=reference.client_id)
-        check()
-        admission = await channel.resolve(reference.provider_ref, reference.definition_ref, check)
-        await self.validate_mcp_snapshot(request, snapshot.value, client_id=reference.client_id)
-        check()
-        if admission.launch.transport != transport:
-            raise McpProviderUnavailable("Provider resolve 改变了原定义的传输类型")
-        return admission
-
     def check_web_extension_file(self, request: NativeExtensionFileRequest, *, client_id: str) -> tuple[_WebHostSession, NativeExtensionPublication]:
         session = self._sessions.get(request.generation or "")
         if (self._admission_closed or not isinstance(session, _WebHostSession)
@@ -457,8 +360,6 @@ class NodeExtensionHostOwner:
             installed=publication.installed, inventory=publication.inventory)
 
     async def _release(self, session: _HostSession | _WebHostSession) -> None:
-        if session.mcp_definitions is not None:
-            session.mcp_definitions.close()
         await session.close()
         if session.reference is not None:
             assert self._management is not None

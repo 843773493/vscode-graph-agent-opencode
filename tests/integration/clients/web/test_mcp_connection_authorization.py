@@ -22,9 +22,6 @@ from tests.integration.backend.agents.test_tool_discovery_policy import (
     discovery_plan as discovery_plan,  # noqa: PLC0414 - 复用同一 model_stream 响应资产
 )
 from tests.integration.backend.agents.test_tool_discovery_policy import (
-    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一 MCP handler
-)
-from tests.integration.backend.agents.test_tool_discovery_policy import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 同一真实 OAuth 资产
 )
 from tests.integration.backend.agents.test_tool_discovery_policy import (
@@ -35,6 +32,9 @@ from tests.integration.backend.agents.test_tool_discovery_policy import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.mcp.http_endpoint import (
+    http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 同一 MCP handler
+)
 from tests.support.paths import chromium_temporary_environment
 
 

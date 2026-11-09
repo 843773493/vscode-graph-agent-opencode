@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -11,10 +12,13 @@ from contextlib import contextmanager
 from functools import partial
 from typing import TYPE_CHECKING, Self
 
+import httpx
+
 from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import workspace_context
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.shielded_cleanup import run_sync_shielded
+from app.gateway.auth import get_gateway_local_token
 from app.schemas.event import Event
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
@@ -26,6 +30,10 @@ from app.services.infrastructure.config.contracts import (
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import changed_json_paths
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings_for_root,
+)
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.persistent_tasks.goal_import import import_legacy_goals
 
 if TYPE_CHECKING:
@@ -111,6 +119,9 @@ class WorkspaceLifespan:
         self._close_requested = asyncio.Event()
         self._close_result: asyncio.Future[None] | None = None
         self._ready: asyncio.Future[None] | None = None
+        self._activated: asyncio.Event | None = None
+        self._business_ready: asyncio.Future[None] | None = None
+        self._closing_before_activation = False
         self._owner: asyncio.Task[None] | None = None
         self._steps: deque[tuple[str, CloseAction]] = deque([
             ("search.close", container.workspace_search_service.aclose),
@@ -138,6 +149,7 @@ class WorkspaceLifespan:
             ("workspace_service.stop", container.workspace_service.stop),
             ("context_transport.close", container.workspace_session_context_transport.aclose),
             ("terminal_transport.close", container.terminal_manager_client.aclose),
+            ("browser_transport.close", container.browser_manager_client.aclose),
             ("workspace_service.close", partial(run_sync_shielded, container.workspace_service.close)),
             ("workspace_source.close", container.workspace_source_owner.close),
             ("attachments.close_admission", container.attachment_blob_store.close_admission),
@@ -158,6 +170,8 @@ class WorkspaceLifespan:
         if self._owner is not None:
             raise RuntimeError("WorkspaceLifespan不能重复启动")
         self._ready = asyncio.get_running_loop().create_future()
+        self._activated = asyncio.Event()
+        self._business_ready = asyncio.get_running_loop().create_future()
         self._ready.add_done_callback(lambda result: None if result.cancelled() else result.exception())
         # MCP的AnyIO scope从创建到重试关闭始终留在同一任务。
         self._owner = asyncio.create_task(self._run(), name=f"workspace-lifespan:{self.container.workspace_id}")
@@ -168,21 +182,47 @@ class WorkspaceLifespan:
         try:
             task.result()
         except BaseException as error:
-            for result in (self._ready, self._close_result):
+            for result in (self._ready, self._business_ready, self._close_result):
                 if result is not None and not result.done():
                     result.set_exception(error)
             logger.error("Workspace生命周期owner失败: task=%s", task.get_name(),
                          exc_info=(type(error), error, error.__traceback__))
 
+    def activate_after_http_startup(self) -> None:
+        if self._activated is None:
+            raise RuntimeError("Workspace lifespan 尚未准备 listener 启动阶段")
+        self._activated.set()
+
+    async def wait_business_ready(self) -> None:
+        if self._business_ready is None:
+            raise RuntimeError("Workspace lifespan 尚未启动")
+        await asyncio.shield(self._business_ready)
+
     async def _run(self) -> None:
         if self._ready is None:
             raise RuntimeError("Workspace生命周期缺少启动回执")
+        activated = self._activated
+        business_ready = self._business_ready
+        if activated is None or business_ready is None:
+            raise RuntimeError("Workspace生命周期缺少 listener 启动阶段")
         try:
-            await self._start()
+            await self._prepare_start()
         except Exception as error:  # noqa: BLE001 - 原启动错误交给调用方，原owner仍接管关闭。
             self._ready.set_exception(error)
         else:
             self._ready.set_result(None)
+        if self._ready.exception() is None:
+            await activated.wait()
+            if self._closing_before_activation:
+                business_ready.set_exception(RuntimeError("Workspace 在 listener-ready 前关闭"))
+            else:
+                try:
+                    await self._start()
+                except Exception as error:
+                    business_ready.set_exception(error)
+                    logger.exception("Workspace MCP 启动失败: workspace_id=%s", self.container.workspace_id)
+                else:
+                    business_ready.set_result(None)
         while True:
             await self._close_requested.wait()
             self._close_requested.clear()
@@ -209,6 +249,9 @@ class WorkspaceLifespan:
         if self._owner.done():
             await self._owner
             raise RuntimeError("Workspace生命周期owner已退出但仍有未关闭步骤")
+        if self._activated is not None and not self._activated.is_set():
+            self._closing_before_activation = True
+            self._activated.set()
         if self._close_result is None or self._close_result.done():
             self._close_result = asyncio.get_running_loop().create_future()
             self._close_result.add_done_callback(lambda result: None if result.cancelled() else result.exception())
@@ -220,9 +263,17 @@ class WorkspaceLifespan:
         # TODO(5.4)：同步阻塞与外部终止核实仍待收口；Backend到期不取消原步骤。
         with workspace_context(self.container.workspace_id, self.container.workspace_root,
                                session_catalog=self.container.session_catalog):
+            close_started = time.monotonic()
+            logger.info("Workspace关闭阶段 begin: workspace_id=%s stage=periodic_tasks",
+                        self.container.workspace_id)
             await _stop_periodic_tasks(self._periodic_tasks)
+            logger.info("Workspace关闭阶段 end: workspace_id=%s stage=periodic_tasks elapsed=%.3fs",
+                        self.container.workspace_id, time.monotonic() - close_started)
             while self._steps:
                 stage, action = self._steps[0]
+                step_started = time.monotonic()
+                logger.info("Workspace关闭阶段 begin: workspace_id=%s stage=%s",
+                            self.container.workspace_id, stage)
                 try:
                     result = action()
                     if inspect.isawaitable(result):
@@ -232,10 +283,14 @@ class WorkspaceLifespan:
                                      self.container.workspace_id, stage)
                     raise
                 self._steps.popleft()
+                logger.info("Workspace关闭阶段 end: workspace_id=%s stage=%s elapsed=%.3fs",
+                            self.container.workspace_id, stage, time.monotonic() - step_started)
 
     async def __aenter__(self) -> Self:
         try:
             await self.start()
+            self.activate_after_http_startup()
+            await self.wait_business_ready()
         except BaseException as error:
             try:
                 await self.close()
@@ -275,9 +330,8 @@ class WorkspaceLifespan:
         )
 
 
-    async def _start(self) -> None:
+    async def _prepare_start(self) -> None:
         container = self.container
-        operations = container.session_catalog_service.operations
         with workspace_context(container.workspace_id, container.workspace_root, session_catalog=container.session_catalog):
             with _workspace_startup_stage(container, "session_catalog.verify_registered_date_directories"):
                 async with NavigationTopologyGate(container.session_catalog.sessions_root).shared():
@@ -287,19 +341,18 @@ class WorkspaceLifespan:
             container.config_service.validate_workspace_config()
             with _workspace_startup_stage(container, "workspace_service.start"):
                 await container.workspace_service.start()
-            with _workspace_startup_stage(container, "mcp_catalog_owner.start"):
-                await container.mcp_catalog_owner.start()
             container.config_service.set_mcp_configuration_guard(container.mcp_catalog_owner.guard_configuration)
-            with _workspace_startup_stage(container, "mcp_connections.start"):
-                container.mcp_connection_service.start()
+
+    async def _start(self) -> None:
+        container = self.container
+        operations = container.session_catalog_service.operations
+        with workspace_context(container.workspace_id, container.workspace_root, session_catalog=container.session_catalog):
+            await self._start_mcp()
             with _workspace_startup_stage(container, "workspace_file_resource_registry.start"):
                 await container.workspace_file_resource_registry.start()
             removed = await run_sync_shielded(container.workspace_activity_service.prune)
             if removed:
                 logger.info("启动时清理 Workspace 会话活动事件: removed=%s", removed)
-            container.config_service.set_mcp_tool_names(
-                container.mcp_catalog_owner.get_tool_ids()
-            )
 
             async def apply_config_candidate(
                 previous: ConfigSnapshot,
@@ -324,9 +377,21 @@ class WorkspaceLifespan:
                     )
                 activate_mcp: ConfigPublication = lambda: None
                 mcp_tool_names = container.mcp_catalog_owner.get_tool_ids()
-                if previous_config.get("mcp") != candidate_config.get("mcp"):
+                previous_bindings = workspace_plugin_bindings_for_root(
+                    previous_config, workspace_root=container.workspace_root,
+                )
+                candidate_bindings = workspace_plugin_bindings_for_root(
+                    candidate_config, workspace_root=container.workspace_root,
+                )
+                plugin_switches, _ = container.mcp_catalog_owner.plugin_configuration_switches(
+                    previous_config, candidate_config,
+                )
+                if (previous_config.get("mcp") != candidate_config.get("mcp")
+                        or previous_bindings != candidate_bindings or plugin_switches):
                     activate_mcp, mcp_tool_names = await container.mcp_catalog_owner.prepare_config(
                         candidate_config.get("mcp"), scope, record_side_effect,
+                        plugin_bindings=candidate_bindings,
+                        reconnect_server_ids=frozenset(plugin_switches),
                     )
                 container.config_service.validate_candidate(candidate, mcp_tool_names=mcp_tool_names)
 
@@ -424,3 +489,39 @@ class WorkspaceLifespan:
             self._periodic_tasks.append(fork_export_cleanup)
             for periodic in self._periodic_tasks:
                 periodic.add_done_callback(_report_periodic_failure)
+
+    async def _start_mcp(self) -> None:
+        container = self.container
+        with workspace_context(container.workspace_id, container.workspace_root,
+                               session_catalog=container.session_catalog):
+            bindings = workspace_plugin_bindings_for_root(
+                container.config_service.get_snapshot().to_dict(),
+                workspace_root=container.workspace_root,
+            )
+            if bindings:
+                gateway_url = GatewayTransportConnection(
+                    gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"),
+                    config_service=container.config_service,
+                ).resolve_gateway_url()
+                async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+                    response = await client.post(
+                        f"{gateway_url}/api/internal/service-plugins/workspaces/"
+                        f"{container.workspace_id}/refresh",
+                        params={"wait_for_ready": "true"},
+                        headers={
+                            "X-Local-Token": get_gateway_local_token(),
+                            "X-BoxTeam-Backend-Generation": os.environ["BOXTEAM_BACKEND_GENERATION"],
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                if payload.get("data", {}).get("state") != "ready":
+                    raise RuntimeError(
+                        "Gateway 未确认工作区插件绑定已就绪: "
+                        f"{payload.get('data')!r}"
+                    )
+            with _workspace_startup_stage(container, "mcp_catalog_owner.start"):
+                await container.mcp_catalog_owner.start()
+            with _workspace_startup_stage(container, "mcp_connections.start"):
+                container.mcp_connection_service.start()
+            container.config_service.set_mcp_tool_names(container.mcp_catalog_owner.get_tool_ids())

@@ -27,7 +27,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
-from tests.integration.workspace_services.mcp.test_invocation_lifecycle import (
+from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用真实 HTTP/MCP 协议 Server
 )
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
@@ -131,7 +131,8 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
             payload = read_jsonc_object(path) if path.exists() else {}
             payload["mcp"] = {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}}
             path.write_text(json.dumps(payload), encoding="utf-8")
-        async with main.lifespan(main.app):
+        async with main.lifespan(main.app) as _main_lifespan_state_134:
+            await _main_lifespan_state_134["after_http_startup"]()
             first, sibling = mounted_case.containers
             service, owner = first.config_service, first.mcp_catalog_owner
             previous, sibling_binding = owner.binding_snapshot(), sibling.mcp_catalog_owner.binding_snapshot()
@@ -271,7 +272,8 @@ async def test_source_api_add_header_reference_replace_disable_remove_and_reenab
             "enabled": True, "transport": "streamable_http", "url": old.url,
             "headers": {"Authorization": "Bearer ${MCP_TEST_OLD_CREDENTIAL}"},
         }}}}
-        async with main.lifespan(main.app):
+        async with main.lifespan(main.app) as _main_lifespan_state_274:
+            await _main_lifespan_state_274["after_http_startup"]()
             first, sibling = mounted_case.containers
             service, owner = first.config_service, first.mcp_catalog_owner
             sibling_binding = sibling.mcp_catalog_owner.binding_snapshot()
@@ -366,7 +368,8 @@ async def test_disabled_sealed_call_commits_failure_and_releases_qualification_b
         }
         path.write_text(json.dumps(payload), encoding="utf-8")
         (sibling_root / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {}}}), encoding="utf-8")
-        async with main.lifespan(main.app):
+        async with main.lifespan(main.app) as _main_lifespan_state_369:
+            await _main_lifespan_state_369["after_http_startup"]()
             first, _sibling = mounted_case.containers
             owner = first.mcp_catalog_owner
             original_resource = owner.binding_snapshot().resolve("mcp__schema__probe").connection_ref

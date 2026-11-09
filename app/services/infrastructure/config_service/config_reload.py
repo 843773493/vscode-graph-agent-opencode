@@ -17,7 +17,7 @@ from app.core.lifecycle import LifetimeScope
 from app.core.trace_middleware import get_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.schemas.gateway.plugin_private_inputs import WorkspacePluginSchemas
-from app.schemas.gateway.service_plugin import PluginBinding
+from app.schemas.gateway.service_plugin import PluginBinding, PluginSlotStatusDTO
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -56,6 +56,7 @@ from app.services.infrastructure.config_service.config_service_common import (
 from app.services.infrastructure.config_service.config_snapshot import (
     ConfigSnapshotMixin,
 )
+from app.services.infrastructure.mcp.config import parse_mcp_server_configs
 from configs.plugin_parameters import PluginParameters, plugin_parameters
 from configs.runtime import validate_config_payload
 
@@ -231,6 +232,32 @@ class ConfigReloadMixin:
                     self._workspace_state_store.append_config_apply_side_effect(
                         apply_id=claim.apply_id, side_effect=effect,
                     )
+
+                for binding, expected_binding in self._mcp_plugin_candidate_bindings(previous, candidate):
+                    record_side_effect({
+                        "resource": "workspace-plugin-runtime",
+                        "action": "candidate-start-intent",
+                        "package_id": binding.package_id,
+                        "plugin_id": binding.plugin_id,
+                        "workspace_id": binding.workspace_id,
+                        "candidate_revision": candidate.revision,
+                    })
+                    await self._apply_gateway_workspace_plugin_candidate(
+                        previous=previous,
+                        candidate=candidate,
+                        candidate_id=pending.candidate_id,
+                        binding=binding,
+                        expected_binding=expected_binding,
+                        gateway_id=str(source_edit["gateway_id"]) if source_edit is not None else None,
+                    )
+                    record_side_effect({
+                        "resource": "workspace-plugin-runtime",
+                        "action": "candidate-ready",
+                        "package_id": binding.package_id,
+                        "plugin_id": binding.plugin_id,
+                        "workspace_id": binding.workspace_id,
+                        "candidate_revision": candidate.revision,
+                    })
 
                 activate = await candidate_applier(previous, candidate, scope, record_side_effect)
                 if not callable(activate):
@@ -494,6 +521,92 @@ class ConfigReloadMixin:
             raise ConfigConflictError(
                 "Gateway Workspace 插件绑定校验回执无效或拒绝 candidate"
             )
+
+    async def _apply_gateway_workspace_plugin_candidate(
+        self, *, previous: ConfigSnapshot, candidate: ConfigSnapshot, candidate_id: str,
+        binding: PluginBinding, expected_binding: PluginBinding | None,
+        gateway_id: str | None = None,
+    ) -> None:
+        previous_bindings = workspace_plugin_bindings_for_root(
+            previous.to_dict(), workspace_root=self._workspace_root,
+        )
+        candidate_bindings = workspace_plugin_bindings_for_root(
+            candidate.to_dict(), workspace_root=self._workspace_root,
+        )
+        previous_binding = next((item for item in previous_bindings if (
+            item.package_id, item.plugin_id, item.workspace_id,
+        ) == (binding.package_id, binding.plugin_id, binding.workspace_id)), None)
+        if (previous_binding != expected_binding or binding not in candidate_bindings
+                or not binding.enabled):
+            raise ConfigConflictError("插件参数替换的原绑定或候选绑定已失效")
+        workspace_id = binding.workspace_id
+        if workspace_id is None or self._workspace_root is None:
+            raise ConfigConflictError("插件参数替换缺少真实 Workspace owner")
+        parameters = plugin_parameters(candidate.to_dict())
+        selected = {binding.package_id: {binding.plugin_id: parameters.get(binding.package_id, {}).get(binding.plugin_id, {})}}
+        declarations = await self.get_workspace_plugin_schemas([binding], gateway_id=gateway_id)
+        store = PluginPrivateInputStore(
+            directory=self._workspace_root / ".boxteam/credentials/plugins",
+            gateway_id=declarations.gateway_id, workspace_id=workspace_id,
+        )
+        resolved = {binding.package_id: {binding.plugin_id: store.resolve(
+            selected[binding.package_id][binding.plugin_id], package_id=binding.package_id,
+            plugin_id=binding.plugin_id,
+            schema=declarations.plugins[0].configuration_schema,
+        )}}
+        candidate_revision = candidate.revision
+        gateway_url = cast("ConfigService", self).get_gateway_connection_url().rstrip("/")
+        request_id = get_current_request_id() or f"config-{candidate_id}"
+        async with httpx.AsyncClient(
+            timeout=cast("ConfigService", self).get_gateway_connection_timeout_seconds(), trust_env=False,
+        ) as client:
+            response = await client.post(
+                f"{gateway_url}/api/internal/service-plugins/workspaces/{workspace_id}/apply-candidate",
+                json={"expected_revision": previous.revision, "candidate_revision": candidate_revision,
+                      "binding": binding.model_dump(mode="json"),
+                      "expected_binding": expected_binding.model_dump(mode="json") if expected_binding else None,
+                      "bindings": [item.model_dump(mode="json") for item in candidate_bindings],
+                      "parameters": selected,
+                      "delivery": {"values": resolved}},
+                headers={"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id},
+            )
+            if response.status_code == 409:
+                raise ConfigConflictError("Gateway 拒绝插件参数候选应用 (HTTP 409)")
+            response.raise_for_status()
+        result = APIResponse[PluginSlotStatusDTO].model_validate_json(response.content)
+        if result.code != 0 or result.request_id != request_id or result.data is None or result.data.state != "ready":
+            raise ConfigConflictError("Gateway 插件参数候选没有返回精确 ready 回执")
+
+    def _mcp_plugin_candidate_bindings(
+        self, previous: ConfigSnapshot, candidate: ConfigSnapshot,
+    ) -> list[tuple[PluginBinding, PluginBinding | None]]:
+        """只重启本轮影响已启用 MCP 插件服务的绑定。"""
+        previous_config, candidate_config = previous.to_dict(), candidate.to_dict()
+        previous_bindings = workspace_plugin_bindings_for_root(previous_config, workspace_root=self._workspace_root)
+        candidate_bindings = workspace_plugin_bindings_for_root(candidate_config, workspace_root=self._workspace_root)
+        old_by_key = {(item.package_id, item.plugin_id, item.workspace_id): item for item in previous_bindings}
+        new_by_key = {(item.package_id, item.plugin_id, item.workspace_id): item for item in candidate_bindings}
+        old_parameters, new_parameters = plugin_parameters(previous_config), plugin_parameters(candidate_config)
+        configured = {server.server_id: server for server in parse_mcp_server_configs(
+            candidate_config.get("mcp"), workspace_root=self._workspace_root,
+        )}
+        changed: dict[tuple[str, str, str | None], tuple[PluginBinding, PluginBinding | None]] = {}
+        for server in configured.values():
+            if not server.enabled:
+                continue
+            service = server.service
+            if service is None:
+                continue
+            key = (service.package_id, service.plugin_id, service.workspace_id)
+            new_binding, old_binding = new_by_key.get(key), old_by_key.get(key)
+            if new_binding is None or not new_binding.enabled:
+                continue
+            if service.package_version != new_binding.package_version:
+                continue
+            params_changed = old_parameters.get(key[0], {}).get(key[1], {}) != new_parameters.get(key[0], {}).get(key[1], {})
+            if old_binding != new_binding or params_changed:
+                changed[key] = (new_binding, old_binding)
+        return list(changed.values())
 
     async def _notify_gateway_workspace_plugins(
         self, *, workspace_id: str | None, candidate_id: str,
@@ -824,9 +937,14 @@ class ConfigReloadMixin:
             raise RuntimeError("配置启动对账缺少 workspace store")
         while (claim := store.get_config_apply_claim(config_domain=self._CONFIG_DOMAIN)) is not None:
             await asyncio.sleep(max(0, (claim.lease_expires_at - datetime.now(UTC)).total_seconds()))
+            journal = store.get_config_apply_journal(apply_id=claim.apply_id)
             store.recover_expired_config_applies(config_domain=self._CONFIG_DOMAIN)
-        # 仍经原 reload 锁、候选 journal 和共同发布边界重建连接；
-        # 不恢复旧 socket，不重放业务工具，也不伪造原 attempt 已提交。
+            if journal is not None and any(
+                effect.get("resource") == "workspace-plugin-runtime"
+                for effect in journal.side_effects
+            ):
+                return
+        # 只有未触及插件候选等破坏性外部副作用时，才沿原 reload 恢复 HTTP 等可重建连接。
         await self._reload_from_watcher(candidate_applier=candidate_applier)
 
     def _config_watch_paths(self) -> tuple[set[Path], set[Path]]:

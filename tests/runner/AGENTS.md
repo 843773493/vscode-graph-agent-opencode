@@ -186,8 +186,7 @@
 
 - `integration-mcp-connection-control` 经真实 Gateway、Backend、Session 消息及 Agent 发现／信封入口，验证首次 OAuth 未授权时的本地控制、兄弟 Server 调用、受信 operation 身份、短 status、参数拒绝与 disconnect，固定240秒／4GiB；模型复用 model_stream，不替代授权 UI、长等待自动继续或真实 Provider 验收。
 - `integration-mcp-oauth-startup` 使用真实 HTTP OAuth／MCP 与真实 Backend 启动，核对首次需授权的局部状态、兄弟 Server、同 request_id、SDK PKCE／state、冷刷新和敏感信息边界，固定90秒／4GiB；不替代产品 connect、授权UI、持久等待或Gateway／Web验收。
-- `integration-mcp-stdio-recovery` 使用真实 Backend、单实例 OS 锁与 SDK stdio，覆盖 POSIX 非合作进程强制关闭、关闭期限失败及旧实例停止后的 OS 退出／claim 冷恢复，固定180秒／4GiB；不替代 Windows Job Object、OAuth、HITL 或 Web 验收。
-- `integration-mcp-stdio-replacement` 使用真实单实例锁、stdio SDK、watcher、Runner和model_stream，核对停止意图先于关闭、停后再启、破坏性失败与同入口修复及兄弟工作区隔离，固定180秒／4GiB；不代替非合作进程终止、退役清理诊断、OAuth或Web验收。
+- `integration-mcp-plugin-reconfiguration` 经真实 Gateway、Workspace Backend、插件管理入口及 stdio MCP 子进程验证参数候选的 stop/start、完整目录与 promotion 顺序、非合作子进程退出、失败 journal 及显式配置修复，并核公开 restart 使用 slot revision 防旧实例、以当前配置 snapshot 作为重启基线；固定240秒／4GiB。
 - `integration-mcp-config-recovery` 通过真实 Backend OS 退出验证 MCP promotion 前后、立即／lease 到期重启、原 claim fencing、连接重建和真实 HTTP SSE 重放，固定240秒／4GiB；不代替 stdio 停后再启、OAuth或Web验收。
 - `integration-mcp-config-replacement` 通过真实双挂载、配置 watcher、Runner、model_stream 和 HTTP MCP Server 核对旧 Turn／新 Turn 连接归属、部分失败、混合待重启及工作区隔离，固定180秒／4GiB；不替代进程崩溃恢复、OAuth或Gateway／主Web验收。
 - `integration-extension-discovery` 复用正式 fork watchdog，覆盖 Owner 发布、冻结完整定义、搜索／分页／策略、实际输出中间件、冷恢复、真实 stdio 信封调用及 stdio／HTTP 进度与原请求取消，固定 180 秒/4GiB；不替代完整 Agent、授权或主 Web 验收。

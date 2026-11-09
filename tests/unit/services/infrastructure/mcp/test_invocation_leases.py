@@ -36,7 +36,9 @@ async def lease_case(tmp_path, resource_use, request):
     ledger = ExternalResourceLeaseLedger(state_path=path)
     owner = McpCatalogOwner(
         raw_config={"supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)},
-                    "servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fixture"}}},
+                    "servers": {"mini": {
+                        "enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/mini/mcp",
+                    }}},
         workspace_root=tmp_path, event_service=EventChannelService(), leases=ledger,
         session_factory=FakeMcpSessionFactory({"mini": ["echo", "other"]}),
     )
@@ -449,7 +451,9 @@ async def startup_recovery_write(
     pending = (pending[0], pending[1], dispatched, pending[3])
     factory = FakeMcpSessionFactory({"mini": ["echo"]})
     owner = McpCatalogOwner(
-        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fixture"}}},
+        raw_config={"servers": {"mini": {
+            "enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/mini/mcp",
+        }}},
         workspace_root=tmp_path, event_service=EventChannelService(), leases=ledger, session_factory=factory,
     )
     case = StartupRecoveryWrite(owner, ledger, path, factory, pending, request.param)

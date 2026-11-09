@@ -1,18 +1,16 @@
-"""真实 SDK/stdio 连接的登记、关闭与取消沿原 task 结算。"""
+"""真实 SDK HTTP 连接的登记、关闭与取消沿原 task 结算。"""
 
 from __future__ import annotations
 
 import asyncio
 import errno
 import json
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, get_ident
 
-import psutil
 import pytest
 from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED
@@ -23,13 +21,14 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogError, McpCatalogOwner
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
     SchemaServerCase,
+    contains_error,
 )
 from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
     schema_server_case as schema_server_case,  # noqa: PLC0414 - 复用真实 SDK 与正式隔离工作区
 )
+from tests.support.mcp.http_endpoint import sdk_http_session_factory
 
 
 @dataclass
@@ -78,26 +77,24 @@ async def publication_gate(
         gate.release.set()
 
 
-def contains_error(error: BaseException, expected: BaseException) -> bool:
-    if error is expected:
-        return True
-    if isinstance(error, BaseExceptionGroup) and any(contains_error(child, expected) for child in error.exceptions):
-        return True
-    return error.__cause__ is not None and contains_error(error.__cause__, expected)
-
-
 @pytest.fixture
-def initializing_exit_owner(request: pytest.FixtureRequest):
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    return McpCatalogOwner(
-        leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
-        raw_config={"servers": {"exiting": {"enabled": True, "transport": "stdio", "command": sys.executable,
-            "args": ["-c", "import sys; sys.stdin.buffer.readline(); sys.exit(17)"]}}},
-        workspace_root=context.workspace_root, event_service=EventChannelService(),
-    ), context
+async def initializing_exit_owner(bridge_endpoint_factory):
+    async with bridge_endpoint_factory(args=["-c", "import sys; sys.stdin.buffer.readline(); sys.exit(17)"]) as (endpoint, token):
+        context = endpoint.context
+        owner = McpCatalogOwner(
+            leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
+            raw_config={"servers": {"exiting": {"enabled": True, "transport": "streamable_http",
+                "url": endpoint.url, "headers": {"X-Local-Token": token}}}},
+            workspace_root=context.workspace_root, event_service=EventChannelService(),
+            session_factory=sdk_http_session_factory,
+        )
+        try:
+            yield owner, context
+        finally:
+            await owner.shutdown()
 
 
-async def test_initialize_eof_keeps_protocol_error_and_cold_verified_exit(initializing_exit_owner):
+async def test_initialize_eof_keeps_protocol_error_and_cold_connection_state(initializing_exit_owner):
     owner, context = initializing_exit_owner
     with pytest.raises(McpCatalogError, match="stage=startup") as caught:
         await owner.start()
@@ -116,9 +113,7 @@ async def test_initialize_eof_keeps_protocol_error_and_cold_verified_exit(initia
         owner.get_tool_ids()
     record, = [record for record in owner._leases.records_by_kind("mcp_connection")
                if record.resource_id.startswith(f"mcp-connection:v1:{owner._instance_id}:")]
-    assert record.status == "stopped" and record.process is not None
-    assert record.process.pid is not None and record.process.created_at is not None
-    assert record.process.phase == "exited" and record.process.returncode == 17 and record.process.exit_verified
+    assert record.status == "unknown" and record.process is None
     cold = ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json")
     assert cold.get(record.resource_id) == record
     assert owner._session_scope is None
@@ -141,8 +136,7 @@ async def test_close_during_registration_never_publishes_readiness(
         assert not opening.done() and not closing.done()
         assert gate.cold_status() == "unknown" and not owner.started
         record = ExternalResourceLeaseLedger(state_path=gate.path).get(gate.resource_id)
-        assert record is not None and record.process == runtime.process_state
-        assert record.process is not None and record.process.phase == "running" and not record.process.exit_verified
+        assert record is not None and record.process is None
         gate.release.set()
         with pytest.raises(McpCatalogError, match="stage=startup"):
             await opening
@@ -168,8 +162,8 @@ async def test_start_cancel_and_scope_close_wait_for_same_sdk_cleanup(
     sdk_tasks: list[asyncio.Task[object]] = []
 
     @asynccontextmanager
-    async def observe_cleanup(server, on_change, lifecycle):
-        async with factory(server, on_change, lifecycle) as session:
+    async def observe_cleanup(server, on_change):
+        async with factory(server, on_change) as session:
             task = asyncio.current_task()
             assert task is not None
             sdk_tasks.append(task)
@@ -186,10 +180,6 @@ async def test_start_cancel_and_scope_close_wait_for_same_sdk_cleanup(
     try:
         await asyncio.wait_for(gate.entered.wait(), 6)
         runtime = owner._runtimes["schema"]
-        processes = [child for child in psutil.Process().children()
-                     if str(case.definitions) in child.cmdline()]
-        assert len(processes) == 1
-        process = processes[0]
         opening.cancel("原启动取消")
         gate.release.set()
         await asyncio.wait_for(cleanup_entered.wait(), 6)
@@ -200,14 +190,13 @@ async def test_start_cancel_and_scope_close_wait_for_same_sdk_cleanup(
             await asyncio.wait_for(asyncio.shield(closing), 0.05)
         assert not opening.done() and not runtime.scope.is_closed
         assert runtime._task is not None and sdk_tasks == [runtime._task]
-        assert not runtime._task.done() and process.is_running()
+        assert not runtime._task.done()
         assert gate.cold_status() == "running" and not owner.started
         cleanup_release.set()
         await asyncio.wait_for(closing, 6)
         with pytest.raises(asyncio.CancelledError, match="原启动取消"):
             await asyncio.wait_for(opening, 6)
         assert runtime._task.done() and runtime.scope.is_closed
-        assert not process.is_running()
         assert gate.cold_status() == "stopped" and not case.received()
         assert owner._session_scope is None
     finally:
@@ -267,8 +256,10 @@ async def test_registration_settles_before_readiness_or_cancel_returns(
             await owner.connect_server("schema", admit=lambda: None, on_initialized=lambda: initialized.append(True))
         else:
             server = owner.server_configuration("schema")
-            payload = {"servers": {"schema": {**server.connection, "enabled": True, "env": {"MCP_TEST_GENERATION": "new"}}}}
-            publish, _ = await owner.prepare_config(payload, scope, lambda _effect: None)
+            assert server.connection is not None
+            payload = {"servers": {"schema": {**server.connection, "enabled": True,
+                "headers": {**server.connection.get("headers", {}), "X-Test-Generation": "new"}}}}
+            publish, _ = await owner.prepare_config(payload, scope, lambda _effect: None, plugin_bindings=())
             publish()
 
     opening = asyncio.create_task(open_connection())
@@ -278,8 +269,7 @@ async def test_registration_settles_before_readiness_or_cancel_returns(
         # 启动身份已预登记；running 提交前仍须保留 unknown，不能伪报就绪。
         assert gate.cold_status() == "unknown"
         record = ExternalResourceLeaseLedger(state_path=gate.path).get(gate.resource_id)
-        assert record is not None and record.process is not None
-        assert record.process.phase == "running" and record.process.pid is not None and not record.process.exit_verified
+        assert record is not None and record.process is None
         assert not opening.done() and not initialized
         if entry == "startup":
             assert not owner.started
@@ -322,8 +312,7 @@ async def test_registration_settles_before_readiness_or_cancel_returns(
                 assert gate.failure is not None and contains_error(error, gate.failure)
     assert gate.cold_status() == "stopped"
     record = ExternalResourceLeaseLedger(state_path=gate.path).get(gate.resource_id)
-    assert record is not None and record.process is not None
-    assert record.process.phase == "exited" and record.process.exit_verified
+    assert record is not None and record.process is None
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
@@ -370,3 +359,4 @@ async def test_close_waits_for_original_terminal_publication(
                 await owner.shutdown()
             assert contains_error(caught.value, gate.failure)
             assert owner._session_scope is not None and owner._session_scope.state == "close_failed"
+            case.expected_shutdown_failure = caught.value

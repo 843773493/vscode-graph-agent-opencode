@@ -35,12 +35,12 @@ from tests.support.mcp.session_doubles import (
 )
 
 
-def _stdio_server(server_id: str = "mini") -> dict[str, object]:
+def _http_server(server_id: str = "mini") -> dict[str, object]:
     return {
         server_id: {
             "enabled": True,
-            "transport": "stdio",
-            "command": "fake-server",
+            "transport": "streamable_http",
+            "url": f"http://127.0.0.1:1/{server_id}/mcp",
         }
     }
 
@@ -53,7 +53,7 @@ def _make_owner(
 ) -> McpCatalogOwner:
     return McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": servers if servers is not None else _stdio_server()},
+        raw_config={"servers": servers if servers is not None else _http_server()},
         workspace_root=tmp_path,
         event_service=event_service,
         session_factory=factory,
@@ -88,12 +88,12 @@ async def test_startup_failure_keeps_exception_chain_without_public_raw_text(
 ) -> None:
     failure, expected = startup_failure
 
-    def fail_connect(server, on_change, lifecycle):
+    def fail_connect(server, on_change):
         raise failure
 
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": _stdio_server()}, workspace_root=tmp_path,
+        raw_config={"servers": _http_server()}, workspace_root=tmp_path,
         event_service=event_channel_service, session_factory=fail_connect,
     )
     with pytest.raises(McpCatalogError) as raised:
@@ -131,9 +131,11 @@ async def test_start_discovers_namespaced_tools_and_calls_them(
     await owner.start()
     try:
         tools = owner.get_tools()
+        metadata = tools[0].metadata
+        assert metadata is not None
         assert [tool.name for tool in tools] == ["mcp__mini__echo"]
-        assert tools[0].metadata["mcp_server_id"] == "mini"
-        assert tools[0].metadata["mcp_remote_tool_name"] == "echo"
+        assert metadata["mcp_server_id"] == "mini"
+        assert metadata["mcp_remote_tool_name"] == "echo"
         assert await tools[0].ainvoke({"text": "hello"}) == "echo:hello"
         assert owner.get_tool_ids() == frozenset({"mcp__mini__echo"})
         snapshots = owner.list_servers()
@@ -200,7 +202,9 @@ async def test_management_snapshot_tracks_publication_and_exact_connection_gener
 ) -> None:
     factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
     owner = _make_owner(tmp_path, factory, event_channel_service, {
-        **_stdio_server(), "disabled": {"enabled": False, "transport": "stdio", "command": "unused"},
+        **_http_server(), "disabled": {
+            "enabled": False, "transport": "streamable_http", "url": "http://127.0.0.1:1/disabled/mcp",
+        },
     })
     await owner.start()
     try:
@@ -378,7 +382,7 @@ async def test_explicit_refresh_keeps_entire_old_catalog_until_all_servers_valid
         tmp_path,
         factory,
         event_channel_service,
-        _stdio_server("alpha") | _stdio_server("beta"),
+        _http_server("alpha") | _http_server("beta"),
     )
     await owner.start()
     try:

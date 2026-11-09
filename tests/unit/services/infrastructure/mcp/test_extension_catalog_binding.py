@@ -38,12 +38,12 @@ from tests.support.mcp.session_doubles import (
 )
 
 
-def _stdio_server(server_id: str = "mini") -> dict[str, object]:
+def _http_server(server_id: str = "mini") -> dict[str, object]:
     return {
         server_id: {
             "enabled": True,
-            "transport": "stdio",
-            "command": "fake-server",
+            "transport": "streamable_http",
+            "url": f"http://127.0.0.1:1/{server_id}/mcp",
         }
     }
 
@@ -56,7 +56,7 @@ def _make_owner(
 ) -> McpCatalogOwner:
     return McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": servers if servers is not None else _stdio_server()},
+        raw_config={"servers": servers if servers is not None else _http_server()},
         workspace_root=tmp_path,
         event_service=event_service,
         session_factory=factory,
@@ -242,8 +242,8 @@ async def test_cross_server_same_remote_name_uses_declared_namespace(
 ) -> None:
     """跨 server 同名远端工具按规范命名空间区分，不冲突也不静默覆盖。"""
     servers: dict[str, object] = {
-        "alpha": {"enabled": True, "transport": "stdio", "command": "fake-a"},
-        "beta": {"enabled": True, "transport": "stdio", "command": "fake-b"},
+        "alpha": {"enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/alpha/mcp"},
+        "beta": {"enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/beta/mcp"},
     }
     factory = _FakeSessionFactory(initial_tools={"alpha": ["echo"], "beta": ["echo"]})
     owner = await _started_owner(tmp_path, factory, event_channel_service, servers)
