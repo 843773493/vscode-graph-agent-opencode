@@ -31,6 +31,8 @@ from mcp.shared.message import ServerMessageMetadata, SessionMessage
 from mcp.types import CONNECTION_CLOSED, METHOD_NOT_FOUND
 from pydantic import ValidationError
 
+from app.runtime.plugin_observation import plugin_observation_router
+
 
 class OwnedChildProcess:
     """MCP Server 原始进程句柄；关闭时等待该句柄和本机进程组退出。"""
@@ -568,7 +570,7 @@ def create_app() -> FastAPI:
         if (str(path_stat.st_dev), str(path_stat.st_ino)) != expected:
             raise RuntimeError("受管进程日志文件与冻结去向不一致")
         return {**identity, "status": "ready", "process_id": os.getpid(),
-                "capabilities": ["status", "shutdown"], "log_sink": sink}
+                "capabilities": ["status", "shutdown", "observation"], "log_sink": sink}
 
     async def shutdown() -> None:
         if app.state.server is not None:
@@ -577,6 +579,8 @@ def create_app() -> FastAPI:
     app = FastAPI(lifespan=bridge.lifespan)
     app.state.server = server
     router = APIRouter(dependencies=[Depends(verify_local_control_request), Depends(verify_runtime_control_token)])
+    router.include_router(plugin_observation_router(instance_id=identity["instance_id"], service=identity["plugin_id"],
+        verify_local=verify_local_control_request, verify_token=verify_runtime_control_token))
 
     @router.get("/internal/plugin/status")
     async def status() -> dict[str, object]:

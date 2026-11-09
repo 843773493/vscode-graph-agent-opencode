@@ -50,6 +50,12 @@ test("Terminal 仅以 Gateway 插件身份启动，并保护 HTTP 与 WebSocket 
       WORKSPACE_ROOT: workspaceRoot,
       BOXTEAM_WORKSPACE_ID: workspaceId,
       BOXTEAM_RUNTIME_CONTROL_TOKEN: token,
+      BOXTEAM_RUNTIME_OBSERVATION: JSON.stringify({
+        instance_id: instanceId,
+        revision: "test",
+        telemetry: { enabled: false, sample_ratio: 1, sample_buffer_limit: 256 },
+        statistics: { enabled: false, collection_interval_ms: 5000 },
+      }),
       BOXTEAM_PLUGIN_PORT: String(port),
       BOXTEAM_PLUGIN_INSTANCE: JSON.stringify({
         gateway_id: "test-gateway",
@@ -90,10 +96,23 @@ test("Terminal 仅以 Gateway 插件身份启动，并保护 HTTP 与 WebSocket 
   assert.equal(status.package_id, "boxteam.developer-tools");
   assert.equal(status.plugin_id, "terminal");
   assert.equal(status.workspace_id, workspaceId);
+  assert.ok(status.capabilities.includes("observation"));
   assert.deepEqual(status.services, [
     { service_id: "http", service_type: "terminal", protocol: "http" },
     { service_id: "socket", service_type: "terminal", protocol: "websocket" },
   ]);
+  const observationResponse = await fetch(`${baseUrl}/internal/plugin/observation`, {
+    headers: { "x-local-token": token },
+  });
+  assert.equal(observationResponse.status, 200);
+  const observation = await observationResponse.json();
+  assert.equal(observation.instance_id, instanceId);
+  assert.equal(observation.applied_revision, "test");
+  assert.equal(observation.telemetry.enabled, false);
+  assert.equal(observation.statistics.enabled, false);
+  assert.equal(observation.requests, null);
+  assert.deepEqual(observation.samples, []);
+  assert.deepEqual(observation.processes, []);
 
   const legacyHealth = await fetch(`${baseUrl}/health`);
   assert.equal(legacyHealth.status, 404);

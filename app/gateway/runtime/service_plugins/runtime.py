@@ -39,6 +39,7 @@ from app.gateway.runtime.workspace_process import (
     _local_child_environment,
     resolve_python_executable,
 )
+from app.schemas.gateway.diagnostics import PluginRuntimeObservationDTO
 from app.schemas.gateway.plugin_commands import (
     PluginCommandRegistration,
     PluginCommandRegistrationsDTO,
@@ -46,8 +47,10 @@ from app.schemas.gateway.plugin_commands import (
 from app.schemas.gateway.service_plugin import (
     PluginBinding,
     PluginInstanceStatus,
+    PluginInstanceView,
     ServicePluginManifest,
 )
+from app.schemas.runtime_observation import RuntimeObservationStatus
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
     requires_private_delivery,
@@ -117,6 +120,7 @@ class PluginSlot:
     state: str = "stopped"
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     commands: dict[str, PluginCommandRegistration] = field(default_factory=dict)
+    observation_error: str | None = None
     command_validators: dict[str, tuple[Draft202012Validator, Draft202012Validator]] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -214,6 +218,66 @@ class GatewayPluginRuntime:
         self.validate_defaults(payload)
         await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None,
                                parameters=plugin_parameters(payload))
+        await self.apply_observation()
+
+    async def _observation(self, slot: PluginSlot, *, apply: bool = False) -> RuntimeObservationStatus:
+        assert slot.receipt is not None and slot.base_url is not None and slot.token is not None
+        if "observation" not in slot.receipt.capabilities:
+            raise ValueError("插件未声明统一诊断管理能力，无法应用或读取诊断配置")
+        url = slot.base_url + "/internal/plugin/observation"
+        headers = {"X-Local-Token": slot.token}
+        desired = ({"instance_id": slot.receipt.instance_id,
+            **cast(dict[str, object], self.settings()["observation"])} if apply else None)
+        if desired is not None:
+            response = await self.client.post(url, headers=headers, json=desired)
+        else:
+            response = await self.client.get(url, headers=headers)
+        response.raise_for_status()
+        actual = RuntimeObservationStatus.model_validate(response.json())
+        if actual.instance_id != slot.receipt.instance_id:
+            raise ValueError("诊断回执不属于原插件实例")
+        if desired is not None and (actual.applied_revision != desired["revision"]
+            or actual.telemetry.model_dump() != desired["telemetry"]
+            or actual.statistics.model_dump() != desired["statistics"]):
+            raise ValueError("插件诊断回执没有采用已提交的设置与 revision")
+        return actual
+
+    async def apply_observation(self) -> None:
+        # 只有配置提交／接管边界发送；逐实例结算，不回滚成功项或重启失败插件。
+        for key in tuple(self.slots):
+            async with self._locks.setdefault(key, asyncio.Lock()):
+                slot = self.slots.get(key)
+                if slot is None or slot.state != "ready" or slot.receipt is None:
+                    continue
+                try:
+                    await self._observation(slot, apply=True)
+                except (httpx.HTTPError, ValueError, RuntimeError) as error:
+                    slot.observation_error = f"诊断应用失败: {error}"
+                    logger.exception("插件诊断配置应用失败: slot=%s", key)
+                else:
+                    slot.observation_error = None
+
+    async def observation_status(self, workspace_id: str | None) -> list[PluginRuntimeObservationDTO]:
+        result = []
+        for key in tuple(self.slots):
+            async with self._locks.setdefault(key, asyncio.Lock()):
+                slot = self.slots.get(key)
+                if slot is None or slot.receipt is None or (
+                    workspace_id is not None and slot.binding.workspace_id != workspace_id
+                ):
+                    continue
+                actual, error = None, slot.observation_error
+                try:
+                    if slot.state != "ready":
+                        raise RuntimeError(f"插件诊断尚不可用: state={slot.state}")
+                    actual = await self._observation(slot)
+                except (httpx.HTTPError, ValueError, RuntimeError) as read_error:
+                    error = f"诊断状态读取失败: {read_error}"
+                result.append(PluginRuntimeObservationDTO(
+                    instance=PluginInstanceView.model_validate(slot.receipt.model_dump(exclude={"log_sink"})),
+                    observation=actual, error=error,
+                ))
+        return result
 
     async def apply_scope(self, entries: list[PluginBinding], *, revision: str, workspace_id: str | None,
                           parameters: PluginParameters | None = None) -> None:
@@ -341,6 +405,8 @@ class GatewayPluginRuntime:
         validate_plugin_parameters(slot.declaration.contributes.configuration, slot.parameters, values)
         environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(values, ensure_ascii=False)
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])
+        environment["BOXTEAM_RUNTIME_OBSERVATION"] = json.dumps({"instance_id": instance_id,
+            **cast(dict[str, object], self.settings()["observation"])})
         root = self.packages.package_root(slot.binding.package_id, slot.binding.package_version)
         python_executable = resolve_python_executable()
         working_directory = self.directory / instance_id
@@ -550,7 +616,9 @@ async def plugin_runtime_lifespan(*, home: Path, gateway_id: str,
     owner = GatewayPluginRuntime(home=home, gateway_id=gateway_id, packages=packages, workspace_root=workspace_root,
         skill_sources=skill_sources,
         settings=lambda: {"logging": {"revision": revision(),
-            **cast(dict[str, dict[str, object]], payload()["logging"])["runtime"]}})
+            **cast(dict[str, dict[str, object]], payload()["logging"])["runtime"]},
+            "observation": {"revision": revision(), **{name: cast(dict[str, object], payload()[name])["runtime"]
+                for name in ("telemetry", "statistics")}}})
     try:
         owner.validate(payload())
         yield owner

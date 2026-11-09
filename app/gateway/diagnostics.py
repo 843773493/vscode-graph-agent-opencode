@@ -420,9 +420,13 @@ async def collect_gateway_diagnostics(
         log_results.append(log_dto)
     processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, extension_management, service_plugins)
     observed = observation.status() if observation is not None else None
+    plugin_observations = await service_plugins.observation_status(selected_workspace_id) if service_plugins else []
     collection_failed = observed is not None and (
         observed.collection_error is not None or any(process.error is not None for process in observed.processes)
     )
+    collection_failed = collection_failed or any(item.error is not None or item.observation is not None and (
+        item.observation.collection_error is not None or any(process.error is not None for process in item.observation.processes)
+    ) for item in plugin_observations)
     return GatewayDiagnosticsDTO(
         gateway_id=local_gateway_id,
         gateway_name=gateway_name,
@@ -436,4 +440,5 @@ async def collect_gateway_diagnostics(
         logs=log_results,
         processes=processes,
         observation=observed,
+        plugin_observations=plugin_observations,
     )

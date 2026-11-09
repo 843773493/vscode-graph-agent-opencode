@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
@@ -9,9 +10,9 @@ const artifactRoot = path.join(projectRoot, "out/tests/src/shared/serverPluginRu
 
 test("受管 Node 插件提供生成合同身份、日志控制和原关闭回执", () => {
   mkdirSync(artifactRoot, { recursive: true });
-  const logPath = path.join(artifactRoot, "plugin-runtime-test.log");
-  const resultPath = path.join(artifactRoot, "plugin-runtime-result.json");
-  if (existsSync(resultPath)) unlinkSync(resultPath);
+  const runId = randomUUID();
+  const logPath = path.join(artifactRoot, `plugin-runtime-${runId}.log`);
+  const resultPath = path.join(artifactRoot, `plugin-runtime-${runId}.json`);
   const logDescriptor = openSync(logPath, "w");
   try {
     const identity = fstatSync(logDescriptor, { bigint: true });
@@ -80,10 +81,59 @@ test("受管 Node 插件提供生成合同身份、日志控制和原关闭回�
       assert.equal(status.plugin_id, management.identity.plugin_id);
       assert.equal(status.instance_id, management.identity.instance_id);
       assert.equal(status.status, "ready");
-      assert.deepEqual(status.capabilities, ["status", "shutdown"]);
+      assert.deepEqual(status.capabilities, ["status", "shutdown", "observation"]);
       assert.deepEqual(status.services, [{ service_id: "terminal", service_type: "terminal", protocol: "websocket" }]);
       assert.equal(status.log_sink.device, process.env.EXPECTED_LOG_DEVICE);
       assert.equal(status.log_sink.inode, process.env.EXPECTED_LOG_INODE);
+
+      const observationUrl = endpoint + "/internal/plugin/observation";
+      const observationHeaders = { "x-local-token": management.token };
+      const observationResponse = await fetch(observationUrl, { headers: observationHeaders });
+      assert.equal(observationResponse.status, 200);
+      const observation = await observationResponse.json();
+      assert.equal(observation.instance_id, management.identity.instance_id);
+      assert.equal(observation.applied_revision, "plugin-runtime-test");
+      assert.equal(observation.requests, null);
+      assert.deepEqual(observation.samples, []);
+      const unauthorizedObservation = await fetch(observationUrl, { headers: { "x-local-token": "wrong-token" } });
+      assert.equal(unauthorizedObservation.status, 401);
+      const unsupportedObservationMethod = await fetch(observationUrl, {
+        method: "PUT", headers: observationHeaders,
+      });
+      assert.equal(unsupportedObservationMethod.status, 405);
+
+      for (const [payload, statusCode] of [
+        [{ instance_id: management.identity.instance_id, revision: "invalid-type",
+          telemetry: { enabled: false, sample_ratio: "invalid", sample_buffer_limit: 256 },
+          statistics: { enabled: false, collection_interval_ms: 5000 } }, 422],
+        [{ instance_id: management.identity.instance_id, revision: "invalid-range",
+          telemetry: { enabled: true, sample_ratio: 2, sample_buffer_limit: 256 },
+          statistics: { enabled: false, collection_interval_ms: 5000 } }, 422],
+        [{ instance_id: "another-plugin-instance", revision: "wrong-instance",
+          telemetry: { enabled: false, sample_ratio: 1, sample_buffer_limit: 256 },
+          statistics: { enabled: false, collection_interval_ms: 5000 } }, 409],
+      ]) {
+        const rejected = await fetch(observationUrl, {
+          method: "POST",
+          headers: { ...observationHeaders, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        assert.equal(rejected.status, statusCode);
+        const unchangedResponse = await fetch(observationUrl, { headers: observationHeaders });
+        assert.deepEqual(await unchangedResponse.json(), observation);
+      }
+
+      const applied = await fetch(observationUrl, {
+        method: "POST",
+        headers: { ...observationHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ instance_id: management.identity.instance_id, revision: "plugin-runtime-hot",
+          telemetry: { enabled: false, sample_ratio: 0, sample_buffer_limit: 64 },
+          statistics: { enabled: false, collection_interval_ms: 5000 } }),
+      });
+      assert.equal(applied.status, 200);
+      assert.equal((await applied.json()).applied_revision, "plugin-runtime-hot");
+      assert.equal((await (await fetch(observationUrl, { headers: observationHeaders })).json()).applied_revision,
+        "plugin-runtime-hot");
 
       const loggingResponse = await fetch(endpoint + "/internal/runtime-logging", { headers });
       assert.equal(loggingResponse.status, 200);
@@ -131,6 +181,9 @@ test("受管 Node 插件提供生成合同身份、日志控制和原关闭回�
           extension_contract_version: 1, services: [{ service_id: "terminal",
             service_type: "terminal", protocol: "websocket" }] }),
         BOXTEAM_RUNTIME_LOGGING: JSON.stringify({ revision: "initial", level: "info", pretty: false }),
+        BOXTEAM_RUNTIME_OBSERVATION: JSON.stringify({ instance_id: "plugin-instance-test", revision: "plugin-runtime-test",
+          telemetry: { enabled: false, sample_ratio: 1, sample_buffer_limit: 256 },
+          statistics: { enabled: false, collection_interval_ms: 5000 } }),
         BOXTEAM_RUNTIME_LOG_SINK: JSON.stringify({ path: logPath, owner_id: "plugin-test-owner",
           role: "service-plugin", source: "gateway", device: String(identity.dev), inode: String(identity.ino) }),
         EXPECTED_LOG_DEVICE: String(identity.dev),

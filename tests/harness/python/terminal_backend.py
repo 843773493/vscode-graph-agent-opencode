@@ -90,6 +90,9 @@ def start_terminal_plugin_service(
         "BOXTEAM_RUNTIME_CONTROL_TOKEN": token,
         "BOXTEAM_PLUGIN_PORT": str(backend_port),
         "BOXTEAM_PLUGIN_INSTANCE": json.dumps(identity),
+        "BOXTEAM_RUNTIME_OBSERVATION": json.dumps({"instance_id": instance_id, "revision": "test-startup",
+            "telemetry": {"enabled": False, "sample_ratio": 1, "sample_buffer_limit": 256},
+            "statistics": {"enabled": False, "collection_interval_ms": 5000}}),
     }
     process, logs = spawn_logged_process(
         [node_bin, "backend.js"],

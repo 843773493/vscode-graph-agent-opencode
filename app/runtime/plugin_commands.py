@@ -24,6 +24,7 @@ from app.api.runtime_logging import runtime_logging_router
 from app.core.logging_config import runtime_logging_state
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.trace_middleware import get_request_id
+from app.runtime.plugin_observation import plugin_observation_router
 from app.schemas.gateway.plugin_commands import (
     PluginCommandCallRequest,
     PluginCommandCancelDTO,
@@ -60,7 +61,7 @@ def plugin_command_router(
     parameters = TypeAdapter(dict[str, JsonValue]).validate_json(os.environ.get("BOXTEAM_PLUGIN_PARAMETERS", "{}"))
     identity = PluginInstanceStatus.model_validate({
         **json.loads(os.environ["BOXTEAM_PLUGIN_INSTANCE"]),
-        "status": "ready", "process_id": os.getpid(), "capabilities": ["status", "shutdown", "commands"],
+        "status": "ready", "process_id": os.getpid(), "capabilities": ["status", "shutdown", "commands", "observation"],
     })
     declarations = [PluginCommandContribution.model_validate(item)
                     for item in json.loads(os.environ["BOXTEAM_PLUGIN_COMMANDS"])]
@@ -76,6 +77,8 @@ def plugin_command_router(
     router = APIRouter(include_in_schema=False,
         dependencies=[Depends(verify_local_control_request), Depends(verify_runtime_control_token)])
     router.include_router(runtime_logging_router(prefix="/internal/runtime-logging", verify_token=verify_runtime_control_token))
+    router.include_router(plugin_observation_router(instance_id=identity.instance_id, service=identity.plugin_id,
+        verify_local=verify_local_control_request, verify_token=verify_runtime_control_token))
 
     def check(payload: PluginCommandCallRequest | PluginCommandCancelRequest) -> None:
         if (payload.gateway_id, payload.package_id, payload.package_version, payload.plugin_id,

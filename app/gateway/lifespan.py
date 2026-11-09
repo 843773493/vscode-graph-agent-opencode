@@ -170,7 +170,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
     app.state.gateway_config = gateway_config
 
     async def apply_committed_config(config: GatewayConfig) -> None:
-        # TODO：迁齐插件诊断 apply/status，逐实例返回实际设置与 revision；当前只采 Gateway 代理及原进程资源。
         await app.state.runtime_observation.apply(RuntimeObservationSettings.from_gateway_config(config.payload), config.revision)
         await app.state.service_plugins.apply(config.payload, config.revision)
 

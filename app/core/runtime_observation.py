@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 
 class RuntimeObservation:
     def __init__(self, *, instance_id: str, revision: str, settings: RuntimeObservationSettings,
-                 processes: Callable[[], Iterable[tuple[str, int]]]) -> None:
+                 processes: Callable[[], Iterable[tuple[str, int]]], collect_requests: bool = True) -> None:
         self.instance_id = instance_id
         self.revision = revision
         self.settings = settings
         self._processes = processes
+        self._collect_requests = collect_requests
         self._samples: deque[RuntimeRequestSample] | None = None
         self._requests: RuntimeRequestStatistics | None = None
         self._resources: list[RuntimeProcessResources] | None = None
@@ -49,7 +50,7 @@ class RuntimeObservation:
             or settings.statistics.collection_interval_ms != self.settings.statistics.collection_interval_ms
         ):
             await self._stop_timer()
-        if not settings.telemetry.enabled:
+        if not settings.telemetry.enabled or not self._collect_requests:
             self._samples = None
         elif self._samples is None or self._samples.maxlen != settings.telemetry.sample_buffer_limit:
             self._samples = deque(self._samples or (), maxlen=settings.telemetry.sample_buffer_limit)
@@ -57,7 +58,7 @@ class RuntimeObservation:
             self._requests = None
             self._resources = None
             self._collection_error = None
-        elif self._requests is None:
+        elif self._collect_requests and self._requests is None:
             self._requests = RuntimeRequestStatistics()
         self.settings, self.revision = settings, revision
         if settings.statistics.enabled and self._task is None:
@@ -89,6 +90,7 @@ class RuntimeObservation:
             requests=self._requests.model_copy() if self._requests is not None else None,
             samples=list(self._samples or ()), processes=list(self._resources or ()),
             collection_error=self._collection_error,
+            unsupported_metrics=["plugin_internal_stages"] if self._collect_requests else ["http_requests", "plugin_internal_stages"],
         )
 
     def _collect_resources(self) -> list[RuntimeProcessResources]:

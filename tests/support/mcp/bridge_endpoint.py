@@ -39,14 +39,19 @@ def bridge_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: pytest.
         if notify_changes:
             server_args += ["--notify-changes"]
         token = uuid4().hex
+        instance_id = uuid4().hex
         monkeypatch.setenv("BOXTEAM_RUNTIME_CONTROL_TOKEN", token)
         monkeypatch.setenv("BOXTEAM_PLUGIN_COMMANDS", "[]")
         monkeypatch.setenv("BOXTEAM_PLUGIN_INSTANCE", json.dumps({
             "gateway_id": "test-gateway", "workspace_id": load_or_create_workspace_id(context.workspace_root),
             "package_id": "test.mcp-bridge", "package_version": "1.0.0", "plugin_id": "probe",
-            "instance_id": uuid4().hex, "instance_scope": "workspace", "management_protocol_version": 1,
+            "instance_id": instance_id, "instance_scope": "workspace", "management_protocol_version": 1,
             "extension_contract_version": 1,
             "services": [{"service_id": "mcp", "service_type": "mcp", "protocol": "streamable-http"}],
+        }))
+        monkeypatch.setenv("BOXTEAM_RUNTIME_OBSERVATION", json.dumps({
+            "instance_id": instance_id,
+            "revision": "test-startup", "telemetry": {"enabled": False}, "statistics": {"enabled": False},
         }))
         monkeypatch.setenv("BOXTEAM_PLUGIN_PARAMETERS", json.dumps({
             "command": sys.executable,

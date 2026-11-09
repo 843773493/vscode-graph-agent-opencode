@@ -13,6 +13,7 @@ from pydantic import (
 
 from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
+from app.schemas.gateway.service_plugin import PluginInstanceView
 from app.schemas.gateway.workspaces import GatewayConnectionKind, GatewayWorkspaceStatus
 from app.schemas.runtime_logging import RuntimeLoggingService
 from app.schemas.runtime_observation import RuntimeObservationStatus
@@ -87,6 +88,12 @@ class GatewayDiagnosticProcessDTO(BaseModel):
     error: str | None = None
 
 
+class PluginRuntimeObservationDTO(BaseModel):
+    instance: PluginInstanceView
+    observation: RuntimeObservationStatus | None = None
+    error: str | None = None
+
+
 class GatewayDiagnosticsDTO(BaseModel):
     gateway_id: str
     gateway_name: str
@@ -100,6 +107,7 @@ class GatewayDiagnosticsDTO(BaseModel):
     logs: list[GatewayDiagnosticLogDTO] = Field(default_factory=list)
     processes: list[GatewayDiagnosticProcessDTO] = Field(default_factory=list)
     observation: RuntimeObservationStatus | None = None
+    plugin_observations: list[PluginRuntimeObservationDTO] = Field(default_factory=list)
 
 
 class GatewayDiagnosticLogQueryScopeDTO(BaseModel):

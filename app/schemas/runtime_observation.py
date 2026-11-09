@@ -32,6 +32,11 @@ class RuntimeObservationSettings(BaseModel):
                                    for name in ("telemetry", "statistics")})
 
 
+class RuntimeObservationApplyRequest(RuntimeObservationSettings):
+    instance_id: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+
+
 class RuntimeRequestSample(BaseModel):
     kind: str
     status_code: int

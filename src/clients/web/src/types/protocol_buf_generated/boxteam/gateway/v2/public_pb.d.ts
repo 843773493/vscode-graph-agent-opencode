@@ -5,6 +5,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
 import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
+import type { PluginInstanceView } from "./service_plugin_pb.js";
 
 /**
  * Describes the file boxteam/gateway/v2/public.proto.
@@ -1776,6 +1777,63 @@ export declare type RuntimeObservationStatus = Message<"boxteam.gateway.v2.Runti
 export declare const RuntimeObservationStatusSchema: GenMessage<RuntimeObservationStatus>;
 
 /**
+ * @generated from message boxteam.gateway.v2.RuntimeObservationApplyRequest
+ */
+export declare type RuntimeObservationApplyRequest = Message<"boxteam.gateway.v2.RuntimeObservationApplyRequest"> & {
+  /**
+   * @generated from field: string instance_id = 1;
+   */
+  instanceId: string;
+
+  /**
+   * @generated from field: string revision = 2;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.TelemetryRuntimeSettings telemetry = 3;
+   */
+  telemetry?: TelemetryRuntimeSettings | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.StatisticsRuntimeSettings statistics = 4;
+   */
+  statistics?: StatisticsRuntimeSettings | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.RuntimeObservationApplyRequest.
+ * Use `create(RuntimeObservationApplyRequestSchema)` to create a new message.
+ */
+export declare const RuntimeObservationApplyRequestSchema: GenMessage<RuntimeObservationApplyRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginRuntimeObservationDTO
+ */
+export declare type PluginRuntimeObservationDTO = Message<"boxteam.gateway.v2.PluginRuntimeObservationDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginInstanceView instance = 1;
+   */
+  instance?: PluginInstanceView | undefined;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.RuntimeObservationStatus observation = 2;
+   */
+  observation?: RuntimeObservationStatus | undefined;
+
+  /**
+   * @generated from field: optional string error = 3;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginRuntimeObservationDTO.
+ * Use `create(PluginRuntimeObservationDTOSchema)` to create a new message.
+ */
+export declare const PluginRuntimeObservationDTOSchema: GenMessage<PluginRuntimeObservationDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.GatewayDiagnosticsDTO
  */
 export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticsDTO"> & {
@@ -1838,6 +1896,11 @@ export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayD
    * @generated from field: optional boxteam.gateway.v2.RuntimeObservationStatus observation = 12;
    */
   observation?: RuntimeObservationStatus | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginRuntimeObservationDTO plugin_observations = 13;
+   */
+  pluginObservations: PluginRuntimeObservationDTO[];
 };
 
 /**

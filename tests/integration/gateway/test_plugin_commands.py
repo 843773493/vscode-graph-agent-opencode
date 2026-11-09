@@ -96,7 +96,7 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
         close_gateway_process(gateway)
 
 
-def _archive(destination: Path, prepared_package_root: Path) -> None:
+def _archive(destination: Path, prepared_package_root: Path, *, python_source: str = PYTHON) -> None:
     command = {"id": "execute", "title": "Execute", "handler": "execute", "required_capabilities": ["read"],
         "arguments_schema": {"type": "object", "additionalProperties": False, "required": ["mode", "value"],
             "properties": {"mode": {"enum": ["return", "wait", "error", "bad-result", "null", "configured"]}, "value": {"type": "string"}}},
@@ -117,16 +117,16 @@ def _archive(destination: Path, prepared_package_root: Path) -> None:
     lock["workspaces"][""] = {"name": package["name"], "dependencies": package["dependencies"]}
     with zipfile.ZipFile(destination, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
-        archive.writestr("entry.py", PYTHON)
+        archive.writestr("entry.py", python_source)
         archive.writestr("entry.mjs", NODE)
         archive.writestr("package.json", json.dumps(package))
         archive.writestr("bun.lock", json.dumps(lock))
         for file in sorted((prepared_package_root / "node_modules").rglob("*")):
             if file.is_file():
                 archive.write(file, file.relative_to(prepared_package_root).as_posix())
-        for file in ("serverPluginRuntime.mjs", "serverPluginCommands.mjs", "serverRuntimeControl.mjs", "serverRuntimeLogging.mjs"):
+        for file in ("serverPluginRuntime.mjs", "serverPluginCommands.mjs", "serverRuntimeControl.mjs", "serverRuntimeLogging.mjs", "serverRuntimeObservation.mjs"):
             archive.write(Path("src/shared") / file, f"src/shared/{file}")
-        for file in ("plugin_commands_pb.js", "service_plugin_pb.js"):
+        for file in ("plugin_commands_pb.js", "service_plugin_pb.js", "public_pb.js"):
             source = Path("src/workspace-services/protocol/generated/boxteam/gateway/v2") / file
             archive.write(source, source.as_posix())
 

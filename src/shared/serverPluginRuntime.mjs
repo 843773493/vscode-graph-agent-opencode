@@ -7,6 +7,7 @@ import {
 } from "./serverRuntimeControl.mjs";
 import { runtimeLoggingState } from "./serverRuntimeLogging.mjs";
 import { createPluginCommands } from "./serverPluginCommands.mjs";
+import { createRuntimeObservation } from "./serverRuntimeObservation.mjs";
 
 function invalidEnvironment(name, detail) {
   throw new TypeError(`${name} ${detail}`);
@@ -98,18 +99,30 @@ export function createPluginRuntimeManagement(options) {
     invalidEnvironment("BOXTEAM_PLUGIN_PARAMETERS", "必须是 JSON 对象");
   }
   const commands = createPluginCommands(environment.identity, options.commands, environment.parameters);
+  const observation = createRuntimeObservation(environment.identity.instance_id, options.service,
+    JSON.parse(readRequiredEnvironment("BOXTEAM_RUNTIME_OBSERVATION")));
 
   return Object.freeze({
     ...environment,
     async handleRequest(request, response, pathname) {
+      observation.observeHttp(response);
       if (await handleRuntimeLoggingRequest(request, response, {
         pathname, service: options.service, readJson: options.readJson, token: environment.token,
       })) return true;
       if (pathname !== "/internal/plugin/status" && pathname !== "/internal/plugin/shutdown"
+          && pathname !== "/internal/plugin/observation"
           && !["/internal/plugin/commands", "/internal/plugin/commands/call", "/internal/plugin/commands/cancel"].includes(pathname)) return false;
 
       verifyLocalRuntimeControlRequest(request);
       verifyRuntimeControlToken(request.headers["x-local-token"], environment.token);
+      if (pathname === "/internal/plugin/observation") {
+        if (!["GET", "POST"].includes(request.method)) {
+          throw Object.assign(new Error("插件诊断只接受 GET 或 POST"), { statusCode: 405 });
+        }
+        sendJson(response, 200, request.method === "GET"
+          ? observation.status() : observation.apply(await options.readJson(request)));
+        return true;
+      }
       if (pathname.startsWith("/internal/plugin/commands")) {
         await commands.handle(request, response, pathname, options.readJson, options.logger);
         return true;
@@ -122,7 +135,7 @@ export function createPluginRuntimeManagement(options) {
           ...environment.identity,
           status: "ready",
           process_id: process.pid,
-          capabilities: ["status", "shutdown", ...(commands.registrations.commands.length ? ["commands"] : [])],
+          capabilities: ["status", "shutdown", "observation", ...(commands.registrations.commands.length ? ["commands"] : [])],
           log_sink: runtimeLoggingState(options.service).log_sink,
         });
         return true;
@@ -137,6 +150,7 @@ export function createPluginRuntimeManagement(options) {
       }
       const receipt = { accepted: true, process_id: process.pid, instance_id: environment.identity.instance_id };
       response.once("finish", () => {
+        observation.close();
         void Promise.resolve().then(options.shutdown).catch((error) => {
           try {
             options.logger.error("插件关闭任务失败", error);

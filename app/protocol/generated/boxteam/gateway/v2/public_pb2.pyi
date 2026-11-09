@@ -1,5 +1,6 @@
 import datetime
 
+from boxteam.gateway.v2 import service_plugin_pb2 as _service_plugin_pb2
 from google.protobuf import struct_pb2 as _struct_pb2
 from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from google.protobuf.internal import containers as _containers
@@ -702,8 +703,30 @@ class RuntimeObservationStatus(_message.Message):
     unsupported_metrics: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, instance_id: _Optional[str] = ..., applied_revision: _Optional[str] = ..., telemetry: _Optional[_Union[TelemetryRuntimeSettings, _Mapping]] = ..., statistics: _Optional[_Union[StatisticsRuntimeSettings, _Mapping]] = ..., requests: _Optional[_Union[RuntimeRequestStatistics, _Mapping]] = ..., samples: _Optional[_Iterable[_Union[RuntimeRequestSample, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[RuntimeProcessResources, _Mapping]]] = ..., collection_error: _Optional[str] = ..., unsupported_metrics: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class RuntimeObservationApplyRequest(_message.Message):
+    __slots__ = ("instance_id", "revision", "telemetry", "statistics")
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    TELEMETRY_FIELD_NUMBER: _ClassVar[int]
+    STATISTICS_FIELD_NUMBER: _ClassVar[int]
+    instance_id: str
+    revision: str
+    telemetry: TelemetryRuntimeSettings
+    statistics: StatisticsRuntimeSettings
+    def __init__(self, instance_id: _Optional[str] = ..., revision: _Optional[str] = ..., telemetry: _Optional[_Union[TelemetryRuntimeSettings, _Mapping]] = ..., statistics: _Optional[_Union[StatisticsRuntimeSettings, _Mapping]] = ...) -> None: ...
+
+class PluginRuntimeObservationDTO(_message.Message):
+    __slots__ = ("instance", "observation", "error")
+    INSTANCE_FIELD_NUMBER: _ClassVar[int]
+    OBSERVATION_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    instance: _service_plugin_pb2.PluginInstanceView
+    observation: RuntimeObservationStatus
+    error: str
+    def __init__(self, instance: _Optional[_Union[_service_plugin_pb2.PluginInstanceView, _Mapping]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ..., error: _Optional[str] = ...) -> None: ...
+
 class GatewayDiagnosticsDTO(_message.Message):
-    __slots__ = ("gateway_id", "gateway_name", "gateway_connection_id", "connection_kind", "status", "checked_at", "selected_workspace_id", "selected_log_id", "workspaces", "logs", "processes", "observation")
+    __slots__ = ("gateway_id", "gateway_name", "gateway_connection_id", "connection_kind", "status", "checked_at", "selected_workspace_id", "selected_log_id", "workspaces", "logs", "processes", "observation", "plugin_observations")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_NAME_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -716,6 +739,7 @@ class GatewayDiagnosticsDTO(_message.Message):
     LOGS_FIELD_NUMBER: _ClassVar[int]
     PROCESSES_FIELD_NUMBER: _ClassVar[int]
     OBSERVATION_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_OBSERVATIONS_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     gateway_name: str
     gateway_connection_id: str
@@ -728,7 +752,8 @@ class GatewayDiagnosticsDTO(_message.Message):
     logs: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticLogDTO]
     processes: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticProcessDTO]
     observation: RuntimeObservationStatus
-    def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ...) -> None: ...
+    plugin_observations: _containers.RepeatedCompositeFieldContainer[PluginRuntimeObservationDTO]
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ..., plugin_observations: _Optional[_Iterable[_Union[PluginRuntimeObservationDTO, _Mapping]]] = ...) -> None: ...
 
 class GatewayDiagnosticLogQueryScopeDTO(_message.Message):
     __slots__ = ("source", "workspace_ids")

@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package boxteam.gateway.v2;
 
+import "boxteam/gateway/v2/service_plugin.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -416,6 +417,19 @@ message RuntimeObservationStatus {
   repeated string unsupported_metrics = 9;
 }
 
+message RuntimeObservationApplyRequest {
+  string instance_id = 1;
+  string revision = 2;
+  TelemetryRuntimeSettings telemetry = 3;
+  StatisticsRuntimeSettings statistics = 4;
+}
+
+message PluginRuntimeObservationDTO {
+  PluginInstanceView instance = 1;
+  optional RuntimeObservationStatus observation = 2;
+  optional string error = 3;
+}
+
 message GatewayDiagnosticsDTO {
   string gateway_id = 1;
   string gateway_name = 2;
@@ -429,6 +443,7 @@ message GatewayDiagnosticsDTO {
   repeated GatewayDiagnosticLogDTO logs = 10;
   repeated GatewayDiagnosticProcessDTO processes = 11;
   optional RuntimeObservationStatus observation = 12;
+  repeated PluginRuntimeObservationDTO plugin_observations = 13;
 }
 
 message GatewayDiagnosticLogQueryScopeDTO {

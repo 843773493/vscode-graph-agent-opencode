@@ -97,9 +97,19 @@ type RuntimeObservationStatusDTO = Omit<
 > & {
   processes: RuntimeProcessResourcesDTO[];
 };
-export type GatewayDiagnosticsDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>, "processes" | "observation"> & {
+type PluginRuntimeObservationDTO = Omit<
+  NullableOptionalFields<OptionalFields<GatewayProtocol.PluginRuntimeObservationDTO>, "error">,
+  "instance" | "observation"
+> & {
+  instance: NullableOptionalFields<
+    OptionalFields<NonNullable<GatewayProtocol.PluginRuntimeObservationDTO["instance"]>>, "workspace_id"
+  >;
+  observation: RuntimeObservationStatusDTO | null;
+};
+export type GatewayDiagnosticsDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>, "processes" | "observation" | "plugin_observations"> & {
   processes: GatewayDiagnosticProcessDTO[];
   observation: RuntimeObservationStatusDTO | null;
+  plugin_observations: PluginRuntimeObservationDTO[];
 };
 export type GatewayDirectoryEntryDTO = OptionalFields<GatewayProtocol.GatewayDirectoryEntryDTO>;
 export type GatewayDirectoryListDTO = OptionalFields<GatewayProtocol.GatewayDirectoryListDTO>;

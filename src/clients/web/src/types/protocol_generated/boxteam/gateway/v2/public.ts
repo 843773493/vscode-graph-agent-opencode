@@ -5,6 +5,7 @@
 // source: boxteam/gateway/v2/public.proto
 
 /* eslint-disable */
+import { PluginInstanceView } from "./service_plugin.js";
 
 export const protobufPackage = "boxteam.gateway.v2";
 
@@ -422,6 +423,19 @@ export interface RuntimeObservationStatus {
   unsupported_metrics: string[];
 }
 
+export interface RuntimeObservationApplyRequest {
+  instance_id: string;
+  revision: string;
+  telemetry: TelemetryRuntimeSettings | undefined;
+  statistics: StatisticsRuntimeSettings | undefined;
+}
+
+export interface PluginRuntimeObservationDTO {
+  instance: PluginInstanceView | undefined;
+  observation?: RuntimeObservationStatus | undefined;
+  error?: string | undefined;
+}
+
 export interface GatewayDiagnosticsDTO {
   gateway_id: string;
   gateway_name: string;
@@ -435,6 +449,7 @@ export interface GatewayDiagnosticsDTO {
   logs: GatewayDiagnosticLogDTO[];
   processes: GatewayDiagnosticProcessDTO[];
   observation?: RuntimeObservationStatus | undefined;
+  plugin_observations: PluginRuntimeObservationDTO[];
 }
 
 export interface GatewayDiagnosticLogQueryScopeDTO {
@@ -4252,6 +4267,99 @@ export const RuntimeObservationStatus: MessageFns<RuntimeObservationStatus> = {
   },
 };
 
+function createBaseRuntimeObservationApplyRequest(): RuntimeObservationApplyRequest {
+  return { instance_id: "", revision: "", telemetry: undefined, statistics: undefined };
+}
+
+export const RuntimeObservationApplyRequest: MessageFns<RuntimeObservationApplyRequest> = {
+  fromJSON(object: any): RuntimeObservationApplyRequest {
+    return {
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : "",
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      telemetry: isSet(object.telemetry) ? TelemetryRuntimeSettings.fromJSON(object.telemetry) : undefined,
+      statistics: isSet(object.statistics) ? StatisticsRuntimeSettings.fromJSON(object.statistics) : undefined,
+    };
+  },
+
+  toJSON(message: RuntimeObservationApplyRequest): unknown {
+    const obj: any = {};
+    if (message.instance_id !== "") {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.telemetry !== undefined) {
+      obj.telemetry = TelemetryRuntimeSettings.toJSON(message.telemetry);
+    }
+    if (message.statistics !== undefined) {
+      obj.statistics = StatisticsRuntimeSettings.toJSON(message.statistics);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RuntimeObservationApplyRequest>, I>>(base?: I): RuntimeObservationApplyRequest {
+    return RuntimeObservationApplyRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RuntimeObservationApplyRequest>, I>>(
+    object: I,
+  ): RuntimeObservationApplyRequest {
+    const message = createBaseRuntimeObservationApplyRequest();
+    message.instance_id = object.instance_id ?? "";
+    message.revision = object.revision ?? "";
+    message.telemetry = (object.telemetry !== undefined && object.telemetry !== null)
+      ? TelemetryRuntimeSettings.fromPartial(object.telemetry)
+      : undefined;
+    message.statistics = (object.statistics !== undefined && object.statistics !== null)
+      ? StatisticsRuntimeSettings.fromPartial(object.statistics)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePluginRuntimeObservationDTO(): PluginRuntimeObservationDTO {
+  return { instance: undefined, observation: undefined, error: undefined };
+}
+
+export const PluginRuntimeObservationDTO: MessageFns<PluginRuntimeObservationDTO> = {
+  fromJSON(object: any): PluginRuntimeObservationDTO {
+    return {
+      instance: isSet(object.instance) ? PluginInstanceView.fromJSON(object.instance) : undefined,
+      observation: isSet(object.observation) ? RuntimeObservationStatus.fromJSON(object.observation) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: PluginRuntimeObservationDTO): unknown {
+    const obj: any = {};
+    if (message.instance !== undefined) {
+      obj.instance = PluginInstanceView.toJSON(message.instance);
+    }
+    if (message.observation !== undefined) {
+      obj.observation = RuntimeObservationStatus.toJSON(message.observation);
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginRuntimeObservationDTO>, I>>(base?: I): PluginRuntimeObservationDTO {
+    return PluginRuntimeObservationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginRuntimeObservationDTO>, I>>(object: I): PluginRuntimeObservationDTO {
+    const message = createBasePluginRuntimeObservationDTO();
+    message.instance = (object.instance !== undefined && object.instance !== null)
+      ? PluginInstanceView.fromPartial(object.instance)
+      : undefined;
+    message.observation = (object.observation !== undefined && object.observation !== null)
+      ? RuntimeObservationStatus.fromPartial(object.observation)
+      : undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
 function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
   return {
     gateway_id: "",
@@ -4266,6 +4374,7 @@ function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
     logs: [],
     processes: [],
     observation: undefined,
+    plugin_observations: [],
   };
 }
 
@@ -4294,6 +4403,9 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
         ? object.processes.map((e: any) => GatewayDiagnosticProcessDTO.fromJSON(e))
         : [],
       observation: isSet(object.observation) ? RuntimeObservationStatus.fromJSON(object.observation) : undefined,
+      plugin_observations: globalThis.Array.isArray(object?.plugin_observations)
+        ? object.plugin_observations.map((e: any) => PluginRuntimeObservationDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -4335,6 +4447,9 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     if (message.observation !== undefined) {
       obj.observation = RuntimeObservationStatus.toJSON(message.observation);
     }
+    if (message.plugin_observations?.length) {
+      obj.plugin_observations = message.plugin_observations.map((e) => PluginRuntimeObservationDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -4357,6 +4472,8 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     message.observation = (object.observation !== undefined && object.observation !== null)
       ? RuntimeObservationStatus.fromPartial(object.observation)
       : undefined;
+    message.plugin_observations = object.plugin_observations?.map((e) => PluginRuntimeObservationDTO.fromPartial(e)) ||
+      [];
     return message;
   },
 };
