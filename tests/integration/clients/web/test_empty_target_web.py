@@ -123,8 +123,6 @@ exports.activate = context => {
     }
   }));
   const activation = crypto.randomUUID();
-  context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.runtimeDiagnostics',
-    () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
   context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.inspect', value => ({
     value, activation, version: context.extension.packageJSON.version,
     folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
@@ -203,8 +201,7 @@ context.subscriptions.push(vscode.commands.registerCommand('boxteam.empty.hybrid
   mode: 'node', version: context.extension.packageJSON.version, platform: process.platform, pid: process.pid, activation,
   nativeContent: require('node:fs').readFileSync(require('node:path').join(__dirname, 'native.txt'), 'utf8'),
   folders: vscode.workspace.workspaceFolders?.map(folder => folder.uri.toString(true)) ?? [],
-})), vscode.commands.registerCommand('boxteam.empty.nodeDiagnostics',
-  () => vscode.commands.executeCommand('boxteam.extensions.getRuntimeDiagnostics')));
+})));
 };
 """ + notebook_probe)
             archive.writestr("extension/native.txt", "hybrid-node-" + version)
@@ -240,7 +237,7 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
         "bun", "tests/integration/clients/web/empty_target_web.mjs"]
     paths = ["app/gateway/server/extension_host.py", "src/clients/workbench/src/extensions/inventory.ts", "src/clients/workbench/scripts/extensions/extensionBrowserTransform.mjs",
         "src/clients/workbench/src/extensions/webHost.ts", "src/clients/workbench/src/extensions/targetContext.ts",
-        "src/clients/workbench/src/extensions/runtimeDiagnostics.ts", "src/clients/workbench/src/extensions/commands.ts",
+        "src/clients/workbench/src/extensions/commands.ts",
         "src/clients/workbench/src/extensions/contribution.ts",
         "src/clients/workbench/src/extensions/targetUris.ts", "src/clients/workbench/scripts/sourceTransform.mjs",
         "src/clients/workbench/scripts/extensions/extensionNotebookTransform.mjs",

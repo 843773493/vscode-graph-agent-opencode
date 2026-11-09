@@ -6,9 +6,6 @@ import { gatewayWorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js
 import { gateway } from '../agentApi.js';
 import { loadSearchScope } from '../search/target.js';
 import { workspaceFileUri } from '../workspaceFiles.js';
-import { registerExtensionRuntimeDiagnostics } from './runtimeDiagnostics.js';
-
-registerExtensionRuntimeDiagnostics();
 
 registerAction2(class AttachExtensionWorkspaceViews extends Action2 {
   constructor() { super({ id: 'boxteam.extensions.attachWorkspaceViews', title: { value: '扩展：挂接窗口工作区并重新载入', original: 'Extensions: Attach Window Workspaces and Reload' }, f1: true }); }

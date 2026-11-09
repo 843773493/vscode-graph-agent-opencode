@@ -12,8 +12,9 @@ const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, '
 const upstream = './src/clients/workbench/upstream/src/vs/';
 const sourcePaths = ['tests/integration/workspace_services/extension_host/extension_instances.test.mjs',
   ...['src/extensions/inventory.ts', 'src/extensions/nativeInventory.ts', 'src/extensions/webConnection.ts', 'src/extensions/targetContext.ts',
-    'scripts/sourceTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
-    'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionOwnerTransform.mjs', 'scripts/extensions/extensionEnablementTransform.mjs',
+    'src/extensions/commands.ts', 'src/extensions/contribution.ts', 'scripts/sourceTransform.mjs',
+    'scripts/extensions/extensionOwnerTransform.mjs', 'scripts/extensions/extensionInstanceTransform.mjs',
+    'scripts/extensions/extensionRunningTransform.mjs', 'scripts/extensions/extensionEnablementTransform.mjs',
     'upstream/src/vs/workbench/services/extensionManagement/browser/extensionEnablementService.ts',
     'upstream/src/vs/workbench/services/extensions/common/abstractExtensionService.ts',
     'upstream/src/vs/workbench/services/extensions/common/extensionRunningLocationTracker.ts',
@@ -741,6 +742,45 @@ test('原 CommandsRegistry 单入口按编辑器／原host冻结调用，dispose
     expect(calls).toEqual([1, 1]);
   } finally { registrations.forEach(registration => registration.dispose()); }
   expect(m.CommandsRegistry.getCommand('probe.shared')).toBeUndefined(); receipt.checks.push('单窗口原命令入口、发起目标冻结、无上下文明确选择、来源撤销及旧代际拒绝');
+});
+
+test('普通目标命令从发起宿主的依赖可见集路由，不触达其它目标同名扩展', async () => {
+  const dependencyA = extension(targetA, '1.0.0', { identifier: id('probe.dep'), contributes: { commands: [
+    { command: 'probe.dependencyCommand', title: '依赖命令' },
+  ] } });
+  const dependencyB = { ...dependencyA, installationTarget: targetB, extensionLocation: m.URI.file('/extensions/B/dep') };
+  const root = extension(targetA, '1.0.0', { identifier: id('probe.root'), contributes: undefined,
+    extensionDependencies: ['probe.dep'] });
+  const source = {
+    runningLocation: new m.RemoteRunningLocation(targetA, 'default', ['a1']),
+    extensions: new m.ExtensionHostExtensions(1, [root, dependencyA], [root.identifier]),
+  };
+  const target = {
+    runningLocation: new m.RemoteRunningLocation(targetA, 'default', ['a1']),
+    extensions: new m.ExtensionHostExtensions(1, [root, dependencyA], [dependencyA.identifier]),
+  };
+  const foreign = {
+    runningLocation: new m.RemoteRunningLocation(targetB, 'default', ['b1']),
+    extensions: new m.ExtensionHostExtensions(1, [dependencyB], [dependencyB.identifier]),
+  };
+  const hosts = [source, target, foreign], calls = [];
+  const service = { getExtensionHosts: () => hosts, getHostExtensions: host => {
+    if (host === source) return [root];
+    return host.extensions.allExtensions;
+  }, whenInstalledExtensionsRegistered: async () => true };
+  const registrations = [
+    m.registerTargetCommand(service, target, 'probe.dependencyCommand', async (...args) => { calls.push({ host: 'A', args }); return 'A'; }),
+    m.registerTargetCommand(service, foreign, 'probe.dependencyCommand', async (...args) => { calls.push({ host: 'B', args }); return 'B'; }),
+  ];
+  try {
+    const selected = await m.captureCommandHost(service, 'probe.dependencyCommand', () => undefined,
+      () => { throw new Error('唯一合法依赖目标不应弹出选择'); }, source);
+    expect(selected).toBe(target);
+    const result = await m.executeCommandForHost(m.CommandsRegistry.getCommand('probe.dependencyCommand'),
+      { get: () => ({ activeEditor: undefined }) }, ['opaque', { value: 7 }], selected);
+    expect(result).toBe('A'); expect(calls).toEqual([{ host: 'A', args: ['opaque', { value: 7 }] }]);
+  } finally { registrations.forEach(registration => registration.dispose()); }
+  receipt.checks.push('普通扩展命令只路由到发起宿主可见且同目标的依赖实例');
 });
 
 test('首次命令在宿主尚未绑定时从原 Registry 与 Tracker 选择目标', async () => {
