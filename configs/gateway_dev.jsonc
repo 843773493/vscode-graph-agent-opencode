@@ -12,6 +12,12 @@
       "pretty": true
     }
   },
+  "telemetry": {
+    "runtime": {"enabled": false, "sample_ratio": 1, "sample_buffer_limit": 256}
+  },
+  "statistics": {
+    "runtime": {"enabled": false, "collection_interval_ms": 5000}
+  },
   "resources": {
     "skill_sources": {
       "sources": [], // 显式共享来源：稳定 id、name、fetch.protocol=http/url、updates 与层内 priority。数组整体覆盖。

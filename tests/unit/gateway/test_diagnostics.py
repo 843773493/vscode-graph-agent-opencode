@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from app.core.logging_contract import load_runtime_log_contract
@@ -145,13 +145,29 @@ def remote_diagnostics(monkeypatch: pytest.MonkeyPatch) -> Iterator[
     yield registry, responses, requests
 
 
+@pytest.fixture
+def diagnostics_request() -> Request:
+    return Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/gateway/diagnostics",
+        "raw_path": b"/api/gateway/diagnostics",
+        "query_string": b"",
+        "headers": [],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+    })
+
+
 @pytest.mark.parametrize("native_path", [
     "/private/diagnostics-marker", r"C:\private\diagnostics-marker", r"\\server\private\diagnostics-marker",
 ], ids=["posix", "drive", "unc"])
 @pytest.mark.parametrize("failure", ["http-403", "http-503", "transport", "validation", "json"])
 async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary(
     remote_diagnostics: tuple[Mock, list[httpx.Response | httpx.RequestError], list[httpx.Request]],
-    native_path: str, failure: str, caplog: pytest.LogCaptureFixture,
+    diagnostics_request: Request, native_path: str, failure: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     registry, responses, requests = remote_diagnostics
     diagnostics = {
@@ -178,6 +194,7 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
 
     async def invoke():
         return await control_router.get_gateway_diagnostics(
+            request=diagnostics_request,
             gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
             tail_lines=300, _="local-token", request_id="req_diagnostics_boundary", registry=registry,
         )
@@ -215,12 +232,13 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
 @pytest.mark.parametrize("error, status", [(KeyError("未知远端"), 404), (ValueError("工作区不属于所选远端"), 400)])
 async def test_remote_diagnostics_preflight_preserves_business_rejection(
     remote_diagnostics: tuple[Mock, list[httpx.Response | httpx.RequestError], list[httpx.Request]],
-    error: Exception, status: int,
+    diagnostics_request: Request, error: Exception, status: int,
 ) -> None:
     registry, _, requests = remote_diagnostics
     registry.remote_gateway_connection.side_effect = error
     with pytest.raises(HTTPException) as caught:
         await control_router.get_gateway_diagnostics(
+            request=diagnostics_request,
             gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
             tail_lines=300, _="local-token", request_id="req_diagnostics_preflight", registry=registry,
         )
@@ -233,11 +251,12 @@ async def test_remote_diagnostics_preflight_preserves_business_rejection(
 ])
 async def test_remote_diagnostics_rejects_conflicting_or_invalid_gateway_before_upstream(
     remote_diagnostics: tuple[Mock, list[httpx.Response | httpx.RequestError], list[httpx.Request]],
-    target_gateway_id: str,
+    diagnostics_request: Request, target_gateway_id: str,
 ) -> None:
     registry, _, requests = remote_diagnostics
     with pytest.raises(HTTPException) as caught:
         await control_router.get_gateway_diagnostics(
+            request=diagnostics_request,
             gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
             tail_lines=300, _="local-token", request_id="req_diagnostics_target",
             registry=registry, target_gateway_id=target_gateway_id,

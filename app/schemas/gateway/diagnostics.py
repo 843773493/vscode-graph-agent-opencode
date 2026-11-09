@@ -15,6 +15,7 @@ from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceI
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.workspaces import GatewayConnectionKind, GatewayWorkspaceStatus
 from app.schemas.runtime_logging import RuntimeLoggingService
+from app.schemas.runtime_observation import RuntimeObservationStatus
 
 GatewayDiagnosticStatus = Literal["ready", "degraded", "offline"]
 
@@ -98,6 +99,7 @@ class GatewayDiagnosticsDTO(BaseModel):
     workspaces: list[GatewayDiagnosticWorkspaceDTO] = Field(default_factory=list)
     logs: list[GatewayDiagnosticLogDTO] = Field(default_factory=list)
     processes: list[GatewayDiagnosticProcessDTO] = Field(default_factory=list)
+    observation: RuntimeObservationStatus | None = None
 
 
 class GatewayDiagnosticLogQueryScopeDTO(BaseModel):

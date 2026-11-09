@@ -1563,6 +1563,219 @@ export declare type GatewayDiagnosticProcessDTO = Message<"boxteam.gateway.v2.Ga
 export declare const GatewayDiagnosticProcessDTOSchema: GenMessage<GatewayDiagnosticProcessDTO>;
 
 /**
+ * @generated from message boxteam.gateway.v2.TelemetryRuntimeSettings
+ */
+export declare type TelemetryRuntimeSettings = Message<"boxteam.gateway.v2.TelemetryRuntimeSettings"> & {
+  /**
+   * @generated from field: bool enabled = 1;
+   */
+  enabled: boolean;
+
+  /**
+   * @generated from field: double sample_ratio = 2;
+   */
+  sampleRatio: number;
+
+  /**
+   * @generated from field: int32 sample_buffer_limit = 3;
+   */
+  sampleBufferLimit: number;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.TelemetryRuntimeSettings.
+ * Use `create(TelemetryRuntimeSettingsSchema)` to create a new message.
+ */
+export declare const TelemetryRuntimeSettingsSchema: GenMessage<TelemetryRuntimeSettings>;
+
+/**
+ * @generated from message boxteam.gateway.v2.StatisticsRuntimeSettings
+ */
+export declare type StatisticsRuntimeSettings = Message<"boxteam.gateway.v2.StatisticsRuntimeSettings"> & {
+  /**
+   * @generated from field: bool enabled = 1;
+   */
+  enabled: boolean;
+
+  /**
+   * @generated from field: int32 collection_interval_ms = 2;
+   */
+  collectionIntervalMs: number;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.StatisticsRuntimeSettings.
+ * Use `create(StatisticsRuntimeSettingsSchema)` to create a new message.
+ */
+export declare const StatisticsRuntimeSettingsSchema: GenMessage<StatisticsRuntimeSettings>;
+
+/**
+ * @generated from message boxteam.gateway.v2.RuntimeRequestSample
+ */
+export declare type RuntimeRequestSample = Message<"boxteam.gateway.v2.RuntimeRequestSample"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: int32 status_code = 2;
+   */
+  statusCode: number;
+
+  /**
+   * @generated from field: double duration_ms = 3;
+   */
+  durationMs: number;
+
+  /**
+   * @generated from field: bool failed = 4;
+   */
+  failed: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.RuntimeRequestSample.
+ * Use `create(RuntimeRequestSampleSchema)` to create a new message.
+ */
+export declare const RuntimeRequestSampleSchema: GenMessage<RuntimeRequestSample>;
+
+/**
+ * @generated from message boxteam.gateway.v2.RuntimeRequestStatistics
+ */
+export declare type RuntimeRequestStatistics = Message<"boxteam.gateway.v2.RuntimeRequestStatistics"> & {
+  /**
+   * @generated from field: int64 count = 1;
+   */
+  count: bigint;
+
+  /**
+   * @generated from field: int64 errors = 2;
+   */
+  errors: bigint;
+
+  /**
+   * @generated from field: double duration_ms = 3;
+   */
+  durationMs: number;
+
+  /**
+   * @generated from field: int64 proxy_count = 4;
+   */
+  proxyCount: bigint;
+
+  /**
+   * @generated from field: int64 proxy_errors = 5;
+   */
+  proxyErrors: bigint;
+
+  /**
+   * @generated from field: double proxy_duration_ms = 6;
+   */
+  proxyDurationMs: number;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.RuntimeRequestStatistics.
+ * Use `create(RuntimeRequestStatisticsSchema)` to create a new message.
+ */
+export declare const RuntimeRequestStatisticsSchema: GenMessage<RuntimeRequestStatistics>;
+
+/**
+ * @generated from message boxteam.gateway.v2.RuntimeProcessResources
+ */
+export declare type RuntimeProcessResources = Message<"boxteam.gateway.v2.RuntimeProcessResources"> & {
+  /**
+   * @generated from field: string service = 1;
+   */
+  service: string;
+
+  /**
+   * @generated from field: int64 pid = 2;
+   */
+  pid: bigint;
+
+  /**
+   * @generated from field: optional int64 rss_bytes = 3;
+   */
+  rssBytes?: bigint | undefined;
+
+  /**
+   * @generated from field: optional double cpu_seconds = 4;
+   */
+  cpuSeconds?: number | undefined;
+
+  /**
+   * @generated from field: optional string error = 5;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.RuntimeProcessResources.
+ * Use `create(RuntimeProcessResourcesSchema)` to create a new message.
+ */
+export declare const RuntimeProcessResourcesSchema: GenMessage<RuntimeProcessResources>;
+
+/**
+ * 仅含本地实例的实际设置、HTTP总耗时及原owner持有进程的资源指标。
+ *
+ * @generated from message boxteam.gateway.v2.RuntimeObservationStatus
+ */
+export declare type RuntimeObservationStatus = Message<"boxteam.gateway.v2.RuntimeObservationStatus"> & {
+  /**
+   * @generated from field: string instance_id = 1;
+   */
+  instanceId: string;
+
+  /**
+   * @generated from field: string applied_revision = 2;
+   */
+  appliedRevision: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.TelemetryRuntimeSettings telemetry = 3;
+   */
+  telemetry?: TelemetryRuntimeSettings | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.StatisticsRuntimeSettings statistics = 4;
+   */
+  statistics?: StatisticsRuntimeSettings | undefined;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.RuntimeRequestStatistics requests = 5;
+   */
+  requests?: RuntimeRequestStatistics | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.RuntimeRequestSample samples = 6;
+   */
+  samples: RuntimeRequestSample[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.RuntimeProcessResources processes = 7;
+   */
+  processes: RuntimeProcessResources[];
+
+  /**
+   * @generated from field: optional string collection_error = 8;
+   */
+  collectionError?: string | undefined;
+
+  /**
+   * @generated from field: repeated string unsupported_metrics = 9;
+   */
+  unsupportedMetrics: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.RuntimeObservationStatus.
+ * Use `create(RuntimeObservationStatusSchema)` to create a new message.
+ */
+export declare const RuntimeObservationStatusSchema: GenMessage<RuntimeObservationStatus>;
+
+/**
  * @generated from message boxteam.gateway.v2.GatewayDiagnosticsDTO
  */
 export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticsDTO"> & {
@@ -1620,6 +1833,11 @@ export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayD
    * @generated from field: repeated boxteam.gateway.v2.GatewayDiagnosticProcessDTO processes = 11;
    */
   processes: GatewayDiagnosticProcessDTO[];
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.RuntimeObservationStatus observation = 12;
+   */
+  observation?: RuntimeObservationStatus | undefined;
 };
 
 /**

@@ -17,6 +17,7 @@ import httpx
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
 from app.core.path_utils import get_gateway_root
+from app.core.runtime_observation import RuntimeObservation
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -321,6 +322,7 @@ async def collect_gateway_diagnostics(
     tail_lines: int = 300,
     extension_management: GatewayExtensionManagement | None = None,
     service_plugins: GatewayPluginRuntime | None = None,
+    observation: RuntimeObservation | None = None,
 ) -> GatewayDiagnosticsDTO:
     if not 20 <= tail_lines <= 1000:
         raise ValueError("tail_lines 必须在 20..1000 范围内")
@@ -417,16 +419,21 @@ async def collect_gateway_diagnostics(
         )
         log_results.append(log_dto)
     processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, extension_management, service_plugins)
+    observed = observation.status() if observation is not None else None
+    collection_failed = observed is not None and (
+        observed.collection_error is not None or any(process.error is not None for process in observed.processes)
+    )
     return GatewayDiagnosticsDTO(
         gateway_id=local_gateway_id,
         gateway_name=gateway_name,
         gateway_connection_id=gateway_connection_id,
         connection_kind=connection_kind,
-        status="degraded" if any(process.error is not None for process in processes) else _status(workspace_items),
+        status="degraded" if collection_failed or any(process.error is not None for process in processes) else _status(workspace_items),
         checked_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         selected_workspace_id=selected_workspace_id,
         selected_log_id=selected_log_id,
         workspaces=workspace_items,
         logs=log_results,
         processes=processes,
+        observation=observed,
     )

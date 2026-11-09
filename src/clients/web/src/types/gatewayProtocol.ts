@@ -84,8 +84,9 @@ type GatewayDiagnosticProcessDTO = Omit<OptionalFields<GatewayProtocol.GatewayDi
   state: GatewayDiagnosticLoggingStateDTO | null;
   error: string | null;
 };
-export type GatewayDiagnosticsDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>, "processes"> & {
+export type GatewayDiagnosticsDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>, "processes" | "observation"> & {
   processes: GatewayDiagnosticProcessDTO[];
+  observation: GatewayProtocol.RuntimeObservationStatus | null;
 };
 export type GatewayDirectoryEntryDTO = OptionalFields<GatewayProtocol.GatewayDirectoryEntryDTO>;
 export type GatewayDirectoryListDTO = OptionalFields<GatewayProtocol.GatewayDirectoryListDTO>;

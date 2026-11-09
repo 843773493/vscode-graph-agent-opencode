@@ -374,6 +374,54 @@ export interface GatewayDiagnosticProcessDTO {
   error?: string | undefined;
 }
 
+export interface TelemetryRuntimeSettings {
+  enabled: boolean;
+  sample_ratio: number;
+  sample_buffer_limit: number;
+}
+
+export interface StatisticsRuntimeSettings {
+  enabled: boolean;
+  collection_interval_ms: number;
+}
+
+export interface RuntimeRequestSample {
+  kind: string;
+  status_code: number;
+  duration_ms: number;
+  failed: boolean;
+}
+
+export interface RuntimeRequestStatistics {
+  count: number;
+  errors: number;
+  duration_ms: number;
+  proxy_count: number;
+  proxy_errors: number;
+  proxy_duration_ms: number;
+}
+
+export interface RuntimeProcessResources {
+  service: string;
+  pid: number;
+  rss_bytes?: number | undefined;
+  cpu_seconds?: number | undefined;
+  error?: string | undefined;
+}
+
+/** 仅含本地实例的实际设置、HTTP总耗时及原owner持有进程的资源指标。 */
+export interface RuntimeObservationStatus {
+  instance_id: string;
+  applied_revision: string;
+  telemetry: TelemetryRuntimeSettings | undefined;
+  statistics: StatisticsRuntimeSettings | undefined;
+  requests?: RuntimeRequestStatistics | undefined;
+  samples: RuntimeRequestSample[];
+  processes: RuntimeProcessResources[];
+  collection_error?: string | undefined;
+  unsupported_metrics: string[];
+}
+
 export interface GatewayDiagnosticsDTO {
   gateway_id: string;
   gateway_name: string;
@@ -386,6 +434,7 @@ export interface GatewayDiagnosticsDTO {
   workspaces: GatewayDiagnosticWorkspaceDTO[];
   logs: GatewayDiagnosticLogDTO[];
   processes: GatewayDiagnosticProcessDTO[];
+  observation?: RuntimeObservationStatus | undefined;
 }
 
 export interface GatewayDiagnosticLogQueryScopeDTO {
@@ -3890,6 +3939,319 @@ export const GatewayDiagnosticProcessDTO: MessageFns<GatewayDiagnosticProcessDTO
   },
 };
 
+function createBaseTelemetryRuntimeSettings(): TelemetryRuntimeSettings {
+  return { enabled: false, sample_ratio: 0, sample_buffer_limit: 0 };
+}
+
+export const TelemetryRuntimeSettings: MessageFns<TelemetryRuntimeSettings> = {
+  fromJSON(object: any): TelemetryRuntimeSettings {
+    return {
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+      sample_ratio: isSet(object.sample_ratio) ? globalThis.Number(object.sample_ratio) : 0,
+      sample_buffer_limit: isSet(object.sample_buffer_limit) ? globalThis.Number(object.sample_buffer_limit) : 0,
+    };
+  },
+
+  toJSON(message: TelemetryRuntimeSettings): unknown {
+    const obj: any = {};
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    if (message.sample_ratio !== 0) {
+      obj.sample_ratio = message.sample_ratio;
+    }
+    if (message.sample_buffer_limit !== 0) {
+      obj.sample_buffer_limit = Math.round(message.sample_buffer_limit);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TelemetryRuntimeSettings>, I>>(base?: I): TelemetryRuntimeSettings {
+    return TelemetryRuntimeSettings.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TelemetryRuntimeSettings>, I>>(object: I): TelemetryRuntimeSettings {
+    const message = createBaseTelemetryRuntimeSettings();
+    message.enabled = object.enabled ?? false;
+    message.sample_ratio = object.sample_ratio ?? 0;
+    message.sample_buffer_limit = object.sample_buffer_limit ?? 0;
+    return message;
+  },
+};
+
+function createBaseStatisticsRuntimeSettings(): StatisticsRuntimeSettings {
+  return { enabled: false, collection_interval_ms: 0 };
+}
+
+export const StatisticsRuntimeSettings: MessageFns<StatisticsRuntimeSettings> = {
+  fromJSON(object: any): StatisticsRuntimeSettings {
+    return {
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+      collection_interval_ms: isSet(object.collection_interval_ms)
+        ? globalThis.Number(object.collection_interval_ms)
+        : 0,
+    };
+  },
+
+  toJSON(message: StatisticsRuntimeSettings): unknown {
+    const obj: any = {};
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    if (message.collection_interval_ms !== 0) {
+      obj.collection_interval_ms = Math.round(message.collection_interval_ms);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<StatisticsRuntimeSettings>, I>>(base?: I): StatisticsRuntimeSettings {
+    return StatisticsRuntimeSettings.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StatisticsRuntimeSettings>, I>>(object: I): StatisticsRuntimeSettings {
+    const message = createBaseStatisticsRuntimeSettings();
+    message.enabled = object.enabled ?? false;
+    message.collection_interval_ms = object.collection_interval_ms ?? 0;
+    return message;
+  },
+};
+
+function createBaseRuntimeRequestSample(): RuntimeRequestSample {
+  return { kind: "", status_code: 0, duration_ms: 0, failed: false };
+}
+
+export const RuntimeRequestSample: MessageFns<RuntimeRequestSample> = {
+  fromJSON(object: any): RuntimeRequestSample {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      status_code: isSet(object.status_code) ? globalThis.Number(object.status_code) : 0,
+      duration_ms: isSet(object.duration_ms) ? globalThis.Number(object.duration_ms) : 0,
+      failed: isSet(object.failed) ? globalThis.Boolean(object.failed) : false,
+    };
+  },
+
+  toJSON(message: RuntimeRequestSample): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.status_code !== 0) {
+      obj.status_code = Math.round(message.status_code);
+    }
+    if (message.duration_ms !== 0) {
+      obj.duration_ms = message.duration_ms;
+    }
+    if (message.failed !== false) {
+      obj.failed = message.failed;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RuntimeRequestSample>, I>>(base?: I): RuntimeRequestSample {
+    return RuntimeRequestSample.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RuntimeRequestSample>, I>>(object: I): RuntimeRequestSample {
+    const message = createBaseRuntimeRequestSample();
+    message.kind = object.kind ?? "";
+    message.status_code = object.status_code ?? 0;
+    message.duration_ms = object.duration_ms ?? 0;
+    message.failed = object.failed ?? false;
+    return message;
+  },
+};
+
+function createBaseRuntimeRequestStatistics(): RuntimeRequestStatistics {
+  return { count: 0, errors: 0, duration_ms: 0, proxy_count: 0, proxy_errors: 0, proxy_duration_ms: 0 };
+}
+
+export const RuntimeRequestStatistics: MessageFns<RuntimeRequestStatistics> = {
+  fromJSON(object: any): RuntimeRequestStatistics {
+    return {
+      count: isSet(object.count) ? globalThis.Number(object.count) : 0,
+      errors: isSet(object.errors) ? globalThis.Number(object.errors) : 0,
+      duration_ms: isSet(object.duration_ms) ? globalThis.Number(object.duration_ms) : 0,
+      proxy_count: isSet(object.proxy_count) ? globalThis.Number(object.proxy_count) : 0,
+      proxy_errors: isSet(object.proxy_errors) ? globalThis.Number(object.proxy_errors) : 0,
+      proxy_duration_ms: isSet(object.proxy_duration_ms) ? globalThis.Number(object.proxy_duration_ms) : 0,
+    };
+  },
+
+  toJSON(message: RuntimeRequestStatistics): unknown {
+    const obj: any = {};
+    if (message.count !== 0) {
+      obj.count = Math.round(message.count);
+    }
+    if (message.errors !== 0) {
+      obj.errors = Math.round(message.errors);
+    }
+    if (message.duration_ms !== 0) {
+      obj.duration_ms = message.duration_ms;
+    }
+    if (message.proxy_count !== 0) {
+      obj.proxy_count = Math.round(message.proxy_count);
+    }
+    if (message.proxy_errors !== 0) {
+      obj.proxy_errors = Math.round(message.proxy_errors);
+    }
+    if (message.proxy_duration_ms !== 0) {
+      obj.proxy_duration_ms = message.proxy_duration_ms;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RuntimeRequestStatistics>, I>>(base?: I): RuntimeRequestStatistics {
+    return RuntimeRequestStatistics.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RuntimeRequestStatistics>, I>>(object: I): RuntimeRequestStatistics {
+    const message = createBaseRuntimeRequestStatistics();
+    message.count = object.count ?? 0;
+    message.errors = object.errors ?? 0;
+    message.duration_ms = object.duration_ms ?? 0;
+    message.proxy_count = object.proxy_count ?? 0;
+    message.proxy_errors = object.proxy_errors ?? 0;
+    message.proxy_duration_ms = object.proxy_duration_ms ?? 0;
+    return message;
+  },
+};
+
+function createBaseRuntimeProcessResources(): RuntimeProcessResources {
+  return { service: "", pid: 0, rss_bytes: undefined, cpu_seconds: undefined, error: undefined };
+}
+
+export const RuntimeProcessResources: MessageFns<RuntimeProcessResources> = {
+  fromJSON(object: any): RuntimeProcessResources {
+    return {
+      service: isSet(object.service) ? globalThis.String(object.service) : "",
+      pid: isSet(object.pid) ? globalThis.Number(object.pid) : 0,
+      rss_bytes: isSet(object.rss_bytes) ? globalThis.Number(object.rss_bytes) : undefined,
+      cpu_seconds: isSet(object.cpu_seconds) ? globalThis.Number(object.cpu_seconds) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: RuntimeProcessResources): unknown {
+    const obj: any = {};
+    if (message.service !== "") {
+      obj.service = message.service;
+    }
+    if (message.pid !== 0) {
+      obj.pid = Math.round(message.pid);
+    }
+    if (message.rss_bytes !== undefined) {
+      obj.rss_bytes = Math.round(message.rss_bytes);
+    }
+    if (message.cpu_seconds !== undefined) {
+      obj.cpu_seconds = message.cpu_seconds;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RuntimeProcessResources>, I>>(base?: I): RuntimeProcessResources {
+    return RuntimeProcessResources.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RuntimeProcessResources>, I>>(object: I): RuntimeProcessResources {
+    const message = createBaseRuntimeProcessResources();
+    message.service = object.service ?? "";
+    message.pid = object.pid ?? 0;
+    message.rss_bytes = object.rss_bytes ?? undefined;
+    message.cpu_seconds = object.cpu_seconds ?? undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseRuntimeObservationStatus(): RuntimeObservationStatus {
+  return {
+    instance_id: "",
+    applied_revision: "",
+    telemetry: undefined,
+    statistics: undefined,
+    requests: undefined,
+    samples: [],
+    processes: [],
+    collection_error: undefined,
+    unsupported_metrics: [],
+  };
+}
+
+export const RuntimeObservationStatus: MessageFns<RuntimeObservationStatus> = {
+  fromJSON(object: any): RuntimeObservationStatus {
+    return {
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : "",
+      applied_revision: isSet(object.applied_revision) ? globalThis.String(object.applied_revision) : "",
+      telemetry: isSet(object.telemetry) ? TelemetryRuntimeSettings.fromJSON(object.telemetry) : undefined,
+      statistics: isSet(object.statistics) ? StatisticsRuntimeSettings.fromJSON(object.statistics) : undefined,
+      requests: isSet(object.requests) ? RuntimeRequestStatistics.fromJSON(object.requests) : undefined,
+      samples: globalThis.Array.isArray(object?.samples)
+        ? object.samples.map((e: any) => RuntimeRequestSample.fromJSON(e))
+        : [],
+      processes: globalThis.Array.isArray(object?.processes)
+        ? object.processes.map((e: any) => RuntimeProcessResources.fromJSON(e))
+        : [],
+      collection_error: isSet(object.collection_error) ? globalThis.String(object.collection_error) : undefined,
+      unsupported_metrics: globalThis.Array.isArray(object?.unsupported_metrics)
+        ? object.unsupported_metrics.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: RuntimeObservationStatus): unknown {
+    const obj: any = {};
+    if (message.instance_id !== "") {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.applied_revision !== "") {
+      obj.applied_revision = message.applied_revision;
+    }
+    if (message.telemetry !== undefined) {
+      obj.telemetry = TelemetryRuntimeSettings.toJSON(message.telemetry);
+    }
+    if (message.statistics !== undefined) {
+      obj.statistics = StatisticsRuntimeSettings.toJSON(message.statistics);
+    }
+    if (message.requests !== undefined) {
+      obj.requests = RuntimeRequestStatistics.toJSON(message.requests);
+    }
+    if (message.samples?.length) {
+      obj.samples = message.samples.map((e) => RuntimeRequestSample.toJSON(e));
+    }
+    if (message.processes?.length) {
+      obj.processes = message.processes.map((e) => RuntimeProcessResources.toJSON(e));
+    }
+    if (message.collection_error !== undefined) {
+      obj.collection_error = message.collection_error;
+    }
+    if (message.unsupported_metrics?.length) {
+      obj.unsupported_metrics = message.unsupported_metrics;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RuntimeObservationStatus>, I>>(base?: I): RuntimeObservationStatus {
+    return RuntimeObservationStatus.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RuntimeObservationStatus>, I>>(object: I): RuntimeObservationStatus {
+    const message = createBaseRuntimeObservationStatus();
+    message.instance_id = object.instance_id ?? "";
+    message.applied_revision = object.applied_revision ?? "";
+    message.telemetry = (object.telemetry !== undefined && object.telemetry !== null)
+      ? TelemetryRuntimeSettings.fromPartial(object.telemetry)
+      : undefined;
+    message.statistics = (object.statistics !== undefined && object.statistics !== null)
+      ? StatisticsRuntimeSettings.fromPartial(object.statistics)
+      : undefined;
+    message.requests = (object.requests !== undefined && object.requests !== null)
+      ? RuntimeRequestStatistics.fromPartial(object.requests)
+      : undefined;
+    message.samples = object.samples?.map((e) => RuntimeRequestSample.fromPartial(e)) || [];
+    message.processes = object.processes?.map((e) => RuntimeProcessResources.fromPartial(e)) || [];
+    message.collection_error = object.collection_error ?? undefined;
+    message.unsupported_metrics = object.unsupported_metrics?.map((e) => e) || [];
+    return message;
+  },
+};
+
 function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
   return {
     gateway_id: "",
@@ -3903,6 +4265,7 @@ function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
     workspaces: [],
     logs: [],
     processes: [],
+    observation: undefined,
   };
 }
 
@@ -3930,6 +4293,7 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
       processes: globalThis.Array.isArray(object?.processes)
         ? object.processes.map((e: any) => GatewayDiagnosticProcessDTO.fromJSON(e))
         : [],
+      observation: isSet(object.observation) ? RuntimeObservationStatus.fromJSON(object.observation) : undefined,
     };
   },
 
@@ -3968,6 +4332,9 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     if (message.processes?.length) {
       obj.processes = message.processes.map((e) => GatewayDiagnosticProcessDTO.toJSON(e));
     }
+    if (message.observation !== undefined) {
+      obj.observation = RuntimeObservationStatus.toJSON(message.observation);
+    }
     return obj;
   },
 
@@ -3987,6 +4354,9 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     message.workspaces = object.workspaces?.map((e) => GatewayDiagnosticWorkspaceDTO.fromPartial(e)) || [];
     message.logs = object.logs?.map((e) => GatewayDiagnosticLogDTO.fromPartial(e)) || [];
     message.processes = object.processes?.map((e) => GatewayDiagnosticProcessDTO.fromPartial(e)) || [];
+    message.observation = (object.observation !== undefined && object.observation !== null)
+      ? RuntimeObservationStatus.fromPartial(object.observation)
+      : undefined;
     return message;
   },
 };

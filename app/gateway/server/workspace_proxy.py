@@ -588,6 +588,7 @@ async def _proxy_workspace_request(
                 if request.method not in {"GET", "HEAD", "OPTIONS"}:
                     require_federation_capability(request, auth, "configuration_write")
             try:
+                request.state.proxy_request = True
                 response = await send_upstream_request(client, forwarded)
                 if retry_availability:
                     # availability 是小型 JSON。提前消费响应体，才能在连接于响应头

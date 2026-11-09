@@ -368,6 +368,54 @@ message GatewayDiagnosticProcessDTO {
   optional string error = 5;
 }
 
+message TelemetryRuntimeSettings {
+  bool enabled = 1;
+  double sample_ratio = 2;
+  int32 sample_buffer_limit = 3;
+}
+
+message StatisticsRuntimeSettings {
+  bool enabled = 1;
+  int32 collection_interval_ms = 2;
+}
+
+message RuntimeRequestSample {
+  string kind = 1;
+  int32 status_code = 2;
+  double duration_ms = 3;
+  bool failed = 4;
+}
+
+message RuntimeRequestStatistics {
+  int64 count = 1;
+  int64 errors = 2;
+  double duration_ms = 3;
+  int64 proxy_count = 4;
+  int64 proxy_errors = 5;
+  double proxy_duration_ms = 6;
+}
+
+message RuntimeProcessResources {
+  string service = 1;
+  int64 pid = 2;
+  optional int64 rss_bytes = 3;
+  optional double cpu_seconds = 4;
+  optional string error = 5;
+}
+
+// 仅含本地实例的实际设置、HTTP总耗时及原owner持有进程的资源指标。
+message RuntimeObservationStatus {
+  string instance_id = 1;
+  string applied_revision = 2;
+  TelemetryRuntimeSettings telemetry = 3;
+  StatisticsRuntimeSettings statistics = 4;
+  optional RuntimeRequestStatistics requests = 5;
+  repeated RuntimeRequestSample samples = 6;
+  repeated RuntimeProcessResources processes = 7;
+  optional string collection_error = 8;
+  repeated string unsupported_metrics = 9;
+}
+
 message GatewayDiagnosticsDTO {
   string gateway_id = 1;
   string gateway_name = 2;
@@ -380,6 +428,7 @@ message GatewayDiagnosticsDTO {
   repeated GatewayDiagnosticWorkspaceDTO workspaces = 9;
   repeated GatewayDiagnosticLogDTO logs = 10;
   repeated GatewayDiagnosticProcessDTO processes = 11;
+  optional RuntimeObservationStatus observation = 12;
 }
 
 message GatewayDiagnosticLogQueryScopeDTO {

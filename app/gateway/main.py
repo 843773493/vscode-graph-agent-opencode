@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import Scope
 
 from app.core.http_cache import NoStoreErrorsMiddleware
 from app.core.logging_config import configure_application_logging
@@ -45,7 +46,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(TraceMiddleware)
+def _observe_request(scope: Scope, status_code: int, duration_ms: float, failed: bool) -> None:
+    observation = getattr(scope["app"].state, "runtime_observation", None)
+    if observation is not None:
+        observation.record_request(status_code=status_code, duration_ms=duration_ms, failed=failed,
+                                   proxy=scope["state"].get("proxy_request", False))
+
+
+app.add_middleware(TraceMiddleware, on_request_complete=_observe_request)
 app.add_middleware(NoStoreErrorsMiddleware, paths=(
     "/api/v1/workspace/files/raw", "/api/v1/workspaces/{workspace_id}/workspace/files/raw",
 ))

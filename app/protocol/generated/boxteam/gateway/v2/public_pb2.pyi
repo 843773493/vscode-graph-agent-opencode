@@ -620,8 +620,90 @@ class GatewayDiagnosticProcessDTO(_message.Message):
     error: str
     def __init__(self, service: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., state: _Optional[_Union[GatewayDiagnosticLoggingStateDTO, _Mapping]] = ..., output_mode: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
+class TelemetryRuntimeSettings(_message.Message):
+    __slots__ = ("enabled", "sample_ratio", "sample_buffer_limit")
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
+    SAMPLE_RATIO_FIELD_NUMBER: _ClassVar[int]
+    SAMPLE_BUFFER_LIMIT_FIELD_NUMBER: _ClassVar[int]
+    enabled: bool
+    sample_ratio: float
+    sample_buffer_limit: int
+    def __init__(self, enabled: _Optional[bool] = ..., sample_ratio: _Optional[float] = ..., sample_buffer_limit: _Optional[int] = ...) -> None: ...
+
+class StatisticsRuntimeSettings(_message.Message):
+    __slots__ = ("enabled", "collection_interval_ms")
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
+    COLLECTION_INTERVAL_MS_FIELD_NUMBER: _ClassVar[int]
+    enabled: bool
+    collection_interval_ms: int
+    def __init__(self, enabled: _Optional[bool] = ..., collection_interval_ms: _Optional[int] = ...) -> None: ...
+
+class RuntimeRequestSample(_message.Message):
+    __slots__ = ("kind", "status_code", "duration_ms", "failed")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    STATUS_CODE_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    FAILED_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    status_code: int
+    duration_ms: float
+    failed: bool
+    def __init__(self, kind: _Optional[str] = ..., status_code: _Optional[int] = ..., duration_ms: _Optional[float] = ..., failed: _Optional[bool] = ...) -> None: ...
+
+class RuntimeRequestStatistics(_message.Message):
+    __slots__ = ("count", "errors", "duration_ms", "proxy_count", "proxy_errors", "proxy_duration_ms")
+    COUNT_FIELD_NUMBER: _ClassVar[int]
+    ERRORS_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    PROXY_COUNT_FIELD_NUMBER: _ClassVar[int]
+    PROXY_ERRORS_FIELD_NUMBER: _ClassVar[int]
+    PROXY_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    count: int
+    errors: int
+    duration_ms: float
+    proxy_count: int
+    proxy_errors: int
+    proxy_duration_ms: float
+    def __init__(self, count: _Optional[int] = ..., errors: _Optional[int] = ..., duration_ms: _Optional[float] = ..., proxy_count: _Optional[int] = ..., proxy_errors: _Optional[int] = ..., proxy_duration_ms: _Optional[float] = ...) -> None: ...
+
+class RuntimeProcessResources(_message.Message):
+    __slots__ = ("service", "pid", "rss_bytes", "cpu_seconds", "error")
+    SERVICE_FIELD_NUMBER: _ClassVar[int]
+    PID_FIELD_NUMBER: _ClassVar[int]
+    RSS_BYTES_FIELD_NUMBER: _ClassVar[int]
+    CPU_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    service: str
+    pid: int
+    rss_bytes: int
+    cpu_seconds: float
+    error: str
+    def __init__(self, service: _Optional[str] = ..., pid: _Optional[int] = ..., rss_bytes: _Optional[int] = ..., cpu_seconds: _Optional[float] = ..., error: _Optional[str] = ...) -> None: ...
+
+class RuntimeObservationStatus(_message.Message):
+    __slots__ = ("instance_id", "applied_revision", "telemetry", "statistics", "requests", "samples", "processes", "collection_error", "unsupported_metrics")
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_REVISION_FIELD_NUMBER: _ClassVar[int]
+    TELEMETRY_FIELD_NUMBER: _ClassVar[int]
+    STATISTICS_FIELD_NUMBER: _ClassVar[int]
+    REQUESTS_FIELD_NUMBER: _ClassVar[int]
+    SAMPLES_FIELD_NUMBER: _ClassVar[int]
+    PROCESSES_FIELD_NUMBER: _ClassVar[int]
+    COLLECTION_ERROR_FIELD_NUMBER: _ClassVar[int]
+    UNSUPPORTED_METRICS_FIELD_NUMBER: _ClassVar[int]
+    instance_id: str
+    applied_revision: str
+    telemetry: TelemetryRuntimeSettings
+    statistics: StatisticsRuntimeSettings
+    requests: RuntimeRequestStatistics
+    samples: _containers.RepeatedCompositeFieldContainer[RuntimeRequestSample]
+    processes: _containers.RepeatedCompositeFieldContainer[RuntimeProcessResources]
+    collection_error: str
+    unsupported_metrics: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, instance_id: _Optional[str] = ..., applied_revision: _Optional[str] = ..., telemetry: _Optional[_Union[TelemetryRuntimeSettings, _Mapping]] = ..., statistics: _Optional[_Union[StatisticsRuntimeSettings, _Mapping]] = ..., requests: _Optional[_Union[RuntimeRequestStatistics, _Mapping]] = ..., samples: _Optional[_Iterable[_Union[RuntimeRequestSample, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[RuntimeProcessResources, _Mapping]]] = ..., collection_error: _Optional[str] = ..., unsupported_metrics: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class GatewayDiagnosticsDTO(_message.Message):
-    __slots__ = ("gateway_id", "gateway_name", "gateway_connection_id", "connection_kind", "status", "checked_at", "selected_workspace_id", "selected_log_id", "workspaces", "logs", "processes")
+    __slots__ = ("gateway_id", "gateway_name", "gateway_connection_id", "connection_kind", "status", "checked_at", "selected_workspace_id", "selected_log_id", "workspaces", "logs", "processes", "observation")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_NAME_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -633,6 +715,7 @@ class GatewayDiagnosticsDTO(_message.Message):
     WORKSPACES_FIELD_NUMBER: _ClassVar[int]
     LOGS_FIELD_NUMBER: _ClassVar[int]
     PROCESSES_FIELD_NUMBER: _ClassVar[int]
+    OBSERVATION_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     gateway_name: str
     gateway_connection_id: str
@@ -644,7 +727,8 @@ class GatewayDiagnosticsDTO(_message.Message):
     workspaces: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticWorkspaceDTO]
     logs: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticLogDTO]
     processes: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticProcessDTO]
-    def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ...) -> None: ...
+    observation: RuntimeObservationStatus
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ...) -> None: ...
 
 class GatewayDiagnosticLogQueryScopeDTO(_message.Message):
     __slots__ = ("source", "workspace_ids")

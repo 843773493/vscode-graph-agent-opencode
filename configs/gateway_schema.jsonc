@@ -13,6 +13,8 @@
     { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/telemetry/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/statistics/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/ui/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/permissions/federation", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -88,6 +90,29 @@
           }
         }
       }
+    },
+    "telemetry": {
+      "type": "object", "additionalProperties": false, "required": ["runtime"],
+      "properties": {"runtime": {
+        "type": "object", "additionalProperties": false,
+        "required": ["enabled", "sample_ratio", "sample_buffer_limit"],
+        "properties": {
+          "enabled": {"type": "boolean", "default": false},
+          "sample_ratio": {"type": "number", "minimum": 0, "maximum": 1, "default": 1},
+          "sample_buffer_limit": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 256}
+        }
+      }}
+    },
+    "statistics": {
+      "type": "object", "additionalProperties": false, "required": ["runtime"],
+      "properties": {"runtime": {
+        "type": "object", "additionalProperties": false,
+        "required": ["enabled", "collection_interval_ms"],
+        "properties": {
+          "enabled": {"type": "boolean", "default": false},
+          "collection_interval_ms": {"type": "integer", "minimum": 1000, "maximum": 60000, "default": 5000}
+        }
+      }}
     },
     "resources": {
       "type": "object",

@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar, Token
 
 from fastapi import Request
@@ -149,8 +150,10 @@ class TraceMiddleware:
     - Trace headers propagation
     """
     
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *,
+                 on_request_complete: Callable[[Scope, int, float, bool], None] | None = None) -> None:
         self.app = app
+        self.on_request_complete = on_request_complete
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -199,6 +202,8 @@ class TraceMiddleware:
 
         response_started = False
         response_status = 500
+        failed = False
+        completed = False
 
         async def traced_send(message: Message) -> None:
             nonlocal response_started, response_status
@@ -219,7 +224,9 @@ class TraceMiddleware:
             await self.app(scope, receive, traced_send)
             if not response_started:
                 raise RuntimeError("No response returned.")
+            completed = True
         except Exception as error:
+            failed = True
             duration = time.perf_counter() - start_time
             # 请求位置与原notes只留诊断；日志失败也不能替换原流异常或阻止500结算。
             error.add_note(
@@ -246,15 +253,19 @@ class TraceMiddleware:
             await response(scope, receive, traced_send)
             return
         finally:
+            duration = time.perf_counter() - start_time
             reset_current_request_id(request_id_token)
             reset_current_navigation_actor(navigation_actor_token)
             reset_current_gateway_id(gateway_id_token)
+            if self.on_request_complete is not None:
+                self.on_request_complete(scope, response_status, duration * 1000,
+                                         failed or not completed or response_status >= 400)
 
         logger.debug(
             "[TRACE] method=%s path=%s status=%s duration=%.4fs request_id=%s",
             request.method,
             request.url.path,
             response_status,
-            time.perf_counter() - start_time,
+            duration,
             request_id,
         )

@@ -268,6 +268,7 @@ async def service_request(package_id: str, plugin_id: str, service_id: str,
 
         async def open_response() -> None:
             nonlocal response, body
+            request.state.proxy_request = True
             response = await send_upstream_request(client, upstream)
             body = UpstreamResponseBody(response, release_route)
 

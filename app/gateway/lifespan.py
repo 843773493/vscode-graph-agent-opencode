@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from typing import cast
 
@@ -18,16 +18,18 @@ from app.core.env import (
     get_project_root,
     load_boxteam_env,
 )
-from app.core.logging_config import configure_application_logging
+from app.core.logging_config import configure_application_logging, runtime_logging_state
 from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import (
     get_boxteam_home,
     get_user_gateway_config_path,
     get_user_gateway_local_config_path,
 )
+from app.core.runtime_observation import RuntimeObservation
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import (
+    GatewayConfig,
     GatewayConfigReloadService,
     load_gateway_config,
 )
@@ -96,6 +98,7 @@ from app.gateway.server.bootstrap import (
     create_registry,
 )
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
+from app.schemas.runtime_observation import RuntimeObservationSettings
 from app.services.infrastructure.config.state import build_secret_binding_summary
 
 logger = logging.getLogger(__name__)
@@ -165,6 +168,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
     )
     app.state.registry = registry
     app.state.gateway_config = gateway_config
+
+    async def apply_committed_config(config: GatewayConfig) -> None:
+        # TODO：迁齐插件诊断 apply/status，逐实例返回实际设置与 revision；当前只采 Gateway 代理及原进程资源。
+        await app.state.runtime_observation.apply(RuntimeObservationSettings.from_gateway_config(config.payload), config.revision)
+        await app.state.service_plugins.apply(config.payload, config.revision)
+
     gateway_config_reload = GatewayConfigReloadService(
         state_store=gateway_state,
         config=gateway_config,
@@ -180,7 +189,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             )
         ),
         gateway_id=gateway_id,
-        on_committed_config=lambda config: app.state.service_plugins.apply(config.payload, config.revision),
+        on_committed_config=apply_committed_config,
     )
     app.state.gateway_config_reload = gateway_config_reload
     federation_policy = FederationPolicyStore(
@@ -214,6 +223,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             )
         return preserve_handoff
 
+    def observation_processes() -> Iterator[tuple[str, int]]:
+        yield "gateway", os.getpid()
+        for owner in registry.backend_owners():
+            if owner.process is not None and owner.process.is_alive():
+                yield "backend", owner.process.pid
+        for slot in service_plugins.slots.values():
+            if slot.process is not None and slot.process.is_alive():
+                yield "plugin", slot.process.pid
+        if (extension_management is not None and extension_management.process is not None
+                and extension_management.process.is_alive()):
+            yield "extension-management", extension_management.process.pid
+
     # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
     async with (
         httpx.AsyncClient(timeout=None, trust_env=False) as http_client,
@@ -236,7 +257,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             revision=lambda: gateway_config_reload.config.revision,
             preserve=should_preserve_for_handoff,
         ) as service_plugins,
+        RuntimeObservation(
+            instance_id=runtime_logging_state().runtime_instance_id,
+            revision=gateway_config.revision,
+            settings=RuntimeObservationSettings.from_gateway_config(gateway_config.payload),
+            processes=observation_processes,
+        ) as runtime_observation,
     ):
+        app.state.runtime_observation = runtime_observation
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
         app.state.extension_management = extension_management
