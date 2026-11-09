@@ -6,7 +6,6 @@ import asyncio
 import json
 import sqlite3
 from contextlib import closing
-from dataclasses import replace
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
@@ -22,10 +21,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
 from tests.integration.backend.agents.test_mcp_connection_control import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用真实 MCP
@@ -47,17 +42,8 @@ from tests.support.processes.workspace import start_backend_process, terminate_p
 
 
 @pytest.fixture
-async def wait_mount(recovery_case, free_tcp_port_factory):
-    terminal_port, browser_port, browser_frontend_port = (free_tcp_port_factory() for _ in range(3))
-    root, artifacts = recovery_case.mount.workspace_root, recovery_case.context.artifacts_dir
-    browser = await asyncio.to_thread(
-        start_browser_manager_processes, workspace_root=root, artifacts_dir=artifacts,
-        backend_port=browser_port, frontend_port=browser_frontend_port, backend_host="127.0.0.1",
-    )
-    try:
-        yield replace(recovery_case.mount, browser_backend_url=f"http://127.0.0.1:{browser_port}")
-    finally:
-        await asyncio.to_thread(terminate_process, terminal)
+def wait_mount(recovery_case):
+    return recovery_case.mount
 
 
 @pytest.fixture

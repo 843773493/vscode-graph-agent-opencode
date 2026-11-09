@@ -186,7 +186,7 @@ async def test_native_thinking_identity_survives_product_execution_and_cold_hist
     })
 
 
-@pytest.mark.parametrize("restart_source_case", [{"managed_gateway": True, "native_services": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"managed_gateway": True, "plugin_ids": ("terminal", "browser")}], indirect=True)
 async def test_equal_blocks_survive_fork_source_deletion_and_backend_hard_restart(
     restart_source_case: RestartRuntimeSourceCase,
     fork_deadlines: ForkDeadlineRegistry,

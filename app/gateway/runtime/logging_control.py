@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -29,13 +30,13 @@ if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
     from app.gateway.runtime.extension_management import GatewayExtensionManagement
     from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
+    from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 
 _CONTROL_PATHS: dict[RuntimeLoggingHttpService, str] = {
     "gateway": "/api/gateway/internal/runtime-logging",
     "backend": "/api/v1/internal/runtime-logging",
-    "terminal": "/internal/runtime-logging",
-    "browser": "/internal/runtime-logging",
     "extension-management": "/internal/runtime-logging",
+    "plugin": "/internal/runtime-logging",
 }
 
 
@@ -59,6 +60,7 @@ class RuntimeLoggingProcess:
 def runtime_logging_processes(
     registry: GatewayWorkspaceRegistry, control: RuntimeLoggingProcessControl,
     extension_management: GatewayExtensionManagement | None = None,
+    service_plugins: GatewayPluginRuntime | None = None,
 ) -> list[RuntimeLoggingProcess]:
     """调用方持有拓扑锁；热应用与管理诊断共用同一份真实进程发现。"""
     async def gateway_status() -> RuntimeLoggingStatus:
@@ -106,15 +108,23 @@ def runtime_logging_processes(
     for owner in registry.backend_owners():
         if owner.process is not None and owner.process.is_alive():
             add_http(owner.process, "backend", owner.contract.backend_url, owner.contract.workspace_ids)
-    for target in registry.targets():
-        if target.connection_kind != "local" or not target.managed or not registry.has_runtime(target.workspace_id):
-            continue
-        runtime = registry.managed_runtime(target.workspace_id)
-        roles: dict[str, RuntimeLoggingHttpService] = {"browser_manager": "browser"}
-        for name, role in roles.items():
-            handle = runtime.processes.get(name)
-            if handle is not None and handle.is_alive():
-                add_http(handle, role, registry.runtime_service_urls(target.workspace_id)[name], (target.workspace_id,))
+    if service_plugins is not None:
+        for slot in service_plugins.slots.values():
+            handle = slot.process
+            if handle is None or not handle.is_alive():
+                continue
+            if slot.base_url is None or slot.token is None:
+                raise RuntimeError("存活插件缺少原 owner 的日志控制地址或凭据")
+            plugin_control = RuntimeLoggingProcessControl(client=control._client, token=slot.token)
+            workspace_ids = (slot.binding.workspace_id,) if slot.binding.workspace_id else ()
+            # 插件名是诊断标签；状态中的 service 仍由插件自己的日志生产者命名。
+            processes.append(RuntimeLoggingProcess(
+                f"{slot.binding.package_id}/{slot.binding.plugin_id}", workspace_ids,
+                partial(plugin_control.status, base_url=slot.base_url, service="plugin", pid=handle.pid),
+                lambda request, owner=plugin_control, url=slot.base_url, pid=handle.pid:
+                    owner.apply(base_url=url, service="plugin", pid=pid, request=request),
+                handle.is_alive,
+            ))
     return processes
 
 
@@ -140,12 +150,12 @@ class RuntimeLoggingProcessControl:
         envelope = response.json()
         if not isinstance(envelope, dict) or "data" not in envelope:
             raise ValueError("日志进程控制响应缺少状态")
-        return RuntimeLoggingProcessControl._validated_status(envelope["data"], service, pid)
+        return RuntimeLoggingProcessControl._validated_status(envelope["data"], None if service == "plugin" else service, pid)
 
     @staticmethod
-    def _validated_status(payload: object, service: RuntimeLoggingService, pid: int) -> RuntimeLoggingStatus:
+    def _validated_status(payload: object, expected_service: RuntimeLoggingService | None, pid: int) -> RuntimeLoggingStatus:
         state = RuntimeLoggingStatus.model_validate(payload)
-        if state.service != service or state.pid != pid:
+        if (expected_service is not None and state.service != expected_service) or state.pid != pid:
             raise RuntimeLoggingConflictError("日志进程身份与受管实例不匹配")
         return state
 

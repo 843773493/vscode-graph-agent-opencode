@@ -253,10 +253,7 @@ class RegistryRoutesMixin:
                 )
             if service == "workspace_api":
                 return gateway_url
-            return (
-                f"{gateway_url}/api/gateway/workspaces/"
-                f"{target.workspace_id}/browser-manager"
-            )
+            raise LookupError(f"插件服务不再作为工作区辅助服务公开: service={service}")
         if (
             not target.managed
             and service == "workspace_api"

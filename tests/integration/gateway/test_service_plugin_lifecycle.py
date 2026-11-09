@@ -17,31 +17,22 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.processes.scope import register_test_process, unregister_test_process
 
 _PLUGIN_SOURCE = '''
-import json, os, sys, threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import asyncio, os, sys
+sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
+from fastapi import FastAPI
+import uvicorn
+from app.core.logging_config import configure_application_logging
+from app.core.trace_middleware import TraceMiddleware
+from app.runtime.plugin_commands import plugin_command_router
 
-identity = json.loads(os.environ["BOXTEAM_PLUGIN_INSTANCE"])
-identity.update(status="ready", process_id=os.getpid(), capabilities=["status", "shutdown"],
-    log_sink=json.loads(os.environ["BOXTEAM_RUNTIME_LOG_SINK"]))
-server = None
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.headers.get("X-Local-Token") != os.environ["BOXTEAM_RUNTIME_CONTROL_TOKEN"]:
-            self.send_error(403); return
-        body = identity if self.path == "/internal/plugin/status" else {
-            "pid": os.getpid(), "instance_id": identity["instance_id"]}
-        raw = json.dumps(body).encode()
-        self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
-    def do_POST(self):
-        if self.headers.get("X-Local-Token") != os.environ["BOXTEAM_RUNTIME_CONTROL_TOKEN"]:
-            self.send_error(403); return
-        self.send_response(200); self.send_header("Content-Length", "2")
-        self.end_headers(); self.wfile.write(b"{}")
-        threading.Thread(target=server.shutdown).start()
-server = ThreadingHTTPServer(("127.0.0.1", int(os.environ["BOXTEAM_PLUGIN_PORT"])), Handler)
-server.serve_forever()
-server.server_close()
+configure_application_logging(service='lifecycle-probe')
+async def shutdown(): server.should_exit = True
+app = FastAPI()
+app.add_middleware(TraceMiddleware)
+app.include_router(plugin_command_router({}, shutdown=shutdown))
+server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=int(os.environ['BOXTEAM_PLUGIN_PORT']),
+    log_config=None))
+asyncio.run(server.serve())
 '''
 
 
@@ -149,7 +140,9 @@ def _install_and_enable(
         "expected_active_digest": document["active_digest"],
         "idempotency_key": "launcher-plugin-lifecycle-enable",
     })
-    assert saved["data"]["edit"]["state"] == "active"
+    saved_data = saved["data"]
+    assert isinstance(saved_data, dict)
+    assert saved_data["edit"]["state"] == "active"
     return saved
 
 
@@ -221,6 +214,13 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
     artifacts = context.artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     workspace = Path(integration_workspace_root_path).resolve()
+    # 生命周期验收不调用模型，隔离配置不能依赖开发机的 Provider 凭据。
+    config_path = workspace / ".boxteam/workspace.jsonc"
+    workspace_config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    for provider in workspace_config["llm"]["providers"]:
+        if "api_key" in provider:
+            provider["api_key"] = "lifecycle-test-unused-key"
+    config_path.write_text(json.dumps(workspace_config), encoding="utf-8")
     runtime_manifest = project_root / "out/development-runtime/runtime-manifest.json"
     python = project_root / ".venv/bin/python"
     node = shutil.which("node")
@@ -282,11 +282,24 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             plugin_pid_before = original_instance["process_id"]
             instance_id_before = original_instance["instance_id"]
 
+            def logging_state() -> dict:
+                diagnostics = _json_request(client, "GET", "/api/gateway/diagnostics")["data"]
+                assert isinstance(diagnostics, dict)
+                processes = diagnostics["processes"]
+                process, = [item for item in processes if item["service"] == "launcher.lifecycle/probe"]
+                assert process["error"] is None, process
+                return process["state"]
+
+            initial_logging = logging_state()
+            assert initial_logging["service"] == "lifecycle-probe"
+            assert initial_logging["pid"] == plugin_pid_before
+
             source_path = "/api/gateway/config/sources/gateway_mutable_override"
             document = _json_request(client, "GET", source_path)["data"]
             assert isinstance(document, dict)
             config = commentjson.loads(str(document["jsonc"]))
             config["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] += 0.25
+            config["logging"]["runtime"] = {"level": "warning", "pretty": False}
             pending_save = _json_request(client, "PUT", source_path, {
                 "gateway_id": gateway_id,
                 "source_key": "gateway_mutable_override",
@@ -298,16 +311,23 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
                 "expected_active_digest": document["active_digest"],
                 "idempotency_key": "launcher-plugin-lifecycle-handoff",
             })
-            assert pending_save["data"]["edit"]["state"] == "pending_restart"
+            pending_data = pending_save["data"]
+            assert isinstance(pending_data, dict)
+            assert pending_data["edit"]["state"] == "pending_restart"
+            assert logging_state() == initial_logging, "pending 不得提前改变仍在使用的实例"
             pending = _wait_for(client, "/api/gateway/config/reload-status",
                 lambda value: isinstance(value.get("data"), dict)
                 and value["data"].get("state") == "pending_restart",
                 process=launcher)
-            candidate_ref = pending["data"]["candidate_ref"]
+            pending_status = pending["data"]
+            assert isinstance(pending_status, dict)
+            candidate_ref = pending_status["candidate_ref"]
             assert isinstance(candidate_ref, str)
 
             restart = _json_request(client, "POST", "/api/gateway/runtime/restart-development")
-            assert restart["data"]["previous_process_id"] == initial_gateway_pid
+            restart_data = restart["data"]
+            assert isinstance(restart_data, dict)
+            assert restart_data["previous_process_id"] == initial_gateway_pid
             next_health = _wait_for(client, health_path,
                 lambda value: isinstance(value.get("data"), dict)
                 and value["data"].get("process_id") != initial_gateway_pid,
@@ -325,6 +345,12 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             assert isinstance(instance_after, dict)
             assert instance_after["process_id"] == plugin_pid_before
             assert instance_after["instance_id"] == instance_id_before
+            active_config = _json_request(client, "GET", source_path)["data"]
+            assert isinstance(active_config, dict)
+            adopted_logging = logging_state()
+            assert adopted_logging == initial_logging | {
+                "level": "warning", "pretty": False, "applied_revision": active_config["active_digest"],
+            }
             plugin_pid = instance_after["process_id"]
             plugin_process = psutil.Process(plugin_pid)
             instance_id = instance_after["instance_id"]

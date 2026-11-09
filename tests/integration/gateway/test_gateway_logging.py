@@ -24,6 +24,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
 
 @dataclass(frozen=True)
@@ -37,21 +38,27 @@ class LoggingCase:
 
 @pytest.fixture
 def logging_case(
-    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+    request: pytest.FixtureRequest, integration_workspace_root_path: str, prepared_developer_tools_package: Path,
 ) -> Iterator[LoggingCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     artifacts = context.artifacts_dir / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)
     home = context.boxteam_home_for_node(request.node.nodeid)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, home)
     workspace = Path(integration_workspace_root_path)
+    port = integration_port_block_for_file(Path(request.node.path)).port(0)
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
     provider.update({"model": "e2e-stub-model", "api_key": "logging-fixture-key"})
     config["agents"]["default"]["model"] = {"primary_provider": "primary", "fallback_providers": []}
+    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
+    config.setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [
+        {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": plugin_id, "enabled": True}
+        for plugin_id in ("terminal", "browser")
+    ]
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
-    port = integration_port_block_for_file(Path(request.node.path)).port(0)
     with model_stream_replay(
         context.output_root, runtime_root=runtime, business_assertion=request.node.nodeid,
     ) as replay:
@@ -67,6 +74,17 @@ def logging_case(
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
                               timeout=10, trust_env=False) as client:
                 client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
+                gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+                deadline = time.monotonic() + 30
+                slots: list[dict] = []
+                while time.monotonic() < deadline:
+                    slots = client.post("/api/gateway/service-plugins/status", json={"gateway_id": gateway_id}).raise_for_status().json()["data"]["plugins"]
+                    if len(slots) == 2 and all(slot["state"] == "ready" for slot in slots):
+                        break
+                    assert not any(slot["state"] == "failed" for slot in slots), slots
+                    time.sleep(0.1)
+                else:
+                    raise AssertionError(f"日志验收所需 Terminal／Browser 插件未就绪: {slots}")
                 yield LoggingCase(client, home, workspace, artifacts, replay)
         finally:
             close_gateway_process(gateway)
@@ -76,7 +94,7 @@ def _states(client: httpx.Client) -> dict[str, dict]:
     data = client.get("/api/gateway/diagnostics").raise_for_status().json()["data"]
     assert len(data["processes"]) == 4, data
     assert all(process["error"] is None for process in data["processes"]), data
-    return {process["service"]: process["state"] for process in data["processes"]}
+    return {process["state"]["service"]: process["state"] for process in data["processes"]}
 
 
 def _wait_status(client: httpx.Client, states: set[str]) -> dict:

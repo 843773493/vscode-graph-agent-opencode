@@ -4,30 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
 import pytest
 import websockets
 
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from tests.harness.python.browser_manager import (
-    BrowserManagerProcesses,
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
+from app.services.infrastructure.config_service import ConfigService
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    browser_plugin_gateway_for_workspace,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
-def browser_service(
-    request: pytest.FixtureRequest, integration_backend_port: int,
+async def browser_service(
+    request: pytest.FixtureRequest, unused_tcp_port: int,
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[BrowserManagerProcesses, TestRunContext, Path]]:
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[tuple[TerminalPluginGateway, BrowserManagerClient, TestRunContext, Path]]:
     with TestRunContext.from_test_file(Path(request.path)) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
         runtime.mkdir(parents=True, exist_ok=True)
@@ -37,27 +37,29 @@ def browser_service(
             workspace_root=run.workspace_root / uuid4().hex,
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
         )
-        handle = start_browser_manager_processes(
-            workspace_root=root, artifacts_dir=run.artifacts_dir,
-            backend_port=integration_backend_port + 60,
-            frontend_port=integration_backend_port + 61, backend_host="127.0.0.1",
-        )
-        run.add_cleanup("Browser 进程", lambda: close_browser_manager_processes(handle))
-        yield handle, run, root
+        home = run.boxteam_home_for_node(request.node.nodeid)
+        monkeypatch.setenv("BOXTEAM_HOME", str(home))
+        async with browser_plugin_gateway_for_workspace(
+            root, run.artifacts_dir, unused_tcp_port, home,
+            prepared_package_root=prepared_developer_tools_package,
+        ) as gateway:
+            client = BrowserManagerClient(workspace_id=load_or_create_workspace_id(root),
+                config_service=ConfigService(workspace_root=root), gateway_url=gateway.gateway_url,
+                binding=gateway.binding)
+            yield gateway, client, run, root
 
 
 async def test_rejected_inputs_keep_connection_usable_without_creating_resources(
-    browser_service: tuple[BrowserManagerProcesses, TestRunContext, Path],
+    browser_service: tuple[TerminalPluginGateway, BrowserManagerClient, TestRunContext, Path],
 ) -> None:
-    handle, run, root = browser_service
-    workspace_id = load_or_create_workspace_id(root)
-    base_url = f"http://127.0.0.1:{handle.backend_port}"
-    client = BrowserManagerClient(workspace_id=workspace_id, backend_url=base_url)
+    gateway, client, run, root = browser_service
     browser_id = f"browser_{uuid4().hex}"
     paths = ("/private/ws-profile", r"C:\private\ws-profile", r"\\host\share\ws-profile")
     receipts = []
+    socket_url = gateway.websocket_url + "&target_gateway_id=" + gateway.gateway_id
+    socket_url += "&token=" + str(gateway.client.headers["X-Local-Token"])
     async with websockets.connect(
-        f"ws://127.0.0.1:{handle.backend_port}/browser?workspace_id={workspace_id}",
+        socket_url,
     ) as socket:
         for native_path in paths:
             cases = [
@@ -82,12 +84,7 @@ async def test_rejected_inputs_keep_connection_usable_without_creating_resources
                 assert "ws-profile" not in response
                 receipts.append(receipt)
         assert await client.list_resources() == []
-        async with httpx.AsyncClient(base_url=base_url, timeout=3, trust_env=False) as http:
-            response = await http.get("/health")
-            response.raise_for_status()
-            health = response.json()
-        assert health["browser_count"] == 0
-        assert health["browser_runtime"] == {"connected": False, "context_count": 0, "generation": 0}
+        assert await client.list_resources() == []
 
         # 真实产品入口创建用户指定的本地页面，原连接随后使用真实授权附加/分离。
         page = root / "user-opened.html"
@@ -113,12 +110,12 @@ async def test_rejected_inputs_keep_connection_usable_without_creating_resources
             assert receipt["browserId"] == browser_id
             receipts.append(receipt)
         await client.delete_resource(browser_id)
-    diagnostics = "\n".join(path.read_text(encoding="utf-8") for path in run.artifacts_dir.glob("browser-backend-*.stderr.log"))
+    diagnostics = "\n".join(path.read_text(encoding="utf-8") for path in gateway.logs_dir.glob("plugins/plugin-*.log"))
     assert "websocket_json" in diagnostics and "SyntaxError" in diagnostics
     assert "websocket_validate" in diagnostics
     for native_path in paths:
         assert native_path.replace("\\", "\\\\") in diagnostics
     run.write_result("passed", {
-        "scope": "真实 Node WebSocket/HTTP、Chromium、本地页面与同连接恢复；不代表 Gateway/Web、Python owner 或进程重启",
-        "receipts": receipts, "health_after_rejection": health,
+        "scope": "真实 Gateway/Browser 插件 WebSocket、HTTP、Chromium、本地页面与同连接恢复",
+        "receipts": receipts, "remaining_resources": await client.list_resources(),
     })

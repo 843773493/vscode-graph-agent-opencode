@@ -393,6 +393,7 @@ class AppContainer:
     terminal_resource_owner: TerminalResourceOwner
     terminal_manager_client: TerminalManagerClient
     browser_resource_owner: BrowserResourceOwner
+    browser_manager_client: BrowserManagerClient
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
@@ -718,8 +719,7 @@ def _build_app_container(
         config_service=config_service,
         workspace_id=workspace_id,
     )
-    browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service,
-        backend_url=startup_mount.browser_backend_url if startup_mount is not None else None)
+    browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service)
     workspace_session_context_transport = GatewaySessionContextClient(
         gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"),
         config_service=config_service,
@@ -1228,6 +1228,7 @@ def _build_app_container(
         terminal_resource_owner=terminal_resource_owner,
         terminal_manager_client=terminal_manager_client,
         browser_resource_owner=browser_resource_owner,
+        browser_manager_client=browser_manager_client,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
         session_communication_service=session_communication_service,

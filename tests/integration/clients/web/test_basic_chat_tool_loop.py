@@ -14,13 +14,8 @@ import commentjson
 import httpx
 import pytest
 
-from app.core.mounted_workspaces import MountedWorkspace
-from app.core.workspace_identity import load_or_create_workspace_id, read_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
@@ -31,18 +26,18 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
+    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
-    terminate_process,
 )
 
 
 @pytest.fixture(scope="module")
-def browser_backend(
+def chat_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
@@ -68,40 +63,21 @@ def browser_backend(
     )
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with ExitStack() as services, model_stream_replay(
-        context.run_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="real-web-composer-read-file-tool-loop",
     ) as replay:
         # 整个服务组保留绑定，避免等待闸门或启动其它服务时被客户端临时源端口抢占。
         lease = E2EProcessLease(
             context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-            tuple(port_block.port(offset) for offset in (0, 2, 3, 10, 20)),
+            tuple(port_block.port(offset) for offset in (0, 10, 20)),
         )
         lease.acquire()
         services.callback(lease.release)
-        frontend_lease, frontend_probes = E2EProcessLease.acquire_available(
-            context.runtime_root_for_node(request.node.nodeid) / "browser-frontend-port.json",
-            range(port_block.port(4), port_block.port(10)),
-        )
-        services.callback(frontend_lease.release)
-        frontend_port = frontend_lease.ports[0]
-        (context.artifacts_dir / "browser-frontend-port-allocation.json").write_text(json.dumps({
-            "port": frontend_port,
-            "probes": [{"port": candidate, "available": available} for candidate, available in frontend_probes],
-        }, indent=2) + "\n", encoding="utf-8")
-        browser = start_browser_manager_processes(
-            workspace_root=workspace_root, artifacts_dir=context.artifacts_dir,
-            backend_port=port_block.port(3), frontend_port=frontend_port, backend_host="127.0.0.1",
-        )
-        services.callback(close_browser_manager_processes, browser)
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="basic-chat-tool-loop-browser-backend",
             asgi_app="tests.support.e2e_control.backend_app:app",
-            startup_mount=MountedWorkspace(
-                load_or_create_workspace_id(workspace_root), workspace_root,
-                browser_backend_url=f"http://127.0.0.1:{port_block.port(3)}",
-            ),
             env_overrides={
                 "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key",
                 "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
@@ -117,11 +93,11 @@ def browser_backend(
 @pytest.mark.asyncio
 async def test_basic_chat_tool_loop_through_real_browser_composer(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend: tuple[str, Path, ModelStreamReplay],
     web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
-    backend_url, workspace_root, replay = browser_backend
+    backend_url, workspace_root, replay = chat_backend
     chromium_path = (
         os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
         or shutil.which("chromium")
@@ -152,11 +128,7 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            guest = await client.post(
-                "/api/gateway/users/guest",
-                json={"tracking": {"source": "basic-chat-tool-loop-test"}},
-            )
-            assert guest.status_code == 200, guest.text
+            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
             gateway_id = health.json()["data"]["gateway_id"]

@@ -95,6 +95,7 @@ async def get_gateway_diagnostics(
                 selected_log_id=log_id,
                 tail_lines=tail_lines,
                 extension_management=getattr(request.app.state, "extension_management", None),
+                service_plugins=getattr(request.app.state, "service_plugins", None),
             )
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

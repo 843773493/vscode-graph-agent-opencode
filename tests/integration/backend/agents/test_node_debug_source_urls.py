@@ -34,7 +34,7 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-    prepared_debug_plugin_package: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     config_path = Path(integration_workspace_config_path)
     source = commentjson.loads(config_path.read_text(encoding="utf-8"))
@@ -74,7 +74,7 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
             )
             cases.append((scope, form, source, code, entry))
     reset_gateway_persistent_state(workspace_root=root)
-    copy_prepared_developer_tools_package(prepared_debug_plugin_package, boxteam_home)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     evidence = []
     with ExitStack() as processes:
         backend = start_backend_process(
@@ -100,8 +100,7 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
             gateway_id, workspace_id = active["gateway_id"], active["workspace_id"]
             installed = await enable_developer_tools_plugins(
                 client, gateway_id=gateway_id, workspace_id=workspace_id,
-                plugin_ids=("debugging",), artifacts_dir=context.artifacts_dir / "debug-plugin",
-                prepared_package=True,
+                plugin_ids=("debugging",),
             )
             assert installed["debugging"]["state"] == "ready"
             client.headers.update({

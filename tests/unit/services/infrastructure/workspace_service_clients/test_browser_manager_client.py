@@ -9,14 +9,19 @@ import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.abstractions.workspace_resources import ResourceTransportGrantRejected
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from app.services.infrastructure.config_service import ConfigService
 from tests.support.resource_owners.sessions import WORKSPACE_ID
 
 
 @pytest.fixture
-def browser_manager_client() -> BrowserManagerClient:
-    return BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
+async def browser_manager_client(monkeypatch: pytest.MonkeyPatch) -> BrowserManagerClient:
+    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.get_gateway_local_token", lambda: "gateway-token")
+    client = BrowserManagerClient(workspace_id=WORKSPACE_ID, gateway_url="http://gateway.test",
+        config_service=Mock(), binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
+            plugin_id="browser", enabled=True, workspace_id=WORKSPACE_ID))
+    yield client
+    await client.aclose()
 
 
 @pytest.mark.asyncio
@@ -86,10 +91,7 @@ async def test_request_timeout_covers_declared_browser_budget(
 
 
 @pytest.mark.asyncio
-async def test_browser_backend_url_is_resolved_from_current_config_snapshot(resource_http) -> None:
-    config = Mock(spec=ConfigService)
-    config.get_browser_backend_url.side_effect = ["http://browser-a", "http://browser-b"]
-    client = BrowserManagerClient(workspace_id=WORKSPACE_ID, config_service=config)
+async def test_browser_client_routes_through_the_exact_workspace_plugin(resource_http, browser_manager_client) -> None:
     requests: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -97,9 +99,10 @@ async def test_browser_backend_url_is_resolved_from_current_config_snapshot(reso
         return httpx.Response(200, json={"data": {"summary": "ok"}})
 
     resource_http(respond)
-    await client._json_request("GET", "/api/browsers")
-    await client._json_request("GET", "/api/browsers")
-    assert [str(request.url) for request in requests] == ["http://browser-a/api/browsers", "http://browser-b/api/browsers"]
+    await browser_manager_client._json_request("GET", "/api/browsers")
+    request, = requests
+    assert request.url == "http://gateway.test/api/gateway/service-plugins/boxteam.developer-tools/browser/services/http/api/browsers?package_version=0.1.0&workspace_id=" + WORKSPACE_ID
+    assert request.headers["X-Local-Token"] == "gateway-token"
 
 
 @pytest.mark.asyncio

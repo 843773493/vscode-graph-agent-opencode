@@ -6,7 +6,6 @@ import yazl from "yazl";
 import { parse as parseJsonc } from "jsonc-parser";
 
 const SOURCE_FILES = [
-  "src/workspace-services/debug/server/backend.js",
   "src/shared/serverHttpShutdown.mjs",
   "src/shared/serverJsonRequest.mjs",
   "src/shared/serverPluginRuntime.mjs",
@@ -32,13 +31,51 @@ const SOURCE_FILES = [
   "src/workspace-services/terminal/server/terminalStateStore.js",
   "src/workspace-services/terminal/server/workspaceIdentity.js",
   "src/workspace-services/terminal/shared/commandText.js",
+  "src/workspace-services/browser/protocol/messages.js",
+  "src/workspace-services/browser/server/backend.js",
+  "src/workspace-services/browser/server/browserDeviceProfiles.js",
+  "src/workspace-services/browser/server/browserManager.js",
+  "src/workspace-services/browser/server/browserRuntime.js",
+  "src/workspace-services/browser/server/browserSession.js",
+  "src/workspace-services/browser/server/browserStateStore.js",
+  "src/workspace-services/browser/server/diagnostics/pageDiagnostics.js",
+  "src/workspace-services/browser/server/diagnostics/streamMetrics.js",
+  "src/workspace-services/browser/server/operations/browserInput.js",
+  "src/workspace-services/browser/server/operations/browserOperationQueue.js",
+  "src/workspace-services/browser/server/operations/browserPageActions.js",
+  "src/workspace-services/browser/server/operations/latestPointerMoveDispatcher.js",
+  "src/workspace-services/browser/server/resources/browserCheckpoint.js",
+  "src/workspace-services/browser/server/resources/browserRuntimePool.js",
+  "src/workspace-services/browser/server/resources/memoryPressure.js",
+  "src/workspace-services/browser/server/resources/resourceGovernor.js",
+  "src/workspace-services/browser/server/resources/resourcePolicy.js",
+  "src/workspace-services/browser/server/transport/browserFrameFlow.js",
+  "src/workspace-services/browser/server/transport/protocol.js",
+  "src/workspace-services/browser/server/url.js",
+  "src/workspace-services/browser/server/workspaceIdentity.js",
+  "src/workspace-services/browser/client/index.html",
+  "src/workspace-services/browser/client/styles.css",
+  "src/workspace-services/browser/client/main.js",
+  "src/workspace-services/browser/client/browserClientUtils.js",
+  "src/workspace-services/browser/client/browserCollaborationUi.js",
+  "src/workspace-services/browser/client/browserDebugElementTree.js",
+  "src/workspace-services/browser/client/browserElementContext.js",
+  "src/workspace-services/browser/client/browserInputEvents.js",
+  "src/workspace-services/browser/client/browserModalUi.js",
+  "src/workspace-services/browser/client/browserShortcuts.js",
+  "src/workspace-services/browser/client/browserToolbarEvents.js",
+  "src/workspace-services/protocol/generated/boxteam/browser/v1/browser_input_pb.js",
+  "src/workspace-services/protocol/generated/boxteam/browser/v1/browser_page_pb.js",
+  "src/workspace-services/protocol/generated/boxteam/browser/v1/browser_pb.js",
+  "src/workspace-services/debug/server/backend.js",
 ];
 
 const PACKAGE_FILES = [
-  ["resources/plugins/developer-tools/skills/debugging/SKILL.md", "skills/debugging/SKILL.md"],
   ["resources/plugins/developer-tools/plugin.jsonc", "plugin.jsonc"],
   ["resources/plugins/developer-tools/package.json", "package.json"],
   ["resources/plugins/developer-tools/bun.lock", "bun.lock"],
+  ["resources/plugins/developer-tools/skills/browser-control/SKILL.md", "skills/browser-control/SKILL.md"],
+  ["resources/plugins/developer-tools/skills/debugging/SKILL.md", "skills/debugging/SKILL.md"],
   ...SOURCE_FILES.map((file) => [file, file]),
 ];
 
@@ -52,7 +89,7 @@ function parseOutputPath(args) {
 }
 
 function assertRepositoryRoot(root) {
-  for (const required of ["package.json", "src/workspace-services/terminal/server/backend.js", "resources"]) {
+  for (const required of ["package.json", "src/workspace-services/terminal/server/backend.js", "src/workspace-services/browser/server/backend.js", "src/workspace-services/debug/server/backend.js", "resources"]) {
     if (!existsSync(path.join(root, required))) {
       throw new Error(`请从仓库根目录运行插件打包脚本；缺少 ${required}`);
     }

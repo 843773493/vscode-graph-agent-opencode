@@ -281,10 +281,8 @@ def test_load_gateway_config_accepts_remote_gateway(tmp_path: Path) -> None:
     assert workspace.remote_gateway_port == 9014
     assert workspace.activate is False
     assert result.default_workspace_skill_groups == (
-        "browser-control",
         "gateway-context",
         "web-search-fetch",
-        "debugging",
     )
 
 

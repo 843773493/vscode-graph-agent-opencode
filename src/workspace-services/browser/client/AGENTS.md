@@ -2,10 +2,6 @@
 
 `src/workspace-services/browser/client/` 存放独立浏览器 attach 网页。用户从主前端资源视图打开该页面后，可以连接指定浏览器页面、断开连接、输入 URL、点击远程屏幕并查看实时画面。
 
-`server.js`是Node静态资源入口；工作区UUID格式校验只依赖`../server/workspaceIdentity.js`，不加载BrowserManager或Playwright。它仍读取并核对显式工作区的权威身份文件；这个Node模块不进入网页main.js的浏览器依赖图。
-
-监听地址是传给Node的主机值，URL中的主机则须按authority语法表示：显式IPv6地址在请求解析基址和启动日志中都通过既有`formatUrlHost()`加方括号；`auto`后端地址继续从HTTP Host解析。HTTP入口验证位于`tests/integration/harness/test_process_ownership.py`，只证明静态服务，不替代页面交互或Browser业务后端验收。
-
 `browserElementContext.js`只格式化元素选择的剪贴板正文：普通模式保留HTML，rich模式生成既定Markdown；元素显示标签优先取路径末项，伪元素附在所属元素后，无路径时才解析选择字段。该标签是CSS形状的说明文字，不是可执行selector、元素ref或资源URI；定位与引用校验仍归后端页面动作owner，不从显示文字反推身份。
 
 页面客户端按输入、展示与交互控制器组织：

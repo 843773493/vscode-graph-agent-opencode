@@ -4,8 +4,7 @@ import asyncio
 import json
 import shutil
 import time
-from collections.abc import Callable, Iterator
-from contextlib import ExitStack
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,7 +29,6 @@ from app.agents.tools.session_history import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import (
     reset_current_gateway_id,
@@ -74,11 +72,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.communication.service import SessionCommunicationService
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
-from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import checkpoint_fixture
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -91,9 +84,7 @@ from tests.support.processes.gateway import (
 )
 from tests.support.processes.workspace import (
     close_backend_process,
-    ensure_local_port_available,
     start_backend_process,
-    terminate_process,
 )
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.session_catalog_owner import FixtureCatalogOwner
@@ -252,33 +243,6 @@ async def _write_session_context_checkpoint(
 @pytest.fixture
 def gateway_local_token_supplier() -> Callable[[], str]:
     return lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"]
-
-
-@pytest.fixture
-def context_auxiliary_services(
-    request: pytest.FixtureRequest,
-) -> Iterator[Callable[[Path], MountedWorkspace]]:
-    """为 overview 的真实资源查询启动目标工作区专属辅助服务。"""
-    port_block = integration_port_block_for_file(Path(request.node.fspath))
-    browser_port, browser_frontend_port = (port_block.port(offset) for offset in (42, 43))
-    with ExitStack() as lifetime:
-        def start(workspace_root: Path) -> MountedWorkspace:
-            for port in (browser_port, browser_frontend_port):
-                ensure_local_port_available(port, service_name="context 测试辅助服务")
-            browser = start_browser_manager_processes(
-                workspace_root=workspace_root,
-                artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
-                backend_port=browser_port,
-                frontend_port=browser_frontend_port,
-                backend_host="127.0.0.1",
-            )
-            lifetime.callback(close_browser_manager_processes, browser)
-            return MountedWorkspace(
-                load_or_create_workspace_id(workspace_root), workspace_root.resolve(),
-                browser_backend_url=f"http://127.0.0.1:{browser_port}",
-            )
-
-        yield start
 
 
 @pytest.fixture
@@ -556,7 +520,6 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
     integration_workspace_root_path: str,
     gateway_local_token_supplier: Callable[[], str],
     local_context_session_service: SessionService,
-    context_auxiliary_services: Callable[[Path], MountedWorkspace],
     frozen_provider_prepare,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -579,7 +542,6 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         workspace_root=str(secondary_workspace),
         port=port_block.port(21),
         log_name="context-tool-secondary-backend",
-        startup_mount=context_auxiliary_services(secondary_workspace),
     )
     gateway = start_gateway_process(
         workspace_root=primary_workspace,

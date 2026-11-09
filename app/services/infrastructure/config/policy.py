@@ -260,7 +260,6 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
                 "/runtime/agent/run/timeout_seconds", "next_job", "next_job"
             ),
             ConfigPolicyRule("/runtime/agent/run/mode", "next_session", "next_session"),
-            ConfigPolicyRule("/runtime/auxiliary_services/**", "next_job", "next_job"),
             ConfigPolicyRule("/runtime/gateway/connection/**", "next_job", "next_job"),
             ConfigPolicyRule("/context/resource_activation", "next_job", "next_job"),
             ConfigPolicyRule("/context/resource_activation/**", "next_job", "next_job"),

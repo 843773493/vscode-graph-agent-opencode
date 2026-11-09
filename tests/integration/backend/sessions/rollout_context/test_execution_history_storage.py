@@ -7,7 +7,6 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import ExitStack
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
@@ -27,10 +26,6 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
     snapshot_node_references,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
@@ -47,7 +42,6 @@ from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,
-    terminate_process,
 )
 from tests.support.session_navigation.http_operations import submit_navigation_operation
 
@@ -86,23 +80,18 @@ def history_target(
 ) -> Iterator[HistoryTarget]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
-    terminal_port = ports.port(5)
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     provider = next(p for p in config["llm"]["providers"] if p["id"] == "primary")
     provider.update({"model": "e2e-stub-model", "api_key": "history-fixture-key"})
     config["agents"]["default"]["model"] = {"primary_provider": "primary", "fallback_providers": []}
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    with ExitStack() as services, model_stream_replay(
-        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+    with model_stream_replay(
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="execution-history-storage-same-workload",
     ) as replay:
         workspace = Path(integration_workspace_root_path)
-        browser = start_browser_manager_processes(workspace_root=workspace, artifacts_dir=context.artifacts_dir,
-                                                  backend_port=ports.port(3), frontend_port=ports.port(4), backend_host="127.0.0.1")
-        services.callback(close_browser_manager_processes, browser)
-        mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace,
-                                 browser_backend_url=f"http://127.0.0.1:{ports.port(3)}")
+        mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace)
         target = HistoryTarget(workspace, ports.port(0), ports.port(1), replay, mount)
         gateway = None
         try:

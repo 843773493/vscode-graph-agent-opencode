@@ -263,6 +263,31 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
             "revision": current["revision"]}).raise_for_status().json()["data"]
         assert configured_call(runtime, restarted, "restart") == 'new:restart'
 
+    # 两种语言的日志生产者可同名，仍按真实 PID／实例分别确认，热应用不能重启插件。
+    def command_logging() -> dict[int, dict]:
+        diagnostics = client.get("/api/gateway/diagnostics").raise_for_status().json()["data"]
+        processes = [item for item in diagnostics["processes"] if item["service"].startswith("proof.commands/")]
+        assert len(processes) == 2 and all(item["error"] is None for item in processes), processes
+        return {item["state"]["pid"]: item["state"] for item in processes}
+
+    before_logging = command_logging()
+    assert {state["service"] for state in before_logging.values()} == {"command-proof"}
+    source_path = "/api/gateway/config/sources/gateway_mutable_override"
+    document = client.get(source_path).raise_for_status().json()["data"]
+    source = commentjson.loads(document["jsonc"])
+    source["logging"] = {"runtime": {"level": "warning", "pretty": False}}
+    saved = client.put(source_path, json={"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+        "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
+        "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+        "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+        "idempotency_key": "commands-logging"}).raise_for_status().json()["data"]
+    assert saved["edit"]["state"] == "active", saved
+    after_logging = command_logging()
+    assert after_logging.keys() == before_logging.keys()
+    for pid, state in after_logging.items():
+        assert state == before_logging[pid] | {"level": "warning", "pretty": False,
+            "applied_revision": saved["active_digest"]}
+
     # 解绑残留不进入有效快照，不引用包；再绑定必须使用当前包 schema。
     assert bind(None) == {}
     bind(None, parameters={"python": {"prefix": 7}})

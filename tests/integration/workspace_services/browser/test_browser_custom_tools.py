@@ -4,12 +4,11 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import AsyncIterator, Generator
-from contextlib import ExitStack
+from collections.abc import AsyncIterator
 from pathlib import Path
 from shutil import copytree
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import httpx
@@ -32,17 +31,18 @@ from app.agents.tools.browser import (
     create_screenshot_page_tool,
     create_type_in_page_tool,
 )
+from app.container import AppContainer
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.main import workspace_api, workspace_http_exception_handler
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    browser_plugin_gateway_for_workspace,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -59,10 +59,6 @@ CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
 BROWSER_CONTROL_SKILL_NAME = "browser-control"
 
 
-def _browser_ports(integration_backend_port: int) -> tuple[int, int]:
-    return integration_backend_port + 60, integration_backend_port + 61
-
-
 def _json_tool_result(raw: object) -> dict[str, object]:
     if not isinstance(raw, str):
         raise TypeError(f"浏览器扩展工具应返回 JSON 字符串，实际: {type(raw).__name__}")
@@ -70,6 +66,46 @@ def _json_tool_result(raw: object) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise TypeError(f"浏览器扩展工具返回值不是对象: {raw}")
     return parsed
+
+
+def _browser_client(container: AppContainer, gateway: TerminalPluginGateway) -> BrowserManagerClient:
+    return BrowserManagerClient(
+        workspace_id=container.workspace_id,
+        config_service=container.config_service,
+        gateway_url=gateway.gateway_url,
+        binding=gateway.binding,
+    )
+
+
+def _browser_http_url(gateway: TerminalPluginGateway, path: str) -> str:
+    route = gateway.http_service_url.split("?", 1)[0]
+    query = urlencode({"package_version": gateway.binding.package_version, "workspace_id": gateway.workspace_id})
+    return f"{route}{path}?{query}"
+
+
+def _browser_http_request(gateway: TerminalPluginGateway, path: str) -> Request:
+    return Request(_browser_http_url(gateway, path), headers=gateway.workspace_headers)
+
+
+async def _browser_http_get(gateway: TerminalPluginGateway, path: str) -> httpx.Response:
+    target = urlsplit(_browser_http_url(gateway, path))
+    return await gateway.client.get(
+        f"{target.path}?{target.query}", headers=gateway.workspace_headers,
+    )
+
+
+def _browser_websocket_url(gateway: TerminalPluginGateway) -> str:
+    return (
+        f"{gateway.websocket_url}&target_gateway_id={gateway.gateway_id}"
+        f"&token={gateway.client.headers['X-Local-Token']}"
+    )
+
+
+def _browser_plugin_log(gateway: TerminalPluginGateway) -> str:
+    slot = gateway.runtime.slots[(gateway.binding.package_id, gateway.binding.plugin_id, gateway.workspace_id)]
+    if slot.receipt is None or slot.receipt.log_sink is None:
+        raise RuntimeError("Browser 插件缺少真实进程日志")
+    return Path(str(slot.receipt.log_sink["path"])).read_text(encoding="utf-8")
 
 
 def _read_http(target: str | Request) -> tuple[int, bytes]:
@@ -174,70 +210,40 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         template_items=CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS,
     )
     copytree(
-        project_root / "resources" / "skills" / BROWSER_CONTROL_SKILL_NAME,
+        project_root / "resources" / "plugins" / "developer-tools" / "skills" / BROWSER_CONTROL_SKILL_NAME,
         workspace_root / ".boxteam" / "skills" / BROWSER_CONTROL_SKILL_NAME,
         dirs_exist_ok=True,
     )
     return str(workspace_root)
 
 
-@pytest.fixture(scope="module", autouse=True)
-def browser_manager_env(
-    integration_workspace_root_path: str,
-    integration_backend_port: int,
-) -> Generator[tuple[int, int], None, None]:
-    backend_port, frontend_port = _browser_ports(integration_backend_port)
-    workspace_root = str(Path(integration_workspace_root_path).resolve())
-    updates = {
-        "WORKSPACE_ROOT": workspace_root,
-        "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{frontend_port}",
-        "BOXTEAM_BROWSER_WORKSPACE_ROOT": workspace_root,
-    }
-    previous = {key: os.environ.get(key) for key in updates}
-    os.environ.update(updates)
-    try:
-        yield backend_port, frontend_port
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
 @pytest.fixture(scope="module")
-def integration_startup_mount(
-    browser_manager_processes: tuple[int, int], integration_workspace_root_path: str,
-) -> MountedWorkspace:
+def integration_startup_mount(integration_workspace_root_path: str) -> MountedWorkspace:
     root = Path(integration_workspace_root_path).resolve()
-    return MountedWorkspace(
-        load_or_create_workspace_id(root), root,
-        browser_backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    return MountedWorkspace(load_or_create_workspace_id(root), root)
 
 
 @pytest.fixture(scope="module")
-def browser_manager_artifacts() -> Path:
-    # 模块级服务只冻结一次日志位置，读取方不能改用当前测试节点的目录。
+def browser_plugin_artifacts() -> Path:
     return TestRunContext.from_test_file(Path(__file__)).artifacts_dir
 
 
 @pytest.fixture(scope="module")
-def browser_manager_processes(
-    browser_manager_env: tuple[int, int],
+async def browser_plugin_gateway(
+    request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
-    browser_manager_artifacts: Path,
-) -> Generator[tuple[int, int], None, None]:
-    backend_port, frontend_port = browser_manager_env
+    browser_plugin_artifacts: Path,
+    integration_backend_port: int,
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[TerminalPluginGateway]:
+    run = TestRunContext.from_test_file(Path(__file__))
     workspace = Path(integration_workspace_root_path).resolve()
-    with ExitStack() as lifetime:
-        browser = start_browser_manager_processes(
-            workspace_root=workspace, backend_port=backend_port,
-            artifacts_dir=browser_manager_artifacts,
-            frontend_port=frontend_port, backend_host="127.0.0.1",
-        )
-        lifetime.callback(close_browser_manager_processes, browser)
-        yield backend_port, frontend_port
+    home = run.boxteam_home_for_node(request.node.nodeid)
+    async with browser_plugin_gateway_for_workspace(
+        workspace, browser_plugin_artifacts, integration_backend_port + 60, home,
+        prepared_package_root=prepared_developer_tools_package,
+    ) as gateway:
+        yield gateway
 
 
 @pytest.fixture
@@ -251,12 +257,12 @@ def browser_application() -> FastAPI:
 
 @pytest.fixture
 async def browser_runtime(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_workspace_root_path: str,
     integration_startup_mount: MountedWorkspace,
     browser_application: FastAPI,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
-    del browser_manager_processes
+    del browser_plugin_gateway
     TestRunContext.from_test_file(Path(__file__)).artifacts_dir.mkdir(parents=True, exist_ok=True)
     async with workspace_tool_runtime(
         Path(integration_workspace_root_path), application=browser_application,
@@ -319,8 +325,7 @@ async def _detach_delete(client: httpx.AsyncClient, resource_id: str, context: C
 @pytest.mark.parametrize("action", ["stop", "delete"])
 async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_persisted(
     action: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -331,8 +336,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     browser_id = resource["resource_id"]
-    transport = BrowserManagerClient(workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     marker = f"browser-stop-page-closed-{browser_id}"
     await transport.perform(browser_id, "run", {"code":
         f"page.once('close', () => console.error({json.dumps(marker)}));"}, actor="agent")
@@ -388,7 +392,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
     records = json.loads((root / ".boxteam/browser-manager/browsers.json").read_text())
     saved, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
     assert saved["status"] == expected_status and saved["reconciliation_status"] == "verified"
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert diagnostics.count(marker) == 1
     assert "检查点" in response.text
     if action == "stop":
@@ -399,8 +403,7 @@ async def test_stop_checkpoint_failure_keeps_unknown_until_explicit_retry_is_per
 @pytest.mark.asyncio
 async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     response = await integration_client.post("/api/v1/resources/browsers", json={
@@ -414,10 +417,7 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     root = Path(container.workspace_root)
     checkpoint = root / ".boxteam/browser-manager/checkpoints" / f"{browser_id}.json"
     checkpoint.mkdir(parents=True)
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     failures: list[BrowserRequestError] = []
     with pytest.raises(BrowserRequestError) as caught:
         await transport._json_request("POST", f"/api/browsers/{browser_id}/freeze", {})
@@ -456,7 +456,7 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
     assert frozen.status_code == 200, frozen.text
     assert frozen.json()["data"]["browser"]["metadata"]["resource_state"] == "frozen"
     assert checkpoint.is_file()
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert "[browser-state-store] 写入浏览器检查点失败" in diagnostics
     assert str(checkpoint) in diagnostics
     assert "文件发布" in diagnostics
@@ -469,8 +469,7 @@ async def test_checkpoint_failure_reports_stage_without_publishing_native_path(
 @pytest.mark.asyncio
 async def test_download_failure_publishes_stage_without_native_storage(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -484,10 +483,7 @@ async def test_download_failure_publishes_stage_without_native_storage(
     destination = root / ".boxteam/browser-manager/downloads" / browser_id
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"existing-directory-conflict")
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     code = """
 const started = page.waitForEvent('download');
 await page.evaluate(() => {
@@ -524,7 +520,7 @@ return 'download-started';
         assert record["download_error"] == failure
         assert str(root) not in json.dumps(record)
         artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-        diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+        diagnostics = _browser_plugin_log(browser_plugin_gateway)
         assert "[browser-state-store] 保存浏览器下载失败" in diagnostics
         assert str(destination) in diagnostics
         (artifacts / f"download-failure-{time.time_ns()}.json").write_text(json.dumps({
@@ -551,12 +547,11 @@ return 'download-started';
 
 @pytest.mark.asyncio
 async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
     integration_workspace_root_path: str,
 ):
-    backend_port, frontend_port = browser_manager_processes
     session_id = browser_context.session_id
     context = browser_context
 
@@ -721,10 +716,10 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert screenshot_url.endswith(f"/api/browsers/{page_id}/screenshots/{screenshot_id}")
     assert str(integration_workspace_root_path) not in screenshot_url
 
-    # 截图的对外可寻址改由浏览器管理器只读端点承载（裁定修正 2）。
+    # 截图通过目标 Gateway 的精确 Browser HTTP 服务实例读取。
     shot_status, shot_body = await asyncio.to_thread(
         _read_http,
-        f"http://127.0.0.1:{backend_port}{screenshot_url}?workspace_id={browser_context.browser_resource_owner.workspace_id}",
+        _browser_http_request(browser_plugin_gateway, screenshot_url),
     )
     assert shot_status == 200
     assert shot_body[:8] == b"\x89PNG\r\n\x1a\n"
@@ -733,8 +728,10 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     # 错误（明确 code），且响应体 MUST NOT 泄漏真实路径（6.3）。
     missing_shot_status, missing_shot_body = await asyncio.to_thread(
         _read_http_error_status_and_body,
-        f"http://127.0.0.1:{backend_port}"
-        f"/api/browsers/{page_id}/screenshots/screenshot_doesnotexist?workspace_id={browser_context.browser_resource_owner.workspace_id}",
+        _browser_http_request(
+            browser_plugin_gateway,
+            f"/api/browsers/{page_id}/screenshots/screenshot_doesnotexist",
+        ),
     )
     assert missing_shot_status == 404
     missing_shot_payload = json.loads(missing_shot_body)
@@ -744,8 +741,10 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
 
     missing_browser_status, missing_browser_body = await asyncio.to_thread(
         _read_http_error_status_and_body,
-        f"http://127.0.0.1:{backend_port}"
-        f"/api/browsers/browser_doesnotexist/screenshots/screenshot_x?workspace_id={browser_context.browser_resource_owner.workspace_id}",
+        _browser_http_request(
+            browser_plugin_gateway,
+            "/api/browsers/browser_doesnotexist/screenshots/screenshot_x",
+        ),
     )
     assert missing_browser_status == 404
     missing_browser_payload = json.loads(missing_browser_body)
@@ -769,11 +768,12 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert time.monotonic() - stale_started_at < 1
     assert "请重新调用 readPage" in str(stale_error.value)
 
-    bare_local_url = f"127.0.0.1:{frontend_port}/health"
+    gateway_path = browser_plugin_gateway.http_service_url.split("?", 1)[0]
+    local_service_path = gateway_path.removeprefix("http://") + "/api/browsers"
     bare_navigation = _json_tool_result(
-        await navigate_page.ainvoke({"pageId": page_id, "type": "url", "url": bare_local_url})
+        await navigate_page.ainvoke({"pageId": page_id, "type": "url", "url": local_service_path})
     )
-    assert bare_navigation["url"] == f"http://{bare_local_url}"
+    assert bare_navigation["url"] == f"http://{local_service_path}"
 
     resources_response = await integration_client.get(
         f"/api/v1/sessions/{session_id}/resources"
@@ -790,17 +790,8 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert "delete" not in browser_resource["available_actions"]
     assert "attach_url" not in browser_resource["metadata"]
 
-    frontend_status, html_body = await asyncio.to_thread(
-        _read_http,
-        f"http://127.0.0.1:{frontend_port}/?browserId={page_id}",
-    )
-    html = html_body.decode("utf-8")
-    assert frontend_status == 200
-    assert "可附加浏览器" in html
-
     grant = await _grant(integration_client, page_id, browser_context)
-    workspace_id = grant["resource"]["workspace_id"]
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": page_id, "grantToken": grant["grant_token"]}))
         attached = await _recv_ws_type(websocket, "attached")
         assert attached["browserId"] == page_id
@@ -847,7 +838,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
 
 @pytest.mark.asyncio
 async def test_agent_lists_current_browser_website_through_documented_tool(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
 ):
@@ -923,7 +914,7 @@ async def test_agent_lists_current_browser_website_through_documented_tool(
 
 @pytest.mark.asyncio
 async def test_playwright_timeout_recovery_allows_immediate_page_actions(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
 ):
@@ -980,8 +971,7 @@ async def test_playwright_timeout_recovery_allows_immediate_page_actions(
 async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
-    browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1000,10 +990,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
         f"context.newPage = async () => {{ throw new Error({json.dumps(reason)}); }};"
         "await page.evaluate(() => new Promise(() => undefined));"
     )
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     with pytest.raises(BrowserRequestError) as caught:
         payload = {"code": code, "timeoutMs": 25}
         await transport._json_request("POST", f"/api/browsers/{browser_id}/run", payload)
@@ -1037,7 +1024,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
     assert record["last_operation"]["status"] == "failed"
     assert str(root) not in json.dumps(record)
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert "[browser-runtime] 页面超时恢复失败" in diagnostics
     assert reason in diagnostics
     (artifacts / f"timeout-recovery-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
@@ -1061,8 +1048,7 @@ async def test_injected_page_recovery_failure_keeps_native_cause_in_diagnostics(
 async def test_injected_registration_failure_shares_safe_http_state_and_record(
     mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
-    browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1075,10 +1061,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/native-profile'}"
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     # 通过脚本入口仅替换第三方CDP连接创建；真实注册、事件、HTTP与落盘保持产品实现。
     installed = await transport.perform(browser_id, "run", {"code": (
         "context.__testOriginalNewCDPSession = context.newCDPSession.bind(context);"
@@ -1088,9 +1071,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
     assert installed["result"] == "installed"
     grant = await _grant(integration_client, browser_id, browser_context)
     states: list[dict[str, object]] = []
-    async with websockets.connect(
-        f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}"
-    ) as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         with pytest.raises(BrowserRequestError) as caught:
@@ -1140,7 +1121,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
     assert retried["created_page_id"] != resource["metadata"]["active_page_id"]
     assert len(retried["browser"]["pages"]) == 2
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert "[browser-session] 注册浏览器标签页失败" in diagnostics
     assert reason in diagnostics
     (artifacts / f"registration-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
@@ -1159,8 +1140,7 @@ async def test_injected_registration_failure_shares_safe_http_state_and_record(
 ])
 async def test_page_control_failure_keeps_native_details_in_diagnostics(
     stage: str, mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1171,7 +1151,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     browser_id = resource["resource_id"]
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     prepared = await transport.perform(browser_id, "navigate", {"type": "new_tab", "url": "about:blank"}, actor="agent")
     page_id = prepared["created_page_id"]
     root = Path(container.workspace_root)
@@ -1192,7 +1172,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
     api_command = {"action": "navigate", "payload": navigation, "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     ws_command = {"type": "captureScreenshot", "browserId": browser_id} if stage == "Page.captureScreenshot" else {"type": "command", "name": "stop", "browserId": browser_id}
     grant = await _grant(integration_client, browser_id, browser_context)
-    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         # attach的首帧已完成，故障只在接下来的用户操作原生边界触发一次。
@@ -1243,7 +1223,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
     assert observed["reconciliation_status"] == "verified"
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    assert reason in "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    assert reason in _browser_plugin_log(browser_plugin_gateway)
     (artifacts / f"page-control-failure-{stage}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1255,8 +1235,7 @@ async def test_page_control_failure_keeps_native_details_in_diagnostics(
 @pytest.mark.parametrize("mode", ["stream", "close", "stream_close"])
 async def test_artifact_stream_and_close_failures_keep_server_available(
     mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1267,10 +1246,11 @@ async def test_artifact_stream_and_close_failures_keep_server_available(
     browser_id = created.json()["data"]["resource_id"]
     saved = _json_tool_result(await create_screenshot_page_tool(browser_context).ainvoke({"pageId": browser_id}))
     artifact_id = saved["screenshot_id"]
+    route = str(saved["screenshot_url"])
     root = Path(container.workspace_root)
     file = root / ".boxteam/browser-manager/screenshots" / f"{browser_id}-{artifact_id}.png"
     expected = file.read_bytes()
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     # 一次性注入文件句柄/流故障；HTTP、pipeline、响应销毁及真实句柄关闭均走产品链路。
     await transport.perform(browser_id, "run", {"code": f"""
 const fs = (await import('node:fs')).default;
@@ -1300,34 +1280,32 @@ fs.promises.open = async (...args) => {{
 }};
 syncBuiltinESMExports(); return 'armed';
 """}, actor="agent")
-    url = f"http://127.0.0.1:{browser_manager_processes[0]}{saved['screenshot_url']}?workspace_id={container.workspace_id}"
     try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            if mode.startswith("stream"):
-                with pytest.raises(httpx.RemoteProtocolError):
-                    await client.get(url)
-            else:
-                completed = await client.get(url)
-                assert completed.status_code == 200 and completed.content == expected
-            deadline = time.monotonic() + 8
-            while True:
-                diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
-                marker = f"读取浏览器产物失败: browser_id={browser_id}, artifact_id={artifact_id}, kind=screenshot, stage="
-                stage, code = ("stream", "EIO") if mode.startswith("stream") else ("close", "EBADF")
-                if marker + f"{stage}, code={code}" in diagnostics:
-                    break
-                assert time.monotonic() < deadline, "未收到流/关闭失败诊断"
-                await asyncio.sleep(0.05)
-            assert f"artifact-test-original-handle-closed {artifact_id}" in diagnostics
-            assert "[browser-backend] 响应开始后传输失败" in diagnostics
-            if mode.startswith("stream"):
-                assert "injected stream EIO " + str(file) in diagnostics
-            if "close" in mode:
-                assert "injected close EBADF " + str(file) in diagnostics
-            if mode == "stream_close":
-                assert "AggregateError: 产物读取及关闭失败" in diagnostics
-            retried = await client.get(url)
-            assert retried.status_code == 200 and retried.content == expected
+        if mode.startswith("stream"):
+            with pytest.raises(httpx.RemoteProtocolError):
+                await _browser_http_get(browser_plugin_gateway, route)
+        else:
+            completed = await _browser_http_get(browser_plugin_gateway, route)
+            assert completed.status_code == 200 and completed.content == expected
+        deadline = time.monotonic() + 8
+        while True:
+            diagnostics = _browser_plugin_log(browser_plugin_gateway)
+            marker = f"读取浏览器产物失败: browser_id={browser_id}, artifact_id={artifact_id}, kind=screenshot, stage="
+            stage, code = ("stream", "EIO") if mode.startswith("stream") else ("close", "EBADF")
+            if marker + f"{stage}, code={code}" in diagnostics:
+                break
+            assert time.monotonic() < deadline, "未收到流/关闭失败诊断"
+            await asyncio.sleep(0.05)
+        assert f"artifact-test-original-handle-closed {artifact_id}" in diagnostics
+        assert "[browser-backend] 响应开始后传输失败" in diagnostics
+        if mode.startswith("stream"):
+            assert "injected stream EIO " + str(file) in diagnostics
+        if "close" in mode:
+            assert "injected close EBADF " + str(file) in diagnostics
+        if mode == "stream_close":
+            assert "AggregateError: 产物读取及关闭失败" in diagnostics
+        retried = await _browser_http_get(browser_plugin_gateway, route)
+        assert retried.status_code == 200 and retried.content == expected
         assert (await transport.get_resource(browser_id))["reconciliation_status"] == "verified"
     finally:
         await transport.perform(browser_id, "run", {"code": """
@@ -1344,8 +1322,7 @@ delete context.__artifactOriginalOpen;
 @pytest.mark.parametrize("kind", ["screenshot", "download"])
 async def test_browser_artifact_read_failure_reports_identity_and_allows_retry(
     kind: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1355,7 +1332,7 @@ async def test_browser_artifact_read_failure_reports_identity_and_allows_retry(
     assert created.status_code == 200, created.text
     browser_id = created.json()["data"]["resource_id"]
     root = Path(container.workspace_root)
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     if kind == "screenshot":
         saved = _json_tool_result(await create_screenshot_page_tool(browser_context).ainvoke({"pageId": browser_id}))
         artifact_id = saved["screenshot_id"]
@@ -1391,57 +1368,55 @@ await started;
         assert expected.decode() == "真实下载正文"
     state_file = root / ".boxteam/browser-manager/browsers.json"
     state_before = state_file.read_bytes()
-    url = f"http://127.0.0.1:{browser_manager_processes[0]}{route}?workspace_id={container.workspace_id}"
     receipts: list[dict[str, object]] = []
-    async with httpx.AsyncClient(timeout=8) as client:
-        for mode, status, code in [
-            ("parent_file", 500, "ENOTDIR"), ("missing", 404, "browser_artifact_not_found"),
-            ("directory", 500, "EISDIR"), ("permission", 500, "EACCES"),
-        ]:
-            if mode == "permission" and os.name == "nt":
-                continue  # Windows权限失败由目标ACL验收，不用chmod冒充。
+    for mode, status, code in [
+        ("parent_file", 500, "ENOTDIR"), ("missing", 404, "browser_artifact_not_found"),
+        ("directory", 500, "EISDIR"), ("permission", 500, "EACCES"),
+    ]:
+        if mode == "permission" and os.name == "nt":
+            continue  # Windows权限失败由目标ACL验收，不用chmod冒充。
+        if mode == "missing":
+            file.unlink()
+        elif mode == "parent_file":
+            parked = file.parent.with_name(f"{file.parent.name}-artifact-read-backup")
+            file.parent.rename(parked)
+            file.parent.write_bytes(b"not-a-directory")
+        elif mode == "directory":
+            file.unlink()
+            file.mkdir()
+        else:
+            file.chmod(0)
+        try:
+            failed = await _browser_http_get(browser_plugin_gateway, route)
+            assert failed.status_code == status, failed.text
+            receipt = failed.json()
+            assert receipt["code"] == code
+            assert f"browser_id={browser_id}" in receipt["error"]
+            assert f"artifact_id={artifact_id}" in receipt["error"]
+            assert f"kind={kind}" in receipt["error"]
+            assert str(root) not in failed.text
+            assert state_file.read_bytes() == state_before
+            receipts.append(receipt)
+        finally:
             if mode == "missing":
-                file.unlink()
+                file.write_bytes(expected)
             elif mode == "parent_file":
-                parked = file.parent.with_name(f"{file.parent.name}-artifact-read-backup")
-                file.parent.rename(parked)
-                file.parent.write_bytes(b"not-a-directory")
+                file.parent.unlink()
+                parked.rename(file.parent)
             elif mode == "directory":
-                file.unlink()
-                file.mkdir()
+                file.rmdir()
+                file.write_bytes(expected)
             else:
-                file.chmod(0)
-            try:
-                failed = await client.get(url)
-                assert failed.status_code == status, failed.text
-                receipt = failed.json()
-                assert receipt["code"] == code
-                assert f"browser_id={browser_id}" in receipt["error"]
-                assert f"artifact_id={artifact_id}" in receipt["error"]
-                assert f"kind={kind}" in receipt["error"]
-                assert str(root) not in failed.text
-                assert state_file.read_bytes() == state_before
-                receipts.append(receipt)
-            finally:
-                if mode == "missing":
-                    file.write_bytes(expected)
-                elif mode == "parent_file":
-                    file.parent.unlink()
-                    parked.rename(file.parent)
-                elif mode == "directory":
-                    file.rmdir()
-                    file.write_bytes(expected)
-                else:
-                    file.chmod(0o600)
-            recovered = await client.get(url)
-            assert recovered.status_code == 200, recovered.text
-            assert recovered.content == expected
-            assert recovered.headers["content-type"] == expected_type
-            assert int(recovered.headers["content-length"]) == len(expected)
-            if kind == "download":
-                assert recovered.headers["content-disposition"] == "attachment; filename*=UTF-8''" + quote(saved["filename"], safe="")
+                file.chmod(0o600)
+        recovered = await _browser_http_get(browser_plugin_gateway, route)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.content == expected
+        assert recovered.headers["content-type"] == expected_type
+        assert int(recovered.headers["content-length"]) == len(expected)
+        if kind == "download":
+            assert recovered.headers["content-disposition"] == "attachment; filename*=UTF-8''" + quote(saved["filename"], safe="")
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert str(file) in diagnostics and "ENOTDIR" in diagnostics
     assert (await transport.get_resource(browser_id))["reconciliation_status"] == "verified"
     (artifacts / f"artifact-read-failure-{kind}-{time.time_ns()}.json").write_text(json.dumps({
@@ -1455,8 +1430,7 @@ await started;
 @pytest.mark.parametrize("mode", ["async"])
 async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery(
     mode: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1469,7 +1443,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"page.evaluate: EACCES {root / '.boxteam/browser-manager/private-summary'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     # 仅令真实页面的摘要采集失败；操作接纳、HTTP回执、owner投影和恢复写入均由产品完成。
     installed = await transport.perform(browser_id, "run", {"code": (
         "await page.setContent('<title>摘要重试</title><button>读取标记</button>');"
@@ -1524,7 +1498,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
     assert "读取标记" in retried.json()["data"]["summary"]
     assert retried.json()["data"]["browser"]["metadata"]["last_operation"]["status"] == "completed"
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics and "stage: 'read_summary'" in diagnostics
     (artifacts / f"summary-failure-{mode}-{time.time_ns()}.json").write_text(json.dumps({
         "transport_receipt": failure.payload, "api_body": api_failure.json(),
@@ -1538,8 +1512,7 @@ async def test_summary_failure_keeps_native_details_out_of_receipts_and_recovery
 @pytest.mark.parametrize("stage", ["read_clipboard", "find_text"])
 async def test_text_query_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1552,14 +1525,14 @@ async def test_text_query_failure_keeps_native_details_in_diagnostics_and_allows
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-text-query'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     await transport.perform(browser_id, "run", {"code": """
 await page.setContent('<title>文本查询</title><input id="text" value="clipboard marker"><p>find marker</p>');
 await page.locator('#text').focus();
 await page.locator('#text').evaluate((input) => input.select());
 """}, actor="agent")
     grant = await _grant(integration_client, browser_id, browser_context)
-    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         # 原生采集只失败一次，原方法在抛错前恢复；不替产品写操作或恢复记录。
@@ -1601,7 +1574,7 @@ await page.locator('#text').evaluate((input) => input.select());
     assert str(root) not in json.dumps(observed)
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics and f"stage={stage}" in diagnostics
     (artifacts / f"text-query-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
@@ -1614,8 +1587,7 @@ await page.locator('#text').evaluate((input) => input.select());
 @pytest.mark.parametrize("stage", ["debug_dom", "debug_sources", "debug_title"])
 async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1628,9 +1600,9 @@ async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_al
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-debug-profile'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     grant = await _grant(integration_client, browser_id, browser_context)
-    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         # 只让真实Playwright采集调用失败一次；不替产品写快照、operation或持久状态。
@@ -1673,7 +1645,7 @@ async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_al
     assert str(root) not in json.dumps(observed)
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics and f"stage={stage}" in diagnostics
     (artifacts / f"debug-snapshot-failure-{stage}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "node_record": record, "owner_projection": observed, "retried": retried,
@@ -1692,8 +1664,7 @@ async def test_debug_snapshot_failure_keeps_native_details_in_diagnostics_and_al
 async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_retry(
     method: str, mode: str, arguments: dict[str, object], integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
-    browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1706,7 +1677,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-dialog-profile'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     # 由真实页面生成对话框；仅第三方 accept/dismiss 方法一次失败，不替产品写 pending 状态。
     opened = await transport.perform(browser_id, "run", {"code": (
         "page.once('dialog', dialog => {"
@@ -1754,7 +1725,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
     result = await transport.perform(browser_id, "run", {"code": "return await page.evaluate(() => window.dialogResult);"}, actor="agent")
     assert result["result"] == (None if method == "dismiss" else arguments.get("promptText", ""))
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics and f"dialog.{method}" in diagnostics
     (artifacts / f"dialog-failure-{method}-{mode}-{time.time_ns()}.json").write_text(json.dumps({
         "receipt": receipt, "state": state, "node_record": record,
@@ -1767,8 +1738,7 @@ async def test_dialog_failure_keeps_native_details_in_diagnostics_and_allows_ret
 @pytest.mark.asyncio
 async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allows_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -1784,7 +1754,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
     selected = root / "本机上传 文件.txt"
     selected.write_text("目标机器上的文件正文", encoding="utf-8")
     assert not missing.exists()
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     chooser_code = "await page.setContent('<input id=upload type=file>'); await page.locator('#upload').click();"
     opened = await transport.perform(browser_id, "run", {"code": chooser_code}, actor="agent")
     assert opened["browser"]["pending_file_chooser"] is True
@@ -1833,7 +1803,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
     assert native_file["result"] == {"name": selected.name, "text": selected.read_text(encoding="utf-8")}
     await transport.perform(browser_id, "run", {"code": chooser_code}, actor="agent")
     grant = await _grant(integration_client, browser_id, browser_context)
-    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}", proxy=None) as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway), proxy=None) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "participantId": "user_file_selection_client", "grantToken": grant["grant_token"]}))
         await _recv_ws_type(websocket, "attached")
         await websocket.send(json.dumps({
@@ -1848,7 +1818,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
         await websocket.send(json.dumps({"type": "detach"}))
         await _recv_ws_type(websocket, "detached")
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert str(missing) in diagnostics and "ENOENT" in diagnostics
     assert "stage: 'select_files'" in diagnostics
     (artifacts / f"file-selection-failure-{time.time_ns()}.json").write_text(json.dumps({
@@ -1870,8 +1840,7 @@ async def test_file_selection_failure_keeps_native_path_in_diagnostics_and_allow
 async def test_device_switch_failure_preserves_primary_and_cleanup_details(
     stage: str, enabling: bool, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
-    browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     root = Path(container.workspace_root)
@@ -1886,7 +1855,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     browser_id = resource["resource_id"]
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     private_path = str(root / ".boxteam/browser-manager/private-device-profile")
     reason = f"injected EACCES: {private_path}"
     failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
@@ -1926,7 +1895,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
         )
     grant = await _grant(integration_client, browser_id, browser_context)
     expected_status = "verified" if enabling else "unknown"
-    async with websockets.connect(f"ws://127.0.0.1:{browser_manager_processes[0]}/browser?workspace_id={container.workspace_id}") as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         assert (await _recv_ws_type(websocket, "attached"))["browserId"] == browser_id
         await transport.perform(browser_id, "run", {"code": code}, actor="agent")
@@ -1980,7 +1949,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
     assert observed["reconciliation_status"] == expected_status
     assert container.browser_resource_owner._leases.leases_for_resource(browser_id) == []
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics
     if stage == "multiple":
         assert reason + "-cleanup" in diagnostics
@@ -2014,8 +1983,7 @@ async def test_device_switch_failure_preserves_primary_and_cleanup_details(
 ])
 async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     stage: str, integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     command = {
@@ -2028,7 +1996,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     seed_id = seeded.json()["data"]["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-startup-profile'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
     # 只在第三方边界注入一次故障；新资源接纳、启动、清理和失败落盘仍由产品入口完成。
     if stage == "acquire_context":
@@ -2086,7 +2054,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
     assert str(root) not in json.dumps(record)
     assert str(root) not in json.dumps(observed)
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics
     assert "service=browser pid=" in diagnostics
     assert "runtime_instance_id=" in diagnostics
@@ -2119,8 +2087,7 @@ async def test_browser_startup_failure_keeps_native_details_in_diagnostics(
 async def test_navigation_failure_keeps_native_details_in_diagnostics(
     navigation_type: str, method: str, mode: str, integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext, browser_runtime: WorkspaceToolRuntime,
-    browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2133,7 +2100,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-navigation-profile'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     # 一次性替换第三方导航边界；收据、状态更新和持久化仍由真实产品入口完成。
     await transport.perform(browser_id, "run", {"code": (
         f"const original = page.{method}; page.{method} = async function (...args) {{ page.{method} = original;"
@@ -2166,7 +2133,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
     record, = [item for item in records["browsers"] if item["browser_id"] == browser_id]
     assert str(root) not in json.dumps(record)
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics
     retried = await transport.perform(browser_id, "navigate", {"type": "url", "url": "about:blank"}, actor="agent")
     assert retried["operation"]["status"] == "completed"
@@ -2190,8 +2157,7 @@ async def test_navigation_failure_keeps_native_details_in_diagnostics(
 async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     stage: str, mode: str, action: str, expected_state: str, reconciliation: str,
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2204,7 +2170,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     browser_id = resource["resource_id"]
     root = Path(container.workspace_root)
     reason = f"injected EACCES: {root / '.boxteam/browser-manager/private-runtime-profile'}"
-    transport = BrowserManagerClient(workspace_id=container.workspace_id, backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}")
+    transport = _browser_client(container, browser_plugin_gateway)
     command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     failure = f"throw Object.assign(new Error({json.dumps(reason)}), {{code: 'EACCES'}});"
     # 仅替换真实Playwright边界，触发一次后恢复原方法；状态转换、回滚与落盘由产品执行。
@@ -2262,7 +2228,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
     assert str(root) not in json.dumps(record)
     assert record["resource_transition_error"] == observed["metadata"]["resource_transition_error"]
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert reason in diagnostics
     assert "[browser-runtime] 资源生命周期操作失败" in diagnostics
     if reconciliation == "unknown":
@@ -2292,7 +2258,7 @@ async def test_runtime_lifecycle_failure_keeps_native_cause_out_of_receipts(
 @pytest.mark.asyncio
 async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
 ) -> None:
     container, _session, _invocation = browser_runtime
     root = Path(container.workspace_root)
@@ -2313,10 +2279,7 @@ async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
     browser_id = resource["resource_id"]
     assert resource["metadata"]["url"] == url
     assert resource["metadata"]["actual_url"] == url
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     transport_response = await transport._json_request("GET", f"/api/browsers/{browser_id}", None)
     assert transport_response["data"]["url"] == url
     assert (await transport.get_resource(browser_id))["url"] == url
@@ -2379,7 +2342,7 @@ async def test_native_file_page_url_survives_checkpoint_and_timeout_recovery(
 
 @pytest.mark.asyncio
 async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
 ):
@@ -2466,11 +2429,11 @@ async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
 
 @pytest.mark.asyncio
 async def test_browser_open_failure_is_exposed_as_failed_resource(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
 ):
-    del browser_manager_processes
+    del browser_plugin_gateway
     session_id = browser_context.session_id
     open_page = create_open_browser_page_tool(browser_context)
 
@@ -2498,11 +2461,10 @@ async def test_browser_open_failure_is_exposed_as_failed_resource(
 
 @pytest.mark.asyncio
 async def test_browser_delete_while_attached_keeps_manager_alive(
-    browser_manager_processes: tuple[int, int],
+    browser_plugin_gateway: TerminalPluginGateway,
     integration_client: httpx.AsyncClient,
     browser_context: CustomToolFactoryContext,
 ):
-    backend_port, _frontend_port = browser_manager_processes
     context = browser_context
     open_page = create_open_browser_page_tool(context)
     opened = _json_tool_result(
@@ -2511,8 +2473,7 @@ async def test_browser_delete_while_attached_keeps_manager_alive(
     page_id = str(opened["pageId"])
 
     grant = await _grant(integration_client, page_id, browser_context)
-    workspace_id = grant["resource"]["workspace_id"]
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+    async with websockets.connect(_browser_websocket_url(browser_plugin_gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": page_id, "grantToken": grant["grant_token"]}))
         attached = await _recv_ws_type(websocket, "attached")
         assert attached["browserId"] == page_id
@@ -2521,7 +2482,7 @@ async def test_browser_delete_while_attached_keeps_manager_alive(
 
     health_status, _ = await asyncio.to_thread(
         _read_http,
-        f"http://127.0.0.1:{backend_port}/health",
+        _browser_http_url(browser_plugin_gateway, "/health"),
     )
     assert health_status == 200
 
@@ -2578,8 +2539,7 @@ async def test_real_node_agent_lock_rejection_preserves_owner_and_never_executes
 @pytest.mark.asyncio
 async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2594,10 +2554,7 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
     parked = destination.with_name(f"{destination.name}-{browser_id}-backup")
     if destination.exists():
         destination.rename(parked)
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     failures: list[dict[str, object]] = []
     screenshot_page = create_screenshot_page_tool(browser_context)
     try:
@@ -2628,7 +2585,7 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
         assert str(root) not in json.dumps(record)
         assert "screenshot_error" not in record
         artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-        diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+        diagnostics = _browser_plugin_log(browser_plugin_gateway)
         assert "[browser-state-store] 保存浏览器截图失败" in diagnostics
         assert str(destination) in diagnostics
         destination.unlink()
@@ -2641,7 +2598,7 @@ async def test_screenshot_failure_reports_stage_and_recovers_through_tool(
         expected = artifact_path.read_bytes()
         assert expected.startswith(b"\x89PNG\r\n\x1a\n")
         assert len(expected) == saved["byte_length"]
-        status, body = await asyncio.to_thread(_read_http, f"http://127.0.0.1:{browser_manager_processes[0]}{saved['screenshot_url']}?workspace_id={container.workspace_id}")
+        status, body = await asyncio.to_thread(_read_http, _browser_http_url(browser_plugin_gateway, str(saved["screenshot_url"])))
         assert status == 200 and body == expected
         (artifacts / f"screenshot-failure-{time.time_ns()}.json").write_text(json.dumps({
             "transport_failures": failures, "resource_response": observed.json(),
@@ -2702,8 +2659,7 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
 @pytest.mark.parametrize("native_failure", ["filesystem", "esm-loader", "commonjs-loader"])
 async def test_script_native_failure_keeps_paths_out_of_http_and_operation_records(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_runtime: WorkspaceToolRuntime, browser_manager_processes: tuple[int, int],
-    browser_manager_artifacts: Path,
+    browser_runtime: WorkspaceToolRuntime, browser_plugin_gateway: TerminalPluginGateway,
     native_failure: str,
 ) -> None:
     container, _session, _invocation = browser_runtime
@@ -2733,10 +2689,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
             f"createRequire({json.dumps((root / 'script-entry.cjs').as_uri())})"
             f"({json.dumps(str(missing_module))});"
         )}
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     command = {"action": "run", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     receipts: list[dict[str, object]] = []
     for mode in ("async", "api"):
@@ -2785,7 +2738,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
     assert recovered.status_code == 200, recovered.text
     assert recovered.json()["data"]["result"] == {"marker": "script-retry-ok", "url": "about:blank"}
     artifacts = TestRunContext.from_test_file(Path(__file__)).artifacts_dir
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert "[browser-runtime] 资源生命周期操作失败" in diagnostics
     assert native_path in diagnostics
     (artifacts / f"script-native-failure-{time.time_ns()}.json").write_text(json.dumps({
@@ -2799,8 +2752,7 @@ async def test_script_native_failure_keeps_paths_out_of_http_and_operation_recor
 @pytest.mark.asyncio
 async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit_retry(
     integration_client: httpx.AsyncClient, browser_context: CustomToolFactoryContext,
-    browser_manager_processes: tuple[int, int], browser_runtime: WorkspaceToolRuntime,
-    browser_manager_artifacts: Path,
+    browser_plugin_gateway: TerminalPluginGateway, browser_runtime: WorkspaceToolRuntime,
 ) -> None:
     container, _session, _invocation = browser_runtime
     created = await integration_client.post("/api/v1/resources/browsers", json={
@@ -2817,10 +2769,7 @@ async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit
     backup = state_file.with_suffix(".published-test-backup")
     state_file.rename(backup)
     state_file.mkdir()
-    transport = BrowserManagerClient(
-        workspace_id=container.workspace_id,
-        backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
-    )
+    transport = _browser_client(container, browser_plugin_gateway)
     failures: list[BrowserRequestError] = []
     command = {"action": "resource-policy", "expected_revision": resource["owner_revision"],
                "thread": resource["source_thread"], "payload": {"policy": "keep_alive"}}
@@ -2861,7 +2810,7 @@ async def test_state_publish_failure_reports_workspace_stage_and_allows_explicit
     record, = [entry for entry in records["browsers"] if entry["browser_id"] == browser_id]
     assert record["resource_policy"] == "keep_alive"
     assert str(root) not in json.dumps(record)
-    diagnostics = "\n".join(item.read_text() for item in browser_manager_artifacts.glob("browser-backend-*.stderr.log"))
+    diagnostics = _browser_plugin_log(browser_plugin_gateway)
     assert "[browser-state-store] 写入浏览器状态失败" in diagnostics
     assert str(state_file) in diagnostics
     assert failures[0].code in diagnostics

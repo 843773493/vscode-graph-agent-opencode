@@ -39,14 +39,13 @@ from app.schemas.gateway.workspaces import GatewayConnectionKind
 
 if TYPE_CHECKING:
     from app.gateway.runtime.extension_management import GatewayExtensionManagement
+    from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 
 _MAX_READ_BYTES = 256 * 1024
 _MAX_GATEWAY_LOG_ENTRIES = 120
 logger = logging.getLogger(__name__)
 _SERVICE_LABELS = {
     "workspace_api": "Workspace API",
-    "terminal_manager": "Terminal Manager",
-    "browser_manager": "Browser Manager",
 }
 
 
@@ -90,8 +89,6 @@ def _process_log_path(service: str, port: int | None) -> Path | None:
         return None
     role = {
         "workspace_api": "backend",
-        "terminal_manager": "terminal",
-        "browser_manager": "browser",
     }.get(service)
     if role is None:
         raise ValueError(f"不支持的诊断服务: {service}")
@@ -148,24 +145,21 @@ def _workspace_candidates(
     workspace_runtime_urls = registry.runtime_service_urls(target.workspace_id)
     if target.managed:
         workspace_runtime_urls.setdefault("workspace_api", target.backend_url)
-    candidates: list[_LogCandidate] = []
-    for service in ("workspace_api", "terminal_manager", "browser_manager"):
-        service_url = workspace_runtime_urls.get(service)
-        log_path = _process_log_path(service, _port_from_url(service_url))
-        if service == "workspace_api" and log_path is None and target.managed:
-            log_path = _process_log_path(service, _port_from_url(target.backend_url))
-        candidates.append(
-            _LogCandidate(
-                log_id=f"workspace:{target.workspace_id}:{service}",
-                source="workspace",
-                workspace_id=target.workspace_id,
-                workspace_name=target.name,
-                service=service,
-                label=f"{target.name} · {_SERVICE_LABELS[service]}",
-                log_path=log_path,
-            )
+    service_url = workspace_runtime_urls.get("workspace_api")
+    log_path = _process_log_path("workspace_api", _port_from_url(service_url))
+    if log_path is None and target.managed:
+        log_path = _process_log_path("workspace_api", _port_from_url(target.backend_url))
+    return [
+        _LogCandidate(
+            log_id=f"workspace:{target.workspace_id}:workspace_api",
+            source="workspace",
+            workspace_id=target.workspace_id,
+            workspace_name=target.name,
+            service="workspace_api",
+            label=f"{target.name} · {_SERVICE_LABELS['workspace_api']}",
+            log_path=log_path,
         )
-    return candidates
+    ]
 
 
 def _read_log(
@@ -284,6 +278,7 @@ def _scope_log_candidates(
 async def _logging_process_diagnostics(
     registry: GatewayWorkspaceRegistry, selected_workspace_id: str | None, candidates: list[_LogCandidate],
     extension_management: GatewayExtensionManagement | None = None,
+    service_plugins: GatewayPluginRuntime | None = None,
 ) -> list[GatewayDiagnosticProcessDTO]:
     async def observe(process: RuntimeLoggingProcess) -> GatewayDiagnosticProcessDTO:
         try:
@@ -307,7 +302,7 @@ async def _logging_process_diagnostics(
 
     async with registry.backend_topology_lock, httpx.AsyncClient(trust_env=False) as client:
         control = RuntimeLoggingProcessControl(client=client, token=get_gateway_local_token())
-        processes = runtime_logging_processes(registry, control, extension_management)
+        processes = runtime_logging_processes(registry, control, extension_management, service_plugins)
         return list(await asyncio.gather(*(
             observe(process) for process in processes
             if selected_workspace_id is None or not process.workspace_ids or selected_workspace_id in process.workspace_ids
@@ -325,6 +320,7 @@ async def collect_gateway_diagnostics(
     selected_log_id: str | None = None,
     tail_lines: int = 300,
     extension_management: GatewayExtensionManagement | None = None,
+    service_plugins: GatewayPluginRuntime | None = None,
 ) -> GatewayDiagnosticsDTO:
     if not 20 <= tail_lines <= 1000:
         raise ValueError("tail_lines 必须在 20..1000 范围内")
@@ -420,7 +416,7 @@ async def collect_gateway_diagnostics(
             include_tail=is_selected,
         )
         log_results.append(log_dto)
-    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, extension_management)
+    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, extension_management, service_plugins)
     return GatewayDiagnosticsDTO(
         gateway_id=local_gateway_id,
         gateway_name=gateway_name,

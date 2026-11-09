@@ -3,10 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-
 GatewayServiceName = Literal[
     "workspace_api",
-    "browser_manager",
 ]
 
 

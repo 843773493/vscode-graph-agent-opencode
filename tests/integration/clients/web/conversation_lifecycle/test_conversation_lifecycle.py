@@ -193,6 +193,7 @@ async def section8_product_nodes(
     web_workbench_assets: Path,
     section8_mcp_catalogs: dict[str, dict[str, Path]],
     section8_ports: TestFilePortBlock,
+    prepared_developer_tools_package: Path,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
     """唯一产品 owner 的三工作区；真实 SSH/channel，模型沿显式回放 transport。"""
     project = Path.cwd().resolve()
@@ -242,7 +243,8 @@ async def section8_product_nodes(
 
     async with open_communication_triad(
         context, prepare, ports=section8_ports, node_port_offsets=SECTION8_NODE_PORT_OFFSETS,
-        resource_service_nodes=("a", "b", "c"),
+        browser_plugin_nodes=("a", "b", "c"),
+        prepared_developer_tools_package=prepared_developer_tools_package,
         gateway_runtime_root=section8_runtime / "gateways",
         backend_asgi_app="tests.support.e2e_control.backend_app:app",
         backend_environment=section8_control.environment | {

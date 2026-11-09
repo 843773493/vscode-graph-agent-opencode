@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -32,6 +33,7 @@ from app.core.turn_execution_scope import (
 )
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
@@ -150,7 +152,15 @@ async def test_transport_timeout_uses_real_client_error_contract(
     monkeypatch: pytest.MonkeyPatch, resource_http,
 ) -> None:
     browser = await browser_owner_fixture.create()
-    client = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
+    client = BrowserManagerClient(
+        workspace_id=WORKSPACE_ID,
+        gateway_url="http://browser.test",
+        config_service=Mock(),
+        binding=PluginBinding(
+            package_id="boxteam.developer-tools", package_version="0.1.0", plugin_id="browser",
+            enabled=True, workspace_id=WORKSPACE_ID,
+        ),
+    )
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)
     resource_http(timeout)

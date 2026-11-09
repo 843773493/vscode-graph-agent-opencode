@@ -85,10 +85,6 @@ from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_plugin import (
     install_terminal_plugin_gateway_components,
@@ -237,7 +233,8 @@ def _prepare_source_workspace(
 @asynccontextmanager
 async def _managed_gateway_skill_source(
     *, workspace: Path, workspace_id: str, boxteam_home: Path, port: int,
-    artifacts_dir: Path, terminal: bool = False,
+    artifacts_dir: Path, prepared_package_root: Path | None = None,
+    terminal: bool = False, browser: bool = False,
 ):
     """为 managed 测试提供真实 owner、已登记本地 Workspace 和认证快照路由。"""
     gateway_root = boxteam_home / "state" / "gateway"
@@ -269,12 +266,18 @@ async def _managed_gateway_skill_source(
     ))
     server_task: asyncio.Task[None] | None = None
     async with AsyncExitStack() as components:
-        if terminal:
-            prepare_terminal_plugin_configuration(workspace, f"http://127.0.0.1:{port}")
+        if terminal or browser:
+            plugin_ids = frozenset(
+                plugin_id for plugin_id, enabled in (("terminal", terminal), ("browser", browser)) if enabled
+            )
+            prepare_terminal_plugin_configuration(
+                workspace, f"http://127.0.0.1:{port}", plugin_ids=plugin_ids,
+            )
             plugins = await components.enter_async_context(install_terminal_plugin_gateway_components(
                 app=api, registry=registry, gateway_id=gateway_id,
                 boxteam_home=boxteam_home, workspace_root=lambda _workspace_id: workspace,
                 artifacts_dir=artifacts_dir / "terminal-plugin-package",
+                prepared_package_root=prepared_package_root,
             ))
             config = ConfigService(workspace_root=workspace)
             await plugins.apply_config_service(config)
@@ -303,6 +306,10 @@ async def source_case(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port = integration_port_block_for_file(Path(request.node.path)).port(10)
     options = getattr(request, "param", {})
+    prepared_package_root = (
+        request.getfixturevalue("prepared_developer_tools_package")
+        if options.get("terminal") or options.get("browser") else None
+    )
     workspace = _prepare_source_workspace(
         context, port, delegated_report=options.get("delegated_report", False),
         workspace_template=options.get("workspace_template", "default_test_workspace"),
@@ -321,7 +328,9 @@ async def source_case(
                     workspace=workspace, workspace_id=workspace_id, boxteam_home=boxteam_home,
                     port=integration_port_block_for_file(Path(request.node.path)).port(11),
                     artifacts_dir=context.artifacts_dir,
+                    prepared_package_root=prepared_package_root,
                     terminal=options.get("terminal", False),
+                    browser=options.get("browser", False),
                 ),
             )
             monkeypatch.setenv(
@@ -331,13 +340,15 @@ async def source_case(
         else:
             monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
         mount_payload = {
-            "workspace_id": workspace_id, "workspace_root": str(workspace), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
+            "workspace_id": workspace_id, "workspace_root": str(workspace),
+            "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
+        }
         runtime_root = context.runtime_root_for_node(request.node.nodeid)
         artifacts_dir = context.artifacts_dir
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         with ExitStack() as services:
             model = services.enter_context(model_stream_replay(
-                runtime_root, runtime_root=runtime_root,
+                context.artifacts_dir, runtime_root=runtime_root,
                 business_assertion="runtime-source-product-admission-and-context",
             ))
             for key, value in model.environment.items():
@@ -348,23 +359,19 @@ async def source_case(
             identifier.bind_identifier_factory(ControlledIdentifiers(address))
             phase_observer.bind_phase_observer(ControlledPhases(address))
             monkeypatch.setattr(runner, "CanonicalItemSink", ObservedCanonicalItemSink)
-            if options.get("terminal") and not options.get("managed_gateway"):
-                terminal = await managed_services.enter_async_context(terminal_plugin_gateway_for_workspace(
+            if (options.get("terminal") or options.get("browser")) and not options.get("managed_gateway"):
+                plugin_ids = frozenset(
+                    plugin_id for plugin_id, enabled in (("terminal", options.get("terminal", False)),
+                        ("browser", options.get("browser", False))) if enabled
+                )
+                plugin_gateway = await managed_services.enter_async_context(terminal_plugin_gateway_for_workspace(
                     workspace_root=workspace, artifacts_dir=artifacts_dir,
                     gateway_port=integration_port_block_for_file(Path(request.node.path)).port(40),
                     boxteam_home=boxteam_home,
+                    plugin_ids=plugin_ids,
+                    prepared_package_root=prepared_package_root,
                 ))
-                monkeypatch.setenv("BOXTEAM_GATEWAY_URL", terminal.gateway_url)
-            if options.get("browser"):
-                browser_port = integration_port_block_for_file(Path(request.node.path)).port(42)
-                mount_payload["browser_backend_url"] = f"http://127.0.0.1:{browser_port}"
-                browser = start_browser_manager_processes(
-                    workspace_root=workspace, backend_port=browser_port,
-                    artifacts_dir=artifacts_dir,
-                    frontend_port=integration_port_block_for_file(Path(request.node.path)).port(43),
-                    backend_host="127.0.0.1",
-                )
-                services.callback(close_browser_manager_processes, browser)
+                monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin_gateway.gateway_url)
             monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount_payload]))
             async with AsyncExitStack() as lifespan:
                 controller = configure_model_stream_from_environment(project_root=Path.cwd())
@@ -2039,6 +2046,10 @@ async def restart_source_case(
     ports = integration_port_block_for_file(Path(request.node.path))
     workspace = _prepare_source_workspace(context, ports.port(10))
     params = getattr(request, "param", {})
+    plugin_ids = frozenset(params.get("plugin_ids", ()))
+    prepared_package_root = (
+        request.getfixturevalue("prepared_developer_tools_package") if plugin_ids else None
+    )
     if "agents_content" in params:
         (workspace / "AGENTS.md").write_text(params["agents_content"], encoding="utf-8")
     runtime_root = context.runtime_root_for_node(request.node.nodeid)
@@ -2046,43 +2057,26 @@ async def restart_source_case(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as services:
         model = services.enter_context(model_stream_replay(
-            runtime_root, runtime_root=runtime_root,
+            context.artifacts_dir, runtime_root=runtime_root,
             business_assertion="runtime-source-real-backend-restart-and-owner-recovery",
         ))
         gateway_id = None
-        if params.get("managed_gateway"):
+        if params.get("managed_gateway") or plugin_ids:
             monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
             gateway_id, _ = await services.enter_async_context(_managed_gateway_skill_source(
                 workspace=workspace, workspace_id=load_or_create_workspace_id(workspace),
                 boxteam_home=context.boxteam_home, port=ports.port(11),
                 artifacts_dir=artifacts_dir,
-                terminal=params.get("native_services", False),
+                prepared_package_root=prepared_package_root,
+                terminal="terminal" in plugin_ids,
+                browser="browser" in plugin_ids,
             ))
             monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(11)}")
-        mount = None
-        if params.get("native_services"):
-            browser_port = ports.port(42)
-            if not params.get("managed_gateway"):
-                home = context.boxteam_home_for_node(request.node.nodeid)
-                monkeypatch.setenv("BOXTEAM_HOME", str(home))
-                terminal = await services.enter_async_context(terminal_plugin_gateway_for_workspace(
-                    workspace_root=workspace, artifacts_dir=artifacts_dir,
-                    gateway_port=ports.port(40), boxteam_home=home,
-                ))
-                monkeypatch.setenv("BOXTEAM_GATEWAY_URL", terminal.gateway_url)
-            browser = start_browser_manager_processes(
-                workspace_root=workspace, backend_port=browser_port, frontend_port=ports.port(43),
-                artifacts_dir=artifacts_dir, backend_host="127.0.0.1",
-            )
-            services.callback(close_browser_manager_processes, browser)
-            mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace,
-                                     browser_backend_url=f"http://127.0.0.1:{browser_port}")
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="runtime-source-restart-0",
             asgi_app="tests.support.e2e_control.communication_backend_app:app",
             env_overrides=model.environment,
-            startup_mount=mount,
         )
         backends = [backend]
         case: RestartRuntimeSourceCase | None = None
@@ -2095,7 +2089,7 @@ async def restart_source_case(
                 headers=headers,
                 timeout=30,
             ) as client:
-                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, mount)
+                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, None)
                 yield case
         finally:
             for handle in reversed(backends):

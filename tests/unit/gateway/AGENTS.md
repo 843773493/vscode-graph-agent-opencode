@@ -29,7 +29,7 @@ tests/unit/gateway/
     │   ├── test_federation*.py、test_gateway_identity_proxy_channels.py
     │   └── test_ssh_selection.py、test_remote_workspace_forward_cleanup.py
     ├── 代理与辅助资源
-    │   ├── test_auxiliary_proxy.py、test_proxy_*.py、test_port_forwards.py
+    │   ├── test_proxy_*.py、test_port_forwards.py
     │   └── test_directory_browser.py
     ├── API 组装
     │   ├── test_lifespan_http_pool.py、test_route_registration_order.py

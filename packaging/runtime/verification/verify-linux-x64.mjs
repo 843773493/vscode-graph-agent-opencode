@@ -12,6 +12,7 @@ import { once } from "node:events";
 
 import { BOXTEAM_VERSION } from "../versions.mjs";
 import { waitForInstalledGateway } from "./verification-readiness.mjs";
+import { verifyBrowserResource } from "./browser-product.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -75,6 +76,8 @@ async function requestJson(pathname, options = {}) {
       ...(options.headers ?? {}),
     },
   });
+  const cookies = response.headers.getSetCookie();
+  if (cookies.length) headers.Cookie = cookies.map((cookie) => cookie.split(";", 1)[0]).join("; ");
   const text = await response.text();
   if (!response.ok) {
     throw new Error(
@@ -112,7 +115,7 @@ async function stopLauncher(child) {
   }
 }
 
-async function verifyRunningProduct(child, readLauncherOutput) {
+async function verifyRunningProduct(child, readLauncherOutput, pluginArchive) {
   const rootResponse = await fetch(`${gatewayUrl}/`);
   if (!rootResponse.ok || !(await rootResponse.text()).includes("root")) {
     throw new Error("安装版 Gateway 未提供打包 Web UI");
@@ -132,6 +135,9 @@ async function verifyRunningProduct(child, readLauncherOutput) {
     throw new Error("安装版 Gateway 本地凭据响应非法");
   }
   headers["X-Local-Token"] = localToken;
+  await requestJson("/api/gateway/users/guest", {
+    method: "POST", body: JSON.stringify({ tracking: { release_verification: true } }),
+  });
 
   const workspacePayload = await requestJson("/api/gateway/workspaces");
   const workspace = workspacePayload.data?.items?.find((item) => item.managed);
@@ -139,24 +145,12 @@ async function verifyRunningProduct(child, readLauncherOutput) {
     throw new Error("安装版 Gateway 未创建默认托管工作区");
   }
 
-  const browserPayload = await requestJson(
-    `/api/gateway/workspaces/${encodeURIComponent(
-      workspace.workspace_id,
-    )}/browser-manager/api/browsers`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: "ses_packaging_smoke",
-        title: "Packaged Chromium Smoke",
-        url: "data:text/html,<title>BoxTeam packaged browser</title>",
-      }),
-    },
-  );
-  if (browserPayload.data?.status !== "running") {
-    throw new Error(
-      `Browser Manager 未启动打包 Chromium: ${JSON.stringify(browserPayload)}`,
-    );
-  }
+  const browser = await verifyBrowserResource(requestJson, {
+    gatewayId: workspace.gateway_id,
+    workspaceId: workspace.workspace_id,
+    packagePath: pluginArchive,
+    url: "data:text/html,<title>BoxTeam packaged browser</title>",
+  });
 
   const restartPayload = await requestJson(
     `/api/gateway/workspaces/${encodeURIComponent(
@@ -166,6 +160,12 @@ async function verifyRunningProduct(child, readLauncherOutput) {
   );
   if (restartPayload.data?.status !== "restarted") {
     throw new Error(`安全重启后端失败: ${JSON.stringify(restartPayload)}`);
+  }
+  const restored = await requestJson(`/api/v1/resources/${encodeURIComponent(browser.resource_id)}`, {
+    headers: { "X-BoxTeam-Workspace-Id": workspace.workspace_id },
+  });
+  if (restored.data?.metadata?.page_id !== browser.page_id) {
+    throw new Error(`Backend 重启后 Browser 页面身份改变: ${JSON.stringify(restored.data)}`);
   }
 
   child.kill("SIGINT");
@@ -275,7 +275,9 @@ async function main() {
     await waitForInstalledGateway({
       child, url: `${gatewayUrl}/api/gateway/health`, headers, timeoutMs: 60_000,
     });
-    await verifyRunningProduct(child, () => launcherOutput);
+    await verifyRunningProduct(child, () => launcherOutput, path.join(
+      relocatedRoot, "node_modules/@boxteam/runtime-linux-x64/application/resources/plugins/developer-tools.zip",
+    ));
   } finally {
     await stopLauncher(child);
   }

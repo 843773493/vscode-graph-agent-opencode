@@ -10,7 +10,7 @@ import httpx
 
 import app.gateway.lifespan as gateway_lifespan
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.runtime import logging_consumer
+from app.gateway.runtime import logging_consumer, logging_control
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
@@ -39,8 +39,9 @@ class FaultLoggingControl(RuntimeLoggingProcessControl):
         request: RuntimeLoggingApply,
     ) -> RuntimeLoggingStatus:
         original = request
+        before = await self.status(base_url=base_url, service=service, pid=pid)
         if (
-            _failure in {"reject", "rollback"} and service == "browser" and request.level == "debug"
+            _failure in {"reject", "rollback"} and service == "plugin" and before.service == "browser" and request.level == "debug"
             or _failure == "rollback" and service == "backend" and request.level == "info"
         ):
             # 向真实消费者发送过期 CAS，仍由其原认证、校验与响应链明确拒绝。
@@ -48,10 +49,10 @@ class FaultLoggingControl(RuntimeLoggingProcessControl):
         try:
             state = await super().apply(base_url=base_url, service=service, pid=pid, request=request)
         except httpx.HTTPStatusError as error:
-            _record({"service": service, "request": original.model_dump(),
+            _record({"service": before.service, "request": original.model_dump(),
                      "sent": request.model_dump(), "status": error.response.status_code})
             raise
-        _record({"service": service, "request": original.model_dump(),
+        _record({"service": before.service, "request": original.model_dump(),
                  "sent": request.model_dump(), "status": 200, "actual": state.model_dump()})
         return state
 
@@ -70,4 +71,5 @@ class FaultPromotionStore(GatewayStateStore):
 
 
 logging_consumer.RuntimeLoggingProcessControl = FaultLoggingControl
+logging_control.RuntimeLoggingProcessControl = FaultLoggingControl
 gateway_lifespan.GatewayStateStore = FaultPromotionStore

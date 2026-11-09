@@ -135,6 +135,13 @@ class WorkspaceResourceOwner:
     async def recover(self, resource_ids: Iterable[str] | None = None) -> None:
         await self._recovery.recover(resource_ids)
 
+    def has_session_records(self, session_id: str) -> bool:
+        return any(
+            any(ref.session_id == session_id for ref in record.thread_associations)
+            or (record.retention_scope == "thread" and record.source_thread.session_id == session_id)
+            for record in self._store.all()
+        )
+
     async def list_resources(
         self,
         *,

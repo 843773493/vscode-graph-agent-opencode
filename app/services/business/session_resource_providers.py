@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from itertools import chain
 
+from app.abstractions.browser_resources import BrowserPluginDisabled
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
 )
+from app.abstractions.terminal.resources import TerminalPluginDisabled
 from app.core.background_task_contracts import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
@@ -118,7 +120,12 @@ class TerminalResourceProvider:
         *,
         include_history: bool = True,
     ) -> list[SessionResourceDTO]:
-        terminal_resources = await self._owner.list_resources(session_id=session_id)
+        try:
+            terminal_resources = await self._owner.list_resources(session_id=session_id)
+        except TerminalPluginDisabled:
+            if self._owner.has_session_records(session_id):
+                raise
+            return []
         return [
             self._to_resource(terminal_resource_data, session_id)
             for terminal_resource_data in terminal_resources
@@ -199,7 +206,12 @@ class BrowserResourceProvider:
         *,
         include_history: bool = True,
     ) -> list[SessionResourceDTO]:
-        browser_resources = await self._owner.list_resources(session_id=session_id)
+        try:
+            browser_resources = await self._owner.list_resources(session_id=session_id)
+        except BrowserPluginDisabled:
+            if self._owner.has_session_records(session_id):
+                raise
+            return []
         return [
             self._to_resource(browser_resource_data, session_id)
             for browser_resource_data in browser_resources

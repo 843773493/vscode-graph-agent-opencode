@@ -1,14 +1,14 @@
 """进程内部日志状态与应用合同，不属于工作区业务协议。"""
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.logging_contract import load_runtime_log_contract
 
-RuntimeLoggingService = Literal["launcher", "gateway", "backend", "terminal", "browser", "extension-management"]
-RuntimeLoggingHttpService = Literal["gateway", "backend", "terminal", "browser", "extension-management"]
+RuntimeLoggingService = Annotated[str, Field(min_length=1)]
+RuntimeLoggingHttpService = Literal["gateway", "backend", "extension-management", "plugin"]
 
 
 class RuntimeLoggingSink(BaseModel):

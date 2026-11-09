@@ -13,6 +13,8 @@ from app.services.infrastructure.browser_manager_client import BrowserManagerCli
 from tests.support.resource_owners.browser import BrowserOwnerFixture
 from tests.support.resource_owners.sessions import SESSION_A, WORKSPACE_ID
 
+BROWSER_SERVICE_URL = "http://browser.test/api/gateway/service-plugins/boxteam.developer-tools/browser/services/http"
+
 
 @pytest.mark.parametrize("native_path", [
     "/private/browser/state.json", r"C:\private\browser\state.json",
@@ -27,6 +29,7 @@ from tests.support.resource_owners.sessions import SESSION_A, WORKSPACE_ID
 ])
 def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    browser_manager_client: BrowserManagerClient,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     native_path: str, failure: str, stage: str | None, resource_http, status: int,
 ) -> None:
@@ -68,8 +71,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
         return httpx.Response(200, content=body)
 
     resource_http(malformed)
-    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
-    monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
+    monkeypatch.setattr(browser_owner_bundle.transport, "perform", browser_manager_client.perform)
     command = {"action": "read", "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     with caplog.at_level(logging.ERROR):
         failed = browser_resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
@@ -124,7 +126,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
     assert pending.status == "reconcile_required"
     retry = browser_resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
     assert retry.status_code == 409, retry.text
-    assert attempts == [("GET", f"http://browser.test/api/browsers/{rid}/read")]
+    assert attempts == [("GET", f"{BROWSER_SERVICE_URL}/api/browsers/{rid}/read?package_version=0.1.0&workspace_id={WORKSPACE_ID}")]
 
 
 @pytest.mark.parametrize("field, value", [
@@ -133,6 +135,7 @@ def test_malformed_response_keeps_original_diagnostics_and_durable_unknown(
 ])
 def test_malformed_successful_grant_marks_unknown_before_api_serialization(
     browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
+    browser_manager_client: BrowserManagerClient,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, field: str | None, value: object,
     resource_http,
 ) -> None:
@@ -156,8 +159,7 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
         return httpx.Response(200, json={"data": grant})
 
     resource_http(malformed)
-    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
-    monkeypatch.setattr(browser_owner_bundle.transport, "issue_transport_grant", transport.issue_transport_grant)
+    monkeypatch.setattr(browser_owner_bundle.transport, "issue_transport_grant", browser_manager_client.issue_transport_grant)
     command = {"expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     with caplog.at_level(logging.ERROR):
         failed = browser_resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
@@ -177,18 +179,17 @@ def test_malformed_successful_grant_marks_unknown_before_api_serialization(
     assert pending.status == "reconcile_required"
     retried = browser_resource_api_client.post(f"/api/v1/resources/{rid}/transport-grant", json=command)
     assert retried.status_code == 409, retried.text
-    assert attempts == [("POST", f"http://browser.test/api/browsers/{rid}/transport-grant")]
+    assert attempts == [("POST", f"{BROWSER_SERVICE_URL}/api/browsers/{rid}/transport-grant?package_version=0.1.0&workspace_id={WORKSPACE_ID}")]
 
 
 def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
-    monkeypatch: pytest.MonkeyPatch,
+    browser_manager_client: BrowserManagerClient, monkeypatch: pytest.MonkeyPatch,
     resource_http,
 ) -> None:
     created = browser_resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
     rid = created.json()["data"]["resource_id"]
-    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     attempts: list[str] = []
 
     def malformed(request: httpx.Request) -> httpx.Response:
@@ -197,7 +198,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
 
     resource_http(malformed)
     sync = browser_owner_bundle.transport.sync_owner_revision
-    monkeypatch.setattr(browser_owner_bundle.transport, "sync_owner_revision", transport.sync_owner_revision)
+    monkeypatch.setattr(browser_owner_bundle.transport, "sync_owner_revision", browser_manager_client.sync_owner_revision)
     browser_owner_bundle.restart()
     failed = browser_resource_api_client.get(f"/api/v1/resources/{rid}")
     expected = "ValueError: 浏览器管理器响应协议错误: stage=browser；请查看工作区浏览器服务日志"
@@ -222,7 +223,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     # 显式停止沿原冻结版本重试；原协议仍失败，不推进版本或派发停止。
     assert blocked.status_code == 400, blocked.text
     assert blocked.json() == {"detail": expected}
-    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"] * 2
+    assert attempts == [f"{BROWSER_SERVICE_URL}/api/browsers/{rid}/owner-revision?package_version=0.1.0&workspace_id={WORKSPACE_ID}"] * 2
     persisted = json.loads((browser_owner_bundle.root / ".boxteam/browser-resources.json").read_text())
     assert persisted["records"][0]["owner_revision"] == frozen_revision
     assert persisted["records"][0]["reconciliation_status"] == "unknown"
@@ -236,7 +237,7 @@ def test_empty_revision_receipt_cannot_finish_owner_restart_recovery(
     assert current["reconciliation_status"] == "unknown" and current["error"] == expected
     assert current["available_actions"] == ["stop"]
     assert current["metadata"]["transport_owner_revision"] == current["owner_revision"]
-    assert attempts == [f"http://browser.test/api/browsers/{rid}/owner-revision"] * 2
+    assert attempts == [f"{BROWSER_SERVICE_URL}/api/browsers/{rid}/owner-revision?package_version=0.1.0&workspace_id={WORKSPACE_ID}"] * 2
     stopped = browser_resource_api_client.post(f"/api/v1/resources/{rid}/stop", json={
         "expected_revision": current["owner_revision"],
     })

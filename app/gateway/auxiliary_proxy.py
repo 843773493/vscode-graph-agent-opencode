@@ -1,361 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import logging
-import re
-from collections.abc import AsyncIterator, Callable
-from functools import partial
-from typing import Annotated
-
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
-from fastapi.responses import FileResponse, StreamingResponse
-from starlette.websockets import WebSocketDisconnect
-from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.core.env import get_project_root
-from app.core.failures import failure_detail
-from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
-from app.gateway.auth import (
-    GatewayAuthContext,
-    get_gateway_local_token,
-    verify_gateway_access,
-)
-from app.gateway.credentials import FederationCredentialStore
-from app.gateway.protocol.proxy import proxy_target_to_proto
-from app.gateway.proxy_upstream import (
-    GATEWAY_PROXY_DROPPED_HEADERS,
-    TARGET_GATEWAY_ID_HEADER,
-    UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
-    build_upstream_url,
-    build_upstream_websocket_url,
-    filter_hop_by_hop_headers,
-    load_proxy_gateway_id,
-    parse_target_gateway_id,
-    relay_websocket_client_to_upstream,
-    relay_websocket_upstream_to_client,
-    run_cleanup_shielded,
-    send_upstream_request,
-)
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.registry.owners import workspace_owner
-from app.gateway.service_types import GatewayServiceName
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
-
-SERVICE_PATHS: dict[str, GatewayServiceName] = {
-    "browser-manager": "browser_manager",
-}
-
-
-def _registry(app: object) -> GatewayWorkspaceRegistry:
-    state = getattr(app, "state", None)
-    registry = getattr(state, "registry", None)
-    if not isinstance(registry, GatewayWorkspaceRegistry):
-        raise RuntimeError("Gateway registry 尚未初始化")  # noqa: TRY004 - 保留装配失败合同。
-    return registry
-
-
-def _http_client(app: object) -> httpx.AsyncClient:
-    state = getattr(app, "state", None)
-    client = getattr(state, "http_client", None)
-    if not isinstance(client, httpx.AsyncClient):
-        raise RuntimeError("Gateway HTTP client 尚未初始化")  # noqa: TRY004
-    return client
-
-
-def _service_name(service_path: str) -> GatewayServiceName:
-    service = SERVICE_PATHS.get(service_path)
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"未知辅助服务: {service_path}")
-    return service
-
-
-def _proxy_request_headers(
-    request: Request,
-    target: WorkspaceTarget | None = None,
-    service: GatewayServiceName | None = None,
-) -> dict[str, str]:
-    headers = filter_hop_by_hop_headers(
-        (key, value)
-        for key, value in request.headers.items()
-        if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS
-        and key.lower() != "x-boxteam-backend-workspace-id"
-    )
-    headers["X-Request-ID"] = get_request_id(request)
-    # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在剥离集合里剔除。
-    headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
-    if target is not None:
-        headers["X-BoxTeam-Workspace-Id"] = target.workspace_id
-        if target.connection_kind == "remote_gateway":
-            headers.update(_registry(request.app).target_request_headers(target))
-    return headers
-
-
-def _proxy_response_headers(response: httpx.Response) -> dict[str, str]:
-    return filter_hop_by_hop_headers(response.headers.items())
-
-
-async def _stream_response(
-    response: httpx.Response,
-    on_close: Callable[[], None],
-) -> AsyncIterator[bytes]:
-    try:
-        async for chunk in response.aiter_bytes():
-            yield chunk
-    finally:
-        await run_cleanup_shielded(
-            partial(_close_auxiliary_response, response, on_close)
-        )
-
-
-async def _close_auxiliary_response(
-    response: httpx.Response,
-    on_close: Callable[[], None],
-) -> None:
-    """回收辅助服务上游响应与路由引用；在客户端取消下也必须完整跑完。"""
-
-    try:
-        await response.aclose()
-    finally:
-        on_close()
-
-
-@router.api_route(
-    "/api/gateway/workspaces/{workspace_id}/{service_path}/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-)
-async def proxy_auxiliary_http(
-    workspace_id: str,
-    service_path: str,
-    path: str,
-    request: Request,
-    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-):
-    if "X-BoxTeam-Backend-Workspace-Id" in request.headers:
-        raise HTTPException(status_code=400, detail="旧 Backend 工作区身份头已失效")
-    service = _service_name(service_path)
-    artifact_read = (
-        service == "browser_manager" and request.method == "GET"
-        and re.fullmatch(r"api/browsers/[^/]+/(downloads|screenshots)/[^/]+", path.strip("/")) is not None
-    )
-    if service in {"browser_manager"} and path.strip("/") != "health" and not artifact_read:
-        raise HTTPException(status_code=403, detail="资源管理请使用工作区 /api/v1/resources owner API")
-    registry = _registry(request.app)
-    try:
-        target = registry.resolve_request_target(workspace_id, parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER)))
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    proxy_target_to_proto(gateway_id=target.gateway_id, workspace_id=target.workspace_id, service=service, path=f"/{path}")
-    workspace_key = target.key
-    if auth.kind == "federation" and target.connection_kind != "local":
-        raise HTTPException(
-            status_code=400,
-            detail="bounded federation 禁止代理嵌套远程辅助服务",
-        )
-    client = _http_client(request.app)
-    registry.acquire_route_reference(workspace_key, streaming=False)
-    route_reference_released = False
-    route_reference_handed_off = False
-
-    def release_route_reference() -> None:
-        nonlocal route_reference_released
-        if route_reference_released:
-            return
-        route_reference_released = True
-        registry.release_route_reference(workspace_key, streaming=False)
-
-    try:
-        try:
-            service_url = registry.resolve_service_url(workspace_key, service)
-        except (LookupError, ValueError) as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        except RuntimeError as error:
-            # 远程投影工作区缺少连接信息是 registry 的权威拒绝语义；与本地运行时
-            # 未就绪同样属于「暂时不可达」，但错误必须显式暴露而非被宽泛兜底吞掉。
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        try:
-            target_url = str(build_upstream_url(service_url, (), path))
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        try:
-            forwarded = client.build_request(
-                request.method,
-                target_url,
-                params=tuple(request.query_params.multi_items()),
-                content=await request.body(),
-                headers=_proxy_request_headers(request, target, service),
-            )
-            response = await send_upstream_request(client, forwarded)
-        except httpx.RequestError as error:
-            logger.exception(
-                "Gateway 辅助服务上游请求失败: request_id=%s, workspace_id=%s, "
-                "service=%s, method=%s, stage=upstream_request, error=%s",
-                get_request_id(request), workspace_id, service, request.method, type(error).__name__,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"无法连接工作区辅助服务: workspace_id={workspace_id}, "
-                    f"service={service}, error_type={type(error).__name__}；请查看 Gateway 服务日志"
-                ),
-            ) from error
-        except TimeoutError as error:
-            logger.exception(
-                "Gateway 辅助服务上游响应头等待超时: request_id=%s, workspace_id=%s, "
-                "service=%s, method=%s, stage=upstream_headers, timeout_seconds=%s",
-                get_request_id(request), workspace_id, service,
-                request.method, UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
-            )
-            raise HTTPException(
-                status_code=504,
-                detail=(
-                    "工作区辅助服务在有限等待时间内未返回响应头: "
-                    f"workspace_id={workspace_id}, service={service}, "
-                    f"timeout_seconds={UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS:g}"
-                ),
-            ) from error
-        media_type = response.headers.get("content-type")
-        if media_type and "text/event-stream" in media_type:
-            # SSE 响应的引用随响应体存活，移交给生成器的单点释放。
-            route_reference_handed_off = True
-            return StreamingResponse(
-                _stream_response(response, release_route_reference),
-                status_code=response.status_code,
-                media_type=media_type,
-                headers=_proxy_response_headers(response),
-            )
-        try:
-            content = await response.aread()
-            headers = _proxy_response_headers(response)
-        finally:
-            await response.aclose()
-        return Response(
-            content=content,
-            status_code=response.status_code,
-            headers=headers,
-            media_type=media_type,
-        )
-    finally:
-        # 客户端断连会在任意 await 点抛 CancelledError；同步释放闭环放在 finally
-        # 保证归还，取消仍向上传播。已移交给 SSE 响应体的引用不在这里释放。
-        if not route_reference_handed_off:
-            release_route_reference()
-
-
-async def _proxy_auxiliary_websocket(
-    *,
-    websocket: WebSocket,
-    workspace_id: str,
-    service: GatewayServiceName,
-    socket_path: str,
-) -> None:
-    registry = _registry(websocket.app)
-    try:
-        if "X-BoxTeam-Backend-Workspace-Id" in websocket.headers:
-            raise ValueError("旧 Backend 工作区身份头已失效")
-        target = registry.resolve_request_target(workspace_id, parse_target_gateway_id(websocket.headers.get(TARGET_GATEWAY_ID_HEADER)))
-        workspace_key = target.key
-        selected_header = websocket.headers.get("X-BoxTeam-Workspace-Id") or websocket.query_params.get("workspace_id")
-        if selected_header is not None and selected_header != target.workspace_id:
-            raise ValueError("辅助服务路径与请求工作区 UUID 冲突")
-        federation_token = websocket.headers.get("x-boxteam-federation-token")
-        if federation_token is not None:
-            FederationCredentialStore(
-                storage_path=get_gateway_root() / "credentials" / "federation.json"
-            ).verify(federation_token)
-            if target.connection_kind != "local":
-                raise PermissionError("bounded federation 禁止代理嵌套远程辅助服务")
-        elif websocket.query_params.get("token") != get_gateway_local_token():
-            raise PermissionError("invalid local token")
-    except (HTTPException, LookupError, PermissionError, ValueError) as error:
-        failure_detail(error, stage="auxiliary-websocket-access", label="辅助服务访问失败")
-        await websocket.close(code=1008, reason="auxiliary_websocket_access_failed")
-        return
-    except RuntimeError as error:
-        failure_detail(error, stage="auxiliary-websocket-access", label="辅助服务访问失败")
-        await websocket.close(code=1011, reason="auxiliary_websocket_access_failed")
-        return
-    registry.acquire_route_reference(workspace_key, streaming=True)
-    route_reference_released = False
-
-    def release_route_reference() -> None:
-        nonlocal route_reference_released
-        if route_reference_released:
-            return
-        route_reference_released = True
-        registry.release_route_reference(workspace_key, streaming=True)
-
-    try:
-        try:
-            service_url = registry.resolve_service_url(workspace_key, service)
-        except (LookupError, ValueError) as error:
-            failure_detail(error, stage="auxiliary-websocket-route", label="辅助服务路由失败")
-            await websocket.close(code=1008, reason="auxiliary_websocket_route_failed")
-            return
-        await websocket.accept()
-        target_url = build_upstream_websocket_url(service_url, socket_path)
-        upstream_headers: dict[str, str] = {}
-        # 按请求注入 Gateway 自身稳定身份，与两条 HTTP 代理同一来源；WebSocket 握手
-        # 只转发这里显式写入的头部，客户端无法自带同名头，故无需额外剥离。
-        upstream_headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
-        if service in {"browser_manager"} and target.connection_kind != "remote_gateway":
-            upstream_headers["X-BoxTeam-Workspace-Id"] = target.workspace_id
-        if target.connection_kind == "remote_gateway":
-            connection_id = registry.remote_connection_for_target(target).connection_id
-            if connection_id is None:
-                await websocket.close(code=1011, reason="远程投影工作区缺少连接")
-                return
-            credential = FederationCredentialStore(
-                storage_path=get_gateway_root() / "credentials" / "federation.json"
-            ).get(connection_id)
-            upstream_headers[TARGET_GATEWAY_ID_HEADER] = workspace_owner(target).gateway_id
-            upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
-        browser_stream = service == "browser_manager"
-        async with connect(
-            target_url,
-            additional_headers=upstream_headers or None,
-            compression=None if browser_stream else "deflate",
-            max_queue=1 if browser_stream else 16,
-            write_limit=256 * 1024 if browser_stream else 32 * 1024,
-        ) as upstream:
-            tasks = {
-                asyncio.create_task(relay_websocket_client_to_upstream(websocket, upstream)),
-                asyncio.create_task(relay_websocket_upstream_to_client(websocket, upstream)),
-            }
-            done, pending = await asyncio.wait(
-                tasks,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            for task in done:
-                task.result()
-    except (ConnectionClosed, WebSocketDisconnect):
-        return
-    except Exception as error:  # noqa: BLE001 - 把上游失败显式发送给 WebSocket 调用方。
-        # 关闭帧上限是123字节；固定阶段说明不截断原错，也不复制本机位置。
-        failure_detail(error, stage="auxiliary-websocket-upstream", label="辅助服务连接失败")
-        await websocket.close(code=1011, reason="auxiliary_websocket_upstream_failed")
-    finally:
-        release_route_reference()
-
-
-@router.websocket(
-    "/api/gateway/workspaces/{workspace_id}/browser-manager/browser"
-)
-async def proxy_browser_websocket(websocket: WebSocket, workspace_id: str) -> None:
-    await _proxy_auxiliary_websocket(
-        websocket=websocket,
-        workspace_id=workspace_id,
-        service="browser_manager",
-        socket_path="browser",
-    )
-
 
 def _terminal_asset(path: str) -> FileResponse:
     """Gateway 直接发布产品 attach 资产，不再启动第二个静态服务。"""
@@ -396,47 +46,56 @@ def _terminal_asset(path: str) -> FileResponse:
     return FileResponse(target)
 
 
-async def _proxy_attach_frontend(request: Request, *, kind: str, path: str):
+def _proxy_attach_frontend(*, kind: str, path: str):
     if kind == "terminal":
         return _terminal_asset(path)
-    frontend_urls = getattr(request.app.state, "attach_frontend_urls", {})
-    frontend_url = frontend_urls.get(kind)
-    if not isinstance(frontend_url, str):
-        raise HTTPException(status_code=404, detail=f"未知 attach 前端: {kind}")
-    try:
-        target_url = str(build_upstream_url(frontend_url, (), path))
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    client = _http_client(request.app)
-    try:
-        response = await client.get(
-            target_url,
-            params=tuple(request.query_params.multi_items()),
-            headers=_proxy_request_headers(request),
-        )
-    except httpx.RequestError as error:
-        logger.exception(
-            "Gateway attach 前端上游请求失败: request_id=%s, kind=%s, "
-            "method=%s, stage=upstream_request, error=%s",
-            get_request_id(request), kind, request.method, type(error).__name__,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"attach 前端不可访问: kind={kind}, "
-                f"error_type={type(error).__name__}；请查看 Gateway 服务日志"
-            ),
-        ) from error
-    return Response(
-        content=response.content,
-        status_code=response.status_code,
-        headers=_proxy_response_headers(response),
-        media_type=response.headers.get("content-type"),
-    )
+    if kind == "browser":
+        return _browser_asset(path)
+    raise HTTPException(status_code=404, detail=f"未知 attach 前端: {kind}")
+
+
+def _browser_asset(path: str) -> FileResponse:
+    """Gateway 直接发布 Browser attach 页面及固定产品资源。"""
+    root = get_project_root()
+    client = root / "src/workspace-services/browser/client"
+    fixed = {
+        "": client / "index.html", "index.html": client / "index.html",
+        "main.js": client / "main.js", "styles.css": client / "styles.css",
+        "browserClientUtils.js": client / "browserClientUtils.js",
+        "browserCollaborationUi.js": client / "browserCollaborationUi.js",
+        "browserDebugElementTree.js": client / "browserDebugElementTree.js",
+        "browserElementContext.js": client / "browserElementContext.js",
+        "browserInputEvents.js": client / "browserInputEvents.js",
+        "browserModalUi.js": client / "browserModalUi.js",
+        "browserShortcuts.js": client / "browserShortcuts.js",
+        "browserToolbarEvents.js": client / "browserToolbarEvents.js",
+        "vendor/codicon/codicon.css": root / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css",
+        "vendor/codicon/codicon.ttf": root / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf",
+        "protocol/messages.js": root / "src/workspace-services/browser/protocol/messages.js",
+    }
+    target = fixed.get(path)
+    if target is None:
+        if path.startswith("protocol/generated/"):
+            source = root / "src/workspace-services/protocol/generated"
+            relative = path.removeprefix("protocol/generated/")
+        elif path.startswith("@bufbuild/protobuf/"):
+            source = root / "node_modules/@bufbuild/protobuf/dist/esm"
+            relative = path.removeprefix("@bufbuild/protobuf/")
+            if not relative or "." not in relative.rsplit("/", 1)[-1]:
+                relative = relative.rstrip("/") + "/index.js"
+                relative = relative.lstrip("/")
+        else:
+            raise HTTPException(404, "未知 Browser attach 资产")
+        target = (source / relative).resolve()
+        if not target.is_relative_to(source.resolve()) or target.suffix != ".js":
+            raise HTTPException(404, "Browser attach 资产越界或类型不支持")
+    if not target.is_file():
+        raise HTTPException(404, f"Browser attach 资产缺失: {path}")
+    return FileResponse(target, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/gateway/attach/protocol/{path:path}")
-async def proxy_protocol_attach_asset(path: str, request: Request):
+async def proxy_protocol_attach_asset(path: str):
     if path.startswith("generated/boxteam/terminal/"):
         kind = "terminal"
     elif path.startswith("generated/boxteam/browser/"):
@@ -452,13 +111,9 @@ async def proxy_protocol_attach_asset(path: str, request: Request):
                 f"仅支持 terminal/browser generated namespace: {path}"
             ),
         )
-    return await _proxy_attach_frontend(
-        request,
-        kind=kind,
-        path=f"protocol/{path}",
-    )
+    return _proxy_attach_frontend(kind=kind, path=f"protocol/{path}")
 
 
 @router.get("/api/gateway/attach/{kind}/{path:path}")
-async def proxy_attach_frontend(kind: str, path: str, request: Request):
-    return await _proxy_attach_frontend(request, kind=kind, path=path)
+async def proxy_attach_frontend(kind: str, path: str):
+    return _proxy_attach_frontend(kind=kind, path=path)

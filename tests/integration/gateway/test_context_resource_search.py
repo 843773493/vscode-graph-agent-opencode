@@ -63,7 +63,7 @@ from tests.support.processes.gateway import (
 
 
 @pytest.mark.usefixtures("agent_ports")
-@pytest.mark.parametrize("restart_source_case", [{"native_services": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"plugin_ids": ("terminal", "browser")}], indirect=True)
 async def test_context_search_keeps_original_source_and_cursor_after_backend_restart(
     request: pytest.FixtureRequest, restart_source_case: RestartRuntimeSourceCase,
 ) -> None:

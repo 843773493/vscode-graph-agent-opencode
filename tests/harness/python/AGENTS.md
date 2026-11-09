@@ -1,17 +1,16 @@
 # 目录用途
 
-存放 Python 测试运行上下文和 Browser、Terminal 辅助服务的进程装具。Workspace FastAPI 后端与 Gateway 进程、端口分配和工作区模板准备位于 `tests/support/`。
+存放 Python 测试运行上下文、Terminal 测试进程装具及共享进程输出载体。Workspace FastAPI 后端与 Gateway 进程、端口分配和工作区模板准备位于 `tests/support/`。
 
-文件按启动的资源命名：`terminal_backend.py` 管 Terminal 业务服务测试进程，`browser_manager.py` 管 Browser 后端及其 attach 前端；Terminal attach 页面由 Gateway 发布静态资产，不再作为独立进程装具。工作区运行上下文归 `run_context.py`。新增装具先确定实际管理的资源范围，避免用 `manager` 泛指单个前端或协议辅助函数。
+`terminal_backend.py` 管 Terminal 插件测试用服务进程；Terminal 和 Browser attach 页面均通过 Gateway 插件运行时提供。工作区运行上下文归 `run_context.py`。新增装具先确定实际管理的资源范围，避免为产品已经托管的插件重复启动测试进程。
 
 ```text
 python/
 ├── run_context.py         测试运行上下文及登记资源的生命周期
 ├── web_workbench.py       正式页面测试的会话级 Workbench 构建及各模块消费收据
 ├── integration_gate.py    集成/E2E session跨worktree独占运行名额
-├── browser_manager.py     Browser 后端、attach 前端的启动与清理
 ├── terminal_backend.py    Terminal 后端的启动及启动失败清理
-└── process_output.py      两种辅助服务共用的进程日志输出
+└── process_output.py      测试进程共用的日志输出
 ```
 
 先按被管理的资源划分启动和清理，再把确实共用的输出载体放到 `process_output.py`；它负责向当前 process scope 登记创建成功的进程，不接管就绪或端口，避免不同资源互相导入启动装具。
@@ -42,10 +41,8 @@ out/tests/<test-id>/
 - Workbench 构建由根 pytest plugin 注册的 session fixture 统一持有，并先取得集成闸门；各模块沿用 `web_workbench_assets`，只共享静态产物，保留各自构建收据与日志。浏览器 profile、端口、工作区与其它可写运行数据必须留在调用方的节点目录，不得写入共享产物或其相邻目录；新 pytest 会话重新构建，不读取上轮产物。
 - 共享构建复用 `app/runtime` 的平台命令监督器，设置180秒期限；POSIX限制每进程数据段4GiB，Windows限制Job总内存4GiB。正常退出、构建失败、超时和调用方中断都回收构建树。收据同时保留原构建命令、监督命令及退出码；不得用只终止根进程的超时替代监督器。
 - 启动前检查端口占用，冲突时明确失败；退出只终止持有的进程句柄，不按端口杀未知监听进程。
-- Browser组合装具的`backend_host`是监听目标，端口预检使用同一主机及地址族；健康检查和前端配置共用一个后端URL。通配监听地址`0.0.0.0/::`分别通过`127.0.0.1/::1`访问，IPv6方括号只用于URL，不传给Node的`--host`。
 - 多进程装具在每个进程创建成功后立即登记清理，后续启动失败或被中断时也要释放已持有的资源。
 - `spawn_logged_process`在父进程日志副本关闭后、返回和等待就绪前向同一 process scope 登记；正常停止复用 `terminate_process` 解除登记，不由组合装具重复登记。
-- Browser、Terminal 后端的启动环境显式传入 `BOXTEAM_PROJECT_ROOT`，工作区路径与进程 cwd 不作为发行资源根。
-- Browser、Terminal 进程统一通过 `process_output.py::spawn_logged_process` 将 stdout/stderr 写入独立且不可覆盖的日志，不接无人读取的 PIPE。子进程继承日志描述符后，父进程关闭自己的副本；打开日志或创建进程失败也必须关闭已打开的文件。就绪失败保留原异常并附日志路径，仍按已有句柄回收全部进程。
-- 日志副本全部关闭后，`spawn_logged_process`才把进程句柄移交调用方。创建成功但日志关闭失败或中断时，入口通过既有`terminate_process`回收尚未移交的进程；回收失败保留日志关闭异常链与日志路径。正常返回后仍由调用方管理进程，不能把失败回收扩大为第二套服务清理。
+- Terminal 独立服务装具显式传入 `BOXTEAM_PROJECT_ROOT`，工作区路径与进程 cwd 不作为发行资源根。Browser 插件只通过 `GatewayPluginRuntime` 启动，并沿插件实例 HTTP/WS 路由访问；不直接启动 Browser 后端进程。
+- Terminal 独立服务进程通过 `process_output.py::spawn_logged_process` 将 stdout/stderr 写入专用日志，不接无人读取的 PIPE。子进程继承日志描述符后，父进程关闭自己的副本；启动或关闭失败复用已有句柄清理，不另建进程 owner。
 - 所有辅助服务启动装具与输出载体都必须接收显式 `artifacts_dir`，由调用测试传入 `TestRunContext.artifacts_dir` 等正式产物根；不根据业务工作区父目录猜路径。嵌套或多个工作区共用所属测试的产物根，日志由进程前缀和唯一后缀区分，不在工作区树里另建日志目录。

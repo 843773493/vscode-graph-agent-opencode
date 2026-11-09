@@ -121,14 +121,7 @@ async def federation_workspaces(
             raise HTTPException(status_code=409, detail="原生工作区登记在身份核验期间变化，请重新预检")
 
     def services_for(workspace_id: str) -> list[str]:
-        services = ["workspace_api"]
-        for service, public_name in (("browser_manager", "browser_manager"),):
-            try:
-                registry.resolve_service_url(workspace_id, service)
-            except (LookupError, RuntimeError):
-                continue
-            services.append(public_name)
-        return services
+        return ["workspace_api"]
 
     direct = []
     for target in registry.targets():
@@ -182,6 +175,7 @@ async def federation_diagnostics(
             selected_log_id=log_id,
             tail_lines=tail_lines,
             extension_management=getattr(request.app.state, "extension_management", None),
+            service_plugins=getattr(request.app.state, "service_plugins", None),
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error

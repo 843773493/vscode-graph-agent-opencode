@@ -1,12 +1,10 @@
-"""通过真实 Gateway 安装包并由原 Workspace 来源 CAS 启用 Terminal。"""
+"""准备隔离安装包，并由原 Workspace 来源 CAS 启用开发工具插件。"""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import shutil
-import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -32,27 +30,11 @@ def copy_prepared_developer_tools_package(package_root: Path, boxteam_home: Path
 
 async def enable_developer_tools_plugins(
     client: httpx.AsyncClient, *, gateway_id: str, workspace_id: str,
-    plugin_ids: tuple[str, ...], artifacts_dir: Path,
-    prepared_package: bool = False,
+    plugin_ids: tuple[str, ...],
 ) -> dict[str, dict[str, object]]:
-    """安装并启用指定开发工具插件，使用 Gateway 的正式配置与生命周期入口。"""
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    """经 Gateway 正式配置与生命周期入口启用已准备的插件。"""
     if not plugin_ids or len(set(plugin_ids)) != len(plugin_ids) or set(plugin_ids) - {"terminal", "browser", "debugging"}:
         raise ValueError(f"开发工具插件列表无效: {plugin_ids}")
-    if not prepared_package:
-        archive = artifacts_dir / f"developer-tools-{uuid4().hex}.zip"
-        packed = await asyncio.to_thread(
-            subprocess.run,
-            ["bun", "scripts/plugins/pack-developer-tools.mjs", "--out", str(archive.resolve())],
-            cwd=Path.cwd(), capture_output=True, text=True, check=False, timeout=60,
-        )
-        (archive.with_suffix(".build.log")).write_text(packed.stdout + packed.stderr, encoding="utf-8")
-        packed.check_returncode()
-        installed = await client.post("/api/gateway/service-plugins/install", json={
-            "gateway_id": gateway_id, "path": str(archive.resolve()),
-            "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-        }, timeout=600)
-        installed.raise_for_status()
     headers = {"X-BoxTeam-Workspace-Id": workspace_id}
     source_path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
     loaded = await client.get(source_path, headers=headers)

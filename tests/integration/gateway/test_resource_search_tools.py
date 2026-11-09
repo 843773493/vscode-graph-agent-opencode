@@ -145,7 +145,7 @@ def agent_ports(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.usefixtures("agent_ports")
-@pytest.mark.parametrize("restart_source_case", [{"native_services": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"plugin_ids": ("terminal", "browser")}], indirect=True)
 async def test_model_execution_invokes_discovery_and_resource_search_through_gateway(
     request: pytest.FixtureRequest, restart_source_case: RestartRuntimeSourceCase,
 ) -> None:

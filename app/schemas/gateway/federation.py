@@ -29,7 +29,7 @@ class FederationWorkspaceDTO(BaseModel):
     name: str
     managed: bool
     connection_kind: Literal["local"]
-    services: list[Literal["workspace_api", "browser_manager"]] = (
+    services: list[Literal["workspace_api"]] = (
         Field(default_factory=list)
     )
 

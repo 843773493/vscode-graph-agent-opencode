@@ -64,7 +64,7 @@ def _record(case: RestartRuntimeSourceCase, session: str, key: str, child: bool)
         ).fetchone())
 
 
-@pytest.mark.parametrize("restart_source_case", [{"native_services": True, "managed_gateway": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"plugin_ids": ("terminal", "browser"), "managed_gateway": True}], indirect=True)
 @pytest.mark.parametrize("child,phase,anchor_mode", [
     (True, "copy.source.before_captured_cas", "inclusive"),
     (False, "copy.target.published", "before"),

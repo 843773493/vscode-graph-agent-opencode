@@ -40,10 +40,8 @@
   "runtime": {
     "workspace": {
       "default_skill_groups": [
-        "browser-control",
         "gateway-context",
-        "web-search-fetch",
-        "debugging"
+        "web-search-fetch"
       ]
     }
   }

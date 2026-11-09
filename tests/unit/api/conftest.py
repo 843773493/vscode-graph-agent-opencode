@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from fastapi import FastAPI, Request
@@ -16,6 +17,9 @@ from app.api.deps import (
 from app.api.resources import router
 from app.core.path_utils import workspace_context
 from app.core.trace_middleware import TraceMiddleware
+from app.schemas.gateway.service_plugin import PluginBinding
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
@@ -44,6 +48,36 @@ def browser_owner_bundle(tmp_path: Path) -> BrowserOwnerFixture:
     root = tmp_path / "browser"
     root.mkdir()
     return build_browser_owner_fixture(root)
+
+
+@pytest.fixture
+async def browser_manager_client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[BrowserManagerClient]:
+    monkeypatch.setattr("app.services.infrastructure.browser_manager_client.get_gateway_local_token",
+                        lambda: "local-dev-token")
+    client = BrowserManagerClient(
+        workspace_id=WORKSPACE_ID, config_service=Mock(), gateway_url="http://browser.test",
+        binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
+            plugin_id="browser", enabled=True, workspace_id=WORKSPACE_ID),
+    )
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+@pytest.fixture
+async def terminal_manager_client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TerminalManagerClient]:
+    monkeypatch.setattr("app.services.infrastructure.terminal_manager_client.get_gateway_local_token",
+                        lambda: "local-dev-token")
+    client = TerminalManagerClient(
+        workspace_id=WORKSPACE_ID, config_service=Mock(), gateway_url="http://terminal.test",
+        binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
+            plugin_id="terminal", enabled=True, workspace_id=WORKSPACE_ID),
+    )
+    try:
+        yield client
+    finally:
+        await client.aclose()
 
 
 class _EmptyWorkspaceResourceOwner:

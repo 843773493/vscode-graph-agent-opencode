@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import zipfile
 from collections.abc import Callable, Iterator
 from functools import lru_cache
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from dotenv import load_dotenv
 
+from app.gateway.plugins.packages import PluginPackageStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.processes.scope import capture_test_processes
@@ -23,6 +27,80 @@ pytest_plugins = [
     "tests.harness.python.integration_gate",
     "tests.harness.python.web_workbench",
 ]
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--prepared-developer-tools-package",
+        default=None,
+        help="已安装并准备依赖的开发工具插件包目录",
+    )
+
+
+@pytest.fixture(scope="session")
+def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator[Path]:
+    """一次准备不可变开发工具包，供隔离 Gateway Home 复制使用。"""
+    from tests.harness.python.terminal_plugin import build_developer_tools_package
+
+    project_root = Path.cwd().resolve()
+    context = TestRunContext.from_test_file(Path(request.session.items[0].path)).prepare()
+    prepared_root = request.config.getoption("--prepared-developer-tools-package", default=None)
+    if prepared_root:
+        root = Path(prepared_root).resolve(strict=True)
+        installed = PluginPackageStore(root.parent.parent).get("boxteam.developer-tools", "0.1.0")
+        if installed.root != root:
+            raise ValueError("预备开发工具包路径与安装记录不一致")
+        artifacts_dir = context.run_root / "artifacts" / "prepared-developer-tools"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        expected_archive = artifacts_dir / f"developer-tools-current-{uuid4().hex}.zip"
+        build_developer_tools_package(project_root, expected_archive)
+        try:
+            with zipfile.ZipFile(expected_archive) as archive:
+                for entry in archive.infolist():
+                    if entry.is_dir():
+                        continue
+                    expected = archive.read(entry.filename)
+                    actual = (root / entry.filename).read_bytes()
+                    if expected != actual:
+                        raise ValueError(f"预备开发工具包文件与当前打包输入不一致: {entry.filename}")
+        finally:
+            expected_archive.unlink(missing_ok=True)
+        pty_binary = root / "node_modules/node-pty/build/Release/pty.node"
+        if not pty_binary.is_file():
+            raise ValueError("预备开发工具包缺少已构建的 node-pty")
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            raise RuntimeError("开发工具插件测试需要 PATH 中存在 node")
+        native_load = subprocess.run(
+            [node_bin, "-e", "require(process.argv[1])", str(pty_binary)],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+        if native_load.returncode:
+            raise RuntimeError(f"预备 node-pty 与测试 Node 不兼容: {native_load.stderr}")
+        yield root
+        return
+
+    artifacts_dir = context.run_root / "artifacts" / "prepared-developer-tools"
+    runtime_dir = context.run_root / "runtime" / "prepared-developer-tools"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    archive = artifacts_dir / "developer-tools.zip"
+    build_developer_tools_package(project_root, archive)
+
+    node_bin = shutil.which("node")
+    if node_bin is None:
+        raise RuntimeError("开发工具插件测试需要 PATH 中存在 node")
+    previous_node_bin = os.environ.get("BOXTEAM_NODE_BIN")
+    os.environ["BOXTEAM_NODE_BIN"] = node_bin
+    try:
+        package_store = PluginPackageStore(runtime_dir / "boxteam-home" / "plugins" / "packages")
+        installed = package_store.install_zip(archive)
+    finally:
+        if previous_node_bin is None:
+            os.environ.pop("BOXTEAM_NODE_BIN", None)
+        else:
+            os.environ["BOXTEAM_NODE_BIN"] = previous_node_bin
+    yield installed.root
 
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)

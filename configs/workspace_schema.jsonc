@@ -28,7 +28,6 @@
     { "pattern": "/agents/*/instructions/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/agent/run/timeout_seconds", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/agent/run/mode", "policy": "next_session", "activation_scope": "next_session", "identity_key": null },
-    { "pattern": "/runtime/auxiliary_services/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/runtime/gateway/connection/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/context/resource_activation", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
     { "pattern": "/context/resource_activation/**", "policy": "next_job", "activation_scope": "next_job", "identity_key": null },
@@ -326,7 +325,6 @@
       "properties": {
         "agent": { "$ref": "#/$defs/agentRuntimeConfig" },
         "gateway": { "$ref": "#/$defs/gatewayRuntimeConfig" },
-        "auxiliary_services": { "$ref": "#/$defs/auxiliaryServicesConfig" },
         "workspace": { "$ref": "#/$defs/workspaceRuntimeConfig" },
         "events": { "$ref": "#/$defs/eventsRuntimeConfig" },
         "debug": { "$ref": "#/$defs/debugRuntimeConfig" }
@@ -516,20 +514,6 @@
           "properties": {
             "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8014" },
             "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 }
-          }
-        }
-      }
-    },
-
-    "auxiliaryServicesConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "browser_backend": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "url": { "type": "string", "format": "uri", "minLength": 1, "default": "http://127.0.0.1:8015" }
           }
         }
       }

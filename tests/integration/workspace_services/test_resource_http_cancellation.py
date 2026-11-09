@@ -10,11 +10,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.abstractions.terminal.resources import TerminalRequestError
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
@@ -105,8 +107,19 @@ def pending_http() -> PendingHTTP:
 
 
 def transport(bundle: TerminalOwnerFixture | BrowserOwnerFixture, url: str) -> TerminalManagerClient | BrowserManagerClient:
-    return (TerminalManagerClient if isinstance(bundle, TerminalOwnerFixture) else BrowserManagerClient)(
-        backend_url=url, workspace_id=WORKSPACE_ID,
+    is_terminal = isinstance(bundle, TerminalOwnerFixture)
+    client_type = TerminalManagerClient if is_terminal else BrowserManagerClient
+    return client_type(
+        workspace_id=WORKSPACE_ID,
+        gateway_url=url,
+        config_service=Mock() if not is_terminal else None,
+        binding=PluginBinding(
+            package_id="boxteam.developer-tools",
+            plugin_id="terminal" if is_terminal else "browser",
+            package_version="0.1.0",
+            workspace_id=WORKSPACE_ID,
+            enabled=True,
+        ),
     )
 
 

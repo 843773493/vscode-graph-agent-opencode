@@ -8,13 +8,10 @@ import subprocess
 from contextlib import ExitStack
 from pathlib import Path
 
+import commentjson
 import httpx
 import pytest
 
-from tests.harness.python.browser_manager import (
-    close_browser_frontend_process,
-    start_browser_frontend_process,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
@@ -27,6 +24,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 
 
 @pytest.mark.asyncio
@@ -34,6 +35,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     web_workbench_assets: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     workspace_root = Path(integration_workspace_root_path).resolve()
@@ -55,23 +57,25 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
 
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway_port = port_block.port(20)
-    browser_frontend_port = port_block.port(21)
+    gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
+    workspace_config = commentjson.loads(workspace_config_path.read_text(encoding="utf-8"))
+    workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        "url"
+    ] = f"http://127.0.0.1:{gateway_port}"
+    workspace_config_path.write_text(
+        json.dumps(workspace_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     with ExitStack() as lifetime:
-        browser_frontend = start_browser_frontend_process(
-            workspace_root=workspace_root,
-            artifacts_dir=artifacts,
-            frontend_port=browser_frontend_port,
-        )
-        lifetime.callback(close_browser_frontend_process, browser_frontend)
         gateway = start_gateway_process(
             workspace_root=workspace_root,
             default_backend_url=None,
             port=gateway_port,
             artifacts_dir=artifacts / "gateway",
-            boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+            boxteam_home=gateway_home,
             extra_env={
                 "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
-                "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             },
         )
         lifetime.callback(close_gateway_process, gateway)
@@ -86,6 +90,10 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             owner = workspaces_response.json()["data"]["active_workspace"]
             workspace_id = owner["workspace_id"]
             gateway_id = owner["gateway_id"]
+            await enable_developer_tools_plugins(
+                client, gateway_id=gateway_id, workspace_id=workspace_id,
+                plugin_ids=("browser",),
+            )
             client.headers.update({"X-BoxTeam-Workspace-Id": workspace_id,
                                    "X-BoxTeam-Target-Gateway-Id": gateway_id})
             session_title = "手动浏览器首航 E2E"

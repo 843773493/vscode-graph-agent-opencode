@@ -7,19 +7,11 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Generator
 from pathlib import Path
 
 import httpx
 import pytest
 
-from app.core.mounted_workspaces import MountedWorkspace
-from app.core.workspace_identity import load_or_create_workspace_id
-from tests.harness.python.browser_manager import (
-    BrowserManagerProcesses,
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
@@ -37,7 +29,6 @@ from tests.support.processes.gateway import (
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
-    terminate_process,
 )
 from tests.support.workspaces import prepare_test_workspace
 
@@ -67,42 +58,8 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="module")
-def integration_browser_manager_processes(
-    integration_workspace_root_path: str,
-) -> Generator[BrowserManagerProcesses, None, None]:
-    workspace_root = Path(integration_workspace_root_path).resolve()
-    ports = integration_port_block_for_file(Path(__file__))
-    browser_processes = start_browser_manager_processes(
-        workspace_root=workspace_root,
-        artifacts_dir=TestRunContext.from_test_file(Path(__file__)).artifacts_dir,
-        backend_port=ports.port(50),
-        frontend_port=ports.port(51),
-        backend_host="127.0.0.1",
-    )
-    try:
-        yield browser_processes
-    finally:
-        close_browser_manager_processes(browser_processes)
-
-
-@pytest.fixture(scope="module")
-def integration_startup_mount(
-    integration_workspace_root_path: str,
-    integration_browser_manager_processes: BrowserManagerProcesses,
-) -> MountedWorkspace:
-    workspace_root = Path(integration_workspace_root_path).resolve()
-    ports = integration_port_block_for_file(Path(__file__))
-    return MountedWorkspace(
-        load_or_create_workspace_id(workspace_root),
-        workspace_root,
-        browser_backend_url=f"http://127.0.0.1:{integration_browser_manager_processes.backend_port}",
-    )
-
-
-@pytest.fixture(scope="module")
 def integration_backend_process(
     request: pytest.FixtureRequest,
-    integration_startup_mount: MountedWorkspace,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     integration_backend_port: int,
@@ -111,12 +68,12 @@ def integration_backend_process(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     replay_config = prepare_e2e_model_stream_config(
         Path.cwd() / "configs/tests/model_stream/model_stream_web_child_thread_delegate.jsonc",
-        output_root=context.run_root,
+        runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        artifacts_dir=context.artifacts_dir,
         mode="replay",
     )
     gateway_port = integration_port_block_for_file(Path(request.node.path)).port(22)
     backend = start_backend_process(
-        startup_mount=integration_startup_mount,
         workspace_root=integration_workspace_root_path,
         port=integration_backend_port,
         log_name="child-thread-integration-backend",

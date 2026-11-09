@@ -6,27 +6,27 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import pytest
 
-from tests.harness.python.browser_manager import (
-    BrowserManagerProcesses,
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    browser_plugin_gateway_for_workspace,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
-def browser_service(
-    request: pytest.FixtureRequest, integration_backend_port: int,
+async def browser_service(
+    request: pytest.FixtureRequest, unused_tcp_port: int,
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[BrowserManagerProcesses, TestRunContext, Path, Path, str]]:
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[tuple[TerminalPluginGateway, TestRunContext, Path, Path, str]]:
     with TestRunContext.from_test_file(Path(__file__)) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
         runtime.mkdir(parents=True, exist_ok=True)
@@ -74,13 +74,13 @@ syncBuiltinESMExports();
         )
         node_options = os.environ.get("NODE_OPTIONS", "")
         monkeypatch.setenv("NODE_OPTIONS", f"{node_options} --import={preload.as_uri()}".strip())
-        handle = start_browser_manager_processes(
-            workspace_root=root, artifacts_dir=run.artifacts_dir / "original",
-            backend_port=integration_backend_port + 60,
-            frontend_port=integration_backend_port + 61, backend_host="127.0.0.1",
-        )
-        run.add_cleanup("原Browser进程", lambda: close_browser_manager_processes(handle))
-        yield handle, run, root, marker, native_path
+        home = run.boxteam_home_for_node(request.node.nodeid)
+        monkeypatch.setenv("BOXTEAM_HOME", str(home))
+        async with browser_plugin_gateway_for_workspace(
+            root, run.artifacts_dir / "original", unused_tcp_port, home,
+            prepared_package_root=prepared_developer_tools_package,
+        ) as gateway:
+            yield gateway, run, root, marker, native_path
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="明确替换Linux内核文件边界，不代表其他平台实机")
@@ -90,10 +90,16 @@ syncBuiltinESMExports();
     r"\\host\share\browser\memory",
 ], indirect=True, ids=["posix", "drive", "unc"])
 async def test_health_keeps_memory_locations_in_raw_diagnostics(
-    browser_service: tuple[BrowserManagerProcesses, TestRunContext, Path, Path, str],
+    browser_service: tuple[TerminalPluginGateway, TestRunContext, Path, Path, str],
 ) -> None:
-    handle, run, root, marker, native_path = browser_service
-    url = f"http://127.0.0.1:{handle.backend_port}/health"
+    gateway, run, root, marker, native_path = browser_service
+    def health_url() -> str:
+        slot = gateway.runtime.slots[(gateway.binding.package_id, gateway.binding.plugin_id, gateway.workspace_id)]
+        if slot.base_url is None:
+            raise RuntimeError("Browser 插件当前没有运行实例")
+        return f"{slot.base_url}/health"
+
+    url = health_url()
     async with httpx.AsyncClient(timeout=2) as http:
         async with asyncio.timeout(5):
             while True:
@@ -133,7 +139,7 @@ async def test_health_keeps_memory_locations_in_raw_diagnostics(
             assert ".mjs:" not in serialized and ".js:" not in serialized
         diagnostics = "\n".join(
             log.read_text(encoding="utf-8")
-            for log in (run.artifacts_dir / "original").glob("browser-backend-*.stderr.log")
+            for log in gateway.logs_dir.glob("plugins/plugin-*.log")
         )
         assert f"EACCES: {native_path}" in diagnostics
         assert f"原始采样来源: {native_path}" in diagnostics
@@ -142,13 +148,8 @@ async def test_health_keeps_memory_locations_in_raw_diagnostics(
         assert (await http.get(url)).json()["resource_governor"] == state
 
         marker.unlink()
-        close_browser_manager_processes(handle)
-        restarted = start_browser_manager_processes(
-            workspace_root=root, artifacts_dir=run.artifacts_dir / "restarted",
-            backend_port=handle.backend_port, frontend_port=handle.frontend_port,
-            backend_host="127.0.0.1",
-        )
-        run.add_cleanup("重启Browser进程", lambda: close_browser_manager_processes(restarted))
+        await gateway.restart()
+        url = health_url()
         async with asyncio.timeout(5):
             while True:
                 recovered = (await http.get(url)).json()["resource_governor"]
@@ -158,7 +159,7 @@ async def test_health_keeps_memory_locations_in_raw_diagnostics(
         assert recovered["running"] is True and recovered["error"] is None
         assert recovered["last_sample"]["cgroup"] == before["resource_governor"]["last_sample"]["cgroup"]
         run.write_result("passed", {
-            "scope": "真实Node/HTTP及原内存采样/调度器；仅替换Linux内核读取，不代表Chromium、Gateway/Web或其他平台",
+            "scope": "真实Gateway托管Browser插件、Node/HTTP及内存采样调度器；仅替换Linux内核读取",
             "native_path_form": native_path, "governor_before": before["resource_governor"],
             "governor_failed": state, "governor_restarted": recovered,
         })

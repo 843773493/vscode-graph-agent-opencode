@@ -8,7 +8,6 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from copy import copy
-from dataclasses import dataclass
 
 import httpx
 from pydantic import ValidationError

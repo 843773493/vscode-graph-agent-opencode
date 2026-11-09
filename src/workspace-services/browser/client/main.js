@@ -6,7 +6,6 @@ import { createBrowserCollaborationUi } from "./browserCollaborationUi.js";
 import { createBrowserShortcuts } from "./browserShortcuts.js";
 import { renderDebugElementTree } from "./browserDebugElementTree.js";
 import {
-  backendWsUrl,
   createOpaqueId,
   shortUrlLabel,
   statusLabel,
@@ -19,20 +18,18 @@ import {
 const params = new URLSearchParams(window.location.search);
 const browserId = params.get("browserId");
 const workspaceId = params.get("workspaceId");
+const targetGatewayId = params.get("target_gateway_id");
 const gatewayMode = Boolean(workspaceId);
-const nativeWorkspaceId = window.BOXTEAM_WORKSPACE_ID;
-const ownerApiBase = gatewayMode ? window.location.origin : window.BOXTEAM_WORKSPACE_BACKEND_URL;
+const ownerApiBase = window.location.origin;
 let ownerResource = null;
 let grantLoading = false;
+let browserService = null;
 const participantStorageKey = `boxteam-browser-participant:${workspaceId || "local"}:${browserId || "unknown"}`;
 let participantId = window.sessionStorage.getItem(participantStorageKey);
 if (!participantId) {
   participantId = createOpaqueId("user");
   window.sessionStorage.setItem(participantStorageKey, participantId);
 }
-const backendBaseUrl = workspaceId
-  ? `${window.location.origin}/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/browser-manager`
-  : window.BOXTEAM_BROWSER_BACKEND_URL || "http://127.0.0.1:8015";
 let gatewayToken = null;
 let backendRequestHeaders = {};
 document.documentElement.classList.toggle("embedded-browser", params.get("embedded") === "1");
@@ -287,19 +284,7 @@ async function copyBrowserLogs() {
 }
 
 async function initializeGatewayAuth() {
-  if (!gatewayMode) {
-    if (typeof nativeWorkspaceId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(nativeWorkspaceId)) {
-      throw new Error("浏览器前端缺少受控工作区 UUID");
-    }
-    if (typeof ownerApiBase !== "string" || !ownerApiBase || !window.BOXTEAM_WORKSPACE_API_TOKEN) {
-      throw new Error("独立浏览器必须显式配置工作区 owner API 地址与凭据，或从 Gateway 打开浏览器");
-    }
-    backendRequestHeaders = {
-      "X-BoxTeam-Workspace-Id": nativeWorkspaceId,
-      "X-Local-Token": window.BOXTEAM_WORKSPACE_API_TOKEN,
-    };
-    return;
-  }
+  if (!gatewayMode || !targetGatewayId) throw new Error("请从明确 Gateway 和工作区的 Browser 资源入口打开");
   backendRequestHeaders["X-BoxTeam-Workspace-Id"] = workspaceId;
   const response = await fetch(`${window.location.origin}/api/gateway/auth/local-credential`);
   if (!response.ok) {
@@ -312,6 +297,35 @@ async function initializeGatewayAuth() {
   }
   gatewayToken = token;
   backendRequestHeaders["X-Local-Token"] = token;
+  backendRequestHeaders["X-BoxTeam-Target-Gateway-Id"] = targetGatewayId;
+}
+
+function backendWsUrl(service) {
+  if (!service || service.workspace_id !== workspaceId || service.gateway_id !== targetGatewayId
+    || service.package_id !== "boxteam.developer-tools" || service.plugin_id !== "browser"
+    || !service.package_version || !service.instance_id || service.service_id !== "socket") {
+    throw new Error("Browser 传输授权缺少原目标的精确插件服务身份");
+  }
+  const url = new URL(`/api/gateway/service-plugins/boxteam.developer-tools/browser/instances/${encodeURIComponent(service.instance_id)}/services/socket/browser`, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("token", gatewayToken);
+  url.searchParams.set("workspace_id", workspaceId);
+  url.searchParams.set("target_gateway_id", service.gateway_id);
+  url.searchParams.set("package_version", service.package_version);
+  return url.toString();
+}
+
+function browserHttpUrl(service, path) {
+  if (!service || service.workspace_id !== workspaceId || service.gateway_id !== targetGatewayId
+    || service.package_id !== "boxteam.developer-tools" || service.plugin_id !== "browser"
+    || !service.package_version || !service.instance_id || service.service_id !== "socket") {
+    throw new Error("Browser HTTP 请求缺少原目标的精确插件服务身份");
+  }
+  const url = new URL(`/api/gateway/service-plugins/boxteam.developer-tools/browser/instances/${encodeURIComponent(service.instance_id)}/services/http/${path.replace(/^\/+/, "")}`, window.location.origin);
+  url.searchParams.set("workspace_id", workspaceId);
+  url.searchParams.set("target_gateway_id", service.gateway_id);
+  url.searchParams.set("package_version", service.package_version);
+  return url.toString();
 }
 
 function setAttachButtonMode(mode) {
@@ -829,7 +843,7 @@ function renderDownloads(snapshot) {
 
 async function saveDownloadToDevice(download) {
   const response = await fetch(
-    `${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}/downloads/${encodeURIComponent(download.download_id)}`,
+    browserHttpUrl(browserService, `api/browsers/${encodeURIComponent(browserId)}/downloads/${encodeURIComponent(download.download_id)}`),
     { headers: backendRequestHeaders },
   );
   if (!response.ok) {
@@ -1172,6 +1186,7 @@ async function attach() {
     grant = await ownerRequest("/transport-grant", {
       expected_revision: ownerResource.owner_revision, thread: transportThread(),
     });
+    browserService = grant.service;
     acceptOwnerResource(grant.resource);
   } catch (error) {
     await refreshAfterFailure(error);
@@ -1179,9 +1194,7 @@ async function attach() {
     return;
   } finally { grantLoading = false; }
   if (manualDetach) return;
-  const transportUrl = new URL(backendWsUrl(backendBaseUrl, gatewayMode ? gatewayToken : null));
-  if (!gatewayMode) transportUrl.searchParams.set("workspace_id", nativeWorkspaceId);
-  const currentSocket = new WebSocket(transportUrl);
+  const currentSocket = new WebSocket(backendWsUrl(grant.service));
   socket = currentSocket;
   socket.binaryType = "arraybuffer";
   setAttachButtonMode("attaching");

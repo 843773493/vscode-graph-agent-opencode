@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import AsyncIterator
-from contextlib import ExitStack, closing
+from contextlib import closing
 from pathlib import Path
 from typing import Literal
 
@@ -28,10 +28,6 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     NativeHTTPState,
@@ -43,8 +39,6 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     _prepare_source_workspace,
 )
 from tests.support.api_helpers import create_session
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import terminate_process
 
 
 @pytest.fixture
@@ -75,25 +69,16 @@ async def fallback_backend(
     monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
     monkeypatch.delenv("BOXTEAM_TEST_MODEL_STREAM_CONFIG", raising=False)
     monkeypatch.setattr(main, "_model_stream_controller", None)
-    ports = integration_port_block_for_file(Path(request.node.path))
-    terminal_port = ports.port(40)
-    with ExitStack() as services:
-        browser = start_browser_manager_processes(
-            workspace_root=workspace, artifacts_dir=context.artifacts_dir,
-            backend_port=ports.port(42), frontend_port=ports.port(43), backend_host="127.0.0.1",
-        )
-        services.callback(close_browser_manager_processes, browser)
-        monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{
-            "workspace_id": workspace_id, "workspace_root": str(workspace),
-            "browser_backend_url": f"http://127.0.0.1:{ports.port(42)}",
-            "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
-        }]))
-        async with main.lifespan(main.app), httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
-            headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id},
-            timeout=30,
-        ) as client:
-            yield client, workspace, context, state
+    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{
+        "workspace_id": workspace_id, "workspace_root": str(workspace),
+        "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
+    }]))
+    async with main.lifespan(main.app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id},
+        timeout=30,
+    ) as client:
+        yield client, workspace, context, state
 
 
 @pytest.mark.parametrize("failure", ["http", "stream", "partial_tool"])

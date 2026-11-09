@@ -96,7 +96,7 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
     # 旧进程根刻意指向未挂载目录，任何隐式回退都会破坏隔离或在此留下数据。
     unmounted_root = context.workspace_root / "unmounted-process-default"
     monkeypatch.setenv("WORKSPACE_ROOT", str(unmounted_root))
-    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{"workspace_id": identity, "workspace_root": str(root), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None} for identity, root in roots.items()]))
+    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{"workspace_id": identity, "workspace_root": str(root), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None} for identity, root in roots.items()]))
     monkeypatch.setattr(main, "_model_stream_controller", None)
     case = MountedCase(roots)
     factory = container_module.build_app_container

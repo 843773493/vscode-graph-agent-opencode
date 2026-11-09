@@ -1,32 +1,25 @@
-"""3.4-C：三条代理通道都必须按请求注入权威 ``X-BoxTeam-Gateway-Id``。
+"""3.4-C：代理请求都必须按请求注入权威 ``X-BoxTeam-Gateway-Id``。
 
-覆盖 Gateway 侧三条原本漏注入的代理通道：WebSocket 中继、生命周期/配置
-control-plane（``_backend_headers``）、联邦冷 catalog 端口。控制面读取 registry
+覆盖生命周期/配置 control-plane（``_backend_headers``）与联邦冷 catalog
+端口。控制面读取 registry
 的原生 Gateway 身份，代理与联邦端口读取同一隔离 Gateway 根的 ``identity.json``；
 三者必须保留真实 gateway_id，而不是任何字面量或瞬时通道标识。
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import AsyncIterator
 from pathlib import Path
 
-import anyio
 import httpx
 import pytest
-from fastapi import FastAPI
 
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import reset_current_request_id, set_current_request_id
-from app.gateway.auth import get_gateway_local_token
-from app.gateway.auxiliary_proxy import _proxy_auxiliary_websocket
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation.workspace_port import WorkspaceCatalogPort
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 def _gateway_id(tmp_path: Path) -> str:
@@ -117,111 +110,3 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     assert captured[0]["x-boxteam-gateway-id"] == _gateway_id(tmp_path)
     assert captured[0]["x-boxteam-workspace-id"] == "00000000-0000-4000-8000-000000000001"
     assert captured[0]["x-request-id"] == catalog_request_id
-
-
-class _FakeWebSocket:
-    """把上游握手头部回灌给测试的最小 WebSocket 替身。"""
-
-    def __init__(self, app: object) -> None:
-        self.app = app
-        self.headers: dict[str, str] = {}
-        self.query_params: dict[str, str] = {}
-        self.accepted = False
-        self._incoming: asyncio.Queue[dict[str, str]] = asyncio.Queue()
-        self._incoming.put_nowait({"type": "websocket.disconnect"})
-
-    async def accept(self) -> None:
-        self.accepted = True
-
-    async def receive(self) -> dict[str, str]:
-        return await self._incoming.get()
-
-    async def send_text(self, message: str) -> None:  # pragma: no cover - 本用例无上游回包
-        raise AssertionError(f"未预期的上游文本帧: {message!r}")
-
-    async def send_bytes(self, message: bytes) -> None:  # pragma: no cover
-        raise AssertionError(f"未预期的上游二进制帧: {message!r}")
-
-    async def close(self, code: int = 1000, reason: str = "") -> None:
-        return None
-
-
-@pytest.mark.asyncio
-async def test_auxiliary_websocket_injects_authoritative_gateway_id(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """WebSocket 中继在握手时注入权威 gateway_id，客户端无法自带该头。"""
-
-    gateway_id = load_or_create_gateway_id(get_gateway_root() / "identity.json")
-    workspace_id = "00000000-0000-4000-8000-000000000001"
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=gateway_id)
-    registry.upsert(
-        WorkspaceTarget(
-            gateway_id=gateway_id,
-            workspace_id=workspace_id,
-            name="ws",
-            root_path=str(tmp_path / "workspace"),
-            backend_url="http://127.0.0.1:41100",
-            connection_kind="local",
-        ),
-        runtime=WorkspaceRuntime(
-            service_urls={"browser_manager": "http://127.0.0.1:41101/api"}
-        ),
-        activate=False,
-    )
-
-    application = FastAPI()
-    application.state.registry = registry
-    websocket = _FakeWebSocket(application)
-    websocket.headers = {"X-BoxTeam-Target-Gateway-Id": gateway_id, "X-BoxTeam-Workspace-Id": workspace_id}
-    websocket.query_params = {"token": get_gateway_local_token()}
-
-    handshake: dict[str, object] = {}
-
-    class _Upstream:
-        async def send(self, message: str | bytes) -> None:
-            return None
-
-        def __aiter__(self) -> AsyncIterator[str | bytes]:
-            async def iterate():
-                if False:  # pragma: no cover - 空上游流，仅让中继自然结束
-                    yield b""
-            return iterate()
-
-        async def close(self) -> None:
-            return None
-
-    class _Connect:
-        def __init__(self, url: str, **kwargs: object) -> None:
-            handshake["url"] = url
-            handshake["headers"] = kwargs.get("additional_headers")
-
-        async def __aenter__(self) -> _Upstream:
-            return _Upstream()
-
-        async def __aexit__(self, *_exc: object) -> None:
-            return None
-
-    monkeypatch.setattr(
-        "app.gateway.auxiliary_proxy.connect",
-        lambda url, **kwargs: _Connect(url, **kwargs),
-    )
-
-    with anyio.move_on_after(2):
-        await _proxy_auxiliary_websocket(
-            websocket=websocket,  # type: ignore[arg-type]
-            workspace_id=workspace_id,
-            service="browser_manager",
-            socket_path="browser",
-        )
-
-    assert websocket.accepted
-    assert handshake["url"] == "ws://127.0.0.1:41101/api/browser"
-    headers = handshake["headers"]
-    assert isinstance(headers, dict)
-    assert headers["X-BoxTeam-Gateway-Id"] == _gateway_id(tmp_path)
-    assert headers["X-BoxTeam-Workspace-Id"] == workspace_id
-    # WebSocket 握手只转发显式写入的头部；客户端自定义无关头不会漂到上游。
-    assert "X-BoxTeam-Federation-Token" not in headers
-    assert registry.route_reference_counts((gateway_id, workspace_id)) == (0, 0)

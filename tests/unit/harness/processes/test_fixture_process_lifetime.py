@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,9 +10,6 @@ import pytest
 
 from tests.e2e.system.workspace_services.terminal import (
     test_terminal_workspace_addressing as addressing_case,
-)
-from tests.integration.workspace_services.browser import (
-    test_browser_resource_performance as performance_case,
 )
 
 
@@ -80,60 +76,3 @@ def test_dual_terminal_fixture_attempts_all_owned_cleanup_after_error(
     assert startup.stop.call_args_list == [call(service) for service in reversed(owned)]
     if stage != "complete":
         assert failure.value.__context__ is startup_error
-
-
-@pytest.fixture
-def subprocess_startup(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock]:
-    process = Mock(spec=subprocess.Popen)
-    spawn = Mock(return_value=process)
-    monkeypatch.setattr(subprocess, "Popen", spawn)
-    return process, spawn
-
-
-@pytest.mark.parametrize("interrupted", [False, True])
-@pytest.mark.parametrize("cleanup_fails", [False, True])
-def test_backend_readiness_failure_cleans_owned_process_and_preserves_errors(
-    interrupted: bool,
-    cleanup_fails: bool,
-    subprocess_startup: tuple[Mock, Mock],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    process, _spawn = subprocess_startup
-    startup_error = KeyboardInterrupt("启动中断") if interrupted else RuntimeError("就绪失败")
-    cleanup_error = RuntimeError("清理失败")
-    terminate = Mock(side_effect=cleanup_error if cleanup_fails else None)
-    monkeypatch.setattr(performance_case, "ensure_local_port_available", Mock())
-    monkeypatch.setattr(performance_case, "load_or_create_workspace_id", lambda _root: "workspace-fixture")
-    monkeypatch.setattr(performance_case, "wait_for_http_ok", Mock(side_effect=startup_error))
-    monkeypatch.setattr(performance_case, "terminate_process", terminate)
-
-    expected_error = BaseExceptionGroup if cleanup_fails else type(startup_error)
-    with pytest.raises(expected_error) as failure:
-        performance_case._browser_backend_process(
-            workspace_root=tmp_path, backend_port=18040, log_path=tmp_path / "browser.log",
-        )
-
-    if cleanup_fails:
-        assert isinstance(failure.value, BaseExceptionGroup)
-        assert failure.value.exceptions == (startup_error, cleanup_error)
-    else:
-        assert failure.value is startup_error
-    terminate.assert_called_once_with(process)
-
-
-def test_browser_spawn_failure_closes_opened_log(
-    subprocess_startup: tuple[Mock, Mock],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _process, spawn = subprocess_startup
-    spawn.side_effect = RuntimeError("进程创建失败")
-    monkeypatch.setattr(performance_case, "ensure_local_port_available", Mock())
-    monkeypatch.setattr(performance_case, "load_or_create_workspace_id", lambda _root: "workspace-fixture")
-
-    with pytest.raises(RuntimeError, match="进程创建失败"):
-        performance_case._browser_backend_process(
-            workspace_root=tmp_path, backend_port=18040, log_path=tmp_path / "browser.log",
-        )
-    assert spawn.call_args.kwargs["stdout"].closed

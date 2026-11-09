@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from contextlib import ExitStack
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
@@ -20,12 +19,9 @@ from app.core.path_utils import catalog_provider_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.business.workspace_resources import recovery
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
+from app.services.infrastructure.config_service import ConfigService
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
+from tests.harness.python.terminal_plugin import browser_plugin_gateway_for_workspace
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -34,11 +30,12 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture
-def browser_client(
+async def browser_client(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
-    integration_backend_port: int, integration_config_path: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[BrowserManagerClient, Path, TestRunContext]]:
+    integration_config_path: str,
+    monkeypatch: pytest.MonkeyPatch, unused_tcp_port: int,
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[tuple[BrowserManagerClient, Path, TestRunContext]]:
     with TestRunContext.from_test_file(request.path) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
         runtime.mkdir(parents=True, exist_ok=True)
@@ -52,35 +49,26 @@ def browser_client(
             workspace_root=root, config_path=Path(integration_config_path),
             schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
         )
-        handle = start_browser_manager_processes(
-            workspace_root=root, artifacts_dir=run.artifacts_dir,
-            backend_port=integration_backend_port + 60,
-            frontend_port=integration_backend_port + 61, backend_host="127.0.0.1",
-        )
-        run.add_cleanup("Browser进程", lambda: close_browser_manager_processes(handle))
-        yield BrowserManagerClient(
-            workspace_id=load_or_create_workspace_id(root),
-            backend_url=f"http://127.0.0.1:{handle.backend_port}",
-        ), root, run
+        home = run.boxteam_home_for_node(request.node.nodeid)
+        monkeypatch.setenv("BOXTEAM_HOME", str(home))
+        async with browser_plugin_gateway_for_workspace(
+            root, run.artifacts_dir, unused_tcp_port, home,
+            prepared_package_root=prepared_developer_tools_package,
+        ) as gateway:
+            yield BrowserManagerClient(workspace_id=load_or_create_workspace_id(root),
+                config_service=ConfigService(workspace_root=root), gateway_url=gateway.gateway_url,
+                binding=gateway.binding), root, run
 
 
 @pytest.fixture
 async def owner_mount(
     browser_client: tuple[BrowserManagerClient, Path, TestRunContext],
-    integration_backend_port: int, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[MountedWorkspace]:
-    client, root, run = browser_client
+    _client, root, run = browser_client
     home = run.boxteam_home_for_node(request.node.nodeid)
     monkeypatch.setenv("BOXTEAM_HOME", str(home))
-    # 需要资源 owner 的测试才装配 Terminal；直接 Browser 协议测试不额外起进程。
-    async with terminal_plugin_gateway_for_workspace(
-        workspace_root=root, artifacts_dir=run.artifacts_dir,
-        gateway_port=integration_backend_port + 62, boxteam_home=home,
-    ) as terminal:
-        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", terminal.gateway_url)
-        yield MountedWorkspace(
-            load_or_create_workspace_id(root), root, browser_backend_url=client.backend_url,
-        )
+    yield MountedWorkspace(load_or_create_workspace_id(root), root)
 
 
 @pytest.fixture
@@ -298,10 +286,8 @@ async def test_close_keeps_timed_out_script_unknown_until_its_original_execution
         record, = [item for item in stored["browsers"] if item["browser_id"] == first]
         assert record["status"] == "running" and record["reconciliation_status"] == "unknown"
         assert record["transport_owner_revision"] == 1
-        async with httpx.AsyncClient() as http:
-            health = await http.get(f"{client.backend_url}/health")
-        assert health.status_code == 200
-        assert health.json()["browser_runtime"]["context_count"] == 1
+        health = await client._json_request("GET", "/health")
+        assert health["browser_runtime"]["context_count"] == 1
         independent = await asyncio.wait_for(client.perform(second, "read", {}, actor="agent"), 2)
         assert independent["operation"]["status"] == "completed"
         diagnostics = "\n".join(p.read_text() for p in run.artifacts_dir.glob("browser-backend-*.stderr.log"))
@@ -375,9 +361,8 @@ async def test_python_management_closes_context_before_waiting_for_its_script(
                 holder_id="request:context-wait-read", operation_id="context-wait-read",
             )
             assert healthy["operation"]["status"] == "completed"
-            async with httpx.AsyncClient() as http:
-                health = await http.get(f"{client.backend_url}/health")
-            assert health.json()["browser_runtime"]["context_count"] == 1
+            health = await client._json_request("GET", "/health")
+            assert health["browser_runtime"]["context_count"] == 1
             run.write_result("passed", {
                 "action": action, "browser_id": rid, "close_seconds": time.monotonic() - started,
                 "scope": "正式Session/Python业务owner→真实Node/Chromium；原脚本仅等待context关闭，不替代强制终止与Gateway/主Web",

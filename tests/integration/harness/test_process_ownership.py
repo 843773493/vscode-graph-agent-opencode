@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -11,28 +8,14 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 from io import StringIO
 from pathlib import Path
-from typing import Literal, TextIO
-from urllib.error import HTTPError
-from urllib.request import urlopen
+from typing import Literal
 
 import psutil
 import pytest
 
-from tests.harness.python import browser_manager, terminal_backend
-from tests.harness.python.browser_manager import (
-    BrowserFrontendProcess,
-    BrowserManagerProcesses,
-    close_browser_frontend_process,
-    close_browser_manager_processes,
-    start_browser_frontend_process,
-    start_browser_manager_processes,
-)
-from tests.harness.python.process_output import spawn_logged_process
+from tests.harness.python import terminal_backend
 from tests.integration.gateway import (
     test_navigation_actor_scope_proxy as navigation_case,
-)
-from tests.integration.workspace_services.browser import (
-    test_browser_resource_performance as performance_case,
 )
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -73,8 +56,8 @@ def test_windows_python_service_stop_releases_actual_server_before_port_reuse(
         children: list[psutil.Process] = []
         try:
             wait_for_http_ok(f"http://127.0.0.1:{port}", process, timeout_seconds=10)
-            children = psutil.Process(process.pid).children(recursive=True)
-            assert children, "本场景必须经 Windows venv 启动器启动实际服务器"
+            children = psutil.Process(process.pid).children()
+            assert children, "本场景必须持有实际服务器子进程"
             terminate_process(process, force=force)
             # 先检查被测关闭的结果，再运行本用例的兜底回收。
             assert process.poll() is not None
@@ -89,179 +72,10 @@ def test_windows_python_service_stop_releases_actual_server_before_port_reuse(
 
 
 @pytest.fixture
-def loud_auxiliary_processes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[list[subprocess.Popen[str]]]:
-    """只替换子进程程序，保留装具实际配置的输出载体与就绪路径。"""
-    created: list[subprocess.Popen[str]] = []
-    script = """
-import os, sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-os.write(1, b'stdout-payload\\n' * 32768)
-os.write(2, b'stderr-payload\\n' * 32768)
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, *args):
-        pass
-HTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()
-"""
-
-    class LoudAuxiliaryProcess(subprocess.Popen[str]):
-        def __init__(
-            self,
-            args: list[str],
-            *,
-            cwd: Path,
-            env: dict[str, str],
-            stdout: int | TextIO,
-            stderr: int | TextIO,
-            text: bool,
-        ) -> None:
-            port = args[args.index("--port") + 1]
-            super().__init__(
-                [sys.executable, "-u", "-c", script, port],
-                cwd=cwd, env=env, stdout=stdout, stderr=stderr, text=text,
-            )
-            created.append(self)
-
-    wait_for_http_ok = browser_manager.wait_for_http_ok
-
-    def short_readiness(url: str, process: subprocess.Popen[str], **_kwargs: object) -> None:
-        wait_for_http_ok(url, process, timeout_seconds=0.5)
-
-    monkeypatch.setattr(browser_manager.subprocess, "Popen", LoudAuxiliaryProcess)
-    monkeypatch.setattr(browser_manager, "wait_for_http_ok", short_readiness)
-    yield created
-    for process in created:
-        browser_manager.terminate_process(process)
-
-
-@pytest.mark.parametrize("process_kind", ["manager", "frontend"])
-def test_large_startup_output_does_not_block_auxiliary_fixture(
-    process_kind: str,
-    loud_auxiliary_processes: list[subprocess.Popen[str]],
-    integration_workspace_root_path: str,
-) -> None:
-    workspace_root = Path(integration_workspace_root_path)
-    workspace = workspace_root / "nested" / process_kind
-    artifacts = workspace_root.parent / "artifacts"
-    previous_logs = set(artifacts.glob("*.log"))
-    ports = integration_port_block_for_file(Path(__file__))
-    with ExitStack() as lifetime:
-        if process_kind == "manager":
-            handle = start_browser_manager_processes(
-                workspace_root=workspace, backend_port=ports.port(64),
-                frontend_port=ports.port(65), backend_host="127.0.0.1",
-                artifacts_dir=artifacts,
-            )
-            lifetime.callback(close_browser_manager_processes, handle)
-        elif process_kind == "frontend":
-            frontend = start_browser_frontend_process(
-                workspace_root=workspace, frontend_port=ports.port(65),
-                artifacts_dir=artifacts,
-            )
-            lifetime.callback(close_browser_frontend_process, frontend)
-        expected_process_count = 2 if process_kind == "manager" else 1
-        assert len(loud_auxiliary_processes) == expected_process_count
-        assert all(process.poll() is None for process in loud_auxiliary_processes)
-        assert all(process.stdout is None and process.stderr is None for process in loud_auxiliary_processes)
-
-    logs = set(artifacts.glob("*.log")) - previous_logs
-    assert not (workspace.parent / "artifacts").exists()
-    assert len(logs) == expected_process_count * 2
-    for channel in ("stdout", "stderr"):
-        channel_logs = [path for path in logs if path.name.endswith(f".{channel}.log")]
-        assert len(channel_logs) == expected_process_count
-        for path in channel_logs:
-            assert path.read_bytes() == f"{channel}-payload\n".encode() * 32768
-    assert all(process.poll() is not None for process in loud_auxiliary_processes)
-
-
-@pytest.fixture
 def process_lifetime() -> Iterator[ExitStack]:
     """测试自建子进程独立归属此 fixture，不受被测嵌套 scope 的释放影响。"""
     with ExitStack() as lifetime:
         yield lifetime
-
-
-@pytest.fixture(params=["127.0.0.1", "::1"])
-def frontend_loopback_address(request: pytest.FixtureRequest) -> tuple[str, int]:
-    host = str(request.param)
-    family = socket.AF_INET6 if host == "::1" else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind((host, 0))
-        except OSError as error:
-            if host == "::1":
-                pytest.skip(f"当前宿主无法绑定IPv6回环地址: {error}")
-            raise
-        return host, int(probe.getsockname()[1])
-
-
-@pytest.mark.parametrize("resource", ["browser"])
-def test_auxiliary_frontend_serves_explicit_loopback_host(
-    resource: str,
-    frontend_loopback_address: tuple[str, int],
-    process_lifetime: ExitStack,
-    integration_workspace_root_path: str,
-) -> None:
-    node = shutil.which("node")
-    assert node is not None, "未找到辅助服务使用的Node运行时"
-    root = Path.cwd()
-    workspace = Path(integration_workspace_root_path)
-    workspace_id = json.loads(
-        (workspace / ".boxteam/workspace-identity.json").read_text(encoding="utf-8"),
-    )["workspace_id"]
-    host, port = frontend_loopback_address
-    # 使用真实 Browser 静态入口与完整 fixture 工作区；不启动 Browser 业务后端。
-    process, logs = spawn_logged_process(
-        [node, str(root / "src/workspace-services" / resource / "client/server.js"),
-         "--host", host, "--port", str(port), "--backend-url", "auto",
-         "--workspace-root", str(workspace), "--workspace-id", workspace_id,
-         "--asset-root", str(root)],
-        cwd=root, env=os.environ.copy(),
-        artifacts_dir=workspace.parent / "artifacts",
-        log_name=f"{resource}-frontend-loopback",
-    )
-    process_lifetime.callback(terminate_process, process)
-    url_host = f"[{host}]" if host == "::1" else host
-    base_url = f"http://{url_host}:{port}"
-    wait_for_http_ok(f"{base_url}/health", process, timeout_seconds=3)
-    with urlopen(f"{base_url}/health", timeout=1) as response:
-        health = json.load(response)
-    assert health == {"ok": True, "backend_url": "auto", "workspace_id": workspace_id}
-    with urlopen(f"{base_url}/config.js", timeout=1) as response:
-        config = response.read().decode("utf-8")
-    backend_port = 8015
-    assert f'"http://{url_host}:{backend_port}"' in config
-    assert json.dumps(workspace_id) in config
-    with urlopen(f"{base_url}/", timeout=1) as response:
-        assert response.status == 200
-        assert b"<html" in response.read()
-    for missing in (
-        "/missing-attach-resource.js",
-        "/protocol/generated/missing-attach-resource.js",
-        "/@bufbuild/protobuf/missing-attach-resource.js",
-    ):
-        log_offset = logs[1].stat().st_size
-        with pytest.raises(HTTPError) as failed:
-            urlopen(f"{base_url}{missing}", timeout=1)
-        with failed.value as response:
-            assert response.code == 404
-            body = response.read().decode("utf-8")
-        assert body == "静态资源请求失败: stage=static_asset, error=Error, code=ENOENT"
-        assert str(root) not in body and str(workspace) not in body
-        with logs[1].open("rb") as diagnostic_log:
-            diagnostic_log.seek(log_offset)
-            diagnostics = diagnostic_log.read().decode("utf-8")
-        assert "ENOENT" in diagnostics and str(root) in diagnostics
-        assert "missing-attach-resource.js" in diagnostics
-        with urlopen(f"{base_url}/", timeout=1) as response:
-            assert response.status == 200
-            assert b"<html" in response.read()
-    assert process.poll() is None
 
 
 def _free_port() -> int:
@@ -379,133 +193,7 @@ def test_process_scope_start_failure_preserves_replacement_port_owner(
         pass
 
 
-@pytest.mark.parametrize(
-    "occupied_start", ["backend", "frontend", "frontend-only"]
-)
-def test_auxiliary_start_refuses_occupied_port_without_killing_owner(
-    process_lifetime: ExitStack,
-    occupied_start: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend_port = _free_port()
-    frontend_port = _free_port()
-    while frontend_port == backend_port:
-        frontend_port = _free_port()
-    occupied_port = backend_port if occupied_start == "backend" else frontend_port
-    listener = _start_listener(occupied_port, process_lifetime=process_lifetime)
-    monkeypatch.setattr(browser_manager.shutil, "which", lambda _name: "node")
-    monkeypatch.setattr(
-        browser_manager.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: pytest.fail("占用端口时不得启动子进程"),
-    )
-
-    with pytest.raises(RuntimeError, match="测试端口已被占用"):
-        if occupied_start == "frontend-only":
-            start_browser_frontend_process(
-                workspace_root=tmp_path,
-                artifacts_dir=tmp_path / "artifacts",
-                frontend_port=frontend_port,
-            )
-        else:
-            start_browser_manager_processes(
-                workspace_root=tmp_path,
-                artifacts_dir=tmp_path / "artifacts",
-                backend_port=backend_port,
-                frontend_port=frontend_port,
-                backend_host="127.0.0.1",
-            )
-    assert listener.poll() is None
-    with socket.create_connection(("127.0.0.1", occupied_port), timeout=1):
-        pass
-
-
-@pytest.mark.parametrize("service", ["browser-manager", "browser-frontend"])
-def test_auxiliary_close_terminates_owned_processes_only(
-    process_lifetime: ExitStack,
-    service: str,
-) -> None:
-    backend_port = _free_port()
-    frontend_port = _free_port()
-    while frontend_port == backend_port:
-        frontend_port = _free_port()
-    backend_replacement = _start_listener(backend_port, process_lifetime=process_lifetime)
-    frontend_replacement = _start_listener(frontend_port, process_lifetime=process_lifetime)
-    owned_backend = _start_idle_process(process_lifetime)
-    owned_frontend = _start_idle_process(process_lifetime)
-
-    if service == "browser-frontend":
-        close_browser_frontend_process(
-            BrowserFrontendProcess(process=owned_frontend, port=frontend_port)
-        )
-        assert owned_frontend.poll() is not None
-        assert owned_backend.poll() is None
-    else:
-        close_browser_manager_processes(
-            BrowserManagerProcesses(
-                backend_process=owned_backend,
-                frontend_process=owned_frontend,
-                backend_port=backend_port,
-                frontend_port=frontend_port,
-            )
-        )
-        assert owned_frontend.poll() is not None
-        assert owned_backend.poll() is not None
-    assert backend_replacement.poll() is None
-    assert frontend_replacement.poll() is None
-    for port in (backend_port, frontend_port):
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            pass
-
-
-def test_browser_manager_frontend_start_failure_terminates_started_backend(
-    process_lifetime: ExitStack,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend_port = _free_port()
-    frontend_port = _free_port()
-    while frontend_port == backend_port:
-        frontend_port = _free_port()
-    real_popen = subprocess.Popen
-    started: list[subprocess.Popen[str]] = []
-
-    def fail_frontend_start(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:
-        if started:
-            raise RuntimeError("模拟第二进程启动失败")
-        process = real_popen(
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        process_lifetime.callback(terminate_process, process)
-        started.append(process)
-        return process
-
-    monkeypatch.setattr(browser_manager.shutil, "which", lambda _name: "node")
-    monkeypatch.setattr(
-        browser_manager,
-        "load_or_create_workspace_id",
-        lambda _workspace_root: "00000000-0000-4000-8000-000000000001",
-    )
-    monkeypatch.setattr(browser_manager.subprocess, "Popen", fail_frontend_start)
-
-    with pytest.raises(RuntimeError, match="模拟第二进程启动失败"):
-        start_browser_manager_processes(
-            workspace_root=tmp_path,
-            artifacts_dir=tmp_path / "artifacts",
-            backend_port=backend_port,
-            frontend_port=frontend_port,
-            backend_host="127.0.0.1",
-        )
-
-    assert len(started) == 1
-    assert started[0].poll() is not None
-
-
-@pytest.mark.parametrize("service", ["terminal", "navigation-scope", "browser-performance"])
+@pytest.mark.parametrize("service", ["terminal", "navigation-scope"])
 def test_backend_start_preserves_existing_port_owner(
     process_lifetime: ExitStack,
     service: str,
@@ -525,10 +213,6 @@ def test_backend_start_preserves_existing_port_owner(
             )
         elif service == "navigation-scope":
             navigation_case._start_navigation_scope_backend(workspace_root=tmp_path, port=port)
-        else:
-            performance_case._browser_backend_process(
-                workspace_root=tmp_path, backend_port=port, log_path=tmp_path / "browser.log",
-            )
     assert listener.poll() is None
     with socket.create_connection(("127.0.0.1", port), timeout=1):
         pass

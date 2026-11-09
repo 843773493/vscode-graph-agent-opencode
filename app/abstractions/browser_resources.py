@@ -15,6 +15,11 @@ BrowserAction = Literal[
     "resource-policy", "freeze", "wake", "discard", "device-profile", "agent-lock",
 ]
 
+
+class BrowserPluginDisabled(RuntimeError):
+    """当前工作区未绑定或已关闭 Browser 插件。"""
+
+
 class BrowserRequestError(ResourceRequestError):
     def __init__(
         self,

@@ -89,8 +89,7 @@ class WorkspaceRuntime:
         preserve_process_names: set[str] | None = None,
     ) -> None:
         """保留可接管的辅助服务；其它由 Gateway 直接拥有的进程正常关闭。"""
-        names = {"browser_manager"}
-        names.update(preserve_process_names or set())
+        names = set(preserve_process_names or set())
         for name in names:
             self.detach_process(name)
         self.close()
@@ -110,8 +109,7 @@ class WorkspaceRuntime:
         errors: list[str] = []
         for name in reversed(tuple(self.processes)):
             try:
-                timeout_seconds = 120 if name == "browser_manager" else 8
-                self.close_process(name, timeout_seconds=timeout_seconds)
+                self.close_process(name, timeout_seconds=8)
             except Exception as error:  # noqa: BLE001 - 排空所有 owned handle 后聚合并抛出错误
                 errors.append(f"{name}: {error}")
         if errors:

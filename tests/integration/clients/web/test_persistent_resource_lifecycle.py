@@ -10,13 +10,10 @@ import subprocess
 from contextlib import ExitStack
 from pathlib import Path
 
+import commentjson
 import httpx
 import pytest
 
-from tests.harness.python.browser_manager import (
-    close_browser_frontend_process,
-    start_browser_frontend_process,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建装具
@@ -30,7 +27,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.terminal_plugin import enable_developer_tools_plugins
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 
 
 @pytest.mark.asyncio
@@ -42,6 +42,7 @@ async def test_persistent_resources_through_real_workbench(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     web_workbench_assets: Path,
+    prepared_developer_tools_package: Path,
     phases: tuple[str, ...],
 ) -> None:
     scope = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -53,22 +54,27 @@ async def test_persistent_resources_through_real_workbench(
     if chromium is None:
         pytest.fail("持久资源 Web Integration 需要真实 Chromium")
     ports = integration_port_block_for_file(Path(request.node.path))
+    workspace_config_path = workspace / ".boxteam" / "workspace.jsonc"
+    workspace_config = commentjson.loads(workspace_config_path.read_text(encoding="utf-8"))
+    workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        "url"
+    ] = f"http://127.0.0.1:{ports.port(21)}"
+    workspace_config_path.write_text(
+        json.dumps(workspace_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
     with ExitStack() as lifetime:
         temporary_environment = lifetime.enter_context(chromium_temporary_environment(runtime / "chromium-tmp"))
         replay = lifetime.enter_context(model_stream_replay(
-            runtime, runtime_root=runtime, business_assertion="persistent-resource-lifecycle",
+            artifacts, runtime_root=runtime, business_assertion="persistent-resource-lifecycle",
         ))
-        browser = start_browser_frontend_process(
-            workspace_root=workspace, artifacts_dir=artifacts, frontend_port=ports.port(43),
-        )
-        lifetime.callback(close_browser_frontend_process, browser)
+        gateway_home = scope.boxteam_home_for_node(request.node.nodeid)
+        copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=ports.port(21),
-            boxteam_home=scope.boxteam_home_for_node(request.node.nodeid), artifacts_dir=artifacts / "gateway",
+            boxteam_home=gateway_home, artifacts_dir=artifacts / "gateway",
             extra_env=temporary_environment | replay.environment | {
                 "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
                 "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10)),
-                "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser.port}",
             },
             asgi_app="tests.support.e2e_control.gateway_app:app",
         )
@@ -83,7 +89,7 @@ async def test_persistent_resources_through_real_workbench(
             gateway_id = owner["gateway_id"]
             await enable_developer_tools_plugins(
                 client, gateway_id=gateway_id, workspace_id=workspace_id,
-                plugin_ids=("terminal",), artifacts_dir=artifacts / "terminal-plugin",
+                plugin_ids=("terminal", "browser"),
             )
         environment = os.environ | temporary_environment | replay.environment | {
             "BOXTEAM_BROWSER_BASE_URL": base_url, "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,

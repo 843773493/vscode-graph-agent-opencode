@@ -65,7 +65,7 @@ async def _set_node_executable(
 async def test_missing_node_executable_preserves_safe_history_and_retries_after_restart(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-    prepared_debug_plugin_package: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     ports = integration_port_block_for_file(Path(request.node.fspath))
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
@@ -108,7 +108,6 @@ async def test_missing_node_executable_preserves_safe_history_and_retries_after_
     config_path.write_text(dummy_config, encoding="utf-8")
     Path(integration_workspace_config_path).write_text(dummy_config, encoding="utf-8")
     reset_gateway_persistent_state(workspace_root=gateway_root)
-    copy_prepared_developer_tools_package(prepared_debug_plugin_package, boxteam_home)
     home_config = boxteam_home / "config"
     home_config.mkdir(parents=True, exist_ok=True)
     shutil.copy2(config_path, home_config / "workspace.jsonc")
@@ -116,6 +115,7 @@ async def test_missing_node_executable_preserves_safe_history_and_retries_after_
         Path.cwd() / "configs/workspace_schema.jsonc",
         home_config / "workspace_schema.jsonc",
     )
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     evidence = {}
     gateway = start_gateway_process(
         workspace_root=gateway_root, default_backend_url=None, port=ports.port(1),
@@ -140,8 +140,7 @@ async def test_missing_node_executable_preserves_safe_history_and_retries_after_
             workspace_id = item["workspace_id"]
             enabled = await enable_developer_tools_plugins(
                 client, gateway_id=gateway_id, workspace_id=workspace_id,
-                plugin_ids=("debugging",), artifacts_dir=context.artifacts_dir / "debug-plugin",
-                prepared_package=True,
+                plugin_ids=("debugging",),
             )
             assert enabled["debugging"]["state"] == "ready"
             client.headers.update({

@@ -10,7 +10,6 @@ import httpx
 from app.core.failures import failure_detail
 from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.runtime.local_workspace import validate_workspace_health_identity
-from app.gateway.service_types import GatewayServiceName
 from app.schemas.gateway.config import GatewayConfigReloadStatusDTO
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.workspaces import (
@@ -73,7 +72,6 @@ class RegistryDtosMixin:
                 if target.connection_kind == "remote_gateway":
                     for service in (
                         "workspace_api",
-                        "browser_manager",
                     ):
                         try:
                             runtime_service_urls[service] = self.resolve_service_url(
@@ -189,71 +187,17 @@ class RegistryDtosMixin:
                                 label=f"工作区配置状态检查失败: workspace_id={target.workspace_id}",
                             ),
                         )
-                health_paths: dict[GatewayServiceName, str] = {
-                    "workspace_api": "/api/v1/health",
-                    "browser_manager": "/health",
-                }
-                def service_dto(
-                    service: GatewayServiceName,
-                    service_status: GatewayServiceStatus,
-                    *,
-                    error: str | None = None,
-                ) -> GatewayServiceStatusDTO:
-                    local_url = (
-                        runtime_service_urls.get(service)
-                    )
-                    parsed_url = urlparse(local_url) if local_url is not None else None
-                    return GatewayServiceStatusDTO(
-                        status=service_status,
-                        health_path=health_paths[service],
-                        local_url=local_url,
-                        local_port=parsed_url.port if parsed_url is not None else None,
-                        error=error,
-                    )
-
+                service_url = runtime_service_urls.get("workspace_api")
+                service_port = urlparse(service_url).port if service_url is not None else None
                 service_statuses: dict[str, GatewayServiceStatusDTO] = {
-                    "workspace_api": service_dto(
-                        "workspace_api",
-                        workspace_service_status,
+                    "workspace_api": GatewayServiceStatusDTO(
+                        status=workspace_service_status,
+                        health_path="/api/v1/health",
+                        local_url=service_url,
+                        local_port=service_port,
                         error=workspace_service_error,
-                    )
+                    ),
                 }
-                for service, health_path in health_paths.items():
-                    if service == "workspace_api":
-                        continue
-                    if service not in runtime_service_urls:
-                        service_statuses[service] = service_dto(
-                            service,
-                            "unavailable",
-                        )
-                        continue
-                    if not check_health:
-                        service_statuses[service] = service_dto(service, "ready")
-                        continue
-                    service_url = runtime_service_urls[service]
-                    try:
-                        response = await client.get(
-                            f"{service_url.rstrip('/')}{health_path}",
-                            headers=registry.target_request_headers(target),
-                        )
-                        service_statuses[service] = service_dto(
-                            service,
-                            "ready" if response.status_code == 200 else "offline",
-                            error=(
-                                None
-                                if response.status_code == 200
-                                else f"健康检查返回 HTTP {response.status_code}"
-                            ),
-                        )
-                    except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
-                        service_statuses[service] = service_dto(
-                            service,
-                            "offline",
-                            error=failure_detail(
-                                error, stage="service_health",
-                                label=f"辅助服务健康检查失败: workspace_id={target.workspace_id}, service={service}",
-                            ),
-                        )
                 return GatewayWorkspaceDTO(
                     workspace_id=target.workspace_id,
                     gateway_id=target.gateway_id,

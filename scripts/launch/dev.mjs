@@ -40,13 +40,6 @@ const {
 } = developmentLayout;
 const logContract = loadRuntimeLogContract(projectRoot);
 const webRoot = path.join(projectRoot, "src", "clients", "workbench");
-const browserFrontendRoot = path.join(
-  projectRoot,
-  "src",
-  "workspace-services",
-  "browser",
-  "client",
-);
 const launcherEntry = path.join(
   projectRoot,
   "packages",
@@ -421,7 +414,6 @@ async function main() {
   for (const [targetPath, label] of [
     [pythonBin, "Python 解释器"],
     [webRoot, "浏览器前端目录"],
-    [browserFrontendRoot, "浏览器前端目录"],
     [launcherEntry, "BoxTeam Launcher"],
   ]) {
     requirePath(targetPath, label);
@@ -456,7 +448,6 @@ async function main() {
     BOXTEAM_DEV_LISTEN_HOST: listenHost,
     BOXTEAM_GATEWAY_PORT: String(ports.gateway),
     BOXTEAM_DEFAULT_BACKEND_PORT: String(ports.backend),
-    BOXTEAM_BROWSER_FRONTEND_URL: `http://${host}:${ports.browserFrontend}`,
     BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT: String(ports.backendDebug),
   };
   process.stdout.write(
@@ -480,7 +471,6 @@ async function main() {
       {
         workspace_id: backendWorkspaceId,
         workspace_root: defaultWorkspaceRoot,
-        browser_backend_url: null,
         config_candidate_ref: null,
         config_generation: null,
         config_fencing_token: null,
@@ -514,29 +504,7 @@ async function main() {
   } else if (serviceMode === "web") {
     processes.push(spawnProcess("bun", ["run", "dev"], webRoot, environment));
   } else {
-    if (serviceMode === "all") {
-      installNodeDebugFixture();
-      processes.push(
-        spawnProcess(
-          nodeBin,
-          [
-            "server.js",
-            "--host",
-            listenHost,
-            "--port",
-            String(ports.browserFrontend),
-            "--backend-url",
-            "auto",
-            "--workspace-root",
-            defaultWorkspaceRoot,
-            "--asset-root",
-            projectRoot,
-          ],
-          browserFrontendRoot,
-          environment,
-        ),
-      );
-    }
+    if (serviceMode === "all") installNodeDebugFixture();
     gatewayProcess = spawnProcess(
       nodeBin,
       [
@@ -570,12 +538,6 @@ async function main() {
       });
       gatewayReady = true;
       if (serviceMode === "all") {
-        await Promise.all([
-          waitForHttpOk({
-            url: `http://${host}:${ports.browserFrontend}/health`,
-            label: "browser frontend",
-          }),
-        ]);
         const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
         processes.push(frontend);
         await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend" });

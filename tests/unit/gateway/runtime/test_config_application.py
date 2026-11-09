@@ -9,6 +9,8 @@ import logging
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
@@ -27,8 +29,10 @@ from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerTransaction,
 )
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
+from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import _apply_gateway_runtime_config
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.runtime_logging import (
     RuntimeLoggingApply,
     RuntimeLoggingService,
@@ -330,6 +334,7 @@ async def test_reload_persists_real_proofs_and_compensates_the_frozen_consumers(
 class LoggingApplicationCase:
     config: ConfigApplicationCase
     registry: GatewayWorkspaceRegistry
+    plugins: GatewayPluginRuntime
     states: dict[int, RuntimeLoggingStatus]
     calls: list[tuple[int, str]]
     failure: str | None = None
@@ -362,23 +367,34 @@ def logging_application(
         registry.upsert(target)
     graph = managed_backend_factory(
         targets, backend_url="http://127.0.0.1:42000", process=ProcessProbe(pid=21),
-        auxiliary_processes={target.workspace_id: {
-            "browser_manager": ProcessProbe(pid=22 + index),
-        } for index, target in enumerate(targets)},
     )
     graph.publish(registry)
     # 即使地址在本机，未受管的外部 Backend 也不参加日志控制。
     registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID, workspace_id='00000000-0000-4000-8000-000000000003', name='external', root_path=str(config.path.parent / 'external'), backend_url='http://127.0.0.1:49999', connection_kind='local'))
-    roles: tuple[tuple[int, RuntimeLoggingService], ...] = ((20, "launcher"), (21, "backend"), (22, "browser"), (23, "browser"))
+    # 两个工作区各自持有 Browser／Terminal；沿新插件 owner 枚举，保留原隔离和故障证明。
+    slots = {}
+    for pid, plugin_id, workspace_index in ((22, "browser", 0), (24, "terminal", 0), (25, "terminal", 1), (23, "browser", 1)):
+        binding = PluginBinding(package_id="proof.logging", package_version="1.0.0", plugin_id=plugin_id,
+                                workspace_id=targets[workspace_index].workspace_id, enabled=True)
+        slots[(binding.package_id, binding.plugin_id, binding.workspace_id)] = SimpleNamespace(
+            binding=binding, process=ProcessProbe(pid=pid), token=f"plugin-token-{pid}",
+            base_url=f"http://127.0.0.1:{42000 + pid}",
+        )
+    plugins = cast(GatewayPluginRuntime, SimpleNamespace(slots=slots))
+    roles: tuple[tuple[int, RuntimeLoggingService], ...] = ((20, "launcher"), (21, "backend"),
+        (22, "browser"), (24, "terminal"), (25, "terminal"), (23, "browser"))
     states = {pid: RuntimeLoggingStatus(
         service=role, pid=pid, runtime_instance_id=f"instance-{pid}",
         applied_revision=config.service.config.revision, level="info", pretty=True, log_sink=None,
     ) for pid, role in roles}
-    case = LoggingApplicationCase(config, registry, states, [])
+    case = LoggingApplicationCase(config, registry, plugins, states, [])
     config.app.state.registry = registry
     config.app.state.gateway_state = config.store
+    config.app.state.service_plugins = plugins
 
     async def status(_self, *, pid: int, **_kwargs) -> RuntimeLoggingStatus:
+        if pid in {22, 23, 24, 25}:
+            assert _self._token == f"plugin-token-{pid}"
         return states[pid]
 
     async def apply(_self, *, pid: int, request: RuntimeLoggingApply, **_kwargs) -> RuntimeLoggingStatus:
@@ -428,7 +444,7 @@ async def test_logging_diagnostics_uses_shared_owners_and_keeps_paths_in_raw_log
 
         monkeypatch.setattr(RuntimeLoggingProcessControl, "status", reject_backend)
     candidates = [_LogCandidate("backend-log", "workspace", "workspace_api", "Backend", path)]
-    processes = await _logging_process_diagnostics(case.registry, None, candidates)
+    processes = await _logging_process_diagnostics(case.registry, None, candidates, service_plugins=case.plugins)
     assert len(processes) == 7
     backend, = [process for process in processes if process.service == "backend"]
     workspace_ids = list(case.registry.backend_owners()[0].contract.workspace_ids)
@@ -445,7 +461,7 @@ async def test_logging_diagnostics_uses_shared_owners_and_keeps_paths_in_raw_log
         assert backend.state.log_sink.owner_id == "test-log-owner"
     assert all(process.output_mode == "stdout-only" for process in processes if process.service != "backend")
     assert not case.calls, "只读诊断不能应用或补偿设置"
-    scoped = await _logging_process_diagnostics(case.registry, workspace_ids[1], candidates)
+    scoped = await _logging_process_diagnostics(case.registry, workspace_ids[1], candidates, service_plugins=case.plugins)
     assert len(scoped) == 5
     assert all(not process.workspace_ids or workspace_ids[1] in process.workspace_ids for process in scoped)
     assert not case.registry.backend_topology_lock.locked()

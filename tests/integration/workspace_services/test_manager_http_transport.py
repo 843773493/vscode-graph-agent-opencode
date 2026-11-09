@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
+from unittest.mock import Mock
 from urllib.parse import urlsplit
 
 import pytest
@@ -85,7 +86,9 @@ async def test_shared_tls_context_preserves_owner_headers_and_tcp_cancellation(
         TerminalManagerClient(workspace_id=WORKSPACE_ID, gateway_url=native_http.url,
             binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
                 plugin_id="terminal", enabled=True, workspace_id=WORKSPACE_ID)),
-        BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url=native_http.url),
+        BrowserManagerClient(workspace_id=WORKSPACE_ID, config_service=Mock(), gateway_url=native_http.url,
+            binding=PluginBinding(package_id="boxteam.developer-tools", package_version="0.1.0",
+                plugin_id="browser", enabled=True, workspace_id=WORKSPACE_ID)),
     )
     try:
         started = perf_counter()
@@ -115,13 +118,22 @@ async def test_shared_tls_context_preserves_owner_headers_and_tcp_cancellation(
             assert fields["x-boxteam-workspace-id"] == WORKSPACE_ID
             assert fields["x-boxteam-resource-owner"] in {"workspace-terminal", "workspace-browser"}
     finally:
-        await clients[0].aclose()
+        await asyncio.gather(*(client.aclose() for client in clients))
     terminal_requests = [item for item in native_http.requests
                          if item["x-boxteam-resource-owner"] == "workspace-terminal"]
     for item in terminal_requests:
         target = urlsplit(item["request"].split(" ")[1])
         assert target.path.startswith(
             "/api/gateway/service-plugins/boxteam.developer-tools/terminal/services/http/"
+        )
+        assert target.query == f"package_version=0.1.0&workspace_id={WORKSPACE_ID}"
+        assert item["x-local-token"]
+    browser_requests = [item for item in native_http.requests
+                        if item["x-boxteam-resource-owner"] == "workspace-browser"]
+    for item in browser_requests:
+        target = urlsplit(item["request"].split(" ")[1])
+        assert target.path.startswith(
+            "/api/gateway/service-plugins/boxteam.developer-tools/browser/services/http/"
         )
         assert target.query == f"package_version=0.1.0&workspace_id={WORKSPACE_ID}"
         assert item["x-local-token"]

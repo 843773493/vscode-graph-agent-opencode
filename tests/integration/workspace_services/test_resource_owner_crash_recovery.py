@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -16,7 +15,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-import httpx
 import psutil
 import pytest
 
@@ -30,10 +28,14 @@ from app.core.path_utils import catalog_provider_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    terminal_plugin_gateway_for_workspace,
+)
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
@@ -43,11 +45,8 @@ ResourceKind = Literal["terminal", "browser"]
 
 
 def _startup_mount(workspace: Path) -> MountedWorkspace:
-    """子进程显式接入本装具启动的真实服务，不依赖产品默认端口。"""
-    return MountedWorkspace(
-        load_or_create_workspace_id(workspace), workspace,
-        browser_backend_url=os.environ["BOXTEAM_BROWSER_BACKEND_URL"],
-    )
+    """子进程只使用当前 Gateway；资源服务不暴露本机直连地址。"""
+    return MountedWorkspace(load_or_create_workspace_id(workspace), workspace)
 
 
 def _publish_barrier(path: Path, identity: dict[str, object]) -> None:
@@ -69,22 +68,6 @@ def _spawn(
     return process
 
 
-def _wait_ready(process: subprocess.Popen[str], url: str) -> None:
-    deadline = time.monotonic() + 30
-    with httpx.Client(timeout=1, trust_env=False) as client:
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError(f"资源服务提前退出: pid={process.pid}, exit={process.returncode}")
-            try:
-                response = client.get(url)
-            except httpx.ConnectError:
-                time.sleep(0.05)
-                continue
-            response.raise_for_status()
-            return
-    raise TimeoutError(f"资源服务未就绪: {url}")
-
-
 def _assert_force_terminated(process: subprocess.Popen[str]) -> None:
     exit_code = process.wait(timeout=10)
     if os.name == "nt":
@@ -98,7 +81,8 @@ def _assert_force_terminated(process: subprocess.Popen[str]) -> None:
 async def resource_processes(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
-) -> AsyncIterator[tuple[Path, Path]]:
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[tuple[Path, Path, TerminalPluginGateway]]:
     project = Path.cwd().resolve()
     workspace = Path(integration_workspace_root_path)
     runtime = TestRunContext.from_test_file(Path(request.node.path)).runtime_root_for_node(request.node.nodeid)
@@ -107,34 +91,20 @@ async def resource_processes(
     temporary.mkdir(exist_ok=True)
     for name in ("TMPDIR", "TMP", "TEMP"):
         monkeypatch.setenv(name, str(temporary))
-    node = shutil.which("node")
-    if node is None:
-        raise RuntimeError("真实资源恢复测试需要 Node")
-    workspace_id = load_or_create_workspace_id(workspace)
     ports = integration_port_block_for_file(Path(request.node.path))
     monkeypatch.setenv("PYTHONPATH", str(project))
     monkeypatch.setenv("BOXTEAM_PROJECT_ROOT", str(project))
-    with ExitStack() as stack:
-        for kind, offset in (("browser", 42),):
-            port = ports.port(offset)
-            monkeypatch.setenv(f"BOXTEAM_{kind.upper()}_BACKEND_URL", f"http://127.0.0.1:{port}")
-            process = _spawn(
-                stack,
-                [node, "backend.js", "--host", "127.0.0.1", "--port", str(port),
-                 "--workspace-root", str(workspace), "--workspace-id", workspace_id],
-                cwd=project / "src" / "workspace-services" / kind / "server",
-                logs=runtime / f"{kind}-node",
-            )
-            _wait_ready(process, f"http://127.0.0.1:{port}/health")
-        home = TestRunContext.from_test_file(Path(request.node.path)).boxteam_home_for_node(request.node.nodeid)
-        monkeypatch.setenv("BOXTEAM_HOME", str(home))
-        async with terminal_plugin_gateway_for_workspace(
-            workspace_root=workspace,
-            artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir,
-            gateway_port=ports.port(40), boxteam_home=home,
-        ) as plugin:
-            monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
-            yield workspace, runtime
+    home = TestRunContext.from_test_file(Path(request.node.path)).boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
+    async with terminal_plugin_gateway_for_workspace(
+        workspace_root=workspace,
+        artifacts_dir=TestRunContext.from_test_file(Path(request.node.path)).artifacts_dir,
+        gateway_port=ports.port(40), boxteam_home=home,
+        prepared_package_root=prepared_developer_tools_package,
+        plugin_ids=frozenset({"terminal", "browser"}),
+    ) as plugin:
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
+        yield workspace, runtime, plugin
 
 
 async def _crash_worker(
@@ -276,6 +246,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                 result["cleanup_status"] = "deleted"
                 output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         finally:
+            await container.browser_manager_client.aclose()
             await container.terminal_manager_client.aclose()
             container.workspace_activity_service.store.close()
             container.session_catalog.close()
@@ -363,6 +334,7 @@ async def _recover_orphan_worker(workspace: Path, barrier: Path, output: Path, k
                 assert rid not in {item["resource_id"] for item in await owner.list_resources()}
                 output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         finally:
+            await container.browser_manager_client.aclose()
             await container.terminal_manager_client.aclose()
             container.workspace_activity_service.store.close()
             container.session_catalog.close()
@@ -378,7 +350,7 @@ async def test_force_termination_unknown_stop_new_process_preserves_owner_and_do
     happened: bool,
     retention_scope: RetentionScope,
 ) -> None:
-    workspace, runtime = resource_processes
+    workspace, runtime, _plugin = resource_processes
     barrier = runtime / "stop-receipt-paused.json"
     result = runtime / "recovered.json"
     test_file = str(Path(request.node.path).resolve())
@@ -418,17 +390,14 @@ async def test_force_termination_unknown_stop_new_process_preserves_owner_and_do
             finally:
                 await terminal.aclose()
         else:
-            backend = os.environ["BOXTEAM_BROWSER_BACKEND_URL"]
-            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
-                response = await client.get(
-                    f"{backend}/api/browsers/{identity['rid']}",
-                    headers={
-                        "X-BoxTeam-Workspace-Id": load_or_create_workspace_id(workspace),
-                        "X-BoxTeam-Resource-Owner": "workspace-browser",
-                    },
-                )
-                response.raise_for_status()
-                observed = response.json()["data"]
+            browser = BrowserManagerClient(
+                workspace_id=load_or_create_workspace_id(workspace),
+                config_service=ConfigService(workspace_root=workspace),
+            )
+            try:
+                observed = await browser.get_resource(identity["rid"])
+            finally:
+                await browser.aclose()
         assert observed[f"{kind}_id"] == killed_record["resource_id"]
         assert (observed["status"] in {"terminated", "closed"}) is happened
         recovered = _spawn(
@@ -466,7 +435,7 @@ async def test_force_termination_restart_keeps_original_orphan_deadline_and_exac
     kind: ResourceKind,
     reattach: bool,
 ) -> None:
-    workspace, runtime = resource_processes
+    workspace, runtime, _plugin = resource_processes
     barrier = runtime / "detached-orphan.json"
     output = runtime / "recovered-orphan.json"
     test_file = str(Path(request.node.path).resolve())
@@ -500,7 +469,7 @@ async def test_force_termination_restart_keeps_original_orphan_deadline_and_exac
 async def test_real_browser_target_rejection_keeps_owner_verified_and_grant_unissued(
     resource_processes: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, race: str,
 ) -> None:
-    workspace, runtime = resource_processes
+    workspace, runtime, _plugin = resource_processes
     async with workspace_tool_runtime(workspace, startup_mount=_startup_mount(workspace)) as (container, session_id, context):
         owner = container.browser_resource_owner
         browser = await owner.create_browser(

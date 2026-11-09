@@ -3,18 +3,30 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+from urllib.parse import quote
 
 from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
 
-from app.abstractions.browser_resources import BrowserAction, BrowserRequestError
+from app.abstractions.browser_resources import (
+    BrowserAction,
+    BrowserPluginDisabled,
+    BrowserRequestError,
+)
 from app.abstractions.workspace_resources import ResourceTransportGrantRejected
 from app.core.failures import mark_public_failure
+from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import validate_workspace_id
+from app.gateway.auth import get_gateway_local_token
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
 from app.runtime.http_tls import auxiliary_service_tls_context
+from app.schemas.gateway.service_plugin import PluginBinding, PluginServiceReference
+from app.services.infrastructure.config.workspace_plugins import (
+    workspace_plugin_bindings,
+)
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 
-DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
 DEFAULT_BROWSER_REQUEST_TIMEOUT_SECONDS = 30
 BROWSER_RUN_REQUEST_GRACE_SECONDS = 10
 logger = logging.getLogger(__name__)
@@ -28,22 +40,40 @@ _ACTION_METHODS = {
 
 class BrowserManagerClient:
     def __init__(
-        self, *, workspace_id: str, backend_url: str | None = None,
-        config_service: ConfigService | None = None,
+        self, *, workspace_id: str, config_service: ConfigService,
+        gateway_url: str | None = None, binding: PluginBinding | None = None,
     ) -> None:
-        configured = backend_url
-        self._config_service = config_service if configured is None else None
-        self._backend_url = (configured or DEFAULT_BROWSER_BACKEND_URL).rstrip("/")
         self._workspace_id = validate_workspace_id(workspace_id)
+        self._config_service = config_service
+        self._connection = GatewayTransportConnection(
+            gateway_url=gateway_url or os.environ.get("BOXTEAM_GATEWAY_URL"), config_service=config_service,
+        )
+        if binding is not None and (binding.package_id, binding.plugin_id) != ("boxteam.developer-tools", "browser"):
+            raise ValueError("Browser 客户端只能消费 boxteam.developer-tools/browser 插件绑定")
+        self._explicit_binding = binding
+        self._binding: PluginBinding | None = None
+        self._revision: str | None = None
+        self._http_client: AsyncClient | None = None
 
-    @property
-    def backend_url(self) -> str:
-        if self._config_service is not None:
-            return self._config_service.get_browser_backend_url().rstrip("/")
-        return self._backend_url
+    async def aclose(self) -> None:
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
-    def _resolve_backend_url(self) -> str:
-        return self.backend_url
+    def _current_binding(self) -> PluginBinding:
+        if self._explicit_binding is not None:
+            binding = self._explicit_binding
+        else:
+            snapshot = self._config_service.get_snapshot()
+            if self._revision != snapshot.revision:
+                bindings = workspace_plugin_bindings(snapshot.to_dict(), workspace_id=self._workspace_id)
+                self._binding = next((item for item in bindings if item.package_id == "boxteam.developer-tools"
+                    and item.plugin_id == "browser"), None)
+                self._revision = snapshot.revision
+            binding = self._binding
+        if binding is None or not binding.enabled or binding.workspace_id != self._workspace_id:
+            raise BrowserPluginDisabled("当前工作区 Browser 插件未绑定或已关闭")
+        return binding
 
     async def create_browser(
         self, *, browser_id: str, owner_revision: int, title: str, url: str,
@@ -118,9 +148,10 @@ class BrowserManagerClient:
         self, browser_id: str, *, owner_revision: int, association: str | None,
     ) -> dict[str, object]:
         path = f"/api/browsers/{browser_id}/transport-grant"
+        service: list[PluginServiceReference] = []
         try:
             grant = await self._request_data(
-                "POST", path, {"owner_revision": owner_revision, "association": association},
+                "POST", path, {"owner_revision": owner_revision, "association": association}, service=service,
             )
         except BrowserRequestError as error:
             payload = error.payload
@@ -156,7 +187,9 @@ class BrowserManagerClient:
             or any(not isinstance(grant.get(key), str) or not grant[key] for key in ("grant_token", "expires_at"))
         ):
             raise self._protocol_error("grant.receipt", grant)
-        return grant
+        if len(service) != 1:
+            raise self._protocol_error("grant.service", grant)
+        return {**grant, "service": service[0].model_dump(mode="json")}
 
     def _normalize_browser_record(self, data: dict[str, object]) -> dict[str, object]:
         try:
@@ -174,12 +207,14 @@ class BrowserManagerClient:
 
     async def _request_data(
         self, method: str, path: str, payload: dict[str, object] | None = None,
-        *, actor: str | None = None,
+        *, actor: str | None = None, service: list[PluginServiceReference] | None = None,
     ) -> dict[str, object]:
-        response = await self._json_request(method, path, payload, actor=actor)
+        response = await self._json_request(method, path, payload, actor=actor, service=service)
         data = response.get("data")
         if not isinstance(data, dict):
             raise self._protocol_error("record.data", response)
+        if service is not None and len(service) != 1:
+            raise self._protocol_error("grant.service", response)
         return data
 
     @staticmethod
@@ -199,24 +234,31 @@ class BrowserManagerClient:
         method: str,
         path: str,
         payload: dict[str, object] | None = None,
-        *, actor: str | None = None,
+        *, actor: str | None = None, service: list[PluginServiceReference] | None = None,
     ) -> dict[str, object]:
+        binding = self._current_binding()
+        base_path = (f"/api/gateway/service-plugins/{quote(binding.package_id, safe='')}/"
+                     f"{quote(binding.plugin_id, safe='')}/services/http")
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         timeout_seconds = self._request_timeout_seconds(method, path, payload)
         try:
+            if self._http_client is None:
+                self._http_client = AsyncClient(timeout=timeout_seconds, trust_env=False, follow_redirects=False,
+                    verify=auxiliary_service_tls_context())
+            headers = {
+                "content-type": "application/json", "X-Local-Token": get_gateway_local_token(),
+                "X-BoxTeam-Workspace-Id": self._workspace_id,
+                "X-BoxTeam-Resource-Owner": "workspace-browser",
+                **({"X-BoxTeam-Actor": actor} if actor is not None else {}),
+            }
+            if request_id := get_current_request_id():
+                headers["X-Request-ID"] = request_id
             # 传输截止只表示回执未知，不能据此宣称服务端操作已经终止。
-            async with asyncio.timeout(timeout_seconds), AsyncClient(
-                timeout=timeout_seconds, trust_env=False, follow_redirects=True,
-                verify=auxiliary_service_tls_context(),
-            ) as client:
-                response = await client.request(
-                    method, f"{self._resolve_backend_url()}{path}", content=body,
-                    headers={
-                        "content-type": "application/json",
-                        "X-BoxTeam-Workspace-Id": self._workspace_id,
-                        "X-BoxTeam-Resource-Owner": "workspace-browser",
-                        **({"X-BoxTeam-Actor": actor} if actor is not None else {}),
-                    },
+            async with asyncio.timeout(timeout_seconds):
+                response = await self._http_client.request(
+                    method, self._connection.resolve_gateway_url() + base_path + path, content=body,
+                    params={"package_version": binding.package_version, "workspace_id": self._workspace_id},
+                    headers=headers, timeout=timeout_seconds,
                 )
                 response.raise_for_status()
                 response_body = response.content
@@ -276,6 +318,16 @@ class BrowserManagerClient:
             raise self._protocol_error("json", response_body, cause=exc) from exc
         if not isinstance(result, dict):
             raise self._protocol_error("response", result)
+        if service is not None:
+            instance_id = response.headers.get("X-BoxTeam-Plugin-Instance-Id")
+            gateway_id = response.headers.get("X-BoxTeam-Plugin-Gateway-Id")
+            if instance_id and gateway_id:
+                target_gateway = response.headers.get("X-BoxTeam-Target-Gateway-Id")
+                if target_gateway and target_gateway != gateway_id:
+                    raise self._protocol_error("grant.gateway", response_body)
+                service.append(PluginServiceReference(gateway_id=gateway_id, package_id=binding.package_id,
+                    package_version=binding.package_version, plugin_id=binding.plugin_id,
+                    instance_id=instance_id, service_id="socket", workspace_id=self._workspace_id))
         return result
 
     @staticmethod

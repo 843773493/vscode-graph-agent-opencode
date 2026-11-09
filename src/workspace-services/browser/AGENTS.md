@@ -2,11 +2,11 @@
 
 ## 目录用途
 
-`src/workspace-services/browser/` 存放独立的可附加浏览器管理进程及其浏览器 attach 页面。该目录服务于本地开发运行时，由 `scripts/launch/dev.mjs` 启动，不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端。
+`src/workspace-services/browser/` 存放 developer-tools 插件中的 Browser 工作区服务及其 attach 页面。不属于 `src/clients/web` 主前端，也不属于 Python FastAPI 后端；运行实例由 Gateway 插件服务生命周期管理。
 
 ## 可修改内容
 
-- 可以新增或修改浏览器后端、浏览器网页前端、浏览器协议与本地运行脚本。
+- 可以新增或修改浏览器后端、浏览器网页前端与浏览器协议。
 - 可以维护与 `.boxteam/browser-manager/` 状态文件相关的实现。
 - 可以调整浏览器 attach/detach、远程屏幕、Playwright 操控和资源状态逻辑。
 
@@ -20,5 +20,5 @@
 
 - 使用 ESM，通过 `import`/`export` 编写 Node.js 代码。
 - 浏览器错误必须显式返回或抛出，不要静默失败。
-- 独立后端默认监听 `127.0.0.1:8015`，attach 前端默认监听 `127.0.0.1:8016`；`scripts/launch/dev.mjs` 传入 `BOXTEAM_DEV_LISTEN_HOST`（默认 `127.0.0.1`）启动 attach 前端，只有需要跨机访问的隔离目标才显式放开。
+- Browser 资源通过 Gateway 插件服务入口访问；不得新增独立 Browser backend 或 attach 页面启动器。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

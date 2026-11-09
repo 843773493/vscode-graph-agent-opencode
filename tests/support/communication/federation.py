@@ -17,19 +17,14 @@ from pathlib import Path
 import commentjson
 import httpx
 
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_session_path_resolver
 from app.core.workspace_identity import (
-    load_or_create_workspace_id,
     workspace_identity_path,
 )
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import prepare_terminal_plugin_configuration
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
@@ -45,11 +40,11 @@ from tests.support.processes.scope import register_test_process, unregister_test
 from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
-    ensure_local_port_available,
     resolve_workspace_python_executable,
     start_backend_process,
     terminate_process,
 )
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
 
 @dataclass
@@ -109,7 +104,8 @@ async def open_communication_triad(
     context: TestRunContext,
     prepare_workspace: Callable[[TestRunContext, int, int], Path],
     *,
-    resource_service_nodes: tuple[str, ...] = (),
+    browser_plugin_nodes: tuple[str, ...] = (),
+    prepared_developer_tools_package: Path | None = None,
     shared_session_ids: tuple[str, ...] = (),
     ports: TestFilePortBlock | None = None,
     node_port_offsets: tuple[int, int, int] = (0, 20, 40),
@@ -144,13 +140,15 @@ async def open_communication_triad(
     layout = tuple(zip(("a", "b", "c"), node_port_offsets, strict=True))
     if same_backend_routes:
         layout = layout[:2]
+    unknown_browser_nodes = set(browser_plugin_nodes) - {name for name, _ in layout}
+    if unknown_browser_nodes:
+        raise ValueError(f"Browser 插件节点不属于本次 Gateway 拓扑: {sorted(unknown_browser_nodes)}")
+    if browser_plugin_nodes and prepared_developer_tools_package is None:
+        raise ValueError("Federation Browser 场景必须传入预备开发工具包")
     backend_layout = layout[:1] if same_backend_routes else layout
     service_offsets = {60, *range(70, 80)}
     service_offsets.update(offset for _, offset in backend_layout)
     service_offsets.update(offset + 1 for _, offset in layout)
-    for name, offset in backend_layout:
-        if name in resource_service_nodes:
-            service_offsets.update(offset + step for step in (4, 5, 6))
     async with AsyncExitStack() as resources:
         # 启动并行节点前持续占住服务端口，避免出站连接提前占用尚未监听的端口。
         # 复用原租约；清理顺序保证所有服务退出后才归还端口。
@@ -182,33 +180,16 @@ async def open_communication_triad(
                 seed_catalog_session_bundle(workspace / ".boxteam/sessions", session_id,
                     title="显式歧义测试资源")
             reset_gateway_persistent_state(workspace_root=workspace)
-            environment = (backend_environment or {}) | {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
-            browser_url = None
-            if name in resource_service_nodes:
-                browser_port = ports.port(offset + 5)
-                browser_frontend_port = ports.port(offset + 6)
-                for service_port in (browser_port, browser_frontend_port):
-                    ensure_local_port_available(service_port, service_name="会话信息正式辅助服务")
-                browser = await asyncio.to_thread(
-                    start_browser_manager_processes, workspace_root=workspace,
-                    artifacts_dir=context.artifacts_dir,
-                    backend_port=browser_port, frontend_port=browser_frontend_port,
-                    backend_host="127.0.0.1",
-                )
-                for process in (browser.backend_process, browser.frontend_process):
-                    register_test_process(process, lambda process=process: terminate_process(process))
-                    resources.push_async_callback(asyncio.to_thread, unregister_test_process, process)
-                resources.push_async_callback(asyncio.to_thread, close_browser_manager_processes, browser)
-                browser_url = f"http://127.0.0.1:{browser_port}"
-            mount = MountedWorkspace(
-                    load_or_create_workspace_id(workspace), workspace.resolve(), browser_backend_url=browser_url,
-            )
-            def start_owned_backend(workspace=workspace, offset=offset, environment=environment, mount=mount, name=name):
+            gateway_url = f"http://127.0.0.1:{ports.port(offset + 1)}"
+            if name in browser_plugin_nodes:
+                prepare_terminal_plugin_configuration(workspace, gateway_url, plugin_ids=frozenset({"browser"}))
+            environment = (backend_environment or {}) | {"BOXTEAM_GATEWAY_URL": gateway_url}
+            def start_owned_backend(workspace=workspace, offset=offset, environment=environment, name=name):
                 try:
                     return start_backend_process(
                         workspace_root=str(workspace), port=ports.port(offset),
                         log_name="c3-backend", env_overrides=environment,
-                        startup_mount=mount, asgi_app=backend_asgi_app,
+                        asgi_app=backend_asgi_app,
                         refresh_user_configuration=False,
                         boxteam_home=gateway_homes[name],
                         artifacts_dir=context.artifacts_dir / ("backend-" + name),
@@ -239,6 +220,12 @@ async def open_communication_triad(
 
         async def start_gateway_node(name: str, offset: int) -> None:
             workspace = workspaces[name]
+            if name in browser_plugin_nodes:
+                await asyncio.to_thread(
+                    copy_prepared_developer_tools_package,
+                    prepared_developer_tools_package,
+                    gateway_homes[name],
+                )
             if name == "a":
                 config_path = gateway_homes[name] / "config/gateway.jsonc"
                 payload = commentjson.loads(config_path.read_text())

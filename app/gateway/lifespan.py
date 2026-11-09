@@ -437,12 +437,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             await gateway_config_reload.start()
             await app.state.session_catalog_search_service.start()
             catalog_search_started = True
-            app.state.attach_frontend_urls = {
-                "browser": os.environ.get(
-                    "BOXTEAM_BROWSER_FRONTEND_URL",
-                    "http://127.0.0.1:8016",
-                ).rstrip("/"),
-            }
+            app.state.attach_frontend_urls = {}
             active_snapshot = gateway_state.get_active_config_snapshot("gateway")
             if active_snapshot is None:
                 raise RuntimeError("Gateway 启动后缺少 active config snapshot")
@@ -514,6 +509,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 listener_state="reserved",
                 state="starting",
             )
+            await service_plugins.adopt()
             if startup_candidate_ref:
                 await _wait_for_managed_runtime_restore_tasks(
                     getattr(app.state, "managed_runtime_restore_tasks", {})
@@ -542,6 +538,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                         fence_check=assert_pending_apply_claim,
                         record=logging_progress_recorder(gateway_state, pending_apply_claim.fencing_token),
                         extension_management=extension_management,
+                        service_plugins=service_plugins,
                     ).stage(), *_gateway_pending_runtime_consumer_stages(
                         app, generation=startup_generation,
                         fencing_token_digest=runtime_fencing_token_digest(pending_apply_claim.fencing_token) or "",
@@ -643,6 +640,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                     registry=registry, candidate=gateway_config, generation=startup_generation,
                     fencing_token_digest=None, fence_check=None, record=lambda detail: None,
                     extension_management=extension_management,
+                    service_plugins=service_plugins,
                 ).stage(),)).apply()
                 await startup_logging_result.finalize()
                 runtime_generation_record = gateway_state.update_gateway_runtime_generation(
@@ -654,7 +652,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             if pending_consumer_result is not None:
                 await pending_consumer_result.finalize()
                 pending_consumer_result = None
-            await service_plugins.adopt()
             await service_plugins.apply(gateway_config_reload.config.payload, gateway_config_reload.config.revision)
             workspace_plugin_bindings.start()
             async def before_http_shutdown() -> None:
@@ -781,7 +778,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             preserve_runtime_for_handoff = should_preserve_for_handoff()
             try:
                 registry.close(
-                    preserve_browser_managers=preserve_runtime_for_handoff,
                     preserve_workspace_backends=preserve_runtime_for_handoff,
                 )
                 if (

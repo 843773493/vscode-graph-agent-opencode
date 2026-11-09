@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -40,12 +40,8 @@ from app.gateway.runtime.workspace_process import (
     GATEWAY_PROCESS_READY_TIMEOUT_SECONDS,
     resolve_backend_workspace_id,
     start_local_backend_process,
-    start_local_browser_service_process,
 )
-from app.schemas.runtime_control import (
-    RuntimeShutdownRequest,
-    WorkspaceServiceShutdownRequest,
-)
+from app.schemas.runtime_control import RuntimeShutdownRequest
 
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
@@ -242,53 +238,8 @@ def workspace_config_proof_expectation(
     }
 
 
-async def _adopt_local_browser_service(
-    *,
-    service_url: str,
-    workspace_id: str,
-    log_dir: Path,
-) -> AdoptedManagedProcess | None:
-    _validate_workspace_id(workspace_id)
-    parsed = urlparse(service_url)
-    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
-        raise ValueError(
-            f"持久化 Browser Manager URL 必须是本机 HTTP 地址: {service_url}"
-        )
-    if parsed.port is None:
-        raise ValueError(f"持久化 Browser Manager URL 缺少端口: {service_url}")
-    try:
-        async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
-            response = await client.get(f"{service_url.rstrip('/')}/health")
-    except httpx.HTTPError:
-        return None
-    if response.status_code != 200:
-        logger.error("持久化 Browser Manager 健康检查失败: url=%s, status=%s, body=%s", service_url, response.status_code, response.text)
-        raise RuntimeError(
-            "持久化 Browser Manager 健康检查失败: "
-            f"url={service_url}, status={response.status_code}"
-        )
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise TypeError(f"持久化 Browser Manager 健康响应必须是 JSON 对象: {service_url}")
-    if payload.get("workspace_id") != workspace_id:
-        logger.error("持久化 Browser Manager backend UUID 不匹配: expected=%s, actual=%r", workspace_id, payload.get("workspace_id"))
-        raise RuntimeError(
-            "持久化 Browser Manager backend UUID 不匹配: "
-            f"url={service_url}, expected={workspace_id}"
-        )
-    process_id = payload.get("process_id")
-    if isinstance(process_id, bool) or not isinstance(process_id, int):
-        raise TypeError(
-            f"持久化 Browser Manager 健康响应缺少 process_id: url={service_url}"
-        )
-    ownership = await _adopt_process_log(
-        service_url, "browser", process_id, parsed.port, log_dir=log_dir,
-    )
-    return AdoptedManagedProcess(pid=process_id, log_ownership=ownership)
-
-
 async def _adopt_process_log(
-    service_url: str, role: Literal["backend", "browser"], process_id: int, port: int, *, log_dir: Path,
+    service_url: str, role: Literal["backend"], process_id: int, port: int, *, log_dir: Path,
 ) -> ProcessLogOwnership:
     """健康证明之后核对受认证进程的实际文件去向，不重开存活日志。"""
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
@@ -329,7 +280,7 @@ def _validate_group_health(
 
 
 def _request_runtime_shutdown(
-    url: str, payload: RuntimeShutdownRequest | WorkspaceServiceShutdownRequest, token: str,
+    url: str, payload: RuntimeShutdownRequest, token: str,
 ) -> None:
     with httpx.Client(timeout=2, trust_env=False) as client:
         response = client.post(url,
@@ -412,67 +363,6 @@ async def _adopt_workspace_backend(
     return process
 
 
-async def _start_member_auxiliary_services(
-    mount: MountedWorkspace, *, project_root: Path, log_dir: Path,
-    request_timeout_seconds: float, poll_interval_seconds: float,
-    runtime: WorkspaceRuntime | None = None,
-    preserve_adopted_processes_on_failure: bool = False,
-    preserve_mount_urls: bool = False,
-    logging_startup: dict[str, object] | None = None,
-) -> WorkspaceRuntime:
-    runtime = runtime or WorkspaceRuntime(service_urls={}, workspace_id=mount.workspace_id)
-    started: list[str] = []
-    try:
-        for service, url in (("browser_manager", mount.browser_backend_url),):
-            service = cast(Literal["browser_manager"], service)
-            existing = runtime.processes.get(service)
-            if existing is not None and not existing.is_alive():
-                runtime.close_process(service)
-                existing = None
-            if existing is None:
-                adopted = await _adopt_local_browser_service(
-                    service_url=url, workspace_id=mount.workspace_id,
-                    log_dir=log_dir,
-                ) if url else None
-                # 同一 generation 的恢复必须保持原完整 manifest 的辅助服务地址。
-                port = urlparse(url).port if url and (adopted is not None or preserve_mount_urls) else allocate_local_port()
-                if port is None:
-                    raise ValueError(f"辅助服务 URL 缺少端口: {url}")
-                if adopted is None and not is_local_port_available(port):
-                    raise RuntimeError(f"辅助服务恢复端口已被占用: {service}, 127.0.0.1:{port}")
-                runtime.service_urls[service] = f"http://127.0.0.1:{port}"
-                handle = adopted or start_local_browser_service_process(
-                    project_root=project_root, workspace_root=mount.workspace_root,
-                    port=port, log_dir=log_dir, workspace_id=mount.workspace_id,
-                    logging_startup=logging_startup,
-                )
-                runtime.set_process(service, handle, adopted=adopted is not None)
-                started.append(service)
-            else:
-                handle = existing
-            await wait_for_workspace_health(
-                f"{runtime.service_urls[service]}/health", mount.workspace_id,
-                getattr(handle, "process", None),
-                request_timeout_seconds=request_timeout_seconds, poll_interval_seconds=poll_interval_seconds,
-            )
-            if os.name == "nt":
-                cast(ManagedProcess | AdoptedManagedProcess, handle).shutdown_request = partial(_request_runtime_shutdown,
-                    f"{runtime.service_urls[service]}/internal/runtime/shutdown",
-                    WorkspaceServiceShutdownRequest(process_id=handle.pid, workspace_id=mount.workspace_id),
-                    get_gateway_local_token())
-        return runtime
-    except BaseException as error:
-        for service in reversed(started):
-            try:
-                if preserve_adopted_processes_on_failure and service in runtime.adopted_process_names:
-                    runtime.detach_process(service)
-                else:
-                    runtime.close_process(service)
-            except BaseException as cleanup_error:  # noqa: BLE001 — 每个新句柄均尝试清理，保留首个失败。
-                error.add_note(f"mount 辅助服务 {service} 清理失败: {cleanup_error!r}")
-        raise
-
-
 async def validate_managed_backend_bindings(mounts: tuple[MountedWorkspace, ...], project_root: Path) -> None:
     """完整组先只读核验；不得启动一个成员后才发现 sibling 根丢失。"""
     for mount in mounts:
@@ -528,26 +418,13 @@ async def start_managed_backend_runtime(
         raise RuntimeError(f"Backend 端口已被占用: 127.0.0.1:{port}")
     runtimes = dict(reusable_runtimes or {})
     try:
-        ready_mounts = []
+        ready_mounts = list(mounts)
         for member, mount in zip(previous.members, mounts, strict=True):
             runtime = runtimes.get(member.workspace_id)
             if runtime is None:
                 runtime = WorkspaceRuntime(service_urls={}, workspace_id=member.workspace_id)
                 owner.unpublished_runtimes[member.workspace_id] = runtime
                 runtimes[member.workspace_id] = runtime
-            await _start_member_auxiliary_services(
-                mount, project_root=project_root, log_dir=log_dir, runtime=runtime,
-                request_timeout_seconds=health_request_timeout_seconds,
-                poll_interval_seconds=health_poll_interval_seconds,
-                preserve_adopted_processes_on_failure=preserve_adopted_processes_on_failure,
-                preserve_mount_urls=preserve_generation or adopted is not None,
-                logging_startup=registry.runtime_logging_startup(),
-            )
-            mount = replace(
-                mount,
-                browser_backend_url=runtime.service_urls["browser_manager"],
-            )
-            ready_mounts.append(mount)
         contract = replace(
             previous, backend_url=f"http://127.0.0.1:{port}",
             generation=previous.generation if adopted is not None or preserve_generation else f"backend_generation_{uuid4().hex}",
@@ -577,7 +454,9 @@ async def start_managed_backend_runtime(
         )
         owner.backend_id = backend_id
         for member in contract.members:
-            runtimes[member.workspace_id].backend_owner = owner
+            runtime = runtimes[member.workspace_id]
+            runtime.service_urls = {"workspace_api": contract.backend_url}
+            runtime.backend_owner = owner
         return contract, {member.workspace_id: runtimes[member.workspace_id] for member in contract.members}
     except BaseException as error:
         try:

@@ -38,7 +38,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.terminal_plugin import enable_developer_tools_plugins
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 from tests.support.trace import get_trace_payload
 
 
@@ -223,6 +226,7 @@ def scripted_gateway_process(
     scripted_debug_gateway_port: int,
     scripted_model_replay: ScriptedModelState,
     scripted_model_info: dict[str, bool],
+    prepared_developer_tools_package: Path,
 ) -> Generator[ScriptedGatewayState, None, None]:
     state = scripted_model_replay
     endpoint = "https://opencode.ai/zen/v1"
@@ -272,11 +276,13 @@ def scripted_gateway_process(
     )
 
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    boxteam_home = context.boxteam_home_for_node("debug-prompt-flow")
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=None,
         port=gateway_port,
-        boxteam_home=context.boxteam_home_for_node("debug-prompt-flow"),
+        boxteam_home=boxteam_home,
         artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={
             "BOXTEAM_DEFAULT_BACKEND_PORT": str(scripted_debug_backend_port),
@@ -298,7 +304,7 @@ def scripted_gateway_process(
                 workspace_id = active["workspace_id"]
                 await enable_developer_tools_plugins(
                     client, gateway_id=gateway_id, workspace_id=workspace_id,
-                    plugin_ids=("debugging",), artifacts_dir=context.artifacts_dir / "debug-plugin",
+                    plugin_ids=("debugging",),
                 )
                 return gateway_id, workspace_id
 

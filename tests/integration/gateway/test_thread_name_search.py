@@ -49,7 +49,7 @@ def reserved_service_ports(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("restart_source_case", [{"native_services": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"plugin_ids": ("terminal", "browser")}], indirect=True)
 async def test_thread_discovery_through_gateway_survives_backend_restart(
     request: pytest.FixtureRequest,
     restart_source_case: RestartRuntimeSourceCase,

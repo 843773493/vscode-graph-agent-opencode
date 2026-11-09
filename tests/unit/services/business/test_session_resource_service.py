@@ -8,7 +8,9 @@ import portalocker
 import pytest
 from fastapi import HTTPException
 
+from app.abstractions.browser_resources import BrowserPluginDisabled
 from app.abstractions.session_resources import BackgroundTaskRegistryProtocol
+from app.abstractions.terminal.resources import TerminalPluginDisabled
 from app.api.sessions import list_session_resources
 from app.core.background_task_contracts import BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
@@ -30,6 +32,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from tests.support.background_work import build_background_registry, spawn_waiting_task
 from tests.support.message_service import build_message_service
+from tests.support.resource_owners.browser import build_browser_owner_fixture
+from tests.support.resource_owners.sessions import SESSION_A
+from tests.support.resource_owners.terminal import build_terminal_owner_fixture
 from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
@@ -302,6 +307,79 @@ def _provider_registry(
             ),
         ]
     )
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+@pytest.mark.parametrize("has_session_record", [False, True])
+async def test_disabled_resource_plugin_only_suppresses_empty_session_owner(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    has_session_record: bool,
+) -> None:
+    bundle = (
+        build_terminal_owner_fixture(tmp_path)
+        if kind == "terminal"
+        else build_browser_owner_fixture(tmp_path)
+    )
+    resource = await bundle.create() if has_session_record else None
+    owner = bundle.restart()
+    plugin_error = (
+        TerminalPluginDisabled("Terminal 插件关闭")
+        if kind == "terminal"
+        else BrowserPluginDisabled("Browser 插件关闭")
+    )
+
+    async def disabled_listing() -> list[dict[str, object]]:
+        raise plugin_error
+
+    monkeypatch.setattr(bundle.transport, "list_resources", disabled_listing)
+    provider = (
+        TerminalResourceProvider(terminal_owner=owner, resource_mapper=SessionResourceMapper())
+        if kind == "terminal"
+        else BrowserResourceProvider(browser_owner=owner, resource_mapper=SessionResourceMapper())
+    )
+    if not has_session_record:
+        assert await provider.list_resources(SESSION_A) == []
+        return
+
+    assert resource is not None
+    before = owner._store.get(str(resource["resource_id"]))
+    leases_before = bundle.leases.leases_for_resource(str(resource["resource_id"]))
+    with pytest.raises(type(plugin_error)) as caught:
+        await provider.list_resources(SESSION_A)
+    assert caught.value is plugin_error
+    assert owner._store.get(str(resource["resource_id"])) == before
+    assert bundle.leases.leases_for_resource(str(resource["resource_id"])) == leases_before
+
+
+@pytest.mark.parametrize("kind", ["terminal", "browser"])
+async def test_session_resource_provider_preserves_regular_cold_listing_errors(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    bundle = (
+        build_terminal_owner_fixture(tmp_path)
+        if kind == "terminal"
+        else build_browser_owner_fixture(tmp_path)
+    )
+    owner = bundle.restart()
+    failure = ConnectionError("首次资源清单未取得回执")
+
+    async def failed_listing() -> list[dict[str, object]]:
+        raise failure
+
+    monkeypatch.setattr(bundle.transport, "list_resources", failed_listing)
+    provider = (
+        TerminalResourceProvider(terminal_owner=owner, resource_mapper=SessionResourceMapper())
+        if kind == "terminal"
+        else BrowserResourceProvider(browser_owner=owner, resource_mapper=SessionResourceMapper())
+    )
+    with pytest.raises(ConnectionError) as caught:
+        await provider.list_resources(SESSION_A)
+    assert caught.value is failure
+    assert owner._recovery._pending is None
 
 
 def test_deleted_terminal_resource_explains_historical_status(

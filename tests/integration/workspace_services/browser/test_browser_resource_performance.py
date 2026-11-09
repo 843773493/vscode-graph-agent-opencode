@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import signal
-import subprocess
 import sys
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -19,13 +17,12 @@ import psutil
 import pytest
 import websockets
 
-from app.core.workspace_identity import load_or_create_workspace_id
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import (
-    ensure_local_port_available,
-    terminate_process,
-    wait_for_http_ok,
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    browser_plugin_gateway_for_workspace,
 )
+from tests.support.ports import integration_port_block_for_file
 
 MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB = 400 * 1024
 MAX_FROZEN_CPU_PERCENT = 5.0
@@ -62,96 +59,29 @@ class _DynamicPageHandler(BaseHTTPRequestHandler):
         return
 
 
-def _browser_backend_process(
-    *,
-    workspace_root: Path,
-    backend_port: int,
-    log_path: Path,
-) -> subprocess.Popen[str]:
-    ensure_local_port_available(backend_port, service_name="Browser 性能测试后端")
-    project_root = Path.cwd().resolve()
-    if os.name == "posix":
-        process_group_options: dict[str, int | bool] = {"start_new_session": True}
-    elif os.name == "nt":
-        process_group_options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    else:
-        raise RuntimeError(f"Browser 性能测试不支持当前操作系统: {os.name}")
-    with log_path.open("a", encoding="utf-8") as log_file:
-        process = subprocess.Popen(
-            [
-                "node",
-                "backend.js",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(backend_port),
-                "--frontend-url",
-                "http://127.0.0.1:1",
-                "--workspace-root",
-                str(workspace_root),
-            ],
-            cwd=project_root / "src" / "workspace-services" / "browser" / "server",
-            env={
-                **os.environ,
-                "BOXTEAM_PROJECT_ROOT": str(project_root),
-                "WORKSPACE_ROOT": str(workspace_root),
-                "BOXTEAM_BROWSER_WORKSPACE_ROOT": str(workspace_root),
-                "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(workspace_root),
-            },
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            **process_group_options,
-        )
-    try:
-        wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", process)
-    except BaseException as startup_error:
-        try:
-            _terminate_browser_backend(process, graceful=False)
-        except BaseException as cleanup_error:  # noqa: BLE001 - 启动和清理错误一并保留
-            raise BaseExceptionGroup(
-                "Browser 性能测试后端就绪检查失败且进程清理失败",
-                [startup_error, cleanup_error],
-            ) from None
-        raise
-    return process
-
-
-def _terminate_browser_backend(
-    process: subprocess.Popen[str], *, graceful: bool = True,
-) -> None:
-    if not graceful or os.name != "nt":
-        terminate_process(process)
-        return
-    if process.poll() is not None:
-        return
-
-    try:
-        process.send_signal(signal.CTRL_BREAK_EVENT)
-    except OSError as signal_error:
-        try:
-            terminate_process(process)
-        except BaseException as cleanup_error:  # noqa: BLE001 - 同时保留优雅关闭和强制清理错误
-            raise BaseExceptionGroup(
-                "Browser 后端无法接收关闭信号且进程清理失败",
-                [signal_error, cleanup_error],
-            ) from None
-        raise RuntimeError(
-            "Browser 后端未收到 Windows CTRL_BREAK_EVENT，已强制清理"
-        ) from signal_error
-
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        terminate_process(process)
-
-
-def _owner_headers(workspace_id: str) -> dict[str, str]:
-    return {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-browser"}
-
-
 def _create_options(workspace_id: str, url: str) -> dict[str, object]:
     return {"workspace_id": workspace_id, "browser_id": f"browser_{uuid4().hex}", "owner_revision": 1, "url": url}
+
+
+def _browser_api_path(gateway: TerminalPluginGateway, suffix: str) -> str:
+    return f"{urlsplit(gateway.http_service_url).path}/api/browsers{suffix}"
+
+
+def _browser_websocket_url(gateway: TerminalPluginGateway) -> str:
+    return (
+        f"{gateway.websocket_url}&target_gateway_id={gateway.gateway_id}"
+        f"&token={gateway.client.headers['X-Local-Token']}"
+    )
+
+
+def _plugin_http_client(gateway: TerminalPluginGateway) -> httpx.Client:
+    return httpx.Client(
+        base_url=gateway.gateway_url,
+        headers=gateway.workspace_headers,
+        params={"package_version": gateway.binding.package_version, "workspace_id": gateway.workspace_id},
+        timeout=30,
+        trust_env=False,
+    )
 
 
 def _descendant_processes(root_pid: int) -> list[psutil.Process]:
@@ -159,7 +89,7 @@ def _descendant_processes(root_pid: int) -> list[psutil.Process]:
         return psutil.Process(root_pid).children(recursive=True)
     except psutil.Error as error:
         raise RuntimeError(
-            f"无法枚举 Browser 后端子进程: pid={root_pid}: {error}"
+            f"无法枚举 Browser 插件子进程: pid={root_pid}: {error}"
         ) from error
 
 
@@ -185,7 +115,7 @@ def _process_tree_memory_kib(root_pid: int) -> tuple[int, str]:
         total += measured_bytes
         sampled_processes += 1
     if sampled_processes == 0:
-        raise RuntimeError(f"Browser 后端没有可采样的子进程: pid={root_pid}")
+        raise RuntimeError(f"Browser 插件没有可采样的子进程: pid={root_pid}")
     return total // 1024, metric
 
 
@@ -204,7 +134,7 @@ def _process_tree_cpu_seconds(root_pid: int) -> float:
         seconds += cpu_times.user + cpu_times.system
         sampled_processes += 1
     if sampled_processes == 0:
-        raise RuntimeError(f"Browser 后端没有可采样的子进程: pid={root_pid}")
+        raise RuntimeError(f"Browser 插件没有可采样的子进程: pid={root_pid}")
     return seconds
 
 
@@ -249,14 +179,16 @@ async def _ack_browser_frame(
     return metadata
 
 
-async def _measure_attached_stream(backend_port: int, browser_id: str, workspace_id: str) -> dict[str, float]:
+async def _measure_attached_stream(gateway: TerminalPluginGateway, browser_id: str) -> dict[str, float]:
     started_at = time.monotonic()
+    workspace_id = gateway.workspace_id
     frames: list[tuple[float, int]] = []
     attached = False
     interaction_sent = False
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend_port}", headers=_owner_headers(workspace_id)) as client:
-        grant = _data(await client.post(f"/api/browsers/{browser_id}/transport-grant", json={"owner_revision": 1, "association": None}))
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+    async with httpx.AsyncClient(base_url=gateway.gateway_url, headers=gateway.workspace_headers,
+        params={"package_version": gateway.binding.package_version, "workspace_id": workspace_id}, trust_env=False) as client:
+        grant = _data(await client.post(_browser_api_path(gateway, f"/{browser_id}/transport-grant"), json={"owner_revision": 1, "association": None}))
+    async with websockets.connect(_browser_websocket_url(gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         deadline = started_at + 8.0
         while time.monotonic() < deadline:
@@ -319,13 +251,15 @@ async def _measure_attached_stream(backend_port: int, browser_id: str, workspace
     }
 
 
-async def _measure_static_stream(backend_port: int, browser_id: str, workspace_id: str) -> dict[str, float]:
+async def _measure_static_stream(gateway: TerminalPluginGateway, browser_id: str) -> dict[str, float]:
     started_at = time.monotonic()
+    workspace_id = gateway.workspace_id
     frames: list[tuple[float, int]] = []
     attached = False
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend_port}", headers=_owner_headers(workspace_id)) as client:
-        grant = _data(await client.post(f"/api/browsers/{browser_id}/transport-grant", json={"owner_revision": 1, "association": None}))
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+    async with httpx.AsyncClient(base_url=gateway.gateway_url, headers=gateway.workspace_headers,
+        params={"package_version": gateway.binding.package_version, "workspace_id": workspace_id}, trust_env=False) as client:
+        grant = _data(await client.post(_browser_api_path(gateway, f"/{browser_id}/transport-grant"), json={"owner_revision": 1, "association": None}))
+    async with websockets.connect(_browser_websocket_url(gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         deadline = started_at + 3.5
         while time.monotonic() < deadline:
@@ -353,10 +287,12 @@ async def _measure_static_stream(backend_port: int, browser_id: str, workspace_i
     }
 
 
-async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, workspace_id: str) -> dict[str, float]:
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend_port}", headers=_owner_headers(workspace_id)) as client:
-        grant = _data(await client.post(f"/api/browsers/{browser_id}/transport-grant", json={"owner_revision": 1, "association": None}))
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+async def _measure_latest_frame_delivery(gateway: TerminalPluginGateway, browser_id: str) -> dict[str, float]:
+    workspace_id = gateway.workspace_id
+    async with httpx.AsyncClient(base_url=gateway.gateway_url, headers=gateway.workspace_headers,
+        params={"package_version": gateway.binding.package_version, "workspace_id": workspace_id}, trust_env=False) as client:
+        grant = _data(await client.post(_browser_api_path(gateway, f"/{browser_id}/transport-grant"), json={"owner_revision": 1, "association": None}))
+    async with websockets.connect(_browser_websocket_url(gateway)) as websocket:
         await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         first_frame: bytes | None = None
         while first_frame is None:
@@ -366,11 +302,13 @@ async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, wor
         first_metadata = _browser_frame_metadata(first_frame)
         await asyncio.sleep(0.3)
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{backend_port}",
-            headers=_owner_headers(workspace_id), timeout=5,
+            base_url=gateway.gateway_url,
+            headers=gateway.workspace_headers, timeout=5,
+            params={"package_version": gateway.binding.package_version, "workspace_id": workspace_id},
+            trust_env=False,
         ) as client:
             response = await client.post(
-                f"/api/browsers/{browser_id}/run",
+                _browser_api_path(gateway, f"/{browser_id}/run"),
                 json={
                     "code": (
                         "await page.evaluate(() => { document.body.style.backgroundColor = "
@@ -382,14 +320,14 @@ async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, wor
             assert response.status_code == 200, response.text
             pending_deadline = time.monotonic() + 1
             while True:
-                stream_state = _data(await client.get(f"/api/browsers/{browser_id}"))
+                stream_state = _data(await client.get(_browser_api_path(gateway, f"/{browser_id}")))
                 delivery = stream_state["stream_metrics"]["delivery"]
                 if delivery["clients"][0]["has_pending_frame"] is True:
                     break
                 assert time.monotonic() < pending_deadline, delivery
                 await asyncio.sleep(0.02)
             await asyncio.sleep(0.15)
-            stream_state = _data(await client.get(f"/api/browsers/{browser_id}"))
+            stream_state = _data(await client.get(_browser_api_path(gateway, f"/{browser_id}")))
             delivery = stream_state["stream_metrics"]["delivery"]
             assert delivery["frames_superseded"] > 0, delivery
         ack_started_at = time.monotonic()
@@ -424,37 +362,47 @@ def dynamic_page_server(request: pytest.FixtureRequest) -> Generator[str, None, 
         yield f"http://127.0.0.1:{port}/"
 
 
-def test_browser_resource_governance_meets_first_ci_budget(
+@pytest.fixture(scope="module")
+async def browser_plugin_gateway(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
-    dynamic_page_server: str,
-) -> None:
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[TerminalPluginGateway]:
     workspace_root = Path(integration_workspace_root_path).resolve()
-    artifacts = workspace_root.parent / "artifacts"
-    artifacts.mkdir(parents=True, exist_ok=True)
+    run = TestRunContext.from_test_file(Path(request.node.fspath)).prepare()
+    gateway_port = integration_port_block_for_file(Path(request.node.fspath)).port(60)
+    home = run.boxteam_home_for_node("browser-resource-performance")
+    async with browser_plugin_gateway_for_workspace(
+        workspace_root,
+        run.artifacts_dir,
+        gateway_port,
+        home,
+        prepared_developer_tools_package,
+    ) as gateway:
+        yield gateway
+
+
+def _run_browser_resource_governance(
+    gateway: TerminalPluginGateway,
+    dynamic_page_server: str,
+    artifacts: Path,
+    event_loop: asyncio.AbstractEventLoop,
+) -> None:
     result_path = artifacts / "browser-resource-performance.json"
-    log_path = artifacts / "browser-resource-backend.log"
     result_path.unlink(missing_ok=True)
-    log_path.unlink(missing_ok=True)
-    port = integration_port_block_for_file(Path(request.node.fspath)).port(60)
     measurements: dict[str, object] = {}
-    workspace_id = load_or_create_workspace_id(workspace_root)
+    workspace_id = gateway.workspace_id
     with ExitStack() as lifetime:
-        process = _browser_backend_process(
-            workspace_root=workspace_root,
-            backend_port=port,
-            log_path=log_path,
-        )
-        lifetime.callback(_terminate_browser_backend, process)
-        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
+        client = _plugin_http_client(gateway)
         lifetime.callback(client.close)
+        api_path = lambda suffix: _browser_api_path(gateway, suffix)
         first = _data(client.post(
-            "/api/browsers",
+            api_path(""),
             json=_create_options(workspace_id, dynamic_page_server),
         ))
         first_id = str(first["browser_id"])
         _data(client.post(
-            f"/api/browsers/{first_id}/run",
+            api_path(f"/{first_id}/run"),
             json={
                 "code": (
                     "await page.locator('#q').fill('restored-value');"
@@ -464,11 +412,11 @@ def test_browser_resource_governance_meets_first_ci_budget(
             },
         ))
         time.sleep(0.5)
-        live_cpu = _cpu_percent(process.pid)
+        live_cpu = _cpu_percent(int(gateway.instance["process_id"]))
         freeze_started = time.monotonic()
-        frozen = _data(client.post(f"/api/browsers/{first_id}/freeze"))
+        frozen = _data(client.post(api_path(f"/{first_id}/freeze")))
         freeze_ms = round((time.monotonic() - freeze_started) * 1000)
-        frozen_cpu = _cpu_percent(process.pid)
+        frozen_cpu = _cpu_percent(int(gateway.instance["process_id"]))
         assert frozen["resource_state"] == "frozen"
         assert live_cpu >= 20, f"动态基线过低，无法验证冻结收益: {live_cpu:.2f}%"
         assert frozen_cpu <= MAX_FROZEN_CPU_PERCENT
@@ -476,7 +424,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
         assert freeze_ms <= MAX_FREEZE_MS
 
         wake_started = time.monotonic()
-        woke = _data(client.post(f"/api/browsers/{first_id}/wake"))
+        woke = _data(client.post(api_path(f"/{first_id}/wake")))
         frozen_wake_ms = round((time.monotonic() - wake_started) * 1000)
         assert woke["resource_state"] == "background"
         assert frozen_wake_ms <= MAX_FROZEN_WAKE_MS
@@ -484,77 +432,72 @@ def test_browser_resource_governance_meets_first_ci_budget(
         browser_ids = [first_id]
         for _ in range(4):
             browser = _data(client.post(
-                "/api/browsers",
+                api_path(""),
                 json=_create_options(workspace_id, "about:blank"),
             ))
             browser_ids.append(str(browser["browser_id"]))
         for browser_id, extra_pages in zip(browser_ids, [2, 2, 2, 2, 1], strict=True):
             for _ in range(extra_pages):
                 _data(client.post(
-                    f"/api/browsers/{browser_id}/navigate",
+                    api_path(f"/{browser_id}/navigate"),
                     json={"type": "new_tab", "url": "about:blank"},
                 ))
         time.sleep(0.5)
         shared_runtime_memory_kib, shared_runtime_memory_metric = (
-            _process_tree_memory_kib(process.pid)
+            _process_tree_memory_kib(int(gateway.instance["process_id"]))
         )
-        health = client.get("/health").json()
+        health = client.get(f"{urlsplit(gateway.http_service_url).path}/health").json()
         assert health["browser_runtime"]["context_count"] == 5
         assert shared_runtime_memory_kib <= MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB
 
         _data(client.post(
-            f"/api/browsers/{first_id}/navigate",
+            api_path(f"/{first_id}/navigate"),
             json={"type": "activate_tab", "tab_id": first_id},
         ))
         for browser_id in browser_ids:
-            state = _data(client.post(f"/api/browsers/{browser_id}/freeze"))
+            state = _data(client.post(api_path(f"/{browser_id}/freeze")))
             assert state["resource_state"] == "frozen"
-        discarded = _data(client.post(f"/api/browsers/{first_id}/discard"))
+        discarded = _data(client.post(api_path(f"/{first_id}/discard")))
         assert discarded["resource_state"] == "discarded"
         assert len(discarded["pages"]) == 3
 
         shutdown_hot_id = browser_ids[1]
-        _data(client.post(f"/api/browsers/{shutdown_hot_id}/wake"))
+        _data(client.post(api_path(f"/{shutdown_hot_id}/wake")))
         _data(client.post(
-            f"/api/browsers/{shutdown_hot_id}/navigate",
+            api_path(f"/{shutdown_hot_id}/navigate"),
             json={"type": "url", "url": dynamic_page_server},
         ))
         _data(client.post(
-            f"/api/browsers/{shutdown_hot_id}/run",
+            api_path(f"/{shutdown_hot_id}/run"),
             json={"code": "await page.locator('#q').fill('shutdown-checkpoint'); return true;"},
         ))
 
-        _terminate_browser_backend(process)
-        process = _browser_backend_process(
-            workspace_root=workspace_root,
-            backend_port=port,
-            log_path=log_path,
-        )
-        lifetime.callback(_terminate_browser_backend, process)
         client.close()
-        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
+        asyncio.run_coroutine_threadsafe(gateway.restart(), event_loop).result(timeout=30)
+        client = _plugin_http_client(gateway)
         lifetime.callback(client.close)
-        restored_record = _data(client.get(f"/api/browsers/{first_id}"))
+        api_path = lambda suffix: _browser_api_path(gateway, suffix)
+        restored_record = _data(client.get(api_path(f"/{first_id}")))
         assert restored_record["resource_state"] == "discarded"
-        shutdown_checkpoint = _data(client.get(f"/api/browsers/{shutdown_hot_id}"))
+        shutdown_checkpoint = _data(client.get(api_path(f"/{shutdown_hot_id}")))
         assert shutdown_checkpoint["status"] == "running"
         assert shutdown_checkpoint["resource_state"] == "discarded"
-        _data(client.post(f"/api/browsers/{shutdown_hot_id}/wake"))
+        _data(client.post(api_path(f"/{shutdown_hot_id}/wake")))
         shutdown_restored = _data(client.post(
-            f"/api/browsers/{shutdown_hot_id}/run",
+            api_path(f"/{shutdown_hot_id}/run"),
             json={"code": "return await page.locator('#q').inputValue();"},
         ))
         assert shutdown_restored["result"] == "shutdown-checkpoint"
         cold_wake_started = time.monotonic()
-        restored_record = _data(client.post(f"/api/browsers/{first_id}/wake"))
+        restored_record = _data(client.post(api_path(f"/{first_id}/wake")))
         cold_wake_ms = round((time.monotonic() - cold_wake_started) * 1000)
         assert cold_wake_ms <= MAX_DISCARDED_WAKE_MS
         restored = _data(client.post(
-            f"/api/browsers/{first_id}/run",
+            api_path(f"/{first_id}/run"),
             json={
                 "code": (
                     "return { value: await page.locator('#q').inputValue(),"
-                    "storage: await page.evaluate(() => sessionStorage.getItem('restore-key'))," 
+        "storage: await page.evaluate(() => sessionStorage.getItem('restore-key')),"
                     "scrollY: await page.evaluate(() => window.scrollY) };"
                 )
             },
@@ -565,11 +508,11 @@ def test_browser_resource_governance_meets_first_ci_budget(
             "scrollY": 900,
         }
         _data(client.post(
-            f"/api/browsers/{first_id}/run",
+            api_path(f"/{first_id}/run"),
             json={"code": "await page.evaluate(() => window.scrollTo(0, 0)); return true;"},
         ))
 
-        stream = asyncio.run(_measure_attached_stream(port, first_id, workspace_id))
+        stream = asyncio.run(_measure_attached_stream(gateway, first_id))
         assert stream["first_frame_ms"] <= MAX_ATTACH_FIRST_FRAME_MS
         assert stream["fps"] >= MIN_INTERACTIVE_STREAM_FPS
         assert stream["bitrate_bps"] <= MAX_INTERACTIVE_STREAM_BITRATE_BPS
@@ -578,23 +521,23 @@ def test_browser_resource_governance_meets_first_ci_budget(
         assert stream["boosted_fps"] >= MIN_INTERACTIVE_STREAM_FPS
         assert stream["boosted_fps"] >= stream["relaxed_fps"] * 1.5
 
-        latest_frame = asyncio.run(_measure_latest_frame_delivery(port, first_id, workspace_id))
+        latest_frame = asyncio.run(_measure_latest_frame_delivery(gateway, first_id))
         assert latest_frame["next_frame_after_ack_ms"] <= MAX_LATEST_FRAME_AFTER_ACK_MS
         assert latest_frame["capture_interval_seconds"] >= MIN_LATEST_FRAME_CAPTURE_INTERVAL_SECONDS
 
         static_browser = _data(client.post(
-            "/api/browsers",
+            api_path(""),
             json=_create_options(workspace_id, "about:blank"),
         ))
-        static_stream = asyncio.run(_measure_static_stream(port, str(static_browser["browser_id"]), workspace_id))
+        static_stream = asyncio.run(_measure_static_stream(gateway, str(static_browser["browser_id"])))
         assert static_stream["late_frame_count"] == 0
         assert static_stream["late_bitrate_bps"] == 0
 
         _data(client.patch(
-            f"/api/browsers/{first_id}/resource-policy",
+            api_path(f"/{first_id}/resource-policy"),
             json={"policy": "keep_alive"},
         ))
-        protected = client.post(f"/api/browsers/{first_id}/freeze")
+        protected = client.post(api_path(f"/{first_id}/freeze"))
         assert protected.status_code == 409
         assert protected.json()["code"] == "browser_resource_protected"
 
@@ -637,3 +580,20 @@ def test_browser_resource_governance_meets_first_ci_budget(
         )
 
     assert result_path.is_file(), measurements
+
+
+@pytest.mark.asyncio
+async def test_browser_resource_governance_meets_first_ci_budget(
+    browser_plugin_gateway: TerminalPluginGateway,
+    dynamic_page_server: str,
+    request: pytest.FixtureRequest,
+) -> None:
+    artifacts = TestRunContext.from_test_file(Path(request.node.fspath)).artifacts_dir
+    event_loop = asyncio.get_running_loop()
+    await asyncio.to_thread(
+        _run_browser_resource_governance,
+        browser_plugin_gateway,
+        dynamic_page_server,
+        artifacts,
+        event_loop,
+    )

@@ -290,16 +290,6 @@ class ConfigRuntimeAccessorsMixin:
             )
         return float(value)
 
-    def get_browser_backend_url(self) -> str:
-        value = self._read_runtime_value(
-            ("auxiliary_services", "browser_backend", "url")
-        )
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(
-                "runtime.auxiliary_services.browser_backend.url 必须是非空字符串"
-            )
-        return value
-
     def get_workspace_file_default_limit(self) -> int:
         value = self._read_runtime_value(
             ("workspace", "files", "list", "default_limit")

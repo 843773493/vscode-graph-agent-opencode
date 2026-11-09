@@ -8,7 +8,6 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import ClassVar
-from urllib.parse import urlparse
 
 from app.core.workspace_identity import bind_workspace_id, validate_workspace_id
 
@@ -17,7 +16,6 @@ from app.core.workspace_identity import bind_workspace_id, validate_workspace_id
 class MountedWorkspace:
     workspace_id: str
     workspace_root: Path
-    browser_backend_url: str | None = None
     config_candidate_ref: str | None = None
     config_generation: str | None = None
     config_fencing_token: str | None = None
@@ -28,21 +26,14 @@ class MountedWorkspace:
             isinstance(value, str) and value.strip() for value in values
         ):
             raise ValueError("mount 配置启动必须同时提供 candidate_ref、generation 和 fencing token")
-        for url in (self.browser_backend_url,):
-            if url is not None and (
-                not isinstance(url, str) or urlparse(url).scheme not in {"http", "https"}
-                or not urlparse(url).netloc
-            ):
-                raise ValueError(f"mount 辅助服务 URL 非法: {url!r}")
 
     def to_payload(self) -> dict[str, object]:
         return {**asdict(self), "workspace_root": str(self.workspace_root)}
 
     def manifest_payload(self) -> dict[str, object]:
-        # candidate 由每工作区配置 owner 独占；组身份只验证 UUID、根与辅助服务绑定。
+        # candidate 由每工作区配置 owner 独占；组身份只验证 UUID 与根目录。
         return {
             "workspace_id": self.workspace_id, "workspace_root": str(self.workspace_root),
-            "browser_backend_url": self.browser_backend_url,
         }
 
 
@@ -81,7 +72,7 @@ class MountedWorkspaceRegistry:
                 )
             bind_workspace_id(workspace_root, workspace_id)
             normalized_mount = MountedWorkspace(
-                workspace_id, workspace_root, mount.browser_backend_url,
+                workspace_id, workspace_root,
                 mount.config_candidate_ref, mount.config_generation, mount.config_fencing_token,
             )
             by_id[workspace_id] = normalized_mount
@@ -118,7 +109,7 @@ class MountedWorkspaceRegistry:
         for index, item in enumerate(payload):
             if not isinstance(item, dict) or set(item) != {
                 "workspace_id",
-                "workspace_root", "browser_backend_url",
+                "workspace_root",
                 "config_candidate_ref", "config_generation", "config_fencing_token",
             }:
                 raise ValueError(
@@ -139,7 +130,6 @@ class MountedWorkspaceRegistry:
                 )
             mounts.append(MountedWorkspace(
                 workspace_id, Path(workspace_root),
-                item["browser_backend_url"],
                 item["config_candidate_ref"], item["config_generation"], item["config_fencing_token"],
             ))
         return cls(mounts)

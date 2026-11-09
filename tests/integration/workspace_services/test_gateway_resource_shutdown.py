@@ -17,6 +17,7 @@ import pytest
 from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import ModelStreamCassette, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
+from tests.harness.python.run_context import TestRunContext
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -26,7 +27,10 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.terminal_plugin import enable_developer_tools_plugins
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 
 
 def _active_group_members(groups: set[int]) -> dict[int, tuple[int, str]]:
@@ -77,10 +81,10 @@ def shutdown_cassette(model_protocol: str) -> ModelStreamCassette:
 
 
 @pytest.fixture
-def shutdown_replay(integration_workspace_root_path: str) -> Iterator[ModelStreamReplay]:
-    output = Path(integration_workspace_root_path).parent
+def shutdown_replay(request: pytest.FixtureRequest) -> Iterator[ModelStreamReplay]:
+    context = TestRunContext.from_test_file(Path(request.node.path))
     with model_stream_replay(
-        output, runtime_root=output / "runtime",
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="gateway-shutdown-drains-real-resource-owners",
     ) as replay:
         yield replay
@@ -127,13 +131,17 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     shutdown_environment: dict[str, str], shutdown_replay: ModelStreamReplay,
     shutdown_cassette: ModelStreamCassette, model_protocol: str,
+    prepared_developer_tools_package: Path,
 ) -> None:
     workspace = Path(integration_workspace_root_path)
     output = workspace.parent / "artifacts"
     output.mkdir(exist_ok=True)
     ports = integration_port_block_for_file(Path(request.node.path))
+    boxteam_home = Path(os.environ["BOXTEAM_HOME"])
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=ports.port(21),
+        boxteam_home=boxteam_home,
         extra_env=shutdown_environment | shutdown_replay.environment | {
             "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(10)),
         },
@@ -164,25 +172,24 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
             assert target["connection_kind"] == "local"
             plugins = await enable_developer_tools_plugins(
                 client, gateway_id=owner["gateway_id"], workspace_id=owner["workspace_id"],
-                plugin_ids=("terminal",), artifacts_dir=output,
+                plugin_ids=("terminal", "browser"),
             )
             terminal = plugins["terminal"]
+            browser = plugins["browser"]
             pids["terminal"] = int(terminal["instance"]["process_id"])
-            pid = pids["terminal"]
-            pid_instances[pid] = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+            pids["browser"] = int(browser["instance"]["process_id"])
+            for pid in pids.values():
+                pid_instances[pid] = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
             client.headers.update({
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
             })
-            for service in ("workspace_api", "browser_manager"):
-                url = target["services"][service]["local_url"]
-                health = await client.get(
-                    url + ("/api/v1/health" if service == "workspace_api" else "/health"),
-                )
-                assert health.status_code == 200, health.text
-                pids[service] = health.json()["process_id"]
-                pid = pids[service]
-                pid_instances[pid] = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+            url = target["services"]["workspace_api"]["local_url"]
+            health = await client.get(url + "/api/v1/health")
+            assert health.status_code == 200, health.text
+            pids["workspace_api"] = health.json()["process_id"]
+            pid = pids["workspace_api"]
+            pid_instances[pid] = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
             created = await client.post("/api/v1/sessions", json={"title": "整组关闭集成验收"})
             assert created.status_code == 200, created.text
             session = created.json()["data"]

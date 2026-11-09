@@ -47,7 +47,7 @@ from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 PACKAGE_ID = "boxteam.developer-tools"
 PACKAGE_VERSION = "0.1.0"
 PLUGIN_ID = "terminal"
-PLUGIN_IDS = frozenset({"terminal", "debugging"})
+PLUGIN_IDS = frozenset({"terminal", "browser", "debugging"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +140,7 @@ class TerminalPluginGateway:
     def websocket_url(self) -> str:
         instance_id = str(self.instance["instance_id"])
         plugin_id = self.binding.plugin_id
-        service_name = "terminal"
+        service_name = "browser" if plugin_id == "browser" else "terminal"
         query = urlencode({"package_version": PACKAGE_VERSION, "workspace_id": self.workspace_id})
         return (
             f"ws://127.0.0.1:{urlsplit(self.gateway_url).port}/api/gateway/service-plugins/"
@@ -470,7 +470,7 @@ async def terminal_plugin_gateway_for_workspace(
                     ) as probe:
                         response = await probe.get(
                             f"/api/gateway/service-plugins/{PACKAGE_ID}/{plugin_id}"
-                            f"/instances/{instance_id}/services/http/api/terminals",
+                            f"/instances/{instance_id}/services/http/api/{'browsers' if plugin_id == 'browser' else 'terminals'}",
                             headers={
                                 "X-BoxTeam-Workspace-Id": workspace_id,
                                 "X-BoxTeam-Resource-Owner": owner_name,
@@ -478,6 +478,27 @@ async def terminal_plugin_gateway_for_workspace(
                         )
                         response.raise_for_status()
                 yield handle
+
+
+@asynccontextmanager
+async def browser_plugin_gateway_for_workspace(
+    workspace_root: Path,
+    artifacts_dir: Path,
+    gateway_port: int,
+    boxteam_home: Path,
+    prepared_package_root: Path,
+) -> AsyncIterator[TerminalPluginGateway]:
+    """以正式 Gateway 插件运行时启动 Browser 服务。"""
+
+    async with terminal_plugin_gateway_for_workspace(
+        workspace_root,
+        artifacts_dir,
+        gateway_port,
+        boxteam_home,
+        plugin_ids=frozenset({"browser"}),
+        prepared_package_root=prepared_package_root,
+    ) as gateway:
+        yield gateway
 
 
 @asynccontextmanager

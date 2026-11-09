@@ -552,19 +552,6 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(
     primary, secondary, joined = await _join_group(case)
     ids = (primary, secondary)
 
-    async def auxiliary_health() -> dict[str, dict[str, object]]:
-        observations: dict[str, dict[str, object]] = {}
-        for identity in ids:
-            for service in ("browser-manager",):
-                response = await case.client.get(f"/api/gateway/workspaces/{identity}/{service}/health")
-                assert response.status_code == 200, response.text
-                body = response.json()
-                assert body["workspace_id"] == identity
-                assert isinstance(body["process_id"], int) and body["process_id"] > 0
-                observations[f"{identity}/{service}"] = body
-        return observations
-
-    auxiliaries_before = await auxiliary_health() if restart_surface == "backend" else {}
     histories = []
     requests = []
     sessions = []
@@ -600,10 +587,6 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(
         assert generations == {restarted["backend_generation"]}
     assert all(item["status"] == "ready" and set(item["affected_workspace_ids"]) == set(ids)
                for item in restored["items"])
-    auxiliaries_after = await auxiliary_health() if restart_surface == "backend" else {}
-    assert {key: value["process_id"] for key, value in auxiliaries_after.items()} == {
-        key: value["process_id"] for key, value in auxiliaries_before.items()
-    }, "Backend 组重启不得重建任一成员的 Terminal／Browser 服务"
     artifacts = case.context.artifacts_dir / f"history-restart-{restart_surface}"
     artifacts.mkdir(parents=True, exist_ok=True)
     restored_healths = []
@@ -648,7 +631,6 @@ async def test_real_group_restart_restores_each_mount_history_and_execution(
     (artifacts / "shared-owner.json").write_text(json.dumps({
         "members": ids, "sessions": sessions, "threads": threads, "before": healths,
         "after": restored_healths, "restart": restarted, "restart_surface": restart_surface,
-        "auxiliaries_before": auxiliaries_before, "auxiliaries_after": auxiliaries_after,
     }, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -920,7 +902,6 @@ async def test_real_stopped_shared_delete_persists_remaining_contract_then_start
     assert str(nondefault_third_root.resolve()) not in json.dumps(published_owner)
     mount = MountedWorkspace(
         binding["workspace_id"], Path(binding["root_path"]),
-        binding["local_service_urls"]["browser_manager"],
     )
     assert health["workspace_id"] == third["workspace_id"] == mount.workspace_id
     assert mount.workspace_root == nondefault_third_root.resolve()

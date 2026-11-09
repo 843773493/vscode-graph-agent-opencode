@@ -37,9 +37,10 @@
 
 - [x] 4.1 将终端管理器变为自有服务插件，保持原 PTY、工作区存储、命令状态、输出 sequence／重放／流控、owner_revision 和 attach 合同，进程由 Gateway 托管。
 - [x] 4.2 迁齐 TerminalManagerClient、资源业务 owner、前端 attach、启动参数、测试和发行接线到 Gateway 路由，删除独立直连端口／旧启动入口；真实创建、执行、resize、断开重附加和关闭验证后物理删旧。
-- [ ] 4.3 将浏览器管理器变为同一合同的服务插件，保持原资源、Playwright 操作、画面输入、协作锁和工作区持久合同；实际浏览器子进程仍由该服务拥有。
-- [ ] 4.4 迁齐 BrowserManagerClient、资源 owner、客户端画面／输入及所有启动／测试接线；真实创建、导航、操作、断开重附加和关闭验证后删除 Backend／客户端直连与旧管理分路。
+- [x] 4.3 将浏览器管理器变为同一合同的服务插件，保持原资源、Playwright 操作、画面输入、协作锁和工作区持久合同；实际浏览器子进程仍由该服务拥有。
+- [x] 4.4 迁齐 BrowserManagerClient、资源 owner、客户端画面／输入及所有启动／测试接线；真实创建、导航、操作、断开重附加和关闭验证后删除 Backend／客户端直连与旧管理分路。
 - [ ] 4.5 验两种服务在 gateway 与 workspace 合法范围的隔离、Backend 重启原资源仍可查询／attach，以及服务显式重启后失效资源明确失败；不得创建新资源伪装恢复。
+  - 2026-11-09 Browser／日志交付切片：Browser 管理进程改由 Gateway 插件运行时托管，Backend 与 attach 页面经原生目标的精确插件 HTTP／WS 路由访问；删除独立 Browser 启动／接管／代理、前端服务与旧装具，保留原 BrowserManager、持久资源及业务 owner。原 actor／协作锁与截图、下载只读入口保持；静态资源沿原 no-store 合同。Browser-only 正式 Workbench 完整场景通过，覆盖创建、首航、标签、失败反馈及重新连接；最终真实 Gateway 生命周期、Agent 锁、截图读取／404、关闭与显式重启 1 passed／45.83秒，复用同一不可变包，未重复安装下载。资源列表仅对明确关闭且目标 Session 无本地记录返回空；32项资源列表／冷恢复错误检查和61项默认 Skill 配置检查通过，Browser／Debug 已迁说明不再作为 inline 默认来源。Python／Node 日志命令与 Launcher 换代／完整停机的既有真实候选结果继续复用；日志 owner 的 PID／实例／revision、CAS 与失败结算保持。调用闭包收集1407项，未作为全量执行结果；发行验证器11项定向检查及正式 Web 构建通过。最终141路径 Ruff 对照61→43无新增、JS语法通过；两批 Python 类型分别12→12、13→13无新增，Workbench 类型仍有既存 revealDiagnosticLog 诊断。准确命令、指纹与失败／成功原件见 `out/tests/temp/2026/11/09/browser_delivery/artifacts/`。真实 Relay、Windows、源码外完整发行及4.5的剩余组合未验；遥测／统计未实现，不勾完相关宽项。
 
 ## 5. MCP 纵向迁移
 
@@ -60,6 +61,7 @@
   - 2026-11-09 私有参数切片：两种 owner 保存只读不可变值，普通来源、状态和接管只存引用；Workspace 候选及启动按认证的确切声明仅解析当前绑定，环境引用仅在目标 writeOnly 字段解释。Gateway 实际安装／保存／重建1项、双 Workspace 隔离及 Backend 重启2项、正式 Workbench 密码输入／两处取消零写／引用保存／清除1项通过；组合 schema、归属错误、缺失和损坏版本及错误不回显均有定向验证。协议生成与一致性、相关类型及正式构建通过；精确提交候选另核生成和原来源重试。原件及源码指纹见 `out/tests/temp/2026/11/09/plugin_private_inputs/artifacts/`。未引用文件回收、复杂组合／数组秘密位置表单、真实 Relay／Windows 验收仍保留 TODO，6.1／7.3 不勾完。
 - [ ] 6.2 在现有 logging.runtime 热应用基础上添加 telemetry.runtime／statistics.runtime，冻结默认关闭、采样／缓冲／间隔边界及 schema，沿原 JSONC 族和合法覆盖层加载，不硬编码环境值。
 - [ ] 6.3 迁齐 Python／Node 的启动诊断初始化和运行期 apply／status，核 instance_id 与实际 revision；部分失败逐项展示，不用全局事务、无效补偿或重启强迫成功。
+  - 2026-11-09 日志插件接线：原 logging.runtime 热应用及本地／联邦诊断改从插件 owner 枚举真实进程，按各 slot 私有凭据控制；允许插件独立 logger 名并继续核 PID、实例、revision 和实际输出。启动先接管再应用日志，原日志 CAS／失败结算合同保持。双工作区各 Browser／Terminal 的50项定向测试及精确候选50项通过；真实Gateway四项失败／CAS／过滤场景、Python／Node同名日志命令场景、Launcher原实例换代与完整停机分别通过，各批不相加。Luna三轮只读复审，保留原隔离与故障断言；相关Ruff及8文件真实Python类型零诊断，外围Ruff与HEAD35→31无新增。旧诊断直接调用签名问题在HEAD复现未扩修。隔离候选换代先遇测试模型凭据依赖，修为unused值；随后旧Browser接管仍消费已删除固定角色，证明本片须与Browser生产清理一同交付；组合工作树换代最终1 passed／32.75秒。准确命令、指纹、失败和成功原件见 `out/tests/temp/2026/11/09/plugin_logging/artifacts/`。仅完成日志子项；telemetry／statistics尚未实现，不勾完6.3。
 - [ ] 6.4 实现 Gateway 代理／现有进程指标与插件内部可选指标，使用有界低成本采样／聚合；不按 Thread／调用 ID 建无限常驻标签，不采秘密和正文，不新增公网上报或独立监控服务。
 - [ ] 6.5 验开关关闭确实停止额外采样、定时器和缓冲工作，新实例使用当前关闭配置；必要错误仍可见，未支持指标明确说明，普通暖请求无附带全包审计／探活。
 - [ ] 6.6 保留既有来源正文、无副作用预检、CAS、pending 管理、Relay 与独立重启权限验证；涉及新格式的支持数据仅走显式迁移，工作区业务数据不迁入 Gateway。

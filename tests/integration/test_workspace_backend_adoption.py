@@ -96,11 +96,6 @@ async def test_preferred_port_mismatch_rejects_without_stopping_adopted_backend(
         "app.gateway.runtime.local_workspace.start_local_backend_process",
         fail_if_started,
     )
-    monkeypatch.setattr(
-        "app.gateway.runtime.local_workspace.start_local_browser_service_process",
-        fail_if_started,
-    )
-
     owner = ManagedBackendOwner(ManagedBackendContract(
         gateway_id=GATEWAY_ID, owner_id="backend_owner_adoption", generation=backend.generation,
         members=(ManagedBackendMember(backend.workspace_id),),

@@ -20,22 +20,26 @@ from tests.support.resource_owners.sessions import (
 )
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 
+RESOURCE_SERVICE_URLS = {
+    "terminal": "http://terminal.test/api/gateway/service-plugins/boxteam.developer-tools/terminal/services/http",
+    "browser": "http://browser.test/api/gateway/service-plugins/boxteam.developer-tools/browser/services/http",
+}
+
 
 @pytest.mark.parametrize("kind", ["terminal", "browser"])
 @pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.RemoteProtocolError])
 def test_async_network_failure_keeps_service_unavailable_and_unknown_after_restart(
     resource_api_client: TestClient, terminal_owner_bundle: TerminalOwnerFixture,
     browser_owner_bundle: BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture, resource_http, kind: str, error_type: type[httpx.RequestError],
+    caplog: pytest.LogCaptureFixture, resource_http, browser_manager_client: BrowserManagerClient,
+    terminal_manager_client: TerminalManagerClient, kind: str, error_type: type[httpx.RequestError],
 ) -> None:
     created = resource_api_client.post(f"/api/v1/resources/{kind}s", json={"session_id": SESSION_A})
     assert created.status_code == 200, created.text
     resource = created.json()["data"]
     rid = resource["resource_id"]
     bundle = terminal_owner_bundle if kind == "terminal" else browser_owner_bundle
-    client = (TerminalManagerClient if kind == "terminal" else BrowserManagerClient)(
-        workspace_id=WORKSPACE_ID, backend_url=f"http://{kind}.test",
-    )
+    client = terminal_manager_client if kind == "terminal" else browser_manager_client
     attempts: list[httpx.Request] = []
     native = "/private/resource/network.key"
 
@@ -395,12 +399,11 @@ def test_lost_browser_action_receipt_keeps_native_error_in_diagnostics(
 
 def test_transport_failure_preserves_api_route_without_treating_it_as_native_path(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
-    monkeypatch: pytest.MonkeyPatch,
+    browser_manager_client: BrowserManagerClient, monkeypatch: pytest.MonkeyPatch,
     resource_http,
 ) -> None:
     resource = _create_browser_resource(resource_api_client)
     resource_id = resource["resource_id"]
-    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     attempted: list[str] = []
 
     def rejected(request: httpx.Request) -> None:
@@ -408,7 +411,7 @@ def test_transport_failure_preserves_api_route_without_treating_it_as_native_pat
         return httpx.Response(500, json={"code": "browser_read_failed"})
 
     resource_http(rejected)
-    monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
+    monkeypatch.setattr(browser_owner_bundle.transport, "perform", browser_manager_client.perform)
     command = {"action": "read", "expected_revision": 1, "thread": resource["source_thread"]}
     failed = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
     assert failed.status_code == 500, failed.text
@@ -425,23 +428,22 @@ def test_transport_failure_preserves_api_route_without_treating_it_as_native_pat
     assert observed["error"] == detail
     assert observed["reconciliation_status"] == "unknown"
     assert observed["available_actions"] == ["stop"]
-    assert attempted == [f"http://browser.test/api/browsers/{resource_id}/read"]
+    assert attempted == [f"{RESOURCE_SERVICE_URLS['browser']}/api/browsers/{resource_id}/read?package_version=0.1.0&workspace_id={WORKSPACE_ID}"]
     pending, = browser_owner_bundle.leases.leases_for_resource(resource_id)
     assert pending.status == "reconcile_required"
 
     rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
     assert rejected.status_code == 409, rejected.text
-    assert attempted == [f"http://browser.test/api/browsers/{resource_id}/read"]
+    assert attempted == [f"{RESOURCE_SERVICE_URLS['browser']}/api/browsers/{resource_id}/read?package_version=0.1.0&workspace_id={WORKSPACE_ID}"]
 
 
 def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
     resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
-    monkeypatch: pytest.MonkeyPatch,
+    browser_manager_client: BrowserManagerClient, monkeypatch: pytest.MonkeyPatch,
     resource_http,
 ) -> None:
     resource = _create_browser_resource(resource_api_client)
     resource_id = resource["resource_id"]
-    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
     attempted: list[str] = []
 
     def timed_out(request: httpx.Request) -> None:
@@ -449,7 +451,7 @@ def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
         raise httpx.ReadTimeout("timed out", request=request)
 
     resource_http(timed_out)
-    monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
+    monkeypatch.setattr(browser_owner_bundle.transport, "perform", browser_manager_client.perform)
     command = {"action": "run", "payload": {"timeoutMs": 25},
                "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     failed = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
@@ -470,7 +472,7 @@ def test_transport_timeout_api_preserves_recovery_details_and_durable_unknown(
     assert pending.status == "reconcile_required"
     rejected = resource_api_client.post(f"/api/v1/resources/{resource_id}/browser-operation", json=command)
     assert rejected.status_code == 409, rejected.text
-    assert attempted == [f"http://browser.test/api/browsers/{resource_id}/run"]
+    assert attempted == [f"{RESOURCE_SERVICE_URLS['browser']}/api/browsers/{resource_id}/run?package_version=0.1.0&workspace_id={WORKSPACE_ID}"]
 
 
 def test_browser_api_delete_rejects_thread_association_without_side_effects(

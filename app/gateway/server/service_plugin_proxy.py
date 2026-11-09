@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -127,6 +128,22 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             if connection.headers.get("X-BoxTeam-Resource-Owner") != "workspace-terminal":
                 raise PermissionError("Terminal 管理缺少工作区资源 owner 身份")
             headers["X-BoxTeam-Resource-Owner"] = "workspace-terminal"
+        if binding.package_id == "boxteam.developer-tools" and binding.plugin_id == "browser" and not websocket:
+            artifact_read = isinstance(connection, Request) and connection.method == "GET" and re.fullmatch(
+                r"api/browsers/[^/]+/(?:downloads|screenshots)/[^/]+", path,
+            ) is not None
+            if not artifact_read:
+                if auth.kind != "local" or not isinstance(connection, Request):
+                    raise PermissionError("Browser 管理必须经过原工作区资源 owner")
+                verify_local_control_request(connection)
+                if connection.headers.get("X-BoxTeam-Resource-Owner") != "workspace-browser":
+                    raise PermissionError("Browser 管理缺少工作区资源 owner 身份")
+                headers["X-BoxTeam-Resource-Owner"] = "workspace-browser"
+                actor = connection.headers.get("X-BoxTeam-Actor")
+                if actor is not None:
+                    if actor not in {"agent", "user:http"}:
+                        raise PermissionError("Browser 操作 actor 无效")
+                    headers["X-BoxTeam-Actor"] = actor
         query = [(key, value) for key, value in query if key not in {"package_version", "workspace_id"}]
         yield _ServiceRoute(build_upstream_url(base_url, (), path).copy_merge_params(tuple(query)), headers, stopped, selected_instance, gateway_id)
 
@@ -214,8 +231,13 @@ async def service_request(package_id: str, plugin_id: str, service_id: str,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     instance_id: str | None = None, workspace_id: CanonicalWorkspaceId | None = None,
 ) -> StreamingResponse:
-    require_federation_capability(request, auth, "send")
-    require_federation_capability(request, auth, "read")
+    artifact_read = (package_id == "boxteam.developer-tools" and plugin_id == "browser"
+        and request.method == "GET" and re.fullmatch(
+            r"api/browsers/[^/]+/(?:downloads|screenshots)/[^/]+", path,
+        ) is not None)
+    capabilities: tuple[Capability, ...] = ("read",) if artifact_read else ("send", "read")
+    for capability in capabilities:
+        require_federation_capability(request, auth, capability)
     binding = PluginBinding(package_id=package_id, plugin_id=plugin_id,
         package_version=package_version, enabled=True, workspace_id=workspace_id)
     # 路由引用一直留到响应体完成；不能在返回 StreamingResponse 时提前归还。
@@ -247,11 +269,12 @@ async def service_request(package_id: str, plugin_id: str, service_id: str,
             body = UpstreamResponseBody(response, release_route)
 
         # 响应头等待也属于原连接；撤权或退役须取消这次发送，不等待网络超时。
-        await run_channel(open_response(), _watch_access(request, auth, route.stopped))
+        await run_channel(open_response(), _watch_access(request, auth, route.stopped, capabilities))
         assert response is not None and body is not None
-        require_federation_capability(request, auth, "send")
-        require_federation_capability(request, auth, "read")
-        result = _ServiceResponse(body, request=request, auth=auth, route=route, response=response)
+        for capability in capabilities:
+            require_federation_capability(request, auth, capability)
+        result = _ServiceResponse(body, request=request, auth=auth, route=route, response=response,
+            capabilities=capabilities)
         handed_off = True
         return result
     except httpx.RequestError as error:

@@ -243,7 +243,7 @@ def restart_fork_deadlines(restart_source_case: RestartRuntimeSourceCase) -> Ite
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("restart_source_case", [{"native_services": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"plugin_ids": ("terminal", "browser")}], indirect=True)
 @pytest.mark.parametrize("phase", ["fork.goal.installed_before_publish", "copy.target.published"])
 async def test_fork_goal_publication_hard_restart_preserves_original_creation(
     restart_source_case: RestartRuntimeSourceCase, restart_fork_deadlines: ForkDeadlineRegistry, phase: str,

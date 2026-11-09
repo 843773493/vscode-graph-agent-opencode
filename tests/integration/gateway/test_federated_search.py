@@ -10,16 +10,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.session_catalog_store import SessionCatalogStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.search_federation import MAX_SEARCH_OUTPUT_BYTES
-from tests.harness.python.browser_manager import (
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -34,7 +29,6 @@ from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,
-    terminate_process,
     workspace_backend_id_for_root,
 )
 from tests.support.workspaces import (
@@ -89,8 +83,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     credential.write_text(LOCAL_TOKEN_HEADERS["X-Local-Token"] + "\n", encoding="utf-8")
     credential.chmod(0o600)
     with ExitStack() as cleanup:
-        preferred_offsets = {"backend-0": 0, "backend-1": 1, "gateway": 20,
-                             "browser-backend": 42, "browser-frontend": 43}
+        preferred_offsets = {"backend-0": 0, "backend-1": 1, "gateway": 20}
         fallback_offsets = [offset for offset in range(ports.end - ports.start + 1)
                             if offset not in preferred_offsets.values()]
         service_ports: dict[str, int] = {}
@@ -109,20 +102,10 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{service_ports['gateway']}")
         fixture = Network(workspace, secondary, stopped, gateway_home, gateway_id, service_ports["gateway"],
                           service_ports["backend-0"], context.artifacts_dir, [])
-        # fork 来源只读取真实查询状态；Browser 服务与 Gateway 共用其原装具。
-        browser = start_browser_manager_processes(
-            workspace_root=workspace, backend_port=service_ports["browser-backend"], frontend_port=service_ports["browser-frontend"],
-            backend_host="127.0.0.1", artifacts_dir=fixture.artifacts,
-        )
-        cleanup.callback(close_browser_manager_processes, browser)
-        mount = MountedWorkspace(
-            workspace_backend_id_for_root(workspace), workspace,
-            browser_backend_url=f"http://127.0.0.1:{service_ports['browser-backend']}",
-        )
         for index, root in enumerate((workspace, secondary)):
             backend = start_backend_process(workspace_root=str(root), port=service_ports[f"backend-{index}"], log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,
-                                            startup_mount=mount if index == 0 else None)
+                                            )
             cleanup.callback(close_backend_process, backend)
             fixture.backends.append(backend)
         # 外部后端登记是查询输入，目录历史不通过磁盘写入或 mock 准备。

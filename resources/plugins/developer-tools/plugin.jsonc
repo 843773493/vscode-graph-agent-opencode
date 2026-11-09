@@ -37,6 +37,92 @@
       "management_protocol_version": 1
     },
     {
+      "id": "browser",
+      "name": "Browser",
+      "instance_scope": "workspace",
+      "requires": [
+        {
+          "extension_point": "services",
+          "version": 1
+        },
+        {
+          "extension_point": "skills",
+          "version": 1
+        }
+      ],
+      "contributes": {
+        "services": [
+          {
+            "service_id": "http",
+            "service_type": "browser",
+            "protocol": "http"
+          },
+          {
+            "service_id": "socket",
+            "service_type": "browser",
+            "protocol": "websocket"
+          }
+        ],
+        "skills": [
+          {
+            "id": "browser-control",
+            "path": "skills/browser-control",
+            "tool_bindings": [
+              {
+                "tool_id": "listBrowserPage",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "openBrowserPage",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "readPage",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "navigatePage",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "clickElement",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "typeInPage",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "hoverElement",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "dragElement",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "handleDialog",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "screenshotPage",
+                "contract_version": 1
+              },
+              {
+                "tool_id": "runPlaywrightCode",
+                "contract_version": 1
+              }
+            ]
+          }
+        ]
+      },
+      "runtime": "node",
+      "entrypoint": [
+        "src/workspace-services/browser/server/backend.js"
+      ],
+      "management_protocol_version": 1
+    },
+    {
       "id": "debugging",
       "name": "Node.js Debugger",
       "instance_scope": "workspace",

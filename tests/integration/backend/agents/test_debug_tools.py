@@ -132,7 +132,7 @@ def use_unused_model_provider(integration_workspace_config_path: str) -> None:
 async def debug_plugin_gateway(
     integration_workspace_root_path: str,
     request: pytest.FixtureRequest,
-    prepared_debug_plugin_package: Path,
+    prepared_developer_tools_package: Path,
 ) -> AsyncIterator[TerminalPluginGateway]:
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     try:
@@ -141,7 +141,7 @@ async def debug_plugin_gateway(
             context.artifacts_dir / "debug-plugin",
             integration_port_block_for_file(Path(__file__)).port(21),
             context.boxteam_home_for_node(request.node.nodeid),
-            prepared_debug_plugin_package,
+            prepared_developer_tools_package,
         ) as gateway:
             gateway_token = set_current_gateway_id(gateway.gateway_id)
             try:

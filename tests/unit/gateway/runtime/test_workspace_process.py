@@ -12,7 +12,6 @@ from app.gateway.runtime.workspace_process import (
     resolve_backend_workspace_id,
     resolve_python_executable,
     start_local_backend_process,
-    start_local_browser_service_process,
 )
 
 
@@ -300,60 +299,3 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
     assert environment["BOXTEAM_BACKEND_GENERATION"] == "test-backend-generation"
     for mount in mounts:
         assert json.loads((mount.workspace_root / ".boxteam/workspace-identity.json").read_text()) == {"workspace_id": mount.workspace_id}
-
-
-@pytest.mark.parametrize("entry_kind", ["missing", "directory"])
-def test_browser_manager_entrypoint_failure_keeps_location_in_diagnostics(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, entry_kind: str,
-) -> None:
-    project_root = tmp_path / "private-installation"
-    entrypoint = project_root / "src/workspace-services/browser/server/backend.js"
-    if entry_kind == "directory":
-        entrypoint.mkdir(parents=True)
-    log_root = tmp_path / "logs"
-    with pytest.raises(FileNotFoundError) as failure:
-        start_local_browser_service_process(
-            project_root=project_root, workspace_root=tmp_path,
-            workspace_id="00000000-0000-4000-8000-000000000001", port=41002,
-            log_dir=log_root,
-        )
-    assert str(project_root) not in str(failure.value)
-    assert "service=browser" in str(failure.value)
-    assert str(entrypoint) in caplog.text
-    assert not log_root.exists()
-    assert entrypoint.is_dir() == (entry_kind == "directory")
-
-
-def test_browser_manager_receives_backend_workspace_uuid(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    managed_process_stub_factory,
-) -> None:
-    project_root = tmp_path / "project"
-    browser_backend = project_root / "src/workspace-services/browser/server/backend.js"
-    browser_backend.parent.mkdir(parents=True)
-    browser_backend.touch()
-    commands: list[list[str]] = []
-
-    def fake_spawn(command: list[str], **_: object) -> object:
-        commands.append(command)
-        return managed_process_stub_factory(timeout_once=False)
-
-    monkeypatch.setenv("BOXTEAM_NODE_BIN", "/node")
-    monkeypatch.setattr(
-        "app.gateway.runtime.workspace_process._spawn_logged_process",
-        fake_spawn,
-    )
-
-    browser = start_local_browser_service_process(
-        project_root=project_root,
-        workspace_root=tmp_path,
-        workspace_id="00000000-0000-4000-8000-000000000001",
-        port=41003,
-        log_dir=tmp_path / "logs",
-    )
-    browser.detach()
-
-    assert commands[0][commands[0].index("--workspace-id") + 1] == (
-        "00000000-0000-4000-8000-000000000001"
-    )

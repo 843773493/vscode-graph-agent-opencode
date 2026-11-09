@@ -20,8 +20,8 @@ def test_registry_resolves_each_mounted_workspace_without_root_aliases(tmp_path)
     workspace_b = _workspace(tmp_path / "b")
     registry = MountedWorkspaceRegistry.from_payload(
         [
-            {"workspace_id": workspace_a[0], "workspace_root": str(workspace_a[1]), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
-            {"workspace_id": workspace_b[0], "workspace_root": str(workspace_b[1]), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
+            {"workspace_id": workspace_a[0], "workspace_root": str(workspace_a[1]), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
+            {"workspace_id": workspace_b[0], "workspace_root": str(workspace_b[1]), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
         ]
     )
 
@@ -52,16 +52,16 @@ def test_registry_rejects_duplicate_ids_and_roots(tmp_path):
     with pytest.raises(ValueError, match="重复 workspace_id"):
         MountedWorkspaceRegistry.from_payload(
             [
-                {"workspace_id": workspace_id, "workspace_root": str(workspace_root), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
-                {"workspace_id": workspace_id, "workspace_root": str(tmp_path), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
+                {"workspace_id": workspace_id, "workspace_root": str(workspace_root), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
+                {"workspace_id": workspace_id, "workspace_root": str(tmp_path), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
             ]
         )
 
     with pytest.raises(ValueError, match="重复工作区根"):
         MountedWorkspaceRegistry.from_payload(
             [
-                {"workspace_id": workspace_id, "workspace_root": str(workspace_root), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
-                {"workspace_id": str(uuid4()), "workspace_root": str(workspace_root), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
+                {"workspace_id": workspace_id, "workspace_root": str(workspace_root), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
+                {"workspace_id": str(uuid4()), "workspace_root": str(workspace_root), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None},
             ]
         )
 
@@ -73,7 +73,7 @@ def test_registry_rejects_identity_mismatch(tmp_path):
             [
                 {
                     "workspace_id": str(uuid4()),
-                    "workspace_root": str(workspace_root), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
+                    "workspace_root": str(workspace_root), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
             ]
         )
     assert load_or_create_workspace_id(workspace_root) == actual_id
@@ -86,7 +86,7 @@ def test_environment_mount_payload_uses_explicit_complete_startup_contract(
     monkeypatch.setenv(
         MountedWorkspaceRegistry.ENVIRONMENT_VARIABLE,
         json.dumps(
-            [{"workspace_id": workspace_id, "workspace_root": str(workspace_root), "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}]
+            [{"workspace_id": workspace_id, "workspace_root": str(workspace_root), "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}]
         ),
     )
 

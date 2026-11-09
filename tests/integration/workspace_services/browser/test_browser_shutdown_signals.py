@@ -7,30 +7,30 @@ import json
 import signal
 import sys
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import uuid4
 
-import httpx
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
-from tests.harness.python.browser_manager import (
-    BrowserManagerProcesses,
-    close_browser_manager_processes,
-    start_browser_manager_processes,
-)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import (
+    TerminalPluginGateway,
+    browser_plugin_gateway_for_workspace,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 
 @pytest.fixture
-def browser_service(
+async def browser_service(
     request: pytest.FixtureRequest, integration_backend_port: int,
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[BrowserManagerProcesses, BrowserManagerClient, Path, TestRunContext, Path]]:
+    prepared_developer_tools_package: Path,
+) -> AsyncIterator[tuple[TerminalPluginGateway, BrowserManagerClient, Path, TestRunContext, Path]]:
     with TestRunContext.from_test_file(Path(__file__)) as run:
         runtime = run.runtime_root_for_node(request.node.nodeid)
         runtime.mkdir(parents=True, exist_ok=True)
@@ -41,16 +41,19 @@ def browser_service(
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
         )
         artifacts = run.artifacts_dir / uuid4().hex
-        handle = start_browser_manager_processes(
-            workspace_root=root, artifacts_dir=artifacts,
-            backend_port=integration_backend_port + 60,
-            frontend_port=integration_backend_port + 61, backend_host="127.0.0.1",
-        )
-        run.add_cleanup("Browser 进程", lambda: close_browser_manager_processes(handle))
-        yield handle, BrowserManagerClient(
-            workspace_id=load_or_create_workspace_id(root),
-            backend_url=f"http://127.0.0.1:{handle.backend_port}",
-        ), root, run, artifacts
+        async with browser_plugin_gateway_for_workspace(
+            root, artifacts, integration_backend_port + 60,
+            run.boxteam_home_for_node(request.node.nodeid),
+            prepared_package_root=prepared_developer_tools_package,
+        ) as handle:
+            client = BrowserManagerClient(
+                workspace_id=load_or_create_workspace_id(root), config_service=Mock(),
+                gateway_url=handle.gateway_url, binding=handle.binding,
+            )
+            try:
+                yield handle, client, root, run, artifacts
+            finally:
+                await client.aclose()
 
 
 @pytest.fixture
@@ -83,7 +86,7 @@ async def blocked_action() -> AsyncIterator[tuple[str, asyncio.Event, asyncio.Ev
 @pytest.mark.skipif(sys.platform == "win32", reason="本组核对 POSIX 信号；Windows SIGBREAK 留待实机验证")
 @pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGINT", "SIGHUP"])
 async def test_signal_shutdown_failure_keeps_the_original_owner_for_retry_and_cold_recovery(
-    browser_service: tuple[BrowserManagerProcesses, BrowserManagerClient, Path, TestRunContext, Path],
+    browser_service: tuple[TerminalPluginGateway, BrowserManagerClient, Path, TestRunContext, Path],
     blocked_action: tuple[str, asyncio.Event, asyncio.Event], signal_name: str,
 ) -> None:
     handle, client, root, run, artifacts = browser_service
@@ -98,7 +101,8 @@ async def test_signal_shutdown_failure_keeps_the_original_owner_for_retry_and_co
         "timeoutMs": 20000,
     }, actor="agent"))
     requested_signal = getattr(signal, signal_name)
-    process = handle.backend_process
+    process = handle.runtime.slots[(handle.binding.package_id, handle.binding.plugin_id, handle.workspace_id)].process.process
+    process_log = handle.runtime.slots[(handle.binding.package_id, handle.binding.plugin_id, handle.workspace_id)].process.log_file.ownership.path
     denied_operation = None
     failure_message = "关闭失败，保留原运行时与 HTTP 管理入口"
     try:
@@ -115,9 +119,7 @@ async def test_signal_shutdown_failure_keeps_the_original_owner_for_retry_and_co
         async with asyncio.timeout(8):
             while True:
                 assert process.poll() is None, "关闭未核实不能退出原 Browser owner"
-                diagnostics = "\n".join(
-                    path.read_text() for path in artifacts.glob("browser-backend-*.stderr.log")
-                )
+                diagnostics = process_log.read_text()
                 if "[browser-backend] 关闭" in diagnostics:
                     break
                 await asyncio.sleep(0.05)
@@ -130,11 +132,7 @@ async def test_signal_shutdown_failure_keeps_the_original_owner_for_retry_and_co
         assert current["active_operation_count"] == 1
         assert current["transport_owner_revision"] == 1
         assert state_file.read_bytes() == state_before
-        async with httpx.AsyncClient() as http:
-            health = await http.get(f"{client.backend_url}/health")
-        assert health.status_code == 200
-        assert health.json()["browser_runtime"]["connected"] is True
-        assert health.json()["browser_runtime"]["context_count"] == 1
+        assert (await client.get_resource(browser_id))["active_operation_count"] == 1
         assert diagnostics.count(failure_message) == 1
         assert "browser_shutdown_operation_drain_timeout" in diagnostics
         assert browser_id in diagnostics
@@ -165,21 +163,16 @@ async def test_signal_shutdown_failure_keeps_the_original_owner_for_retry_and_co
         assert record["resource_state"] == "discarded"
         assert record["reconciliation_status"] == "verified"
 
-        close_browser_manager_processes(handle)
-        restarted = start_browser_manager_processes(
-            workspace_root=root, artifacts_dir=artifacts,
-            backend_port=handle.backend_port, frontend_port=handle.frontend_port,
-            backend_host="127.0.0.1",
-        )
-        run.add_cleanup("冷重启 Browser 进程", lambda: close_browser_manager_processes(restarted))
+        await handle.restart()
+        restarted_process = handle.runtime.slots[(handle.binding.package_id, handle.binding.plugin_id, handle.workspace_id)].process.process
         cold = await client.get_resource(browser_id)
         assert cold["browser_id"] == browser_id and cold["resource_state"] == "discarded"
         restored = await client.perform(browser_id, "run", {
             "code": "return await page.locator('#field').inputValue();",
         }, actor="agent")
         assert restored["result"] == "after-signal"
-        restarted.backend_process.send_signal(requested_signal)
-        assert await asyncio.to_thread(restarted.backend_process.wait, timeout=8) == exit_code
+        restarted_process.send_signal(requested_signal)
+        assert await asyncio.to_thread(restarted_process.wait, timeout=8) == exit_code
         run.write_result("passed", {
             "signal": signal_name, "exit_code": exit_code, "browser_id": browser_id,
             "drain_wait_seconds": elapsed, "restored_value": restored["result"],
@@ -196,7 +189,7 @@ async def test_signal_shutdown_failure_keeps_the_original_owner_for_retry_and_co
     pytest.param("exception", True, marks=pytest.mark.skipif(sys.platform == "win32", reason="POSIX 信号中途到达致命错误")),
 ])
 async def test_fatal_error_still_exits_when_manager_drain_fails(
-    browser_service: tuple[BrowserManagerProcesses, BrowserManagerClient, Path, TestRunContext, Path],
+    browser_service: tuple[TerminalPluginGateway, BrowserManagerClient, Path, TestRunContext, Path],
     blocked_action: tuple[str, asyncio.Event, asyncio.Event], fatal_kind: str, signal_first: bool,
 ) -> None:
     handle, client, _root, run, artifacts = browser_service
@@ -216,17 +209,18 @@ async def test_fatal_error_still_exits_when_manager_drain_fails(
         await asyncio.wait_for(arrived.wait(), 5)
         async with asyncio.timeout(8):
             while True:
-                diagnostics = "\n".join(path.read_text() for path in artifacts.glob("browser-backend-*.stderr.log"))
+                slot = handle.runtime.slots[(handle.binding.package_id, handle.binding.plugin_id, handle.workspace_id)]
+                diagnostics = slot.process.log_file.ownership.path.read_text()
                 if "关闭检查点失败" in diagnostics:
                     break
-                assert handle.backend_process.poll() is None
+                assert slot.process.process.poll() is None
                 await asyncio.sleep(0.05)
         # 原致命退出仍先等已接纳的 HTTP 请求结束；不把它误写成整个 shutdown 有界。
         assert not running.done()
         release.set()
-        exit_code = await asyncio.to_thread(handle.backend_process.wait, timeout=8)
+        exit_code = await asyncio.to_thread(slot.process.process.wait, timeout=8)
         assert exit_code == 1
-        diagnostics = "\n".join(path.read_text() for path in artifacts.glob("browser-backend-*.stderr.log"))
+        diagnostics = slot.process.log_file.ownership.path.read_text()
         assert marker in diagnostics
         assert "关闭检查点失败" in diagnostics
         assert "保留原运行时与 HTTP 管理入口" not in diagnostics

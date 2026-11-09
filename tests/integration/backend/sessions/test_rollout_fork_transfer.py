@@ -82,8 +82,11 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
             async with open_communication_triad(
                 context, _prepare_workspace, backend_environment=model.environment,
                 backend_asgi_app="tests.support.e2e_control.backend_app:app",
-                # 共享 Backend 时真实 owner 是 A，辅助服务必须跟随该 owner 启动。
-                resource_service_nodes=options.get("resource_service_nodes", ("a" if same_backend_routes else "b",)),
+                browser_plugin_nodes=options.get("browser_plugin_nodes", ()),
+                prepared_developer_tools_package=(
+                    request.getfixturevalue("prepared_developer_tools_package")
+                    if options.get("browser_plugin_nodes") else None
+                ),
                 on_sshd_started=fork_deadlines.watchdog.register_c3_sshd,
                 same_backend_routes=same_backend_routes,
             ) as nodes:
@@ -907,7 +910,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transfer_triad", [{"resource_service_nodes": ("b", "c")}], indirect=True)
+@pytest.mark.parametrize("transfer_triad", [{"browser_plugin_nodes": ("b", "c")}], indirect=True)
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 async def test_real_source_child_fork_cold_history_attachment_and_successor(
     transfer_triad, creation_kind: str,

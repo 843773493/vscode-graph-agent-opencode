@@ -43,7 +43,7 @@ def _release_match(case: RestartRuntimeSourceCase, barrier: str) -> None:
     })
 
 
-@pytest.mark.parametrize("restart_source_case", [{"native_services": True, "managed_gateway": True}], indirect=True)
+@pytest.mark.parametrize("restart_source_case", [{"plugin_ids": ("terminal", "browser"), "managed_gateway": True}], indirect=True)
 @pytest.mark.parametrize("phase", [
     "copy.source.before_captured_cas", "copy.target.published", "thread.initial.admitted_before_bound",
 ], ids=["capture", "published", "admitted"])

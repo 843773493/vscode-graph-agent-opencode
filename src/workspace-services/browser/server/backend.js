@@ -1,6 +1,6 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
-import { handleRuntimeLoggingRequest, handleRuntimeShutdownRequest } from "../../../shared/serverRuntimeControl.mjs";
 import { createJsonRequestReader } from "../../../shared/serverJsonRequest.mjs";
+import { createPluginRuntimeManagement } from "../../../shared/serverPluginRuntime.mjs";
 import { closeHttpServer } from "../../../shared/serverHttpShutdown.mjs";
 
 import http from "node:http";
@@ -22,7 +22,6 @@ import { encodeBinaryFrame, encodeServerMessage, parseClientMessage } from "./tr
 const logger = createRuntimeLogger("browser", "browser.backend");
 
 const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 8015;
 function parseArgs(argv) {
   const args = new Map();
   for (let index = 0; index < argv.length; index += 1) {
@@ -212,10 +211,16 @@ function wsClient(socket) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const host = args.get("host") || process.env.BOXTEAM_BROWSER_HOST || DEFAULT_HOST;
-  const port = Number(args.get("port") || process.env.BOXTEAM_BROWSER_BACKEND_PORT || DEFAULT_PORT);
+  const host = DEFAULT_HOST;
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
-  const workspaceId = validateWorkspaceId(args.get("workspace-id") || process.env.BOXTEAM_WORKSPACE_ID);
+  const plugin = createPluginRuntimeManagement({
+    service: "browser",
+    logger,
+    readJson: createJsonRequestReader(logger),
+    shutdown: () => shutdown("browser_plugin_control", 0),
+  });
+  const { port, identity } = plugin;
+  const workspaceId = validateWorkspaceId(identity.workspace_id);
   const workspaceLogger = logger.withContext({ workspace_id: workspaceId });
   const readJson = createJsonRequestReader(workspaceLogger);
   const manager = new BrowserManager({ workspaceRoot, workspaceId });
@@ -240,10 +245,7 @@ async function main() {
 
     try {
       const { url, pathname } = normalizePathname(request);
-      if (await handleRuntimeLoggingRequest(request, response, { pathname, service: "browser", readJson })) return;
-      if (await handleRuntimeShutdownRequest(request, response, { pathname, workspaceId, readJson, logger: workspaceLogger,
-        shutdown: () => shutdown("browser_manager_control", 0),
-      })) return;
+      if (await plugin.handleRequest(request, response, pathname)) return;
       if (request.method === "GET" && pathname === "/health") {
         sendJson(response, 200, {
           ok: true,
@@ -256,18 +258,24 @@ async function main() {
         return;
       }
 
+      if (pathname !== "/services/http/api/browsers"
+        && !pathname.startsWith("/services/http/api/browsers/")) {
+        notFound(response);
+        return;
+      }
+      const businessPath = pathname.slice("/services/http".length);
       requestWorkspace(request, url, workspaceId);
-      const artifactRequest = /^\/api\/browsers\/[^/]+\/(downloads|screenshots)\/[^/]+$/.test(pathname);
+      const artifactRequest = /^\/api\/browsers\/[^/]+\/(downloads|screenshots)\/[^/]+$/.test(businessPath);
       if (!artifactRequest) requireOwner(request);
 
-      if (request.method === "GET" && pathname === "/api/browsers") {
+      if (request.method === "GET" && businessPath === "/api/browsers") {
         sendJson(response, 200, {
           data: manager.list(),
         });
         return;
       }
 
-      if (request.method === "POST" && pathname === "/api/browsers") {
+      if (request.method === "POST" && businessPath === "/api/browsers") {
         const payload = await readJson(request);
         const browser = await manager.create({
           workspaceId: payload.workspace_id,
@@ -283,7 +291,7 @@ async function main() {
         return;
       }
 
-      const downloadMatch = pathname.match(/^\/api\/browsers\/([^/]+)\/downloads\/([^/]+)$/);
+      const downloadMatch = businessPath.match(/^\/api\/browsers\/([^/]+)\/downloads\/([^/]+)$/);
       if (request.method === "GET" && downloadMatch) {
         await sendDownload(response, manager.download(downloadMatch[1], downloadMatch[2]), {
           browserId: downloadMatch[1], artifactId: downloadMatch[2], kind: "download",
@@ -291,7 +299,7 @@ async function main() {
         return;
       }
 
-      const screenshotMatch = pathname.match(/^\/api\/browsers\/([^/]+)\/screenshots\/([^/]+)$/);
+      const screenshotMatch = businessPath.match(/^\/api\/browsers\/([^/]+)\/screenshots\/([^/]+)$/);
       if (request.method === "GET" && screenshotMatch) {
         await sendDownload(
           response,
@@ -301,7 +309,7 @@ async function main() {
         return;
       }
 
-      const browserMatch = pathname.match(/^\/api\/browsers\/([^/]+)(?:\/([^/]+))?$/);
+      const browserMatch = businessPath.match(/^\/api\/browsers\/([^/]+)(?:\/([^/]+))?$/);
       if (browserMatch) {
         const browserId = browserMatch[1];
         const action = browserMatch[2] || "";
@@ -584,7 +592,20 @@ async function main() {
     }
   });
 
-  const wss = new WebSocketServer({ server, path: "/browser" });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    try {
+      const { url, pathname } = normalizePathname(request);
+      if (pathname !== "/services/socket/browser") throw Object.assign(new Error("未知 Browser WebSocket 路径"), { statusCode: 404 });
+      if (request.headers["x-local-token"] !== plugin.token) throw Object.assign(new Error("Browser 插件连接凭据无效"), { statusCode: 403 });
+      requestWorkspace(request, url, workspaceId);
+      wss.handleUpgrade(request, socket, head, (connection) => wss.emit("connection", connection, request));
+    } catch (error) {
+      const status = error.statusCode ?? 500;
+      const body = error.message;
+      socket.end(`HTTP/1.1 ${status} Browser Service Rejected\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    }
+  });
   wss.on("connection", (socket, request) => {
     const client = wsClient(socket);
     try {

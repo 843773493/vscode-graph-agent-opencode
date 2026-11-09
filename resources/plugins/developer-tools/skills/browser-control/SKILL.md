@@ -8,6 +8,8 @@ allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navig
 
 ## 调用约定
 
+- 本说明随目标工作区的 Browser 插件发布；先用 `skill_load(name="browser-control")` 加载，再通过原工具信封操作。读取说明不授予工具权限，也不创建浏览器。
+- 操作始终由目标 Gateway 托管的 Browser 插件执行，本机路径和本机端口均按目标机器解释。
 - 所有工具都必须通过固定入口 `invoke_extension_tool` 调用。
 - `tool_name` 必须使用本 Skill 声明的工具名；`arguments` 必须符合对应的 `arguments_schema`。
 - 工具返回的 `pageId` 是后续调用使用的浏览器实例 ID。`readPage` 返回的 `pages[].page_id` 是标签页 `tabId`。
@@ -55,6 +57,12 @@ allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navig
         "type": "boolean",
         "default": false,
         "description": "为 false 时优先接管当前会话的运行中浏览器；为 true 时新建浏览器。"
+      },
+      "retention_scope": {
+        "type": "string",
+        "enum": ["thread", "workspace"],
+        "default": "thread",
+        "description": "thread 为来源 Thread 临时浏览器；workspace 创建或提升为工作区持久浏览器。"
       }
     }
   }
@@ -267,7 +275,7 @@ allowed-tools: listBrowserPage, openBrowserPage, readPage, screenshotPage, navig
       },
       "timeoutMs": {
         "type": "integer",
-        "default": 5000,
+        "default": 10000,
         "minimum": 1,
         "maximum": 60000
       }

@@ -54,7 +54,7 @@ browser/
 
 `test_browser_storage_diagnostics.py`通过真实Node/HTTP/Chromium截图、原生目录冲突及日志writer的真实ENOTDIR次错，核对原失败操作、公开查询、冷磁盘记录和显式重试后的PNG字节；关键资源状态由正式创建／截图入口生成，故障文件仅制造fs边界冲突。suite `integration-browser-storage-diagnostics`固定60秒/4GiB；不代其它存储出口的网络验收、Gateway/Web、Python业务owner、Backend重启或Windows实机。
 
-性能测试通过 `psutil` 遍历 Browser 后端的子进程，避免依赖 `/proc` 与 `sysconf`：CPU统一累计用户态和系统态秒数；内存 Linux 采样 PSS，Windows/macOS 采样 USS，结果同时记录指标名。服务关闭在 POSIX 发送 SIGTERM，在 Windows 使用独立进程组和 CTRL_BREAK_EVENT，以触发 Browser Manager 的检查点保存。
+性能测试经 `browser_plugin_gateway_for_workspace` 启动正式 Gateway Browser 插件，再通过插件 HTTP/WS 路由测量资源治理、帧传输与进程树资源；插件 owner 重启后核对原 Browser 身份和页面状态恢复。`psutil` 遍历插件进程的子进程：CPU累计用户态和系统态秒数；Linux采样PSS，Windows/macOS采样USS，并记录指标名。
 
 `browser_shutdown_operations.mjs`另经正式创建与交互生成两个真实页面，仅暂停其中一项原context释放：核整次关闭观察到期、peer的真实检查点和context终态、同Promise重入不重复释放、原执行结束后共享运行时关闭及两个原ID冷恢复表单。它验证协作式等待及关闭接管，不证明任意脚本可强制终止或生产进程退出；默认30秒与跨阶段预算由定向Manager单测核对。
 
@@ -71,7 +71,7 @@ browser/
 ## 规范
 
 - 工作区、端口和产物按测试文件隔离到 `out/tests/integration/workspace_services/browser/`。
-- 工具测试的进程内`browser_runtime`与后端进程必须共用`integration_startup_mount`提供的显式服务地址；仅创建专属端口的辅助进程，不会自动改变进程内容器的目标，不能依赖默认8012/8015恰好可用。
+- 工具测试由`integration_startup_mount`提供明确的工作区挂载；Browser 插件实例经工作区 Gateway 配置绑定，并通过精确的插件 HTTP/WS 路由访问。测试不得启动或推测 Browser 独立后端地址。
 - 性能测试的页面HTTP服务在绑定后立即登记socket关闭；线程成功启动后再登记shutdown和join，避免启动失败时保留监听端口。停止、等待线程、关闭socket是独立释放动作，某一步失败或中断仍尝试后续动作，并保留原异常链。
 
 同一版本排空文件还验证冷Python owner单次30秒等待：经正式创建及生命周期关闭得到资源，真实HTTP返回清单/授权版本后暂停回执，仅推进原截止；核同一页面、冻结版本、未知状态和同版本重试。它证明协作式恢复等待到期，不证明同步阻塞、真实网络永久挂起、独立Backend重启或整个operation/shutdown期限。

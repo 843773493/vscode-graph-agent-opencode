@@ -33,7 +33,7 @@ app/gateway/
 根层模块索引：`auth.py` 校验本地与联邦访问凭据；`credentials.py` 管理 Gateway 联邦凭据和身份；
 `federation_pairing.py` 提供凭据签发命令；`managed_workspaces.py` 和 `remote_gateway.py` 协调直接及远端
 工作区目标；`ssh_command.py`、`ssh_config.py`、`ssh_connections.py` 解析 SSH 配置并生成连接参数；
-`auxiliary_proxy.py` 转发 Browser 辅助服务及 Gateway 发布的 Terminal attach 静态资源，`proxy_upstream.py` 转发上游 Gateway 请求；
+`auxiliary_proxy.py` 发布 Gateway 管理的 Browser/Terminal attach 静态资源，插件业务服务由 `server/service_plugin_proxy.py` 统一代理；`proxy_upstream.py` 转发上游 Gateway 请求；
 `device_connections.py` 管理设备连接 API；`diagnostics.py` 汇集 Gateway 诊断信息；`runtime_proof.py`
 负责运行配置应用与健康证明；`service_types.py` 定义共享服务类型；工作区 UUID 由既有 `app/core/workspace_identity.py` 管理；
 `ui_settings.py` 合并 UI 设置。不要仅因文件变长就按语法类型拆分；应先找出独立的数据 owner 和调用边界。
