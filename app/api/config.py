@@ -4,13 +4,24 @@ import asyncio
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_config_service, get_request_id, verify_local_token
+from app.api.deps import (
+    get_config_service,
+    get_request_id,
+    get_workspace_container,
+    verify_local_token,
+)
 from app.api.errors import state_conflict_http_error
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
+from app.container import AppContainer
 from app.core.trace_middleware import require_current_gateway_id
+from app.schemas.gateway.plugin_private_inputs import (
+    PluginPrivateInputReference,
+    PluginPrivateInputWriteRequest,
+)
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.config import (
     ConfigDTO,
@@ -29,14 +40,51 @@ from app.schemas.internal_v2.config import (
     ConfigUpdateRequest,
 )
 from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
+from app.services.infrastructure.config.plugin_private_inputs import (
+    PluginPrivateInputStore,
+    validate_private_input,
+)
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
 )
 from app.services.infrastructure.config_service import ConfigService
+from configs.plugin_parameters import plugin_parameters
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+@router.post("/plugin-private-inputs", response_model=APIResponse[PluginPrivateInputReference])
+async def write_plugin_private_input(
+    payload: PluginPrivateInputWriteRequest,
+    response: Response,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    container: Annotated[AppContainer, Depends(get_workspace_container)],
+) -> APIResponse[PluginPrivateInputReference]:
+    gateway_id = require_current_gateway_id("插件私有参数写入")
+    if payload.gateway_id != gateway_id or payload.workspace_id != container.workspace_id:
+        raise HTTPException(409, "插件私有输入目标与原配置 owner 不一致")
+    service = container.config_service
+    try:
+        document = service.get_source_document(source_key=payload.source_key, gateway_id=gateway_id)
+        if not document.writable:
+            raise ValueError("插件私有参数所选配置来源只读")
+        binding = PluginBinding(package_id=payload.package_id, plugin_id=payload.plugin_id,
+            package_version=payload.package_version, workspace_id=container.workspace_id, enabled=False)
+        declarations = await service.get_workspace_plugin_schemas([binding], gateway_id=gateway_id)
+        values = plugin_parameters(document.source_effective).get(payload.package_id, {}).get(payload.plugin_id, {})
+        validate_private_input(declarations.plugins[0].configuration_schema, values,
+            payload.parameter_pointer, payload.value.get_secret_value())
+        store = PluginPrivateInputStore(directory=container.workspace_root / ".boxteam/credentials/plugins",
+            gateway_id=gateway_id, workspace_id=container.workspace_id)
+        reference = store.write(package_id=payload.package_id, plugin_id=payload.plugin_id,
+            parameter_pointer=payload.parameter_pointer, value=payload.value)
+    except (ValueError, LookupError, FileNotFoundError, ConfigConflictError) as error:
+        raise HTTPException(409, str(error)) from error
+    response.headers["Cache-Control"] = "no-store"
+    return APIResponse(data=reference, request_id=request_id)
 
 
 def _service_plugin_runtime_manage(request: Request) -> bool:

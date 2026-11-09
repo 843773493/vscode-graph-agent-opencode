@@ -90,7 +90,7 @@ def _package(path: Path, *, package_id: str, mode: str = "") -> Path:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("nested/entry.py", PYTHON_PLUGIN.replace(
             "'pid': os.getpid(), 'instance_id': identity['instance_id'],",
-            "'parameters': json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS']), 'pid': os.getpid(), 'instance_id': identity['instance_id'],"))
+            "'parameters': {key: ('<private-present>' if key == 'credentialValue' else value) for key, value in json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS']).items()}, 'credential_digest': __import__('hashlib').sha256(json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS']).get('credentialValue', '').encode()).hexdigest(), 'pid': os.getpid(), 'instance_id': identity['instance_id'],"))
         archive.writestr("nested/local_module.py", "VALUE = 1\n")
     return path
 
@@ -243,12 +243,35 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-private-parameters",
             {"credentialValue": "must-not-reach-source"}, expected_status=409)
 
-        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-parameters", {"label": "A changed"})
+        private_value = "workspace-private-input-sentinel"
+        private_response = exchange("POST", f"/api/v1/workspaces/{workspace_a_id}/config/plugin-private-inputs", {
+            "gateway_id": target_gateway, "workspace_id": workspace_a_id, "package_id": "probe.tools",
+            "plugin_id": "probe", "package_version": "1.0.0", "source_key": "workspace_root_mutable_override",
+            "parameter_pointer": "/credentialValue", "value": private_value,
+        }).raise_for_status()
+        assert private_response.headers["Cache-Control"] == "no-store"
+        private_reference = private_response.json()["data"]
+        assert private_value not in private_response.text
+        write_binding(workspace_b_id, [binding_for("probe.tools")], "workspace-b-foreign-private-reference",
+            {"credentialValue": private_reference}, expected_status=409)
+        missing_reference = {**private_reference, "version": "0" * 32}
+        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-missing-private-reference",
+            {"credentialValue": missing_reference}, expected_status=409)
+        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-parameters",
+            {"label": "A changed", "credentialValue": private_reference})
+        source_path = f"/api/v1/workspaces/{workspace_a_id}/config/sources/workspace_root_mutable_override"
+        document = exchange("GET", source_path).raise_for_status()
+        assert private_value not in document.text
+        assert private_reference["version"] in document.text
+        assert private_value not in (workspaces[0] / ".boxteam/workspace.jsonc").read_text()
+        private_file = workspaces[0] / ".boxteam/credentials/plugins" / (private_reference["version"] + ".json")
+        assert json.loads(private_file.read_text())["value"] == private_value
         changed_a = _wait_for(lambda value: (item := status_for(value, workspace_a_id)) is not None
             and item["state"] == "ready" and item["instance"]["instance_id"] != ready_a["instance"]["instance_id"])
         assert_process_exited(ready_a["instance"]["process_id"])
         ready_a = status_for(changed_a, workspace_a_id)
-        assert ready_a is not None and call(ready_a)["parameters"] == {"label": "A changed"}
+        assert ready_a is not None and call(ready_a)["parameters"] == {"label": "A changed", "credentialValue": "<private-present>"}
+        assert call(ready_a)["credential_digest"] == hashlib.sha256(private_value.encode()).hexdigest()
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
         restarted = exchange("POST", f"/api/gateway/workspaces/{workspace_a_id}/runtime/restart-safe",
@@ -256,7 +279,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         assert restarted.status_code == 200
         same_a = wait_binding(workspace_a_id, "ready")
         assert same_a["instance"]["instance_id"] == ready_a["instance"]["instance_id"]
-        assert call(same_a)["parameters"] == {"label": "A changed"}
+        assert call(same_a)["parameters"] == {"label": "A changed", "credentialValue": "<private-present>"}
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
         restarted_plugin = exchange("POST", "/api/gateway/service-plugins/restart", {
@@ -271,7 +294,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         assert_process_exited(same_a["instance"]["process_id"])
         assert call_response(same_a).status_code == 409, "插件重启后旧 instance_id 必须失效，不能改投新实例"
         ready_a = restarted_plugin
-        assert call(ready_a)["parameters"] == {"label": "A changed"}
+        assert call(ready_a)["parameters"] == {"label": "A changed", "credentialValue": "<private-present>"}
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
         write_binding(workspace_a_id, [binding_for("probe.tools", enabled=False)], "workspace-a-plugin-disable")

@@ -8,7 +8,7 @@ import logging
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,9 +47,13 @@ from app.schemas.gateway.service_plugin import (
     PluginInstanceStatus,
     ServicePluginManifest,
 )
+from app.services.infrastructure.config.plugin_private_inputs import (
+    PluginPrivateInputStore,
+    requires_private_delivery,
+    validate_plugin_parameters,
+)
 from configs.plugin_parameters import (
     PluginParameters,
-    PluginParameterValidator,
     plugin_parameters,
 )
 
@@ -144,6 +148,9 @@ class GatewayPluginRuntime:
         self.slots: dict[Slot, PluginSlot] = {}
         self._locks: dict[Slot, asyncio.Lock] = {}
         self.client = httpx.AsyncClient(trust_env=False, timeout=10, follow_redirects=False)
+        self.private_inputs = PluginPrivateInputStore(directory=home / "credentials/plugins",
+            gateway_id=gateway_id, workspace_id=None)
+        self.workspace_parameters: Callable[[PluginBinding, str], Awaitable[dict[str, JsonValue]]] | None = None
 
     @staticmethod
     def key(binding: PluginBinding) -> Slot:
@@ -172,22 +179,17 @@ class GatewayPluginRuntime:
                 raise ValueError(f"新建工作区默认值只接受已安装的 workspace 插件: {binding.package_id}/{binding.plugin_id}")
 
     def validate_bindings(self, bindings: list[PluginBinding], *, workspace_id: str | None,
-                          parameters: PluginParameters | None = None) -> None:
+                          parameters: PluginParameters | None = None,
+                          delivered: PluginParameters | None = None) -> None:
         for binding in bindings:
             declaration = self.declaration(binding)
             values = (parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {})
-            schema = declaration.contributes.configuration
-            if schema is None:
-                if values:
-                    raise ValueError(f"插件未声明参数: {binding.package_id}/{binding.plugin_id}")
-            else:
-                error = next(PluginParameterValidator(schema).iter_errors(values), None)
-                if error is not None:
-                    if error.validator == "writeOnly":
-                        raise ValueError("插件秘密参数尚未接入私有输入 owner，不能通过普通参数提交") from error
-                    raise ValueError(f"插件参数不符合 {binding.package_id}/{binding.plugin_id}"
-                                     f"@{binding.package_version} schema: field={list(error.absolute_path)}, "
-                                     f"constraint={error.validator}") from error
+            resolved = (self.private_inputs.resolve(values, package_id=binding.package_id, plugin_id=binding.plugin_id,
+                        schema=declaration.contributes.configuration)
+                        if workspace_id is None else
+                        delivered.get(binding.package_id, {}).get(binding.plugin_id, {})
+                        if delivered is not None else None)
+            validate_plugin_parameters(declaration.contributes.configuration, values, resolved)
         self.skill_sources.validate_plugin_bindings(bindings, self.packages, workspace_id=workspace_id)
 
     async def apply(self, payload: dict[str, object], revision: str) -> None:
@@ -300,7 +302,16 @@ class GatewayPluginRuntime:
         environment["BOXTEAM_PLUGIN_COMMANDS"] = json.dumps([
             command.model_dump(mode="json") for command in slot.declaration.contributes.commands
         ])
-        environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(slot.parameters, ensure_ascii=False)
+        values = slot.parameters
+        if slot.binding.workspace_id is None:
+            values = self.private_inputs.resolve(values, package_id=slot.binding.package_id,
+                plugin_id=slot.binding.plugin_id, schema=slot.declaration.contributes.configuration)
+        elif requires_private_delivery(values, slot.declaration.contributes.configuration):
+            if self.workspace_parameters is None:
+                raise RuntimeError("Workspace 插件私有参数尚未接入原配置 owner")
+            values = await self.workspace_parameters(slot.binding, slot.revision)
+        validate_plugin_parameters(slot.declaration.contributes.configuration, slot.parameters, values)
+        environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(values, ensure_ascii=False)
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])
         root = self.packages.package_root(slot.binding.package_id, slot.binding.package_version)
         working_directory = self.directory / instance_id
@@ -318,6 +329,7 @@ class GatewayPluginRuntime:
         log_file = self.logs.open("service-plugin", instance_id)
         process = _spawn_logged_process([executable, str(root / entrypoint[0]), *entrypoint[1:]],
             log_file=log_file, cwd=working_directory, env=environment, detached=True)
+        del environment["BOXTEAM_PLUGIN_PARAMETERS"]
         slot.process = ManagedProcess(process, log_file)
         deadline = time.monotonic() + 10
         try:

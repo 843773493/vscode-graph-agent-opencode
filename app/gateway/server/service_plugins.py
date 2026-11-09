@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.runtime_control import verify_local_control_request
 from app.core.shielded_cleanup import run_sync_shielded
@@ -31,6 +31,12 @@ from app.gateway.server.management_routes import (
     management_gateway_route,
 )
 from app.schemas.canonical_params import CanonicalWorkspaceId
+from app.schemas.gateway.plugin_private_inputs import (
+    PluginParameterSchema,
+    PluginPrivateInputReference,
+    PluginPrivateInputWriteRequest,
+    WorkspacePluginSchemas,
+)
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
     InstallPluginRequest,
@@ -45,14 +51,36 @@ from app.schemas.gateway.service_plugin import (
     WorkspacePluginConfigurationDTO,
 )
 from app.schemas.gateway.service_plugin_workspace import (
-    WorkspacePluginCandidate,
     WorkspacePluginCreation,
+    WorkspacePluginValidation,
 )
 from app.schemas.internal_v2.common import APIResponse
+from app.services.infrastructure.config.plugin_private_inputs import (
+    validate_private_input,
+)
 from configs.plugin_parameters import plugin_parameters
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.post("/api/internal/service-plugins/workspaces/{workspace_id}/schemas", include_in_schema=False,
+    dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
+async def workspace_parameter_schemas(workspace_id: CanonicalWorkspaceId, bindings: list[PluginBinding],
+    request: Request,
+) -> APIResponse[WorkspacePluginSchemas]:
+    registry = request.app.state.registry
+    try:
+        target = registry.resolve((registry.gateway_id, workspace_id))
+        if target.connection_kind != "local" or any(binding.workspace_id != workspace_id for binding in bindings):
+            raise ValueError("插件参数声明必须属于认证交付的原生工作区")
+        owner = request.app.state.service_plugins
+        plugins = [PluginParameterSchema(binding=binding,
+            configuration_schema=owner.declaration(binding).contributes.configuration) for binding in bindings]
+    except (ValueError, LookupError, FileNotFoundError) as error:
+        raise HTTPException(409, str(error)) from error
+    return APIResponse(data=WorkspacePluginSchemas(gateway_id=registry.gateway_id,
+        workspace_id=workspace_id, plugins=plugins), request_id=get_request_id(request))
 
 
 @router.post("/api/internal/service-plugins/workspaces/{workspace_id}/refresh", include_in_schema=False,
@@ -67,7 +95,7 @@ async def refresh_workspace(workspace_id: CanonicalWorkspaceId, request: Request
 
 @router.post("/api/internal/service-plugins/workspaces/{workspace_id}/validate", include_in_schema=False,
     dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
-async def validate_workspace_bindings(workspace_id: CanonicalWorkspaceId, candidate: WorkspacePluginCandidate,
+async def validate_workspace_bindings(workspace_id: CanonicalWorkspaceId, candidate: WorkspacePluginValidation,
     request: Request,
 ) -> APIResponse[bool]:
     # Workspace 已登记原 pending 引用；与卸载串行核安装存在后才允许发布 active。
@@ -82,7 +110,7 @@ async def validate_workspace_bindings(workspace_id: CanonicalWorkspaceId, candid
             if len(keys) != len(bindings) or any(binding.workspace_id != workspace_id for binding in bindings):
                 raise ValueError("插件绑定必须唯一且属于认证交付的工作区")
             request.app.state.service_plugins.validate_bindings(bindings, workspace_id=workspace_id,
-                                                               parameters=candidate.parameters)
+                parameters=candidate.parameters, delivered=candidate.delivery.values.get_secret_value())
     except (ValueError, LookupError, FileNotFoundError) as error:
         raise HTTPException(409, str(error)) from error
     return APIResponse(data=True, request_id=get_request_id(request))
@@ -103,6 +131,38 @@ async def relay(request: Request, target: PluginTarget, auth: GatewayAuthContext
             json=body, headers=route.headers)
         check_management_route(request, route)
         return response
+
+
+@router.post("/api/gateway/service-plugins/private-inputs", response_model=APIResponse[PluginPrivateInputReference])
+async def write_gateway_private_input(payload: PluginPrivateInputWriteRequest, request: Request, response: Response,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
+) -> APIResponse[PluginPrivateInputReference]:
+    remote = await relay(request, payload, auth)
+    if remote is not None:
+        if remote.is_error:
+            raise HTTPException(remote.status_code, remote.json().get("detail"))
+        response.headers["Cache-Control"] = "no-store"
+        return APIResponse[PluginPrivateInputReference].model_validate_json(remote.content)
+    require_federation_capability(request, auth, "configuration_write")
+    if payload.gateway_id != owner.gateway_id or payload.workspace_id is not None:
+        raise HTTPException(409, "Gateway 私有输入必须属于当前原生配置 owner")
+    try:
+        document = request.app.state.gateway_config_reload.get_source_document(source_key=payload.source_key)
+        if not document.writable:
+            raise ValueError("插件私有参数所选配置来源只读")
+        binding = PluginBinding(package_id=payload.package_id, plugin_id=payload.plugin_id,
+            package_version=payload.package_version, enabled=False)
+        schema = owner.declaration(binding).contributes.configuration
+        values = plugin_parameters(document.source_effective).get(payload.package_id, {}).get(payload.plugin_id, {})
+        validate_private_input(schema, values, payload.parameter_pointer, payload.value.get_secret_value())
+        reference = await run_sync_shielded(lambda: owner.private_inputs.write(package_id=payload.package_id,
+            plugin_id=payload.plugin_id, parameter_pointer=payload.parameter_pointer, value=payload.value))
+    except (ValueError, LookupError, FileNotFoundError) as error:
+        raise HTTPException(409, str(error)) from error
+    require_federation_capability(request, auth, "configuration_write")
+    response.headers["Cache-Control"] = "no-store"
+    return APIResponse(data=reference, request_id=get_request_id(request))
 
 
 @router.post("/api/gateway/service-plugins/inventory")

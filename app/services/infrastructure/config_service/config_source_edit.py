@@ -226,6 +226,7 @@ class ConfigSourceEditMixin:
         _, candidate = self._preflight_source_edit(source_key, gateway_id, request)
         await service._validate_gateway_workspace_plugin_bindings(
             previous=service._require_snapshot(), candidate=candidate, candidate_id=request.idempotency_key,
+            gateway_id=gateway_id,
         )
         with service._mcp_configuration_guard(candidate.to_dict().get("mcp")):
             pass
@@ -275,6 +276,7 @@ class ConfigSourceEditMixin:
             != workspace_plugin_bindings_for_root(desired, workspace_root=service._workspace_root)):
             await service._validate_gateway_workspace_plugin_bindings(
                 previous=previous, candidate=candidate, candidate_id=request.idempotency_key,
+                gateway_id=gateway_id,
             )
         intent: dict[str, object] = {"gateway_id": gateway_id, "workspace_id": request.workspace_id,
                   "source_key": source_key, "request_digest": request_digest, "file_digest": sha256(text.encode("utf-8")).hexdigest(),

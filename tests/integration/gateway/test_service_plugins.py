@@ -107,11 +107,13 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         data = exchange("POST", "/api/gateway/service-plugins/status", target).raise_for_status().json()["data"]
         return {item["binding"]["plugin_id"]: item for item in data["plugins"]}
 
-    def bind(entries: list[dict[str, object]]) -> dict[str, object]:
+    def bind(entries: list[dict[str, object]], parameters: dict[str, object] | None = None) -> dict[str, object]:
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
         source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        if parameters is not None:
+            source["plugins"]["configuration"] = {"values": {"probe.tools": {"python": parameters}}}
         reply = exchange("PUT", path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
             "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
@@ -130,8 +132,11 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         manifest = {"manifest_version": 1, "package_id": "probe.tools", "version": version,
             "name": "真实受控插件", "extension_contract_version": 1, "plugins": [
                 {"id": runtime, "name": runtime, "instance_scope": "gateway",
-                 "requires": [{"extension_point": "services", "version": 1}],
-                 "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]},
+                 "requires": [{"extension_point": "services", "version": 1},
+                    {"extension_point": "configuration", "version": 1}],
+                 "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}],
+                    "configuration": {"type": "object", "additionalProperties": False,
+                        "properties": {"credentialValue": {"type": "string", "minLength": 8, "writeOnly": True}}}},
                  "runtime": runtime, "entrypoint": ["nested/custom/entry.py", mode] if runtime == "python" else ["another/plugin.mjs"],
                  "management_protocol_version": 1} for runtime in ("python", "node")] + [
                 {"id": "declarations", "name": "无进程配置", "instance_scope": "gateway",
@@ -139,7 +144,9 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
                  "contributes": {"configuration": {"type": "object", "properties": {}}}}]}
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("plugin.jsonc", json.dumps(manifest))
-            archive.writestr("nested/custom/entry.py", PYTHON_PLUGIN)
+            archive.writestr("nested/custom/entry.py", PYTHON_PLUGIN.replace(
+                "'version': identity['package_version'], 'cwd': os.getcwd(),",
+                "'credential_digest': __import__('hashlib').sha256(json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS']).get('credentialValue', '').encode()).hexdigest(), 'version': identity['package_version'], 'cwd': os.getcwd(),"))
             archive.writestr("nested/custom/local_module.py", "VALUE = 1\n")
             archive.writestr("another/plugin.mjs", NODE_PLUGIN)
         return path
@@ -177,6 +184,24 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert echo(python).raise_for_status().json()["version"] == "1.0.0"
         assert echo(node).raise_for_status().json()["version"] == "1.0.0"
         assert "/plugins/packages/" not in echo(python).json()["cwd"]
+        private_value = "gateway-private-input-sentinel"
+        private_request = {**target, "package_id": "probe.tools", "plugin_id": "python", "package_version": "1.0.0",
+            "source_key": "gateway_mutable_override", "parameter_pointer": "/credentialValue", "value": private_value}
+        for invalid in ({"parameter_pointer": "/undeclared"}, {"package_version": "missing"}, {"source_key": "inline:0"},
+                        {"value": "short"}):
+            rejected = exchange("POST", "/api/gateway/service-plugins/private-inputs", {**private_request, **invalid})
+            assert rejected.status_code == 409 and private_value not in rejected.text
+        private_response = exchange("POST", "/api/gateway/service-plugins/private-inputs", private_request).raise_for_status()
+        assert private_response.headers["Cache-Control"] == "no-store" and private_value not in private_response.text
+        reference = private_response.json()["data"]
+        current = bind(entries(), {"credentialValue": reference})
+        python = current["python"]
+        assert current["node"]["instance"] == node["instance"]
+        digest = hashlib.sha256(private_value.encode()).hexdigest()
+        assert echo(python).raise_for_status().json()["credential_digest"] == digest
+        source_document = exchange("GET", "/api/gateway/config/sources/gateway_mutable_override").json()["data"]
+        assert private_value not in json.dumps(source_document)
+        assert private_value not in json.dumps(states())
         blocked = exchange("POST", "/api/gateway/service-plugins/uninstall",
             {**target, "package_id": "probe.tools", "package_version": "1.0.0"})
         assert blocked.status_code == 409
@@ -184,6 +209,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
             "package_id": "probe.tools", "package_version": "1.0.0", "plugin_id": "python", "revision": python["revision"]})
         restarted.raise_for_status()
         python_new = restarted.json()["data"]
+        assert echo(python_new).raise_for_status().json()["credential_digest"] == digest
         assert python_new["instance"]["instance_id"] != python["instance"]["instance_id"]
         assert not psutil.pid_exists(python["instance"]["process_id"])
         assert echo(python).status_code == 409

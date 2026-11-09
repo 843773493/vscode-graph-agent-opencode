@@ -4,6 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
+import type { Value } from "@bufbuild/protobuf/wkt";
 
 /**
  * Describes the file boxteam/gateway/v2/service_plugin.proto.
@@ -849,6 +850,110 @@ export declare type PluginTarget = Message<"boxteam.gateway.v2.PluginTarget"> & 
  * Use `create(PluginTargetSchema)` to create a new message.
  */
 export declare const PluginTargetSchema: GenMessage<PluginTarget>;
+
+/**
+ * 私有值只进入所属配置 owner 的受限文件；普通配置和回执保存引用。
+ *
+ * @generated from message boxteam.gateway.v2.PluginPrivateInputReference
+ */
+export declare type PluginPrivateInputReference = Message<"boxteam.gateway.v2.PluginPrivateInputReference"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 3;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: string package_id = 4;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string plugin_id = 5;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string parameter_pointer = 6;
+   */
+  parameterPointer: string;
+
+  /**
+   * @generated from field: string version = 7;
+   */
+  version: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginPrivateInputReference.
+ * Use `create(PluginPrivateInputReferenceSchema)` to create a new message.
+ */
+export declare const PluginPrivateInputReferenceSchema: GenMessage<PluginPrivateInputReference>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginPrivateInputWriteRequest
+ */
+export declare type PluginPrivateInputWriteRequest = Message<"boxteam.gateway.v2.PluginPrivateInputWriteRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 2;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string workspace_id = 3;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: string package_id = 4;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string plugin_id = 5;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string parameter_pointer = 6;
+   */
+  parameterPointer: string;
+
+  /**
+   * @generated from field: google.protobuf.Value value = 7;
+   */
+  value?: Value | undefined;
+
+  /**
+   * @generated from field: string package_version = 8;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: string source_key = 9;
+   */
+  sourceKey: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginPrivateInputWriteRequest.
+ * Use `create(PluginPrivateInputWriteRequestSchema)` to create a new message.
+ */
+export declare const PluginPrivateInputWriteRequestSchema: GenMessage<PluginPrivateInputWriteRequest>;
 
 /**
  * @generated from message boxteam.gateway.v2.InstallPluginRequest

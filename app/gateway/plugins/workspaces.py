@@ -7,11 +7,16 @@ import logging
 from uuid import uuid4
 
 import httpx
+from pydantic import JsonValue
 
 from app.core.trace_middleware import get_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
+from app.schemas.gateway.plugin_private_inputs import (
+    PluginParameterDelivery,
+    PluginParameterDeliveryRequest,
+)
 from app.schemas.gateway.service_plugin import (
     PluginBinding,
     WorkspacePluginConfigurationDTO,
@@ -30,6 +35,7 @@ class WorkspacePluginBindings:
 
     def __init__(self, registry: GatewayWorkspaceRegistry, runtime: GatewayPluginRuntime) -> None:
         self.registry, self.runtime = registry, runtime
+        self.runtime.workspace_parameters = self.deliver_parameters
         self.snapshots: dict[str, WorkspacePluginSnapshot] = {}
         self.states: dict[str, WorkspacePluginConfigurationDTO] = {}
         self._signatures: dict[str, tuple[object, ...]] = {}
@@ -224,6 +230,24 @@ class WorkspacePluginBindings:
                 raise ValueError("工作区配置交接来自已失效 Backend generation")
             self.registry.confirm_backend_management_identity(route, snapshot.backend_id)
             return snapshot
+
+    async def deliver_parameters(self, binding: PluginBinding, revision: str) -> dict[str, JsonValue]:
+        """只在新实例启动时读取原 owner；不缓存或写入接管材料。"""
+        assert binding.workspace_id is not None
+        request_id = get_current_request_id() or f"plugin-parameters-{uuid4().hex}"
+        with self.registry.backend_management_routes(workspace_ids=(binding.workspace_id,)) as routes:
+            route, = routes
+            response = await self.runtime.client.post(route.base_url + "/api/internal/service-plugins/parameters",
+                json=PluginParameterDeliveryRequest(binding=binding, revision=revision,
+                    configuration_schema=self.runtime.declaration(binding).contributes.configuration).model_dump(mode="json"),
+                headers={"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id,
+                         "X-BoxTeam-Workspace-Id": binding.workspace_id,
+                         "X-BoxTeam-Gateway-Id": self.registry.gateway_id})
+            response.raise_for_status()
+            result = APIResponse[PluginParameterDelivery].model_validate_json(response.content)
+            if result.code != 0 or result.request_id != request_id or result.data is None:
+                raise ValueError("插件私有参数交付未获得原配置 owner 回执")
+            return result.data.values.get_secret_value()[binding.package_id][binding.plugin_id]
 
     def configured_bindings(self) -> list[PluginBinding]:
         return [binding for snapshot in self.snapshots.values() for binding in snapshot.bindings]

@@ -15,9 +15,11 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import type { GatewayConfigSourceDocumentDTO, GatewayConfigSourceEditRequest, GatewayConfigSourcesDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import type { PluginBinding, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import type { PluginBinding, PluginInventoryResultDTO, PluginPrivateInputReference, PluginPrivateInputWriteRequest,
+  PluginRuntimeStatusDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
+import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import { gateway } from '../agentApi.js';
 import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
@@ -27,6 +29,7 @@ type ConfigDocument = GatewayConfigSourceDocumentDTO | ConfigSourceDocumentDTO;
 type ConfigIntent = GatewayConfigSourceEditRequest | ConfigSourceEditRequest;
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 type Source = { source_key?: string | null; layer: string; presence: string; uri?: string | null; writable?: boolean };
+type PrivateParameter = { pointer: string; schema: Record<string, unknown> };
 
 const targetHeader = (gatewayId: string) => ({ 'X-BoxTeam-Target-Gateway-Id': gatewayId });
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -85,7 +88,7 @@ async function readWorkspaceBindings(target: GatewayWorkspaceRequestTarget): Pro
 
 async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
   quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null,
-  editParameters = false): Promise<void> {
+  editParameters = false, privateParameter?: PrivateParameter): Promise<void> {
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
   let document: ConfigDocument;
   let route: { gateway_id: string; workspace_id?: string };
@@ -113,7 +116,53 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
   }
   if (!document.writable) throw new Error(`配置来源 ${source.source_key} 只读，未提交插件变更`);
   let jsonc: string;
-  if (editParameters) {
+  let privateInputConfirmed = false;
+  if (privateParameter) {
+    const parameterPath = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
+      ...privateParameter.pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
+    let current: unknown = parse(document.jsonc);
+    for (const key of parameterPath) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
+    const configured = current !== undefined;
+    const action = await quickInput.pick([{ label: configured ? '更换已设置秘密参数' : '设置秘密参数', clear: false },
+      ...(current !== undefined
+        ? [{ label: '清除此来源的秘密覆盖', clear: true }] : [])],
+    { title: `${binding.package_id}/${binding.plugin_id}${privateParameter.pointer}`, placeHolder: '原值不会回读；更换会创建新的不可变秘密版本' });
+    if (!action) return;
+    let storedValue: unknown;
+    if (!action.clear) {
+      const text = await quickInput.input({ title: '输入插件秘密参数', prompt: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key}`,
+        password: true, validateInput: async value => {
+          if (privateParameter.schema.type === 'string' || !value) return null;
+          try { JSON.parse(value); return null; } catch { return '此秘密字段需要输入有效 JSON'; }
+        } });
+      if (text === undefined) return;
+      storedValue = privateParameter.schema.type === 'string' ? text : JSON.parse(text);
+      const accepted = await quickInput.pick([{ label: '取消' }, { label: '确认保存秘密', save: true,
+        description: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key} · ${binding.package_id}@${binding.package_version}/${binding.plugin_id}${privateParameter.pointer}` }],
+      { title: '确认目标、来源与秘密参数' });
+      if (!accepted?.save) return;
+      privateInputConfirmed = true;
+      const writeTarget: PluginPrivateInputWriteRequest = { gateway_id: gatewayTarget.gateway_id, ...(gatewayTarget.gateway_connection_id
+        ? { gateway_connection_id: gatewayTarget.gateway_connection_id } : {}),
+        ...(workspaceTarget ? { workspace_id: workspaceTarget.workspace_id } : {}), package_id: binding.package_id,
+        plugin_id: binding.plugin_id, package_version: binding.package_version, source_key: source.source_key!,
+        parameter_pointer: privateParameter.pointer, value: storedValue };
+      const privatePath = workspaceTarget
+        ? `/api/v1/workspaces/${encodeURIComponent(workspaceTarget.workspace_id)}/config/plugin-private-inputs`
+        : '/api/gateway/service-plugins/private-inputs';
+      const reference = await gateway.request<PluginPrivateInputReference>(privatePath, {
+        method: 'POST', headers: workspaceTarget ? gatewayWorkspaceRequestHeaders(workspaceTarget)
+          : targetHeader(gatewayTarget.gateway_id),
+        body: JSON.stringify(writeTarget),
+      });
+      if (reference.kind !== 'plugin_private_file' || reference.gateway_id !== gatewayTarget.gateway_id
+        || (reference.workspace_id ?? null) !== (workspaceTarget?.workspace_id ?? null) || reference.package_id !== binding.package_id
+        || reference.plugin_id !== binding.plugin_id || reference.parameter_pointer !== privateParameter.pointer
+        || !reference.version) throw new Error('插件秘密输入写入回执归属或引用版本无效');
+      storedValue = reference;
+    }
+    jsonc = updateJsonc(document.jsonc, parameterPath, action.clear ? undefined : storedValue);
+  } else if (editParameters) {
     if (scope === 'defaults') throw new Error('新建工作区默认值只保存绑定；参数由目标工作区配置 owner 管理');
     const parameterPath = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id];
     let current: unknown = parse(document.jsonc);
@@ -147,8 +196,8 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
     expected_active_revision: document.active_revision, expected_active_digest: document.active_digest,
     idempotency_key: crypto.randomUUID() }) as ConfigIntent;
   let saved: ConfigDocument;
-  const change = editParameters ? '修改参数' : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
-  const confirmation = editParameters ? '插件参数' : '插件绑定';
+  const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
+  const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数' : '插件绑定';
   if (gatewaySource) {
     const query = gatewayTarget.gateway_connection_id ? `?gateway_connection_id=${encodeURIComponent(gatewayTarget.gateway_connection_id)}` : '';
     const headers = targetHeader(gatewayTarget.gateway_id);
@@ -156,7 +205,7 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
     const preflight = await gateway.request<{ document?: GatewayConfigSourceDocumentDTO; changed_paths: string[] }>(
       `/api/gateway/config/sources/${key}/preflight${query}`, { method: 'POST', headers, body: JSON.stringify(intent) });
     if (!preflight.document || preflight.document.gateway_id !== gatewayTarget.gateway_id || preflight.document.source_key !== source.source_key) throw new Error('Gateway 配置预检回执归属不匹配');
-    const accepted = await quickInput.pick([{ label: '取消' }, { label: `确认保存 Gateway ${confirmation}`, save: true,
+    const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存 Gateway ${confirmation}`, save: true,
       description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
     { title: '确认配置提交' });
     if (!accepted?.save) return;
@@ -166,7 +215,7 @@ async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof manag
   } else {
     const workspace = workspaceTarget!;
     const preflight = await preflightConfigSource(0, workspace, intent as ConfigSourceEditRequest);
-    const accepted = await quickInput.pick([{ label: '取消' }, { label: `确认保存工作区${confirmation}`, save: true,
+    const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存工作区${confirmation}`, save: true,
       description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
     { title: '确认配置提交' });
     if (!accepted?.save) return;
@@ -371,6 +420,13 @@ export class ServicePluginPackagesView extends ViewPane {
       parameters.textContent = '编辑参数 JSON';
       parameters.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
         this.quickInput, this.notifications, bindingValue, null, true)));
+      const privateFields = writeOnlyFields(plugin.contributes?.configuration);
+      for (const field of privateFields) {
+        const secret = append(details, $('button'));
+        secret.textContent = `管理秘密参数 ${field.pointer}`;
+        secret.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
+          this.quickInput, this.notifications, bindingValue, null, false, field)));
+      }
       if (plugin.contributes?.configuration) {
         const schema = append(details, $('pre'));
         schema.setAttribute('aria-label', '此安装版本的参数 schema');
@@ -387,6 +443,18 @@ export class ServicePluginPackagesView extends ViewPane {
       }));
     }
   }
+}
+
+function writeOnlyFields(schema: Record<string, unknown> | undefined, prefix = ''): PrivateParameter[] {
+  // TODO：补齐组合 schema 与数组项的秘密位置选择；当前表单枚举对象属性，写入口仍按完整 schema 校验。
+  const properties = schema?.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return [];
+  return Object.entries(properties as Record<string, unknown>).flatMap(([key, candidate]) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+    const value = candidate as Record<string, unknown>;
+    const pointer = `${prefix}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+    return value.writeOnly === true ? [{ pointer, schema: value }] : writeOnlyFields(value, pointer);
+  });
 }
 
 async function chooseWorkspace(target: ReturnType<typeof managementGateway>, quickInput: IQuickInputService): Promise<GatewayWorkspaceRequestTarget | undefined> {

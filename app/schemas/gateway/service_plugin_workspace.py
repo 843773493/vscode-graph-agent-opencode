@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.gateway.plugin_private_inputs import PluginParameterDelivery
 from app.schemas.gateway.service_plugin import PluginBinding
 from configs.plugin_parameters import PluginParameters
 
@@ -13,6 +14,11 @@ class WorkspacePluginCandidate(BaseModel):
 
     bindings: list[PluginBinding]
     parameters: PluginParameters = Field(default_factory=dict)
+
+
+class WorkspacePluginValidation(WorkspacePluginCandidate):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    delivery: PluginParameterDelivery
 
 
 class WorkspacePluginCreation(BaseModel):

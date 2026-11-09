@@ -52,6 +52,10 @@ from app.schemas.gateway.plugin_commands import (
     PluginCommandRegistration,
     PluginCommandRegistrationsDTO,
 )
+from app.schemas.gateway.plugin_private_inputs import (
+    PluginPrivateInputReference,
+    PluginPrivateInputWriteRequest,
+)
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
     InstallPluginRequest,
@@ -237,6 +241,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     name: f"{service_plugin_pb2.DESCRIPTOR.package}.{name}"
     for name in (
         "PluginTarget", "InstallPluginRequest", "PluginVersionRequest", "RestartPluginRequest",
+        "PluginPrivateInputReference", "PluginPrivateInputWriteRequest",
         "InstalledPluginPackageDTO", "PluginInventoryResultDTO", "PluginRuntimeStatusDTO",
         "PluginSlotStatusDTO", "PluginUninstallResultDTO",
     )
@@ -310,6 +315,7 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginDebuggerContribution, PluginContributions,
         ServicePluginManifest, PluginPackageManifest, PluginBinding, PluginInstanceStatus, PluginTarget,
         InstallPluginRequest, PluginVersionRequest, RestartPluginRequest,
+        PluginPrivateInputReference, PluginPrivateInputWriteRequest,
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
         PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
         PluginSkillSourceDTO, GatewaySkillSourceEntryDTO, GatewaySkillSourcesDTO,

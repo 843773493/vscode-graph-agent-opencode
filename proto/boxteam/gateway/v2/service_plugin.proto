@@ -191,6 +191,29 @@ message PluginTarget {
   optional string gateway_connection_id = 2;
 }
 
+// 私有值只进入所属配置 owner 的受限文件；普通配置和回执保存引用。
+message PluginPrivateInputReference {
+  string kind = 1;
+  string gateway_id = 2;
+  optional string workspace_id = 3;
+  string package_id = 4;
+  string plugin_id = 5;
+  string parameter_pointer = 6;
+  string version = 7;
+}
+
+message PluginPrivateInputWriteRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  optional string workspace_id = 3;
+  string package_id = 4;
+  string plugin_id = 5;
+  string parameter_pointer = 6;
+  google.protobuf.Value value = 7;
+  string package_version = 8;
+  string source_key = 9;
+}
+
 message InstallPluginRequest {
   string gateway_id = 1;
   optional string gateway_connection_id = 2;

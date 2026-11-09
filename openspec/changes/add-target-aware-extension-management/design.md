@@ -70,6 +70,8 @@ Gateway 负责传输、实例路由和生命周期，不解析工具策略或写
 
 安装按包校验 manifest、资源路径、摘要和所需合同，准备锁定依赖后原子发布唯一安装记录。未知结构、VSIX、非法插件或不兼容合同明确拒绝，不部分安装、不自动转换。目标运行环境和发行资源提供解释器／依赖，首次工具调用不下载；安装准备子进程仍在受管边界，不执行任意安装 hook。普通请求不重新 hash 全包。自有贡献直连原 Workbench／业务服务，不提供 vscode API、Extension Host RPC、VSIX 转换或任意 renderer 脚本注入。
 
+通用插件秘密参数采用 D9 的秘密输入、存储与运行交付合同，支持用户直接输入后安全保存，也保留 `${ENV_NAME}`／`env:NAME` 的既有环境引用。manifest 的 writeOnly 在本项目表示秘密输入及禁止普通读取回显，不是禁止用户经受保护入口输入真实值；普通 JSONC／参数通道仅接受合法引用。schema 声明不是秘密存储实现，不按字段名猜测秘密，也不在普通文本中自动展开环境变量。
+
 ### D4. 控制合同与业务合同各有版本
 
 所有运行代码的插件提供同一管理合同：启动就绪回执、status、shutdown、诊断配置 apply／status，以及实际支持的统计读取。管理回执以插件实例为身份，包含 package_id／版本、plugin_id、作用域、instance_id、管理及扩展合同版本、状态、能力及可为空的已导出服务清单；命令处理代码插件可以不提供任何服务。service_id 只在服务清单和具体业务路由内使用，不作为插件管理操作的单值身份；未知或不兼容版本在就绪前拒绝。纯声明插件没有 ready 进程，其贡献状态独立于运行状态。逻辑管理操作是具名协议，不开放任意模块／method／命令透传；插件命令只经 D13 的已注册命令合同调用。Python／Node 复用同一 schema 与合同测试，各自只实现必要语言侧支持。
@@ -141,6 +143,14 @@ Extensions 视图复用原搜索、包列表／详情和目标 Quick Input，直
 UI 管理范围只有“当前 Gateway”“当前工作区”和“新建工作区默认值”。前两者改变精确绑定；第三者只编辑创建模板，不是第三种运行 scope，不修改已有工作区、不按每次启动动态继承。细节由 D19 定义。初次目标为当前入口原生 Gateway；各视图独立保存目标，已有详情、草稿、在途开关冻结原目标，切焦点不能改投，迟到结果不串列表。工具或命令不能代用户开启插件，关闭时明确返回插件未开启／正在停止／失败。
 
 插件参数和启用状态归原 Gateway／Workspace 配置 owner：Gateway 范围在 Gateway 来源，workspace 范围在精确工作区来源，秘密只存原私有引用。UI 开关与 JSONC 共用 writer、CAS、候选及生效合同，不在前端伪造成功。静态配置 schema／诊断信息可在插件关闭后查看，不意味着启用其工具、Skill 或快捷键；未知字段按原 schema 拒绝，未绑定参数仅按下述登记容器保留。Workbench 主题／布局／快捷键仍归原 profile，旧 VSIX 配置桥迁齐后删除。
+
+秘密输入沿原设置表单／Quick Input 使用密码控件。已保存字段只显示配置状态和引用，提供更换、清除入口，不读取原值填回表单；JSONC 仍编辑引用。所有输入交互确认后，专用受保护写入口才接收真实值，核原 configuration_write 和冻结目标、来源、确切包版本 schema，再交所属配置 owner 保存并只返回引用。用户取消输入不写秘密或来源，临时输入不进入浏览器持久草稿、普通事件、诊断或日志。秘密引用仍经原 source writer、预检、CAS、active／pending 提交；保存秘密文件不等于配置生效或插件启动，CAS 冲突保留旧来源，不覆盖并发提交。
+
+秘密正文复用现有权限受限私有文件与原子发布原语，Gateway 范围归目标 Gateway，workspace 范围归对应 Workspace；不以浏览器存储、包目录或接管材料作为秘密来源。增加正式插件参数引用类型，绑定原生目标、必要 workspace、package_id／plugin_id、参数位置及不可变值版本，不复用只绑定 MCP Server 的引用，也不接受任意文件路径。更换秘密创建新版本，再通过原配置 CAS 切换引用；清除只移除选定来源层的引用并展示真实下层值，不自动擦除其它来源或仍被 active／pending 引用的正文，未引用值沿原私有输入 owner 清理规则处理。安装包卸载不顺带删除秘密。首版的保护来自原权限／ACL，不宣称已接入 VS Code 桌面版的系统加密存储；不新增秘密账本、通用 SecretStorage SDK、密钥链框架或跨机器同步机制。
+
+配置 owner 只在声明的秘密字段解析已保存引用或显式环境引用，按目标机器环境解释 `${ENV_NAME}`／`env:NAME`，不读取浏览器或 Relay 的环境。沿用本项目现有语法，不为了对齐 VS Code 的 `${env:NAME}` 再加一组别名。解引用后的实际值按当前确切包版本 schema 验证，错误不携带原值。普通来源、active／pending、事件和接管材料只存引用及原有非秘密元数据；配置读取、安装或运行管理资格均不授予秘密回读。
+
+工作区秘密由原 owner 在已认证启动／配置应用交付中仅传给对应目标插件，Gateway 可沿认证通道转送，但不读取工作区秘密文件或持久化原值。正常接管保留已核实实例；显式重建由原 owner 重新解析已保存输入，合法引用无需再次询问用户。缺输入显示等待输入并提供显式配置入口，缺失版本、权限或归属错误保留明确原因，不改投其它目标、不静默改用环境变量，也不在状态读取、后台恢复或重试循环中反复弹密码框。更换／清除后的实例变更仍沿原配置应用与重启分类，不保证正在运行的插件立即擦除已经取得的值，不自动重放原业务调用。
 
 插件参数必须位于原配置 owner 正式登记的 package_id／plugin_id 参数容器中，与引用安装版本的运行绑定分开。卸载须先解除绑定；剩余参数仍在原来源内，UI 明示“插件未安装／未绑定，参数未生效”，不参与 effective／active／pending 或热应用，不提供已删除 schema 的表单。原 JSONC writer 仍按容器结构及 JSON 类型编辑／删除这些不生效的值；将来显式绑定时再按确切版本 schema 完整验证，失败不启用。这个有限容器不是未知配置兜底，域外字段及已绑定插件的非法参数仍拒绝；不保存影子 schema、额外配置文件或孤儿参数账本。
 
@@ -388,6 +398,8 @@ Gateway 配置 owner 持有非秘密的新建工作区插件模板（workspace_d
 | src/vs/workbench/api/common/configurationExtensionPoint.ts:262–274、357–374；src/vs/platform/configuration/common/configurationRegistry.ts:505–520、744–765 | 复用原配置注册／释放思想；明确停用仍可读已安装 schema，卸载才释放对应投影但不删用户值。目标／版本隔离是本项目额外约束，不将远端业务 schema 混入全局单例 |
 | src/vs/base/node/zip.ts:76–103；src/vs/platform/extensionResourceLoader/common/extensionResourceLoaderService.ts:34–43 | 借鉴安装路径及原资源读取边界；自有 ZIP 在安装处核物理包根，不能把示例字符串前缀检查当完备防逃逸方案，不复制 VSIX 下载器或新增运行沙箱 |
 | src/vs/platform/actions/common/actions.ts:491–498、549–564；src/vs/workbench/contrib/quickaccess/browser/commandsQuickAccess.ts:227–260；src/vs/workbench/services/keybinding/browser/keybindingService.ts:638–646 | Command 执行与 Menu 元数据是不同注册；保留单 dispatcher，同时按 scoped context 隔离标题、条件及键位，防隐式命令面板项越过目标范围 |
+| src/vs/workbench/api/browser/mainThreadSecretState.ts：以 extensionId／key 隔离；services/secrets/browser/secretStorageService.ts 默认内存、可注入 provider；platform/encryption/electron-main/encryptionMainService.ts 使用 Electron safeStorage | 借鉴普通配置与秘密分离，秘密归本项目目标 Gateway／Workspace 的原 owner；首版复用权限受限私有文件，明确不等同于上游系统加密存储，不恢复已退役的 context.secrets／Extension Host RPC |
+| src/vs/workbench/contrib/mcp/common/mcpRegistry.ts 的 _updateStorageWithExpressionInputs、mcpRegistryInputStorage.ts；services/configurationResolver/browser/baseConfigurationResolverService.ts 的 promptString／password | 采用密码输入、保存后复用、更换及清除的交互；普通来源只存引用，秘密写入与来源 CAS 分开报告。上游 MCP 使用 AES-GCM 与秘密服务保存密钥，本项目不据此新增第二秘密系统；环境引用继续沿既有语法和明确目标解释 |
 | src/vs/workbench/contrib/debug/browser/debugAdapterManager.ts:121–145、209–251 | 原 Debug 类型／schema／factory 具有全局接缝；同逻辑类型只登记一个目标分发 factory，声明按目标版本投影，不能直接逐目标覆盖原 Map |
 | src/vs/workbench/contrib/debug/browser/debugService.ts:508–512、622–624；debugAdapterManager.ts:256–269 | 配置解析／变量替换先于 session 构造；目标及绑定版本从原启动上下文开始冻结，贯穿前置解析和后续 factory 调用 |
 | src/vs/workbench/services/keybinding/browser/keybindingService.ts:606–626；src/vs/base/common/platform.ts:99–104、259 | 平台键位由客户端 Workbench 解释，远端安装平台不决定用户键盘规则 |

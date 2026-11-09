@@ -54,11 +54,13 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             {"id": "gateway-preference", "name": "Gateway 偏好", "instance_scope": "gateway",
              "requires": [{"extension_point": "configuration", "version": 1}],
              "contributes": {"configuration": {"type": "object", "additionalProperties": False,
-                 "properties": {"label": {"type": "string"}}}}},
+                 "properties": {"label": {"type": "string"},
+                     "credential": {"type": "string", "minLength": 8, "writeOnly": True}}}}},
             {"id": "workspace-preference", "name": "工作区偏好", "instance_scope": "workspace",
              "requires": [{"extension_point": "configuration", "version": 1}],
              "contributes": {"configuration": {"type": "object", "additionalProperties": False,
-                 "properties": {"label": {"type": "string"}}}}},
+                 "properties": {"label": {"type": "string"},
+                     "credential": {"type": "string", "minLength": 8, "writeOnly": True}}}}},
         ],
     }
     with ZipFile(package_path, "w") as archive:

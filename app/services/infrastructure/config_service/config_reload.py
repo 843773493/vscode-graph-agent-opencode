@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
 import httpx
 
@@ -15,6 +16,8 @@ from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeScope
 from app.core.trace_middleware import get_current_request_id
 from app.gateway.auth import get_gateway_local_token
+from app.schemas.gateway.plugin_private_inputs import WorkspacePluginSchemas
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -22,6 +25,10 @@ from app.services.infrastructure.config import (
     ConfigSnapshot,
 )
 from app.services.infrastructure.config.contracts import ConfigPublication
+from app.services.infrastructure.config.plugin_private_inputs import (
+    PluginPrivateInputStore,
+    has_parameter_references,
+)
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.shadow_scope import (
     ConfigShadowLifecycleError,
@@ -49,7 +56,7 @@ from app.services.infrastructure.config_service.config_service_common import (
 from app.services.infrastructure.config_service.config_snapshot import (
     ConfigSnapshotMixin,
 )
-from configs.plugin_parameters import plugin_parameters
+from configs.plugin_parameters import PluginParameters, plugin_parameters
 from configs.runtime import validate_config_payload
 
 if TYPE_CHECKING:
@@ -301,6 +308,7 @@ class ConfigReloadMixin:
                     previous=previous,
                     candidate=candidate,
                     candidate_id=pending.candidate_id,
+                    gateway_id=str(source_edit["gateway_id"]) if source_edit is not None else None,
                 )
                 await self._shadow_lifecycle.apply_candidate(
                     candidate.to_dict(),
@@ -384,12 +392,37 @@ class ConfigReloadMixin:
             if self._watcher is not None:
                 self._update_config_watch_paths(self._watcher)
 
+    async def get_workspace_plugin_schemas(self, bindings: list[PluginBinding], *,
+                                           gateway_id: str | None = None) -> WorkspacePluginSchemas:
+        service = cast("ConfigService", self)
+        workspace_id = bindings[0].workspace_id
+        if not workspace_id or any(binding.workspace_id != workspace_id for binding in bindings):
+            raise ConfigConflictError("插件参数声明缺少唯一工作区归属")
+        request_id = get_current_request_id() or f"plugin-schemas-{uuid4().hex}"
+        async with httpx.AsyncClient(timeout=service.get_gateway_connection_timeout_seconds(), trust_env=False) as client:
+            response = await client.post(
+                service.get_gateway_connection_url().rstrip("/")
+                + f"/api/internal/service-plugins/workspaces/{workspace_id}/schemas",
+                json=[binding.model_dump(mode="json") for binding in bindings],
+                headers={"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id})
+            if response.status_code == 409:
+                raise ConfigConflictError("Gateway 拒绝确切版本的插件参数声明")
+            response.raise_for_status()
+        result = APIResponse[WorkspacePluginSchemas].model_validate_json(response.content)
+        data = result.data
+        if (result.code != 0 or result.request_id != request_id or data is None
+            or data.workspace_id != workspace_id or [plugin.binding for plugin in data.plugins] != bindings
+            or (gateway_id is not None and data.gateway_id != gateway_id)):
+            raise ConfigConflictError("插件参数声明回执与原生目标或确切绑定不一致")
+        return data
+
     async def _validate_gateway_workspace_plugin_bindings(
         self,
         *,
         previous: ConfigSnapshot,
         candidate: ConfigSnapshot,
         candidate_id: str,
+        gateway_id: str | None = None,
     ) -> None:
         previous_bindings = workspace_plugin_bindings_for_root(
             previous.to_dict(), workspace_root=self._workspace_root,
@@ -411,6 +444,26 @@ class ConfigReloadMixin:
             raise ConfigConflictError("Workspace 插件绑定缺少唯一真实 workspace_id")
 
         service = cast("ConfigService", self)
+        if self._workspace_root is None:
+            raise ConfigConflictError("Workspace 插件私有参数缺少工作区配置 owner")
+        selected: PluginParameters = {}
+        for binding in bindings:
+            selected.setdefault(binding.package_id, {})[binding.plugin_id] = parameters.get(
+                binding.package_id, {}).get(binding.plugin_id, {})
+        resolved = selected
+        if has_parameter_references(selected):
+            declarations = await self.get_workspace_plugin_schemas(bindings, gateway_id=gateway_id)
+            store = PluginPrivateInputStore(directory=self._workspace_root / ".boxteam/credentials/plugins",
+                gateway_id=declarations.gateway_id, workspace_id=workspace_id)
+            resolved = {}
+            try:
+                for declaration in declarations.plugins:
+                    binding = declaration.binding
+                    resolved.setdefault(binding.package_id, {})[binding.plugin_id] = store.resolve(
+                        selected[binding.package_id][binding.plugin_id], package_id=binding.package_id,
+                        plugin_id=binding.plugin_id, schema=declaration.configuration_schema)
+            except ValueError as error:
+                raise ConfigConflictError(str(error)) from error
         gateway_url = service.get_gateway_connection_url().rstrip("/")
         request_id = get_current_request_id() or f"config-{candidate_id}"
         async with httpx.AsyncClient(
@@ -420,7 +473,8 @@ class ConfigReloadMixin:
             response = await client.post(
                 f"{gateway_url}/api/internal/service-plugins/workspaces/{workspace_id}/validate",
                 json={"bindings": [binding.model_dump(mode="json") for binding in bindings],
-                      "parameters": parameters},
+                      "parameters": selected,
+                      "delivery": {"values": resolved}},
                 headers={
                     "X-Local-Token": get_gateway_local_token(),
                     "X-Request-ID": request_id,

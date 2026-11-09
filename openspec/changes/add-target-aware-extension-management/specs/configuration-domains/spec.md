@@ -61,6 +61,10 @@ Gateway SHALL 持有自有插件来源、安装／服务登记、实例范围、
 
 受管服务绑定 SHALL 引用明确 package_id／plugin_id、service_id、已发布包版本及 manifest 允许范围；workspace 绑定另核精确工作区。Backend stdio 的 managed_launch／command 创建链 SHALL 迁齐为 Gateway 服务连接并删除，不保留新旧配置运行时双读。完整工作区运行时恢复所需非秘密绑定 SHALL 由 Workspace 配置 owner 重新认证交付；未交付时 Gateway 等待，不用旧实例／库存推断启用状态，不越界读取文件。Backend 单独重启／Gateway 正常接管时已核实实例仍沿原合同保留。服务 ready 前所需工作区输入 SHALL 由原 owner 经认证准入交付，缺失时明确等待输入而非伪报就绪。安装发布不自动提交配置或运行插件。
 
+通用插件秘密参数 SHALL 沿 target-scoped-settings 的同一合同支持密码输入、保存后复用、更换及清除，由原 Gateway／Workspace 配置 owner 使用现有权限受限私有文件与原子发布保存不可变值；普通来源只保存绑定目标、必要 workspace、插件、参数位置和值版本的正式引用。writeOnly 允许专用受保护入口接收真实值，拒绝普通 JSONC／参数通道中的秘密明文，写入核原 configuration_write，不回显原值。引用更换与清除仍经原 source writer／CAS，秘密保存不代替配置提交或实例生效，不删除仍被 active／pending 引用的值，不新增秘密账本或通用 SecretStorage SDK。
+
+既有 `${ENV_NAME}`／`env:NAME` SHALL 作为可选秘密来源，仅由配置所属目标的原 owner 解释；实际值按确切包版本 schema 验证，普通正文不自动展开引用。工作区秘密仅经原认证启动／配置应用交付传给对应插件，不进入 Gateway 接管材料或普通配置镜像；合法已保存输入在重建时复用，缺失和归属错误明确报告，不隐式改用其它目标或来源。状态读取／后台恢复不自动弹密码框。
+
 认证交付 SHALL 由原启动／配置变更通知或用户显式重试驱动；缺输入报告 waiting，认证失败报告 failed，普通状态读取不重新交付或启动插件，不加轮询、扫盘及配置修复流程。
 
 #### Scenario: 两个工作区绑定同一安装包

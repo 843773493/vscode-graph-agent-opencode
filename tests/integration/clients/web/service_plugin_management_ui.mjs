@@ -5,7 +5,10 @@ import { expect } from 'playwright/test';
 import { parse as parseJsonc } from 'jsonc-parser';
 
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
-const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [], installed: false, uninstalled: false };
+const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [],
+  privateInputWrites: [], installed: false, uninstalled: false };
+let privateInputRequestCount = 0;
+let sourceWriteRequestCount = 0;
 let browser;
 let page;
 try {
@@ -20,11 +23,26 @@ try {
   page.on('response', async response => {
     const request = response.request();
     const url = new URL(response.url());
+    if (request.method() === 'POST' && (url.pathname.endsWith('/config/plugin-private-inputs')
+      || url.pathname.endsWith('/service-plugins/private-inputs'))) {
+      const requestBody = JSON.parse(request.postData() ?? '{}');
+      result.privateInputWrites.push({ path: url.pathname, status: response.status(), gatewayId: requestBody.gateway_id,
+        workspaceId: requestBody.workspace_id ?? null, packageId: requestBody.package_id, pluginId: requestBody.plugin_id,
+        packageVersion: requestBody.package_version, sourceKey: requestBody.source_key,
+        parameterPointer: requestBody.parameter_pointer, returnedReference: response.ok() && !JSON.stringify(await response.json()).includes(requestBody.value) });
+      return;
+    }
     if (request.method() !== 'PUT' || !url.pathname.includes('/config/sources/')) return;
     const headers = await request.allHeaders();
     result.configWrites.push({ path: url.pathname, sourceKey: url.pathname.split('/').at(-1), status: response.status(),
       gatewayId: headers['x-boxteam-target-gateway-id'] ?? null, workspaceId: headers['x-boxteam-workspace-id'] ?? null,
       body: request.postData() });
+  });
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (request.method() === 'POST' && (url.pathname.endsWith('/config/plugin-private-inputs')
+      || url.pathname.endsWith('/service-plugins/private-inputs'))) privateInputRequestCount++;
+    if (request.method() === 'PUT' && url.pathname.includes('/config/sources/')) sourceWriteRequestCount++;
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
@@ -121,7 +139,60 @@ try {
     await expect(quick).not.toBeVisible();
     await expect(view.getByRole('button', { name: '编辑参数 JSON', exact: true })).toBeVisible();
   };
+  const setSecret = async (name, sourceKey, value, scopeWorkspace) => {
+    await openPlugin(name);
+    await view.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
+    await pick(sourceKey);
+    await pick('设置秘密参数');
+    await inputQuick(value);
+    const privateWrite = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith(scopeWorkspace ? '/config/plugin-private-inputs' : '/service-plugins/private-inputs'));
+    const configWrite = page.waitForResponse(response => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname.endsWith(`/config/sources/${sourceKey}`));
+    await pick('确认保存秘密');
+    const privateResponse = await privateWrite;
+    assert.equal(privateResponse.status(), 200);
+    const response = await configWrite;
+    assert.equal(response.status(), 200);
+    const receipt = await response.json();
+    assert.equal(receipt.data.edit.source_saved, true);
+    await expect(quick).not.toBeVisible();
+  };
+  const openSecretInput = async name => {
+    await openPlugin(name);
+    await view.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
+    await pick('gateway_mutable_override');
+    await pick('设置秘密参数');
+    const password = quick.locator('input[type="password"]');
+    await expect(password).toHaveCount(1);
+    return password;
+  };
+  const initialPrivateWrites = privateInputRequestCount;
+  const initialSourceWrites = sourceWriteRequestCount;
+  const cancelledPassword = await openSecretInput('Gateway 偏好 · gateway-preference');
+  await cancelledPassword.fill('cancelled-password-sentinel');
+  await cancelledPassword.press('Escape');
+  await expect(quick).not.toBeVisible();
+  assert.equal(privateInputRequestCount, initialPrivateWrites);
+  assert.equal(sourceWriteRequestCount, initialSourceWrites);
+  const cancelledConfirmationPassword = await openSecretInput('Gateway 偏好 · gateway-preference');
+  await cancelledConfirmationPassword.fill('cancelled-confirmation-sentinel');
+  await cancelledConfirmationPassword.press('Enter');
+  await pick('取消');
+  await expect(quick).not.toBeVisible();
+  assert.equal(privateInputRequestCount, initialPrivateWrites);
+  assert.equal(sourceWriteRequestCount, initialSourceWrites);
   await editParameters('gateway_mutable_override', '确认保存 Gateway 插件参数', 'Gateway 独立参数');
+  await setSecret('Gateway 偏好 · gateway-preference', 'gateway_mutable_override',
+    'gateway-secret-sentinel', false);
+  await openPlugin('Gateway 偏好 · gateway-preference');
+  await view.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
+  await pick('gateway_mutable_override');
+  await pick('清除此来源的秘密覆盖');
+  const gatewaySecretClear = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
+  await pick('确认保存 Gateway 插件秘密参数');
+  assert.equal((await gatewaySecretClear).status(), 200);
 
   await view.getByLabel('插件管理范围').selectOption('workspace');
   await pick(workspaceName);
@@ -129,11 +200,21 @@ try {
   await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
   result.configOwners.push('workspace');
   await editParameters('workspace_root_mutable_override', '确认保存工作区插件参数', '工作区独立参数');
+  await setSecret('工作区偏好 · workspace-preference', 'workspace_root_mutable_override',
+    'workspace-secret-sentinel', true);
   const gatewayDocument = await api('/api/gateway/config/sources/gateway_mutable_override');
   const workspaceDocument = await api(`/api/v1/workspaces/${active.workspace_id}/config/sources/workspace_root_mutable_override`,
     { headers: { 'X-BoxTeam-Workspace-Id': active.workspace_id } });
   assert.equal(gatewayDocument.effective.plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, 'Gateway 独立参数');
   assert.equal(workspaceDocument.effective.plugins.configuration.values['ui.preference-probe']['workspace-preference'].label, '工作区独立参数');
+  assert.equal(workspaceDocument.effective.plugins.configuration.values['ui.preference-probe']['workspace-preference'].credential.kind, 'plugin_private_file');
+  assert.equal(gatewayDocument.effective.plugins.configuration.values['ui.preference-probe']['gateway-preference'].credential, undefined);
+  assert.equal(result.privateInputWrites.length, 2);
+  assert.ok(result.privateInputWrites.every(write => write.status === 200 && write.returnedReference
+    && write.packageVersion === '1.0.0' && write.sourceKey === (write.workspaceId ? 'workspace_root_mutable_override' : 'gateway_mutable_override')
+    && write.parameterPointer === '/credential'));
+  assert.ok(result.configWrites.every(write => !write.body?.includes('gateway-secret-sentinel')
+    && !write.body?.includes('workspace-secret-sentinel')));
   result.parametersEdited = true;
 
   await view.getByLabel('插件管理范围').selectOption('defaults');

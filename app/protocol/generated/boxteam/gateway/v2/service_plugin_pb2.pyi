@@ -333,6 +333,46 @@ class PluginTarget(_message.Message):
     gateway_connection_id: str
     def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
+class PluginPrivateInputReference(_message.Message):
+    __slots__ = ("kind", "gateway_id", "workspace_id", "package_id", "plugin_id", "parameter_pointer", "version")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
+    PARAMETER_POINTER_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    gateway_id: str
+    workspace_id: str
+    package_id: str
+    plugin_id: str
+    parameter_pointer: str
+    version: str
+    def __init__(self, kind: _Optional[str] = ..., gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., package_id: _Optional[str] = ..., plugin_id: _Optional[str] = ..., parameter_pointer: _Optional[str] = ..., version: _Optional[str] = ...) -> None: ...
+
+class PluginPrivateInputWriteRequest(_message.Message):
+    __slots__ = ("gateway_id", "gateway_connection_id", "workspace_id", "package_id", "plugin_id", "parameter_pointer", "value", "package_version", "source_key")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
+    PARAMETER_POINTER_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    gateway_connection_id: str
+    workspace_id: str
+    package_id: str
+    plugin_id: str
+    parameter_pointer: str
+    value: _struct_pb2.Value
+    package_version: str
+    source_key: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., package_id: _Optional[str] = ..., plugin_id: _Optional[str] = ..., parameter_pointer: _Optional[str] = ..., value: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., package_version: _Optional[str] = ..., source_key: _Optional[str] = ...) -> None: ...
+
 class InstallPluginRequest(_message.Message):
     __slots__ = ("gateway_id", "gateway_connection_id", "path", "development_directory", "expected_digest")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]

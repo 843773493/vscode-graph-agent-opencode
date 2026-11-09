@@ -197,6 +197,29 @@ export interface PluginTarget {
   gateway_connection_id?: string | undefined;
 }
 
+/** 私有值只进入所属配置 owner 的受限文件；普通配置和回执保存引用。 */
+export interface PluginPrivateInputReference {
+  kind: string;
+  gateway_id: string;
+  workspace_id?: string | undefined;
+  package_id: string;
+  plugin_id: string;
+  parameter_pointer: string;
+  version: string;
+}
+
+export interface PluginPrivateInputWriteRequest {
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+  workspace_id?: string | undefined;
+  package_id: string;
+  plugin_id: string;
+  parameter_pointer: string;
+  value: any | undefined;
+  package_version: string;
+  source_key: string;
+}
+
 export interface InstallPluginRequest {
   gateway_id: string;
   gateway_connection_id?: string | undefined;
@@ -1493,6 +1516,156 @@ export const PluginTarget: MessageFns<PluginTarget> = {
     const message = createBasePluginTarget();
     message.gateway_id = object.gateway_id ?? "";
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginPrivateInputReference(): PluginPrivateInputReference {
+  return {
+    kind: "",
+    gateway_id: "",
+    workspace_id: undefined,
+    package_id: "",
+    plugin_id: "",
+    parameter_pointer: "",
+    version: "",
+  };
+}
+
+export const PluginPrivateInputReference: MessageFns<PluginPrivateInputReference> = {
+  fromJSON(object: any): PluginPrivateInputReference {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      parameter_pointer: isSet(object.parameter_pointer) ? globalThis.String(object.parameter_pointer) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+    };
+  },
+
+  toJSON(message: PluginPrivateInputReference): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.parameter_pointer !== "") {
+      obj.parameter_pointer = message.parameter_pointer;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginPrivateInputReference>, I>>(base?: I): PluginPrivateInputReference {
+    return PluginPrivateInputReference.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginPrivateInputReference>, I>>(object: I): PluginPrivateInputReference {
+    const message = createBasePluginPrivateInputReference();
+    message.kind = object.kind ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.package_id = object.package_id ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.parameter_pointer = object.parameter_pointer ?? "";
+    message.version = object.version ?? "";
+    return message;
+  },
+};
+
+function createBasePluginPrivateInputWriteRequest(): PluginPrivateInputWriteRequest {
+  return {
+    gateway_id: "",
+    gateway_connection_id: undefined,
+    workspace_id: undefined,
+    package_id: "",
+    plugin_id: "",
+    parameter_pointer: "",
+    value: undefined,
+    package_version: "",
+    source_key: "",
+  };
+}
+
+export const PluginPrivateInputWriteRequest: MessageFns<PluginPrivateInputWriteRequest> = {
+  fromJSON(object: any): PluginPrivateInputWriteRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      parameter_pointer: isSet(object.parameter_pointer) ? globalThis.String(object.parameter_pointer) : "",
+      value: isSet(object?.value) ? object.value : undefined,
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+    };
+  },
+
+  toJSON(message: PluginPrivateInputWriteRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.parameter_pointer !== "") {
+      obj.parameter_pointer = message.parameter_pointer;
+    }
+    if (message.value !== undefined) {
+      obj.value = message.value;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginPrivateInputWriteRequest>, I>>(base?: I): PluginPrivateInputWriteRequest {
+    return PluginPrivateInputWriteRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginPrivateInputWriteRequest>, I>>(
+    object: I,
+  ): PluginPrivateInputWriteRequest {
+    const message = createBasePluginPrivateInputWriteRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.package_id = object.package_id ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.parameter_pointer = object.parameter_pointer ?? "";
+    message.value = object.value ?? undefined;
+    message.package_version = object.package_version ?? "";
+    message.source_key = object.source_key ?? "";
     return message;
   },
 };

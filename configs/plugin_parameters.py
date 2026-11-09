@@ -2,26 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from typing import cast
+from collections.abc import Mapping
+from typing import Literal, cast
 
-from jsonschema import Draft202012Validator, validators
-from jsonschema.exceptions import ValidationError
-from jsonschema.protocols import Validator
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 PluginParameters = dict[str, dict[str, dict[str, JsonValue]]]
 
 
-def _private_parameter(
-    _validator: Validator, write_only: bool, _instance: object, _schema: Mapping[str, object],
-) -> Iterator[ValidationError]:
-    if write_only:
-        # TODO：秘密参数接入原配置 owner 的私有引用交付；普通参数通道不得接收真实秘密。
-        yield ValidationError("插件秘密参数尚未接入私有输入 owner，不能通过普通参数提交")
+class PluginPrivateInputReference(BaseModel):
+    """原配置 owner 的不可变私有文件引用，不承载原生路径或秘密。"""
 
-
-PluginParameterValidator = validators.extend(Draft202012Validator, {"writeOnly": _private_parameter})
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
+    kind: Literal["plugin_private_file"] = "plugin_private_file"
+    gateway_id: str = Field(min_length=1)
+    workspace_id: str | None = None
+    package_id: str = Field(min_length=1)
+    plugin_id: str = Field(min_length=1)
+    parameter_pointer: str = Field(pattern=r"^(?:/(?:[^~/]|~[01])*)+$")
+    version: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
 def plugin_parameters(config: Mapping[str, object]) -> PluginParameters:
