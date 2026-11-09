@@ -29,10 +29,6 @@ from app.api.runtime_control import verify_local_control_request
 from app.core.async_channel import close_channel, run_channel
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
-from app.gateway.auxiliary_proxy import (
-    _relay_client_to_upstream,
-    _relay_upstream_to_client,
-)
 from app.gateway.federation.policy import (
     Capability,
     FederationPolicyStore,
@@ -45,6 +41,8 @@ from app.gateway.proxy_upstream import (
     build_upstream_url,
     filter_hop_by_hop_headers,
     parse_target_gateway_id,
+    relay_websocket_client_to_upstream,
+    relay_websocket_upstream_to_client,
     send_upstream_request,
 )
 from app.gateway.server.management_routes import (
@@ -293,8 +291,8 @@ async def service_websocket(websocket: WebSocket, package_id: str, plugin_id: st
                 async with connect(url, additional_headers=route.headers, compression=None,
                     max_queue=1, write_limit=256 * 1024, open_timeout=10, close_timeout=5) as upstream:
                     await websocket.accept()
-                    await run_channel(_relay_client_to_upstream(websocket, upstream),
-                        _relay_upstream_to_client(websocket, upstream))
+                    await run_channel(relay_websocket_client_to_upstream(websocket, upstream),
+                        relay_websocket_upstream_to_client(websocket, upstream))
 
             await run_channel(relay(), _watch_access(websocket, auth, route.stopped))
     except PermissionError as error:

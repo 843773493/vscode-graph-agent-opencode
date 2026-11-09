@@ -36,7 +36,6 @@ from app.gateway.auth import (
     get_gateway_local_token,
     verify_gateway_access,
 )
-from app.gateway.auxiliary_proxy import _websocket_target
 from app.gateway.control.user_access import (
     USER_ACCESS_COOKIE_NAME,
     UserAccessContext,
@@ -48,6 +47,7 @@ from app.gateway.federation.policy import (
     federation_capability_allowed,
     require_federation_capability,
 )
+from app.gateway.proxy_upstream import build_upstream_websocket_url
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceRouteLease
 from app.gateway.registry.routes import BackendManagementRoute
 from app.gateway.server.extension_management import _download_base_url, management_owner
@@ -695,7 +695,7 @@ async def extension_web_host_channel(websocket: WebSocket) -> None:
             expected_client_id = f"peer:{websocket.app.state.registry.gateway_id}:{client_id}" if route.remote else client_id
             path = "api/gateway/extension-web-hosts/channel" if route.remote else "api/internal/extension-web-hosts/channel"
             operations = [
-                _upstream(websocket, url=_websocket_target(route.base_url, path), headers=headers, payload=payload,
+                _upstream(websocket, url=build_upstream_websocket_url(route.base_url, path), headers=headers, payload=payload,
                     auth=auth, access=access, leases=route.leases, expected_client_id=expected_client_id),
                 _watch_policy(websocket, auth), _watch_management_route(websocket, route),
                 *(_watch_route(lease) for lease in route.leases),
@@ -737,7 +737,7 @@ async def extension_host_channel(websocket: WebSocket) -> None:
             else:
                 expected_client_id = client_id
                 path = "api/internal/extension-hosts/channel"
-            url = _websocket_target(route.base_url, path)
+            url = build_upstream_websocket_url(route.base_url, path)
             _check(websocket, auth, access, leases, capability="extension_host_manage")
             # 所有监视与启动在同一作用域；连接等待期间撤权也会取消原上游。
             operations = [
@@ -764,7 +764,7 @@ async def _provider_upstream(websocket: WebSocket, *, route: GatewayManagementRo
     client_id: str) -> None:
     path = "api/gateway/extension-hosts/mcp-definitions" if route.remote else "api/internal/extension-hosts/mcp-definitions"
     expected_client = f"peer:{websocket.app.state.registry.gateway_id}:{client_id}" if route.remote else client_id
-    async with connect(_websocket_target(route.base_url, path), additional_headers={**route.headers, CLIENT_HEADER: client_id},
+    async with connect(build_upstream_websocket_url(route.base_url, path), additional_headers={**route.headers, CLIENT_HEADER: client_id},
                        compression=None, open_timeout=10, close_timeout=10) as upstream:
         await upstream.send(payload.model_dump_json(exclude={"gateway_connection_id"}))
         async with asyncio.timeout(15):

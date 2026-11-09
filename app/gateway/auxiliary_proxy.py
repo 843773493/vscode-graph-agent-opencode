@@ -5,8 +5,7 @@ import logging
 import re
 from collections.abc import AsyncIterator, Callable
 from functools import partial
-from typing import Annotated, Protocol
-from urllib.parse import urlsplit, urlunsplit
+from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -31,9 +30,12 @@ from app.gateway.proxy_upstream import (
     TARGET_GATEWAY_ID_HEADER,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
+    build_upstream_websocket_url,
     filter_hop_by_hop_headers,
     load_proxy_gateway_id,
     parse_target_gateway_id,
+    relay_websocket_client_to_upstream,
+    relay_websocket_upstream_to_client,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -47,12 +49,6 @@ logger = logging.getLogger(__name__)
 SERVICE_PATHS: dict[str, GatewayServiceName] = {
     "browser-manager": "browser_manager",
 }
-
-
-class UpstreamWebSocket(Protocol):
-    async def send(self, message: str | bytes) -> None: ...
-
-    def __aiter__(self) -> AsyncIterator[str | bytes]: ...
 
 
 def _registry(app: object) -> GatewayWorkspaceRegistry:
@@ -250,42 +246,6 @@ async def proxy_auxiliary_http(
             release_route_reference()
 
 
-def _websocket_target(base_url: str, socket_path: str) -> str:
-    parsed = urlsplit(base_url)
-    scheme = "wss" if parsed.scheme == "https" else "ws"
-    path = f"{parsed.path.rstrip('/')}/{socket_path}"
-    return urlunsplit((scheme, parsed.netloc, path, "", ""))
-
-
-async def _relay_client_to_upstream(
-    websocket: WebSocket,
-    upstream: UpstreamWebSocket,
-) -> None:
-    while True:
-        message = await websocket.receive()
-        message_type = message["type"]
-        if message_type == "websocket.disconnect":
-            return
-        text = message.get("text")
-        if text is not None:
-            await upstream.send(text)
-            continue
-        body = message.get("bytes")
-        if body is not None:
-            await upstream.send(body)
-
-
-async def _relay_upstream_to_client(
-    websocket: WebSocket,
-    upstream: UpstreamWebSocket,
-) -> None:
-    async for message in upstream:
-        if isinstance(message, str):
-            await websocket.send_text(message)
-        else:
-            await websocket.send_bytes(message)
-
-
 async def _proxy_auxiliary_websocket(
     *,
     websocket: WebSocket,
@@ -337,7 +297,7 @@ async def _proxy_auxiliary_websocket(
             await websocket.close(code=1008, reason="auxiliary_websocket_route_failed")
             return
         await websocket.accept()
-        target_url = _websocket_target(service_url, socket_path)
+        target_url = build_upstream_websocket_url(service_url, socket_path)
         upstream_headers: dict[str, str] = {}
         # 按请求注入 Gateway 自身稳定身份，与两条 HTTP 代理同一来源；WebSocket 握手
         # 只转发这里显式写入的头部，客户端无法自带同名头，故无需额外剥离。
@@ -363,8 +323,8 @@ async def _proxy_auxiliary_websocket(
             write_limit=256 * 1024 if browser_stream else 32 * 1024,
         ) as upstream:
             tasks = {
-                asyncio.create_task(_relay_client_to_upstream(websocket, upstream)),
-                asyncio.create_task(_relay_upstream_to_client(websocket, upstream)),
+                asyncio.create_task(relay_websocket_client_to_upstream(websocket, upstream)),
+                asyncio.create_task(relay_websocket_upstream_to_client(websocket, upstream)),
             }
             done, pending = await asyncio.wait(
                 tasks,

@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Iterable
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, WebSocket
+from websockets.asyncio.client import ClientConnection
 
 from app.core.identifier import validate_gateway_id
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -26,10 +27,13 @@ __all__ = [
     "UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
     "UpstreamResponseBody",
     "build_upstream_url",
+    "build_upstream_websocket_url",
     "close_upstream_response",
     "filter_hop_by_hop_headers",
     "load_proxy_gateway_id",
     "parse_target_gateway_id",
+    "relay_websocket_client_to_upstream",
+    "relay_websocket_upstream_to_client",
     "run_cleanup_shielded",
     "send_upstream_request",
 ]
@@ -263,3 +267,33 @@ def build_upstream_url(
             f"规范化结果={url.path!r}"
         )
     return url
+
+
+def build_upstream_websocket_url(base_url: str, path: str) -> str:
+    """将目标 Gateway 的 HTTP(S) 地址转换为同一路径的 WS(S) 地址。"""
+    parsed = urlsplit(base_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return urlunsplit((scheme, parsed.netloc, f"{parsed.path.rstrip('/')}/{path.lstrip('/')}", "", ""))
+
+
+async def relay_websocket_client_to_upstream(
+    websocket: WebSocket, upstream: ClientConnection,
+) -> None:
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+        if (text := message.get("text")) is not None:
+            await upstream.send(text)
+        elif (body := message.get("bytes")) is not None:
+            await upstream.send(body)
+
+
+async def relay_websocket_upstream_to_client(
+    websocket: WebSocket, upstream: ClientConnection,
+) -> None:
+    async for message in upstream:
+        if isinstance(message, str):
+            await websocket.send_text(message)
+        else:
+            await websocket.send_bytes(message)
