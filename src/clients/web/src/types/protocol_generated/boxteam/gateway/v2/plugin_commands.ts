@@ -5,8 +5,38 @@
 // source: boxteam/gateway/v2/plugin_commands.proto
 
 /* eslint-disable */
+import {
+  PluginBinding,
+  PluginCommandContribution,
+  PluginKeybindingContribution,
+  PluginMenuContribution,
+} from "./service_plugin.js";
 
 export const protobufPackage = "boxteam.gateway.v2";
+
+export interface PluginContributionTarget {
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+  workspace_id?: string | undefined;
+}
+
+export interface PluginCommandPublication {
+  binding: PluginBinding | undefined;
+  revision: string;
+  state: string;
+  error?: string | undefined;
+  instance_id?: string | undefined;
+  commands: PluginCommandContribution[];
+  registrations: PluginCommandRegistration[];
+  menus: PluginMenuContribution[];
+  keybindings: PluginKeybindingContribution[];
+}
+
+export interface PluginCommandSnapshotDTO {
+  gateway_id: string;
+  workspace_id?: string | undefined;
+  publications: PluginCommandPublication[];
+}
 
 /** 运行实例仅注册清单内的具名处理者；不是任意方法调用协议。 */
 export interface PluginCommandRegistration {
@@ -80,6 +110,177 @@ export interface PluginCommandEventDTO {
   result: any | undefined;
   error_code?: string | undefined;
 }
+
+function createBasePluginContributionTarget(): PluginContributionTarget {
+  return { gateway_id: "", gateway_connection_id: undefined, workspace_id: undefined };
+}
+
+export const PluginContributionTarget: MessageFns<PluginContributionTarget> = {
+  fromJSON(object: any): PluginContributionTarget {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+    };
+  },
+
+  toJSON(message: PluginContributionTarget): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginContributionTarget>, I>>(base?: I): PluginContributionTarget {
+    return PluginContributionTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginContributionTarget>, I>>(object: I): PluginContributionTarget {
+    const message = createBasePluginContributionTarget();
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.workspace_id = object.workspace_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginCommandPublication(): PluginCommandPublication {
+  return {
+    binding: undefined,
+    revision: "",
+    state: "",
+    error: undefined,
+    instance_id: undefined,
+    commands: [],
+    registrations: [],
+    menus: [],
+    keybindings: [],
+  };
+}
+
+export const PluginCommandPublication: MessageFns<PluginCommandPublication> = {
+  fromJSON(object: any): PluginCommandPublication {
+    return {
+      binding: isSet(object.binding) ? PluginBinding.fromJSON(object.binding) : undefined,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : undefined,
+      commands: globalThis.Array.isArray(object?.commands)
+        ? object.commands.map((e: any) => PluginCommandContribution.fromJSON(e))
+        : [],
+      registrations: globalThis.Array.isArray(object?.registrations)
+        ? object.registrations.map((e: any) => PluginCommandRegistration.fromJSON(e))
+        : [],
+      menus: globalThis.Array.isArray(object?.menus)
+        ? object.menus.map((e: any) => PluginMenuContribution.fromJSON(e))
+        : [],
+      keybindings: globalThis.Array.isArray(object?.keybindings)
+        ? object.keybindings.map((e: any) => PluginKeybindingContribution.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PluginCommandPublication): unknown {
+    const obj: any = {};
+    if (message.binding !== undefined) {
+      obj.binding = PluginBinding.toJSON(message.binding);
+    }
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    if (message.instance_id !== undefined) {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.commands?.length) {
+      obj.commands = message.commands.map((e) => PluginCommandContribution.toJSON(e));
+    }
+    if (message.registrations?.length) {
+      obj.registrations = message.registrations.map((e) => PluginCommandRegistration.toJSON(e));
+    }
+    if (message.menus?.length) {
+      obj.menus = message.menus.map((e) => PluginMenuContribution.toJSON(e));
+    }
+    if (message.keybindings?.length) {
+      obj.keybindings = message.keybindings.map((e) => PluginKeybindingContribution.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginCommandPublication>, I>>(base?: I): PluginCommandPublication {
+    return PluginCommandPublication.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginCommandPublication>, I>>(object: I): PluginCommandPublication {
+    const message = createBasePluginCommandPublication();
+    message.binding = (object.binding !== undefined && object.binding !== null)
+      ? PluginBinding.fromPartial(object.binding)
+      : undefined;
+    message.revision = object.revision ?? "";
+    message.state = object.state ?? "";
+    message.error = object.error ?? undefined;
+    message.instance_id = object.instance_id ?? undefined;
+    message.commands = object.commands?.map((e) => PluginCommandContribution.fromPartial(e)) || [];
+    message.registrations = object.registrations?.map((e) => PluginCommandRegistration.fromPartial(e)) || [];
+    message.menus = object.menus?.map((e) => PluginMenuContribution.fromPartial(e)) || [];
+    message.keybindings = object.keybindings?.map((e) => PluginKeybindingContribution.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBasePluginCommandSnapshotDTO(): PluginCommandSnapshotDTO {
+  return { gateway_id: "", workspace_id: undefined, publications: [] };
+}
+
+export const PluginCommandSnapshotDTO: MessageFns<PluginCommandSnapshotDTO> = {
+  fromJSON(object: any): PluginCommandSnapshotDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      publications: globalThis.Array.isArray(object?.publications)
+        ? object.publications.map((e: any) => PluginCommandPublication.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PluginCommandSnapshotDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.publications?.length) {
+      obj.publications = message.publications.map((e) => PluginCommandPublication.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginCommandSnapshotDTO>, I>>(base?: I): PluginCommandSnapshotDTO {
+    return PluginCommandSnapshotDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginCommandSnapshotDTO>, I>>(object: I): PluginCommandSnapshotDTO {
+    const message = createBasePluginCommandSnapshotDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.publications = object.publications?.map((e) => PluginCommandPublication.fromPartial(e)) || [];
+    return message;
+  },
+};
 
 function createBasePluginCommandRegistration(): PluginCommandRegistration {
   return { command_id: "", handler: "", registration_id: "" };

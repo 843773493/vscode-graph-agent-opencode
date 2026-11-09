@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from starlette.types import Message, Scope
 
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
@@ -88,3 +91,66 @@ async def test_command_requires_declared_business_permission_before_upstream(
                                      headers={"X-Request-ID": "command-business-only"})
         assert response.status_code == 200
         assert len(calls) == 1 and calls[0].headers["X-Request-ID"] == "command-business-only"
+
+
+async def test_command_publications_use_business_read_and_current_permissions(
+    command_gateway: tuple[FastAPI, list[httpx.Request], dict[str, object]],
+) -> None:
+    app, calls, payload = command_gateway
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/gateway/service-plugins/commands/publications",
+            json={"gateway_id": payload["gateway_id"]}, headers={"X-Request-ID": "publication-business-only"})
+        assert response.status_code == 200 and response.json()["request_id"] == "publication-business-only"
+        publication = response.json()["data"]["publications"][0]
+        assert publication["commands"] == [] and publication["registrations"] == []
+        app.state.federation_policy_store.publish({"default_effect": "allow", "rules": [
+            {"capability": "service_plugin_runtime_manage", "effect": "deny"}]})
+        response = await client.post("/api/gateway/service-plugins/commands/publications",
+                                     json={"gateway_id": payload["gateway_id"]})
+        assert response.status_code == 200
+        publication = response.json()["data"]["publications"][0]
+        assert [item["id"] for item in publication["commands"]] == ["write"]
+        assert publication["registrations"][0]["registration_id"] == "registration"
+        assert publication["instance_id"] == "original"
+        assert not ({"parameters", "token", "base_url"} & publication.keys())
+        app.state.federation_policy_store.publish({"rules": [{"capability": "read", "effect": "deny"}]})
+        response = await client.post("/api/gateway/service-plugins/commands/publications",
+                                     json={"gateway_id": payload["gateway_id"]})
+        assert response.status_code == 403 and "read" in response.text
+        assert calls == []
+
+
+async def test_publication_subscription_updates_permissions_and_finishes_revoked_stream(
+    command_gateway: tuple[FastAPI, list[httpx.Request], dict[str, object]],
+) -> None:
+    app, calls, payload = command_gateway
+    incoming: asyncio.Queue[Message] = asyncio.Queue()
+    outgoing: asyncio.Queue[Message] = asyncio.Queue()
+    await incoming.put({"type": "http.request", "body": json.dumps({"gateway_id": payload["gateway_id"]}).encode(),
+                        "more_body": False})
+    scope: Scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": "POST", "scheme": "http", "path": "/api/gateway/service-plugins/commands/events",
+        "raw_path": b"/api/gateway/service-plugins/commands/events", "query_string": b"",
+        "headers": [(b"content-type", b"application/json"), (b"x-request-id", b"publication-permissions")],
+        "client": ("127.0.0.1", 12345), "server": ("test", 80)}
+    running = asyncio.create_task(app(scope, incoming.get, outgoing.put))
+    try:
+        start = await asyncio.wait_for(outgoing.get(), 3)
+        assert start["type"] == "http.response.start" and start["status"] == 200
+        first = await asyncio.wait_for(outgoing.get(), 3)
+        assert first["type"] == "http.response.body"
+        initial = json.loads(first["body"].decode().split("data: ", 1)[1])
+        assert initial["publications"][0]["registrations"] == []
+        app.state.federation_policy_store.publish({"rules": [{"capability": "service_plugin_runtime_manage", "effect": "deny"}]})
+        updated = await asyncio.wait_for(outgoing.get(), 3)
+        assert updated["type"] == "http.response.body"
+        snapshot = json.loads(updated["body"].decode().split("data: ", 1)[1])
+        assert snapshot["publications"][0]["registrations"][0]["registration_id"] == "registration"
+        app.state.federation_policy_store.publish({"rules": [{"capability": "read", "effect": "deny"}]})
+        final = await asyncio.wait_for(outgoing.get(), 3)
+        assert final == {"type": "http.response.body", "body": b"", "more_body": False}
+        await asyncio.wait_for(running, 3)
+        assert calls == []
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)

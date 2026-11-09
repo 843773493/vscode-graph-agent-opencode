@@ -31,6 +31,7 @@ from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
     ManagedProcess,
     _spawn_logged_process,
+    wait_process_exit,
 )
 from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.runtime.process_ports import allocate_local_port
@@ -41,8 +42,10 @@ from app.gateway.runtime.workspace_process import (
 )
 from app.schemas.gateway.diagnostics import PluginRuntimeObservationDTO
 from app.schemas.gateway.plugin_commands import (
+    PluginCommandPublication,
     PluginCommandRegistration,
     PluginCommandRegistrationsDTO,
+    PluginCommandSnapshotDTO,
 )
 from app.schemas.gateway.service_plugin import (
     PluginBinding,
@@ -121,6 +124,7 @@ class PluginSlot:
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     commands: dict[str, PluginCommandRegistration] = field(default_factory=dict)
     observation_error: str | None = None
+    exit_waiter: asyncio.Task[None] | None = None
     command_validators: dict[str, tuple[Draft202012Validator, Draft202012Validator]] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -156,6 +160,55 @@ class GatewayPluginRuntime:
         self.private_inputs = PluginPrivateInputStore(directory=home / "credentials/plugins",
             gateway_id=gateway_id, workspace_id=None)
         self.workspace_parameters: Callable[[PluginBinding, str], Awaitable[dict[str, JsonValue]]] | None = None
+        self.changed = asyncio.Event()
+
+    def _publish(self) -> None:
+        changed, self.changed = self.changed, asyncio.Event()
+        changed.set()
+
+    def command_snapshot(self, workspace_id: str | None) -> PluginCommandSnapshotDTO:
+        publications = []
+        for slot in self.slots.values():
+            if not slot.binding.enabled or slot.binding.workspace_id not in {None, workspace_id}:
+                continue
+            contributes = slot.declaration.contributes
+            if not (contributes.commands or contributes.menus or contributes.keybindings):
+                continue
+            actual = slot.describe()
+            ready = actual["state"] == "ready" and not slot.stopped.is_set()
+            publications.append(PluginCommandPublication(binding=slot.binding, revision=slot.revision,
+                state=str(actual["state"]), error=slot.error,
+                instance_id=slot.receipt.instance_id if ready and slot.receipt is not None else None,
+                commands=contributes.commands, registrations=list(slot.commands.values()) if ready else [],
+                menus=contributes.menus, keybindings=contributes.keybindings))
+        return PluginCommandSnapshotDTO(gateway_id=self.gateway_id, workspace_id=workspace_id,
+                                       publications=publications)
+
+    def _watch_exit(self, slot: PluginSlot) -> None:
+        assert slot.receipt is not None
+        process_id = slot.receipt.process_id
+
+        async def watch() -> None:
+            try:
+                await wait_process_exit(process_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                slot.error = f"插件退出通知失败: {error}"
+                logger.exception("插件退出等待失败: binding=%s", slot.binding)
+            else:
+                slot.error = "插件进程已退出；需显式重启，不自动重放在途操作"
+            slot.state = "failed"
+            slot.stopped.set()
+            self._publish()
+
+        slot.exit_waiter = asyncio.create_task(watch())
+
+    async def _release_exit_waiter(self, slot: PluginSlot) -> None:
+        if slot.exit_waiter is not None:
+            slot.exit_waiter.cancel()
+            await asyncio.gather(slot.exit_waiter, return_exceptions=True)
+            slot.exit_waiter = None
 
     @staticmethod
     def key(binding: PluginBinding) -> Slot:
@@ -295,6 +348,8 @@ class GatewayPluginRuntime:
                         logger.exception("配置已删除，插件原实例尚未完成停止: slot=%s", key)
                     else:
                         del self.slots[key]
+                    finally:
+                        self._publish()
         for binding in bindings.values():
             await self.apply_binding(binding, revision=revision,
                 parameters=(parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {}))
@@ -315,6 +370,7 @@ class GatewayPluginRuntime:
                 self.skill_sources.publish_plugin(binding, self.packages)
                 previous.parameters = values
                 previous.revision = revision
+                self._publish()
                 return previous.describe()
             declaration = self.declaration(binding)
             if binding.enabled and declaration.runtime is not None:
@@ -329,6 +385,7 @@ class GatewayPluginRuntime:
                 except Exception as error:
                     previous.state, previous.error = "failed", str(error)
                     logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
+                    self._publish()
                     return previous.describe()
             slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values)
             self.slots[key] = slot
@@ -342,6 +399,10 @@ class GatewayPluginRuntime:
                 except Exception as error:
                     slot.state, slot.error = "failed", str(error)
                     logger.exception("插件启动失败: slot=%s", key)
+                finally:
+                    self._publish()
+            else:
+                self._publish()
             return slot.describe()
 
     def _record(self, key: Slot) -> Path:
@@ -376,6 +437,7 @@ class GatewayPluginRuntime:
         instance_id, token = uuid4().hex, secrets.token_urlsafe(32)
         port = allocate_local_port()
         slot.state, slot.base_url, slot.token = "starting", f"http://127.0.0.1:{port}", token
+        self._publish()
         environment = _local_child_environment()
         environment["BOXTEAM_PROJECT_ROOT"] = str(get_project_root())
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -461,6 +523,7 @@ class GatewayPluginRuntime:
                         process_id=receipt.process_id, created_at=psutil.Process(receipt.process_id).create_time(),
                         instance_id=instance_id, base_url=slot.base_url, token=token).model_dump_json())
                 temporary.replace(record_path)
+                self._watch_exit(slot)
                 return
         except BaseException as error:
             try:
@@ -492,6 +555,7 @@ class GatewayPluginRuntime:
             {"pid": receipt.process_id, "log_sink": receipt.log_sink})
         slot.process = AdoptedManagedProcess(receipt.process_id, ownership)
         slot.receipt, slot.base_url, slot.token, slot.state = receipt, record.base_url, record.token, "ready"
+        self._watch_exit(slot)
         return True
 
     async def _command_registrations(self, slot: PluginSlot, instance_id: str, base_url: str,
@@ -528,10 +592,12 @@ class GatewayPluginRuntime:
         except BaseException:
             # 候选未完成接管，不关闭旧 Gateway 仍持有的实例。
             for slot in adopted.values():
+                await self._release_exit_waiter(slot)
                 assert slot.process is not None
                 slot.process.detach()
             raise
         self.slots.update(adopted)
+        self._publish()
 
     async def _stop(self, key: Slot, slot: PluginSlot) -> None:
         closing = asyncio.create_task(self._stop_process(key, slot))
@@ -549,6 +615,9 @@ class GatewayPluginRuntime:
         slot.stopped.set()
         if slot.process is not None:
             slot.state = "stopping"
+        await self._release_exit_waiter(slot)
+        self._publish()
+        if slot.process is not None:
             deadline = time.monotonic() + 8
             shutdown_error: httpx.HTTPError | None = None
             if slot.process.is_alive() and slot.receipt is not None:
@@ -567,6 +636,7 @@ class GatewayPluginRuntime:
                 raise RuntimeError("插件 shutdown 回执失败；原进程已核实退出") from shutdown_error
             self._record(key).unlink(missing_ok=True)
         slot.state = "stopped"
+        self._publish()
 
     def service(self, binding: PluginBinding, *, service_id: str, instance_id: str,
                 websocket: bool = False) -> tuple[str, str, asyncio.Event]:
@@ -596,9 +666,11 @@ class GatewayPluginRuntime:
         errors: list[Exception] = []
         for key, slot in self.slots.items():
             try:
-                if preserve and slot.process is not None:
-                    slot.process.detach()
-                elif not preserve:
+                if preserve:
+                    await self._release_exit_waiter(slot)
+                    if slot.process is not None:
+                        slot.process.detach()
+                else:
                     await self._stop(key, slot)
             except Exception as error:  # noqa: BLE001 — 所有进程都须尝试回收，结尾汇总原错误。
                 errors.append(error)

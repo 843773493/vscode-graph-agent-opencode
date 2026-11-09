@@ -11,7 +11,14 @@ from app.schemas.canonical_params import (
     CanonicalThreadId,
     CanonicalWorkspaceId,
 )
-from app.schemas.gateway.service_plugin import PluginVersionRequest
+from app.schemas.gateway.service_plugin import (
+    PluginBinding,
+    PluginCommandContribution,
+    PluginKeybindingContribution,
+    PluginMenuContribution,
+    PluginTarget,
+    PluginVersionRequest,
+)
 
 
 class PluginCommandRegistration(BaseModel):
@@ -27,6 +34,34 @@ class PluginCommandRegistrationsDTO(BaseModel):
 
     instance_id: str = Field(min_length=1)
     commands: list[PluginCommandRegistration]
+
+
+class PluginContributionTarget(PluginTarget):
+    workspace_id: CanonicalWorkspaceId | None = None
+
+
+class PluginCommandPublication(BaseModel):
+    """原绑定的窗口贡献投影，不含进程地址、凭据或插件参数。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    binding: PluginBinding
+    revision: str
+    state: str
+    error: str | None = None
+    instance_id: str | None = None
+    commands: list[PluginCommandContribution]
+    registrations: list[PluginCommandRegistration]
+    menus: list[PluginMenuContribution]
+    keybindings: list[PluginKeybindingContribution]
+
+
+class PluginCommandSnapshotDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gateway_id: str
+    workspace_id: CanonicalWorkspaceId | None = None
+    publications: list[PluginCommandPublication]
 
 
 class PluginCommandInstanceRequest(PluginVersionRequest):

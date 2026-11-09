@@ -32,8 +32,11 @@ from app.schemas.gateway.plugin_commands import (
     PluginCommandCancelRequest,
     PluginCommandEventDTO,
     PluginCommandInstanceRequest,
+    PluginCommandPublication,
     PluginCommandRegistration,
     PluginCommandRegistrationsDTO,
+    PluginCommandSnapshotDTO,
+    PluginContributionTarget,
 )
 from app.schemas.gateway.plugin_private_inputs import (
     PluginPrivateInputReference,
@@ -207,7 +210,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     name: f"{plugin_commands_pb2.DESCRIPTOR.package}.{name}"
     for name in ("PluginCommandCallRequest", "PluginCommandCancelRequest", "PluginCommandCancelDTO",
-                 "PluginCommandInstanceRequest", "PluginCommandRegistrationsDTO")
+                 "PluginCommandInstanceRequest", "PluginCommandRegistrationsDTO",
+                 "PluginContributionTarget", "PluginCommandSnapshotDTO")
 }
 
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
@@ -216,6 +220,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
 }
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    "PluginCommandSnapshotDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandSnapshotDTO"],
     "ExtensionConfigurationEventDTO": gateway_public_pb2.DESCRIPTOR.message_types_by_name["ExtensionConfigurationEventDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
     "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
@@ -276,6 +281,7 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,
         PluginCommandInstanceRequest, PluginCommandRegistration, PluginCommandRegistrationsDTO,
         PluginCommandEventDTO,
+        PluginContributionTarget, PluginCommandPublication, PluginCommandSnapshotDTO,
     ):
         message = descriptor_pool.FindMessageTypeByName(f"boxteam.gateway.v2.{model.__name__}")
         assert_public_schema(model.model_json_schema(), message)

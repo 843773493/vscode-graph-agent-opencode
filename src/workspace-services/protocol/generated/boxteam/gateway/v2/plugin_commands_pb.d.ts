@@ -4,12 +4,121 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
+import type { PluginBinding, PluginCommandContribution, PluginKeybindingContribution, PluginMenuContribution } from "./service_plugin_pb.js";
 import type { Value } from "@bufbuild/protobuf/wkt";
 
 /**
  * Describes the file boxteam/gateway/v2/plugin_commands.proto.
  */
 export declare const file_boxteam_gateway_v2_plugin_commands: GenFile;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginContributionTarget
+ */
+export declare type PluginContributionTarget = Message<"boxteam.gateway.v2.PluginContributionTarget"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 2;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string workspace_id = 3;
+   */
+  workspaceId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginContributionTarget.
+ * Use `create(PluginContributionTargetSchema)` to create a new message.
+ */
+export declare const PluginContributionTargetSchema: GenMessage<PluginContributionTarget>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginCommandPublication
+ */
+export declare type PluginCommandPublication = Message<"boxteam.gateway.v2.PluginCommandPublication"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginBinding binding = 1;
+   */
+  binding?: PluginBinding | undefined;
+
+  /**
+   * @generated from field: string revision = 2;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string error = 4;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: optional string instance_id = 5;
+   */
+  instanceId?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginCommandContribution commands = 6;
+   */
+  commands: PluginCommandContribution[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginCommandRegistration registrations = 7;
+   */
+  registrations: PluginCommandRegistration[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginMenuContribution menus = 8;
+   */
+  menus: PluginMenuContribution[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginKeybindingContribution keybindings = 9;
+   */
+  keybindings: PluginKeybindingContribution[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginCommandPublication.
+ * Use `create(PluginCommandPublicationSchema)` to create a new message.
+ */
+export declare const PluginCommandPublicationSchema: GenMessage<PluginCommandPublication>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginCommandSnapshotDTO
+ */
+export declare type PluginCommandSnapshotDTO = Message<"boxteam.gateway.v2.PluginCommandSnapshotDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 2;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginCommandPublication publications = 3;
+   */
+  publications: PluginCommandPublication[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginCommandSnapshotDTO.
+ * Use `create(PluginCommandSnapshotDTOSchema)` to create a new message.
+ */
+export declare const PluginCommandSnapshotDTOSchema: GenMessage<PluginCommandSnapshotDTO>;
 
 /**
  * 运行实例仅注册清单内的具名处理者；不是任意方法调用协议。

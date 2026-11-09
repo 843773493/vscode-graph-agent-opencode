@@ -1,3 +1,4 @@
+import asyncio
 import os
 import subprocess
 import sys
@@ -10,7 +11,48 @@ from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
     ManagedProcess,
     _capture_windows_process_tree,
+    wait_process_exit,
 )
+
+
+@pytest.fixture
+def exit_notification_process():
+    process = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"], stdin=subprocess.PIPE)
+    try:
+        yield process
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        process.wait(timeout=5)
+
+
+async def test_exit_notification_waits_for_actual_exit(exit_notification_process) -> None:
+    process = exit_notification_process
+    waiting = asyncio.create_task(wait_process_exit(process.pid))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    process.stdin.close()
+    process.stdin = None
+    await asyncio.wait_for(waiting, 3)
+    assert process.wait(timeout=1) == 0
+
+
+async def test_exit_notification_cancellation_keeps_process_alive(exit_notification_process) -> None:
+    process = exit_notification_process
+    waiting = asyncio.create_task(wait_process_exit(process.pid))
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(waiting, 3)
+    assert process.poll() is None
+
+
+async def test_exit_notification_accepts_already_exited_process(exit_notification_process) -> None:
+    process = exit_notification_process
+    process.stdin.close()
+    process.stdin = None
+    assert process.wait(timeout=3) == 0
+    await asyncio.wait_for(wait_process_exit(process.pid), 3)
 
 
 class _LogFile:

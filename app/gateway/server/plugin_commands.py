@@ -3,20 +3,36 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator
+from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from typing import Annotated, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
+from starlette.types import Message, Receive, Scope, Send
 
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
+    stream_sse_with_heartbeat,
+)
 from app.core.async_channel import run_channel
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
-from app.gateway.federation.policy import Capability, require_federation_capability
-from app.gateway.proxy_upstream import UpstreamResponseBody, send_upstream_request
+from app.gateway.federation.policy import (
+    Capability,
+    federation_capability_allowed,
+    require_federation_capability,
+)
+from app.gateway.proxy_upstream import (
+    UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    UpstreamResponseBody,
+    send_upstream_request,
+)
 from app.gateway.runtime.service_plugins.runtime import PluginSlot
 from app.gateway.server.management_routes import (
     check_management_route,
@@ -34,17 +50,20 @@ from app.schemas.gateway.plugin_commands import (
     PluginCommandEventDTO,
     PluginCommandInstanceRequest,
     PluginCommandRegistrationsDTO,
+    PluginCommandSnapshotDTO,
+    PluginContributionTarget,
 )
-from app.schemas.gateway.service_plugin import PluginBinding
+from app.schemas.gateway.service_plugin import PluginBinding, PluginTarget
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.sse import sse_responses
 
 router = APIRouter()
 Auth = Annotated[GatewayAuthContext, Depends(verify_gateway_access)]
 
 
 @contextmanager
-def command_route(request: Request, payload: PluginCommandInstanceRequest, auth: GatewayAuthContext,
-                  operation: str) -> Iterator[tuple[_ServiceRoute, PluginSlot | None]]:
+def _gateway_route(request: Request, payload: PluginTarget,
+                   auth: GatewayAuthContext) -> Iterator[_ServiceRoute | None]:
     with management_gateway_route(request, gateway_id=payload.gateway_id,
         gateway_connection_id=payload.gateway_connection_id, auth=auth) as remote:
         if remote is not None:
@@ -61,9 +80,19 @@ def command_route(request: Request, payload: PluginCommandInstanceRequest, auth:
             try:
                 check()
                 yield _ServiceRoute(httpx.URL(remote.base_url + request.url.path), remote.headers,
-                    stopped, payload.instance_id, payload.gateway_id, True), None
+                    stopped, "", payload.gateway_id, True)
             finally:
                 registry.remove_commit_observer(check)
+            return
+        yield None
+
+
+@contextmanager
+def command_route(request: Request, payload: PluginCommandInstanceRequest, auth: GatewayAuthContext,
+                  operation: str) -> Iterator[tuple[_ServiceRoute, PluginSlot | None]]:
+    with _gateway_route(request, payload, auth) as remote:
+        if remote is not None:
+            yield replace(remote, instance_id=payload.instance_id), None
             return
         if payload.workspace_id is not None:
             target = request.app.state.registry.resolve((payload.gateway_id, payload.workspace_id))
@@ -86,6 +115,176 @@ def command_route(request: Request, payload: PluginCommandInstanceRequest, auth:
         yield _ServiceRoute(httpx.URL(slot.base_url + "/internal/plugin/commands" + operation),
             {"X-Local-Token": slot.token, "X-Request-ID": get_request_id(request)},
             slot.stopped, payload.instance_id, payload.gateway_id), slot
+
+
+def _contribution_access(request: Request, payload: PluginContributionTarget, auth: GatewayAuthContext) -> None:
+    require_federation_capability(request, auth, "read")
+    if payload.workspace_id is not None:
+        target = request.app.state.registry.resolve((payload.gateway_id, payload.workspace_id))
+        if target.connection_kind != "local":
+            raise LookupError("贡献快照必须由目标 Gateway 的原生工作区解释")
+
+
+def _authorized_snapshot(request: Request, payload: PluginContributionTarget,
+                         auth: GatewayAuthContext) -> PluginCommandSnapshotDTO:
+    snapshot = request.app.state.service_plugins.command_snapshot(payload.workspace_id)
+    publications = []
+    for publication in snapshot.publications:
+        commands = [command for command in publication.commands if all(
+            federation_capability_allowed(request, auth, capability)
+            for capability in cast(list[Capability], ["send", *command.required_capabilities]))]
+        ids = {command.id for command in commands}
+        publications.append(publication.model_copy(update={"commands": commands,
+            "registrations": [entry for entry in publication.registrations if entry.command_id in ids],
+            "menus": [entry for entry in publication.menus if entry.command_id in ids],
+            "keybindings": [entry for entry in publication.keybindings if entry.command_id in ids]}))
+    return snapshot.model_copy(update={"publications": publications})
+
+
+@router.post("/api/gateway/service-plugins/commands/publications")
+async def publications(payload: PluginContributionTarget, request: Request,
+                       auth: Auth) -> APIResponse[PluginCommandSnapshotDTO]:
+    try:
+        with _gateway_route(request, payload, auth) as remote:
+            require_federation_capability(request, auth, "read")
+            if remote is None:
+                _contribution_access(request, payload, auth)
+                snapshot = _authorized_snapshot(request, payload, auth)
+            else:
+                response = await request.app.state.service_plugins.client.post(remote.url, headers=remote.headers,
+                    json=payload.model_dump(mode="json", exclude={"gateway_connection_id"}))
+                response.raise_for_status()
+                envelope = APIResponse[PluginCommandSnapshotDTO].model_validate(response.json())
+                snapshot = envelope.data
+                if envelope.request_id != get_request_id(request) or remote.stopped.is_set():
+                    raise LookupError("原贡献快照路由已失效或回执不属于原请求")
+            if snapshot is None or (snapshot.gateway_id, snapshot.workspace_id) != (payload.gateway_id, payload.workspace_id):
+                raise ValueError("贡献快照不属于原 Gateway／工作区")
+            require_federation_capability(request, auth, "read")
+            return APIResponse(data=snapshot, request_id=get_request_id(request))
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(error.response.status_code, error.response.json().get("detail")) from error
+
+
+class _PublicationStreamResponse(StreamingResponse):
+    """原订阅持有原路由；撤权、换代和响应头发送失败都结清它。"""
+
+    def __init__(self, source: AsyncIterable[bytes | str], *, request: Request, auth: GatewayAuthContext,
+                 stopped: asyncio.Event, close: Callable[[], None], body: UpstreamResponseBody | None) -> None:
+        super().__init__(source, media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+        self.request, self.auth, self.stopped, self.close, self.body = request, auth, stopped, close, body
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        started, completed = False, False
+        revoked: HTTPException | None = None
+
+        async def forward(message: Message) -> None:
+            nonlocal started, completed
+            if message["type"] == "http.response.start":
+                started = True
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                completed = True
+            await send(message)
+
+        async def watch() -> None:
+            nonlocal revoked
+            try:
+                await _watch_access(self.request, self.auth, self.stopped, ("read",))
+            except LookupError as error:
+                revoked = HTTPException(409, str(error))
+            except HTTPException as error:
+                revoked = error
+
+        try:
+            await run_channel(super().__call__(scope, receive, forward), watch())
+            if revoked is not None:
+                if not started:
+                    await JSONResponse(status_code=revoked.status_code, content={"detail": revoked.detail,
+                        "request_id": get_request_id(self.request)})(scope, receive, send)
+                elif not completed:
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+        finally:
+            try:
+                if self.body is not None:
+                    await self.body.aclose()
+            finally:
+                self.close()
+
+
+@router.post("/api/gateway/service-plugins/commands/events", response_class=StreamingResponse,
+    responses=sse_responses("原绑定的完整命令贡献快照", {"snapshot": PluginCommandSnapshotDTO}))
+async def publication_events(payload: PluginContributionTarget, request: Request, auth: Auth) -> StreamingResponse:
+    references = ExitStack()
+    body: UpstreamResponseBody | None = None
+    handed_off = False
+    try:
+        remote = references.enter_context(_gateway_route(request, payload, auth))
+        require_federation_capability(request, auth, "read")
+        if remote is None:
+            _contribution_access(request, payload, auth)
+            owner = request.app.state.service_plugins
+
+            async def frames() -> AsyncIterator[str]:
+                while True:
+                    # 先捕获唤醒对象再读取快照，不在 yield 之间丢掉配置提交。
+                    changed = owner.changed
+                    policy_changed = request.app.state.federation_policy_store.changed
+                    if stopped.is_set() or not federation_capability_allowed(request, auth, "read"):
+                        return
+                    snapshot = _authorized_snapshot(request, payload, auth)
+                    yield f"event: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+                    await run_channel(changed.wait(), policy_changed.wait())
+
+            source = stream_sse_with_heartbeat(frames(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+                                               close_source_on_exit=True)
+            stopped = asyncio.Event()
+            registry = request.app.state.registry
+
+            def check() -> None:
+                try:
+                    _contribution_access(request, payload, auth)
+                except (HTTPException, LookupError):
+                    stopped.set()
+
+            registry.add_commit_observer(check)
+            references.callback(registry.remove_commit_observer, check)
+        else:
+            client = request.app.state.service_plugins.client
+            upstream = client.build_request("POST", remote.url, headers=remote.headers,
+                json=payload.model_dump(mode="json", exclude={"gateway_connection_id"}), timeout=None)
+            response = await send_upstream_request(client, upstream,
+                response_headers_timeout_seconds=UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS)
+            body = UpstreamResponseBody(response)
+            if response.is_error:
+                await response.aread()
+                raise HTTPException(response.status_code, response.json().get("detail"))
+            if (response.headers.get("X-Request-ID") != get_request_id(request)
+                or response.headers.get("content-type", "").split(";", 1)[0] != "text/event-stream"):
+                raise ValueError("贡献事件流回执的请求身份或协议不符")
+            source, stopped = body, remote.stopped
+        result = _PublicationStreamResponse(source, request=request, auth=auth, stopped=stopped,
+                                            close=references.close, body=body)
+        handed_off = True
+        return result
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    finally:
+        if not handed_off:
+            try:
+                if body is not None:
+                    await body.aclose()
+            finally:
+                references.close()
 
 
 def capabilities(request: Request, auth: GatewayAuthContext, slot: PluginSlot | None,

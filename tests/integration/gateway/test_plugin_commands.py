@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import commentjson
 import httpx
+import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
@@ -19,6 +21,8 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.workspaces import install_test_workspace_config
+
+SnapshotReader = Callable[[Callable[[dict], bool]], dict]
 
 PYTHON = '''
 import sys, os, asyncio
@@ -96,6 +100,36 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
         close_gateway_process(gateway)
 
 
+@pytest.fixture
+def command_snapshots(plugin_gateway: tuple[httpx.Client, TestRunContext]) -> Iterator[SnapshotReader]:
+    client, context = plugin_gateway
+    gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+    evidence: list[dict] = []
+    with client.stream("POST", "/api/gateway/service-plugins/commands/events", json={"gateway_id": gateway_id},
+                       headers={"X-Request-ID": "command-publications"}) as response:
+        response.raise_for_status()
+        assert response.headers["X-Request-ID"] == "command-publications"
+        lines = response.iter_lines()
+
+        def read(matches: Callable[[dict], bool]) -> dict:
+            deadline = time.monotonic() + 20
+            for line in lines:
+                assert time.monotonic() < deadline, "原命令绑定没有发布预期快照"
+                if line.startswith("data: "):
+                    snapshot = json.loads(line[6:])
+                    assert snapshot["gateway_id"] == gateway_id and snapshot["workspace_id"] is None
+                    evidence.append(snapshot)
+                    if matches(snapshot):
+                        return snapshot
+            raise AssertionError("原贡献订阅在预期状态之前结束")
+
+        assert read(lambda _: True)["publications"] == []
+        try:
+            yield read
+        finally:
+            (context.artifacts_dir / "command-publications.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
+
+
 def _archive(destination: Path, prepared_package_root: Path, *, python_source: str = PYTHON) -> None:
     command = {"id": "execute", "title": "Execute", "handler": "execute", "required_capabilities": ["read"],
         "arguments_schema": {"type": "object", "additionalProperties": False, "required": ["mode", "value"],
@@ -134,6 +168,7 @@ def _archive(destination: Path, prepared_package_root: Path, *, python_source: s
 def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     plugin_gateway: tuple[httpx.Client, TestRunContext],
     prepared_developer_tools_package: Path,
+    command_snapshots: SnapshotReader,
 ) -> None:
     client, context = plugin_gateway
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
@@ -170,6 +205,14 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
 
     states = bind(True)
     assert set(states) == {"python", "node"}
+    published = command_snapshots(lambda snapshot: len(snapshot["publications"]) == 2
+        and all(item["state"] == "ready" for item in snapshot["publications"]))
+    assert {item["binding"]["plugin_id"] for item in published["publications"]} == {"python", "node"}
+    for item in published["publications"]:
+        assert item["instance_id"] == states[item["binding"]["plugin_id"]]["instance"]["instance_id"]
+        assert [entry["command_id"] for entry in item["registrations"]] == ["execute"]
+        assert item["commands"][0]["title"] == "Execute"
+        assert not ({"parameters", "base_url", "token", "process_id"} & item.keys())
     evidence = []
     last_call: dict[str, object] = {}
     for runtime, state in states.items():
@@ -232,6 +275,7 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
         assert restarted.raise_for_status().json()["data"]["instance"]["instance_id"] != instance["instance_id"]
         assert client.post("/api/gateway/service-plugins/commands/call", json=call).status_code == 409
     disabled = bind(False)
+    assert command_snapshots(lambda snapshot: not snapshot["publications"])["publications"] == []
     assert all(state["state"] == "stopped" for state in disabled.values())
     assert client.post("/api/gateway/service-plugins/commands/call", json=last_call).status_code == 409
 
@@ -288,6 +332,25 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     for pid, state in after_logging.items():
         assert state == before_logging[pid] | {"level": "warning", "pretty": False,
             "applied_revision": saved["active_digest"]}
+
+    latest = client.post("/api/gateway/service-plugins/commands/publications",
+                         json={"gateway_id": gateway_id}).raise_for_status().json()["data"]
+    current = {item["binding"]["plugin_id"]: item for item in latest["publications"]}
+    with client.stream("POST", "/api/gateway/service-plugins/commands/events", json={"gateway_id": gateway_id}) as late:
+        late.raise_for_status()
+        first = next(line for line in late.iter_lines() if line.startswith("data: "))
+        assert json.loads(first[6:]) == latest
+    node_instance = current["node"]["instance_id"]
+    actual = client.post("/api/gateway/service-plugins/status", json={"gateway_id": gateway_id})\
+        .raise_for_status().json()["data"]["plugins"]
+    python_pid = next(item["instance"]["process_id"] for item in actual if item["binding"]["plugin_id"] == "python")
+    psutil.Process(python_pid).kill()
+    failed = command_snapshots(lambda snapshot: any(item["binding"]["plugin_id"] == "python"
+        and item["state"] == "failed" for item in snapshot["publications"]))
+    failures = {item["binding"]["plugin_id"]: item for item in failed["publications"]}
+    assert failures["python"]["registrations"] == [] and failures["python"]["instance_id"] is None
+    assert failures["python"]["error"] and failures["node"]["instance_id"] == node_instance
+    assert failures["node"]["state"] == "ready" and len(failures["node"]["registrations"]) == 1
 
     # 解绑残留不进入有效快照，不引用包；再绑定必须使用当前包 schema。
     assert bind(None) == {}

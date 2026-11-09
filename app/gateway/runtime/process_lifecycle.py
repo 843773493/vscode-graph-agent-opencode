@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import signal
 import subprocess
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -12,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TextIO
 
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.runtime.process_groups import (
     ProcessStartMarker,
     _capture_posix_group_leader_start_marker,
@@ -23,6 +26,69 @@ from app.gateway.runtime.process_logs import ProcessLogFile, ProcessLogOwnership
 logger = logging.getLogger(__name__)
 
 WindowsProcessStartTimesByPid = dict[int, float]
+
+
+async def wait_process_exit(pid: int) -> None:
+    """等待已持有实例的系统退出通知；取消只释放等待，不终止进程。"""
+    if os.name == "nt":
+        import pywintypes
+        import win32api
+        import win32con
+        import win32event
+
+        try:
+            process = win32api.OpenProcess(win32con.SYNCHRONIZE, False, pid)
+        except pywintypes.error as error:
+            if error.winerror == 87:  # 进程已退出，系统不再提供句柄。
+                return
+            raise
+        cancelled = win32event.CreateEvent(None, True, False, None)
+        waiting = asyncio.create_task(asyncio.to_thread(win32event.WaitForMultipleObjects,
+            [process, cancelled], False, win32event.INFINITE))
+        try:
+            await asyncio.shield(waiting)
+        finally:
+            win32event.SetEvent(cancelled)
+            # 保留句柄直至实际等待返回，接管释放时也不会遗留 executor 线程。
+            async def release() -> None:
+                try:
+                    await waiting
+                finally:
+                    win32api.CloseHandle(cancelled)
+                    win32api.CloseHandle(process)
+
+            await run_cleanup_shielded(release)
+        return
+
+    import select
+
+    loop = asyncio.get_running_loop()
+    exited = loop.create_future()
+    queue = None
+    descriptor = None
+    try:
+        if sys.platform == "darwin":
+            queue = select.kqueue()
+            queue.control([select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT)], 0)
+            descriptor = queue.fileno()
+        else:
+            descriptor = os.pidfd_open(pid)
+        def complete() -> None:
+            if not exited.done():
+                exited.set_result(None)
+
+        loop.add_reader(descriptor, complete)
+        await exited
+    except ProcessLookupError:
+        return
+    finally:
+        if descriptor is not None:
+            loop.remove_reader(descriptor)
+        if queue is not None:
+            queue.close()
+        elif descriptor is not None:
+            os.close(descriptor)
 
 
 class LoggedProcessCleanupError(RuntimeError):

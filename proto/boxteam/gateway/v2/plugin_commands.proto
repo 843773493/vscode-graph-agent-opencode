@@ -3,6 +3,31 @@ syntax = "proto3";
 package boxteam.gateway.v2;
 
 import "google/protobuf/struct.proto";
+import "boxteam/gateway/v2/service_plugin.proto";
+
+message PluginContributionTarget {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  optional string workspace_id = 3;
+}
+
+message PluginCommandPublication {
+  PluginBinding binding = 1;
+  string revision = 2;
+  string state = 3;
+  optional string error = 4;
+  optional string instance_id = 5;
+  repeated PluginCommandContribution commands = 6;
+  repeated PluginCommandRegistration registrations = 7;
+  repeated PluginMenuContribution menus = 8;
+  repeated PluginKeybindingContribution keybindings = 9;
+}
+
+message PluginCommandSnapshotDTO {
+  string gateway_id = 1;
+  optional string workspace_id = 2;
+  repeated PluginCommandPublication publications = 3;
+}
 
 // 运行实例仅注册清单内的具名处理者；不是任意方法调用协议。
 message PluginCommandRegistration {
