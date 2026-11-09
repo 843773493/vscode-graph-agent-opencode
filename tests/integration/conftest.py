@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator, Sequence
 from hashlib import sha1
@@ -21,10 +22,12 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import output_root_for_test
+from tests.support.plugin_package import native_plugin_target
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import reset_gateway_persistent_state
 from tests.support.processes.workspace import (
     close_backend_process,
+    resolve_workspace_python_executable,
     start_backend_process,
     workspace_backend_id_for_root,
 )
@@ -102,6 +105,34 @@ def _hermetic_proxy_env():
 @pytest.fixture(scope="session", autouse=True)
 def integration_is_debug() -> bool:
     return os.getenv("BOXTEAM_INTEGRATION_BACKEND_DEBUGPY") == "1"
+
+
+@pytest.fixture(scope="session")
+def prepared_mcp_stdio_package() -> Path:
+    """普通 MCP 集成用例共享一次完整的、不可变的本机目标包。"""
+    project_root = Path.cwd().resolve()
+    context = TestRunContext.from_test_file(Path("tests/integration/conftest.py"))
+    output = context.run_root / "runtime" / "mcp-stdio.zip"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    python = str(resolve_workspace_python_executable(project_root))
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError("构建 MCP stdio 测试包需要 PATH 中可用的 uv")
+    subprocess.run(
+        [
+            "bun", "scripts/plugins/pack-mcp-stdio.mjs",
+            "--out", str(output),
+            "--target-json", json.dumps(native_plugin_target("python")),
+            "--python", python,
+            "--uv", uv,
+        ],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    return output
 
 
 @pytest.fixture(scope="module")

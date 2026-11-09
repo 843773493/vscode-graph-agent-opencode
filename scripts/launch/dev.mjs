@@ -57,14 +57,6 @@ const pythonBin = path.resolve(
 );
 const nodeBin =
   process.env.NODE_BIN ?? (process.platform === "win32" ? "node.exe" : "node");
-const installationTools = {
-  bun_executable: Bun.which("bun"),
-  uv_executable: Bun.which("uv"),
-  node_gyp_entrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"),
-};
-for (const [name, value] of Object.entries(installationTools)) {
-  if (!value || !existsSync(value)) throw new Error(`开发插件安装工具缺失: ${name}`);
-}
 const onlyLaunch = cliArguments.includes("--only-launch");
 const serviceArgumentIndex = cliArguments.findIndex(
   (argument) => argument === "--service" || argument.startsWith("--service="),
@@ -182,7 +174,6 @@ function writeDevelopmentManifest() {
         distribution: "source-development",
         version: BOXTEAM_VERSION,
         python_executable: pythonBin,
-        installation_tools: installationTools,
         application_root: projectRoot,
         config_resources: {
           gateway_inline: path.join(projectRoot, "configs", "gateway_inline.jsonc"),
@@ -439,9 +430,6 @@ async function main() {
     BOXTEAM_DEVELOPMENT_RESTART_CWD: projectRoot,
     BOXTEAM_PYTHON_BIN: pythonBin,
     BOXTEAM_NODE_BIN: nodeBin,
-    BOXTEAM_BUN_BIN: installationTools.bun_executable,
-    BOXTEAM_UV_BIN: installationTools.uv_executable,
-    BOXTEAM_NODE_GYP_JS: installationTools.node_gyp_entrypoint,
     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
     BOXTEAM_DEV_PORT_OFFSET: String(portOffset),
     BOXTEAM_DEV_FRONTEND_PORT: String(ports.frontend),

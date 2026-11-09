@@ -6,11 +6,8 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 import zipfile
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 
@@ -19,7 +16,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.http_server import running_http_server
+from tests.support.plugin_package import native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -71,8 +68,31 @@ server.serve_forever(); server.server_close()
 '''
 
 
-def _plugin_archive(path: Path, *, package_version: str, lock: str, python_version: str = "1.0.0",
-    entry_content: str | None = None) -> Path:
+def _python_lock(dependency_version: str = "1.0.0") -> str:
+    lines = [
+        "version = 1",
+        "revision = 3",
+        f'requires-python = "=={sys.version_info.major}.{sys.version_info.minor}.*"',
+        "",
+        "[[package]]",
+        'name = "plugin-dependency"',
+        f'version = "{dependency_version}"',
+        'source = { registry = "https://example.invalid/simple" }',
+        "",
+        "[[package]]",
+        'name = "plugin-dependency-fixture"',
+        'version = "1.0.0"',
+        'source = { virtual = "." }',
+        "",
+        "[package.metadata]",
+        f'requires-dist = [{{ name = "plugin-dependency", specifier = "=={dependency_version}" }}]',
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _plugin_archive(path: Path, *, package_version: str, python_version: str = "1.0.0",
+    entry_content: str | None = None, include_dependency: bool = True,
+    lock_dependency_version: str | None = None) -> Path:
     manifest = {
         "manifest_version": 1,
         "package_id": "dependency.probe",
@@ -89,6 +109,7 @@ def _plugin_archive(path: Path, *, package_version: str, lock: str, python_versi
             "entrypoint": ["entry.py"],
             "management_protocol_version": 1,
         }],
+        "target": native_plugin_target("python"),
     }
     project = (
         "[project]\nname = 'plugin-dependency-fixture'\nversion = '1.0.0'\n"
@@ -98,8 +119,35 @@ def _plugin_archive(path: Path, *, package_version: str, lock: str, python_versi
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("pyproject.toml", project)
-        archive.writestr("uv.lock", lock)
+        archive.writestr("uv.lock", _python_lock(lock_dependency_version or python_version))
         archive.writestr("entry.py", entry_content or _plugin_source())
+        if include_dependency:
+            with zipfile.ZipFile(BytesIO(_dependency_wheel())) as wheel:
+                for entry in wheel.infolist():
+                    archive.writestr(f"python/site-packages/{entry.filename}", wheel.read(entry.filename))
+    return path
+
+
+def _gateway_path_without_uv() -> str:
+    uv = shutil.which("uv")
+    if uv is None:
+        return os.environ.get("PATH", "")
+    uv_path = Path(uv).resolve()
+    entries = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            entries.append(entry)
+            continue
+        directory = Path(entry)
+        if any(
+            candidate.exists() and candidate.resolve() == uv_path
+            for candidate in (directory / "uv", directory / "uv.exe")
+        ):
+            continue
+        entries.append(entry)
+    path = os.pathsep.join(entries)
+    if shutil.which("uv", path=path) is not None:
+        raise RuntimeError("无法从 Gateway 测试 PATH 中移除 uv")
     return path
 
 
@@ -107,6 +155,21 @@ def _plugin_archive(path: Path, *, package_version: str, lock: str, python_versi
 def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_path: str,
     unused_tcp_port: int):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.artifacts_dir
+    packages = {
+        "good": _plugin_archive(artifacts / "dependency-plugin.zip", package_version="1.0.0"),
+        "stale": _plugin_archive(
+            artifacts / "dependency-plugin-stale.zip", package_version="2.0.0",
+            python_version="2.0.0", lock_dependency_version="1.0.0",
+        ),
+        "missing": _plugin_archive(
+            artifacts / "dependency-plugin-missing.zip", package_version="3.0.0", include_dependency=False,
+        ),
+        "changed": _plugin_archive(
+            artifacts / "dependency-plugin-changed.zip", package_version="1.0.0",
+            entry_content=_plugin_source() + "\n# changed package contents\n",
+        ),
+    }
     template = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
     config = Path.cwd() / "configs/tests/workspace/default.jsonc"
     schema = Path.cwd() / "configs/workspace_schema.jsonc"
@@ -125,147 +188,126 @@ def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_worksp
         port=unused_tcp_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir,
+        extra_env={"PATH": _gateway_path_without_uv()},
     )
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=30, trust_env=False) as client:
-            yield client, context
+            client.post("/api/gateway/users/guest", json={}).raise_for_status()
+            active = client.get("/api/gateway/workspaces").raise_for_status().json()["data"]["active_workspace"]
+            client.headers.update({
+                "X-BoxTeam-Target-Gateway-Id": active["gateway_id"],
+                "X-BoxTeam-Gateway-Id": active["gateway_id"],
+                "X-BoxTeam-Workspace-Id": active["workspace_id"],
+            })
+            client.get("/api/v1/health").raise_for_status()
+            yield client, context, packages
     finally:
         close_gateway_process(gateway)
 
 
-def test_gateway_installs_runs_and_restarts_locked_dependency_package(dependency_plugin_gateway,
-    request: pytest.FixtureRequest) -> None:
-    client, context = dependency_plugin_gateway
-    registry_root = context.artifacts_dir / "registry"
-    package_page = registry_root / "simple/plugin-dependency"
-    package_page.mkdir(parents=True)
-    (registry_root / "plugin_dependency-1.0.0-py3-none-any.whl").write_bytes(_dependency_wheel())
-    (package_page / "index.html").write_text(
-        '<a href="../../plugin_dependency-1.0.0-py3-none-any.whl">plugin-dependency</a>', encoding="utf-8",
-    )
-    uv = shutil.which("uv")
-    assert uv is not None
-    environment = {key: value for key, value in os.environ.items()
-        if not key.upper().startswith(("UV_", "PIP_", "PYTHON"))
-        and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}}
+
+def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
+    dependency_plugin_gateway,
+) -> None:
+    client, context, packages = dependency_plugin_gateway
     evidence: list[dict[str, object]] = []
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
-    package_dir = context.artifacts_dir / "bundle"
-    package_dir.mkdir()
-    (package_dir / "pyproject.toml").write_text(
-        "[project]\nname = 'plugin-dependency-fixture'\nversion = '1.0.0'\n"
-        f"requires-python = '=={sys.version_info.major}.{sys.version_info.minor}.*'\n"
-        "dependencies = ['plugin-dependency==1.0.0']\n", encoding="utf-8",
-    )
 
-    with running_http_server(ThreadingHTTPServer(
-        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(registry_root)),
-    )) as registry:
-        registry_url = f"http://127.0.0.1:{registry.server_port}/simple"
-        lock_command = [
-            uv, "--no-config", "--project", str(package_dir), "lock", "--python", sys.executable,
-            "--no-python-downloads", "--no-managed-python", "--default-index", registry_url,
-        ]
-        lock_result = subprocess.run(
-            lock_command, cwd=package_dir, env=environment, capture_output=True, text=True, timeout=45, check=False,
+    def exchange(method: str, path: str, body: dict[str, object] | None = None) -> httpx.Response:
+        request_id = f"plugin-dependency-{len(evidence) + 1}"
+        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id})
+        assert response.headers.get("X-Request-ID") == request_id
+        if response.headers.get("content-type", "").startswith("application/json"):
+            payload = response.json()
+            if "request_id" in payload:
+                assert payload["request_id"] == request_id
+        evidence.append({
+            "method": method,
+            "path": path,
+            "request_id": request_id,
+            "status": response.status_code,
+            "request": body,
+            "response": response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text,
+        })
+        return response
+
+    def install(archive: Path) -> httpx.Response:
+        return exchange("POST", "/api/gateway/service-plugins/install", {
+            "gateway_id": gateway_id,
+            "path": str(archive),
+            "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        })
+
+    def status() -> dict[str, object]:
+        response = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id})
+        return response.raise_for_status().json()["data"]
+
+    def bind() -> dict[str, object]:
+        path = "/api/gateway/config/sources/gateway_mutable_override"
+        source = exchange("GET", path).raise_for_status().json()["data"]
+        payload = commentjson.loads(source["jsonc"])
+        payload.setdefault("plugins", {})["runtime"] = {"entries": [{
+            "package_id": "dependency.probe",
+            "package_version": "1.0.0",
+            "plugin_id": "probe",
+            "enabled": True,
+        }]}
+        response = exchange("PUT", path, {
+            "gateway_id": gateway_id,
+            "source_key": "gateway_mutable_override",
+            "jsonc": json.dumps(payload, ensure_ascii=False, indent=2),
+            "base_file_digest": source["file_digest"],
+            "base_layer_revision": source["layer_revision"],
+            "base_layer_digest": source["layer_digest"],
+            "expected_active_revision": source["active_revision"],
+            "expected_active_digest": source["active_digest"],
+            "idempotency_key": "plugin-dependency-first-bind",
+        }).raise_for_status().json()["data"]
+        assert response["edit"]["state"] == "active"
+        return next(item for item in status()["plugins"] if item["binding"]["plugin_id"] == "probe")
+
+    def call(instance: dict[str, object]) -> httpx.Response:
+        slot = instance["instance"]
+        path = (
+            f"/api/gateway/service-plugins/dependency.probe/probe/instances/{slot['instance_id']}"
+            "/services/echo/value?package_version=1.0.0"
         )
-        (context.artifacts_dir / "uv-lock-command.json").write_text(json.dumps({
-            "command": lock_command,
-            "returncode": lock_result.returncode,
-            "stdout": lock_result.stdout,
-            "stderr": lock_result.stderr,
-        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        if lock_result.returncode:
-            raise AssertionError(f"本地锁文件准备失败: exit={lock_result.returncode}: {lock_result.stderr}")
-        lock_text = (package_dir / "uv.lock").read_text(encoding="utf-8")
-        good = _plugin_archive(context.artifacts_dir / "dependency-plugin.zip",
-            package_version="1.0.0", lock=lock_text)
-        stale = _plugin_archive(context.artifacts_dir / "dependency-plugin-stale.zip",
-            package_version="2.0.0", lock=lock_text, python_version="2.0.0")
-        changed = _plugin_archive(context.artifacts_dir / "dependency-plugin-changed.zip",
-            package_version="1.0.0", lock=lock_text,
-            entry_content=_plugin_source() + "\n# changed package contents\n")
+        return exchange("GET", path)
 
-        counter = 0
+    try:
+        assert install(packages["good"]).status_code == 200
+        stale = install(packages["stale"])
+        assert stale.status_code == 422
+        assert "pyproject.toml 与 uv.lock 根依赖不一致" in stale.json()["detail"]
+        missing = install(packages["missing"])
+        assert missing.status_code == 422
+        assert "缺少已准备的 python/site-packages" in missing.json()["detail"]
 
-        def exchange(method: str, path: str, body: dict[str, object] | None = None) -> httpx.Response:
-            nonlocal counter
-            counter += 1
-            request_id = f"plugin-dependency-{counter}"
-            response = client.request(method, path, json=body, headers={"X-Request-ID": request_id})
-            assert response.headers.get("X-Request-ID") == request_id
-            if response.headers.get("content-type", "").startswith("application/json"):
-                payload = response.json()
-                if "request_id" in payload:
-                    assert payload["request_id"] == request_id
-            evidence.append({"method": method, "path": path, "request_id": request_id,
-                "status": response.status_code, "request": body,
-                "response": response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text})
-            return response
+        inventory = exchange(
+            "POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id},
+        ).raise_for_status().json()["data"]["packages"]
+        assert {item["manifest"]["version"] for item in inventory} == {"1.0.0"}
 
-        def install(archive: Path) -> httpx.Response:
-            return exchange("POST", "/api/gateway/service-plugins/install", {
-                "gateway_id": gateway_id,
-                "path": str(archive),
-                "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-            })
+        ready = bind()
+        assert ready["state"] == "ready"
+        reply = call(ready).raise_for_status().json()
+        assert reply["value"] == "locked-dependency-ready"
+        assert reply["instance_id"] == ready["instance"]["instance_id"]
 
-        def status() -> dict[str, object]:
-            return exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id})\
-                .raise_for_status().json()["data"]
-
-        def bind() -> dict[str, object]:
-            path = "/api/gateway/config/sources/gateway_mutable_override"
-            source = exchange("GET", path).raise_for_status().json()["data"]
-            payload = commentjson.loads(source["jsonc"])
-            payload.setdefault("plugins", {})["runtime"] = {"entries": [{
-                "package_id": "dependency.probe", "package_version": "1.0.0", "plugin_id": "probe", "enabled": True,
-            }]}
-            response = exchange("PUT", path, {
-                "gateway_id": gateway_id,
-                "source_key": "gateway_mutable_override",
-                "jsonc": json.dumps(payload, ensure_ascii=False, indent=2),
-                "base_file_digest": source["file_digest"],
-                "base_layer_revision": source["layer_revision"],
-                "base_layer_digest": source["layer_digest"],
-                "expected_active_revision": source["active_revision"],
-                "expected_active_digest": source["active_digest"],
-                "idempotency_key": "plugin-dependency-first-bind",
-            }).raise_for_status().json()["data"]
-            assert response["edit"]["state"] == "active"
-            return next(item for item in status()["plugins"] if item["binding"]["plugin_id"] == "probe")
-
-        def call(instance: dict[str, object]) -> httpx.Response:
-            slot = instance["instance"]
-            return exchange("GET", f"/api/gateway/service-plugins/dependency.probe/probe/instances/"
-                f"{slot['instance_id']}/services/echo/value?package_version=1.0.0")
-
-        try:
-            assert install(good).status_code == 200
-            stale_response = install(stale)
-            assert stale_response.status_code == 409
-            assert "stage=python-sync" in stale_response.json()["detail"]
-            assert not any(item["manifest"]["version"] == "2.0.0"
-                for item in exchange("POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id})
-                    .raise_for_status().json()["data"]["packages"])
-            ready = bind()
-            assert ready["state"] == "ready"
-            reply = call(ready).raise_for_status().json()
-            assert reply["value"] == "locked-dependency-ready"
-            assert reply["instance_id"] == ready["instance"]["instance_id"]
-            restarted = exchange("POST", "/api/gateway/service-plugins/restart", {
-                "gateway_id": gateway_id,
-                "package_id": "dependency.probe",
-                "package_version": "1.0.0",
-                "plugin_id": "probe",
-                "revision": ready["revision"],
-            }).raise_for_status().json()["data"]
-            assert restarted["instance"]["instance_id"] != ready["instance"]["instance_id"]
-            assert call(restarted).raise_for_status().json()["value"] == "locked-dependency-ready"
-            assert install(changed).status_code == 409, "同包版本内容不可变"
-            assert call(restarted).raise_for_status().json()["value"] == "locked-dependency-ready"
-        finally:
-            (context.artifacts_dir / "plugin-dependency-flow.json").write_text(
-                json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
-            )
+        restarted = exchange("POST", "/api/gateway/service-plugins/restart", {
+            "gateway_id": gateway_id,
+            "package_id": "dependency.probe",
+            "package_version": "1.0.0",
+            "plugin_id": "probe",
+            "revision": ready["revision"],
+        }).raise_for_status().json()["data"]
+        assert restarted["instance"]["instance_id"] != ready["instance"]["instance_id"]
+        assert call(restarted).raise_for_status().json()["value"] == "locked-dependency-ready"
+        assert install(packages["changed"]).status_code == 409, "同包版本内容不可变"
+        assert call(restarted).raise_for_status().json()["value"] == "locked-dependency-ready"
+    finally:
+        (context.artifacts_dir / "plugin-dependency-flow.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )

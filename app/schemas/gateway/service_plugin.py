@@ -228,6 +228,19 @@ class ServicePluginManifest(_PluginValue):
         return self
 
 
+class PluginRuntimeTarget(_PluginValue):
+    version: str = Field(min_length=1)
+    abi: str = Field(min_length=1)
+
+
+class PluginPackageTarget(_PluginValue):
+    os: Literal["linux", "windows", "macos"]
+    architecture: Literal["x64", "arm64"]
+    system_baseline: str = Field(min_length=1)
+    node: PluginRuntimeTarget | None = None
+    python: PluginRuntimeTarget | None = None
+
+
 class PluginPackageManifest(_PluginValue):
     manifest_version: Literal[1] = 1
     package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -236,12 +249,24 @@ class PluginPackageManifest(_PluginValue):
     description: str | None = None
     extension_contract_version: Literal[1] = 1
     plugins: list[ServicePluginManifest] = Field(min_length=1)
+    target: PluginPackageTarget | None = None
 
     @model_validator(mode="after")
     def plugin_ids_are_unique(self) -> PluginPackageManifest:
         plugin_ids = [plugin.id for plugin in self.plugins]
         if len(plugin_ids) != len(set(plugin_ids)):
             raise ValueError("同一插件包内 plugin id 必须唯一")
+        runtimes = {plugin.runtime for plugin in self.plugins if plugin.runtime is not None}
+        if not runtimes:
+            if self.target is not None:
+                raise ValueError("纯声明插件包不需要目标运行环境")
+            return self
+        if self.target is None:
+            raise ValueError("代码插件包必须声明唯一目标运行环境")
+        if (self.target.node is not None) != ("node" in runtimes):
+            raise ValueError("插件包 Node 目标必须且只能对应 Node 代码插件")
+        if (self.target.python is not None) != ("python" in runtimes):
+            raise ValueError("插件包 Python 目标必须且只能对应 Python 代码插件")
         return self
 
 
@@ -353,8 +378,10 @@ __all__ = [
     "PluginKeybindingContribution",
     "PluginMenuContribution",
     "PluginPackageManifest",
+    "PluginPackageTarget",
     "PluginRuntime",
     "PluginRuntimeStatusDTO",
+    "PluginRuntimeTarget",
     "PluginScope",
     "PluginServiceContribution",
     "PluginServiceReference",

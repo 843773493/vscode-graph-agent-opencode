@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ from app.services.infrastructure.resource_platform.observation.source_update_pol
     SourceUpdatePolicy,
 )
 from configs.plugin_parameters import PluginParameters, plugin_parameters
+from tests.support.plugin_package import native_plugin_target
 from tests.support.processes.workspace import ensure_local_port_available
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
@@ -229,8 +231,16 @@ def _debug_plugin_snapshot(workspace_id: str) -> TerminalPluginConfigSnapshot:
 
 
 def build_developer_tools_package(project_root: Path, archive: Path) -> None:
+    bun = shutil.which("bun")
+    node = os.environ.get("BOXTEAM_NODE_BIN") or shutil.which("node")
+    python = os.environ.get("BOXTEAM_PYTHON_BIN") or sys.executable
+    node_gyp = project_root / "node_modules/node-gyp/bin/node-gyp.js"
+    if not bun or not node or not node_gyp.is_file():
+        raise RuntimeError("开发工具插件打包需要 Bun、目标 Node 和 node-gyp")
     subprocess.run(
-        ["bun", "scripts/plugins/pack-developer-tools.mjs", "--out", str(archive.resolve())],
+        [bun, "scripts/plugins/pack-developer-tools.mjs", "--out", str(archive.resolve()),
+         "--target-json", json.dumps(native_plugin_target("node")), "--bun", bun,
+         "--node", node, "--node-gyp", str(node_gyp.resolve()), "--python", python],
         cwd=project_root,
         check=True,
         capture_output=True,

@@ -1,76 +1,177 @@
-"""按包内锁文件准备 Gateway 插件私有运行依赖。"""
+"""校验插件制品包含完整、可重定位的运行依赖。"""
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import shutil
-import tempfile
+import platform
+import subprocess
+import sys
 import tomllib
-from pathlib import Path
+from email.parser import Parser
+from functools import cache
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
 
 import commentjson
+from packaging.requirements import Requirement
+from packaging.utils import NormalizedName, canonicalize_name
 
-from app.core.child_process import OwnedChildProcess
-from app.core.identifier import create_uuid_hex
-from app.core.shielded_cleanup import run_cleanup_shielded
-from app.gateway.runtime.workspace_process import resolve_python_executable
+from app.schemas.gateway.service_plugin import PluginPackageTarget
 
-_MAX_OUTPUT = 65536
-_INSTALL_TIMEOUT = 600
+_VALIDATED_PACKAGES: set[tuple[str, tuple[str, ...]]] = set()
 
 
-def has_python_lock(root: Path) -> bool:
-    return (root / "pyproject.toml").is_file() or (root / "uv.lock").is_file()
+def validate_runtime_target(target: PluginPackageTarget | None, *, runtimes: set[str], node_executable: str | None,
+                            python_executable: Path) -> None:
+    if target is None:
+        raise RuntimeError("代码插件包缺少目标运行环境")
+    target_os = target.os
+    current_os = {"linux": "linux", "win32": "windows", "darwin": "macos"}.get(sys.platform)
+    if current_os != target_os:
+        raise RuntimeError(f"插件目标操作系统不匹配: package={target_os}, gateway={current_os or sys.platform}")
+    architecture = {"AMD64": "x64", "x86_64": "x64", "aarch64": "arm64", "ARM64": "arm64"}.get(platform.machine())
+    if architecture != target.architecture:
+        raise RuntimeError(f"插件目标架构不匹配: package={target.architecture}, gateway={architecture or platform.machine()}")
+    _validate_system_baseline(target.system_baseline, target_os)
+    if "node" in runtimes:
+        runtime = target.node
+        if runtime is None:
+            raise RuntimeError("插件包缺少 Node 目标运行时")
+        if node_executable is None:
+            raise RuntimeError("Node 插件没有配置目标 Node 运行时")
+        node = _node_runtime(node_executable)
+        if node["version"] != runtime.version or node["abi"] != runtime.abi:
+            raise RuntimeError(
+                f"插件 Node 运行时不匹配: package={runtime.version}/{runtime.abi}, gateway={node['version']}/{node['abi']}"
+            )
+    if "python" in runtimes:
+        if target.python is None:
+            raise RuntimeError("插件包缺少 Python 目标运行时")
+        runtime = _python_runtime(python_executable)
+        if runtime["version"] != target.python.version or runtime["abi"] != target.python.abi:
+            raise RuntimeError(
+                f"插件 Python 运行时不匹配: package={target.python.version}/{target.python.abi}, "
+                f"gateway={runtime['version']}/{runtime['abi']}"
+            )
 
 
-def has_node_lock(root: Path) -> bool:
-    if (root / "bun.lock").is_file():
-        return True
-    manifest = root / "package.json"
-    if not manifest.is_file():
-        return False
-    package = json.loads(manifest.read_text(encoding="utf-8"))
-    return any(package.get(field) for field in ("dependencies", "optionalDependencies", "peerDependencies"))
+def _validate_system_baseline(baseline: str, target_os: str) -> None:
+    if target_os == "linux":
+        label, actual = "glibc", platform.libc_ver()
+        if actual[0] != "glibc":
+            raise RuntimeError(f"插件需要 glibc，当前系统 libc 为 {actual[0] or 'unknown'}")
+        prefix = "glibc-"
+    elif target_os == "windows":
+        if sys.platform != "win32":
+            raise RuntimeError("Windows 插件基线只能在 Windows Gateway 上校验")
+        version = sys.getwindowsversion()
+        label, actual = "windows", (f"{version.major}.{version.minor}.{version.build}", "")
+        prefix = "windows-"
+    else:
+        label, actual = "macos", (platform.mac_ver()[0], "")
+        prefix = "macos-"
+    if not baseline.startswith(prefix):
+        raise ValueError(f"插件目标系统基线格式无效: {baseline}")
+    required = _version_tuple(baseline.removeprefix(prefix))
+    current = _version_tuple(actual[1] if target_os == "linux" else actual[0])
+    if current < required:
+        raise RuntimeError(f"插件系统基线不满足: required={label} {baseline.removeprefix(prefix)}, "
+                           f"gateway={actual[1] if target_os == 'linux' else actual[0]}")
 
 
-def prepare_dependencies(root: Path, *, runtimes: set[str]) -> None:
-    if "python" in runtimes and has_python_lock(root):
-        asyncio.run(_prepare_python(root))
-    if "node" in runtimes and has_node_lock(root):
-        asyncio.run(_prepare_node(root))
+def _version_tuple(value: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in value.split("."))
+    except ValueError as error:
+        raise ValueError(f"无效的系统版本号: {value}") from error
 
 
-def validate_dependency_inputs(root: Path, *, runtimes: set[str]) -> None:
+@cache
+def _node_runtime(executable: str) -> dict[str, str]:
+    result = subprocess.run(
+        [executable, "-p", "JSON.stringify({version:process.versions.node,abi:process.versions.modules})"],
+        capture_output=True, text=True, timeout=5, check=True,
+    )
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict) or not isinstance(value.get("version"), str) or not isinstance(value.get("abi"), str):
+        raise TypeError("目标 Node 返回了无效的运行时元数据")
+    return value
+
+
+@cache
+def _python_runtime(executable: Path) -> dict[str, str]:
+    result = subprocess.run(
+        [str(executable), "-c", "import json,sys; print(json.dumps({'version':sys.version.split()[0], 'abi':f'cp{sys.version_info.major}{sys.version_info.minor}'}))"],
+        capture_output=True, text=True, timeout=5, check=True,
+    )
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict) or not isinstance(value.get("version"), str) or not isinstance(value.get("abi"), str):
+        raise TypeError("目标 Python 返回了无效的运行时元数据")
+    return value
+
+
+def validate_prebuilt_dependencies(root: Path, *, runtimes: set[str], digest: str | None = None) -> None:
+    cache_key = (digest, tuple(sorted(runtimes))) if digest is not None else None
+    if cache_key is not None and cache_key in _VALIDATED_PACKAGES:
+        return
+    if (root / ".venv").exists():
+        raise ValueError("插件包不能携带构建机 Python .venv；请提供可重定位的 python/site-packages")
     python_project = root / "pyproject.toml"
     python_lock = root / "uv.lock"
-    if has_python_lock(root):
+    python_site = root / "python/site-packages"
+    if python_project.exists() or python_lock.exists():
         if "python" not in runtimes:
             raise ValueError("仅 Python 代码插件可包含 pyproject.toml 或 uv.lock")
         if not python_project.is_file() or not python_lock.is_file():
             raise ValueError("Python 插件依赖必须同时提供 pyproject.toml 与 uv.lock")
-        _validate_python_lock(python_project, python_lock)
+        requirements = _validate_python_lock(python_project, python_lock)
+        if requirements and not python_site.is_dir():
+            raise ValueError("Python 插件缺少已准备的 python/site-packages")
+        if python_site.exists():
+            _validate_python_site(root, python_site, requirements)
+    elif python_site.exists():
+        raise ValueError("Python site-packages 必须由同包 pyproject.toml 与 uv.lock 声明")
+
     for unsupported in ("requirements.txt", "requirements.lock", "poetry.lock", "Pipfile", "Pipfile.lock"):
         if (root / unsupported).exists():
             raise ValueError(f"Python 插件不支持 {unsupported}；请提供 pyproject.toml 与 uv.lock")
+
     for obsolete in ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "bun.lockb"):
         if (root / obsolete).exists():
             raise ValueError(f"Node 插件不支持 {obsolete}；请提供 package.json 与 bun.lock")
     node_manifest, node_lock = root / "package.json", root / "bun.lock"
+    node_modules = root / "node_modules"
     if node_manifest.is_file():
-        package = json.loads(node_manifest.read_text(encoding="utf-8"))
-        dependencies = any(package.get(field) for field in ("dependencies", "optionalDependencies", "peerDependencies"))
-        if dependencies and ("node" not in runtimes or not node_lock.is_file()):
-            raise ValueError("声明 Node 运行依赖时必须由 Node 代码插件同时提供 bun.lock")
-    if node_lock.is_file():
-        if "node" not in runtimes or not node_manifest.is_file():
-            raise ValueError("仅 Node 代码插件可包含 bun.lock，且必须同时提供 package.json")
-        _validate_node_lock(node_manifest, node_lock)
+        manifest = json.loads(node_manifest.read_text(encoding="utf-8"))
+        locked_versions = _validate_node_lock(node_manifest, node_lock) if node_lock.is_file() else {}
+        declared = _node_requirements(manifest)
+        if declared and "node" not in runtimes:
+            raise ValueError("仅 Node 代码插件可包含 Node 运行依赖")
+        if declared and not node_lock.is_file():
+            raise ValueError("声明 Node 运行依赖时必须同时提供 bun.lock")
+        if declared and not node_modules.is_dir():
+            raise ValueError("Node 插件缺少已准备的 node_modules")
+        if not declared.issubset(locked_versions):
+            raise ValueError("Bun 锁文件缺少 package.json 声明的依赖")
+        if node_modules.exists():
+            _validate_node_modules(root, manifest, locked_versions)
+    elif node_lock.exists() or node_modules.exists():
+        raise ValueError("Node bun.lock 与 node_modules 必须由同包 package.json 声明")
+    if cache_key is not None:
+        _VALIDATED_PACKAGES.add(cache_key)
 
 
-def _validate_python_lock(project_file: Path, lock_file: Path) -> None:
+def _node_requirements(manifest: dict[str, object]) -> set[str]:
+    requirements: set[str] = set()
+    for field in ("dependencies", "optionalDependencies", "peerDependencies"):
+        values = manifest.get(field, {})
+        if not isinstance(values, dict):
+            raise TypeError(f"Node package.json {field} 必须是对象")
+        requirements.update(name for name in values if isinstance(name, str))
+    return requirements
+
+
+def _validate_python_lock(project_file: Path, lock_file: Path) -> list[Requirement]:
     project = tomllib.loads(project_file.read_text(encoding="utf-8"))
     project_config = project.get("project")
     if not isinstance(project_config, dict):
@@ -94,9 +195,43 @@ def _validate_python_lock(project_file: Path, lock_file: Path) -> None:
                 or parsed.query or parsed.fragment
                 or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
             raise ValueError("Python 插件锁定 registry 必须是 HTTPS；HTTP 仅允许 loopback")
+    dependencies = project_config.get("dependencies", [])
+    if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
+        raise TypeError("Python 插件 [project].dependencies 必须是字符串数组")
+    declared = [Requirement(item) for item in dependencies]
+    active = [requirement for requirement in declared
+              if requirement.marker is None or requirement.marker.evaluate()]
+    project_package = next((package for package in lock["package"]
+                            if isinstance(package, dict) and package.get("source") == {"virtual": "."}), None)
+    if project_package is None:
+        raise ValueError("Python 插件 uv.lock 缺少根项目记录")
+    metadata = project_package.get("metadata", {})
+    locked_requirements = metadata.get("requires-dist", []) if isinstance(metadata, dict) else []
+    locked = [Requirement(_locked_requirement(item)) for item in locked_requirements]
+    key = lambda requirement: (canonicalize_name(requirement.name), str(requirement.specifier),
+        tuple(sorted(requirement.extras)), str(requirement.marker or ""))
+    if sorted(map(key, active)) != sorted(map(key, locked)):
+        raise ValueError("Python 插件 pyproject.toml 与 uv.lock 根依赖不一致")
+    return active
 
 
-def _validate_node_lock(manifest_path: Path, lock_path: Path) -> None:
+def _locked_requirement(value: object) -> str:
+    if not isinstance(value, dict) or not isinstance(value.get("name"), str):
+        raise TypeError("Python 插件 uv.lock 根依赖条目格式无效")
+    name = value["name"]
+    specifier = value.get("specifier", "")
+    if not isinstance(specifier, str):
+        raise TypeError("Python 插件 uv.lock 根依赖版本格式无效")
+    extras = value.get("extra", [])
+    if not isinstance(extras, list) or not all(isinstance(extra, str) for extra in extras):
+        raise TypeError("Python 插件 uv.lock 根依赖 extras 格式无效")
+    marker = value.get("marker")
+    if marker is not None and not isinstance(marker, str):
+        raise TypeError("Python 插件 uv.lock 根依赖 marker 格式无效")
+    return f"{name}[{','.join(extras)}]{specifier}" + (f" ; {marker}" if marker else "")
+
+
+def _validate_node_lock(manifest_path: Path, lock_path: Path) -> dict[str, set[str]]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     lock = commentjson.loads(lock_path.read_text(encoding="utf-8"))
     if lock.get("lockfileVersion") != 1 or not isinstance(lock.get("workspaces", {}).get(""), dict):
@@ -104,17 +239,20 @@ def _validate_node_lock(manifest_path: Path, lock_path: Path) -> None:
     if set(lock["workspaces"]) != {""}:
         raise ValueError("插件包必须有单一根 package.json，不支持 workspace 链接")
     root_package = lock["workspaces"][""]
-    for dependency_field in ("dependencies", "optionalDependencies", "devDependencies", "peerDependencies"):
+    for dependency_field in ("dependencies", "optionalDependencies", "peerDependencies"):
         if manifest.get(dependency_field, {}) != root_package.get(dependency_field, {}):
             raise ValueError(f"Bun 锁文件根 {dependency_field} 与 package.json 不一致")
-    for package in lock.get("packages", {}).values():
+    packages = lock.get("packages", {})
+    if not isinstance(packages, dict):
+        raise TypeError("Bun 锁文件 packages 必须是对象")
+    versions: dict[str, set[str]] = {}
+    for key, package in packages.items():
         if not isinstance(package, list) or len(package) != 4 or not isinstance(package[0], str):
             raise ValueError("Bun 锁文件只允许带完整性摘要的 registry 依赖")
         name, separator, version = package[0].rpartition("@")
         source = package[1]
         if not separator or not name or not version or not isinstance(source, str) or not isinstance(package[3], str) or not package[3].startswith("sha512-"):
             raise ValueError("Bun 锁文件依赖缺少明确版本或 integrity")
-        # Bun 的默认 registry 用空字符串表示；显式 tarball／registry 只允许 HTTPS 或 loopback。
         for location in (version, source):
             if not location:
                 continue
@@ -125,117 +263,141 @@ def _validate_node_lock(manifest_path: Path, lock_path: Path) -> None:
                     raise ValueError("Bun 锁文件不支持路径、Git、链接或携带凭据的依赖")
             elif "/" in location or location.startswith((".", "workspace:", "file:", "link:")):
                 raise ValueError("Bun 锁文件不支持本机路径或 workspace 依赖")
+        if not isinstance(key, str):
+            raise TypeError("Bun 锁文件 package key 必须是字符串")
+        versions.setdefault(key, set()).add(version)
+        versions.setdefault(name, set()).add(version)
+    return versions
 
 
-async def _run(command: list[str], *, cwd: Path, env: dict[str, str], stage: str) -> str:
-    process = OwnedChildProcess(create_uuid_hex(namespace="gateway-plugin-dependency"))
-    output = bytearray()
+def _node_dependency_sets(manifest: dict[str, object]) -> tuple[set[str], set[str]]:
+    required: set[str] = set()
+    optional: set[str] = set()
+    for field in ("dependencies", "peerDependencies", "optionalDependencies"):
+        values = manifest.get(field, {})
+        if not isinstance(values, dict) or not all(isinstance(name, str) for name in values):
+            raise TypeError(f"Node package.json {field} 必须是对象且使用字符串键")
+        names = set(values)
+        if field == "optionalDependencies":
+            optional.update(names)
+        else:
+            required.update(names)
 
-    async def collect() -> None:
-        child = process.process
-        assert child is not None and child.stdout is not None
-        async for chunk in child.stdout:
-            if len(output) < _MAX_OUTPUT:
-                output.extend(chunk[:_MAX_OUTPUT - len(output)])
-        await child.wait()
-
-    try:
-        async with asyncio.timeout(_INSTALL_TIMEOUT):
-            await process.start(command, cwd=cwd, env=env, stderr=-2)
-            await collect()
-    finally:
-        async def close() -> None:
-            await process.close()
-
-        await run_cleanup_shielded(close)
-    if process.state.returncode != 0:
-        detail = bytes(output).decode("utf-8", errors="replace")
-        raise RuntimeError(f"插件依赖阶段失败: stage={stage}, exit_code={process.state.returncode}: {detail}")
-    return bytes(output).decode("utf-8", errors="replace")
-
-
-def _python_environment() -> dict[str, str]:
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.upper().startswith(("UV_", "PIP_", "PYTHON"))
-        and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}
+    peer_metadata = manifest.get("peerDependenciesMeta", {})
+    if not isinstance(peer_metadata, dict):
+        raise TypeError("Node package.json peerDependenciesMeta 必须是对象")
+    optional_peers = {
+        name for name, value in peer_metadata.items()
+        if isinstance(name, str) and isinstance(value, dict) and value.get("optional") is True
     }
-    if "UV_CACHE_DIR" in os.environ:
-        environment["UV_CACHE_DIR"] = os.environ["UV_CACHE_DIR"]
-    return environment
+    optional.update(required & optional_peers)
+    required.difference_update(optional)
+    return required, optional
 
 
-async def _prepare_python(root: Path) -> None:
-    uv = _installation_tool("BOXTEAM_UV_BIN", "uv")
-    command_prefix = [uv, "--no-config", "--project", str(root)]
-    options = ["--python", str(resolve_python_executable()), "--no-python-downloads", "--no-managed-python", "--no-build"]
-    await _run([*command_prefix, "sync", "--locked", "--no-dev", "--no-default-groups",
-        "--no-install-project", "--link-mode", "copy", *options], cwd=root,
-        env=_python_environment(), stage="python-sync")
+def _resolve_node_package(root: Path, owner: Path, name: str) -> Path | None:
+    parts = name.split("/")
+    if parts[0].startswith("@"):
+        if len(parts) != 2:
+            raise ValueError(f"Node package.json 依赖名称无效: {name}")
+    elif len(parts) != 1:
+        raise ValueError(f"Node package.json 依赖名称无效: {name}")
+    if any(part in {"", ".", ".."} or "\\" in part or ":" in part for part in parts):
+        raise ValueError(f"Node package.json 依赖名称无效: {name}")
 
-
-def _installation_tool(variable: str, source_command: str) -> str:
-    configured = os.environ.get(variable)
-    if not configured and not os.environ.get("BOXTEAM_RUNTIME_MANIFEST"):
-        configured = shutil.which(source_command)
-    if not configured or not Path(configured).is_absolute() or not Path(configured).is_file():
-        raise RuntimeError(f"插件安装需要目标运行时提供明确的 {variable}")
-    return str(Path(configured).resolve(strict=True))
-
-
-def _node_headers_root(node: Path) -> Path | None:
-    for root in (node.parent, node.parent.parent):
-        if (root / "include/node/node.h").is_file():
-            return root
+    current = owner
+    while current == root or root in current.parents:
+        package = current / "node_modules" / Path(*parts)
+        if package.exists():
+            return package
+        if current == root:
+            break
+        current = current.parent
     return None
 
 
-async def _prepare_node(root: Path) -> None:
-    lock_path = root / "bun.lock"
-    bun = _installation_tool("BOXTEAM_BUN_BIN", "bun")
-    environment = {key: value for key, value in os.environ.items()
-        if not key.upper().startswith(("NPM_", "NODE_", "BUN_"))}
-    # 保留正常缓存位置，隔离认证与配置；不再为每次安装创建空缓存。
-    environment["BUN_INSTALL_CACHE_DIR"] = os.environ.get("BUN_INSTALL_CACHE_DIR", str(Path.home() / ".bun/install/cache"))
-    for key in ("XDG_CACHE_HOME",):
-        if key in os.environ:
-            environment[key] = os.environ[key]
-    before = lock_path.read_bytes()
-    with tempfile.TemporaryDirectory(prefix=".bun-prepare-", dir=root.parent) as temporary:
-        configuration = Path(temporary)
-        install_environment = dict(environment)
-        for key in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME"):
-            install_environment[key] = str(configuration)
-        empty_config = configuration / "bunfig.toml"
-        empty_config.touch()
-        for key in ("NPM_CONFIG_USERCONFIG", "NPM_CONFIG_GLOBALCONFIG"):
-            file = configuration / (key.lower() + ".npmrc")
-            file.touch()
-            install_environment[key] = str(file)
-        await _run([bun, "--no-env-file", f"--config={empty_config}", "install",
-            "--frozen-lockfile", "--production", "--ignore-scripts", "--backend", "copyfile"],
-            cwd=root, env=install_environment, stage="bun-install")
-    if lock_path.read_bytes() != before:
-        raise RuntimeError("Bun 安装改写了锁文件；插件包未发布")
-    if (root / "node_modules/node-pty/package.json").is_file():
-        await _build_node_pty(root, environment)
+def _validate_node_modules(root: Path, manifest: dict[str, object],
+                           locked_versions: dict[str, set[str]]) -> None:
+    required, optional = _node_dependency_sets(manifest)
+    pending: list[tuple[Path, str, bool]] = []
+    pending.extend((root, name, True) for name in required)
+    pending.extend((root, name, False) for name in optional)
+    visited: set[Path] = set()
+    while pending:
+        owner, name, is_required = pending.pop()
+        package = _resolve_node_package(root, owner, name)
+        if package is None:
+            if is_required:
+                raise ValueError(f"Node 插件依赖未准备完整: {name}")
+            continue
+        package_file = package / "package.json"
+        if not package_file.is_file():
+            raise ValueError(f"Node 插件依赖缺少 package.json: {name}")
+        if package in visited:
+            continue
+        visited.add(package)
+        installed = json.loads(package_file.read_text(encoding="utf-8"))
+        if not isinstance(installed, dict):
+            raise TypeError(f"Node 插件依赖 package.json 必须是对象: {name}")
+        installed_name, installed_version = installed.get("name"), installed.get("version")
+        locked_versions_for_package = locked_versions.get(name, set())
+        if (not isinstance(installed_name, str) or not isinstance(installed_version, str)
+                or installed_version not in locked_versions_for_package):
+            raise ValueError(f"Node 插件依赖版本与 bun.lock 不一致: {name}")
+        dependencies, optional_dependencies = _node_dependency_sets(installed)
+        pending.extend((package, dependency, True) for dependency in dependencies)
+        pending.extend((package, dependency, False) for dependency in optional_dependencies)
 
 
-async def _build_node_pty(root: Path, environment: dict[str, str]) -> None:
-    package_root = root / "node_modules/node-pty"
-    if not (package_root / "binding.gyp").is_file():
-        raise ValueError("node-pty 缺少 binding.gyp，拒绝运行包提供的安装脚本")
-    node = Path(_installation_tool("BOXTEAM_NODE_BIN", "node"))
-    configured_gyp = os.environ.get("BOXTEAM_NODE_GYP_JS")
-    if not configured_gyp and os.environ.get("BOXTEAM_RUNTIME_MANIFEST"):
-        raise RuntimeError("目标运行时未提供 BOXTEAM_NODE_GYP_JS")
-    node_gyp = Path(configured_gyp) if configured_gyp else Path.cwd() / "node_modules/node-gyp/bin/node-gyp.js"
-    if not node_gyp.is_absolute() or not node_gyp.is_file():
-        raise RuntimeError("目标运行时缺少明确的 BOXTEAM_NODE_GYP_JS，不能构建 node-pty")
-    command = [str(node), str(node_gyp), "rebuild", f"--python={resolve_python_executable()}"]
-    # 同一 Node 发行版的 headers 优先复用；缺少时 node-gyp 按执行它的目标 Node 版本取标准缓存。
-    node_root = _node_headers_root(node)
-    if node_root is not None:
-        command.append(f"--nodedir={node_root}")
-    await _run(command, cwd=package_root, env=environment, stage="node-pty-native-build")
+def _validate_python_site(root: Path, site: Path, requirements: list[Requirement]) -> None:
+    entries: dict[NormalizedName, tuple[Path, str]] = {}
+    for path in site.glob("*.dist-info"):
+        metadata_path = path / "METADATA"
+        if not path.is_dir() or not metadata_path.is_file():
+            raise ValueError(f"Python 插件包含不完整的 dist-info: {path.relative_to(root)}")
+        metadata = Parser().parsestr(metadata_path.read_text(encoding="utf-8"))
+        name, version = metadata.get("Name"), metadata.get("Version")
+        if not name or not version:
+            raise ValueError(f"Python 插件 METADATA 缺少 Name 或 Version: {metadata_path.relative_to(root)}")
+        entries[canonicalize_name(name)] = (path, version)
+
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    packages: dict[NormalizedName, dict[str, object]] = {
+        canonicalize_name(item["name"]): item for item in lock["package"]
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    pending = [(canonicalize_name(requirement.name), frozenset(requirement.extras))
+               for requirement in requirements]
+    visited: set[tuple[NormalizedName, frozenset[str]]] = set()
+    while pending:
+        name, extras = pending.pop()
+        key = (name, extras)
+        if key in visited:
+            continue
+        visited.add(key)
+        locked, installed = packages.get(name), entries.get(name)
+        if locked is None or installed is None:
+            raise ValueError(f"Python 插件依赖未准备完整: {name}")
+        if installed[1] != locked.get("version"):
+            raise ValueError(f"Python 插件依赖版本与 uv.lock 不一致: {name}")
+        metadata = Parser().parsestr((installed[0] / "METADATA").read_text(encoding="utf-8"))
+        for raw in metadata.get_all("Requires-Dist", []):
+            requirement = Requirement(raw)
+            marker_extras = extras or frozenset({""})
+            if requirement.marker is None or any(
+                requirement.marker.evaluate({"extra": extra}) for extra in marker_extras
+            ):
+                dependency = canonicalize_name(requirement.name)
+                dependency_lock = packages.get(dependency)
+                if dependency_lock is None:
+                    raise ValueError(f"Python 插件依赖未锁定: {dependency}")
+                if not requirement.specifier.contains(str(dependency_lock.get("version")), prereleases=True):
+                    raise ValueError(f"Python 插件依赖版本与 wheel metadata 不一致: {dependency}")
+                pending.append((dependency, frozenset(requirement.extras)))
+    for metadata in site.rglob("*.pth"):
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            value = line.strip()
+            if not value or value.startswith("import "):
+                continue
+            if Path(value).is_absolute() or PureWindowsPath(value).is_absolute():
+                raise ValueError(f"Python 插件包含不可重定位的 .pth 路径: {metadata.relative_to(root)}")

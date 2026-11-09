@@ -25,6 +25,7 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
+from tests.support.plugin_package import native_plugin_target
 
 GATEWAY = "gateway_" + "a" * 32
 WORKSPACE_A = "11111111-1111-4111-8111-111111111111"
@@ -43,6 +44,7 @@ class SkillCase:
         (source / "guide").mkdir(parents=True)
         (source / "plugin.jsonc").write_text(json.dumps({
             "package_id": package, "version": "1.0.0", "name": package,
+            **({"target": native_plugin_target("python")} if code else {}),
             "plugins": [{"id": "guide", "name": "Guide", "instance_scope": "workspace",
                 **({"runtime": "python", "entrypoint": ["main.py"], "management_protocol_version": 1} if code else {}),
                 "requires": [{"extension_point": "skills", "version": 1}],
@@ -101,7 +103,8 @@ async def test_code_restart_preserves_static_skill_publication(
     case = skill_case
     binding = case.install("proof.restart", code=True)
 
-    async def started(_key, slot):
+    async def started(_key, slot, *, delivered_parameters=None):
+        assert delivered_parameters is None
         slot.state = "ready"
 
     monkeypatch.setattr(case.runtime, "_start", started)

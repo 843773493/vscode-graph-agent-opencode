@@ -156,7 +156,7 @@ class ServicePluginManifest(_message.Message):
     def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., instance_scope: _Optional[str] = ..., requires: _Optional[_Iterable[_Union[PluginExtensionRequirement, _Mapping]]] = ..., contributes: _Optional[_Union[PluginContributions, _Mapping]] = ..., runtime: _Optional[str] = ..., entrypoint: _Optional[_Iterable[str]] = ..., management_protocol_version: _Optional[int] = ...) -> None: ...
 
 class PluginPackageManifest(_message.Message):
-    __slots__ = ("manifest_version", "package_id", "version", "name", "description", "extension_contract_version", "plugins")
+    __slots__ = ("manifest_version", "package_id", "version", "name", "description", "extension_contract_version", "plugins", "target")
     MANIFEST_VERSION_FIELD_NUMBER: _ClassVar[int]
     PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -164,6 +164,7 @@ class PluginPackageManifest(_message.Message):
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     EXTENSION_CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
     PLUGINS_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
     manifest_version: int
     package_id: str
     version: str
@@ -171,7 +172,30 @@ class PluginPackageManifest(_message.Message):
     description: str
     extension_contract_version: int
     plugins: _containers.RepeatedCompositeFieldContainer[ServicePluginManifest]
-    def __init__(self, manifest_version: _Optional[int] = ..., package_id: _Optional[str] = ..., version: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., extension_contract_version: _Optional[int] = ..., plugins: _Optional[_Iterable[_Union[ServicePluginManifest, _Mapping]]] = ...) -> None: ...
+    target: PluginPackageTarget
+    def __init__(self, manifest_version: _Optional[int] = ..., package_id: _Optional[str] = ..., version: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., extension_contract_version: _Optional[int] = ..., plugins: _Optional[_Iterable[_Union[ServicePluginManifest, _Mapping]]] = ..., target: _Optional[_Union[PluginPackageTarget, _Mapping]] = ...) -> None: ...
+
+class PluginRuntimeTarget(_message.Message):
+    __slots__ = ("version", "abi")
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ABI_FIELD_NUMBER: _ClassVar[int]
+    version: str
+    abi: str
+    def __init__(self, version: _Optional[str] = ..., abi: _Optional[str] = ...) -> None: ...
+
+class PluginPackageTarget(_message.Message):
+    __slots__ = ("os", "architecture", "system_baseline", "node", "python")
+    OS_FIELD_NUMBER: _ClassVar[int]
+    ARCHITECTURE_FIELD_NUMBER: _ClassVar[int]
+    SYSTEM_BASELINE_FIELD_NUMBER: _ClassVar[int]
+    NODE_FIELD_NUMBER: _ClassVar[int]
+    PYTHON_FIELD_NUMBER: _ClassVar[int]
+    os: str
+    architecture: str
+    system_baseline: str
+    node: PluginRuntimeTarget
+    python: PluginRuntimeTarget
+    def __init__(self, os: _Optional[str] = ..., architecture: _Optional[str] = ..., system_baseline: _Optional[str] = ..., node: _Optional[_Union[PluginRuntimeTarget, _Mapping]] = ..., python: _Optional[_Union[PluginRuntimeTarget, _Mapping]] = ...) -> None: ...
 
 class PluginBinding(_message.Message):
     __slots__ = ("package_id", "plugin_id", "package_version", "workspace_id", "enabled")

@@ -25,6 +25,7 @@ from app.core.config_sources import config_revision
 from app.core.env import get_project_root
 from app.core.file_permissions import restrict_private_path_access
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.gateway.plugins.dependencies import validate_runtime_target
 from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
@@ -166,6 +167,21 @@ class GatewayPluginRuntime:
             raise ValueError("插件绑定与 manifest 固定范围不符")
         return plugin
 
+    def validate_target(self, binding: PluginBinding) -> None:
+        package = self.packages.get(binding.package_id, binding.package_version)
+        runtimes = {entry.runtime for entry in package.manifest.plugins if entry.runtime is not None}
+        if not runtimes:
+            return
+        node_executable = os.environ.get("BOXTEAM_NODE_BIN")
+        if "node" in runtimes and (not node_executable or not Path(node_executable).is_absolute()):
+            raise ValueError("Node 插件需要已配置的绝对 BOXTEAM_NODE_BIN，不临时发现或下载")
+        if package.manifest.target is None:
+            raise RuntimeError("代码插件包缺少目标运行环境")
+        validate_runtime_target(package.manifest.target, runtimes=runtimes,
+            node_executable=node_executable, python_executable=resolve_python_executable())
+        self.packages.validate_runtime_dependencies(binding.package_id, binding.package_version,
+            plugin_id=binding.plugin_id)
+
     def validate(self, payload: dict[str, object]) -> None:
         self.validate_bindings(gateway_plugin_bindings(payload), workspace_id=None,
                                parameters=plugin_parameters(payload))
@@ -183,6 +199,8 @@ class GatewayPluginRuntime:
                           delivered: PluginParameters | None = None) -> None:
         for binding in bindings:
             declaration = self.declaration(binding)
+            if binding.enabled and declaration.runtime is not None:
+                self.validate_target(binding)
             values = (parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {})
             resolved = (self.private_inputs.resolve(values, package_id=binding.package_id, plugin_id=binding.plugin_id,
                         schema=declaration.contributes.configuration)
@@ -237,6 +255,8 @@ class GatewayPluginRuntime:
                 previous.revision = revision
                 return previous.describe()
             declaration = self.declaration(binding)
+            if binding.enabled and declaration.runtime is not None:
+                self.validate_target(binding)
             if restart and (not binding.enabled or declaration.runtime is None):
                 raise ValueError("只有已开启的代码插件可以重启")
             if previous is not None:
@@ -322,18 +342,26 @@ class GatewayPluginRuntime:
         environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(values, ensure_ascii=False)
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])
         root = self.packages.package_root(slot.binding.package_id, slot.binding.package_version)
+        python_executable = resolve_python_executable()
         working_directory = self.directory / instance_id
         working_directory.mkdir(parents=True, exist_ok=True)
         entrypoint = slot.declaration.entrypoint
         assert entrypoint is not None
         if slot.declaration.runtime == "python":
-            executable = str(self.packages.python_executable(
+            executable = str(python_executable)
+            site_packages = self.packages.python_site_packages(
                 slot.binding.package_id, slot.binding.package_version, plugin_id=slot.binding.plugin_id,
-            ) or resolve_python_executable())
+            )
+            environment.pop("PYTHONPATH", None)
+            if site_packages is not None:
+                environment["PYTHONPATH"] = str(site_packages)
+            environment["PYTHONNOUSERSITE"] = "1"
         else:
-            executable = os.environ.get("BOXTEAM_NODE_BIN", "")
-            if not executable or not Path(executable).is_absolute():
+            node_executable = os.environ.get("BOXTEAM_NODE_BIN")
+            if not node_executable or not Path(node_executable).is_absolute():
                 raise ValueError("Node 插件需要已配置的绝对 BOXTEAM_NODE_BIN，不临时发现或下载")
+            executable = node_executable or ""
+            environment.pop("NODE_PATH", None)
         log_file = self.logs.open("service-plugin", instance_id)
         process = _spawn_logged_process([executable, str(root / entrypoint[0]), *entrypoint[1:]],
             log_file=log_file, cwd=working_directory, env=environment, detached=True)

@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import sys
-import zipfile
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,11 +118,8 @@ async def mcp_plugin_case(
             close_gateway_process(gateway)
 
 
-def _package(path: Path) -> Path:
-    package_root = Path.cwd() / "resources/plugins/mcp-stdio"
-    with zipfile.ZipFile(path, "w") as archive:
-        for file in ("plugin.jsonc", "bridge.py"):
-            archive.write(package_root / file, file)
+def _package(path: Path, prepared_package: Path) -> Path:
+    path.write_bytes(prepared_package.read_bytes())
     return path
 
 
@@ -283,7 +279,7 @@ async def _agent_call(case: McpPluginCase, *, phase: str) -> list[dict]:
 
 
 async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
-    mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory,
+    mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory, prepared_mcp_stdio_package: Path,
 ) -> None:
     case = mcp_plugin_case
     evidence: dict[str, object] = {}
@@ -291,7 +287,7 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
     definitions = artifacts / "definitions.json"
     receipts = artifacts / "receipts.jsonl"
     definitions.write_text(json.dumps({"probe": {"type": "object"}, "second": {"type": "object"}}), encoding="utf-8")
-    archive = _package(artifacts / "mcp-bridge.zip")
+    archive = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
     try:
         response = await case.client.post("/api/gateway/service-plugins/install", json={
             "gateway_id": case.gateway_id, "path": str(archive),

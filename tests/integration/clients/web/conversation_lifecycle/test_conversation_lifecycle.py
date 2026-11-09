@@ -54,14 +54,16 @@ SECTION8_NODE_PORT_OFFSETS = (0, 10, 40)
 MCP_PLUGIN_VERSION = "0.1.0"
 
 
-def _section8_mcp_plugin_package(path: Path, server_id: str) -> str:
-    package_root = Path.cwd() / "resources/plugins/mcp-stdio"
-    manifest = json.loads((package_root / "plugin.jsonc").read_text(encoding="utf-8"))
-    manifest["package_id"] = f"boxteam.mcp-e2e-{server_id.replace('_', '-')}"
-    manifest["name"] = f"BoxTeam MCP {server_id} test bridge"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-        archive.write(package_root / "bridge.py", "bridge.py")
+def _section8_mcp_plugin_package(path: Path, server_id: str, prepared_package: Path) -> str:
+    with zipfile.ZipFile(prepared_package) as prepared, zipfile.ZipFile(path, "w") as archive:
+        for entry in prepared.infolist():
+            content = prepared.read(entry.filename)
+            if entry.filename == "plugin.jsonc":
+                manifest = commentjson.loads(content)
+                manifest["package_id"] = f"boxteam.mcp-e2e-{server_id.replace('_', '-')}"
+                manifest["name"] = f"BoxTeam MCP {server_id} test bridge"
+                content = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode()
+            archive.writestr(entry, content)
     return manifest["package_id"]
 
 
@@ -228,6 +230,7 @@ async def section8_product_nodes(
     section8_mcp_catalogs: dict[str, dict[str, Path]],
     section8_ports: TestFilePortBlock,
     prepared_developer_tools_package: Path,
+    prepared_mcp_stdio_package: Path,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
     """唯一产品 owner 的三工作区；真实 SSH/channel，模型沿显式回放 transport。"""
     project = Path.cwd().resolve()
@@ -295,7 +298,11 @@ async def section8_product_nodes(
             plugin_values = {}
             mcp_servers = {}
             for server, catalog in section8_mcp_catalogs[name].items():
-                package_id = _section8_mcp_plugin_package(section8_runtime / f"mcp-{name}-{server}.zip", f"{name}-{server}")
+                package_id = _section8_mcp_plugin_package(
+                    section8_runtime / f"mcp-{name}-{server}.zip",
+                    f"{name}-{server}",
+                    prepared_mcp_stdio_package,
+                )
                 packages[package_id] = server
                 runtime_entries.append({"package_id": package_id, "package_version": MCP_PLUGIN_VERSION,
                                         "plugin_id": "stdio", "enabled": True})

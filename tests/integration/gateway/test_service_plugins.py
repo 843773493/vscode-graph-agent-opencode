@@ -14,6 +14,7 @@ import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.plugin_package import native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -130,6 +131,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
     def package(version: str, mode: str = '') -> Path:
         path = context.artifacts_dir / f"probe-{version}.zip"
         manifest = {"manifest_version": 1, "package_id": "probe.tools", "version": version,
+            "target": native_plugin_target("python", "node"),
             "name": "真实受控插件", "extension_contract_version": 1, "plugins": [
                 {"id": runtime, "name": runtime, "instance_scope": "gateway",
                  "requires": [{"extension_point": "services", "version": 1},

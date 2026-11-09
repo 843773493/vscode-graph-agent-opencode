@@ -123,7 +123,6 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
   const environment = { ...baseEnvironment };
   // Gateway 输出经 Launcher 的管道转存，不继承 Launcher 文件描述符的证明。
   delete environment.BOXTEAM_RUNTIME_LOG_SINK;
-  for (const key of ["BOXTEAM_BUN_BIN", "BOXTEAM_UV_BIN", "BOXTEAM_NODE_GYP_JS"]) delete environment[key];
   return {
     ...environment,
     BOXTEAM_DISTRIBUTION: runtime.distribution,
@@ -132,11 +131,6 @@ export function gatewayEnvironment(runtime, baseEnvironment) {
     BOXTEAM_GATEWAY_URL: endpoint.url,
     BOXTEAM_NODE_BIN: runtime.nodeExecutable,
     BOXTEAM_PYTHON_BIN: runtime.pythonExecutable,
-    ...(runtime.installationTools == null ? {} : {
-      BOXTEAM_BUN_BIN: runtime.installationTools.bun_executable,
-      BOXTEAM_UV_BIN: runtime.installationTools.uv_executable,
-      BOXTEAM_NODE_GYP_JS: runtime.installationTools.node_gyp_entrypoint,
-    }),
     ...(defaultBackendPort === undefined || defaultBackendPort === ""
       ? {}
       : { BOXTEAM_DEFAULT_BACKEND_PORT: defaultBackendPort }),

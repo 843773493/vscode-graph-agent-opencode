@@ -4,11 +4,9 @@ import json
 import os
 import shutil
 import subprocess
-import zipfile
 from collections.abc import Callable, Iterator
 from functools import lru_cache
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 from dotenv import load_dotenv
@@ -50,21 +48,9 @@ def prepared_developer_tools_package(request: pytest.FixtureRequest) -> Iterator
         installed = PluginPackageStore(root.parent.parent).get("boxteam.developer-tools", "0.1.0")
         if installed.root != root:
             raise ValueError("预备开发工具包路径与安装记录不一致")
-        artifacts_dir = context.run_root / "artifacts" / "prepared-developer-tools"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        expected_archive = artifacts_dir / f"developer-tools-current-{uuid4().hex}.zip"
-        build_developer_tools_package(project_root, expected_archive)
-        try:
-            with zipfile.ZipFile(expected_archive) as archive:
-                for entry in archive.infolist():
-                    if entry.is_dir():
-                        continue
-                    expected = archive.read(entry.filename)
-                    actual = (root / entry.filename).read_bytes()
-                    if expected != actual:
-                        raise ValueError(f"预备开发工具包文件与当前打包输入不一致: {entry.filename}")
-        finally:
-            expected_archive.unlink(missing_ok=True)
+        manifest = installed.manifest
+        if manifest.target is None or not (root / "node_modules").is_dir():
+            raise ValueError("预备开发工具包缺少目标元数据或已准备的 Node 依赖")
         pty_binary = root / "node_modules/node-pty/build/Release/pty.node"
         if not pty_binary.is_file():
             raise ValueError("预备开发工具包缺少已构建的 node-pty")
@@ -323,15 +309,6 @@ def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
         encoding="utf-8",
     )
     # 会话级注入先于模块级服务启动；个别用例仍可显式移除以验证缺失配置。
-    tool_paths = {
-        "BOXTEAM_BUN_BIN": shutil.which("bun"),
-        "BOXTEAM_UV_BIN": shutil.which("uv"),
-        "BOXTEAM_NODE_GYP_JS": str(Path.cwd() / "node_modules/node-gyp/bin/node-gyp.js"),
-    }
-    previous_tools = {key: os.environ.get(key) for key in tool_paths}
-    for key, value in tool_paths.items():
-        if value is not None:
-            os.environ[key] = value
     previous_manifest = os.environ.get("BOXTEAM_RUNTIME_MANIFEST")
     os.environ["BOXTEAM_RUNTIME_MANIFEST"] = str(manifest)
     try:
@@ -341,8 +318,3 @@ def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
             os.environ.pop("BOXTEAM_RUNTIME_MANIFEST", None)
         else:
             os.environ["BOXTEAM_RUNTIME_MANIFEST"] = previous_manifest
-        for key, value in previous_tools.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value

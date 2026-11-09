@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import cast
 
 import commentjson
-import httpx
 import psutil
 import pytest
 
@@ -29,6 +28,7 @@ from tests.support.model_stream.config import ModelStreamReplay, model_stream_re
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_test_workspace,
@@ -96,7 +96,7 @@ def _model_interactions() -> list[dict[str, object]]:
 
 def test_workbench_debug_ui_and_agent_share_plugin_run(
     request: pytest.FixtureRequest, web_workbench_assets: Path, debug_model: ModelStreamReplay,
-    debug_gateway_port: int,
+    debug_gateway_port: int, prepared_developer_tools_package: Path,
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
@@ -126,19 +126,13 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         "const state = { counter: 1 };\nstate.counter += 2;\nstate.counter += 3;\nconsole.log('debug-result', state.counter);\nsetInterval(() => {}, 1000);\n",
         encoding="utf-8",
     )
-    archive = context.artifacts_dir / "developer-tools.zip"
-    subprocess.run(["bun", "scripts/plugins/pack-developer-tools.mjs", "--out", str(archive)],
-        check=True, capture_output=True, text=True, timeout=60)
+    gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=port,
-        boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
+        boxteam_home=gateway_home, artifacts_dir=context.artifacts_dir / "gateway",
         asgi_app="tests.support.e2e_control.gateway_app:app",
         extra_env={**debug_model.environment, "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     try:
-        with httpx.Client(base_url=base_url, headers={"X-Local-Token": "local-dev-token"}, timeout=30, trust_env=False) as client:
-            health = client.get("/api/gateway/health"); health.raise_for_status()
-            installed = client.post("/api/gateway/service-plugins/install", timeout=600, json={
-                "gateway_id": health.json()["data"]["gateway_id"], "path": str(archive.resolve())})
-            installed.raise_for_status()
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
         command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
             "bun", "tests/integration/clients/web/debug_plugin_workbench.mjs"]

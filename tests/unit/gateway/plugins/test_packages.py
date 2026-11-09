@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from app.gateway.plugins.packages import PluginPackageStore
+from tests.support.plugin_package import native_plugin_target
 
 
 def _manifest() -> dict[str, object]:
@@ -15,6 +17,7 @@ def _manifest() -> dict[str, object]:
         "package_id": "example.tools",
         "version": "1.0.0",
         "name": "Example tools",
+        "target": native_plugin_target("node"),
         "extension_contract_version": 1,
         "plugins": [
             {
@@ -39,13 +42,23 @@ def _manifest() -> dict[str, object]:
     }
 
 
+@pytest.fixture
+def configured_node_bin(monkeypatch: pytest.MonkeyPatch) -> str:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("测试主机没有 Node")
+    executable = str(Path(node).resolve(strict=True))
+    monkeypatch.setenv("BOXTEAM_NODE_BIN", executable)
+    return executable
+
+
 def _write_zip(path: Path, files: dict[str, bytes]) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         for name, content in files.items():
             archive.writestr(name, content)
 
 
-def _install_manifest(tmp_path: Path, manifest: dict[str, object]) -> None:
+def _write_manifest_archive(tmp_path: Path, manifest: dict[str, object]) -> Path:
     archive_path = tmp_path / "candidate.zip"
     _write_zip(archive_path, {
         "plugin.jsonc": json.dumps(manifest).encode(),
@@ -54,10 +67,48 @@ def _install_manifest(tmp_path: Path, manifest: dict[str, object]) -> None:
             b"---\nname: browser-control\ndescription: Browser guidance\n---\n\nUse browser.\n"
         ),
     })
+    return archive_path
+
+
+def _install_manifest(tmp_path: Path, manifest: dict[str, object]) -> None:
+    archive_path = _write_manifest_archive(tmp_path, manifest)
     PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
 
 
-def test_nested_declared_entrypoint_and_skill_are_installed_without_directory_discovery(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("target_mismatch", "message"),
+    [
+        ("os", "插件目标操作系统不匹配"),
+        ("node_abi", "插件 Node 运行时不匹配"),
+    ],
+)
+def test_install_rejects_host_mismatched_runtime_target_before_publish(
+    tmp_path: Path,
+    configured_node_bin: str,
+    target_mismatch: str,
+    message: str,
+) -> None:
+    manifest = _manifest()
+    target = dict(manifest["target"])  # type: ignore[arg-type]
+    target["node"] = dict(target["node"])  # type: ignore[arg-type]
+    manifest["target"] = target
+    if target_mismatch == "os":
+        target["os"] = "windows" if target["os"] == "linux" else "linux"  # type: ignore[index]
+    else:
+        target["node"]["abi"] += "-mismatch"  # type: ignore[index]
+    archive_path = _write_manifest_archive(tmp_path, manifest)
+    installed_root = tmp_path / "installed"
+    store = PluginPackageStore(installed_root)
+
+    with pytest.raises(RuntimeError, match=message):
+        store.install_zip(archive_path)
+
+    assert not (installed_root / "example.tools/1.0.0").exists()
+
+
+def test_nested_declared_entrypoint_and_skill_are_installed_without_directory_discovery(
+    tmp_path: Path, configured_node_bin: str,
+) -> None:
     archive_path = tmp_path / "package.zip"
     _write_zip(archive_path, {
         "plugin.jsonc": json.dumps(_manifest()).encode(),
@@ -107,7 +158,9 @@ def test_nested_entrypoint_cannot_escape_package_root(tmp_path: Path) -> None:
         PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
 
 
-def test_explicit_development_directory_publishes_a_manifest_driven_snapshot(tmp_path: Path) -> None:
+def test_explicit_development_directory_publishes_a_manifest_driven_snapshot(
+    tmp_path: Path, configured_node_bin: str,
+) -> None:
     source = tmp_path / "development-package"
     (source / "implementations/engine/browser").mkdir(parents=True)
     (source / "custom/docs/browser-guide/examples").mkdir(parents=True)
@@ -136,7 +189,9 @@ def test_explicit_development_directory_publishes_a_manifest_driven_snapshot(tmp
     assert len(installed.manifest.plugins) == 1
 
 
-def test_install_accepts_typed_plugin_contributions(tmp_path: Path) -> None:
+def test_install_accepts_typed_plugin_contributions(
+    tmp_path: Path, configured_node_bin: str,
+) -> None:
     manifest = _manifest()
     plugin = manifest["plugins"][0]  # type: ignore[index]
     plugin["requires"].extend(  # type: ignore[index]

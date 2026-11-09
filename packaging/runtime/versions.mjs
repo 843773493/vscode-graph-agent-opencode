@@ -52,6 +52,7 @@ export const PYTHON_RUNTIME_WINDOWS_X64 = Object.freeze({
 
 export const NODE_RUNTIME_WINDOWS_X64 = Object.freeze({
   version: "22.17.0",
+  abi: "127",
   archive: "node-v22.17.0-win-x64.zip",
   url: "https://nodejs.org/dist/v22.17.0/node-v22.17.0-win-x64.zip",
   sha256: "721ab118a3aac8584348b132767eadf51379e0616f0db802cc1e66d7f0d98f85",
@@ -64,6 +65,3 @@ export const NODE_RUNTIME_DEPENDENCIES = Object.freeze({
   playwright: "1.61.1",
   ws: "8.18.0",
 });
-
-// 插件安装工具与插件运行 Node 分开；发行包携带固定 Bun 和 uv。
-export const PLUGIN_INSTALLATION_TOOLS = Object.freeze({ bun: "1.3.11", uv: "0.11.26", nodeGyp: "10.3.1" });

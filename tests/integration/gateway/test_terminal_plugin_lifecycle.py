@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -25,6 +24,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_test_workspace,
@@ -41,22 +41,6 @@ def _json(response: httpx.Response) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise TypeError(f"Gateway 响应必须是 JSON 对象: {response.request.url}")
     return value
-
-
-def _build_package(project_root: Path, output: Path) -> None:
-    subprocess.run(
-        [
-            "bun",
-            "scripts/plugins/pack-developer-tools.mjs",
-            "--out",
-            str(output.resolve()),
-        ],
-        cwd=project_root,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
 
 
 def _cas_workspace_binding(
@@ -226,6 +210,7 @@ def _wait_for_owner_revision(
 def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
     request: pytest.FixtureRequest,
     unused_tcp_port: int,
+    prepared_developer_tools_package: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -256,11 +241,13 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
         ] = f"http://127.0.0.1:{unused_tcp_port}"
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway = start_gateway_process(
         workspace_root=gateway_workspace,
         default_backend_url=None,
         port=unused_tcp_port,
-        boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+        boxteam_home=gateway_home,
         artifacts_dir=context.artifacts_dir,
     )
     try:
@@ -281,15 +268,6 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
                 item["workspace_id"] for item in managed["items"]
                 if item["gateway_id"] == gateway_id and item["name"] == "Terminal plugin lifecycle"
             )
-            archive = context.artifacts_dir / "boxteam.developer-tools-0.1.0.zip"
-            _build_package(project_root, archive)
-            install = _json(client.post("/api/gateway/service-plugins/install", json={
-                "gateway_id": gateway_id,
-                "path": str(archive),
-                "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-            }))
-            assert install["data"]["manifest"]["package_id"] == PACKAGE_ID
-
             _cas_workspace_binding(client, gateway_id=gateway_id, workspace_id=workspace_id,
                 enabled=True, idempotency_key="terminal-plugin-lifecycle-enable")
             ready = _wait_for_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id, state="ready")

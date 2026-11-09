@@ -64,11 +64,11 @@ Gateway 负责传输、实例路由和生命周期，不解析工具策略或写
 
 ### D3. 自有 plugin.jsonc 与插件入口
 
-包使用标准 .zip，根 plugin.jsonc，不规定专用后缀。开发目录使用同一结构和合同。根字段只有包级 manifest_version、package_id、version、名称／说明、extension_contract_version 与 plugins 数组；不保留根级 runtime／entrypoint／instance_scope／contributes，也不双读此前未发布的单入口或 components／component_id 设计。
+包使用标准 .zip，根 plugin.jsonc，不规定专用后缀。开发目录使用同一结构和合同。根字段包含包级 manifest_version、package_id、version、名称／说明、extension_contract_version、plugins 数组及 D7 的目标制品兼容信息；不保留根级 runtime／entrypoint／instance_scope／contributes，也不双读此前未发布的单入口或 components／component_id 设计。
 
 每个 plugins 项声明稳定 id、名称、固定 instance_scope、requires 和 contributes；其 id 就是外部绑定的 plugin_id，不另设第二标识。插件 ID 包内唯一，由 package_id／plugin_id 组合确定逻辑插件；原扩展点版本及七类贡献均放在 plugins[].contributes 内。配置 schema 只在该插件的 contributes.configuration 中，用户参数／开关不写入安装包。命令处理者或服务需要代码时，该插件另声明 runtime、entrypoint、management_protocol_version；runtime 支持 python／node，entrypoint 是相对包根的入口及参数数组，不是 shell 字符串。平台／运行环境要求归需要代码的插件；纯 Skill／菜单／配置插件没有这些运行字段。插件不得引用兄弟插件的私有 handler 或共用其进程；v1 不实现插件依赖自动启用。
 
-安装按包校验 manifest、资源路径、摘要和所需合同，准备锁定依赖后原子发布唯一安装记录。未知结构、VSIX、非法插件或不兼容合同明确拒绝，不部分安装、不自动转换。目标运行环境和发行资源提供解释器／依赖，首次工具调用不下载；安装准备子进程仍在受管边界，不执行任意安装 hook。普通请求不重新 hash 全包。自有贡献直连原 Workbench／业务服务，不提供 vscode API、Extension Host RPC、VSIX 转换或任意 renderer 脚本注入。
+安装按包校验 manifest、目标兼容信息、资源路径、摘要和所需合同，安全解包完整运行制品后原子发布唯一安装记录。未知结构、VSIX、非法插件、不兼容合同或缺失依赖明确拒绝，不部分安装、不自动转换。解释器由应用发行物提供，依赖及必要资源在插件发布前准备完毕；安装、启用和工具调用均不执行包管理器、编译器或安装 hook，不联网补齐。普通请求不重新 hash 全包。自有贡献直连原 Workbench／业务服务，不提供 vscode API、Extension Host RPC、VSIX 转换或任意 renderer 脚本注入。
 
 通用插件秘密参数采用 D9 的秘密输入、存储与运行交付合同，支持用户直接输入后安全保存，也保留 `${ENV_NAME}`／`env:NAME` 的既有环境引用。manifest 的 writeOnly 在本项目表示秘密输入及禁止普通读取回显，不是禁止用户经受保护入口输入真实值；普通 JSONC／参数通道仅接受合法引用。schema 声明不是秘密存储实现，不按字段名猜测秘密，也不在普通文本中自动展开环境变量。
 
@@ -108,13 +108,21 @@ Gateway 汇总代理的请求次数／总耗时／错误和现有进程资源数
 
 当前公网源不存在。`plugins.sources` 的正式来源记录包含 source_id、协议版本、可选 base_url 及 enabled；内置无虚构地址，未配置／未启用时市场 UI 显示明确状态并且零网络请求，本地包、开发目录及已安装管理照常可用。预留的目录／下载合同提供来源、分页／目录版本、package_id／版本、平台／运行时要求、包 URL、`.zip` 文件名与摘要，文件名不参与插件身份判定；查询变更取消或废弃旧结果，不因零命中查其它源。公网服务建设另立任务，不在本轮创建在线目录或默认凭据。
 
-安装／更新在发起时冻结目标安装域、来源、确切版本和摘要。下载、校验、依赖准备及原子发布由唯一安装 owner 负责；安装完成不自动启用工作区或运行插件。Bun／uv 仅用于自有包的锁定依赖准备，插件运行仍使用目标 Node／Python，发行包明确提供安装工具位置并复用正常缓存；安装配置和凭据独立隔离，不执行任意安装 hook，仅允许具名 node-pty 的受控原生构建，不保留独立第三方 MCP 目录安装入口。
+安装／更新在发起时冻结目标安装域、来源、确切包版本、目标平台制品及摘要。唯一安装 owner 只负责下载所选完整制品、安全校验、解包和原子发布；安装完成不自动启用工作区或运行插件，不执行 Bun／uv／npm／pip、node-gyp、编译器或包内安装 hook，也不下载缺失依赖。不保留独立第三方 MCP 目录安装入口。
+
+依赖准备前移到发布构建：Node 使用 package.json 与 Bun 文本 bun.lock，Python 使用 pyproject.toml 与 uv.lock，锁定生产依赖并隔离构建凭据、复用正常缓存。禁止任意安装 hook；node-pty 的具名受控构建只在发布环境执行，并与发行 Node ABI 匹配。Bun、uv、node-gyp、编译器及 SDK 是构建工具，不再因为插件安装而成为用户发行环境的必需组件；实际仍有其他消费者的工具按其原职责处理，不据此扩大删除范围。
+
+应用发行物自带其支持的明确版本 Node／Python，不依赖用户系统 PATH、开发机环境或 Electron Node。插件 ZIP 携带完整运行代码、Node 的 node_modules 或打包后依赖、Python 可重定位的依赖及必要运行资源，使用发行物中的匹配解释器；同包可共享只读依赖，不共享实例或秘密。Python 不直接搬运带构建机绝对路径的 .venv，不借用产品开发源码中的模块；原生模块、动态库和必要配套资源在发布前准备。自带包、下载包与显式开发目录均消费同样的已准备制品，源码准备是独立开发／发布命令，不在产品安装器保留源码安装分路。纯声明或无第三方依赖的包不强制增加空依赖目录。
+
+目录／manifest／发布校验统一表达目标 OS、架构、必要系统基线及运行时版本要求；原生依赖另核 Node ABI 或 Python ABI／平台标签。相同包版本可以发布多个目标制品，安装只选择满足原生目标的明确制品并冻结其摘要，不由 ZIP 文件名猜测兼容性，不在同一安装域拼接不同制品或扩大生命周期槽位。纯代码可声明确实兼容的平台范围，不将一个原生制品伪装为通用包。
+
+缺少所选确切包版本的兼容制品、所需 Node／Python 版本、ABI 或完整依赖时，不安装发布、不启用／切换，不注册该候选贡献或启动实例；预检在原配置提交和停止旧实例前完成，失败保持原绑定及仍兼容可用的旧发布。已保存绑定在应用重启后不再满足要求时，保留原配置并明确显示不可用，不伪报 ready 或改写 enabled。API 与 UI 返回包／版本、原生目标、所需及实际可用版本／平台和失败原因，建议获取对应完整包或支持该运行时的应用版本；没有对应版本时直接提示当前不支持，不引导用户手工安装编译环境，不自动换版、安装环境或现场编译。
 
 更新仅安装新版本，不修改绑定、模板或现有实例。切换绑定版本是独立显式配置操作，在一个绑定内按下表执行；不同插件不要求全局串行。原配置 owner 只持有一个期望版本，实际进程与各贡献 owner 的发布结果直接报告，不增加可变的版本组合账本。
 
 | 步骤 | 唯一责任与失败出口 |
 |---|---|
-| 校验候选 | 原配置及贡献 owner 校验安装版本、范围、完整声明和可离线验证的参数；此时不撤旧注册、不停进程。失败直接拒绝，原绑定及发布保持 |
+| 校验候选 | 原配置及贡献 owner 校验确切安装版本、目标制品／发行运行时兼容性、完整依赖、范围、完整声明和可离线验证的参数；此时不撤旧注册、不停进程。失败直接拒绝并提示，原绑定及仍可用的发布保持 |
 | 提交与撤准入 | 原配置 writer 经 CAS 提交期望版本，撤销该绑定的新业务准入；已关闭插件到此只改配置，不启动或发布可执行贡献 |
 | 替换运行实例 | 已开启代码插件交原 Gateway runtime 停旧、核退出、启新；停止失败阻止新实例，启动失败报告 failed。已提交期望不回滚，不重启旧版本；纯声明插件跳过此步 |
 | 发布贡献 | 各原 owner 使用 D13 的候选发布步骤及固定引用顺序；MCP 目录另由 D8 的原 Backend 配置流程整体发布。某一步失败即结束本次后续推进，保留已经发生的真实结果，不跨 owner 回滚或补偿 |
@@ -160,7 +168,7 @@ UI 管理范围只有“当前 Gateway”“当前工作区”和“新建工作
 
 | 纵向链 | 迁入方向 | 必须物理删除的旧接入 |
 |---|---|---|
-| 格式／来源／安装 | 自有 manifest、归档和唯一安装 owner | VSIX／Gallery／Open VSX／第三方 MCP 目录、scanner／profile 安装、vscode:uninstall |
+| 格式／来源／安装 | 自有 manifest、预构建目标制品和唯一安装 owner | VSIX／Gallery／Open VSX／第三方 MCP 目录、scanner／profile 安装、vscode:uninstall，以及用户安装阶段的依赖解析／下载／编译和源码安装分支 |
 | 服务运行 | Gateway 托管及项目管理协议 | 用户 Web／Node Extension Host、RPC／API 适配、running location／activation／动态 Provider 桥 |
 | Backend 消费 | Gateway 的具名 HTTP／流路由 | MCP stdio 创建、Terminal／Browser 直连、Node 调试目标创建、Backend 安装 subprocess 旁路；不包含 python_exec／条件脚本／ffmpeg |
 | UI／设置 | 原 UI 组件＋自有模型与原配置 owner | 假 ILocalExtension／VSIX 对象、旧安装库存／配置镜像和宿主 profile／view 文件接口 |
@@ -170,13 +178,15 @@ UI 管理范围只有“当前 Gateway”“当前工作区”和“新建工作
 
 旧数据按最近两个经用户验收 release 的真实契约评估，缺少基线则报告并在隔离 Home 实施，不推测开发残留需要迁移，不删除用户配置／凭据／会话。确需迁移的支持数据用显式官方迁移收敛；不将旧 VSIX 自动转换或继续运行。tasks.md 保留旧证据原文，其通过范围限于原架构。
 
-Web／Electron 共用同一 renderer，插件运行在目标 Gateway 所在环境。发行物包含工作台静态资源、插件启动所需组件及自带插件，离线自有包不依赖源码／开发服务。Python／Node 语言实现不改变协议和身份规则。
+Web／Electron 共用同一 renderer，插件运行在目标 Gateway 所在环境。发行物包含工作台静态资源、明确版本的 Node／Python、插件启动所需组件及已准备的自带插件，完整插件包安装后即可使用，不要求用户安装语言环境或编译工具，离线本地包不依赖缓存、源码或开发服务。Python／Node 语言实现不改变协议和身份规则。
 
 ### D11. 验证与总延迟
 
 采用少量有判别力的真实产品切片：Gateway 与 workspace 两种实例；同名跨工作区隔离；终端输出／重附加；浏览器操作／重附加；标准 MCP＋stdio 子进程；源码调试 UI 与 Agent 共用同一 run；断连、原实例重连、显式重启、新代际与未知写入不重放；遥测开关与部分失败；原 UI 的自有包安装／配置；旧入口不可达。各链路的实际退出与边界按 D16／D17 验，不把 Backend 所有内部进程一概视为插件执行；python_exec／条件脚本／ffmpeg 不新增插件迁移验收。
 
 通过实际 Gateway、目标工作区、完整 Workbench 初始化验证，不以健康接口或空壳启动代替功能。Python／Node 共用合同场景，Integration 和真实外部 E2E 分别表述。Web／Electron、Linux／Windows／SSH 按实际消费能力分别验收，不以浏览器 parity 代替原生产物。
+
+交付验收使用已构建发行物及对应平台完整插件包，在无源码、无全局 Node／Python、无 Bun／uv／编译器且依赖缓存为空的隔离环境中禁用外网，经过真实安装→开启→Python／Node 业务调用→重启；覆盖 node-pty 原生能力、Python 依赖和从新路径启动的可重定位性。缺少确切包版本／目标制品、运行时版本或 ABI 不匹配、依赖缺失须在生效前明确拒绝，旧可用绑定不变，零现场下载／构建或替代版本。普通业务测试继续复用同一不可变产物并隔离 Home／实例，不重复依赖准备；发布构建可联网，但不能拿构建环境或暖缓存代替这项验收。
 
 普通暖读遵守 enforce-interactive-latency-budgets 的现有总预算：普通本地 API p95≤500ms／单次≤1500ms，导航／实际可操作 UI 沿原更严格期限；排队、Gateway 转发、校验、序列化及内部重试都计入。安装和显式启动单独计时，不能把等待塞到普通请求。默认不每请求探活、扫进程或全包 hash；只在安装发布、启动绑定变化和实际恢复边界作必要检查。测试用进程外超时和内存保护，失败先归因，没有输入变化不重复长跑。
 
@@ -280,7 +290,7 @@ DAP 合同覆盖 initialize／能力协商、launch 与 configurationDone、源�
 | python_exec | 原 Backend Python 工具及 subprocess 执行 | 用户明确保留，调用、解释器选择、执行位置和清理均不改 |
 | 持续任务 script 条件 | Backend 调度／判断／TaskDecisionDTO 及 native_command 监督执行 | 用户明确保留，原脚本调用、进程监督及限额机制均不改 |
 | 视频附件 ffmpeg | Backend 附件／内容 owner 及原 subprocess 执行 | 用户明确保留，原抽帧、临时文件和错误处理均不改 |
-| Bun／uv 安装准备 | 唯一安装 owner；同一受管执行原语 | 已纳入，不能与插件首次调用混在一起 |
+| Bun／uv 依赖准备及原生编译 | 发布构建工具链；用户安装 owner 仅校验／解包／发布 | 按 D7 前移，删除目标安装和首次调用时的依赖准备子进程 |
 | apply_patch、ls／read／glob／grep／write／edit、资源／上下文搜索 | 原文件／文本／搜索 owner | 保留，URI／版本／CAS 不移交 Gateway，不为纯业务计算创建插件 |
 | Goal／任务、子 Agent／团队／消息／等待、时间与后台消息、Agent 执行调试 | Backend 原编排、会话和事件 owner | 保留，包括原条件脚本执行；builtin 条件和模型 judge 不另插件化 |
 | web_search／fetch_webpage、skill_load | 原 HTTP 查询／技能 owner | 保留现有无需子进程的实现；注册名不构成服务进程需求 |
@@ -288,7 +298,7 @@ DAP 合同覆盖 initialize／能力协商、launch 与 configurationDone、源�
 
 用户明确要求 python_exec、持续任务条件脚本、视频预处理 ffmpeg 保留原用法：三者均保持现有 Backend 执行位置、调用协议、进程管理和清理，不经过 Gateway，不接终端／执行插件，不增加适配层或备用分支。python_exec 的解释器选择、cwd／PYTHONPATH、双流、非零／超时错误和临时脚本清理保持；条件脚本的 JSON 输入、原监督器及期限／内存／输出保护、TaskDecisionDTO 验证和续跑语义保持；ffmpeg 的抽帧参数、临时文件及错误处理保持。本 change 不为这三条链新增非 PTY 执行服务或修改其既有测试。
 
-安装准备及明确纳入的外部 custom 插件执行仍遵守既定托管边界；不借工具盘点把其他 Backend 子进程自动归为待删除旁路。Gateway 不新增任意 shell／进程 API，业务准入继续由原 owner 负责。
+依赖准备按 D7 移出用户安装链，明确纳入的外部 custom 插件执行仍遵守既定托管边界；不借工具盘点把其他 Backend 子进程自动归为待删除旁路。Gateway 不新增任意 shell／进程 API，业务准入继续由原 owner 负责。
 
 另外发现两类非工具进程，明确留出边界：SQLite fork 快照的隔离子进程是存储 owner 的内部一致性原语，本次保留，不将数据库／物理会话路径交 Gateway；系统文件管理器显示的 `open`／explorer／gio／xdg-open 是宿主动作，暂不迁成远端插件，也不因此给 Electron 新增原生能力，现有行为不在本次顺带删除。两者后续如改动需独立设计和验收。Launcher／SSH／Gateway／Workspace 生命周期继续归原控制面；async task 的 spawn 不当作 OS 进程。完成标准是上述工具及外围执行单链迁齐，不是“Backend 绝无任何子进程”。
 
@@ -379,7 +389,7 @@ Gateway 配置 owner 持有非秘密的新建工作区插件模板（workspace_d
 
 扩展点目录只集中定义标识、合同版本、支持状态及 D15 的接缝元数据；各扩展点的具体校验、发布和注销仍由实际 owner 执行，不在 Gateway 再造命令表、SkillCatalog、配置或调试业务系统。上述是对迁移后唯一落点的约束，旧安装／宿主消费者仍须按 D10 逐链迁齐再物理删除，不增加旧代码适配层。仓库内新增源码子目录补齐 AGENTS.md 四节；不对第三方包额外要求仓库协作文件。
 
-安装内容由原生目标唯一安装 owner 在既有安装域内按 package_id、确切版本及摘要管理，全局安装数据归 ${BOXTEAM_HOME:-~/.boxteams}/，不另设前端安装副本或工作区包副本。依赖在发布前准备，发布后的包内容只读；启动、Skill 加载及工具调用不向包内写日志、运行缓存、配置或秘密。实例控制数据复用 Gateway 原 runtime／控制面目录，诊断日志沿原 state/logs；工作区参数、私有输入、浏览器／终端业务资源及会话产物仍由各原 owner 写入其合法工作区数据目录。包内 Skill 注册只读资源路径并通过原资源链读取，不复制到可编辑工作区；用户已有的合法工作区 Skill 覆盖仍按 D18 生效。这里不新增运行账本、业务 URI 模板或通用用户数据目录。
+安装内容由原生目标唯一安装 owner 在既有安装域内按 package_id、确切版本及目标制品摘要管理，全局安装数据归 ${BOXTEAM_HOME:-~/.boxteams}/，不另设前端安装副本或工作区包副本。依赖在发布构建、生成 ZIP 前准备，用户安装仅校验／解包／原子发布；允许包内已准备的 node_modules／Python 依赖，但仍禁止构建机凭据、根外依赖和不可重定位环境。发布后的包内容只读；启动、Skill 加载及工具调用不向包内写日志、运行缓存、配置或秘密。实例控制数据复用 Gateway 原 runtime／控制面目录，诊断日志沿原 state/logs；工作区参数、私有输入、浏览器／终端业务资源及会话产物仍由各原 owner 写入其合法工作区数据目录。包内 Skill 注册只读资源路径并通过原资源链读取，不复制到可编辑工作区；用户已有的合法工作区 Skill 覆盖仍按 D18 生效。这里不新增运行账本、业务 URI 模板或通用用户数据目录。
 
 实例工作目录和可写输出指向对应原 owner 合法目录，包内容是不可变输入；“只读发布”是包及运行实现的约定，不宣称 Python／Node 子进程受到安全沙箱强制隔离，不新增沙箱或逐请求文件完整性检测。
 
@@ -415,6 +425,7 @@ Gateway 配置 owner 持有非秘密的新建工作区插件模板（workspace_d
 - [崩溃时写结果未知] → 默认明确报错及不重放，后续专用恢复必须由对应服务另行设计。
 - [把完整扩展架构做成全量 SDK] → 只实施首批七类贡献及必要公共合同，调试限真实能力，Skill 复用原 owner，未开放点不编写空 Provider／通用 RPC。
 - [跨目标同 ID 与失效注册污染工作台] → 原 Command 单 dispatcher、明确插件目标和生命周期释放，旧实例回执不能改写新注册。
+- [预构建制品体积与平台矩阵增加] → 发布前准备目标运行依赖并验证运行时／ABI，只有实际提供的目标标为支持；缺少对应版本时明确不生效，不把网络或编译成本转嫁给用户，也不新增运行时依赖管理框架。
 
 ## Migration Plan
 

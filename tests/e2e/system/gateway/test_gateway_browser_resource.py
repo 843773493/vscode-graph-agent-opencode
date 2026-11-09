@@ -216,13 +216,22 @@ async def _wait_for_remote_workspace_gateway_url(
 def _install_remote_developer_tools_plugin(
     target: GatewaySshTarget, *, gateway_id: str, gateway_port: int, boxteam_home: str,
 ) -> None:
-    script = """import hashlib, json, subprocess, sys
+    script = """import hashlib, json, os, shutil, subprocess, sys
 from pathlib import Path
 from urllib.request import Request, urlopen
+from tests.support.plugin_package import native_plugin_target
 
 gateway_id, repository, package_path, port, home = sys.argv[1:]
 Path(package_path).parent.mkdir(parents=True, exist_ok=True)
-subprocess.run(['bun', 'scripts/plugins/pack-developer-tools.mjs', '--out', package_path],
+node = os.environ.get('BOXTEAM_NODE_BIN') or shutil.which('node')
+bun = shutil.which('bun')
+python = os.environ.get('BOXTEAM_PYTHON_BIN') or sys.executable
+node_gyp = str(Path(repository) / 'node_modules/node-gyp/bin/node-gyp.js')
+if not node or not bun or not Path(node_gyp).is_file():
+    raise RuntimeError('目标机缺少 Node、Bun 或 node-gyp')
+subprocess.run([bun, 'scripts/plugins/pack-developer-tools.mjs', '--out', package_path,
+    '--target-json', json.dumps(native_plugin_target('node')), '--bun', bun, '--node', node,
+    '--node-gyp', node_gyp, '--python', python],
     cwd=repository, check=True, timeout=60, capture_output=True, text=True)
 token = (Path(home) / 'state/gateway/credentials/local-token').read_text(encoding='utf-8').strip()
 payload = json.dumps({'gateway_id': gateway_id, 'path': package_path,

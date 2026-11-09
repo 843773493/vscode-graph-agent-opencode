@@ -432,6 +432,11 @@ export declare type PluginPackageManifest = Message<"boxteam.gateway.v2.PluginPa
    * @generated from field: repeated boxteam.gateway.v2.ServicePluginManifest plugins = 7;
    */
   plugins: ServicePluginManifest[];
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginPackageTarget target = 8;
+   */
+  target?: PluginPackageTarget | undefined;
 };
 
 /**
@@ -439,6 +444,63 @@ export declare type PluginPackageManifest = Message<"boxteam.gateway.v2.PluginPa
  * Use `create(PluginPackageManifestSchema)` to create a new message.
  */
 export declare const PluginPackageManifestSchema: GenMessage<PluginPackageManifest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginRuntimeTarget
+ */
+export declare type PluginRuntimeTarget = Message<"boxteam.gateway.v2.PluginRuntimeTarget"> & {
+  /**
+   * @generated from field: string version = 1;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string abi = 2;
+   */
+  abi: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginRuntimeTarget.
+ * Use `create(PluginRuntimeTargetSchema)` to create a new message.
+ */
+export declare const PluginRuntimeTargetSchema: GenMessage<PluginRuntimeTarget>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginPackageTarget
+ */
+export declare type PluginPackageTarget = Message<"boxteam.gateway.v2.PluginPackageTarget"> & {
+  /**
+   * @generated from field: string os = 1;
+   */
+  os: string;
+
+  /**
+   * @generated from field: string architecture = 2;
+   */
+  architecture: string;
+
+  /**
+   * @generated from field: string system_baseline = 3;
+   */
+  systemBaseline: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginRuntimeTarget node = 4;
+   */
+  node?: PluginRuntimeTarget | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginRuntimeTarget python = 5;
+   */
+  python?: PluginRuntimeTarget | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginPackageTarget.
+ * Use `create(PluginPackageTargetSchema)` to create a new message.
+ */
+export declare const PluginPackageTargetSchema: GenMessage<PluginPackageTarget>;
 
 /**
  * @generated from message boxteam.gateway.v2.PluginBinding

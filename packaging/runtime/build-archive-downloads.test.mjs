@@ -85,6 +85,8 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots) {
       }]));
     } else if (specifier === "../../scripts/plugins/pack-developer-tools.mjs") {
       exports = { async packDeveloperTools() { throw new Error("归档检查应在源码复制前结束"); } };
+    } else if (specifier === "../../scripts/plugins/pack-mcp-stdio.mjs") {
+      exports = { async packMcpStdio() { throw new Error("归档检查应在源码复制前结束"); } };
     } else if (specifier === "./runtime-build-result.mjs") {
       const owner = await import(new URL(specifier, scriptUrl));
       exports = {
@@ -106,6 +108,24 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots) {
       for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
     }, { context });
   });
+  if (mode === "windows-cross") {
+    await assert.rejects(module.evaluate(), (error) => {
+      assert.match(error.message, /windows-x64 构建器不支持当前模式: host=linux-x64 cross=true/);
+      return true;
+    });
+    assert.deepEqual(calls, [], "Linux --cross 必须在构建快照、下载与子进程前拒绝");
+    assert.equal(readFileSync(buildResultPath, "utf8"), "stale success\n", "拒绝模式不能改写旧构建metadata");
+    for (const directory of [
+      ...["stage", "tarballs", "release-assets", "standalone", "installer"]
+        .map((name) => path.join(projectRoot, "out/packaging", target, name)),
+      defaultDownloadRoot,
+      pythonDownloadRoot,
+      nodeDownloadRoot,
+    ]) {
+      assert.equal(existsSync(directory), false, `拒绝模式不得创建 ${directory}`);
+    }
+    return { downloads: 0, rejectedBeforeWrites: true, oldMetadataPreserved: true };
+  }
   await assert.rejects(module.evaluate(), (error) => error === stopBeforeExtract);
   assert.equal(calls[0][0], "source-snapshot");
   assert.equal(calls[0][1], initialFingerprint);
@@ -149,8 +169,10 @@ describe("构建入口将下载目录交给唯一归档owner", () => {
       if (run.error || run.status !== 0) {
         throw new Error(`构建下载接线 ${mode}/${scenario} 失败: exit=${run.status} signal=${run.signal}；artifacts=${artifactsRoot}\n${stderr.toString("utf8")}`, { cause: run.error });
       }
-      expect(JSON.parse(stdout.toString("utf8"))).toEqual({ downloads: mode === "linux" ? 1 : 2,
-        snapshotMatchesInitial: true, oldMetadataRemoved: true, stoppedBeforeExtract: true });
+      expect(JSON.parse(stdout.toString("utf8"))).toEqual(mode === "windows-cross"
+        ? { downloads: 0, rejectedBeforeWrites: true, oldMetadataPreserved: true }
+        : { downloads: mode === "linux" ? 1 : 2,
+          snapshotMatchesInitial: true, oldMetadataRemoved: true, stoppedBeforeExtract: true });
     });
   }
 });

@@ -104,6 +104,20 @@ export interface PluginPackageManifest {
   description?: string | undefined;
   extension_contract_version: number;
   plugins: ServicePluginManifest[];
+  target: PluginPackageTarget | undefined;
+}
+
+export interface PluginRuntimeTarget {
+  version: string;
+  abi: string;
+}
+
+export interface PluginPackageTarget {
+  os: string;
+  architecture: string;
+  system_baseline: string;
+  node: PluginRuntimeTarget | undefined;
+  python: PluginRuntimeTarget | undefined;
 }
 
 export interface PluginBinding {
@@ -827,6 +841,7 @@ function createBasePluginPackageManifest(): PluginPackageManifest {
     description: undefined,
     extension_contract_version: 0,
     plugins: [],
+    target: undefined,
   };
 }
 
@@ -844,6 +859,7 @@ export const PluginPackageManifest: MessageFns<PluginPackageManifest> = {
       plugins: globalThis.Array.isArray(object?.plugins)
         ? object.plugins.map((e: any) => ServicePluginManifest.fromJSON(e))
         : [],
+      target: isSet(object.target) ? PluginPackageTarget.fromJSON(object.target) : undefined,
     };
   },
 
@@ -870,6 +886,9 @@ export const PluginPackageManifest: MessageFns<PluginPackageManifest> = {
     if (message.plugins?.length) {
       obj.plugins = message.plugins.map((e) => ServicePluginManifest.toJSON(e));
     }
+    if (message.target !== undefined) {
+      obj.target = PluginPackageTarget.toJSON(message.target);
+    }
     return obj;
   },
 
@@ -885,6 +904,96 @@ export const PluginPackageManifest: MessageFns<PluginPackageManifest> = {
     message.description = object.description ?? undefined;
     message.extension_contract_version = object.extension_contract_version ?? 0;
     message.plugins = object.plugins?.map((e) => ServicePluginManifest.fromPartial(e)) || [];
+    message.target = (object.target !== undefined && object.target !== null)
+      ? PluginPackageTarget.fromPartial(object.target)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePluginRuntimeTarget(): PluginRuntimeTarget {
+  return { version: "", abi: "" };
+}
+
+export const PluginRuntimeTarget: MessageFns<PluginRuntimeTarget> = {
+  fromJSON(object: any): PluginRuntimeTarget {
+    return {
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      abi: isSet(object.abi) ? globalThis.String(object.abi) : "",
+    };
+  },
+
+  toJSON(message: PluginRuntimeTarget): unknown {
+    const obj: any = {};
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.abi !== "") {
+      obj.abi = message.abi;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginRuntimeTarget>, I>>(base?: I): PluginRuntimeTarget {
+    return PluginRuntimeTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginRuntimeTarget>, I>>(object: I): PluginRuntimeTarget {
+    const message = createBasePluginRuntimeTarget();
+    message.version = object.version ?? "";
+    message.abi = object.abi ?? "";
+    return message;
+  },
+};
+
+function createBasePluginPackageTarget(): PluginPackageTarget {
+  return { os: "", architecture: "", system_baseline: "", node: undefined, python: undefined };
+}
+
+export const PluginPackageTarget: MessageFns<PluginPackageTarget> = {
+  fromJSON(object: any): PluginPackageTarget {
+    return {
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
+      architecture: isSet(object.architecture) ? globalThis.String(object.architecture) : "",
+      system_baseline: isSet(object.system_baseline) ? globalThis.String(object.system_baseline) : "",
+      node: isSet(object.node) ? PluginRuntimeTarget.fromJSON(object.node) : undefined,
+      python: isSet(object.python) ? PluginRuntimeTarget.fromJSON(object.python) : undefined,
+    };
+  },
+
+  toJSON(message: PluginPackageTarget): unknown {
+    const obj: any = {};
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
+    if (message.architecture !== "") {
+      obj.architecture = message.architecture;
+    }
+    if (message.system_baseline !== "") {
+      obj.system_baseline = message.system_baseline;
+    }
+    if (message.node !== undefined) {
+      obj.node = PluginRuntimeTarget.toJSON(message.node);
+    }
+    if (message.python !== undefined) {
+      obj.python = PluginRuntimeTarget.toJSON(message.python);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginPackageTarget>, I>>(base?: I): PluginPackageTarget {
+    return PluginPackageTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginPackageTarget>, I>>(object: I): PluginPackageTarget {
+    const message = createBasePluginPackageTarget();
+    message.os = object.os ?? "";
+    message.architecture = object.architecture ?? "";
+    message.system_baseline = object.system_baseline ?? "";
+    message.node = (object.node !== undefined && object.node !== null)
+      ? PluginRuntimeTarget.fromPartial(object.node)
+      : undefined;
+    message.python = (object.python !== undefined && object.python !== null)
+      ? PluginRuntimeTarget.fromPartial(object.python)
+      : undefined;
     return message;
   },
 };

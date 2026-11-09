@@ -20,6 +20,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import (
     plugin_gateway as plugin_gateway,  # noqa: PLC0414 — pytest 复用原独立 Gateway fixture。
 )
+from tests.support.plugin_package import native_plugin_target
 
 PLUGIN = '''
 import gzip, json, os
@@ -79,6 +80,7 @@ server.run()
 def install_stream_plugin(client: httpx.Client, context: TestRunContext) -> PluginSlotStatusDTO:
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
     manifest = {"manifest_version": 1, "package_id": "stream.probe", "version": "1.0.0",
+        "target": native_plugin_target("python"),
         "name": "流协议探针", "extension_contract_version": 1, "plugins": [{
             "id": "streams", "name": "服务流", "instance_scope": "gateway", "runtime": "python",
             "entrypoint": ["server.py"], "management_protocol_version": 1,

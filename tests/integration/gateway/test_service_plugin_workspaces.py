@@ -15,6 +15,7 @@ import pytest
 
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import PYTHON_PLUGIN
+from tests.support.plugin_package import native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -72,6 +73,7 @@ def _package(path: Path, *, package_id: str, mode: str = "") -> Path:
         "package_id": package_id,
         "version": "1.0.0",
         "name": "Workspace 生命周期探针",
+        "target": native_plugin_target("python"),
         "extension_contract_version": 1,
         "plugins": [{
             "id": "probe",

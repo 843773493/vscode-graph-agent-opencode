@@ -23,9 +23,8 @@ from jsonschema.exceptions import SchemaError
 from app.core.atomic_fs import fsync_directory, fsync_file
 from app.gateway.federation.policy import CAPABILITIES
 from app.gateway.plugins.dependencies import (
-    has_python_lock,
-    prepare_dependencies,
-    validate_dependency_inputs,
+    validate_prebuilt_dependencies,
+    validate_runtime_target,
 )
 from app.schemas.gateway.service_plugin import (
     PluginPackageManifest,
@@ -130,19 +129,22 @@ class PluginPackageStore:
     def package_root(self, package_id: str, version: str) -> Path:
         return self.get(package_id, version).root
 
-    def python_executable(self, package_id: str, version: str, *, plugin_id: str) -> Path | None:
+    def validate_runtime_dependencies(self, package_id: str, version: str, *, plugin_id: str) -> None:
+        installed = self.get(package_id, version)
+        if not any(item.id == plugin_id and item.runtime is not None for item in installed.manifest.plugins):
+            raise ValueError("运行依赖校验必须属于精确代码插件")
+        runtimes = {item.runtime for item in installed.manifest.plugins if item.runtime is not None}
+        validate_prebuilt_dependencies(installed.root, runtimes=runtimes, digest=installed.digest)
+
+    def python_site_packages(self, package_id: str, version: str, *, plugin_id: str) -> Path | None:
         installed = self.get(package_id, version)
         plugin = next((item for item in installed.manifest.plugins if item.id == plugin_id), None)
         if plugin is None or plugin.runtime != "python":
-            raise ValueError("Python 插件解释器查询必须属于精确 Python 插件")
-        if not has_python_lock(installed.root):
+            raise ValueError("Python 插件依赖查询必须属于精确 Python 插件")
+        site_packages = installed.root / "python/site-packages"
+        if not site_packages.is_dir():
             return None
-        executable = installed.root / ".venv" / (
-            "Scripts/python.exe" if os.name == "nt" else "bin/python"
-        )
-        if not executable.is_file():
-            raise RuntimeError("已发布 Python 插件缺少锁定依赖解释器")
-        return executable
+        return site_packages
 
     def uninstall(self, package_id: str, version: str, *, references: Iterable[str] = ()) -> None:
         _validate_identity(package_id, version)
@@ -182,8 +184,17 @@ class PluginPackageStore:
                 lambda relative: (staging / relative).read_bytes(),
             )
             runtimes = {plugin.runtime for plugin in staged_manifest.plugins if plugin.runtime is not None}
-            validate_dependency_inputs(staging, runtimes=runtimes)
-            prepare_dependencies(staging, runtimes=runtimes)
+            validate_prebuilt_dependencies(staging, runtimes=runtimes, digest=digest)
+            if runtimes:
+                from app.gateway.runtime.workspace_process import (
+                    resolve_python_executable,
+                )
+
+                node = os.environ.get("BOXTEAM_NODE_BIN")
+                if "node" in runtimes and (not node or not Path(node).is_absolute()):
+                    raise RuntimeError("安装 Node 插件制品需要 Gateway 配置的绝对 BOXTEAM_NODE_BIN")
+                validate_runtime_target(staged_manifest.target, runtimes=runtimes,
+                    node_executable=node, python_executable=resolve_python_executable())
             metadata = {"digest": digest, "manifest": manifest.model_dump(mode="json")}
             metadata_path = staging / ".boxteam-plugin.json"
             with metadata_path.open("x", encoding="utf-8") as stream:
@@ -228,8 +239,8 @@ def _zip_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
     folded_names: set[str] = set()
     for info in infos:
         name = _safe_member(info.filename)
-        if name.split("/", 1)[0] in {"node_modules", ".venv"} or name == ".npmrc":
-            raise ValueError(f"插件包不能携带目标生成依赖或 npm 凭据配置: {name}")
+        if name.split("/", 1)[0] == ".venv" or name == ".npmrc":
+            raise ValueError(f"插件包不能携带 Python 虚拟环境或 npm 凭据配置: {name}")
         if name.casefold() in folded_names:
             raise ValueError(f"插件 ZIP 含重复路径: {name}")
         mode = info.external_attr >> 16
@@ -252,8 +263,8 @@ def _directory_entries(source: Path) -> tuple[str, ...]:
     for item in source.rglob("*"):
         relative = item.relative_to(source).as_posix()
         _safe_member(relative)
-        if relative.split("/", 1)[0] in {"node_modules", ".venv"} or relative == ".npmrc":
-            raise ValueError(f"开发插件不能携带目标生成依赖或 npm 凭据配置: {relative}")
+        if relative.split("/", 1)[0] == ".venv" or relative == ".npmrc":
+            raise ValueError(f"开发插件不能携带 Python 虚拟环境或 npm 凭据配置: {relative}")
         if item.is_symlink():
             raise ValueError(f"插件目录不允许符号链接: {relative}")
         if item.is_file():

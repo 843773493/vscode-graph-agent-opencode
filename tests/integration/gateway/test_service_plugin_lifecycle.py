@@ -14,6 +14,7 @@ import httpx
 import psutil
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.plugin_package import native_plugin_target
 from tests.support.processes.scope import register_test_process, unregister_test_process
 
 _PLUGIN_SOURCE = '''
@@ -84,6 +85,7 @@ def _package_archive(path: Path) -> None:
         "package_id": "launcher.lifecycle",
         "version": "1.0.0",
         "name": "Launcher lifecycle probe",
+        "target": native_plugin_target("python"),
         "extension_contract_version": 1,
         "plugins": [{
             "id": "probe",

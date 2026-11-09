@@ -153,4 +153,4 @@ out/tests/packaging/runtime/windows-python-dependencies/
 - staging 不得引用构建机仓库绝对路径。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
-Terminal attach 页面及其明确使用的 xterm／codicon 静态文件由 application-sources 一并交付，不复制前端依赖树。Linux／Windows builder 复用 scripts/plugins/pack-developer-tools.mjs 生成标准 developer-tools.zip；该资产只供显式安装使用，普通启动或读取不安装、不启用。插件打包脚本参与构建输入指纹。
+Terminal attach 页面及其明确使用的 xterm／codicon 静态文件由 application-sources 一并交付，不复制前端依赖树。Linux／Windows builder 将目标 OS、架构、系统基线及 Node/Python 版本与 ABI 传给 developer-tools 和 MCP stdio 两个 ZIP 打包器；两份 ZIP 均随 runtime 交付。插件打包脚本参与构建输入指纹。

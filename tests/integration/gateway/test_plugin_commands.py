@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.plugin_package import native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -95,35 +96,34 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
         close_gateway_process(gateway)
 
 
-def _archive(destination: Path) -> None:
+def _archive(destination: Path, prepared_package_root: Path) -> None:
     command = {"id": "execute", "title": "Execute", "handler": "execute", "required_capabilities": ["read"],
         "arguments_schema": {"type": "object", "additionalProperties": False, "required": ["mode", "value"],
             "properties": {"mode": {"enum": ["return", "wait", "error", "bad-result", "null", "configured"]}, "value": {"type": "string"}}},
         "result_schema": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": False, "required": ["runtime", "pid", "value"],
             "properties": {"runtime": {"enum": ["python", "node"]}, "pid": {"type": "integer"}, "value": {"type": "string"}}}
         ]}}
-    manifest = {"package_id": "proof.commands", "version": "1.0.0", "name": "Command proof", "plugins": [
+    manifest = {"package_id": "proof.commands", "version": "1.0.0", "name": "Command proof",
+        "target": native_plugin_target("python", "node"), "plugins": [
         {"id": runtime, "name": runtime, "instance_scope": "gateway", "runtime": runtime,
          "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"], "management_protocol_version": 1,
          "requires": [{"extension_point": "commands", "version": 1}, {"extension_point": "configuration", "version": 1}],
          "contributes": {"commands": [command], "configuration": {"type": "object", "additionalProperties": False,
              "properties": {"prefix": {"type": "string"}, "credentialValue": {"type": "string", "writeOnly": True}}}}}
         for runtime in ("python", "node")]}
-    package = json.loads(Path("resources/plugins/developer-tools/package.json").read_text())
+    package = json.loads((prepared_package_root / "package.json").read_text())
     package["name"] = "command-proof"
-    package["dependencies"] = {key: value for key, value in package["dependencies"].items()
-                               if key in {"@bufbuild/protobuf", "ajv"}}
-    lock = commentjson.loads(Path("resources/plugins/developer-tools/bun.lock").read_text())
+    lock = commentjson.loads((prepared_package_root / "bun.lock").read_text())
     lock["workspaces"][""] = {"name": package["name"], "dependencies": package["dependencies"]}
-    for key in list(lock["packages"]):
-        if key in {"node-pty", "node-addon-api", "playwright", "playwright-core", "fsevents", "ws"}:
-            del lock["packages"][key]
     with zipfile.ZipFile(destination, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("entry.py", PYTHON)
         archive.writestr("entry.mjs", NODE)
         archive.writestr("package.json", json.dumps(package))
         archive.writestr("bun.lock", json.dumps(lock))
+        for file in sorted((prepared_package_root / "node_modules").rglob("*")):
+            if file.is_file():
+                archive.write(file, file.relative_to(prepared_package_root).as_posix())
         for file in ("serverPluginRuntime.mjs", "serverPluginCommands.mjs", "serverRuntimeControl.mjs", "serverRuntimeLogging.mjs"):
             archive.write(Path("src/shared") / file, f"src/shared/{file}")
         for file in ("plugin_commands_pb.js", "service_plugin_pb.js"):
@@ -133,11 +133,12 @@ def _archive(destination: Path) -> None:
 
 def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     plugin_gateway: tuple[httpx.Client, TestRunContext],
+    prepared_developer_tools_package: Path,
 ) -> None:
     client, context = plugin_gateway
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
     package = context.artifacts_dir / "commands.zip"
-    _archive(package)
+    _archive(package, prepared_developer_tools_package)
     client.post("/api/gateway/service-plugins/install", json={"gateway_id": gateway_id,
         "path": str(package.resolve())}).raise_for_status()
     bindings = [{"package_id": "proof.commands", "plugin_id": runtime, "package_version": "1.0.0", "enabled": True}

@@ -6,7 +6,7 @@
 
 ### Requirement: 插件包必须采用多插件自有格式并退出旧扩展执行体系
 
-插件包 Plugin Package SHALL 是标准 .zip 包或同结构显式开发目录，根 plugin.jsonc 声明 manifest_version、package_id、version、名称说明、extension_contract_version 和 plugins。每个插件 Plugin SHALL 声明包内唯一 id（外部绑定的 plugin_id，与 package_id 共同确定逻辑插件）、名称、固定 gateway／workspace instance_scope、requires 与 contributes；有运行代码时才声明 Python／Node runtime、相对包根入口及参数数组和 management_protocol_version。贡献 Contribution 全部归 plugins[].contributes；运行实例 Runtime Instance 属于精确插件绑定。系统 MUST NOT 保留根级 runtime／entrypoint／scope／contributes、components／component_id、modules／features 双套模型或开发格式兼容。名称不能代替稳定 ID，入口不能为 shell 字符串。
+插件包 Plugin Package SHALL 是标准 .zip 包或同结构显式开发目录，根 plugin.jsonc 声明 manifest_version、package_id、version、名称说明、extension_contract_version、plugins 及目标制品兼容信息。每个插件 Plugin SHALL 声明包内唯一 id（外部绑定的 plugin_id，与 package_id 共同确定逻辑插件）、名称、固定 gateway／workspace instance_scope、requires 与 contributes；有运行代码时才声明 Python／Node runtime、相对包根入口及参数数组和 management_protocol_version。贡献 Contribution 全部归 plugins[].contributes；运行实例 Runtime Instance 属于精确插件绑定。系统 MUST NOT 保留根级 runtime／entrypoint／scope／contributes、components／component_id、modules／features 双套模型或开发格式兼容。名称不能代替稳定 ID，入口不能为 shell 字符串。
 
 包是整体安装／版本／卸载单位，插件是独立开启／关闭／重启单位；同包运行插件分别使用独立实例，插件内工具和 Skill 共用该插件生命周期，纯声明插件无运行入口。系统 SHALL 删除项目接入的 VSIX、市场、用户 Extension Host／vscode API／RPC 和旧动态 Provider，保留原 Workbench、内置贡献及业务实现。
 
@@ -124,9 +124,9 @@ UI SHALL 复用原管理列表／详情及目标选择器，包级提供安装�
 
 ### Requirement: 安装运行与数据删除必须分别执行
 
-安装 SHALL 由目标唯一安装 owner 校验、准备锁定依赖后发布，不自动运行服务或改工作区配置；需要进程的准备步骤 SHALL 经统一受管边界执行。更新发布新不可变版本，原运行实例继续绑定原版本；卸载 SHALL 在原实际运行／读取／使用引用结清后删除对应版本，有引用时明确拒绝并显示引用，不隐式关闭资源。
+安装 SHALL 由目标唯一安装 owner 校验完整预构建制品、安全解包后原子发布，不在目标解析／安装／编译依赖，不自动运行服务或改工作区配置。更新发布新不可变版本，原运行实例继续绑定原版本；卸载 SHALL 在原实际运行／读取／使用引用结清后删除对应版本，有引用时明确拒绝并显示引用，不隐式关闭资源。
 
-Node 依赖 SHALL 仅使用 `package.json` 与 Bun 文本 `bun.lock`，安装经 Bun frozen lock 执行并禁用生命周期脚本；Python 依赖继续使用 uv 锁定准备。安装与插件运行分开：Node 插件仍由目标 Node 执行，`node-pty` 仅经具名 node-gyp 构建匹配目标 Node，不运行其它安装 hook。发行环境 SHALL 明确提供 Bun、uv、node-gyp 的位置，不回退开发机 PATH。安装 SHALL 复用工具的正常缓存，同时隔离用户认证与配置；普通业务测试可复用已准备的不可变包，运行 Home 与实例仍各自隔离，并保留真实安装入口验收。
+Node 依赖 SHALL 在发布构建阶段以 `package.json` 与 Bun 文本 `bun.lock` 锁定准备，Python 依赖在同阶段以 `pyproject.toml` 与 `uv.lock` 准备。构建复用正常缓存并隔离凭据，禁止任意安装 hook；`node-pty` 的具名 node-gyp 构建只在发布环境执行并匹配发行 Node ABI。Bun、uv、node-gyp 和编译工具 SHALL NOT 因插件安装而成为用户运行环境的必需组件。普通业务测试可复用同一已准备不可变包，运行 Home 与实例仍各自隔离，真实安装入口 SHALL 使用最终制品验收。
 
 卸载引用 SHALL 只从原 owner 的四类事实读取：实际运行或尚未核实退出的实例、原配置 active／pending 绑定（关闭但未解除也计入）、Gateway 新建模板及未结清创建 intent、原资源 owner 未完成的读取／使用 lease。可释放 UI 投影先结清，不形成永久引用；完整封存正文与未绑定参数残留不占包引用。原安装 owner SHALL 经现有登记定位引用 owner，并复用原拓扑／删除互斥边界，避免引用建立与删除竞争；不能确认引用时拒绝本次卸载并指出未知来源，不把未知当空集、不为检查启动 Backend、不扫描目录或建立全局引用账本／巡检器。
 
@@ -140,9 +140,39 @@ v1 MUST NOT 执行任意安装／卸载 hook 或 vscode:uninstall，不以退出
 - **WHEN** 用户卸载某版本，而原登记中的工作区引用 owner 无法确认其 active／pending 绑定
 - **THEN** 卸载明确拒绝并列出该来源，包保持；零 Backend 自动启动、扫盘和后台修复，不将已停止工作区视作没有绑定
 
+### Requirement: 插件必须携带完整运行依赖并在版本不匹配时明确不生效
+
+应用发行物 SHALL 提供受支持的明确版本 Node／Python，插件使用目标发行运行时，不查找用户系统 PATH、不借用开发源码或 Electron Node。插件 ZIP SHALL 在发布前带齐运行代码、Node 的 node_modules 或打包后依赖、可重定位的 Python 依赖、原生模块及必要运行资源；不得直接复制带构建机绝对路径的 .venv。自带包、下载包与显式开发目录使用同一已准备制品合同，纯声明或无第三方依赖的插件不要求空依赖目录。
+
+用户安装、启用和运行 SHALL 无需自行安装 Node／Python、Bun／uv、编译器或 SDK；安装只校验、解包并原子发布完整包，MUST NOT 执行包管理器、安装 hook、原生编译或联网补齐依赖。源码依赖准备只属于独立开发／发布命令，不在产品安装器保留第二分路。
+
+目录及 manifest SHALL 明确目标 OS／架构、必要系统基线、运行时版本要求及原生依赖适用的 Node ABI／Python ABI／平台标签；安装冻结所选确切包版本、兼容目标制品及摘要。同一包版本可有不同平台制品，实际安装只接受满足原生目标的完整制品，不拼接不同目标内容、不根据文件名猜测兼容性；纯代码可声明真实兼容范围。
+
+缺少所选确切包版本的兼容制品、所需运行时版本、ABI 或完整依赖时 SHALL 明确不生效；安装不发布，启用／切换在原 CAS 提交、撤旧准入或停止旧实例前拒绝，不注册候选贡献，不启动实例。原绑定和仍兼容可用的旧实例保持。已保存绑定在重启后不满足要求时保留配置并报告不可用，不伪报 ready 或改写 enabled。API／UI SHALL 报告包版本、原生目标、所需与实际可用版本／平台及具体原因，提示获取对应完整包或支持版本的应用；没有对应版本时明确当前不支持，不要求用户手工配环境，不自动改用其他包版本、系统解释器、现场下载或编译。
+
+#### Scenario: 空缓存且没有开发工具仍可离线安装运行
+- **WHEN** 用户在支持平台使用完整应用发行物，系统未安装 Node／Python／Bun／uv／编译器、依赖缓存为空且外网不可达，从本地安装匹配的完整 Python／Node 插件包
+- **THEN** 安装不执行依赖准备或外部下载，开启后通过发行运行时及包内依赖完成真实业务和重启；Node 原生模块可用，Python 依赖不读取开发机环境
+
+#### Scenario: 安装目录改变后 Python 插件仍可运行
+- **WHEN** 完整 Python 插件包在与构建机不同的安装路径发布并重启运行
+- **THEN** 解释器来自目标发行物，依赖在新包根解析，真实调用成功，不依赖构建机 .venv 路径或源码
+
+#### Scenario: 缺少确切版本或目标平台制品
+- **WHEN** 所选包版本没有目标 Windows／Linux／架构的兼容制品，用户尝试安装或切换
+- **THEN** 明确不支持并展示包版本、目标及可用制品，零候选生效、配置替换或旧实例停止，不自动选择其他版本或现场构建
+
+#### Scenario: 运行时版本或 ABI 不兼容
+- **WHEN** 插件要求的 Node／Python 版本或原生模块 ABI 与目标发行运行时不匹配
+- **THEN** 生效前拒绝并说明所需与实际版本／ABI，原可用绑定保持，不使用系统 PATH 或下载另一套环境；重启遇到已保存的不兼容绑定时只报告不可用
+
+#### Scenario: 下载包缺少必要依赖
+- **WHEN** ZIP 只有依赖声明和锁文件，缺少该插件必需的运行依赖或资源
+- **THEN** 原安装 owner 明确拒绝发布并指出缺失项，不执行 Bun／uv／pip／npm 或安装脚本补齐，不将解包成功当作可用
+
 ### Requirement: 打包客户端必须复用目标侧服务链
 
-Web 与 Electron SHALL 构建同一工作台；插件运行在目标 Gateway 所在环境，Electron 只承担既有窗口、生命周期和固定存储。发行物 SHALL 提供所需管理组件、自带插件和静态资源，启动及自有离线包安装不得依赖源码、开发服务器或 Electron Node API。界面仅在相应合同可用时声明可运行。
+Web 与 Electron SHALL 构建同一工作台；插件运行在目标 Gateway 所在环境，Electron 只承担既有窗口、生命周期和固定存储。发行物 SHALL 提供明确版本的目标 Node／Python、所需管理组件、已准备的自带插件和静态资源，启动及完整离线包安装不得依赖源码、开发服务器、用户开发环境、依赖缓存或 Electron Node API。界面仅在相应合同及兼容制品可用时声明可运行。
 
 #### Scenario: 源码目录外启动打包产物
 - **WHEN** 关闭开发服务器后从源码目录外启动 Electron，连接已有 Gateway 并使用终端／浏览器／MCP

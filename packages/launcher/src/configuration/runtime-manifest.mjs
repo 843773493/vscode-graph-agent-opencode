@@ -72,14 +72,6 @@ export function validateRuntimeManifest(value) {
   if (node.source === "bundled" && nodeExecutable === null) {
     throw new Error("node.source=bundled 时必须提供 executable");
   }
-  let installationTools = null;
-  if (manifest.installation_tools !== undefined && manifest.installation_tools !== null) {
-    const tools = requireObject(manifest.installation_tools, "runtime manifest.installation_tools");
-    installationTools = Object.freeze(Object.fromEntries(
-      ["bun_executable", "uv_executable", "node_gyp_entrypoint"].map((key) => [key,
-        requireString(tools[key], `runtime manifest.installation_tools.${key}`)]),
-    ));
-  }
   let extensionHost = null;
   if (manifest.extension_host !== null && manifest.extension_host !== undefined) {
     const value = requireObject(manifest.extension_host, "runtime manifest.extension_host");
@@ -131,7 +123,6 @@ export function validateRuntimeManifest(value) {
       executable: nodeExecutable,
     }),
     extensionHost,
-    installationTools,
   });
 }
 
@@ -149,9 +140,6 @@ export function resolveRuntimeManifest(manifestPath, value) {
     runtimeRoot,
     pythonExecutable: resolveResource(runtimeRoot, manifest.pythonExecutable),
     applicationRoot: resolveResource(runtimeRoot, manifest.applicationRoot),
-    installationTools: manifest.installationTools === null ? null : Object.freeze(Object.fromEntries(
-      Object.entries(manifest.installationTools).map(([key, value]) => [key, resolveResource(runtimeRoot, value)]),
-    )),
     configResources: Object.freeze(
       Object.fromEntries(
         Object.entries(manifest.configResources).map(([key, value]) => [
@@ -208,7 +196,6 @@ export function assertRuntimeResources(manifest) {
   for (const [label, resourcePath] of [
     ["Python", manifest.pythonExecutable],
     ["应用根目录", manifest.applicationRoot],
-    ...Object.entries(manifest.installationTools ?? {}).map(([key, value]) => [`插件安装工具 ${key}`, value]),
     ...Object.entries(manifest.configResources).map(([name, resourcePath]) => [
       `配置资源 ${name}`,
       resourcePath,

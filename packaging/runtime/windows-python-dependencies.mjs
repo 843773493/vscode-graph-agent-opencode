@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { PYTHON_RUNTIME_WINDOWS_X64, PLUGIN_INSTALLATION_TOOLS } from "./versions.mjs";
+import { PYTHON_RUNTIME_WINDOWS_X64 } from "./versions.mjs";
 
 // TODO: 依赖锁文件变化后重新确认这些包仍是纯 Python 且没有 Windows wheel。
 const CROSS_BUILD_SOURCE_PACKAGES = Object.freeze([
@@ -148,14 +148,7 @@ export function installWindowsPythonDependencies({ pythonExecutable, outputRoot,
       "--no-build",
       "--requirements",
       crossRequirementsPath,
-      `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`,
     ]);
-    // --target 将 wheel 自带工具放进 site-packages/bin，发行入口统一使用目标 Scripts。
-    const scriptsRoot = path.join(runtimePackageRoot, "python", "Scripts");
-    mkdirSync(scriptsRoot, { recursive: true });
-    for (const executable of ["uv.exe", "uvx.exe"]) {
-      renameSync(path.join(sitePackagesRoot, "bin", executable), path.join(scriptsRoot, executable));
-    }
     removeInstalledPythonPackageArtifacts(
       sitePackagesRoot,
       CROSS_BUILD_SOURCE_PACKAGES,
@@ -178,7 +171,6 @@ export function installWindowsPythonDependencies({ pythonExecutable, outputRoot,
       pythonExecutable,
       "--requirements",
       requirementsPath,
-      `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`,
   ];
   run("uv", installArguments);
 }

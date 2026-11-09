@@ -10,7 +10,6 @@ import { spawnSync } from "node:child_process";
 
 import {
   BOXTEAM_VERSION,
-  PLUGIN_INSTALLATION_TOOLS,
   NODE_RUNTIME_DEPENDENCIES,
   PYTHON_RUNTIME,
 } from "./versions.mjs";
@@ -24,6 +23,7 @@ import {
 import { downloadPinnedLinuxPython } from "./pinned-archive-download.mjs";
 import { copyApplicationSources } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
+import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
 import {
   beginRuntimeBuild,
   publishRuntimeBuildResult,
@@ -67,7 +67,6 @@ function installPythonDependencies(pythonExecutable) {
     "requirements-txt",
     "--output-file",
     requirementsPath,
-    `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`,
   ]);
   run("uv", [
     "pip",
@@ -76,11 +75,10 @@ function installPythonDependencies(pythonExecutable) {
     pythonExecutable,
     "--requirements",
     requirementsPath,
-    `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`,
   ]);
 }
 
-function installNodeDependencies(applicationRoot) {
+function installNodeDependencies(applicationRoot, nodeExecutable) {
   cpSync(
     path.join(projectRoot, "packaging", "runtime", "node-package.json"),
     path.join(applicationRoot, "package.json"),
@@ -90,7 +88,7 @@ function installNodeDependencies(applicationRoot) {
     env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
   });
   const nodePtyRoot = path.join(applicationRoot, "node_modules", "node-pty");
-  run(process.env.BOXTEAM_NODE_BIN ?? "node", [path.join(applicationRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
+  run(nodeExecutable, [path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
     cwd: nodePtyRoot,
   });
 }
@@ -153,11 +151,6 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     // npm pack 会排除包内符号链接，因此必须指向实际解释器文件。
     python_executable: "python/bin/python3.12",
     application_root: "application",
-    installation_tools: {
-      bun_executable: "application/node_modules/@oven/bun-linux-x64/bin/bun",
-      uv_executable: "python/bin/uv",
-      node_gyp_entrypoint: "application/node_modules/node-gyp/bin/node-gyp.js",
-    },
     config_resources: {
       gateway_inline: "application/configs/gateway_inline.jsonc",
       gateway_schema: "application/configs/gateway_schema.jsonc",
@@ -168,6 +161,7 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
     web_assets: "web",
     chromium_executable: path.relative(runtimePackageRoot, chromiumExecutable),
     node: {
+      // TODO: 源码外发行验收前改用随发行物携带的固定 Node；当前 npm Launcher 的 Node 不匹配会按制品合同拒绝。
       source: "launcher",
       executable: null,
     },
@@ -237,7 +231,6 @@ async function main() {
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);
-  await packDeveloperTools(projectRoot, path.join(applicationRoot, "resources/plugins/developer-tools.zip"));
   // 内建 SQLite 不导出 C 符号；探针只使用连接注入的 SQLite extension API。
   run("cc", [
     "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -250,7 +243,28 @@ async function main() {
     "from app.core.sqlite_state import sqlite_vfs_max_pathname; " +
       "print('SQLite VFS mxPathname:', sqlite_vfs_max_pathname())",
   ], { cwd: applicationRoot });
-  installNodeDependencies(applicationRoot);
+  const nodeExecutable = Bun.which(process.env.BOXTEAM_NODE_BIN ?? "node");
+  const bunExecutable = Bun.which("bun");
+  const uvExecutable = Bun.which("uv");
+  if (!nodeExecutable || !bunExecutable || !uvExecutable) {
+    throw new Error("发布构建需要明确的 Node、Bun 和 uv 构建工具");
+  }
+  const nodeRuntime = JSON.parse(run(nodeExecutable, ["--print",
+    "JSON.stringify({version:process.versions.node,abi:process.versions.modules,glibc:process.report.getReport().header.glibcVersionRuntime})",
+  ], { capture: true }));
+  if (!nodeRuntime.glibc) throw new Error("linux-x64 发布构建需要 GNU libc 目标");
+  installNodeDependencies(applicationRoot, nodeExecutable);
+  const pluginBuild = {
+    projectRoot, nodeExecutable, bunExecutable, uvExecutable, pythonExecutable,
+    nodeGypEntrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"),
+    target: {
+      os: "linux", architecture: "x64", system_baseline: `glibc-${nodeRuntime.glibc}`,
+      node: { version: nodeRuntime.version, abi: nodeRuntime.abi },
+      python: { version: PYTHON_RUNTIME.version, abi: "cp312" },
+    },
+  };
+  await packDeveloperTools({ ...pluginBuild, output: path.join(applicationRoot, "resources/plugins/developer-tools.zip") });
+  await packMcpStdio({ ...pluginBuild, output: path.join(applicationRoot, "resources/plugins/mcp-stdio.zip") });
 
   run("bun", ["run", "build"], {
     cwd: path.join(projectRoot, "src", "clients", "workbench"),

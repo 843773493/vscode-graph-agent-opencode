@@ -5,8 +5,9 @@
 ## What Changes
 
 - **BREAKING**：取消第三方 VS Code 插件兼容，删除项目接入的 VSIX 安装／扫描／卸载、Marketplace／Gallery、Web／Node Extension Host、扩展 API／RPC、动态 VSIX MCP Provider 及相关配置、构建、协议和测试链路。不得保留转换器、旧格式 fallback 或第二安装／运行体系。
-- 统一浏览器管理器、终端管理器、源码调试、MCP 以及需要创建进程的安装阶段为受管服务插件。Backend 始终通过 HTTP／流式通道访问 Gateway，再由目标原生 Gateway 路由到精确插件实例；不保存插件监听端口，不直接创建这些执行子进程。`python_exec`、持续任务条件脚本和视频预处理 ffmpeg 明确排除本次迁移，保留原调用方式、Backend 执行位置和现有进程管理，不接入 Gateway 或终端插件。
+- 统一浏览器管理器、终端管理器、源码调试与 MCP 为受管服务插件。Backend 始终通过 HTTP／流式通道访问 Gateway，再由目标原生 Gateway 路由到精确插件实例；不保存插件监听端口，不直接创建这些执行子进程。插件依赖准备和原生编译前移到发布构建阶段，不在用户安装时执行。`python_exec`、持续任务条件脚本和视频预处理 ffmpeg 明确排除本次迁移，保留原调用方式、Backend 执行位置和现有进程管理，不接入 Gateway 或终端插件。
 - 自有包使用标准 `.zip` 归档，根目录包含 `plugin.jsonc`，不规定专用文件后缀；manifest、扩展合同与管理协议分别版本化。区分声明式贡献、运行期 Provider 与受管服务；纯声明插件无需运行入口，有运行代码时支持 Python／Node，不沿用 VSIX manifest 或 vscode API。
+- 插件按“下载即可使用”交付：应用发行物提供明确版本的目标 Node／Python，插件 ZIP 携带匹配目标平台及运行时的完整运行依赖和必要资源；Node 可随包携带 node_modules 或打包后的依赖，Python 使用可重定位的依赖布局，原生模块在发布前构建。用户无需安装语言环境、Bun／uv、编译器或 SDK，安装和启动不联网补依赖、不执行构建 hook。缺少所选确切版本的兼容制品、所需运行时版本或 ABI 时不生效，原生目标返回具体差异及可行动提示，不自动改用其他版本、系统 PATH 或现场编译；预检失败保持原绑定和仍兼容可用的旧实例。
 - 统一“插件包 Plugin Package／插件 Plugin／贡献 Contribution／运行实例 Runtime Instance”。ZIP 是整体安装更新单位，plugins 是独立启停单位，贡献全部归插件；不保留根级运行入口或另一套模块／功能管理实体。同包插件独立实例，纯声明插件无进程。
 - 首批开放命令、菜单、快捷键、配置、受管服务、源码调试与 Skill 七类贡献，直接接入已有 Workbench Registry／业务服务；建立扩展点版本和支持状态、显式插件目标、开关驱动启停、取消／事件与注销释放合同。调试迁移已有 Node Inspector JavaScript 业务及20个工具，经标准 DAP 接原 Debug UI；不依赖 js-debug VSIX，不宣称已支持 Python 调试。搜索、树、编辑器、文件系统、语言、通用 Terminal／Task Provider 等仍未开放，不因上游有实现而伪报插件可用，不预写空 Provider。
 - UI 复用原插件管理视图，按“插件包 → 插件 → 运行实例”展示，支持当前 Gateway、当前工作区的开启／关闭／重启及新建工作区默认值；默认值只在创建时冻结初始化，不修改已有工作区。插件开启随所属范围运行，工具、命令和 Skill 不触发启动；包级批量开关逐项报告，不增加包级 enabled。
@@ -43,6 +44,6 @@
 ## Impact
 
 - Gateway：复用 registry、进程句柄／组、接管、日志、联邦和配置设施；新增具名插件管理及业务代理，不运行 Agent 业务、不直接读取工作区 `.boxteam/`。
-- Backend／workspace-services：Terminal／Browser 客户端、源码调试和 MCP 会话统一访问 Gateway，服务内部保留原资源 owner；安装子进程按原规划迁入受管执行边界。Python 工具、条件脚本和 ffmpeg 保留现有实现；存储一致性内部原语和宿主系统打开操作同样不在本次迁移范围。
+- Backend／workspace-services：Terminal／Browser 客户端、源码调试和 MCP 会话统一访问 Gateway，服务内部保留原资源 owner；删除用户安装阶段的依赖安装／编译子进程，Bun／uv 仅保留为发布构建工具。Python 工具、条件脚本和 ffmpeg 保留现有实现；存储一致性内部原语和宿主系统打开操作同样不在本次迁移范围。
 - Workbench／发行：复用原注册表与 UI 服务承接自有贡献，不创建第二套命令／菜单／设置系统；迁齐旧体系的有效业务消费者后删除旧市场、用户扩展宿主和打包接线，保留原版编辑器与内置资源，不修改 reference_repo 或固定上游源码。
 - 本轮只修订 OpenSpec，不实施代码或修改用户环境。已有任务与验证原文在 tasks.md 历史区保留，不计作新架构已实现；后续迁移按纵向链和真实 release 基线执行。

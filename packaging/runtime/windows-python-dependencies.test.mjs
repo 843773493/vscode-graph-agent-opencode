@@ -39,7 +39,7 @@ async function observeDependencies(moduleUrl, scenario) {
   const { syncBuiltinESMExports } = await import("node:module");
   syncBuiltinESMExports();
   const { installWindowsPythonDependencies } = await import(moduleUrl);
-  const { PYTHON_RUNTIME_WINDOWS_X64, PLUGIN_INSTALLATION_TOOLS } = await import(new URL("./versions.mjs", moduleUrl));
+  const { PYTHON_RUNTIME_WINDOWS_X64 } = await import(new URL("./versions.mjs", moduleUrl));
   const write = (relative, body) => {
     const file = path.join(sitePackagesRoot, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body);
@@ -67,8 +67,6 @@ async function observeDependencies(moduleUrl, scenario) {
           fs.writeFileSync(requirementsPath, locked);
         } else if (args.includes("--no-build")) {
           for (const file of oldPackageFiles) write(file, "old wheel");
-          write("bin/uv.exe", "target uv");
-          write("bin/uvx.exe", "target uvx");
           write("litellm_extra/__init__.py", "unrelated package");
           write("litellm_extra-1.0.0.dist-info/METADATA", "unrelated metadata");
           write("other/native.pyd", "Windows extension");
@@ -96,12 +94,12 @@ async function observeDependencies(moduleUrl, scenario) {
   } catch (error) { failure = error; }
   const exportCommand = ["uv", ["export", "--locked", "--no-dev", "--format", "requirements-txt", "--output-file", requirementsPath]];
   const targetCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--python-version",
-    PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath, `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`]];
+    PYTHON_RUNTIME_WINDOWS_X64.version, "--python-platform", "x86_64-pc-windows-msvc", "--no-build", "--requirements", crossRequirementsPath]];
   const sourceCommand = ["uv", ["pip", "install", "--target", sitePackagesRoot, "--no-deps",
     "commentjson==0.9.0", "lark_parser==0.12.0", "litellm==1.2.0"]];
   if (scenario === "native") {
     assert.equal(failure, undefined);
-    assert.deepEqual(calls, [exportCommand, ["uv", ["pip", "install", "--python", pythonExecutable, "--requirements", requirementsPath, `uv==${PLUGIN_INSTALLATION_TOOLS.uv}`]]]);
+    assert.deepEqual(calls, [exportCommand, ["uv", ["pip", "install", "--python", pythonExecutable, "--requirements", requirementsPath]]]);
     assert.equal(fs.existsSync(crossRequirementsPath), false);
     assert.equal(fs.readFileSync(path.join(sitePackagesRoot, "preexisting.so"), "utf8"), "native build leaves package content alone");
   } else {
@@ -117,8 +115,6 @@ async function observeDependencies(moduleUrl, scenario) {
     } else assert.equal(failure, undefined);
     if (scenario !== "export-failure") assert.equal(fs.readFileSync(crossRequirementsPath, "utf8"), [...header, ...targetBlock].join("\n") + "\n");
     if (["cross", "unexpected-native"].includes(scenario)) {
-      assert.equal(fs.readFileSync(path.join(runtimePackageRoot, "python/Scripts/uv.exe"), "utf8"), "target uv");
-      assert.equal(fs.existsSync(path.join(sitePackagesRoot, "bin/uv.exe")), false);
       for (const root of ["commentjson", "lark", "litellm"]) {
         assert.equal(fs.existsSync(path.join(sitePackagesRoot, root, "nested/native.so")), false);
         assert.equal(fs.readFileSync(path.join(sitePackagesRoot, root, "nested/module.py"), "utf8"), "source body");
@@ -128,7 +124,7 @@ async function observeDependencies(moduleUrl, scenario) {
     }
   }
   if (["cross", "unexpected-native"].includes(scenario)) {
-    const expectedDirectories = [".", "bin", "litellm_extra", "litellm_extra-1.0.0.dist-info", "other",
+    const expectedDirectories = [".", "litellm_extra", "litellm_extra-1.0.0.dist-info", "other",
       ...["commentjson", "lark", "litellm"].flatMap((root) => [root, `${root}/nested`])];
     if (scenario === "unexpected-native") expectedDirectories.push("unrelated", "litellm_extra/nested");
     assert.deepEqual([...new Set(cleanupDirectories)].sort(), expectedDirectories.sort());
@@ -175,6 +171,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   const pythonExecutable = path.join(runtimePackageRoot, "python/python.exe");
   const stop = new Error("fixture在Python依赖准备边界结束");
   const commands = [];
+  let downloads = 0;
   let installations = 0;
   const context = createContext({ console, Buffer, process: {
     env: { BOXTEAM_PROJECT_ROOT: projectRoot }, cwd: () => projectRoot, arch: "x64",
@@ -185,19 +182,30 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   await module.link(async (specifier) => {
     let exports;
     if (specifier === "./pinned-archive-download.mjs") exports = {
-      downloadPinnedWindowsPython: async () => path.join(projectRoot, "python.tgz"),
-      downloadPinnedWindowsNode: async () => path.join(projectRoot, "node.zip"),
+      downloadPinnedWindowsPython: async () => { downloads++; return path.join(projectRoot, "python.tgz"); },
+      downloadPinnedWindowsNode: async () => { downloads++; return path.join(projectRoot, "node.zip"); },
     };
     else if (specifier === "../../scripts/plugins/pack-developer-tools.mjs") exports = {
       packDeveloperTools: async () => {},
     };
+    else if (specifier === "../../scripts/plugins/pack-mcp-stdio.mjs") exports = {
+      packMcpStdio: async () => {},
+    };
     else if (specifier === "./windows-python-dependencies.mjs") exports = {
       installWindowsPythonDependencies(options) {
         installations++;
+        assert.equal(
+          fs.readFileSync(
+            path.join(outputRoot, "stage/build-node/node-v22.17.0-win-x64/node.exe"),
+            "utf8",
+          ),
+          "fixture node",
+          "Windows Node 必须在 Python 依赖owner之前解包并校验",
+        );
         assert.equal(options.pythonExecutable, pythonExecutable);
         assert.equal(options.outputRoot, outputRoot);
         assert.equal(options.runtimePackageRoot, runtimePackageRoot);
-        assert.equal(options.crossBuild, mode === "cross");
+        assert.equal(options.crossBuild, false);
         assert.equal(options.run("fixture-run", ["argument"], { capture: true }), "fixture output");
         throw stop;
       },
@@ -206,8 +214,25 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
       exports = { ...await import(specifier.startsWith(".") ? new URL(specifier, builderUrl).href : specifier) };
       if (specifier === "node:child_process") exports.spawnSync = (command, args, options) => {
         commands.push([command, [...args], options.cwd]);
-        if (command === "tar") {
-          fs.mkdirSync(path.dirname(pythonExecutable), { recursive: true }); fs.writeFileSync(pythonExecutable, "fixture");
+        if (command === "tar" && args[0] === "-xzf") {
+          fs.mkdirSync(path.dirname(pythonExecutable), { recursive: true });
+          fs.writeFileSync(pythonExecutable, "fixture");
+        } else if (command === "tar" && args[0] === "-xf") {
+          const extractRoot = args[args.indexOf("-C") + 1];
+          const nodeExecutable = path.join(
+            extractRoot,
+            "node-v22.17.0-win-x64/node.exe",
+          );
+          fs.mkdirSync(path.dirname(nodeExecutable), { recursive: true });
+          fs.writeFileSync(nodeExecutable, "fixture node");
+        } else if (command === "unzip") {
+          const extractRoot = args[args.indexOf("-d") + 1];
+          const nodeExecutable = path.join(
+            extractRoot,
+            "node-v22.17.0-win-x64/node.exe",
+          );
+          fs.mkdirSync(path.dirname(nodeExecutable), { recursive: true });
+          fs.writeFileSync(nodeExecutable, "fixture node");
         }
         return { status: 0, stdout: "fixture output\n" };
       };
@@ -216,10 +241,23 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
       for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
     }, { context });
   });
+  if (mode === "cross") {
+    await assert.rejects(module.evaluate(), (error) => {
+      assert.match(error.message, /windows-x64 构建器不支持当前模式: host=linux-x64 cross=true/);
+      return true;
+    });
+    assert.equal(downloads, 0, "Linux --cross 必须在归档下载前拒绝");
+    assert.equal(installations, 0, "Linux --cross 必须在 Python 依赖owner前拒绝");
+    assert.deepEqual(commands, [], "Linux --cross 不得解包或运行构建命令");
+    assert.equal(fs.existsSync(outputRoot), false, "Linux --cross 不得创建staging");
+    return { mode, rejectedBeforeWrites: true, downloads, installations, commands: commands.length };
+  }
   await assert.rejects(module.evaluate(), (error) => error === stop);
   assert.equal(installations, 1);
-  assert.deepEqual(commands, [
+  assert.deepEqual(JSON.parse(JSON.stringify(commands)), [
     ["tar", ["-xzf", path.join(projectRoot, "python.tgz"), "-C", runtimePackageRoot], projectRoot],
+    ["tar", ["-xf", path.join(projectRoot, "node.zip"), "-C",
+      path.join(outputRoot, "stage/build-node")], projectRoot],
     ["fixture-run", ["argument"], projectRoot],
   ]);
   assert.equal(fs.readFileSync(path.join(runtimePackageRoot, "application/resources/fixture.txt"), "utf8"), "resources");
@@ -262,8 +300,15 @@ describe("Windows Python依赖准备的唯一owner", () => {
     });
   }
   for (const mode of ["native", "cross"]) {
-    test(`真实构建入口/${mode}传入目录、模式与原命令runner`, () => {
-      expect(runObservation(observeBuilderDependencyCall, "./build-windows-x64.mjs", "builder-wiring", mode).scenario).toBe(mode);
+    test(mode === "cross"
+      ? "真实构建入口/Linux --cross 在下载与staging前拒绝"
+      : `真实构建入口/${mode}传入目录、模式与原命令runner`, () => {
+      const observation = runObservation(observeBuilderDependencyCall, "./build-windows-x64.mjs", "builder-wiring", mode);
+      if (mode === "cross") {
+        expect(observation).toEqual({ mode, rejectedBeforeWrites: true, downloads: 0, installations: 0, commands: 0 });
+      } else {
+        expect(observation.scenario).toBe(mode);
+      }
     });
   }
 });

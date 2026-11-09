@@ -98,6 +98,20 @@ message PluginPackageManifest {
   optional string description = 5;
   int32 extension_contract_version = 6;
   repeated ServicePluginManifest plugins = 7;
+  PluginPackageTarget target = 8;
+}
+
+message PluginRuntimeTarget {
+  string version = 1;
+  string abi = 2;
+}
+
+message PluginPackageTarget {
+  string os = 1;
+  string architecture = 2;
+  string system_baseline = 3;
+  PluginRuntimeTarget node = 4;
+  PluginRuntimeTarget python = 5;
 }
 
 message PluginBinding {

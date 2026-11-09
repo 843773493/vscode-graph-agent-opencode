@@ -3,7 +3,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -12,7 +11,6 @@ import { spawnSync } from "node:child_process";
 
 import {
   BOXTEAM_VERSION,
-  PLUGIN_INSTALLATION_TOOLS,
   NODE_RUNTIME_WINDOWS_X64,
   NODE_RUNTIME_DEPENDENCIES,
   PYTHON_RUNTIME_WINDOWS_X64,
@@ -31,6 +29,7 @@ import {
 } from "./pinned-archive-download.mjs";
 import { copyApplicationSources } from "./application-sources.mjs";
 import { packDeveloperTools } from "../../scripts/plugins/pack-developer-tools.mjs";
+import { packMcpStdio } from "../../scripts/plugins/pack-mcp-stdio.mjs";
 import {
   beginRuntimeBuild,
   publishRuntimeBuildResult,
@@ -104,7 +103,7 @@ function precompilePythonBytecode(pythonExecutable, applicationRoot) {
   run(pythonExecutable, [...compileArguments, ...sourceRoots]);
 }
 
-function installNodeDependencies(applicationRoot) {
+function installNodeDependencies(applicationRoot, nodeExecutable) {
   cpSync(
     path.join(projectRoot, "packaging", "runtime", "node-package.json"),
     path.join(applicationRoot, "package.json"),
@@ -123,7 +122,7 @@ function installNodeDependencies(applicationRoot) {
   });
   if (!crossBuild) {
     // Windows 原生构建只运行受控 node-gyp，不允许任何依赖安装 hook。
-    run(process.env.BOXTEAM_NODE_BIN ?? "node", [path.join(applicationRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
+    run(nodeExecutable, [path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
       cwd: path.join(applicationRoot, "node_modules/node-pty"),
     });
   }
@@ -219,6 +218,7 @@ function writeRuntimeMetadata({
   chromiumExecutable,
   chromiumExecutableRelative,
   distribution = "npm",
+  // TODO: npm runtime 仍使用 Launcher Node；源码外交付前须像 standalone 一样携带固定目标 Node。
   nodeSource = "launcher",
   nodeExecutable = null,
   nodeRuntime = null,
@@ -230,11 +230,6 @@ function writeRuntimeMetadata({
     // npm pack 会排除包内符号链接，因此必须指向实际解释器文件。
     python_executable: "python/python.exe",
     application_root: "application",
-    installation_tools: {
-      bun_executable: "application/node_modules/@oven/bun-windows-x64/bin/bun.exe",
-      uv_executable: "python/Scripts/uv.exe",
-      node_gyp_entrypoint: "application/node_modules/node-gyp/bin/node-gyp.js",
-    },
     config_resources: {
       gateway_inline: "application/configs/gateway_inline.jsonc",
       gateway_schema: "application/configs/gateway_schema.jsonc",
@@ -322,43 +317,21 @@ function writeStandaloneLauncherScripts(packageRoot) {
   );
 }
 
-function stageStandalonePackage(nodeArchive) {
+function stageStandalonePackage(nodeExecutable) {
   const packageRoot = path.join(standaloneStageRoot, standaloneDirectoryName);
   const runtimeRoot = path.join(packageRoot, "runtime");
   const launcherRoot = path.join(packageRoot, "launcher");
-  const nodeExtractRoot = path.join(standaloneStageRoot, "node-extract");
   const standaloneArchive = path.join(
     standaloneRoot,
     `${standaloneDirectoryName}.zip`,
   );
   rmSync(packageRoot, { recursive: true, force: true });
-  rmSync(nodeExtractRoot, { recursive: true, force: true });
   rmSync(standaloneArchive, { force: true });
   mkdirSync(standaloneRoot, { recursive: true });
-  mkdirSync(nodeExtractRoot, { recursive: true });
   cpSync(runtimePackageRoot, runtimeRoot, { recursive: true });
-  if (crossBuild) {
-    run("unzip", ["-q", nodeArchive, "-d", nodeExtractRoot]);
-  } else {
-    run("tar", ["-xf", nodeArchive, "-C", nodeExtractRoot]);
-  }
-  const [nodeDirectory] = readdirSync(nodeExtractRoot, {
-    withFileTypes: true,
-  }).filter((entry) => entry.isDirectory());
-  if (!nodeDirectory) {
-    throw new Error(`Windows Node 压缩包缺少顶层目录: ${nodeArchive}`);
-  }
-  const bundledNodeSource = path.join(
-    nodeExtractRoot,
-    nodeDirectory.name,
-    "node.exe",
-  );
-  if (!existsSync(bundledNodeSource)) {
-    throw new Error(`Windows Node 压缩包缺少 node.exe: ${nodeArchive}`);
-  }
   const bundledNodeRoot = path.join(runtimeRoot, "node");
   mkdirSync(bundledNodeRoot, { recursive: true });
-  cpSync(bundledNodeSource, path.join(bundledNodeRoot, "node.exe"));
+  cpSync(nodeExecutable, path.join(bundledNodeRoot, "node.exe"));
 
   const npmManifest = JSON.parse(
     readFileSync(path.join(runtimePackageRoot, "runtime-manifest.json"), "utf8"),
@@ -454,9 +427,7 @@ function buildWindowsInstaller(packageRoot) {
 async function main() {
   const nativeWindowsBuild =
     process.platform === "win32" && process.arch === "x64" && !crossBuild;
-  const linuxCrossBuild =
-    process.platform === "linux" && process.arch === "x64" && crossBuild;
-  if (!nativeWindowsBuild && !linuxCrossBuild) {
+  if (!nativeWindowsBuild) {
     throw new Error(
       `windows-x64 构建器不支持当前模式: host=${process.platform}-${process.arch} cross=${String(crossBuild)}`,
     );
@@ -489,11 +460,25 @@ async function main() {
   if (!existsSync(pythonExecutable)) {
     throw new Error(`解压后缺少 Windows Python: ${pythonExecutable}`);
   }
+  const nodeExtractRoot = path.join(stageRoot, "build-node");
+  mkdirSync(nodeExtractRoot, { recursive: true });
+  if (crossBuild) {
+    run("unzip", ["-q", nodeArchive, "-d", nodeExtractRoot]);
+  } else {
+    run("tar", ["-xf", nodeArchive, "-C", nodeExtractRoot]);
+  }
+  const nodeExecutable = path.join(
+    nodeExtractRoot,
+    `node-v${NODE_RUNTIME_WINDOWS_X64.version}-win-x64`,
+    "node.exe",
+  );
+  if (!existsSync(nodeExecutable)) {
+    throw new Error(`Windows Node 压缩包缺少 node.exe: ${nodeArchive}`);
+  }
 
   const applicationRoot = path.join(runtimePackageRoot, "application");
   mkdirSync(applicationRoot, { recursive: true });
   copyApplicationSources(projectRoot, applicationRoot);
-  await packDeveloperTools(projectRoot, path.join(applicationRoot, "resources/plugins/developer-tools.zip"));
   installWindowsPythonDependencies({
     pythonExecutable, outputRoot, runtimePackageRoot, crossBuild, run,
   });
@@ -502,7 +487,44 @@ async function main() {
   //   在普通 Windows 机器上冷启动可能超过 120 秒，导致 Gateway 等待后端就绪超时退出。
   // - 这里提前用 compileall 生成字节码缓存并打进安装包，显著缩短用户首次启动时间。
   precompilePythonBytecode(pythonExecutable, applicationRoot);
-  installNodeDependencies(applicationRoot);
+  const bunExecutable = Bun.which("bun");
+  const uvExecutable = Bun.which("uv");
+  if (!bunExecutable || !uvExecutable) {
+    throw new Error("发布构建需要明确的 Bun 和 uv 构建工具");
+  }
+  installNodeDependencies(applicationRoot, nodeExecutable);
+  const pluginBuild = {
+    projectRoot,
+    nodeExecutable,
+    bunExecutable,
+    uvExecutable,
+    pythonExecutable,
+    nodeGypEntrypoint: path.join(
+      projectRoot,
+      "node_modules/node-gyp/bin/node-gyp.js",
+    ),
+    target: {
+      os: "windows",
+      architecture: "x64",
+      system_baseline: "windows-10.0.19041",
+      node: {
+        version: NODE_RUNTIME_WINDOWS_X64.version,
+        abi: NODE_RUNTIME_WINDOWS_X64.abi,
+      },
+      python: {
+        version: PYTHON_RUNTIME_WINDOWS_X64.version,
+        abi: "cp312",
+      },
+    },
+  };
+  await packDeveloperTools({
+    ...pluginBuild,
+    output: path.join(applicationRoot, "resources/plugins/developer-tools.zip"),
+  });
+  await packMcpStdio({
+    ...pluginBuild,
+    output: path.join(applicationRoot, "resources/plugins/mcp-stdio.zip"),
+  });
 
   run("bun", ["run", "build"], {
     cwd: path.join(projectRoot, "src", "clients", "workbench"),
@@ -538,7 +560,7 @@ async function main() {
     npmPack(downloader.packageRoot, tarballRoot),
     npmPack(launcherPackageRoot, tarballRoot),
   ];
-  const standaloneArchive = stageStandalonePackage(nodeArchive);
+  const standaloneArchive = stageStandalonePackage(nodeExecutable);
   const installerArchive = buildWindowsInstaller(
     path.join(standaloneStageRoot, standaloneDirectoryName),
   );
