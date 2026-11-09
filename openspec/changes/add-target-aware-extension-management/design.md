@@ -198,6 +198,8 @@ Web／Electron 共用同一 renderer，插件运行在目标 Gateway 所在环�
 
 命令可选 enablement 沿原 Command 的 UI precondition；菜单项 when 只控制该位置的呈现，快捷键的有效条件是命令 precondition 与自身 when 的合取，用户键位覆盖继续沿原解析规则。命令面板、菜单和快捷键使用原可用性处理；程序化命令调用不把 enablement 或菜单可见性当作业务授权，仍核实际目标、业务权限、当前插件／handler 状态及参数。缺省条件表示无额外 UI 条件；已填写但词法／语法非法的表达式必须在发布前拒绝，不将解析失败的 undefined 当作缺省。解析成功后仍核其引用键是否属于产品已公布集合，不能以可解析代表可使用。
 
+首版命令菜单位置公布为 `commandPalette`、`editor/title` 和 `editor/context`；不登记隐式全局命令面板项。可用条件键为 `boxteam.pluginGateway`、`boxteam.pluginWorkspace`、`editorTextFocus`、`editorHasSelection`、`resourceScheme`、`resourceExtname`、`resourceFilename`、`isLinux`、`isWindows`、`isMac`，前两项由产品按发起业务目标填入，包不能自行设置。命令面板只对自有贡献冻结这些已公布的值，原生命令保持原上下文语义。未来扩充位置或键集合须由实际消费者实现并登记，不将原上游所有标识自动视为开放。
+
 平台键位在消费端 Workbench 按客户端 OS／键盘映射解释，保留各平台声明和原用户覆盖；目标 Gateway OS 只决定插件运行兼容性，不能在目标安装／发布时按目标平台裁掉客户端键位。
 
 同一插件绑定 v1 只有一个 runtime，插件内命令处理者及服务共享其生命周期；同包兄弟插件各自运行。纯菜单／快捷键／配置／Skill 插件无需入口。贡献归属同一插件开关及固定范围，不设置另一套贡献 enabled；声明不能推断成跨工作区业务授权。

@@ -11,6 +11,7 @@ import './search/workspaceQuickAccess.js';
 import './automation/contribution.js';
 import './resources/quickAccess.js';
 import './extensions/contribution.js';
+import './extensions/pluginCommands.js';
 import './debug/contribution.js';
 import './managementTarget.js';
 

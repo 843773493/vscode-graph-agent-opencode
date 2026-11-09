@@ -28,6 +28,7 @@ import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './sett
 import { extensionTerminalSourcePaths, transformExtensionTerminal } from './extensions/extensionTerminalTransform.mjs';
 import { extensionDebugSourcePaths, transformExtensionDebug } from './extensions/extensionDebugTransform.mjs';
 import { pluginDebugSourcePaths, transformPluginDebug } from './pluginDebugTransform.mjs';
+import { pluginCommandSourcePaths, transformPluginCommands } from './pluginCommandTransform.mjs';
 import { extensionTasksSourcePaths, transformExtensionTasks } from './extensions/extensionTasksTransform.mjs';
 import { extensionNotebookSourcePaths, transformExtensionNotebookApi, transformExtensionNotebooks } from './extensions/extensionNotebookTransform.mjs';
 
@@ -89,6 +90,7 @@ export const transformedSourcePaths = [...new Set([
   // 带原生进程依赖的入口由下面的 Node 清单及其真实 tsconfig 检查。
   ...extensionDebugSourcePaths.filter(path => !path.includes('/node/')),
   ...pluginDebugSourcePaths,
+  ...pluginCommandSourcePaths,
   ...extensionTasksSourcePaths.filter(path => !path.includes('/node/')),
   ...extensionConfigurationSourcePaths, ...configurationContributionSourcePaths, ...configurationRegistrySourcePaths,
   ...extensionFileEventsSourcePaths,
@@ -138,6 +140,7 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionTerminal(root, path, contents, replaceOnce);
     contents = transformExtensionDebug(root, path, contents, replaceOnce);
     contents = transformPluginDebug(root, path, contents, replaceOnce);
+    contents = transformPluginCommands(root, path, contents, replaceOnce);
     contents = transformExtensionTasks(root, path, contents, replaceOnce);
     contents = transformExtensionNotebookApi(root, path, contents);
     if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
@@ -449,7 +452,7 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
       contents = replaceOnce(contents, '@IContextKeyService private readonly contextKeyService: IContextKeyService',
         '@IContextKeyService private readonly contextKeyService: IContextKeyService,\n@IEditorService private readonly editors: IEditorService');
       const entry = 'private doShowOrPick(value: string, pick: boolean, options?: IQuickAccessOptions): Promise<IQuickPickItem[] | undefined> | void {';
-      contents = replaceOnce(contents, entry, `${entry}\noptions = prepareSearchInvocation(options, this.editors);`);
+      contents = replaceOnce(contents, entry, `${entry}\noptions = prepareSearchInvocation(options, this.editors, this.editors.activeEditorPane?.scopedContextKeyService || this.contextKeyService);`);
       const picker = 'const picker = disposables.add(this.quickInputService.createQuickPick({ useSeparators: true }));';
       contents = replaceOnce(contents, picker, `${picker}\nconst canPickMany = pick && options?.canPickMany === true;\npicker.canSelectMany = canPickMany;`);
       contents = replaceOnce(contents, 'let pickPromise: DeferredPromise<IQuickPickItem[]> | undefined = undefined;',

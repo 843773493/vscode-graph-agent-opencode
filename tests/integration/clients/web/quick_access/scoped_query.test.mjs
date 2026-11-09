@@ -37,28 +37,35 @@ describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
   test('显式转接保留原归属及接收者，新入口独立捕获，不隐式继承旧错误或接受动作', () => {
     const editors = { activeEditor: new m.ThreadInput({ ...owner, sessionId: 'session-a', threadId: 'thread-a', title: 'A', routeId: '' }) };
     const accept = () => {}, additions = [{ label: '原附件' }];
+    let focused = true;
+    const context = { getContextKeyValue: key => key === 'editorTextFocus' ? focused : undefined };
     const initial = m.prepareSearchInvocation({ providerOptions: { handleAccept: accept, additionPicks: additions, includeHelp: true },
-      enabledProviderPrefixes: ['', '?', '%'] }, editors);
+      enabledProviderPrefixes: ['', '?', '%'] }, editors, context);
+    focused = false;
     const other = { ...owner, workspaceId: 'workspace-b' };
     editors.activeEditor = new m.ThreadInput({ ...other, sessionId: 'session-b', threadId: 'thread-b', title: 'B', routeId: '' });
     const transfer = m.prepareSearchInvocation({ ...initial, preserveValue: true,
-      providerOptions: { ...initial.providerOptions, includeHelp: false } }, editors);
+      providerOptions: { ...initial.providerOptions, includeHelp: false } }, editors, context);
     expect(transfer.providerOptions.searchOwner).toEqual(owner);
+    expect(transfer.providerOptions.pluginCommandOwner).toEqual(owner);
+    expect(new Map(transfer.providerOptions.pluginCommandContext).get('editorTextFocus')).toBe(true);
     expect(transfer.providerOptions.handleAccept).toBe(accept);
     expect(transfer.providerOptions.additionPicks).toBe(additions);
     expect(transfer.providerOptions.includeHelp).toBe(false);
     expect(transfer.enabledProviderPrefixes).toEqual(['', '?', '%']);
-    const fresh = m.prepareSearchInvocation(undefined, editors);
+    const fresh = m.prepareSearchInvocation(undefined, editors, context);
     expect(fresh.providerOptions.searchOwner).toEqual(other);
+    expect(fresh.providerOptions.pluginCommandOwner).toEqual(other);
+    expect(new Map(fresh.providerOptions.pluginCommandContext).get('editorTextFocus')).toBe(false);
     expect(fresh.providerOptions.handleAccept).toBeUndefined();
     expect(fresh.enabledProviderPrefixes).toBeUndefined();
     const failed = { providerOptions: { searchOwnerError: '发起身份已失效' } };
-    const continued = m.prepareSearchInvocation(failed, editors);
+    const continued = m.prepareSearchInvocation(failed, editors, context);
     expect(continued.providerOptions.searchOwnerError).toBe('发起身份已失效');
     expect(continued.providerOptions.searchOwner).toBeUndefined();
     expect(fresh.providerOptions.searchOwnerError).toBeUndefined();
     const selected = [owner, other];
-    const multi = m.prepareSearchInvocation({ providerOptions: { searchOwners: selected } }, { activeEditor: undefined });
+    const multi = m.prepareSearchInvocation({ providerOptions: { searchOwners: selected } }, { activeEditor: undefined }, context);
     expect(multi.providerOptions.searchOwners).toBe(selected);
     expect(multi.providerOptions.searchOwner).toBeUndefined();
     expect(multi.providerOptions.searchOwnerError).toBeUndefined();

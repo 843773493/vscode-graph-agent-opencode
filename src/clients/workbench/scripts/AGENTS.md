@@ -59,3 +59,5 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 原生VSIX的`keepExisting=true`沿原scanner只复用有效且ExtensionKey完全一致的已发布目录；候选先预检，原扫描对象通过同次context交给依赖规划和原task，依赖与正文都消费实际复用manifest。`reused`只来自原提取／准备结果，不按目录存在、hash或第二库存猜测；扫描失败保留原错误和目录，成功扫描前不得解除`.obsolete`。false或未指定仍沿原替换语义，原Gallery的复用扫描失败也不得隐式删除重提取；这不代表物理清理或活宿主引用保护已完成。
 
 `fileDialogTransform.mjs` 只沿原 FileService／SimpleFileDialog 传递工作区目录错误；真实 stat 缺失仍用原 FILE_NOT_FOUND 候选合同，readdir 拒绝保留原原因，不添加探针、目录缓存或另一套选择器。所有原更新入口回到同一对话框终结器；取消只释放当前更新，失败先终结再清 busy，避免排队接受消费旧项。确认 prompt 由原对话框释放，关闭后迟到验证不能复活控件或开始创建目录；非工作区 scheme 和保存新文件候选保持原合同。
+
+`pluginCommandTransform.mjs` 将自有命令接入原 CommandService、菜单动作和 Quick Access 的冻结参数，并为原 KeybindingsRegistry 提供可释放的单条登记及 resolver 失效通知；保留键盘布局和用户覆盖。不得按目标调用全量 `setExtensionKeybindings` 或复制原解析器，不修改固定上游。新增接缝纳入实际转换源码类型检查。

@@ -31,3 +31,5 @@
 运行视图的目标发现消费明确根及原生 Gateway 的两项管理能力，多根最终核完整有序集合，单根不重复发现。零根窗口只从缓存的页面入口 Gateway 身份发现唯一安装域并创建空 Web 视图，不读取管理标题选择或请求 Node 宿主；合法空目录明确诊断组件未配置，故障不能转换为空目录。视图仍保存在原 running-location owner；只有安装权限不读取宿主运行态或启动宿主，宿主初始化可只读原 profile 描述，不授安装写入权限。
 
 自有包管理由 `servicePluginManagement.ts` 直接消费目标 Gateway 库存及原配置来源；Gateway、明确工作区与新建默认值各改原 owner 的 CAS 来源，不伪造 VSIX 或把 enabled 当 ready。工作区期望从原配置 owner 读取，异步交接状态另显；后台刷新以当前目标及代际结算。旧原生宿主模块尚在后续纵向迁移范围，不恢复已删除的 `installation.ts` 或旧安装命令。
+
+自有命令由 `pluginCommandRegistry.ts` 持有原 Command／Menu／Keybinding 句柄，同逻辑 ID 只注册一个 dispatcher；完整快照先预校验再替换对应绑定，旧资格不得改投。`pluginCommands.ts` 负责窗口订阅与交互，传输归 Web `api/pluginCommands.ts`。命令面板在原 Quick Access 聚焦前冻结目标和已公布上下文，菜单保留自身冻结参数；程序化调用在首次 await 前捕获业务 owner。普通调用不经过旧宿主激活或重新发现；断连释放本目标投影，窗口关闭不修改 enabled。

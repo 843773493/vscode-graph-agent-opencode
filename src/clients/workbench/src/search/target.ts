@@ -13,33 +13,43 @@ import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { sourceDocumentSource } from '../sourceDocuments.js';
 import type { SearchScope } from './scope.js';
+import { pluginCommandContextKeys } from '../extensions/pluginCommandRegistry.js';
+import type { IContextKeyService } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import type { AnythingQuickAccessProviderRunOptions, IQuickAccessOptions } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 
 /** 同一次模式转接保留发起归属，不重新采样后来获得焦点的编辑器。 */
 export interface SearchInvocationOptions extends AnythingQuickAccessProviderRunOptions {
   searchOwner?: WorkspaceOwner;
+  pluginCommandOwner?: { gatewayId: string; workspaceId?: string };
+  pluginCommandContext?: readonly [string, unknown][];
   searchOwnerError?: string;
   /** 用户明确选择的查询集合；发起 owner 仍独立保留。 */
   searchOwners?: readonly WorkspaceOwner[];
 }
 
 /** 原 Controller 的同次模式转接传递调用参数；新入口在浮层聚焦前捕获归属。 */
-export function prepareSearchInvocation(options: IQuickAccessOptions | undefined, editors: IEditorService): IQuickAccessOptions {
+export function prepareSearchInvocation(options: IQuickAccessOptions | undefined, editors: IEditorService, context: IContextKeyService): IQuickAccessOptions {
   const supplied = options?.providerOptions as SearchInvocationOptions | undefined;
   const providerOptions: SearchInvocationOptions = { ...supplied };
   if (!('fileSearchDelegate' in providerOptions) && !providerOptions.searchOwners && !providerOptions.searchOwner && !providerOptions.searchOwnerError) {
     try { providerOptions.searchOwner = captureSearchOwner(editors); }
     catch (error) { providerOptions.searchOwnerError = String(error); }
   }
+  if (!providerOptions.pluginCommandOwner) {
+    const snapshot = workspaceContext.getSnapshot();
+    providerOptions.pluginCommandOwner = providerOptions.searchOwner
+      ?? (!editors.activeEditor && !snapshot.activeId && !snapshot.loading && !snapshot.error && snapshot.gatewayId
+        ? { gatewayId: snapshot.gatewayId } : undefined);
+  }
+  providerOptions.pluginCommandContext ??= [...pluginCommandContextKeys].map(key => [key, context.getContextKeyValue(key)]);
   return { ...options, providerOptions };
 }
 
 /** 必须在 Quick Input 获得焦点前同步读取；异步查根期间不重新采样活动目标。 */
-export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {
-  const input = editors.activeEditor;
+export function captureSearchOwner(editors: IEditorService, input: IEditorService['activeEditor'] | null = editors.activeEditor): WorkspaceOwner {
   if (input instanceof AutomationInput) return { ...input.owner };
   if (input instanceof ThreadInput) return { gatewayId: input.owner.gatewayId, workspaceId: input.owner.workspaceId };
-  const resource = EditorResourceAccessor.getCanonicalUri(input, { supportSideBySide: SideBySideEditor.PRIMARY });
+  const resource = EditorResourceAccessor.getCanonicalUri(input ?? undefined, { supportSideBySide: SideBySideEditor.PRIMARY });
   if (resource?.scheme === 'boxteam-file') {
     const { gatewayId, workspaceId } = workspaceFileSource(resource);
     return { gatewayId, workspaceId };
