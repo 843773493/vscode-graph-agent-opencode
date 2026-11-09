@@ -84,9 +84,22 @@ type GatewayDiagnosticProcessDTO = Omit<OptionalFields<GatewayProtocol.GatewayDi
   state: GatewayDiagnosticLoggingStateDTO | null;
   error: string | null;
 };
+type RuntimeProcessResourcesDTO = NullableOptionalFields<
+  OptionalFields<GatewayProtocol.RuntimeProcessResources>,
+  "rss_bytes" | "cpu_seconds" | "error"
+>;
+type RuntimeObservationStatusDTO = Omit<
+  NullableOptionalFields<
+    OptionalFields<GatewayProtocol.RuntimeObservationStatus>,
+    "requests" | "collection_error"
+  >,
+  "processes"
+> & {
+  processes: RuntimeProcessResourcesDTO[];
+};
 export type GatewayDiagnosticsDTO = Omit<OptionalFields<GatewayProtocol.GatewayDiagnosticsDTO>, "processes" | "observation"> & {
   processes: GatewayDiagnosticProcessDTO[];
-  observation: GatewayProtocol.RuntimeObservationStatus | null;
+  observation: RuntimeObservationStatusDTO | null;
 };
 export type GatewayDirectoryEntryDTO = OptionalFields<GatewayProtocol.GatewayDirectoryEntryDTO>;
 export type GatewayDirectoryListDTO = OptionalFields<GatewayProtocol.GatewayDirectoryListDTO>;
