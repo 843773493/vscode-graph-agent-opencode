@@ -1,20 +1,17 @@
 import { join } from 'node:path';
-import ts from 'typescript';
 
 export const extensionBrowserSourcePaths = ['src/vs/workbench/services/extensions/browser/extensionService.ts',
-  'src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts',
   'src/vs/workbench/services/extensions/browser/webWorkerExtensionHost.ts',
   'src/vs/workbench/services/extensions/common/extensionHostProtocol.ts'];
 
 export function transformExtensionBrowser(root, path, source, replaceOnce) {
-  if (path === join(root, 'upstream', extensionBrowserSourcePaths[2])) {
+  if (path === join(root, 'upstream', extensionBrowserSourcePaths[1])) {
     let contents = replaceOnce(source, 'private readonly _onDidExit', 'protected readonly _onDidExit');
     return replaceOnce(contents, 'private async _createExtHostInitData()', 'protected async _createExtHostInitData()');
   }
-  if (path === join(root, 'upstream', extensionBrowserSourcePaths[3])) {
+  if (path === join(root, 'upstream', extensionBrowserSourcePaths[2])) {
     return replaceOnce(source, 'export interface IExtensionHostInitData {', 'export interface IExtensionHostInitData {\n  readonly isTargetExtensionHost?: boolean;');
   }
-  if (path === join(root, 'upstream', extensionBrowserSourcePaths[1])) return transformInstallationActions(root, path, source, replaceOnce);
   if (path !== join(root, 'upstream', extensionBrowserSourcePaths[0])) return source;
   let contents = `import { scanTargetExtensions, reopenTargetWebHost } from ${JSON.stringify(join(root, 'src/extensions/inventory.js'))};
 import { browserGatewayId } from ${JSON.stringify(join(root, '../web/src/hooks/settings/browserUiSettings.js'))};
@@ -135,42 +132,4 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';\n` + sou
   contents = contents.replace(/^import \{ IRemoteExplorerService \}[^\n]+\n/m, '');
   contents = contents.replace(/^\t\t@IWorkspaceTrustManagementService[^\n]+\n/m, '');
   return contents.replace(/^\t\t@IRemoteExplorerService[^\n]+\n/m, '');
-}
-
-function transformInstallationActions(root, path, source, replaceOnce) {
-  const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-  const actions = new Map();
-  function visit(node) {
-    if (ts.isCallExpression(node) && node.expression.getText(parsed) === 'this.registerExtensionAction') {
-      const options = node.arguments[0];
-      if (options && ts.isObjectLiteralExpression(options)) {
-        const fields = new Map(options.properties.filter(ts.isPropertyAssignment).map(field => [field.name.getText(parsed), field.initializer]));
-        const id = fields.get('id')?.getText(parsed);
-        if (id === 'SELECT_INSTALL_VSIX_EXTENSION_COMMAND_ID' || id === 'INSTALL_EXTENSION_FROM_VSIX_COMMAND_ID') {
-          if (actions.has(id) || !fields.has('run') || !fields.has('menu')) throw new Error('VSIX 原安装 action 锚点不唯一或不完整');
-          actions.set(id, fields);
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(parsed);
-  if (actions.size !== 2) throw new Error('未找到两条原 VSIX 安装 action');
-  let contents = source;
-  for (const [id, fields] of actions) {
-    const select = id === 'SELECT_INSTALL_VSIX_EXTENSION_COMMAND_ID';
-    contents = replaceOnce(contents, fields.get('run').getText(parsed), select
-      ? '(accessor: ServicesAccessor) => installTargetVsix(accessor, { select: true })'
-      : '(accessor: ServicesAccessor, resources: URI[] | URI) => installTargetVsix(accessor, { resources })');
-    contents = replaceOnce(contents, fields.get('menu').getText(parsed), select ? `[
-      { id: MenuId.CommandPalette },
-      { id: MenuId.ViewContainerTitle, when: ContextKeyExpr.equals('viewContainer', VIEWLET_ID), group: '3_install', order: 1 }
-    ]` : `[{ id: MenuId.ExplorerContext, group: 'extensions',
-      when: ContextKeyExpr.and(ResourceContextKey.Extension.isEqualTo('.vsix'), ResourceContextKey.Scheme.isEqualTo('boxteam-file')) }]`);
-  }
-  contents = replaceOnce(contents, "import { mnemonicButtonLabel } from '../../../../base/common/labels.js';\n", '');
-  contents = replaceOnce(contents, "import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';\n", '');
-  contents = replaceOnce(contents, "import { IHostService } from '../../../services/host/browser/host.js';\n", '');
-  contents = replaceOnce(contents, 'ExtensionEditorTab, ExtensionRuntimeActionType,', 'ExtensionEditorTab,');
-  return `import { installTargetVsix } from ${JSON.stringify(join(root, 'src/extensions/installation.js'))};\n` + contents;
 }

@@ -1,0 +1,170 @@
+import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
+import { chromium } from 'playwright';
+import { expect } from 'playwright/test';
+import { parse as parseJsonc } from 'jsonc-parser';
+
+const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
+const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [], installed: false, uninstalled: false };
+let browser;
+let page;
+try {
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
+  page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  page.setDefaultTimeout(15_000);
+  page.on('pageerror', error => result.pageErrors.push(error.message));
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (['http:', 'https:'].includes(url.protocol) && url.origin !== new URL(input.baseUrl).origin) result.externalRequests.push(request.url());
+  });
+  page.on('response', async response => {
+    const request = response.request();
+    const url = new URL(response.url());
+    if (request.method() !== 'PUT' || !url.pathname.includes('/config/sources/')) return;
+    const headers = await request.allHeaders();
+    result.configWrites.push({ path: url.pathname, sourceKey: url.pathname.split('/').at(-1), status: response.status(),
+      gatewayId: headers['x-boxteam-target-gateway-id'] ?? null, workspaceId: headers['x-boxteam-workspace-id'] ?? null,
+      body: request.postData() });
+  });
+  await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  const api = (path, options = {}) => page.evaluate(async ({ path, options }) => {
+    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+    const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
+      'Content-Type': 'application/json', ...(options.headers ?? {}) },
+      body: options.body && JSON.stringify(options.body) });
+    const envelope = await response.json();
+    if (!response.ok || envelope.code !== 0 || envelope.request_id !== response.headers.get('X-Request-ID')) {
+      throw new Error(`${path}: ${response.status} ${JSON.stringify(envelope)}`);
+    }
+    return envelope.data;
+  }, { path, options });
+  result.initialization = [];
+  for (const path of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) {
+    result.initialization.push({ path, data: await api(path) });
+  }
+  const active = result.initialization[1].data.active_workspace;
+  assert(active?.workspace_id && active.gateway_id === result.initialization[0].data.gateway_id);
+  const targets = result.initialization[1].data.items.filter(item => item.workspace_id === active.workspace_id && item.gateway_id === active.gateway_id);
+  assert.equal(targets.length, 1);
+  const workspaceName = targets[0].name;
+  result.owner = { gatewayId: active.gateway_id, workspaceId: active.workspace_id };
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
+  const view = page.locator('.service-plugin-packages-view');
+  await expect(view).toBeVisible();
+
+  const quick = page.locator('.quick-input-widget');
+  const pick = async label => {
+    await expect(quick).toBeVisible();
+    await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click();
+  };
+  const inputQuick = async value => {
+    await expect(quick).toBeVisible();
+    const field = quick.locator('input').first();
+    await field.fill(value);
+    await field.press('Enter');
+  };
+  const installButton = view.getByRole('button', { name: '安装插件包', exact: true });
+  await installButton.click();
+  await pick('ZIP 文件');
+  await inputQuick(input.packagePath);
+  await expect(view).toContainText('ui.preference-probe@1.0.0', { timeout: 30_000 });
+  const search = view.getByRole('searchbox', { name: '搜索已安装插件包' });
+  await search.fill('不存在的插件包');
+  await expect(view.locator('.service-plugin-package')).toBeHidden();
+  await search.fill('ui.preference-probe');
+  await expect(view.locator('.service-plugin-package')).toBeVisible();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  await expect(view.locator('.service-plugin-package')).toBeVisible();
+  await expect(search).toHaveValue('ui.preference-probe');
+  await search.clear();
+  result.installed = true;
+  result.phase = 'gateway-binding';
+
+  const openPlugin = async name => {
+    await view.getByRole('button', { name, exact: true }).click();
+    await expect(view.locator('.service-plugin-details')).toBeVisible();
+  };
+  const enable = async (name, sourceKey, confirmLabel) => {
+    await openPlugin(name);
+    const toggle = view.locator('.service-plugin-details button').first();
+    await expect(toggle).toHaveText('启用此范围');
+    await toggle.click();
+    await pick(sourceKey);
+    await pick(confirmLabel);
+    await expect(quick).not.toBeVisible();
+    await expect(view.locator('.service-plugin-details button').first()).toHaveText('停用此范围');
+  };
+  const unbind = async (name, sourceKey, confirmLabel) => {
+    await openPlugin(name);
+    await view.locator('.service-plugin-details button').filter({ hasText: '解除此范围绑定' }).click();
+    await pick(sourceKey);
+    await pick(confirmLabel);
+    await expect(quick).not.toBeVisible();
+    await expect(view.getByRole('button', { name: '解除此范围绑定', exact: true })).toHaveCount(0);
+  };
+  await enable('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  result.configOwners.push('gateway');
+
+  await view.getByLabel('插件管理范围').selectOption('workspace');
+  await pick(workspaceName);
+  await expect(view).toContainText('工作区偏好 · workspace-preference');
+  await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
+  result.configOwners.push('workspace');
+
+  await view.getByLabel('插件管理范围').selectOption('defaults');
+  await expect(view).toContainText('工作区偏好 · workspace-preference');
+  await enable('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  result.configOwners.push('defaults');
+  assert.deepEqual(new Set(result.configOwners), new Set(['gateway', 'workspace', 'defaults']));
+
+  result.phase = 'unbind-and-uninstall';
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  await expect(view).toContainText('Gateway 偏好 · gateway-preference');
+  await unbind('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  await view.getByLabel('插件管理范围').selectOption('workspace');
+  await pick(workspaceName);
+  await unbind('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
+  await view.getByLabel('插件管理范围').selectOption('defaults');
+  await unbind('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  const packageRow = view.locator('section').filter({ hasText: 'ui.preference-probe@1.0.0' }).first();
+  await packageRow.getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await pick('卸载整包');
+  await expect(view).toContainText('尚无插件包', { timeout: 30_000 });
+  result.uninstalled = true;
+  result.phase = 'mcp-search-entry';
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.search', '@mcp'));
+  const mcpView = page.getByRole('button', { name: 'MCP Servers - MCP gallery not configured Section', exact: true });
+  await expect(mcpView).toBeVisible();
+  await expect(page.getByText("The MCP gallery is not configured. Configure 'chat.mcp.gallery.serviceUrl'.", { exact: true }).first()).toBeVisible();
+  await expect(view.getByLabel('插件管理范围')).toBeHidden();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.installedExtensions'));
+  await expect(view.getByLabel('插件管理范围')).toBeVisible();
+  result.mcpSearchAvailable = true;
+  result.phase = 'complete';
+  assert(result.configWrites.some(item => item.path === '/api/gateway/config/sources/gateway_mutable_override'
+    && item.body?.includes('workspace_defaults')));
+  assert(result.configWrites.some(item => item.path === '/api/gateway/config/sources/gateway_mutable_override'
+    && item.body?.includes('gateway-preference')));
+  assert(result.configWrites.some(item => item.path === '/api/v1/config/sources/workspace_root_mutable_override'
+    && item.workspaceId === active.workspace_id && item.body?.includes('workspace-preference')));
+  for (const write of result.configWrites) {
+    const intent = JSON.parse(write.body);
+    const source = parseJsonc(intent.jsonc);
+    if (write.workspaceId) assert(source.plugins.runtime.entries.every(binding => !Object.hasOwn(binding, 'workspace_id')));
+  }
+  assert.deepEqual(result.externalRequests, []);
+  await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
+} catch (error) {
+  result.failure = error instanceof Error ? error.stack : String(error);
+  if (page) {
+    result.startupError = await page.locator('#startup-error').textContent().catch(() => null);
+    try { await page.screenshot({ path: `${input.artifacts}/plugin-management-ui-failure.png` }); }
+    catch (diagnosticError) { result.screenshotError = String(diagnosticError); }
+  }
+  await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
+  throw error;
+} finally {
+  await browser?.close();
+}

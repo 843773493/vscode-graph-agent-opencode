@@ -210,15 +210,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
       controller.signal.throwIfAborted();
       if (!picked) return;
       let target: ManagementTarget = { ...picked.target, gateway_connection_id: picked.target.gateway_connection_id ?? undefined };
-      if (scope === 'extensions') {
-        const domains = await extensionDomains(target, controller.signal);
-        const domain = domains.length === 1 ? domains[0] : (await quickInput.pick(domains.map(domain => ({
-          label: domain.backend_id, description: target.name, target: domain,
-        })), { title: `选择扩展安装域 · ${target.name}`, placeHolder: '该选择用于后续安装、更新和卸载' }, cancellation.token))?.target;
-        controller.signal.throwIfAborted();
-        if (!domain) return;
-        target = { ...target, backend_id: domain.backend_id };
-      } else if (scope === 'mcp') {
+      if (scope === 'mcp') {
         const domains = await mcpDomains(target, controller.signal);
         const domain = domains.length === 1 ? domains[0] : (await quickInput.pick(domains.map(domain => ({
           label: domain.backend_id, description: target.name, target: domain,
@@ -226,7 +218,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
         controller.signal.throwIfAborted();
         if (!domain) return;
         target = { ...target, backend_id: domain.backend_id };
-      } else {
+      } else if (scope === 'settings') {
         const directory = await gateway.request<ExtensionConfigurationTargetListDTO>('/api/gateway/extension-configurations/targets', {
           method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
             gateway_connection_id: target.gateway_connection_id }), signal: controller.signal,

@@ -14,7 +14,9 @@
 
 原窗口 Registry 是唯一扩展事实源；Host 集合由其派生且保持公开 ID 唯一。静态贡献候选必须先验证后启动 Host，主线程回调保留原代际准入。每 Backend 当前只有一个明确 default view，集合变更要求 reload；必要文档过滤不代表全部扩展 API 已完成隔离。测试及产物遵守根 AGENTS。
 
-VSIX 原命令 ID、菜单及拖放调用保持；只精确替换两条原 action 的安装处理与菜单门槛，不保留单 local／remote 安装回退。目标视图 getter 直接投影原运行位置 owner 的完整视图，不能另存安装目标；其中只有宿主管理获准的视图产生 Node running location，权限来自同一次完整目标准入，不由扩展是否存在猜测。转换源码纳入同一真实类型检查和构建。
+插件管理沿原 Extensions 容器接自有包模型；原 contribution 只保留必要内置单例、容器、ext 快速访问及自有搜索／安装／刷新动作，不注册旧 VSIX、Gallery、筛选／排序及批量启停命令。MCP／AgentPlugins 的独立视图仍使用原容器与查询 context，不得把这些查询当普通包名。运行视图仍由原 running-location owner 投影，不以管理标题选择推断宿主目标。转换源码纳入同一真实类型检查和构建。
+
+欢迎页插件步骤只导航到自有包管理；编辑器教程保留真实内置能力、设置与用户 snippets，不保留已退役市场的命令、截图或能力承诺。仍通过原欢迎页数据和教程内容 owner 转换，不修改固定上游原件。
 
 Memento 的目标与稳定视图身份在原 ExtensionStorageService 内生成，MainThreadStorage 读写和通知使用同一身份；窗口内置 Web 保留原 profile 行为。目标 Node 文件型存储位置沿认证初始化映射；目标 Web 使用浏览器存储的明确目标/profile/view 命名空间，不把它声称为目标磁盘。目标扩展的跨设备 setKeysForSync 未迁齐消费者时从原公开 API 明确拒绝，不能写无人消费的声明。
 

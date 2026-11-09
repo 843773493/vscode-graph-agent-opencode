@@ -11,7 +11,13 @@ import { PagedModel } from '../upstream/src/vs/base/common/paging.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
-const sources = new Map(await Promise.all(mcpSourcePaths.map(async path => {
+const sources = new Map(await Promise.all([...mcpSourcePaths,
+  'src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts',
+  'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
+  'src/vs/workbench/contrib/welcomeWalkthrough/browser/editor/vs_code_editor_walkthrough.ts',
+  'src/vs/workbench/browser/parts/editor/editorStatus.ts',
+  'src/vs/workbench/contrib/extensions/browser/extensionsQuickAccess.ts',
+].map(async path => {
   const full = join(root, 'upstream', path);
   const transformed = await transform(full, await readFile(full, 'utf8'));
   return [path.split('/').at(-1)!, ts.createSourceFile(full, transformed, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)] as const;
@@ -27,6 +33,162 @@ function methodBody(name: string, kind: string, method: string) {
   if (!node || !ts.isMethodDeclaration(node) || !node.body) throw new Error(`原方法缺失：${kind}.${method}`);
   return node.body.getText();
 }
+
+test('实际插件管理注册只提供自有入口，搜索和安装回执仍沿原服务', async () => {
+  const parsed = source('extensions.contribution.ts');
+  const actions = parsed.statements.filter(node => !ts.isImportDeclaration(node) && !ts.isVariableStatement(node)
+    && !(ts.isExpressionStatement(node) && (node.expression.getText().startsWith('registerSingleton(')
+      || node.expression.getText().startsWith('Registry.'))));
+  const commands = new Map<string, (accessor: object, query?: string) => unknown>();
+  const workbench = Symbol('workbench'), views = Symbol('views');
+  const calls: unknown[] = [];
+  let accessorValid = true;
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(actions.map(node => node.getText()).join('\n'));
+  new Function('CommandsRegistry', 'Action2', 'registerAction2', 'IExtensionsWorkbenchService', 'IViewsService',
+    'localize2', 'refreshIcon', 'MenuId', 'ContextKeyExpr', 'VIEWLET_ID', 'installServicePluginPackage', javascript)(
+    { registerCommand(id: string, handler: (accessor: object, query?: string) => unknown) { commands.set(id, handler); } },
+    class { constructor(readonly options: { id: string }) {} },
+    (Action: new () => { options: { id: string }; run(accessor: object): unknown }) => {
+      const action = new Action(); commands.set(action.options.id, accessor => action.run(accessor));
+    }, workbench, views, (_key: string, value: string) => ({ value, original: value }), {}, { ViewContainerTitle: 'title' },
+    { equals: () => ({}) }, 'extensions', async () => { calls.push('install'); accessorValid = false; },
+  );
+  expect([...commands.keys()].sort()).toEqual([
+    'boxteam.plugins.installPackage', 'workbench.extensions.action.clearExtensionsSearchResults',
+    'workbench.extensions.action.focusExtensionsView', 'workbench.extensions.action.installedExtensions',
+    'workbench.extensions.action.refreshExtension', 'workbench.extensions.search',
+  ].sort());
+  const failure = new Error('原刷新失败');
+  let rejectRefresh = false;
+  const accessor = { get(id: symbol) {
+    if (!accessorValid) throw new Error('ServicesAccessor 已随同步命令调用结束');
+    if (id === workbench) return { openSearch(query: string) { calls.push(query); } };
+    expect(id).toBe(views);
+    return { getActiveViewPaneContainerWithId: () => ({ async refresh() { calls.push('refresh'); if (rejectRefresh) throw failure; } }) };
+  } };
+  await commands.get('workbench.extensions.search')!(accessor, '@mcp');
+  await commands.get('workbench.extensions.action.installedExtensions')!(accessor);
+  await commands.get('boxteam.plugins.installPackage')!(accessor);
+  expect(calls).toEqual(['@mcp', '', 'install', 'refresh']);
+  accessorValid = true;
+  rejectRefresh = true;
+  await expect(commands.get('workbench.extensions.action.refreshExtension')!(accessor)).rejects.toBe(failure);
+});
+
+test('欢迎页的插件按钮可打开自有包，教程保留内置能力而不宣传旧市场', () => {
+  const parsed = source('gettingStartedContent.ts');
+  const cards: { id: string; title: string; description: string; media: { path: string } }[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const id = node.properties.find(property => ts.isPropertyAssignment(property) && property.name.getText(parsed) === 'id');
+      if (id && ts.isPropertyAssignment(id) && ts.isStringLiteral(id.initializer)
+          && ['extensionsWebWeb', 'extensions'].includes(id.initializer.text)) {
+        const expression = new Bun.Transpiler({ loader: 'ts' }).transformSync(`const step = ${node.getText(parsed)};`);
+        cards.push(new Function('localize', 'Button', `${expression}\nreturn step;`)(
+          (_key: string, text: string, button: string) => text.replace('{0}', button ?? ''),
+          (text: string, command: string) => `[${text}](${command})`,
+        ));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  expect(cards.map(card => card.id).sort()).toEqual(['extensions', 'extensionsWebWeb']);
+  for (const card of cards) {
+    expect(card.title).toBe('管理插件包');
+    const command = /\]\(command:([^)]+)\)/.exec(card.description)?.[1];
+    expect(command).toBe('workbench.extensions.action.installedExtensions');
+    expect(source('extensions.contribution.ts').text).toContain(`'${command}'`);
+    expect(card.media.path).toBe('empty');
+  }
+  expect(parsed.text).not.toContain('command:workbench.extensions.action.show');
+  const walkthrough = source('vs_code_editor_walkthrough.ts');
+  const content = walkthrough.statements.find(ts.isFunctionDeclaration)!;
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(content.getText(walkthrough).replace('export default ', ''));
+  const render = new Function('platform', 'IWorkbenchEnvironmentService', `${javascript}\nreturn content;`)(
+    { isWeb: true }, 'environment',
+  ) as (accessor: object) => string;
+  const markdown = render({ get: () => ({ remoteAuthority: undefined }) });
+  expect(markdown).toContain('### IntelliSense');
+  expect(markdown).toContain('context.strokeStyle');
+  expect(markdown).toContain('command:workbench.action.openGlobalSettings');
+  expect(markdown).toContain('command:workbench.action.openSnippets');
+  expect(markdown).not.toContain('command:workbench.extensions.');
+  expect(markdown).not.toContain('extension gallery');
+});
+
+test('语言选择器保留语言和配置选项，既不查询市场也不提供失效搜索', async () => {
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(
+    `class Action { async run(accessor) ${methodBody('editorStatus.ts', 'ChangeLanguageAction', 'run')} }`,
+  );
+  const ids = ['IQuickInputService', 'IEditorService', 'ILanguageService', 'ILanguageDetectionService',
+    'ITextFileService', 'IPreferencesService', 'IConfigurationService', 'ITelemetryService'];
+  const Action = new Function(...ids, 'getCodeEditor', 'EditorResourceAccessor', 'SideBySideEditor', 'Schemas',
+    'getIconClassesForLanguageId', 'extname', 'basename', 'localize', javascript + '\nreturn Action;')(
+    ...ids, (control: object) => control, { getOriginalUri: () => ({ scheme: 'boxteam-file', path: '/source.ts' }) },
+    { PRIMARY: 1 }, { untitled: 'untitled' }, () => [], () => '.ts', () => 'source.ts',
+    (_key: string, message: string, ...args: string[]) => message.replace(/\{(\d+)\}/g, (_, index) => args[Number(index)] ?? ''),
+  ) as new () => { run(accessor: object): Promise<void> };
+  let picks: { id?: string; label: string }[] = [];
+  const services: Record<string, object> = {
+    IQuickInputService: { async pick(items: typeof picks) { picks = items; return undefined; } },
+    IEditorService: { activeTextEditorControl: { getModel: () => ({ getLanguageId: () => 'typescript', getValueLength: () => 0 }) } },
+    ILanguageService: { getLanguageName: () => 'TypeScript', getSortedRegisteredLanguageNames: () => [{ languageName: 'TypeScript', languageId: 'typescript' }],
+      getExtensions: () => ['.ts'] },
+    ILanguageDetectionService: {}, ITextFileService: {}, IPreferencesService: {}, IConfigurationService: {}, ITelemetryService: {},
+  };
+  await new Action().run({ get(id: string) {
+    if (!(id in services)) throw new Error(`语言选择器不能访问旧市场服务：${id}`);
+    return services[id];
+  } });
+  expect(picks.some(pick => pick.id === 'typescript')).toBe(true);
+  expect(picks.some(pick => pick.label.includes('Configure File Association'))).toBe(true);
+  expect(picks.some(pick => pick.label.includes('language based settings'))).toBe(true);
+  expect(picks.some(pick => /marketplace|extension/i.test(pick.label))).toBe(false);
+});
+
+test('ext快速访问仅保留原管理入口，不再包含旧市场安装实现或注册', () => {
+  const parsed = source('extensionsQuickAccess.ts');
+  expect(parsed.statements.filter(ts.isClassDeclaration).map(node => node.name?.text)).toEqual(['ManageExtensionsQuickAccessProvider']);
+  const contribution = source('extensions.contribution.ts');
+  const quickAccess: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(contribution).endsWith('.registerQuickAccessProvider')) {
+      quickAccess.push(node.arguments[0]!.getText(contribution));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(contribution);
+  expect(quickAccess).toHaveLength(1);
+  expect(quickAccess[0]).toContain('ManageExtensionsQuickAccessProvider');
+  expect(contribution.text).not.toContain('InstallExtensionQuickAccessProvider');
+});
+
+test('浏览器内置管理只返回system和custom内置项，不再查询已退役的用户安装域', async () => {
+  const path = join(root, 'src/extensions/nativeManagement.ts');
+  const parsed = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'WebExtensionManagementService');
+  if (!owner || !ts.isClassDeclaration(owner)) throw new Error('内置扩展管理服务缺失');
+  const method = owner.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === 'getInstalled');
+  if (!method) throw new Error('内置扩展清单入口缺失');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class Service { ${method.getText(parsed)} }`);
+  const Service = new Function('ExtensionType', 'toLocalExtension', javascript + '\nreturn Service;')(
+    { System: 0, User: 1 }, (extension: object) => extension,
+  ) as new () => { getInstalled(type?: number): Promise<{ identifier: string; installationTarget: object }[]> };
+  const service = new Service(), calls: string[] = [];
+  Object.assign(service, { assertProfile: () => {}, profiles: { currentProfile: { id: 'original-profile' } }, scanner: {
+    scanSystemExtensions: async () => { calls.push('system'); return [{ identifier: 'system' }]; },
+    scanCustomBuiltinExtensions: async () => { calls.push('custom'); return [{ identifier: 'custom' }]; },
+  }, readTargetOptions: () => { throw new Error('不能发现旧安装域'); } });
+  expect((await service.getInstalled()).map(item => item.identifier)).toEqual(['system', 'custom']);
+  expect(calls.splice(0)).toEqual(['system', 'custom']);
+  expect((await service.getInstalled(0)).map(item => item.identifier)).toEqual(['system']);
+  expect(calls.splice(0)).toEqual(['system']);
+  const user = await service.getInstalled(1);
+  expect(user.map(item => item.identifier)).toEqual(['custom']);
+  expect(user[0]!.installationTarget).toEqual({ kind: 'web', profileId: 'original-profile' });
+  expect(calls).toEqual(['custom']);
+});
 
 test('实际转换只注册一个项目 MCP 服务，原列表／详情继续注册，第二发现与工具 client 不再实例化', () => {
   const registrations: string[][] = [];
@@ -171,21 +333,41 @@ test('新增原 MCP 搜索视图的查询拒绝进入既有通知通道，不产
   expect(received).toEqual([failure]);
 });
 
-test('原刷新入口保留异步搜索与更新检查，搜索拒绝进入同一通知通道', async () => {
+test('插件包刷新保留原 MCP 列表查询，错误交回原命令，不再检查 VSIX 更新', async () => {
   const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function refresh() ${methodBody('extensionsViewlet.ts', 'ExtensionsViewPaneContainer', 'refresh')}`);
-  const refresh = new Function('AutoCheckUpdatesConfigurationKey', javascript + '\nreturn refresh;')('autoCheckUpdates') as (this: object) => Promise<void>;
-  const failure = new Error('目录 HTTP 503');
+  const refresh = new Function(javascript + '\nreturn refresh;')() as (this: object) => Promise<void>;
   const events: unknown[] = [];
-  await refresh.call({
-    updateInstalledExtensionsContexts: async () => { events.push('contexts'); },
-    doSearch: async (force: boolean) => { events.push(force); throw failure; },
-    onError: (error: Error) => { events.push(error); },
-    configurationService: { getValue: () => true },
-    extensionsWorkbenchService: { checkForUpdates: () => { events.push('updates'); } },
-  });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(events).toEqual(['contexts', true, 'updates', failure]);
+  const panes = [{}];
+  const failure = new Error('目录 HTTP 503');
+  await expect(refresh.call({ panes,
+    getView: (id: string) => { expect(id).toBe('boxteam.views.extensionPackages'); return { refresh: async () => { events.push('packages'); } }; },
+    showExtensionsViews: async (views: object[]) => { expect(views).toBe(panes); events.push('mcp'); throw failure; },
+  })).rejects.toBe(failure);
+  expect(events).toEqual(['packages', 'mcp']);
 });
+
+test.each([
+  ['@mcp server', true, false], ['@agentPlugins name', false, true], ['my-package', false, false],
+  ['@installed @mcp server', true, false], ['@installed @agentPlugins name', false, true],
+  ['package@mcp', false, false], ['@mcp-suffix', false, false],
+])(
+  '原搜索入口 %s 在同一容器分派并保留查询', async (query, mcp, agentPlugins) => {
+    const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`function search(value: string) ${methodBody('extensionsViewlet.ts', 'ExtensionsViewPaneContainer', 'search')}`);
+    const search = new Function(javascript + '\nreturn search;')() as (this: object, query: string) => void;
+    const values: Record<string, unknown> = {};
+    const key = (name: string) => ({ set: (value: unknown) => { values[name] = value; } });
+    const views = [{}];
+    search.call({ panes: views, queryValue: '', contextKeyService: { bufferChangeEvents: (run: () => void) => run() },
+      searchMcpServersContextKey: key('mcp'), searchAgentPluginsContextKey: key('agentPlugins'), defaultViewsContextKey: key('default'),
+      searchHasTextContextKey: key('hasText'), extensionsSearchValueContextKey: key('query'),
+      getView: () => ({ search: (value: string) => { values.packages = value; } }),
+      showExtensionsViews: async (received: object[]) => { expect(received).toBe(views); values.shown = true; },
+      onError: (error: Error) => { throw error; },
+    }, query);
+    await Promise.resolve();
+    expect(values).toEqual({ mcp, agentPlugins, default: false, hasText: true, query, packages: query, shown: true });
+  },
+);
 
 test('原活动栏进度结束时只清理自身，原查询 Promise 仍拒绝且不另生未处理拒绝', async () => {
   const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class Progress {

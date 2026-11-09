@@ -223,10 +223,6 @@ export function transformMcpGallery(path, source, replaceOnce, replaceSection) {
   if (path.endsWith('/mcpWorkbenchService.ts')) {
     contents = replaceOnce(contents, 'class McpWorkbenchServer implements', 'export class McpWorkbenchServer implements');
   }
-  if (path.endsWith('/extensionsViewlet.ts')) {
-    contents = replaceOnce(contents, '\t\tthis.showExtensionsViews(addedViews);', '\t\tvoid this.showExtensionsViews(addedViews).catch(error => this.onError(error));');
-    contents = replaceOnce(contents, '\t\tthis.doSearch(true);', '\t\tvoid this.doSearch(true).catch(error => this.onError(error));');
-  }
   if (path.endsWith('/progressService.ts')) {
     // 活动栏只观察任务以清理进度；清理链不应复制一个无人接收的任务拒绝。
     contents = replaceOnce(contents, `\t\tpromise.finally(() => {

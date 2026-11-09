@@ -165,16 +165,12 @@ export class WebExtensionManagementService extends AbstractExtensionManagementSe
 
   async getInstalled(type?: ExtensionType, profileLocation?: URI): Promise<ILocalExtension[]> {
     this.assertProfile(profileLocation);
-    const options = type === ExtensionType.System ? undefined : await this.readTargetOptions({ profileLocation });
     const system = type === ExtensionType.User ? [] : (await this.scanner.scanSystemExtensions()).map(extension => toLocalExtension({ ...extension,
       installationTarget: { kind: 'web', profileId: this.profiles.currentProfile.id } }));
     if (type === ExtensionType.System) return system;
-    return this.withTarget(options!, async (target, signal) => {
-      const [inventory, custom] = await Promise.all([this.inventory(target, signal), this.scanner.scanCustomBuiltinExtensions()]);
-      signal.throwIfAborted();
-      return [...system, ...custom.map(extension => toLocalExtension({ ...extension,
-        installationTarget: { kind: 'web', profileId: this.profiles.currentProfile.id } })), ...this.acceptInventory(inventory, target)];
-    });
+    const custom = await this.scanner.scanCustomBuiltinExtensions();
+    return [...system, ...custom.map(extension => toLocalExtension({ ...extension,
+      installationTarget: { kind: 'web', profileId: this.profiles.currentProfile.id } }))];
   }
 
   override async installGalleryExtensions(extensions: InstallExtensionInfo[]): Promise<InstallExtensionResult[]> {
