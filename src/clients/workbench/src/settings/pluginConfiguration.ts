@@ -5,7 +5,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWriteRequest, PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gatewayWorkspaceRequestHeaders, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
@@ -290,14 +290,8 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
     const workspace = scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput) : undefined;
     if (scope.scope === 'workspace' && !workspace) return;
     check();
-    const schemas = await gateway.request<PluginConfigurationSchemasDTO>('/api/gateway/service-plugins/configuration-schemas', {
-      method: 'POST', body: JSON.stringify({ gateway_id: target.gateway_id,
-        gateway_connection_id: target.gateway_connection_id, workspace_id: workspace?.workspace_id }),
-    });
+    const schemas = await new ConfigurationSourceOwner({ ...target, workspace_id: workspace?.workspace_id }).configurationSchemas();
     check();
-    if (schemas.gateway_id !== target.gateway_id || (schemas.workspace_id ?? null) !== (workspace?.workspace_id ?? null)) {
-      throw new Error('插件配置声明不属于原设置目标');
-    }
     if (!schemas.plugins.length) { notifications.info('目标范围没有已安装的插件配置声明。'); return; }
     const selected = await quickInput.pick(schemas.plugins.map(plugin => ({ label: plugin.name,
       description: `${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,

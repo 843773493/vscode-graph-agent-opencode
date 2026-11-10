@@ -3,6 +3,7 @@ import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest } from '../../../
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
 import { gateway } from '../agentApi.js';
+import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 
 export type SourceTarget = Readonly<{ gateway_id: string; gateway_connection_id?: string; workspace_id?: string }>;
 export type SourceDocument = GatewayConfigSourceDocumentDTO | ConfigSourceDocumentDTO;
@@ -31,6 +32,16 @@ export class ConfigurationSourceOwner {
   list(signal?: AbortSignal) {
     return this.target.workspace_id ? listConfigSources(0, this.workspace, signal)
       : this.request<GatewayConfigSourcesDTO>(this.path(), { signal });
+  }
+  async configurationSchemas(signal?: AbortSignal): Promise<PluginConfigurationSchemasDTO> {
+    const { gateway_id, gateway_connection_id, workspace_id } = this.target;
+    const schemas = await this.request<PluginConfigurationSchemasDTO>('/api/gateway/service-plugins/configuration-schemas', {
+      method: 'POST', body: JSON.stringify({ gateway_id, gateway_connection_id, workspace_id }), signal,
+    });
+    if (schemas.gateway_id !== this.target.gateway_id || (schemas.workspace_id ?? undefined) !== this.target.workspace_id) {
+      throw new Error('配置 schema 回执不属于原目标');
+    }
+    return schemas;
   }
   private document(document: SourceDocument, sourceKey: string, key?: string): SourceDocument {
     if (document.gateway_id !== this.target.gateway_id || ('workspace_id' in document ? document.workspace_id : undefined) !== this.target.workspace_id

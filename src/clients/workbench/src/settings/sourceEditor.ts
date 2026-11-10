@@ -14,6 +14,7 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../upstream/s
 import { IFilesConfigurationService } from '../../upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
 import { onGatewayUserSessionInvalidated, HttpRequestError } from '../../../web/src/api/http.js';
 import { workspaceContext } from '../workspaceContext.js';
+import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceTarget, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
 
 export const configSourceScheme = 'boxteam-config-source';
@@ -41,6 +42,7 @@ interface SourceEdit extends ConfigSourceBackup {
   initial?: SourceDocument;
   loading?: Promise<SourceDocument>;
   invalidated: boolean;
+  schemaLoading?: { route?: string; bindings: string; request: Promise<PluginConfigurationSchemasDTO> };
 }
 
 /** 只适配原文本文件生命周期；正文、预检、CAS 和提交事实全部由原配置 owner 提供。 */
@@ -78,6 +80,18 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     const document = this.edit(resource).document;
     if (!document) throw new Error('配置来源尚未读取');
     return document;
+  }
+  configurationSchemas(resource: URI, owner: ConfigurationSourceOwner, bindings: string): Promise<PluginConfigurationSchemasDTO> {
+    const edit = this.edit(resource);
+    // 同一来源的多个编辑器组只合并在途读取；结清即释放，不缓存另一份安装库存。
+    let pending = edit.schemaLoading;
+    if (!pending || pending.route !== owner.target.gateway_connection_id || pending.bindings !== bindings) {
+      pending = { route: owner.target.gateway_connection_id, bindings, request: owner.configurationSchemas().finally(() => {
+        if (edit.schemaLoading === pending) edit.schemaLoading = undefined;
+      }) };
+      edit.schemaLoading = pending;
+    }
+    return pending.request;
   }
   release(resource: URI): void { this.edits.delete(resource.toString()); }
   invalidate(): void { for (const edit of this.edits.values()) edit.invalidated = true; }

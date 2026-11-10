@@ -54,6 +54,13 @@ async def test_saved_bindings_refresh_only_their_settings_schema(
                 "onlyTwo": {"type": "number", "default": 2},
             },
         ),
+        (
+            "3.0.0",
+            {
+                "mode": {"type": "string", "default": "third"},
+                "onlyThree": {"type": "number", "default": 3},
+            },
+        ),
     ]:
         path = context.artifacts_dir / f"schema-probe-{version}.zip"
         manifest = {
@@ -124,6 +131,7 @@ async def test_saved_bindings_refresh_only_their_settings_schema(
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert result["isolated_versions"] and result["same_input_refreshed"]
+    assert result["late_installed_schema_refreshed"] and result["ordinary_save_zero_schema_requests"]
     assert (
         result["unbind_released_only_owner"]
         and result["residue_preserved"]

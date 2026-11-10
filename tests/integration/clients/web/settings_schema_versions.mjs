@@ -7,7 +7,7 @@ import { parse, modify, applyEdits } from 'jsonc-parser';
 import { installPlugin } from '../../../support/plugin_package.mjs';
 
 const input = JSON.parse(process.env.BOXTEAM_SETTINGS_SCHEMA_FIXTURE);
-const result = { phase: 'initialization', pageErrors: [], requests: [], writes: [], oldHostRequests: [] };
+const result = { phase: 'initialization', pageErrors: [], requests: [], writes: [], oldHostRequests: [], schemaRequests: [] };
 let browser, page;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
@@ -17,6 +17,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(error.message));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (path.endsWith('/service-plugins/configuration-schemas')) result.schemaRequests.push(request.postDataJSON());
     if (path.includes('/extension-configurations/')) result.oldHostRequests.push(path);
     if (request.method() === 'PUT' && path.includes('/config/sources/')) {
       const body = request.postDataJSON();
@@ -120,6 +121,35 @@ try {
   assert.equal((await api(sourcePath, { headers: headers(a) })).jsonc, aSaved.jsonc);
   result.isolated_versions = true;
 
+  result.phase = 'install-new-version-with-live-form';
+  // 保留 B 原表单，让另组的正式 JSONC 保存驱动同一文本模型；不能重开表单替产品补读声明。
+  await command('workbench.action.splitEditorRight');
+  await search(b, 2, '@ext:schema.probe/preference');
+  await command('workbench.action.focusFirstEditorGroup');
+  await command('settings.switchToJSON');
+  await expect(field(b, 'onlyTwo')).toBeVisible();
+  await installPlugin(api, { gateway_id: health.gateway_id, path: input.packagePaths[2] });
+  const beforeLateBinding = await api(sourcePath, { headers: headers(b) });
+  let lateBinding = update(beforeLateBinding.jsonc, ['plugins', 'runtime', 'entries'], [binding('3.0.0')]);
+  lateBinding = update(lateBinding, ['plugins', 'configuration', 'values', 'schema.probe', 'preference'], { mode: 'late-B' });
+  const sourceText = page.locator('.editor-group-container.active .monaco-editor .view-lines').last();
+  await sourceText.click(); await page.keyboard.press('Control+A');
+  await page.evaluate(value => navigator.clipboard.writeText(value), lateBinding); await page.keyboard.press('Control+V');
+  const schemaReadsBeforeSave = result.schemaRequests.length;
+  await save();
+  await expect(field(b, 'onlyThree')).toBeVisible();
+  await expect(field(b, 'mode').getByRole('textbox')).toHaveValue('late-B');
+  await expect(field(b, 'onlyTwo')).toHaveCount(0);
+  assert.equal(result.schemaRequests.length, schemaReadsBeforeSave + 1, '原 B 表单只补读一次新绑定版本');
+  result.late_installed_schema_refreshed = true;
+  await command('workbench.action.focusSecondEditorGroup');
+  await field(b, 'mode').getByRole('textbox').fill('late-B-updated'); await save();
+  assert.equal(result.schemaRequests.length, schemaReadsBeforeSave + 1, '普通参数保存不能重新读取安装声明');
+  result.ordinary_save_zero_schema_requests = true;
+  await command('workbench.action.focusFirstEditorGroup');
+  await command('workbench.action.closeEditorsAndGroup');
+  await expect(pane(a)).toHaveCount(1); await expect(pane(b)).toHaveCount(1);
+
   const editBinding = async (target, version) => {
     await command('settings.switchToJSON');
     const text = page.locator('.editor-group-container.active .monaco-editor .view-lines').last();
@@ -149,6 +179,8 @@ try {
   result.unbind_released_only_owner = true; result.residue_preserved = true;
   await api('/api/gateway/service-plugins/uninstall', { method: 'POST', body: {
     gateway_id: health.gateway_id, package_id: 'schema.probe', package_version: '2.0.0' } });
+  await api('/api/gateway/service-plugins/uninstall', { method: 'POST', body: {
+    gateway_id: health.gateway_id, package_id: 'schema.probe', package_version: '3.0.0' } });
   const schemas = await api('/api/gateway/service-plugins/configuration-schemas', { method: 'POST', body: { gateway_id: health.gateway_id, workspace_id: b.workspace_id } });
   assert(!schemas.plugins.some(plugin => plugin.package_id === 'schema.probe' && plugin.package_version === '2.0.0'));
   await api('/api/gateway/service-plugins/uninstall', { method: 'POST', body: {
