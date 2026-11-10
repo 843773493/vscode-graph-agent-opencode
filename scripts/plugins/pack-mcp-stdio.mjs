@@ -110,7 +110,7 @@ export async function packMcpStdio({ projectRoot, output, target, uvExecutable, 
       "--project", packageRoot, "--output-file", requirementsFile], packageRoot, environment);
     run(uvExecutable, ["--no-config", "pip", "install", "--python", pythonExecutable, "--target", sitePackages,
       "--require-hashes", "--no-deps", "--no-build", "--requirements", requirementsFile], packageRoot, environment);
-    const files = collectFiles(packageRoot, packageRoot).filter(([source]) => !source.endsWith("/plugin.jsonc"));
+    const files = collectFiles(packageRoot, packageRoot).filter(([, relative]) => relative !== "plugin.jsonc");
     files.push(...collectFiles(stage, sitePackages));
     files.push([manifestPath, "plugin.jsonc"]);
     for (const source of ["app/__init__.py", "app/core/__init__.py", "app/core/runtime_observation.py",

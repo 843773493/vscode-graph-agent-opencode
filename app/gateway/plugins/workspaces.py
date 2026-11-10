@@ -182,7 +182,7 @@ class WorkspacePluginBindings:
         workspace_id = target.workspace_id
         previous = self.snapshots.get(workspace_id)
         revision = previous.revision if previous else None
-        if target.managed and not target.desired_running:
+        if startup_generation is None and target.managed and not target.desired_running:
             await self.runtime.apply_scope([], revision=revision or "workspace-stopped", workspace_id=workspace_id)
             if self._stop_failure(workspace_id, revision=revision):
                 return

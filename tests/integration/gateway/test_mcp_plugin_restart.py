@@ -70,9 +70,14 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
                  f"?package_version=0.1.0&workspace_id={case.workspace_id}")
     response = await case.client.post(old_route, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert response.status_code == 409, response.text
-    # 显式刷新必须暴露原 client 已失效；不能按同名或同 schema 自动改投新插件。
+    # 旧 session 已先退出时返回失败快照；刷新撞上断线时返回原刷新错误，均不能改投新实例。
     response = await case.client.get("/api/v1/mcp/servers", params={"refresh": "true"})
-    assert response.status_code == 503, response.text
+    if response.status_code == 200:
+        failed, = [item for item in response.json()["data"] if item["server_id"] == "probe"]
+        assert failed["status"] == "failed" and failed["connection_ref"] is None, failed
+        assert failed["tools"] == old_catalog["tools"], "失败状态保留原目录，不能自动改投新服务"
+    else:
+        assert response.status_code == 503 and "probe" in response.json()["detail"], response.text
     response = await case.client.post("/api/v1/mcp/connection-operations", json={
         "operation_id": "restart-explicit-connect", "server_id": "probe", "action": "connect",
     })
@@ -90,3 +95,16 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
     new_catalog = await _catalog(case)
     assert new_catalog["connection_ref"] != old_catalog["connection_ref"]
     assert not receipts.exists(), "重启、失效读取和重连不能自动重放工具副作用"
+
+    restarted_instance = psutil.Process(current["instance"]["process_id"])
+    restarted_children = restarted_instance.children(recursive=True)
+    # TODO(Windows): 深层测试安装目录使 psutil 原生 DLL 加载报路径过长；尚未完成同场景验收。
+    case.restart_gateway()
+    _, alive = await asyncio.to_thread(
+        psutil.wait_procs, [restarted_instance, *restarted_children], timeout=5,
+    )
+    assert not alive, [process.pid for process in alive]
+    cold_plugin = await _plugin(case, state="ready")
+    assert cold_plugin["instance"]["instance_id"] != current["instance"]["instance_id"]
+    await _catalog(case)
+    assert not receipts.exists(), "同 Home 冷启动不能重放 MCP 工具副作用"
