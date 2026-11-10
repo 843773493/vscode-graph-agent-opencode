@@ -393,12 +393,13 @@ class GatewayPluginRuntime:
             if previous is not None:
                 if previous.binding != binding:
                     self.skill_sources.remove_plugin(key)
+                previous_version = previous.process_version or previous.binding.package_version
                 try:
                     await self._stop(key, previous)
                 except Exception as error:
                     # 期望已提交，实际句柄／回执仍属于旧实例；同一输入不得再次尝试替换。
                     slot = replace(previous, binding=binding, revision=revision, declaration=declaration,
-                        parameters=values, state="failed", error=str(error), commands={})
+                        parameters=values, state="failed", error=f"停止原实例失败（原运行版本 {previous_version}；未启动新实例）: {error}", commands={})
                     self.slots[key] = slot
                     logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
                     self._publish()
@@ -407,18 +408,20 @@ class GatewayPluginRuntime:
                 package_digest=self.packages.get(binding.package_id, binding.package_version).digest,
                 log_id=previous.log_id if previous is not None and not binding.enabled else None)
             self.slots[key] = slot
+            stage = "启动实例" if binding.enabled and declaration.runtime is not None else "发布贡献"
             try:
                 if binding.enabled and declaration.runtime is not None:
                     # 冷恢复的失败属于这个绑定，不阻断 Gateway 或其它插件。
                     if previous is None:
                         self.validate_target(binding)
                     await self._start(key, slot, delivered_parameters=delivered_parameters)
+                stage = "发布贡献"
                 self.skill_sources.publish_plugin(binding, self.packages)
             except asyncio.CancelledError:
-                slot.state, slot.error = "failed", "启动被取消；已结算原进程，需显式重启"
+                slot.state, slot.error = "failed", f"{stage}被取消；需显式重启"
                 raise
             except Exception as error:
-                slot.state, slot.error = "failed", str(error)
+                slot.state, slot.error = "failed", f"{stage}失败: {error}"
                 logger.exception("插件启动或贡献发布失败: slot=%s", key)
             finally:
                 self._publish()
@@ -550,7 +553,9 @@ class GatewayPluginRuntime:
             try:
                 await run_cleanup_shielded(lambda: self._stop(key, slot))
             except Exception as cleanup_error:  # noqa: BLE001 — 保留启动与回收两个原始失败。
-                raise BaseExceptionGroup("插件启动及原进程回收均失败", [error, cleanup_error]) from None
+                raise BaseExceptionGroup(
+                    f"插件启动失败: {error}；原进程回收失败: {cleanup_error}；目标进程未结清",
+                    [error, cleanup_error]) from None
             raise
 
     async def _adopt(self, slot: PluginSlot, record: _ProcessRecord) -> bool:

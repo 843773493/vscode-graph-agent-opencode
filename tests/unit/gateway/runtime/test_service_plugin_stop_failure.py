@@ -88,7 +88,7 @@ async def test_failed_stop_keeps_actual_version_and_does_not_retry_unchanged_des
     result = await owner.apply_binding(desired, revision="committed", parameters={})
     assert result["state"] == "failed" and result["binding"] == desired.model_dump(mode="json")
     assert result["instance"] == actual
-    assert result["error"] == "原进程仍未退出" and result["revision"] == "committed"
+    assert result["error"] == "停止原实例失败（原运行版本 1.0.0；未启动新实例）: 原进程仍未退出" and result["revision"] == "committed"
     current = owner.slots[owner.key(desired)]
     assert current.process is processes[0] and current.stopped.is_set()
     assert owner.references("stop.probe", "1.0.0"), "旧进程未结清仍保护原版本"
@@ -112,3 +112,32 @@ async def test_failed_stop_keeps_actual_version_and_does_not_retry_unchanged_des
         assert restarted.instance.package_version == "2.0.0"
         assert restarted.instance.instance_id == "instance-2" and len(processes) == 2
         assert owner.references("stop.probe", "1.0.0") == []
+
+
+@pytest.mark.parametrize("stage", ["start", "publish"])
+async def test_failed_replacement_reports_stage_and_does_not_restore_or_repeat(
+    blocked_plugin: tuple[GatewayPluginRuntime, list[Mock], PluginBinding],
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    owner, processes, original = blocked_plugin
+    processes[0].close.side_effect = None
+    desired = original.model_copy(update={"package_version": "2.0.0"})
+    if stage == "start":
+        async def fail_start(_key, _slot, *, delivered_parameters=None):
+            raise RuntimeError("新入口不可用")
+        monkeypatch.setattr(owner, "_start", fail_start)
+    else:
+        monkeypatch.setattr(owner.skill_sources, "publish_plugin", Mock(side_effect=ValueError("Skill 来源冲突")))
+    failed = PluginSlotStatusDTO.model_validate(await owner.apply_binding(desired, revision="changed", parameters={}))
+    assert failed.binding == desired and failed.state == "failed"
+    assert failed.error == ("启动实例失败: 新入口不可用" if stage == "start" else "发布贡献失败: Skill 来源冲突")
+    assert processes[0].close.call_count == 1
+    assert len(processes) == (1 if stage == "start" else 2)
+    if stage == "start":
+        assert failed.instance is None
+    else:
+        assert failed.instance is not None and failed.instance.package_version == "2.0.0"
+        with pytest.raises(LookupError):
+            owner.service(desired, service_id="echo", instance_id=failed.instance.instance_id)
+    unchanged = await owner.apply_binding(desired, revision="unrelated", parameters={})
+    assert unchanged["error"] == failed.error and len(processes) == (1 if stage == "start" else 2)

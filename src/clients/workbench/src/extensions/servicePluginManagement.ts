@@ -250,14 +250,19 @@ export class ServicePluginPackagesView extends ViewPane {
     const details = append(container, $('section.service-plugin-details'));
     append(details, $('h3')).textContent = `${manifest.package_id}/${plugin.id}`;
     append(details, $('p')).textContent = scope === 'defaults' ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
-      : `${plugin.instance_scope} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}${status?.error ? ` · ${status.error}` : ''}`;
+      : `${plugin.instance_scope} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}`;
     append(details, $('p')).textContent = `Gateway ${target.gateway_id}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
     const versions = append(details, $('p'));
     versions.setAttribute('aria-label', '插件配置与运行版本');
     versions.textContent = `配置：${binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定'} · `
       + (scope === 'defaults' ? '仅新建默认值，未操作当前实例' : status?.instance
-        ? `实际：${status.state} @${status.instance.package_version}${status.error ? ` · ${status.error}` : ''}`
-        : plugin.runtime ? `实际：${status?.state ?? '未运行'}` : '声明式，无运行实例');
+        ? `实际：${status.state} @${status.instance.package_version}`
+        : plugin.runtime ? `实际：${status?.state ?? '未运行'} · 尚无 ready 实例回执` : '声明式，无运行实例');
+    if (status?.error) {
+      const failure = append(details, $('p'));
+      failure.setAttribute('aria-label', '插件运行失败原因');
+      failure.textContent = status.error;
+    }
     const logId = status?.log_id;
     if (logId) {
       const logs = append(details, $('button')) as HTMLButtonElement;
