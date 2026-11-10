@@ -270,6 +270,21 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         source_document = exchange("GET", "/api/gateway/config/sources/gateway_mutable_override").json()["data"]
         assert private_value not in json.dumps(source_document)
         assert private_value not in json.dumps(states())
+        private_path = (context.boxteam_home_for_node(request.node.nodeid)
+            / "credentials/plugins" / f"{reference['version']}.json")
+        unavailable_private_path = private_path.with_suffix(".unavailable")
+        before_missing_input = states()
+        before_python = before_missing_input["python"]
+        private_path.rename(unavailable_private_path)
+        try:
+            rejected = exchange("POST", "/api/gateway/service-plugins/restart", {**target,
+                "package_id": "probe.tools", "package_version": "1.0.0", "plugin_id": "python",
+                "revision": before_python["revision"]})
+            assert rejected.status_code == 409 and "私有输入版本不存在" in rejected.text
+            assert states() == before_missing_input, "重启预校验失败不能改变原绑定、revision或实际实例"
+            assert echo(before_python).raise_for_status().json()["credential_digest"] == digest
+        finally:
+            unavailable_private_path.rename(private_path)
         blocked = exchange("POST", "/api/gateway/service-plugins/uninstall",
             {**target, "package_id": "probe.tools", "package_version": "1.0.0"})
         assert blocked.status_code == 409

@@ -48,8 +48,8 @@ async def blocked_plugin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     owner.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
     processes: list[Mock] = []
 
-    async def start(_key, slot: PluginSlot, *, delivered_parameters=None) -> None:
-        assert delivered_parameters is None
+    async def start(_key, slot: PluginSlot, *, parameters) -> None:
+        assert parameters == {}
         process = Mock(spec=ManagedProcess)
         process.is_alive.return_value = True
         processes.append(process)
@@ -124,7 +124,7 @@ async def test_failed_replacement_reports_stage_and_does_not_restore_or_repeat(
     processes[0].close.side_effect = None
     desired = original.model_copy(update={"package_version": "2.0.0"})
     if stage == "start":
-        async def fail_start(_key, _slot, *, delivered_parameters=None):
+        async def fail_start(_key, _slot, *, parameters):
             raise RuntimeError("新入口不可用")
         monkeypatch.setattr(owner, "_start", fail_start)
     else:
@@ -159,7 +159,7 @@ async def test_cancelled_start_with_cleanup_failure_publishes_failed_slot_and_pr
         [cancellation, cleanup],
     )
 
-    async def fail_after_cleanup(_key, slot: PluginSlot, *, delivered_parameters=None) -> None:
+    async def fail_after_cleanup(_key, slot: PluginSlot, *, parameters) -> None:
         slot.process, slot.process_version = process, slot.binding.package_version
         raise failure
 

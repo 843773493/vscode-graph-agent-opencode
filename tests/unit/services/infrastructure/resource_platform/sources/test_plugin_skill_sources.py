@@ -103,8 +103,8 @@ async def test_code_restart_preserves_static_skill_publication(
     case = skill_case
     binding = case.install("proof.restart", code=True)
 
-    async def started(_key, slot, *, delivered_parameters=None):
-        assert delivered_parameters is None
+    async def started(_key, slot, *, parameters):
+        assert parameters == {}
         slot.state = "ready"
 
     monkeypatch.setattr(case.runtime, "_start", started)

@@ -297,6 +297,21 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         assert call(ready_a)["credential_digest"] == hashlib.sha256(private_value.encode()).hexdigest()
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
+        unavailable_private_file = private_file.with_suffix(".unavailable")
+        private_file.rename(unavailable_private_file)
+        try:
+            rejected = exchange("POST", "/api/gateway/service-plugins/restart", {
+                "gateway_id": target_gateway, "workspace_id": workspace_a_id,
+                "package_id": "probe.tools", "package_version": "1.0.0", "plugin_id": "probe",
+                "revision": ready_a["revision"],
+            })
+            assert rejected.status_code == 409 and "私有输入版本不存在" in rejected.text
+            assert wait_binding(workspace_a_id, "ready") == ready_a
+            assert call(ready_a)["credential_digest"] == hashlib.sha256(private_value.encode()).hexdigest()
+            assert wait_binding(workspace_b_id, "ready") == ready_b
+        finally:
+            unavailable_private_file.rename(private_file)
+
         restarted = exchange("POST", f"/api/gateway/workspaces/{workspace_a_id}/runtime/restart-safe",
             timeout=150).raise_for_status()
         assert restarted.status_code == 200

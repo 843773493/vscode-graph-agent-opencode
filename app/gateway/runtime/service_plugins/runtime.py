@@ -386,11 +386,15 @@ class GatewayPluginRuntime:
                 self._publish()
                 return previous.describe()
             declaration = self.declaration(binding)
-            # 已有实例的显式重启／替换仍须先预检，不能先停旧实例再发现目标不兼容。
-            if previous is not None and binding.enabled and declaration.runtime is not None:
-                self.validate_target(binding)
             if restart and (not binding.enabled or declaration.runtime is None):
                 raise ValueError("只有已开启的代码插件可以重启")
+            slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values,
+                package_digest=self.packages.get(binding.package_id, binding.package_version).digest,
+                log_id=previous.log_id if previous is not None and not binding.enabled else None)
+            runtime_parameters: dict[str, JsonValue] = {}
+            # 在撤旧准入和停旧之前校验；同一份解析结果只交给本次新进程。
+            if previous is not None and binding.enabled and declaration.runtime is not None:
+                runtime_parameters = await self._start_parameters(slot, delivered_parameters)
             if previous is not None:
                 if previous.binding != binding:
                     self.skill_sources.remove_plugin(key)
@@ -405,17 +409,14 @@ class GatewayPluginRuntime:
                     logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
                     self._publish()
                     return slot.describe()
-            slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values,
-                package_digest=self.packages.get(binding.package_id, binding.package_version).digest,
-                log_id=previous.log_id if previous is not None and not binding.enabled else None)
             self.slots[key] = slot
             stage = "启动实例" if binding.enabled and declaration.runtime is not None else "发布贡献"
             try:
                 if binding.enabled and declaration.runtime is not None:
                     # 冷恢复的失败属于这个绑定，不阻断 Gateway 或其它插件。
                     if previous is None:
-                        self.validate_target(binding)
-                    await self._start(key, slot, delivered_parameters=delivered_parameters)
+                        runtime_parameters = await self._start_parameters(slot, delivered_parameters)
+                    await self._start(key, slot, parameters=runtime_parameters)
                 stage = "发布贡献"
                 self.skill_sources.publish_plugin(binding, self.packages)
             except asyncio.CancelledError:
@@ -454,10 +455,25 @@ class GatewayPluginRuntime:
         if missing:
             raise ValueError("插件缺少必需管理能力: " + ", ".join(sorted(missing)))
 
-    async def _start(
-        self, key: Slot, slot: PluginSlot, *,
-        delivered_parameters: dict[str, JsonValue] | None = None,
-    ) -> None:
+    async def _start_parameters(
+        self, slot: PluginSlot, delivered_parameters: dict[str, JsonValue] | None,
+    ) -> dict[str, JsonValue]:
+        self.validate_target(slot.binding)
+        values = slot.parameters
+        if slot.binding.workspace_id is None:
+            values = self.private_inputs.resolve(values, package_id=slot.binding.package_id,
+                plugin_id=slot.binding.plugin_id, schema=slot.declaration.contributes.configuration)
+        elif requires_private_delivery(values, slot.declaration.contributes.configuration):
+            if delivered_parameters is not None:
+                values = delivered_parameters
+            else:
+                if self.workspace_parameters is None:
+                    raise RuntimeError("Workspace 插件私有参数尚未接入原配置 owner")
+                values = await self.workspace_parameters(slot.binding, slot.revision)
+        validate_plugin_parameters(slot.declaration.contributes.configuration, slot.parameters, values)
+        return values
+
+    async def _start(self, key: Slot, slot: PluginSlot, *, parameters: dict[str, JsonValue]) -> None:
         record_path = self._record(key)
         if record_path.exists():
             raise RuntimeError("原插件进程发现记录尚未接管，拒绝重复启动；需重启所属运行时")
@@ -481,19 +497,7 @@ class GatewayPluginRuntime:
         environment["BOXTEAM_PLUGIN_COMMANDS"] = json.dumps([
             command.model_dump(mode="json") for command in slot.declaration.contributes.commands
         ])
-        values = slot.parameters
-        if slot.binding.workspace_id is None:
-            values = self.private_inputs.resolve(values, package_id=slot.binding.package_id,
-                plugin_id=slot.binding.plugin_id, schema=slot.declaration.contributes.configuration)
-        elif requires_private_delivery(values, slot.declaration.contributes.configuration):
-            if delivered_parameters is not None:
-                values = delivered_parameters
-            else:
-                if self.workspace_parameters is None:
-                    raise RuntimeError("Workspace 插件私有参数尚未接入原配置 owner")
-                values = await self.workspace_parameters(slot.binding, slot.revision)
-        validate_plugin_parameters(slot.declaration.contributes.configuration, slot.parameters, values)
-        environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(values, ensure_ascii=False)
+        environment["BOXTEAM_PLUGIN_PARAMETERS"] = json.dumps(parameters, ensure_ascii=False)
         environment["BOXTEAM_RUNTIME_LOGGING"] = json.dumps(self.settings()["logging"])
         environment["BOXTEAM_RUNTIME_OBSERVATION"] = json.dumps({"instance_id": instance_id,
             **cast(dict[str, object], self.settings()["observation"])})
