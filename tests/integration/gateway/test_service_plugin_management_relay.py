@@ -11,6 +11,7 @@ import time
 import zipfile
 from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Literal
 from urllib.parse import urlsplit
 
 import commentjson
@@ -40,13 +41,13 @@ from tests.support.plugin_package import native_plugin_target
 pytest_plugins = ["tests.integration.gateway.test_target_gateway_routing"]
 
 
-def _plugin_archive(version: str) -> bytes:
+def _plugin_archive(version: str, *, target: dict[str, object] | None = None) -> bytes:
     manifest = {
         "manifest_version": 1,
         "package_id": "relay.management.probe",
         "version": version,
         "name": "Relay management probe",
-        "target": native_plugin_target("python"),
+        "target": native_plugin_target("python") if target is None else target,
         "extension_contract_version": 1,
         "plugins": [{
             "id": "streams",
@@ -96,7 +97,13 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         "X-BoxTeam-Gateway-Connection-Id": connection_id,
     }
 
-    source_server = _source_server({version: _plugin_archive(version) for version in ("1.0.0", "1.1.0")})
+    contents = {version: _plugin_archive(version) for version in ("1.0.0", "1.1.0")}
+    wrong_platform = dict(native_plugin_target("python"))
+    wrong_platform["os"] = "windows" if wrong_platform["os"] != "windows" else "linux"
+    wrong_abi = {**native_plugin_target("python"), "python": {"version": "0.0.0", "abi": "cp000"}}
+    contents["2.0.0"] = _plugin_archive("2.0.0", target=wrong_platform)
+    contents["2.1.0"] = _plugin_archive("2.1.0", target=wrong_abi)
+    source_server = _source_server(contents)
     source_thread = threading.Thread(target=source_server.serve_forever, daemon=True)
     source_thread.start()
     evidence: list[dict[str, object]] = []
@@ -141,7 +148,8 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert result.edit is not None and result.edit.state == "active", result
         return result
 
-    def install(artifact: PluginSourceArtifact, catalog_revision: str) -> None:
+    def install(artifact: PluginSourceArtifact, catalog_revision: str, *,
+                expected_status: Literal["succeeded", "failed"] = "succeeded") -> PluginInstallOperationDTO:
         operation_id = f"relay-plugin-install-{artifact.package_version}"
         accepted = PluginInstallOperationDTO.model_validate(exchange(client_a, "/api/gateway/service-plugins/install", {
             "gateway_id": gateway_b, "source_id": "relay-proof", "catalog_revision": catalog_revision,
@@ -158,7 +166,8 @@ def test_plugin_management_and_call_relay_to_original_gateway(
                 break
             assert time.monotonic() < deadline, installed
             time.sleep(0.05)
-        assert installed.status == "succeeded", installed
+        assert installed.status == expected_status, installed
+        return installed
 
     def publish_policy(capabilities: list[str] | None) -> None:
         principal = principal_ref_for_gateway(gateway_a)
@@ -272,6 +281,29 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert native.status_code == 200 and native.content == payload
         assert native.headers["X-Request-ID"] == "native-plugin-instance-call"
 
+        # 目录提供的完整制品仍须由 B 判兼容；拒绝新版不能撤旧绑定或改投 A。
+        for version, reason in (("2.0.0", "插件目标操作系统不匹配"), ("2.1.0", "插件 Python 运行时不匹配")):
+            failed = install(artifacts[version], source.catalog_revision, expected_status="failed")
+            assert failed.gateway_id == gateway_b and failed.artifact.package_id == "relay.management.probe"
+            assert failed.artifact.package_version == version and failed.artifact.target == artifacts[version].target
+            assert failed.artifact.digest == artifacts[version].digest
+            assert failed.error and reason in failed.error
+            assert "package=" in failed.error and "gateway=" in failed.error and "完整插件 ZIP" in failed.error
+            for reader, remote in ((client_a, True), (client_b, False)):
+                unchanged = PluginRuntimeStatusDTO.model_validate(exchange(reader,
+                    "/api/gateway/service-plugins/status", target,
+                    f"incompatible-{version}-unchanged-{remote}", remote=remote))
+                retained, = [item for item in unchanged.plugins if item.binding.package_id == "relay.management.probe"]
+                assert retained == slot, "不兼容来源制品不得改变原绑定、revision或运行实例"
+            available = PluginInventoryResultDTO.model_validate(exchange(client_a,
+                "/api/gateway/service-plugins/inventory", target, f"incompatible-{version}-inventory"))
+            assert {item.manifest.version for item in available.packages
+                    if item.manifest.package_id == "relay.management.probe"} == {"1.0.0"}
+            called = client_a.post(service, headers={**headers, "Content-Encoding": "gzip",
+                "X-Request-ID": f"incompatible-{version}-old-call"}, content=gzip.compress(payload))
+            assert called.status_code == 200 and called.content == payload
+            assert called.headers["X-Request-ID"] == f"incompatible-{version}-old-call"
+
         publish_policy(["service_plugin_installation_manage", "configuration_read",
                         "service_plugin_runtime_manage", "configuration_write"])
         revoked = client_a.post(service, headers={
@@ -353,6 +385,11 @@ def test_plugin_management_and_call_relay_to_original_gateway(
 
 
 def _source_server(contents: dict[str, bytes]) -> ThreadingHTTPServer:
+    targets = {}
+    for version, content in contents.items():
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            targets[version] = json.loads(archive.read("plugin.jsonc"))["target"]
+
     class SourceHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             path = urlsplit(self.path).path
@@ -361,7 +398,7 @@ def _source_server(contents: dict[str, bytes]) -> ThreadingHTTPServer:
                     "protocol_version": 1, "source_id": "relay-proof",
                     "catalog_revision": "catalog-relay-v1", "items": [{
                         "package_id": "relay.management.probe", "package_version": version,
-                        "target": native_plugin_target("python"),
+                        "target": targets[version],
                         "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
                         "url": f"http://127.0.0.1:{server.server_port}/plugin-{version}.zip",
                         "filename": f"relay-plugin-{version}.zip",
