@@ -10,6 +10,7 @@ from zipfile import ZipFile
 import commentjson
 import httpx
 import psutil
+import pytest
 
 from app.schemas.gateway.service_plugin import PluginSlotStatusDTO
 from tests.harness.python.run_context import TestRunContext
@@ -19,8 +20,9 @@ from tests.support.plugin_package import install_plugin, native_plugin_target
 pytest_plugins = ["tests.integration.gateway.test_service_plugins"]
 
 
+@pytest.mark.parametrize("remove_binding", [False, True], ids=["disable", "unbind"])
 def test_slow_shutdown_body_cannot_extend_stop_deadline(
-    plugin_gateway: tuple[httpx.Client, TestRunContext],
+    plugin_gateway: tuple[httpx.Client, TestRunContext], remove_binding: bool,
 ) -> None:
     client, context = plugin_gateway
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
@@ -79,23 +81,28 @@ def test_slow_shutdown_body_cannot_extend_stop_deadline(
         original, = status()
         assert original.state == "ready" and original.instance is not None
         started = time.monotonic()
-        save([{**binding, "enabled": False}])
+        save([] if remove_binding else [{**binding, "enabled": False}])
         elapsed = time.monotonic() - started
         stopped, = status()
         evidence.append({"elapsed_seconds": elapsed, "slot": stopped.model_dump(mode="json")})
         # 包含来源 CAS 和序列化的余量；12秒持续响应在旧实现中超过8秒总期限。
         assert elapsed < 10, evidence[-1]
-        assert stopped.binding.enabled is False and stopped.state == "failed"
+        assert stopped.state == "failed"
+        if not remove_binding:
+            assert stopped.binding.enabled is False
         assert stopped.instance == original.instance
         assert "shutdown" in (stopped.error or "") and "已核实退出" in (stopped.error or "")
         assert not psutil.pid_exists(original.instance.process_id)
         old_url = (f"/api/gateway/service-plugins/shutdown.deadline/probe/instances/"
             f"{original.instance.instance_id}/services/echo/value?package_version=1.0.0")
         assert client.get(old_url).status_code == 409
-        save([])
-        assert status() == []
-        client.post("/api/gateway/service-plugins/uninstall", json={**target,
-            "package_id": "shutdown.deadline", "package_version": "1.0.0"}).raise_for_status()
+        if not remove_binding:
+            save([])
+            assert status() == []
+        response = client.post("/api/gateway/service-plugins/uninstall", json={**target,
+            "package_id": "shutdown.deadline", "package_version": "1.0.0"})
+        evidence.append({"uninstall_status": response.status_code, "response": response.json()})
+        response.raise_for_status()
     finally:
         (context.artifacts_dir / "shutdown-deadline.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -703,10 +703,8 @@ class GatewayPluginRuntime:
         return [
             f"runtime:{slot.binding.plugin_id}:{slot.binding.workspace_id or 'gateway'}"
             for slot in self.slots.values()
-            if (slot.binding.package_id == package_id and slot.binding.package_version == version
-                and slot.binding.enabled)
-            or (slot.process is not None and slot.binding.package_id == package_id
-                and slot.process_version == version)]
+            if slot.process is not None and slot.binding.package_id == package_id
+            and slot.process_version == version]
 
     async def close(self, *, preserve: bool = False) -> None:
         errors: list[Exception] = []

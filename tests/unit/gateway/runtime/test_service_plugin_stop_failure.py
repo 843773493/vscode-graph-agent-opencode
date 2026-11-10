@@ -93,7 +93,7 @@ async def test_failed_stop_keeps_actual_version_and_does_not_retry_unchanged_des
     current = owner.slots[owner.key(desired)]
     assert current.process is processes[0] and current.stopped.is_set()
     assert owner.references("stop.probe", "1.0.0"), "旧进程未结清仍保护原版本"
-    assert bool(owner.references("stop.probe", "2.0.0")) == (operation == "switch")
+    assert owner.references("stop.probe", "2.0.0") == [], "期望版本由配置引用保护，运行引用只保护实际未结清的进程"
     with pytest.raises(LookupError):
         owner.service(original, service_id="echo", instance_id="instance-1")
     with pytest.raises(LookupError):
