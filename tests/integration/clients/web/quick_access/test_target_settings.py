@@ -68,7 +68,6 @@ async def test_default_agent_source_command_preserves_owner_and_source(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
-    assert result["extensionTargetSelectedFromTitle"]
     assert result["cancelledWithoutWrite"] and result["readonlyWithoutWrite"]
     assert result["savedToFrozenOwner"] and result["deletedSourceOverride"]
     assert result["savedPendingShown"] and result["pendingDiscarded"]

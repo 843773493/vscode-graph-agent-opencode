@@ -1,135 +1,55 @@
 import { join } from 'node:path';
 
-export const extensionBrowserSourcePaths = ['src/vs/workbench/services/extensions/browser/extensionService.ts',
-  'src/vs/workbench/services/extensions/browser/webWorkerExtensionHost.ts',
-  'src/vs/workbench/services/extensions/common/extensionHostProtocol.ts'];
+export const extensionBrowserSourcePaths = ['src/vs/workbench/services/extensions/browser/extensionService.ts'];
 
+/** 原窗口 Worker 只加载产品内置贡献；不再发现或连接用户目标宿主。 */
 export function transformExtensionBrowser(root, path, source, replaceOnce) {
-  if (path === join(root, 'upstream', extensionBrowserSourcePaths[1])) {
-    let contents = replaceOnce(source, 'private readonly _onDidExit', 'protected readonly _onDidExit');
-    return replaceOnce(contents, 'private async _createExtHostInitData()', 'protected async _createExtHostInitData()');
-  }
-  if (path === join(root, 'upstream', extensionBrowserSourcePaths[2])) {
-    return replaceOnce(source, 'export interface IExtensionHostInitData {', 'export interface IExtensionHostInitData {\n  readonly isTargetExtensionHost?: boolean;');
-  }
   if (path !== join(root, 'upstream', extensionBrowserSourcePaths[0])) return source;
-  let contents = `import { scanTargetExtensions, reopenTargetWebHost } from ${JSON.stringify(join(root, 'src/extensions/inventory.js'))};
-import { browserGatewayId } from ${JSON.stringify(join(root, '../web/src/hooks/settings/browserUiSettings.js'))};
-import { TargetExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/targetHost.js'))};
-import { TargetWebExtensionHost } from ${JSON.stringify(join(root, 'src/extensions/webHost.js'))};
-import { DisposableStore } from '../../../../base/common/lifecycle.js';\n` + source;
-  contents = replaceOnce(contents, 'export class ExtensionService extends AbstractExtensionService implements IExtensionService {',
-    'export class ExtensionService extends AbstractExtensionService implements IExtensionService {\n  private readonly _targetExtensionLifetime = this._register(new DisposableStore());');
-  contents = replaceOnce(contents, 'ExtensionIdentifier, IExtensionDescription', 'ExtensionIdentifier, ExtensionInstallationTarget, IExtension, bindExtensionDescription, IExtensionDescription');
-  contents = replaceOnce(contents, "import { IRemoteExtensionHostDataProvider, IRemoteExtensionHostInitData, RemoteExtensionHost } from '../common/remoteExtensionHost.js';\n", '');
-  contents = replaceOnce(contents, 'private async _scanWebExtensions(): Promise<IExtensionDescription[]> {', `private async _scanWebExtensions(): Promise<IExtensionDescription[]> {
-    const target = { kind: 'web' as const, profileId: this._userDataProfileService.currentProfile.id };`);
-  contents = replaceOnce(contents, '\t\t\t\t} catch (error) {\n\t\t\t\t\tthis._logService.error(error);\n\t\t\t\t}', '\t\t\t\t} catch (error) {\n\t\t\t\t\tthis._logService.error(error);\n          throw error;\n\t\t\t\t}');
-  contents = replaceOnce(contents, 'scanUserExtensions(this._userDataProfileService.currentProfile.extensionsResource, { skipInvalidExtensions: true })', 'scanCustomBuiltinExtensions({ skipInvalidExtensions: true })');
-  contents = replaceOnce(contents, 'return dedupExtensions(system, user, [], development, this._logService);', 'return dedupExtensions(system, user, [], development, this._logService).map(extension => bindExtensionDescription(extension, target));');
-  const resolveStart = contents.indexOf('\tprivate async _resolveExtensionsDefault(');
-  const resolveEnd = contents.indexOf('\n\tprotected _resolveExtensions()', resolveStart);
-  contents = replaceOnce(contents, contents.slice(resolveStart, resolveEnd), `
-  private async _resolveExtensionsDefault(emitter: AsyncIterableEmitter<ResolvedExtensions>) {
-    const [localExtensions, inventory] = await Promise.all([this._scanWebExtensions(),
-      browserGatewayId(0).then(gatewayId => scanTargetExtensions(this._workspaceContext,
-        extension => this._manifestProperties.getExtensionKind(extension), this._targetExtensionLifetime, gatewayId, this._logService))]);
-    this._setExtensionWorkspaceViews(inventory.views);
-    emitter.emitOne(new RemoteExtensions(inventory.extensions));
-    emitter.emitOne(new LocalExtensions(localExtensions));
+  let contents = source;
+  const replaceRegion = (start, end, replacement) => {
+    const at = contents.indexOf(start), until = contents.indexOf(end, at);
+    if (at < 0 || until < 0) throw new Error('内置 Worker 转换边界缺失：' + start);
+    contents = replaceOnce(contents, contents.slice(at, until), replacement);
+  };
+  replaceRegion('\tprotected override async _initialize(): Promise<void> {', '\n\tprivate _scanWebExtensionsPromise', '');
+  replaceRegion('\tprivate async _scanWebExtensions():', '\n\tprotected _resolveExtensions()', `
+  private async _scanWebExtensions(): Promise<IExtensionDescription[]> {
+    return this._scanWebExtensionsPromise ??= (async () => {
+      const [system, custom] = await Promise.all([
+        this._webExtensionsScannerService.scanSystemExtensions(),
+        this._webExtensionsScannerService.scanCustomBuiltinExtensions({ skipInvalidExtensions: true }),
+      ]);
+      return dedupExtensions(system.map(e => toExtensionDescription(e)), custom.map(e => toExtensionDescription(e)), [], [], this._logService);
+    })();
   }
 `);
-  contents = replaceOnce(contents, '@IWorkspaceContextService contextService: IWorkspaceContextService,', '@IWorkspaceContextService private readonly _workspaceContext: IWorkspaceContextService,');
-  contents = replaceOnce(contents, '@IExtensionManifestPropertiesService extensionManifestPropertiesService: IExtensionManifestPropertiesService,', '@IExtensionManifestPropertiesService private readonly _manifestProperties: IExtensionManifestPropertiesService,');
-  contents = replaceOnce(contents, '\n\t\t\textensionManifestPropertiesService,', '\n\t\t\t_manifestProperties,');
-  contents = replaceOnce(contents, '\n\t\t\tcontextService,', '\n\t\t\t_workspaceContext,');
-  contents = replaceOnce(contents, '\tprivate _initFetchFileSystem(): void {', `
-  protected override async _prepareExtensionHostRestart(location: ExtensionRunningLocation, pending: DisposableStore) {
-    if (location.kind !== ExtensionHostKind.LocalWebWorker || !location.installationTarget) return undefined;
-    const view = this._runningLocations.workspaceViews.find(view =>
-      installationTargetKey(view.installationTarget) === installationTargetKey(location.installationTarget!));
-    if (!view?.webHost || location.viewId !== view.viewId || JSON.stringify(location.workspaceIds) !== JSON.stringify(view.workspaceIds)) {
-      throw new Error('目标 Web 宿主恢复没有匹配原工作区视图，请重新载入窗口');
-    }
-    const previous = this._runningLocations.filterByRunningLocation(this.extensions, location);
-    const next = await reopenTargetWebHost(view, previous, pending);
-    await this._rebindWebExtensionHost(view, next.webHost, previous, next.extensions, pending);
-    return next.webHost;
-  }
-  protected override _bindExtension(extension: IExtension): IExtension {
-    // 这些事件来自原 Web management owner；Backend 事件必须携带其原生可信 target。
-    return { ...extension, installationTarget: extension.installationTarget ?? { kind: 'web', profileId: this._userDataProfileService.currentProfile.id } };
-  }
-  protected override _removalTarget(extension?: IExtension): ExtensionInstallationTarget {
-    return extension?.installationTarget ?? { kind: 'web', profileId: this._userDataProfileService.currentProfile.id };
-  }
-\tprivate _initFetchFileSystem(): void {`);
-  // 产品不运行单 remoteAuthority resolver；目标身份只从明确目录的实时发现取得。
-  const doStart = contents.indexOf('\tprivate async _doResolveExtensions(');
-  const doEnd = contents.indexOf('\n\tprotected async _onExtensionHostExit', doStart);
-  contents = replaceOnce(contents, contents.slice(doStart, doEnd), `
+  replaceRegion('\tprivate async _doResolveExtensions(', '\n\tprotected async _onExtensionHostExit', `
   private async _doResolveExtensions(emitter: AsyncIterableEmitter<ResolvedExtensions>): Promise<void> {
-    return this._resolveExtensionsDefault(emitter);
+    emitter.emitOne(new LocalExtensions(await this._scanWebExtensions()));
   }
 `);
+  replaceRegion('\tprivate _createRemoteExtensionHostDataProvider(', '\n}\n\nexport class BrowserExtensionHostKindPicker', '');
+  replaceRegion('\t\t\tcase ExtensionHostKind.Remote: {', '\n\t\t}\n\t}', '\t\t\tcase ExtensionHostKind.Remote: return null;');
+  replaceRegion('\tpublic static pickRunningLocation(', '\n\t}\n}\n\nregisterSingleton', `
+  public static pickRunningLocation(extensionKinds: ExtensionKind[], isInstalledLocally: boolean, _isInstalledRemotely: boolean, _preference: ExtensionRunningPreference): ExtensionHostKind | null {
+    return isInstalledLocally && extensionKinds.includes('web') ? ExtensionHostKind.LocalWebWorker : null;`);
   contents = replaceOnce(contents, '\t\t\tremoteAgentService,\n\t\t\tremoteAuthorityResolverService,\n\t\t\textensionEnablementService,', '\t\t\textensionEnablementService,');
-  contents = replaceOnce(contents, '\t\t@IRemoteAgentService private readonly _remoteAgentService: IRemoteAgentService,\n\t\t@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,\n', '');
-  const remoteStart = contents.indexOf('\t\t\tcase ExtensionHostKind.Remote: {');
-  const remoteEnd = contents.indexOf('\n\t\t}\n\t}', remoteStart);
-  contents = replaceOnce(contents, contents.slice(remoteStart, remoteEnd), `
-      case ExtensionHostKind.Remote: {
-        return this._instantiationService.createInstance(TargetExtensionHost, runningLocation, runningLocations, this._getExtensionRegistrySnapshotWhenReady);
-      }`);
-  contents = replaceOnce(contents, 'return this._instantiationService.createInstance(WebWorkerExtensionHost, runningLocation, startup, this._createLocalExtensionHostDataProvider(runningLocations, runningLocation, isInitialStart));', `const provider = this._createLocalExtensionHostDataProvider(runningLocations, runningLocation, isInitialStart);
-        const view = runningLocation.installationTarget ? runningLocations.workspaceViews.find(view =>
-          installationTargetKey(view.installationTarget) === installationTargetKey(runningLocation.installationTarget!)) : undefined;
-        if (runningLocation.installationTarget) {
-          if (!view?.webHost) throw new Error('目标 Web Worker 缺少该视图的冻结发布资格');
-          return this._instantiationService.createInstance(TargetWebExtensionHost, runningLocation, startup, provider, view.webHost);
-        }
-        return this._instantiationService.createInstance(WebWorkerExtensionHost, runningLocation, startup, provider);`);
-  contents = replaceOnce(contents, 'ExtensionIdentifier, ExtensionInstallationTarget, IExtension, bindExtensionDescription, IExtensionDescription',
-    'ExtensionIdentifier, ExtensionInstallationTarget, IExtension, bindExtensionDescription, installationTargetKey, IExtensionDescription');
-  const providerStart = contents.indexOf('\tprivate _createLocalExtensionHostDataProvider(');
-  const factoryEnd = contents.indexOf('\n}\n\nexport class BrowserExtensionHostKindPicker', providerStart);
-  contents = replaceOnce(contents, contents.slice(providerStart, factoryEnd), `
-  private _createLocalExtensionHostDataProvider(runningLocations: ExtensionRunningLocationTracker, desiredRunningLocation: ExtensionRunningLocation, _isInitialStart: boolean): IWebWorkerExtensionHostDataProvider {
-    return { getInitData: async (): Promise<IWebWorkerExtensionHostInitData> => {
-      const snapshot = await this._getExtensionRegistrySnapshotWhenReady();
-      const all = runningLocations.getHostExtensions(snapshot.extensions, desiredRunningLocation);
-      const mine = runningLocations.filterByRunningLocation(all, desiredRunningLocation);
-      return { extensions: new ExtensionHostExtensions(snapshot.versionId, all, mine.map(extension => extension.identifier)) };
-    } };
-  }
-`);
-  // UI-only Node 不能冒充 workspace 扩展；Backend 上的 browser-only 安装也不能混入窗口 Web profile。
-  const picker = contents.indexOf('\tpublic static pickRunningLocation(');
-  const bodyStart = contents.indexOf('\n\t\tconst result:', picker);
-  contents = replaceOnce(contents, contents.slice(bodyStart, contents.lastIndexOf('\n\t}\n}')), `
-    if (isInstalledRemotely) return extensionKinds.includes('workspace') ? ExtensionHostKind.Remote : null;
-    return isInstalledLocally && extensionKinds.includes('web') ? ExtensionHostKind.LocalWebWorker : null;
-`);
-  contents = replaceOnce(contents, `\t\tconst extensionHostFactory = new BrowserExtensionHostFactory(
-\t\t\textensionsProposedApi,
-\t\t\t() => this._scanWebExtensions(),
-\t\t\t() => this._getExtensionRegistrySnapshotWhenReady(),
-\t\t\tinstantiationService,
-\t\t\textensionEnablementService,
-\t\t\tlogService
-\t\t);`, `const extensionHostFactory = new BrowserExtensionHostFactory(() => this._getExtensionRegistrySnapshotWhenReady(), instantiationService);`);
-  const ctorStart = contents.indexOf('\n\tconstructor(', contents.indexOf('class BrowserExtensionHostFactory'));
-  const ctorEnd = contents.indexOf('\n\tcreateExtensionHost(', ctorStart);
-  contents = replaceOnce(contents, contents.slice(ctorStart, ctorEnd), `
-  constructor(private readonly _getExtensionRegistrySnapshotWhenReady: () => Promise<ExtensionDescriptionRegistrySnapshot>,
-    @IInstantiationService private readonly _instantiationService: IInstantiationService) { }
-`);
-  contents = contents.replace("import { PersistentConnectionEventType } from '../../../../platform/remote/common/remoteAgentConnection.js';\n", '');
-  contents = contents.replace('IRemoteAuthorityResolverService, RemoteAuthorityResolverError, ResolverResult', 'IRemoteAuthorityResolverService, ResolverResult');
-  contents = contents.replace('ResolvedExtensions, ResolverExtensions, checkEnabledAndProposedAPI, isResolverExtension', 'ResolvedExtensions');
-  contents = contents.replace('ExtensionRunningLocationTracker, filterExtensionDescriptions', 'ExtensionRunningLocationTracker');
-  contents = contents.replace('private readonly _browserEnvironmentService:', '_browserEnvironmentService:');
-  contents = contents.replace(/^import \{ IWorkspaceTrustManagementService \}[^\n]+\n/m, '');
-  contents = contents.replace(/^import \{ IRemoteExplorerService \}[^\n]+\n/m, '');
-  contents = contents.replace(/^\t\t@IWorkspaceTrustManagementService[^\n]+\n/m, '');
-  return contents.replace(/^\t\t@IRemoteExplorerService[^\n]+\n/m, '');
+  for (const line of [
+    "import { PersistentConnectionEventType } from '../../../../platform/remote/common/remoteAgentConnection.js';\n",
+    "import { IRemoteExtensionHostDataProvider, IRemoteExtensionHostInitData, RemoteExtensionHost } from '../common/remoteExtensionHost.js';\n",
+    "import { IUserDataInitializationService } from '../../userData/browser/userDataInit.js';\n",
+    "import { IUserDataProfileService } from '../../userDataProfile/common/userDataProfile.js';\n",
+    "import { IWorkspaceTrustManagementService } from '../../../../platform/workspace/common/workspaceTrust.js';\n",
+    "import { IRemoteExplorerService } from '../../remote/common/remoteExplorerService.js';\n",
+    '\t\t@IUserDataInitializationService private readonly _userDataInitializationService: IUserDataInitializationService,\n',
+    '\t\t@IUserDataProfileService private readonly _userDataProfileService: IUserDataProfileService,\n',
+    '\t\t@IWorkspaceTrustManagementService private readonly _workspaceTrustManagementService: IWorkspaceTrustManagementService,\n',
+    '\t\t@IRemoteExplorerService private readonly _remoteExplorerService: IRemoteExplorerService,\n',
+    '\t\t@IRemoteAgentService private readonly _remoteAgentService: IRemoteAgentService,\n',
+    '\t\t@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,\n',
+  ]) contents = replaceOnce(contents, line, '');
+  contents = contents.replace('private readonly _browserEnvironmentService:', '_browserEnvironmentService:')
+    .replace('IRemoteAuthorityResolverService, RemoteAuthorityResolverError, ResolverResult', 'IRemoteAuthorityResolverService, ResolverResult')
+    .replace('LocalExtensions, RemoteExtensions, ResolvedExtensions, ResolverExtensions, checkEnabledAndProposedAPI, isResolverExtension', 'LocalExtensions, ResolvedExtensions, checkEnabledAndProposedAPI');
+  return contents;
 }

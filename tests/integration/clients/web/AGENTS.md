@@ -35,8 +35,6 @@ web/
 
 ## 规范
 
-- `target_tabs_product.mjs` 经正式 Workbench、双 Gateway／Backend 和两个真实 Node 宿主检查公开 TabGroups 投影、身份、MultiDiff、移动及关闭；页面与 Chromium 关闭后继续核原管理服务身份及显式 Relay 库存归属。SSH 仍是具名 loopback 装具；未开放的 `$moveTab` 与 `goToFileUri` 只由定向转换测试覆盖，不冒充公开产品入口。
-- `target_configuration_scopes.mjs` 从真实托管 Backend 双根、原 VSIX 安装与挂接命令分别进入真实 Web Worker／Node 进程，共用一套公开 probe 与驱动；公开配置 API 经原 writer 生成 profile、稳定 `.code-workspace` 和 folder 设置后才模拟外改。核默认值、覆盖、缺省推导、语言、同宿主 watcher 通知和非法资源零写入；使用原 `_workbench.open` 打开原宿主 `configuration.resource_uri` 的 JSON，真实键盘产生 dirty，扩展更新拒绝覆盖，较新磁盘正文经原保存冲突保留，再沿原 revert 和公开并发更新核队列不丢字段。业务 JSONC 保持，不以此代替全部竞态或原生平台验收。
 - 完整产品页面场景必须通过真实 Gateway 访问；局部组件 harness 必须明确标识为 Integration。
 - 完整 Workbench 页面使用 Gateway 默认根 URL，不依赖测试专用的 Agent 查询参数；独立 MCP 授权仍使用既有授权路由。
 - 服务替身和页面路由拦截必须显式记录，不能伪造成功状态。

@@ -29,14 +29,13 @@ import {
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
 
 const cliArguments = process.argv.slice(2);
-const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });
+const developmentLayout = resolveDevelopmentLayout();
 const {
   projectRoot,
   boxteamHome,
   defaultWorkspaceRoot,
   portOffset,
   ports,
-  extensionHost,
 } = developmentLayout;
 const logContract = loadRuntimeLogContract(projectRoot);
 const webRoot = path.join(projectRoot, "src", "clients", "workbench");
@@ -185,12 +184,6 @@ function writeDevelopmentManifest() {
         web_assets: null,
         chromium_executable:
           process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
-        extension_host: extensionHost === null
-          ? null
-          : {
-              node_executable: extensionHost.nodeExecutable,
-              component_root: extensionHost.componentRoot,
-            },
         node: {
           source: "launcher",
           executable: null,

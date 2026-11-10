@@ -1,4 +1,4 @@
-"""以独立进程和真实 HTTP 验证 Gateway listener 与原管理 owner 的关闭顺序。"""
+"""以独立进程和真实 HTTP 验证 Gateway listener 与显式服务的关闭顺序。"""
 
 from __future__ import annotations
 
@@ -54,13 +54,13 @@ class Owner:
                 await asyncio.sleep(0.01)
         record("quiesce-finish")
 
-owner = Owner()
+owned_service = Owner()
 
 @asynccontextmanager
 async def lifespan(app):
     if mode == "startup_error":
         raise RuntimeError("original-startup-failure")
-    app.state.extension_management = owner
+    app.state.owned_service = owned_service
     record("startup")
 
     async def after_http_startup():
@@ -76,9 +76,9 @@ async def lifespan(app):
 
     try:
         yield {
-            "extension_management": owner,
+            "owned_service": owned_service,
             "after_http_startup": after_http_startup,
-            "before_http_shutdown": owner.quiesce,
+            "before_http_shutdown": owned_service.quiesce,
         }
     finally:
         record("lifespan-exit")
@@ -100,7 +100,7 @@ async def child():
 @app.post("/callback")
 async def callback(request: Request):
     record("callback")
-    return {"original_owner": request.state.extension_management is owner}
+    return {"original_owner": request.state.owned_service is owned_service}
 '''
 
 
@@ -172,7 +172,7 @@ def runner_process(request: pytest.FixtureRequest) -> Iterator[RunnerProcess]:
     pytest.param(("normal", "signal"), marks=pytest.mark.skipif(sys.platform == "win32", reason="POSIX 信号")),
     ("normal", "eof"),
 ], indirect=True)
-def test_runner_keeps_listener_until_original_owner_quiesces(runner_process: RunnerProcess) -> None:
+def test_runner_keeps_listener_until_owned_service_quiesces(runner_process: RunnerProcess) -> None:
     runner = runner_process
     wait_for_http_ok(runner.url + "/health", runner.process, timeout_seconds=5)
     assert isinstance(runner.process.args, list)
@@ -310,7 +310,7 @@ def test_authenticated_shutdown_uses_original_runner_and_keeps_callback_until_qu
 
 @pytest.mark.parametrize("runner_process", [("normal", "eof")], indirect=True)
 @pytest.mark.parametrize("timeout_before_release", [False, True])
-def test_fixture_eof_close_waits_for_original_owner_and_releases_port(
+def test_fixture_eof_close_waits_for_owned_service_and_releases_port(
     runner_process: RunnerProcess, timeout_before_release: bool,
 ) -> None:
     runner = runner_process

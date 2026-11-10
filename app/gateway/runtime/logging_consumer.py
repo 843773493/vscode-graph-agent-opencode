@@ -27,7 +27,6 @@ from app.schemas.runtime_logging import (
 )
 
 if TYPE_CHECKING:
-    from app.gateway.runtime.extension_management import GatewayExtensionManagement
     from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 
 ProgressRecorder = Callable[[dict[str, object]], None]
@@ -75,7 +74,6 @@ class RuntimeLoggingConsumer:
         self, *, registry: GatewayWorkspaceRegistry, candidate: GatewayConfig,
         generation: str, fencing_token_digest: str | None,
         fence_check: Callable[[], None] | None, record: ProgressRecorder,
-        extension_management: GatewayExtensionManagement | None = None,
         service_plugins: GatewayPluginRuntime | None = None,
     ) -> None:
         self._registry = registry
@@ -84,7 +82,6 @@ class RuntimeLoggingConsumer:
         self._fencing_token_digest = fencing_token_digest
         self._fence_check = fence_check
         self._record = record
-        self._extension_management = extension_management
         self._service_plugins = service_plugins
         self._targets: list[LoggingTarget] = []
         self._locked = False
@@ -114,7 +111,7 @@ class RuntimeLoggingConsumer:
         control = RuntimeLoggingProcessControl(client=self._client, token=get_gateway_local_token())
 
         self._targets = [LoggingTarget(process) for process in runtime_logging_processes(
-            self._registry, control, self._extension_management, self._service_plugins,
+            self._registry, control, self._service_plugins,
         )]
 
         identities: set[tuple[str, int, str]] = set()

@@ -20,8 +20,6 @@ runtime/
 │   └── test_ssh_process.py               SSH 进程生命周期
 ├── gateway runtime coordination
 │   ├── test_development_restart.py       开发服务重启
-│   ├── test_extension_management.py      常驻管理取消、未知回执和失败资源回收
-│   ├── test_extension_download.py        制品原始流、重定向、代理凭据与传输日志
 │   ├── test_gateway_runtime_lock_table.py 运行时互斥锁
 │   └── test_workspace_reconnect.py       重连、Backend owner 生命周期与接管
 ```

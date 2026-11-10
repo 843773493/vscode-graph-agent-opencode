@@ -164,28 +164,29 @@ test('ext快速访问仅保留原管理入口，不再包含旧市场安装实�
 });
 
 test('浏览器内置管理只返回system和custom内置项，不再查询已退役的用户安装域', async () => {
-  const path = join(root, 'src/extensions/nativeManagement.ts');
+  const path = join(root, 'src/extensions/builtinManagement.ts');
   const parsed = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
   const owner = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'WebExtensionManagementService');
   if (!owner || !ts.isClassDeclaration(owner)) throw new Error('内置扩展管理服务缺失');
   const method = owner.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === 'getInstalled');
   if (!method) throw new Error('内置扩展清单入口缺失');
   const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class Service { ${method.getText(parsed)} }`);
-  const Service = new Function('ExtensionType', 'toLocalExtension', javascript + '\nreturn Service;')(
-    { System: 0, User: 1 }, (extension: object) => extension,
-  ) as new () => { getInstalled(type?: number): Promise<{ identifier: string; installationTarget: object }[]> };
+  const Service = new Function('ExtensionType', javascript + '\nreturn Service;')(
+    { System: 0, User: 1 },
+  ) as new () => { getInstalled(type?: number): Promise<{ identifier: string; isApplicationScoped: boolean; source: string }[]> };
   const service = new Service(), calls: string[] = [];
-  Object.assign(service, { assertProfile: () => {}, profiles: { currentProfile: { id: 'original-profile' } }, scanner: {
+  Object.assign(service, { scanner: {
     scanSystemExtensions: async () => { calls.push('system'); return [{ identifier: 'system' }]; },
     scanCustomBuiltinExtensions: async () => { calls.push('custom'); return [{ identifier: 'custom' }]; },
-  }, readTargetOptions: () => { throw new Error('不能发现旧安装域'); } });
+  } });
   expect((await service.getInstalled()).map(item => item.identifier)).toEqual(['system', 'custom']);
   expect(calls.splice(0)).toEqual(['system', 'custom']);
   expect((await service.getInstalled(0)).map(item => item.identifier)).toEqual(['system']);
   expect(calls.splice(0)).toEqual(['system']);
   const user = await service.getInstalled(1);
   expect(user.map(item => item.identifier)).toEqual(['custom']);
-  expect(user[0]!.installationTarget).toEqual({ kind: 'web', profileId: 'original-profile' });
+  expect(user[0]!.isApplicationScoped).toBe(true);
+  expect(user[0]!.source).toBe('resource');
   expect(calls).toEqual(['custom']);
 });
 
@@ -210,13 +211,8 @@ test('实际转换只注册一个项目 MCP 服务，原列表／详情继续注
   expect(source('mcp.contribution.ts').text).toContain('EditorPaneDescriptor.create(');
 });
 
-test('动态MCP Provider的扩展API在浏览器与Node宿主拒绝注册，不发布到原MCP注册表', async () => {
+test('内置Worker的动态MCP Provider API拒绝注册，不发布到原MCP注册表', () => {
   const apiSource = source('extHost.api.impl.ts');
-  const nodeRuntimeTransform = sourceTransform(root, { commit: pinnedUpstreamCommit }, [], { runtime: 'node' });
-  const apiPath = join(root, 'upstream/src/vs/workbench/api/common/extHost.api.impl.ts');
-  const nodeRuntimeSource = ts.createSourceFile(apiPath,
-    await nodeRuntimeTransform(apiPath, await readFile(apiPath, 'utf8')),
-    ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const getBody = (parsed: ts.SourceFile): string => {
     let body: ts.Block | undefined;
     const visit = (node: ts.Node) => {
@@ -227,22 +223,17 @@ test('动态MCP Provider的扩展API在浏览器与Node宿主拒绝注册，不�
     if (!body) throw new Error('动态 MCP Provider API 入口缺失');
     return body.getText(parsed);
   };
-  const browserBody = getBody(apiSource);
-  const nodeBody = getBody(nodeRuntimeSource);
-  expect(browserBody).not.toContain('registerMcpConfigurationProvider');
-  expect(nodeBody).not.toContain('registerMcpConfigurationProvider');
-
-  for (const body of [browserBody, nodeBody]) {
-    const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(
-      'function registerMcpServerDefinitionProvider(id: string, _provider: object) ' + body,
-    );
-    let registryCalls = 0;
-    const register = new Function('extHostMcp', javascript + '\nreturn registerMcpServerDefinitionProvider;')(
-      { registerMcpConfigurationProvider() { registryCalls += 1; } },
-    ) as (id: string, provider: object) => never;
-    expect(() => register('legacy-provider', {})).toThrow('已停用');
-    expect(registryCalls).toBe(0);
-  }
+  const body = getBody(apiSource);
+  expect(body).not.toContain('registerMcpConfigurationProvider');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(
+    'function registerMcpServerDefinitionProvider(id: string, _provider: object) ' + body,
+  );
+  let registryCalls = 0;
+  const register = new Function('extHostMcp', javascript + '\nreturn registerMcpServerDefinitionProvider;')(
+    { registerMcpConfigurationProvider() { registryCalls += 1; } },
+  ) as (id: string, provider: object) => never;
+  expect(() => register('legacy-provider', {})).toThrow('已停用');
+  expect(registryCalls).toBe(0);
 });
 
 test.each(['InstallFromManifestAction', 'OpenUserMcpResourceCommand', 'OpenRemoteUserMcpResourceCommand', 'OpenWorkspaceMcpResourceCommand', 'OpenWorkspaceFolderMcpResourceCommand', 'SetOAuthClientSecret', 'RemoveStoredInput', 'EditStoredInput'])(

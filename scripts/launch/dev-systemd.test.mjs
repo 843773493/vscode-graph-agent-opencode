@@ -158,23 +158,6 @@ describe("源码开发运行目录", () => {
 });
 
 describe("transient systemd 启动", () => {
-  test("Node 宿主 opt-in 参数进入 dev 主进程命令", () => {
-    const node = path.join(fixtureRoot, "runtime", "node");
-    const component = path.join(fixtureRoot, "runtime", "extension host");
-    const unit = buildTransientDevelopmentUnit({ cwd: fixtureProjectRoot, environment: {},
-      args: ["--extension-host-node", node, "--extension-host-component", component] });
-    expect(unit.layout.extensionHost).toEqual({ nodeExecutable: node, componentRoot: component });
-    expect(unit.systemdRunArguments.slice(-7)).toEqual([
-      "--",
-      path.resolve(process.execPath),
-      path.join(fixtureProjectRoot, "scripts/launch/dev.mjs"),
-      "--extension-host-node",
-      node,
-      "--extension-host-component",
-      component,
-    ]);
-  });
-
   test("使用 collect、Restart=no 和仓库内 BOXTEAM_HOME", () => {
     const unit = buildTransientDevelopmentUnit({
       cwd: fixtureProjectRoot,

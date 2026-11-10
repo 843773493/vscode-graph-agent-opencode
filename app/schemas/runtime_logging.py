@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.logging_contract import load_runtime_log_contract
 
 RuntimeLoggingService = Annotated[str, Field(min_length=1)]
-RuntimeLoggingHttpService = Literal["gateway", "backend", "extension-management", "plugin"]
+RuntimeLoggingHttpService = Literal["gateway", "backend", "plugin"]
 
 
 class RuntimeLoggingSink(BaseModel):

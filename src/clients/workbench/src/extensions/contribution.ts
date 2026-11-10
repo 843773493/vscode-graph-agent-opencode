@@ -8,13 +8,13 @@ import { loadSearchScope } from '../search/target.js';
 import { workspaceFileUri } from '../workspaceFiles.js';
 
 registerAction2(class AttachExtensionWorkspaceViews extends Action2 {
-  constructor() { super({ id: 'boxteam.extensions.attachWorkspaceViews', title: { value: '扩展：挂接窗口工作区并重新载入', original: 'Extensions: Attach Window Workspaces and Reload' }, f1: true }); }
+  constructor() { super({ id: 'boxteam.extensions.attachWorkspaceViews', title: { value: '挂接窗口工作区并重新载入', original: 'Attach Window Workspaces and Reload' }, f1: true }); }
   async run(accessor: ServicesAccessor): Promise<void> {
     const quickInput = accessor.get(IQuickInputService), editing = accessor.get(IWorkspaceEditingService);
     const routes = await gateway.workspaces(false);
     const selected = await quickInput.pick(routes.items.map(workspace => ({ label: workspace.name,
       description: workspace.gateway_id + ' / ' + workspace.workspace_id + ' · ' + workspace.status, workspace,
-    })), { canPickMany: true, placeHolder: '明确选择本窗口的工作区集合；接受后重新载入，Node 扩展只看见所属 Backend 的目录' });
+    })), { canPickMany: true, placeHolder: '明确选择本窗口的工作区集合；接受后重新载入，内置语言服务使用这一完整范围' });
     if (!selected?.length) return;
     const scope = await loadSearchScope(selected.map(item => gatewayWorkspaceOwner(item.workspace)), new AbortController().signal);
     const folders = scope.workspaces.map(workspace => ({

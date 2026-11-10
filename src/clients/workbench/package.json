@@ -6,8 +6,7 @@
   "scripts": {
     "build": "bun scripts/build.mjs",
     "dev": "node scripts/dev.mjs",
-    "typecheck": "bun scripts/typecheck.mjs",
-    "typecheck:node": "bun scripts/typecheckNode.mjs"
+    "typecheck": "bun scripts/typecheck.mjs"
   },
   "dependencies": {
     "@hpke/core": "^1.9.0",

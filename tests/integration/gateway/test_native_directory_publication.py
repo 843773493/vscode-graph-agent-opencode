@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TypeVar
@@ -19,7 +19,6 @@ from app.core.resource_uri import parse_resource_uri
 from app.core.workspace_identity import read_workspace_id
 from app.gateway.lifespan import lifespan
 from app.gateway.routes import native_directories
-from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.schemas.gateway.native_directories import (
     NativeDirectoryBindingDTO,
     NativeDirectoryResolveDTO,
@@ -54,7 +53,7 @@ def _resolve_reply(**values: str) -> NativeDirectoryResolveDTO:
 
 
 @asynccontextmanager
-async def publication_lifespan(application: FastAPI) -> AsyncIterator[dict[str, GatewayExtensionManagement | None]]:
+async def publication_lifespan(application: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitable[None]] | None]]:
     with patch.object(native_directories, "NativeDirectoryBindingDTO", _binding_reply), patch.object(
         native_directories, "NativeDirectoryResolveDTO", _resolve_reply,
     ):

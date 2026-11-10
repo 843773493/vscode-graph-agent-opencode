@@ -19,7 +19,6 @@ from app.schemas.gateway.diagnostics import (
     GatewayHealthDTO,
 )
 from app.schemas.gateway.directory import GatewayDirectoryListDTO
-from app.schemas.gateway.extension_host import ExtensionTargetDTO
 from app.schemas.gateway.lifecycle import GatewayRuntimeBlockerDTO
 from app.schemas.gateway.native_directories import NativeDirectoryBindRequest
 from app.schemas.gateway.port_forwarding import (
@@ -39,31 +38,6 @@ from app.schemas.gateway.workspaces import (
     GatewayServiceStatusDTO,
 )
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
-
-
-def test_extension_target_resolution_http_contract_uses_original_gateway_route(
-    gateway_openapi: JsonSchemaValue,
-) -> None:
-    original = deepcopy(gateway_openapi)
-    operation = gateway_openapi["paths"]["/api/gateway/extension-targets/resolve"]["post"]
-    body = operation["requestBody"]["content"]["application/json"]["schema"]
-    assert body["$ref"].endswith("/ExtensionHostTargetRequest")
-    envelope = gateway_openapi["components"]["schemas"][
-        operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[1]
-    ]
-    target_schema = envelope["properties"]["data"]["anyOf"][0]["$ref"]
-    assert target_schema.endswith("/ExtensionTargetViewDTO")
-    assert {"ExtensionTargetViewDTO", "ExtensionInstallationInventoryRequest"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
-    openapi.assert_gateway_http_schemas(gateway_openapi)
-    assert gateway_openapi == original
-
-    target = ExtensionTargetDTO.model_validate({"protocol_version": 1, "gateway_id": "gateway_" + "a" * 32,
-        "backend_id": "01900000-0000-7000-8000-000000000001", "source": "live",
-        "capabilities": {"installation_manage": True, "host_manage": False}})
-    assert target.capabilities.installation_manage and not target.capabilities.host_manage
-    with pytest.raises(ValidationError):
-        ExtensionTargetDTO.model_validate({**target.model_dump(),
-            "capabilities": {"installation_manage": False, "host_manage": False}})
 
 
 def test_workspace_file_proxy_paths_expose_one_canonical_workspace_identity(gateway_openapi: JsonSchemaValue) -> None:

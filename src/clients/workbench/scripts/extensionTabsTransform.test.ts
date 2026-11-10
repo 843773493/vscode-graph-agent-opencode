@@ -1,9 +1,6 @@
 import { expect, test } from 'bun:test';
-import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { build } from 'esbuild';
 import ts from 'typescript';
 import { diffSets } from '../upstream/src/vs/base/common/collections.js';
 import { Emitter, Event } from '../upstream/src/vs/base/common/event.js';
@@ -11,22 +8,12 @@ import { DisposableMap, DisposableStore } from '../upstream/src/vs/base/common/l
 import { observableValue } from '../upstream/src/vs/base/common/observable.js';
 import { isEqual } from '../upstream/src/vs/base/common/resources.js';
 import { assertReturnsDefined } from '../upstream/src/vs/base/common/types.js';
-import { isUriComponents, URI } from '../upstream/src/vs/base/common/uri.js';
+import { URI } from '../upstream/src/vs/base/common/uri.js';
 import type { IEditorTabGroupDto, TabOperation } from '../upstream/src/vs/workbench/api/common/extHost.protocol.js';
-import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform } from './sourceTransform.mjs';
+import { pinnedUpstreamCommit, sourceTransform } from './sourceTransform.mjs';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
-// URI业务依赖也消费实际转换源码；共享原URI类，避免装具产生第二套instanceof身份。
-const uriPath = join(root, 'upstream/src/vs/base/common/uri.ts');
-const uriBundle = resolve('out/tests/src/clients/workbench/scripts/extensionTabsTransform/artifacts', randomUUID() + '.mjs');
-await build({ stdin: { contents: "export { TargetUriTransformer, hostOwnsWorkspaceResource } from '../src/extensions/targetUris.js';",
-  resolveDir: join(root, 'scripts') }, outfile: uriBundle, bundle: true, format: 'esm', platform: 'node', target: 'es2024',
-  plugins: [{ name: 'shared-original-uri', setup(builder) {
-    builder.onResolve({ filter: /(?:^|\/)uri\.(?:js|ts)$/ }, args => resolve(args.resolveDir, args.path).replace(/\.js$/, '.ts') === uriPath
-      ? { path: pathToFileURL(uriPath).href, external: true } : undefined);
-  } }, buildSourcePlugin(root, transform)], tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
-const { TargetUriTransformer, hostOwnsWorkspaceResource } = await import(pathToFileURL(uriBundle).href) as typeof import('../src/extensions/targetUris.js');
 
 interface TabInput {
   uri?: URI;
@@ -170,7 +157,7 @@ function loadRuntime(): Promise<Runtime> {
     const receiver = evaluate(await declarations('src/vs/workbench/api/common/extHostEditorTabs.ts', receiverNames), receiverNames,
       { Emitter, URI, diffSets, assertReturnsDefined, typeConverters, ...types, ...protocol, MainContext: { MainThreadEditorTabs: {} } });
     const owner = evaluate(await declarations('src/vs/workbench/api/browser/mainThreadEditorTabs.ts', ['MainThreadEditorTabs'], true), ['MainThreadEditorTabs'], {
-      Event, URI, DisposableMap, DisposableStore, isEqual, hostOwnsWorkspaceResource, ...editor, ...grouping, ...positions, ...columns, ...protocol,
+      Event, URI, DisposableMap, DisposableStore, isEqual, ...editor, ...grouping, ...positions, ...columns, ...protocol,
       EditorInput, AbstractTextResourceEditorInput, NotebookEditorInput, CustomEditorInput, WebviewInput, TerminalEditorInput,
       ChatEditorInput, SideBySideEditorInput, DiffEditorInput, MergeEditorInput, InteractiveEditorInput, MultiDiffEditorInput,
       ExtHostContext: { ExtHostEditorTabs: {} },
@@ -180,23 +167,9 @@ function loadRuntime(): Promise<Runtime> {
   })();
 }
 
-function makeHost(gatewayId: string, workspaceIds: string[]) {
-  const binding = { gateway_id: gatewayId, backend_id: '00000000-0000-4000-8000-000000000001', initialization: {
-    os: 'linux', parent_pid: 1, logs_location_uri: 'file:///target/logs',
-    environment: { app_root_uri: 'file:///target/app', global_storage_home_uri: 'file:///target/global',
-      workspace_storage_home_uri: 'file:///target/storage', profile_id: 'default',
-      remote_settings: { native_uri: 'file:///target/profile/settings.json', resource_uri: `boxteam://${gatewayId}/profile/default/settings` } },
-    workspace: { id: `${gatewayId}-view`, name: '明确工作区视图', folders: workspaceIds.map(id => ({ workspace_id: id, name: id,
-      resource_uri: `boxteam://workspace/${id}/resources/files/root`, native_uri: `file:///target/${id}` })) },
-  } };
-  const uriTransformer = new TargetUriTransformer(binding as never, () => []);
-  return { host: { binding, targetContext: { kind: 'node', connection: binding }, uriTransformer }, roots: uriTransformer.folders.map(folder => folder.uri), uriTransformer };
-}
-const hostA = makeHost('gateway-tabs', ['workspace-a1', 'workspace-a2']);
-const hostB = makeHost('gateway-tabs', ['workspace-b']);
-const fileA = (name: string, index = 0) => URI.joinPath(hostA.roots[index], name);
-const fileB = (name: string) => URI.joinPath(hostB.roots[0], name);
-const text = (label: string, uri = fileA(label)) => new AbstractTextResourceEditorInput(label, uri);
+const fileOne = (name: string, index = 0) => URI.file(`/workspaces/one-${index + 1}/${name}`);
+const fileTwo = (name: string) => URI.file(`/workspaces/two/${name}`);
+const text = (label: string, uri = fileOne(label)) => new AbstractTextResourceEditorInput(label, uri);
 
 interface EditorChange { groupId: number; event: { kind: number; editor?: EditorInput; editorIndex?: number; oldEditorIndex?: number } }
 class EditorGroup {
@@ -285,7 +258,7 @@ class EditorModel {
 }
 
 type Packet = { kind: 'model'; value: IEditorTabGroupDto[] } | { kind: 'group'; value: IEditorTabGroupDto } | { kind: 'operation'; value: TabOperation };
-function connect(model: EditorModel, target: typeof hostA | undefined) {
+function connect(model: EditorModel) {
   let owner!: MainThread;
   const receiver = new model.runtime.ExtHost({ getProxy: () => ({
     $closeTab: (ids: string[], focus?: boolean) => owner.$closeTab(ids, focus),
@@ -297,12 +270,7 @@ function connect(model: EditorModel, target: typeof hostA | undefined) {
   subscriptions.add(receiver.tabGroups.onDidChangeTabs(event => tabsChanged.push(event)));
   subscriptions.add(receiver.tabGroups.onDidChangeTabGroups(event => groupsChanged.push(event)));
   function wire<T>(value: T): T {
-    return JSON.parse(JSON.stringify(value, (_key, item: unknown) => {
-      if (target && isUriComponents(item) && '$mid' in item && item.$mid === 1) {
-        return target.uriTransformer.transformOutgoing(item);
-      }
-      return item;
-    }));
+    return JSON.parse(JSON.stringify(value));
   }
   const proxy = {
     $acceptEditorTabModel(value: IEditorTabGroupDto[]) {
@@ -318,7 +286,7 @@ function connect(model: EditorModel, target: typeof hostA | undefined) {
       try { receiver.$acceptTabOperation(wire(value)); } catch (error) { errors.push(error); throw error; }
     },
   };
-  owner = new model.runtime.MainThread({ extensionHost: target?.host ?? { binding: undefined }, getProxy: () => proxy },
+  owner = new model.runtime.MainThread({ getProxy: () => proxy },
     model, { getValue: () => 'right' }, model);
   return { owner, receiver, packets, errors, tabsChanged, groupsChanged,
     group: (group: EditorGroup) => assertReturnsDefined(receiver._extHostTabGroups.find(value => value.groupId === group.id)),
@@ -335,117 +303,72 @@ function operations(connection: Connection, kind: number) {
 }
 async function ready() { await Promise.resolve(); await Promise.resolve(); }
 
-test('真实 owner 到原 receiver：完整 input 按 A1/A2 view 隔离，所有组和真实 active group 保留，Web 看完整窗口', async () => {
+test('真实 owner 到 receiver：完整编辑器窗口模型和真实 active group 全部保留', async () => {
   const runtime = await loadRuntime();
-  const a1 = text('a1.ts'), a2 = text('a2.ts', fileA('a2.ts', 1)), b = text('b.ts', fileB('b.ts'));
-  const merge = (label: string, last: URI) => new MergeEditorInput(label, fileA('base'), { uri: fileA('left') }, { uri: last }, fileA('result'));
+  const a1 = text('a1.ts'), a2 = text('a2.ts', fileOne('a2.ts', 1)), b = text('b.ts', fileTwo('b.ts'));
   const editors = [b, a1, a2,
-    new DiffEditorInput('diff-own', a1, a2), new DiffEditorInput('diff-mixed', a1, b),
-    new DiffEditorInput('notebook-own', new NotebookEditorInput('nb1', fileA('1.ipynb')), new NotebookEditorInput('nb2', fileA('2.ipynb', 1))),
-    new DiffEditorInput('notebook-mixed', new NotebookEditorInput('nb1', fileA('1.ipynb')), new NotebookEditorInput('nb-b', fileB('2.ipynb'))),
-    new CustomEditorInput('custom-own', fileA('image.bin')), new SideBySideEditorInput('side-own', a1, a2),
-    new SideBySideEditorInput('side-mixed', a1, b), new InteractiveEditorInput('interactive-own', fileA('interactive'), fileA('input')),
-    new InteractiveEditorInput('interactive-mixed', fileA('interactive2'), fileB('input')), merge('merge-own', fileA('right', 1)),
-    merge('merge-mixed', fileB('right')), new WebviewInput('webview'), new TerminalEditorInput('terminal'), new ChatEditorInput('chat'),
-    text('outside-native', URI.file('/outside/unbound.txt')), text('other-gateway', fileA('same.ts').with({ authority: 'foreign-gateway' }))];
-  const model = new EditorModel(runtime, [editors, [text('b-active.ts', fileB('b-active.ts'))], []]);
+    new DiffEditorInput('diff', a1, a2),
+    new DiffEditorInput('notebook-diff', new NotebookEditorInput('nb1', fileOne('1.ipynb')), new NotebookEditorInput('nb2', fileTwo('2.ipynb'))),
+    new CustomEditorInput('custom', fileOne('image.bin')), new SideBySideEditorInput('side', a1, a2),
+    new InteractiveEditorInput('interactive', fileOne('interactive'), fileTwo('input')),
+    new MergeEditorInput('merge', fileOne('base'), { uri: fileOne('left') }, { uri: fileTwo('right') }, fileOne('result')),
+    new WebviewInput('webview'), new TerminalEditorInput('terminal'), new ChatEditorInput('chat'),
+    text('outside-native', URI.file('/outside/unbound.txt')), text('other-scheme', URI.parse('boxteam://workspace/files/same.ts'))];
+  const model = new EditorModel(runtime, [editors, [text('active.ts', fileTwo('active.ts'))], []]);
   model.groups[0].activeEditor = a1; model.activeGroup = model.groups[1];
-  const a = connect(model, hostA), other = connect(model, hostB), web = connect(model, undefined);
+  const connection = connect(model);
   try {
     await ready();
-    expect(a.receiver.tabGroups.all).toHaveLength(3);
-    expect(other.receiver.tabGroups.all).toHaveLength(3);
-    expect(labels(a.group(model.groups[0]).apiObject)).toEqual(['a1.ts', 'a2.ts', 'diff-own', 'notebook-own', 'custom-own', 'side-own', 'interactive-own', 'merge-own']);
-    expect(labels(other.group(model.groups[0]).apiObject)).toEqual(['b.ts']);
-    expect(a.receiver.tabGroups.activeTabGroup).toBe(a.group(model.activeGroup).apiObject);
-    expect(a.receiver.tabGroups.activeTabGroup.tabs).toEqual([]);
-    expect(a.receiver.tabGroups.activeTabGroup.activeTab).toBeUndefined();
-    expect(other.receiver.tabGroups.activeTabGroup.activeTab?.label).toBe('b-active.ts');
-    expect(a.group(model.groups[0]).apiObject.tabs[0].input?.uri?.toString()).toBe('file:///target/workspace-a1/a1.ts');
-    expect(a.group(model.groups[0]).apiObject.tabs[1].input?.uri?.toString()).toBe('file:///target/workspace-a2/a2.ts');
-    expect(labels(web.group(model.groups[0]).apiObject)).toEqual(editors.map(editor => editor.label));
-    expect(web.group(model.groups[0]).apiObject.tabs[1].input?.uri?.toString()).toBe(a1.resource!.toString());
-    expect(web.receiver.tabGroups.activeTabGroup).toBe(web.group(model.activeGroup).apiObject);
-    const projectedIds = a.receiver._extHostTabGroups.flatMap(group => group.tabs.map(tab => tab.tabId));
-    expect(projectedIds.every(id => /^\d+~\d+$/.test(id))).toBe(true);
-    expect([a.errors, other.errors, web.errors]).toEqual([[], [], []]);
-  } finally { a.dispose(); other.dispose(); web.dispose(); model.dispose(); }
+    expect(connection.receiver.tabGroups.all).toHaveLength(3);
+    expect(labels(connection.group(model.groups[0]).apiObject)).toEqual(editors.map(editor => editor.label));
+    expect(connection.receiver.tabGroups.activeTabGroup).toBe(connection.group(model.activeGroup).apiObject);
+    expect(connection.receiver.tabGroups.activeTabGroup.activeTab?.label).toBe('active.ts');
+    expect(connection.group(model.groups[0]).apiObject.tabs[1].input?.uri?.toString()).toBe('file:///workspaces/one-1/a1.ts');
+    expect(connection.group(model.groups[0]).apiObject.tabs[2].input?.uri?.toString()).toBe('file:///workspaces/one-2/a2.ts');
+    expect(connection.receiver._extHostTabGroups.flatMap(group => group.tabs.map(tab => tab.tabId)).every(id => /^\d+~\d+$/.test(id))).toBe(true);
+    expect(connection.errors).toEqual([]);
+  } finally { connection.dispose(); model.dispose(); }
 });
 
-test('增量 open/close/move 使用 projected index，状态更新及原 Tab/TabGroup/API 身份连续保留', async () => {
-  const runtime = await loadRuntime();
-  const a1 = text('one.ts'), a2 = text('two.ts'), b0 = text('b0', fileB('b0')), b1 = text('b1', fileB('b1'));
-  const model = new EditorModel(runtime, [[b0, a1, b1, a2], [text('b2', fileB('b2'))]]);
-  model.groups[0].activeEditor = a1;
-  const connection = connect(model, hostA), group = model.groups[0];
+test('增量 open/close/move 使用真实索引并保留 Tab、TabGroup 和 API 对象身份', async () => {
+  const runtime = await loadRuntime(), one = text('one.ts'), two = text('two.ts');
+  const model = new EditorModel(runtime, [[one, two]]), connection = connect(model), group = model.groups[0];
+  model.groups[0].activeEditor = one;
   try {
     await ready();
     const api = connection.receiver.tabGroups, originalGroup = connection.group(group), groupApi = originalGroup.apiObject;
-    const [originalOne, originalTwo] = originalGroup.tabs, [one, two] = groupApi.tabs;
-    const retained = new Map<object, string>([[api, 'api'], [originalGroup, 'group'], [groupApi, 'groupApi'], [originalOne, 'one'], [originalTwo, 'two'], [one, 'oneApi'], [two, 'twoApi']]);
-    a2.label = 'two-renamed.ts'; model.emit(group, 'EDITOR_LABEL', a2, 3);
-    a2.dirty = true; model.emit(group, 'EDITOR_DIRTY', a2, 3);
-    group.sticky.add(a2); model.emit(group, 'EDITOR_STICKY', a2, 3);
-    group.pinned.delete(a2); model.emit(group, 'EDITOR_PIN', a2, 3);
-    expect(two.label).toBe('two-renamed.ts'); expect(two.isDirty).toBe(true); expect(two.isPinned).toBe(true); expect(two.isPreview).toBe(true);
+    const [originalOne, originalTwo] = originalGroup.tabs, [oneApi, twoApi] = groupApi.tabs;
+    two.label = 'two-renamed.ts'; model.emit(group, 'EDITOR_LABEL', two, 1);
+    two.dirty = true; model.emit(group, 'EDITOR_DIRTY', two, 1);
+    group.sticky.add(two); model.emit(group, 'EDITOR_STICKY', two, 1);
+    group.pinned.delete(two); model.emit(group, 'EDITOR_PIN', two, 1);
+    expect([twoApi.label, twoApi.isDirty, twoApi.isPinned, twoApi.isPreview]).toEqual(['two-renamed.ts', true, true, true]);
     expect(operations(connection, runtime.operations.TAB_UPDATE).slice(-4).map(value => value.index)).toEqual([1, 1, 1, 1]);
-    group.activate(b1); expect(groupApi.activeTab).toBeUndefined(); expect(one.isActive).toBe(false); expect(two.isActive).toBe(false);
-    group.activate(a1); a2.label = 'two-later.ts'; model.emit(group, 'EDITOR_LABEL', a2, group.editors.indexOf(a2));
-    expect(groupApi.activeTab).toBe(one); expect(two.isActive).toBe(false);
-    const count = connection.packets.length;
-    group.open(text('foreign-open', fileB('foreign-open')), 1);
-    expect(connection.packets).toHaveLength(count);
-    const a3 = text('three.ts'); group.open(a3, 2);
-    const three = groupApi.tabs[0];
-    expect(labels(groupApi)).toEqual(['three.ts', 'one.ts', 'two-later.ts']);
-    expect(operations(connection, runtime.operations.TAB_OPEN).at(-1)?.index).toBe(0);
-    group.moveEditor(a2, group, { index: 0 });
-    expect(labels(groupApi)).toEqual(['two-later.ts', 'three.ts', 'one.ts']);
+    group.activate(two); expect(groupApi.activeTab).toBe(twoApi); expect(oneApi.isActive).toBe(false);
+    group.activate(one); expect(groupApi.activeTab).toBe(oneApi);
+
+    const three = text('three.ts'); group.open(three, 1); const threeApi = groupApi.tabs[1];
+    expect(labels(groupApi)).toEqual(['one.ts', 'three.ts', 'two-renamed.ts']);
+    expect(operations(connection, runtime.operations.TAB_OPEN).at(-1)?.index).toBe(1);
+    group.moveEditor(two, group, { index: 0 });
+    expect(labels(groupApi)).toEqual(['two-renamed.ts', 'one.ts', 'three.ts']);
     expect(operations(connection, runtime.operations.TAB_MOVE).at(-1)).toMatchObject({ oldIndex: 2, index: 0 });
-    expect(groupApi.tabs[0]).toBe(two); expect(groupApi.tabs[2]).toBe(one);
-    const beforeForeignClose = connection.packets.length;
-    group.closeNow(b0); expect(connection.packets).toHaveLength(beforeForeignClose);
-    group.closeNow(a3);
-    expect(operations(connection, runtime.operations.TAB_CLOSE).at(-1)?.index).toBe(1);
-    expect(connection.tabsChanged.at(-1)?.closed[0]).toBe(three);
-    expect(labels(groupApi)).toEqual(['two-later.ts', 'one.ts']);
+    expect(groupApi.tabs[0]).toBe(twoApi); expect(groupApi.tabs[1]).toBe(oneApi);
+    group.closeNow(three);
+    expect(operations(connection, runtime.operations.TAB_CLOSE).at(-1)?.index).toBe(2);
+    expect(connection.tabsChanged.at(-1)?.closed[0]).toBe(threeApi);
+    expect(labels(groupApi)).toEqual(['two-renamed.ts', 'one.ts']);
     expect(connection.group(group)).toBe(originalGroup);
     expect(connection.group(group).tabs[0]).toBe(originalTwo); expect(connection.group(group).tabs[1]).toBe(originalOne);
-    expect(retained.get(connection.receiver.tabGroups)).toBe('api'); expect(retained.get(connection.group(group))).toBe('group');
-    expect(retained.get(connection.group(group).apiObject)).toBe('groupApi'); expect(retained.get(connection.group(group).tabs[1])).toBe('one');
-    expect(retained.get(connection.group(group).tabs[0])).toBe('two');
-    expect(retained.get(groupApi.tabs[1])).toBe('oneApi'); expect(retained.get(groupApi.tabs[0])).toBe('twoApi');
+    expect(connection.receiver.tabGroups).toBe(api);
     expect(connection.errors).toEqual([]);
   } finally { connection.dispose(); model.dispose(); }
 });
 
-test('组 add/remove/move 的完整 resync 保留原 receiver 对象和实际 activeTabGroup', async () => {
-  const runtime = await loadRuntime();
-  const model = new EditorModel(runtime, [[text('a.ts')], [text('b.ts', fileB('b.ts'))]]);
-  const connection = connect(model, hostA);
-  try {
-    await ready();
-    const group = model.groups[0], foreign = model.groups[1], original = connection.group(group);
-    const tab = original.tabs[0], groupApi = original.apiObject, tabApi = tab.apiObject;
-    const added = model.addGroup(foreign);
-    model.activeGroup = foreign; model.emit(foreign, 'GROUP_ACTIVE');
-    expect(connection.receiver.tabGroups.activeTabGroup).toBe(connection.group(foreign).apiObject);
-    expect(connection.receiver.tabGroups.activeTabGroup.activeTab).toBeUndefined();
-    model.moveGroup(foreign, 0);
-    expect(groupApi.viewColumn).toBe(2); expect(connection.group(foreign).apiObject.viewColumn).toBe(1);
-    model.removeGroup(added);
-    expect(connection.group(group)).toBe(original); expect(original.tabs[0]).toBe(tab);
-    expect(connection.group(group).apiObject).toBe(groupApi); expect(original.tabs[0].apiObject).toBe(tabApi);
-    expect(connection.receiver.tabGroups.activeTabGroup).toBe(connection.group(foreign).apiObject);
-    expect(connection.packets.filter(packet => packet.kind === 'model')).toHaveLength(4);
-    expect(connection.groupsChanged.some(change => change.opened.includes(groupApi))).toBe(true);
-    expect(connection.errors).toEqual([]);
-  } finally { connection.dispose(); model.dispose(); }
-});
-
-test('before-ready 事件和 dispose 后迟到 ready 都零发包', async () => {
+test('组结构 resync 保留原 receiver 对象，迟到 ready 不会在 dispose 后发送', async () => {
   const runtime = await loadRuntime(), gate = Promise.withResolvers<void>();
-  const model = new EditorModel(runtime, [[text('a.ts')]], gate.promise), connection = connect(model, hostA);
+  const model = new EditorModel(runtime, [[text('a.ts')], [text('b.ts', fileTwo('b.ts'))]], gate.promise);
+  const connection = connect(model);
   try {
     model.groups[0].open(text('before-ready.ts'));
     const added = model.addGroup(model.groups[0]); model.moveGroup(added, 0); model.removeGroup(added);
@@ -456,179 +379,57 @@ test('before-ready 事件和 dispose 后迟到 ready 都零发包', async () => 
   } finally { connection.dispose(); model.dispose(); }
 });
 
-test('MultiDiff 初始和 open 都监听完整 endpoints，mixed 隐藏仍监听，恢复才 open，真实关闭释放', async () => {
-  const runtime = await loadRuntime();
-  const pair = { originalUri: fileA('old.ts'), modifiedUri: fileA('new.ts', 1), goToFileUri: fileA('jump.ts') };
+test('MultiDiff 初始和异步更新复用标签对象，关闭及 dispose 释放订阅', async () => {
+  const runtime = await loadRuntime(), pair = { originalUri: fileOne('old.ts'), modifiedUri: fileTwo('new.ts') };
   const initial = new MultiDiffEditorInput('initial', [pair]);
-  const hidden = new MultiDiffEditorInput('mixed', [{ ...pair, modifiedUri: fileB('foreign.ts') }]);
-  const single = new MultiDiffEditorInput('single-owned', [{ modifiedUri: fileA('single.ts') }]);
-  const foreignSingle = new MultiDiffEditorInput('single-foreign', [{ originalUri: fileB('single.ts') }]);
-  const foreignGoto = new MultiDiffEditorInput('goto-foreign', [{ ...pair, goToFileUri: fileB('jump.ts') }]);
   const empty = new MultiDiffEditorInput('empty', []), unresolved = new MultiDiffEditorInput('unresolved', undefined);
-  const initialEditors = [initial, hidden, single, foreignSingle, foreignGoto, empty, unresolved];
-  const model = new EditorModel(runtime, [initialEditors]), connection = connect(model, hostA), group = model.groups[0];
+  const editors = [initial, empty, unresolved], model = new EditorModel(runtime, [editors]), connection = connect(model), group = model.groups[0];
   try {
     await ready();
-    const groupApi = connection.group(group).apiObject, original = groupApi.tabs[0], singleApi = groupApi.tabs[1];
-    expect(labels(groupApi)).toEqual(['initial', 'single-owned']);
-    expect(initialEditors.map(editor => editor.listeners)).toEqual([1, 1, 1, 1, 1, 1, 1]);
-    expect(singleApi.input?.textDiffs).toEqual([]);
-    initial.resources.set([{ ...pair, modifiedUri: fileA('changed.ts', 1) }], undefined);
+    const groupApi = connection.group(group).apiObject, original = groupApi.tabs[0];
+    expect(labels(groupApi)).toEqual(['initial', 'empty', 'unresolved']);
+    expect(editors.map(editor => editor.listeners)).toEqual([1, 1, 1]);
+    initial.resources.set([{ ...pair, modifiedUri: fileOne('changed.ts', 1) }], undefined);
     expect(groupApi.tabs[0]).toBe(original);
-    expect(original.input?.textDiffs?.[0].modified?.toString()).toBe('file:///target/workspace-a2/changed.ts');
-    const sourceId = tabId(connection, original);
-    expect(sourceId).not.toContain('opaque-initial'); expect(sourceId).not.toContain('multi-diff-editor');
-    initial.resources.set([{ ...pair, goToFileUri: fileB('changed.ts') }], undefined);
-    expect(labels(groupApi)).toEqual(['single-owned']); expect(initial.listeners).toBe(1);
-    expect(connection.tabsChanged.at(-1)?.closed).toEqual([original]);
-    const beforeStillMixed = connection.packets.length;
-    initial.resources.set([{ originalUri: fileB('still-foreign.ts') }], undefined);
-    expect(connection.packets).toHaveLength(beforeStillMixed);
-    initial.resources.set([pair], undefined);
-    expect(labels(groupApi)).toEqual(['initial', 'single-owned']); expect(groupApi.tabs[0]).not.toBe(original);
-    expect(groupApi.tabs[1]).toBe(singleApi); expect(initial.listeners).toBe(1);
-    hidden.resources.set([{ originalUri: fileA('one-sided.ts') }], undefined);
-    expect(labels(groupApi)).toEqual(['initial', 'mixed', 'single-owned']);
-    expect(groupApi.tabs[1].input?.textDiffs).toEqual([]);
-    foreignSingle.resources.set([{ originalUri: fileB('still-foreign.ts'), goToFileUri: fileA('owned-jump.ts') }], undefined);
-    expect(labels(groupApi)).not.toContain('single-foreign');
-    foreignGoto.resources.set([pair], undefined); expect(labels(groupApi)).toContain('goto-foreign');
-    const opened = new MultiDiffEditorInput('opened-mixed', [{ ...pair, originalUri: fileB('other.ts') }]);
-    group.open(opened, 1);
-    expect(opened.listeners).toBe(1); expect(labels(groupApi)).not.toContain('opened-mixed');
-    opened.resources.set([pair], undefined);
-    expect(labels(groupApi)).toEqual(['initial', 'opened-mixed', 'mixed', 'single-owned', 'goto-foreign']);
-    expect(operations(connection, runtime.operations.TAB_OPEN).at(-1)?.index).toBe(1);
+    expect(original.input?.textDiffs?.[0].modified?.toString()).toBe('file:///workspaces/one-2/changed.ts');
+    expect(tabId(connection, original)).not.toContain('opaque-initial');
+
+    const opened = new MultiDiffEditorInput('opened', [pair]); group.open(opened, 1);
+    const openedApi = groupApi.tabs[1];
+    opened.resources.set([{ ...pair, originalUri: fileTwo('opened.ts') }], undefined);
+    expect(openedApi.input?.textDiffs?.[0].original?.toString()).toBe('file:///workspaces/two/opened.ts');
     group.closeNow(opened); expect(opened.listeners).toBe(0);
-    group.closeNow(foreignSingle); expect(foreignSingle.listeners).toBe(0);
-    const afterClose = connection.packets.length; opened.resources.set([pair], undefined); foreignSingle.resources.set([pair], undefined);
-    expect(connection.packets).toHaveLength(afterClose);
+    group.closeNow(initial); expect(initial.listeners).toBe(0);
     expect(connection.errors).toEqual([]);
   } finally { connection.dispose(); model.dispose(); }
-  expect(initialEditors.map(editor => editor.listeners)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+  expect(editors.map(editor => editor.listeners)).toEqual([0, 0, 0]);
 });
 
-test('同 ID 新组继续持有原 MultiDiff 时，observable 更新可见与隐藏标签且不重复订阅', async () => {
-  const runtime = await loadRuntime(), pair = { originalUri: fileA('old.ts'), modifiedUri: fileA('new.ts') };
-  const visible = new MultiDiffEditorInput('visible', [pair]), hidden = new MultiDiffEditorInput('hidden', [{ modifiedUri: fileB('foreign.ts') }]);
-  const model = new EditorModel(runtime, [[visible, hidden]]), connection = connect(model, hostA);
-  try {
-    await ready();
-    const retired = model.groups[0], original = connection.group(retired).apiObject.tabs[0];
-    const current = new EditorGroup(retired.id, [...retired.editors], model);
-    model.groups.splice(0, 1, current); model.activeGroup = current;
-    model.removed.fire(retired); model.added.fire(current);
-    expect([visible.listeners, hidden.listeners]).toEqual([1, 1]);
-    visible.resources.set([{ ...pair, modifiedUri: fileA('changed.ts', 1) }], undefined);
-    expect(connection.group(current).apiObject.tabs[0]).toBe(original);
-    expect(original.input?.textDiffs?.[0].modified?.toString()).toBe('file:///target/workspace-a2/changed.ts');
-    hidden.resources.set([pair], undefined);
-    expect(labels(connection.group(current).apiObject)).toEqual(['visible', 'hidden']);
-    expect([visible.listeners, hidden.listeners]).toEqual([1, 1]); expect(connection.errors).toEqual([]);
-  } finally { connection.dispose(); model.dispose(); }
-  expect([visible.listeners, hidden.listeners]).toEqual([0, 0]);
-});
-
-test('Node closeTab 整批预检：未知或归属已变化的后一项不能先关闭前一项，原 receiver close 可成功', async () => {
-  const runtime = await loadRuntime(), first = text('first.ts'), second = text('second.ts');
-  const model = new EditorModel(runtime, [[first], [second]]), connection = connect(model, hostA);
-  try {
-    await ready();
-    const firstApi = connection.group(model.groups[0]).apiObject.tabs[0], secondApi = connection.group(model.groups[1]).apiObject.tabs[0];
-    const firstId = tabId(connection, firstApi), secondId = tabId(connection, secondApi);
-    await expect(connection.owner.$closeTab([firstId, 'foreign-opaque-id'])).rejects.toThrow('不属于发起宿主');
-    expect(model.groups.map(group => group.closeCalls.length)).toEqual([0, 0]);
-    const source = second.resource; second.resource = fileB('now-foreign.ts');
-    await expect(connection.owner.$closeTab([firstId, secondId])).rejects.toThrow('不属于发起宿主');
-    expect(model.groups.map(group => group.closeCalls.length)).toEqual([0, 0]); second.resource = source;
-    expect(await connection.receiver.tabGroups.close([firstApi, secondApi], true)).toBe(true);
-    expect(model.groups.map(group => group.closeCalls[0])).toEqual([
-      { editors: [first], options: { preserveFocus: true } }, { editors: [second], options: { preserveFocus: true } },
-    ]);
-    expect(connection.tabsChanged.flatMap(change => change.closed)).toEqual([firstApi, secondApi]);
-    expect(connection.errors).toEqual([]);
-  } finally { connection.dispose(); model.dispose(); }
-});
-
-for (const replacement of ['tab', 'group'] as const) test(`closeTab 等待前组确认时 ${replacement} 被替换，已关闭结果保留且后继原对象不再执行`, async () => {
+test('异步 close 等待期间标签被关闭重开时，旧请求不会关闭新标签', async () => {
   const runtime = await loadRuntime(), gate = Promise.withResolvers<boolean>();
-  const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model, hostA);
+  const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model);
   try {
     await ready();
     const [first, second] = model.groups, editor = second.editors[0];
-    const firstApi = connection.group(first).apiObject.tabs[0], secondApi = connection.group(second).apiObject.tabs[0];
-    const secondId = tabId(connection, secondApi);
+    const firstApi = connection.group(first).apiObject.tabs[0], oldApi = connection.group(second).apiObject.tabs[0];
+    const id = tabId(connection, oldApi);
     first.closeGate = gate.promise;
-    const waiting = connection.receiver.tabGroups.close([firstApi, secondApi], true);
+    const waiting = connection.receiver.tabGroups.close([firstApi, oldApi], true);
     expect(first.closeCalls).toHaveLength(1); expect(second.closeCalls).toEqual([]);
-    let current = second;
-    if (replacement === 'tab') {
-      second.closeNow(editor); second.open(editor);
-      expect(connection.group(second).apiObject.tabs[0]).not.toBe(secondApi);
-    } else {
-      // 原工作集恢复先安装新组，再恢复 remove/add 通知，组 ID 可以复用。
-      current = new EditorGroup(second.id, [editor], model);
-      model.groups.splice(model.groups.indexOf(second), 1, current);
-      model.removed.fire(second); model.added.fire(current);
-    }
-    const currentApi = connection.group(current).apiObject.tabs[0];
-    expect(tabId(connection, currentApi)).toBe(secondId);
+    second.closeNow(editor); second.open(editor);
+    const currentApi = connection.group(second).apiObject.tabs[0];
+    expect(currentApi).not.toBe(oldApi); expect(tabId(connection, currentApi)).toBe(id);
     gate.resolve(true);
     await expect(waiting).rejects.toThrow('前序关闭结果=[true]，未执行后继关闭');
-    expect(first.editors).toEqual([]); expect(second.closeCalls).toEqual([]); expect(current.closeCalls).toEqual([]);
-    expect(current.editors).toEqual([editor]); expect(connection.group(current).apiObject.tabs[0]).toBe(currentApi);
+    expect(first.editors).toEqual([]); expect(second.closeCalls).toEqual([]);
+    expect(second.editors).toEqual([editor]); expect(connection.group(second).apiObject.tabs[0]).toBe(currentApi);
     expect(connection.errors).toEqual([]);
   } finally { gate.resolve(true); connection.dispose(); model.dispose(); }
 });
 
-test('closeTab 等待中普通布局 resync 保持原标签身份，后继组仍按原请求成功关闭', async () => {
+test('closeGroup 等待期间后继组被同 ID 组替换，不关闭替代组', async () => {
   const runtime = await loadRuntime(), gate = Promise.withResolvers<boolean>();
-  const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model, hostA);
-  try {
-    await ready();
-    const [first, second] = model.groups, editor = second.editors[0];
-    const firstApi = connection.group(first).apiObject.tabs[0], secondApi = connection.group(second).apiObject.tabs[0];
-    first.closeGate = gate.promise;
-    const waiting = connection.receiver.tabGroups.close([firstApi, secondApi], true);
-    model.moveGroup(second, 0);
-    expect(connection.group(second).apiObject.tabs[0]).toBe(secondApi);
-    gate.resolve(true);
-    expect(await waiting).toBe(true);
-    expect(second.closeCalls).toEqual([{ editors: [editor], options: { preserveFocus: true } }]);
-    expect(connection.tabsChanged.flatMap(change => change.closed)).toEqual([firstApi, secondApi]);
-    expect(model.groups.every(group => group.editors.length === 0)).toBe(true); expect(connection.errors).toEqual([]);
-  } finally { gate.resolve(true); connection.dispose(); model.dispose(); }
-});
-
-test('Node mixed closeGroup 只关闭自有输入且保留 foreign 非空组，Web closeGroup 保持全窗口范围', async () => {
-  const runtime = await loadRuntime(), own = text('own.ts'), foreign = text('foreign.ts', fileB('foreign.ts')), ownLast = text('own-last.ts');
-  const model = new EditorModel(runtime, [[foreign, own], [text('foreign-only.ts', fileB('foreign-only.ts'))], [ownLast]]);
-  const connection = connect(model, hostA);
-  try {
-    await ready();
-    const [mixed, foreignOnly, last] = model.groups, mixedApi = connection.group(mixed).apiObject;
-    expect(await connection.receiver.tabGroups.close([mixedApi, connection.group(foreignOnly).apiObject, connection.group(last).apiObject], true)).toBe(true);
-    expect(mixed.closeCalls).toEqual([{ editors: [own], options: { preserveFocus: true } }]);
-    expect(foreignOnly.closeCalls.every(call => call.editors.length === 0)).toBe(true);
-    expect(mixed.editors).toEqual([foreign]); expect(model.groups).toEqual([mixed, foreignOnly]);
-    expect(model.removeCalls).toEqual([last]); expect(connection.group(mixed).apiObject).toBe(mixedApi);
-    expect(model.groups.every(group => group.closeAllCalls === 0)).toBe(true);
-    expect(connection.errors).toEqual([]);
-  } finally { connection.dispose(); model.dispose(); }
-  const webModel = new EditorModel(runtime, [[text('a.ts'), text('b.ts', fileB('b.ts')), new TerminalEditorInput('terminal')], []]);
-  const web = connect(webModel, undefined);
-  try {
-    await ready();
-    const group = webModel.groups[0], originals = [...group.editors];
-    expect(await web.receiver.tabGroups.close(web.group(group).apiObject)).toBe(true);
-    expect(group.closeCalls[0].editors).toEqual(originals); expect(group.count).toBe(0); expect(webModel.removeCalls).toEqual([group]);
-    expect(web.errors).toEqual([]);
-  } finally { web.dispose(); webModel.dispose(); }
-});
-
-test('closeGroup 等待前组确认时后继组同 ID 重建，不能关闭替代组且保留前序结果', async () => {
-  const runtime = await loadRuntime(), gate = Promise.withResolvers<boolean>();
-  const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model, hostA);
+  const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model);
   try {
     await ready();
     const [first, second] = model.groups;
@@ -645,124 +446,55 @@ test('closeGroup 等待前组确认时后继组同 ID 重建，不能关闭替�
   } finally { gate.resolve(true); connection.dispose(); model.dispose(); }
 });
 
-test('closeGroup 当前关闭完成时原组已由同 ID 空组替代，不删除替代组且保留真实结果', async () => {
-  const runtime = await loadRuntime(), gate = Promise.withResolvers<boolean>();
-  const model = new EditorModel(runtime, [[text('only.ts')]]), connection = connect(model, hostA);
+test('moveTab 在完整窗口索引上移动标签并保留组内身份', async () => {
+  const runtime = await loadRuntime(), source = text('source.ts'), zero = text('zero.ts'), one = text('one.ts');
+  const model = new EditorModel(runtime, [[source], [zero, one]]), connection = connect(model);
   try {
     await ready();
-    const original = model.groups[0]; original.closeGate = gate.promise;
-    const waiting = connection.receiver.tabGroups.close(connection.group(original).apiObject);
-    const current = new EditorGroup(original.id, [], model);
-    model.groups.splice(0, 1, current); model.activeGroup = current;
-    model.removed.fire(original); model.added.fire(current);
-    gate.resolve(true);
-    expect(await waiting).toBe(true); expect(original.editors).toEqual([]);
-    expect(model.groups).toEqual([current]); expect(model.removeCalls).toEqual([]); expect(current.closeCalls).toEqual([]);
-    expect(connection.errors).toEqual([]);
-  } finally { gate.resolve(true); connection.dispose(); model.dispose(); }
-});
-
-test('move 先核 source 再创建组，目标 projected index 按可见 anchor 转真实索引，同组移动仍保 API 身份', async () => {
-  const runtime = await loadRuntime(), source = text('source.ts'), a0 = text('target-zero.ts'), a1 = text('target-one.ts');
-  const model = new EditorModel(runtime, [[text('b-source', fileB('b-source')), source],
-    [text('b-leading', fileB('b-leading')), a0, text('b-middle', fileB('b-middle')), a1, text('b-trailing', fileB('b-trailing'))]]);
-  const connection = connect(model, hostA);
-  try {
-    await ready();
-    const [sourceGroup, target] = model.groups;
-    const sourceId = tabId(connection, connection.group(sourceGroup).apiObject.tabs[0]);
-    expect(() => connection.owner.$moveTab('unknown-tab', 0, 8)).toThrow('不属于发起宿主');
-    expect(model.addCalls).toEqual([]);
-    const originalResource = source.resource; source.resource = fileB('source-moved-away.ts');
-    expect(() => connection.owner.$moveTab(sourceId, 0, 8)).toThrow('不属于发起宿主');
-    expect(model.addCalls).toEqual([]); source.resource = originalResource;
+    const [sourceGroup, target] = model.groups, sourceApi = connection.group(sourceGroup).apiObject.tabs[0];
+    const sourceId = tabId(connection, sourceApi);
     connection.owner.$moveTab(sourceId, 1, 1, true);
-    expect(sourceGroup.moveCalls[0]).toEqual({ editor: source, target, options: { index: 3, preserveFocus: true } });
-    expect(labels(connection.group(target).apiObject)).toEqual(['target-zero.ts', 'source.ts', 'target-one.ts']);
-    const zero = connection.group(target).apiObject.tabs[0], zeroId = tabId(connection, zero);
-    connection.owner.$moveTab(zeroId, 3, 1, false);
-    expect(target.moveCalls.at(-1)?.options).toEqual({ index: 5, preserveFocus: false });
-    expect(labels(connection.group(target).apiObject)).toEqual(['source.ts', 'target-one.ts', 'target-zero.ts']);
-    expect(connection.group(target).apiObject.tabs[2]).toBe(zero);
+    expect(sourceGroup.moveCalls[0]).toEqual({ editor: source, target, options: { index: 1, preserveFocus: true } });
+    expect(labels(connection.group(target).apiObject)).toEqual(['zero.ts', 'source.ts', 'one.ts']);
+    const movedApi = connection.group(target).apiObject.tabs[1];
+    expect(movedApi).not.toBe(sourceApi);
+    expect(movedApi.label).toBe('source.ts');
+    expect(tabId(connection, movedApi)).not.toBe(sourceId);
+    const zeroApi = connection.group(target).apiObject.tabs[0], zeroId = tabId(connection, zeroApi);
+    connection.owner.$moveTab(zeroId, 2, 1, false);
+    expect(target.moveCalls.at(-1)?.options).toEqual({ index: 2, preserveFocus: false });
+    expect(labels(connection.group(target).apiObject)).toEqual(['source.ts', 'one.ts', 'zero.ts']);
+    expect(connection.group(target).apiObject.tabs[2]).toBe(zeroApi);
     connection.owner.$moveTab(zeroId, 0, 1);
-    expect(target.moveCalls.at(-1)?.options.index).toBe(2);
-    expect(connection.group(target).apiObject.tabs[0]).toBe(zero);
+    expect(target.moveCalls.at(-1)?.options.index).toBe(0);
+    expect(connection.group(target).apiObject.tabs[0]).toBe(zeroApi);
     connection.owner.$moveTab(zeroId, -1, 2);
     expect(model.addCalls).toHaveLength(1);
     expect(target.moveCalls.at(-1)?.target).toBe(model.addCalls[0]);
     expect(target.moveCalls.at(-1)?.options.index).toBe(0);
-    expect(labels(connection.group(model.addCalls[0]).apiObject)).toEqual(['target-zero.ts']);
+    expect(labels(connection.group(model.addCalls[0]).apiObject)).toEqual(['zero.ts']);
     expect(connection.errors).toEqual([]);
   } finally { connection.dispose(); model.dispose(); }
 });
 
-test('move 创建组的同步事件关闭并重开原输入时，旧请求不能移动新 Tab', async () => {
-  const runtime = await loadRuntime(), editor = text('source.ts');
-  const model = new EditorModel(runtime, [[editor]]), connection = connect(model, hostA);
-  try {
-    await ready();
-    const source = model.groups[0], original = connection.group(source).apiObject.tabs[0], id = tabId(connection, original);
-    const listener = model.onDidAddGroup(() => { source.closeNow(editor); source.open(editor); });
-    try {
-      expect(() => connection.owner.$moveTab(id, 0, 1)).toThrow('不属于发起宿主');
-      const reopened = connection.group(source).apiObject.tabs[0];
-      expect(reopened).not.toBe(original); expect(tabId(connection, reopened)).toBe(id);
-      expect(source.moveCalls).toEqual([]); expect(source.editors).toEqual([editor]);
-      expect(model.addCalls).toHaveLength(1); expect(model.addCalls[0].editors).toEqual([]);
-      expect(connection.errors).toEqual([]);
-    } finally { listener.dispose(); }
-  } finally { connection.dispose(); model.dispose(); }
-});
-
-for (const operation of ['tab', 'group'] as const) test(`${operation} close 的异步等待后 dispose，不触碰第二组也不再发包`, async () => {
-  const runtime = await loadRuntime(), gate = Promise.withResolvers<boolean>();
-  const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model, hostA);
-  try {
-    await ready();
-    const [first, second] = model.groups; first.closeGate = gate.promise;
-    const waiting = operation === 'tab'
-      ? connection.owner.$closeTab([tabId(connection, connection.group(first).apiObject.tabs[0]), tabId(connection, connection.group(second).apiObject.tabs[0])])
-      : connection.owner.$closeGroup([first.id, second.id]);
-    expect(first.closeCalls).toHaveLength(1); expect(second.closeCalls).toEqual([]);
-    connection.owner.dispose(); const packets = connection.packets.length; gate.resolve(true);
-    await expect(waiting).rejects.toThrow('标签宿主代际已经关闭；前序关闭结果=[true]，未执行后继关闭');
-    expect(second.closeCalls).toEqual([]); expect(second.editors.map(editor => editor.label)).toEqual(['second.ts']);
-    expect(model.removeCalls).toEqual([]); expect(connection.packets).toHaveLength(packets); expect(connection.errors).toEqual([]);
-  } finally { gate.resolve(true); connection.dispose(); model.dispose(); }
-});
-
-test('同组相同投影位置为 no-op，不跨过隐藏标签或发送无意义增量', async () => {
-  const runtime = await loadRuntime();
-  const model = new EditorModel(runtime, [[text('first.ts'), text('foreign.ts', fileB('foreign.ts')), text('last.ts')]]);
-  const connection = connect(model, hostA);
-  try {
-    await ready();
-    const group = model.groups[0], before = [...group.editors], packets = connection.packets.length;
-    connection.owner.$moveTab(tabId(connection, connection.group(group).apiObject.tabs[0]), 0, 0);
-    expect(group.editors).toEqual(before);
-    expect(group.moveCalls).toEqual([]);
-    expect(connection.packets).toHaveLength(packets);
-    expect(connection.errors).toEqual([]);
-  } finally { connection.dispose(); model.dispose(); }
-});
-
-for (const operation of ['tab', 'group'] as const) for (const result of [true, false]) {
-  test(`${operation} 单组 close 已返回 ${result} 后 dispose，保留真实结果且不再移除组或发包`, async () => {
+for (const operation of ['tab', 'group'] as const) {
+  test(operation + ' 多组 close 等待期间 dispose，不再执行后继组', async () => {
     const runtime = await loadRuntime(), gate = Promise.withResolvers<boolean>();
-    const model = new EditorModel(runtime, [[text('only.ts')]]), connection = connect(model, hostA);
+    const model = new EditorModel(runtime, [[text('first.ts')], [text('second.ts')]]), connection = connect(model);
     try {
       await ready();
-      const group = model.groups[0]; group.closeGate = gate.promise;
+      const [first, second] = model.groups, firstApi = connection.group(first).apiObject.tabs[0];
+      const secondApi = connection.group(second).apiObject.tabs[0];
+      first.closeGate = gate.promise;
       const waiting = operation === 'tab'
-        ? connection.owner.$closeTab([tabId(connection, connection.group(group).apiObject.tabs[0])])
-        : connection.owner.$closeGroup([group.id]);
-      expect(group.closeCalls).toHaveLength(1);
-      connection.owner.dispose(); const packets = connection.packets.length; gate.resolve(result);
-      expect(await waiting).toBe(result);
-      expect(group.editors).toHaveLength(result ? 0 : 1);
-      expect(model.removeCalls).toEqual([]);
-      expect(connection.packets).toHaveLength(packets);
+        ? connection.owner.$closeTab([tabId(connection, firstApi), tabId(connection, secondApi)])
+        : connection.owner.$closeGroup([first.id, second.id]);
+      expect(first.closeCalls).toHaveLength(1); expect(second.closeCalls).toEqual([]);
+      connection.owner.dispose(); const packets = connection.packets.length; gate.resolve(true);
+      await expect(waiting).rejects.toThrow('标签同步已经释放；前序关闭结果=[true]，未执行后继关闭');
+      expect(second.closeCalls).toEqual([]); expect(second.editors.map(editor => editor.label)).toEqual(['second.ts']);
+      expect(model.removeCalls).toEqual([]); expect(connection.packets).toHaveLength(packets);
       expect(connection.errors).toEqual([]);
-    } finally { gate.resolve(result); connection.dispose(); model.dispose(); }
+    } finally { gate.resolve(true); connection.dispose(); model.dispose(); }
   });
 }

@@ -162,7 +162,7 @@ try {
   await command('editor.action.inspectTMScopes');
   const plainTokens = editor(1).locator('.token-inspect-widget');
   await expect(plainTokens).toHaveText('No grammar or semantic tokens available.');
-  result.plainTextToken = await plainTokens.innerText();
+  result.plainTextToken = await plainTokens.textContent();
   await command('editor.action.inspectTMScopes');
   await expect(plainTokens).toHaveCount(0);
   await changeLanguage('json', 'JSON');

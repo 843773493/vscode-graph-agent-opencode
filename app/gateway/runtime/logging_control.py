@@ -28,14 +28,12 @@ from app.schemas.runtime_logging import (
 
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
-    from app.gateway.runtime.extension_management import GatewayExtensionManagement
     from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
     from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 
 _CONTROL_PATHS: dict[RuntimeLoggingHttpService, str] = {
     "gateway": "/api/gateway/internal/runtime-logging",
     "backend": "/api/v1/internal/runtime-logging",
-    "extension-management": "/internal/runtime-logging",
     "plugin": "/internal/runtime-logging",
 }
 
@@ -59,7 +57,6 @@ class RuntimeLoggingProcess:
 
 def runtime_logging_processes(
     registry: GatewayWorkspaceRegistry, control: RuntimeLoggingProcessControl,
-    extension_management: GatewayExtensionManagement | None = None,
     service_plugins: GatewayPluginRuntime | None = None,
 ) -> list[RuntimeLoggingProcess]:
     """调用方持有拓扑锁；热应用与管理诊断共用同一份真实进程发现。"""
@@ -99,11 +96,6 @@ def runtime_logging_processes(
         )
         http_processes[key] = process
         processes.append(process)
-
-    if extension_management is not None and extension_management.process is not None and extension_management.instance is not None:
-        handle = extension_management.process
-        if handle.is_alive():
-            add_http(handle, "extension-management", extension_management.instance.base_url, ())
 
     for owner in registry.backend_owners():
         if owner.process is not None and owner.process.is_alive():

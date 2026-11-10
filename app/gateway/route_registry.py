@@ -24,14 +24,6 @@ from app.gateway.routes import (
     workspaces_lifecycle,
     workspaces_managed,
 )
-from app.gateway.server.extension_configuration import (
-    router as extension_configuration_router,
-)
-from app.gateway.server.extension_host import router as extension_host_router
-from app.gateway.server.extension_management import (
-    router as extension_management_router,
-)
-from app.gateway.server.extension_package import router as extension_package_router
 from app.gateway.server.mcp_upstream_proxy import router as mcp_upstream_proxy_router
 from app.gateway.server.plugin_commands import router as plugin_commands_router
 from app.gateway.server.port_forwarding import router as port_forwards_router
@@ -75,10 +67,6 @@ def register_gateway_routes(app: FastAPI) -> None:
     app.include_router(service_plugins_router)
     app.include_router(plugin_commands_router)
     app.include_router(service_plugin_proxy_router)
-    app.include_router(extension_host_router)
-    app.include_router(extension_management_router)
-    app.include_router(extension_package_router)
-    app.include_router(extension_configuration_router)
     app.include_router(federation_router)
     app.include_router(resource_navigation_router)
     app.include_router(text_mutation_router)

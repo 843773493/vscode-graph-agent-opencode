@@ -23,7 +23,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_resource_uri 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
 # （工作区集合根、Session 定位和 Thread 定位）。
-_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files", "attachments", "extensions"})
+_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files", "attachments"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTROL_CHAR: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -208,15 +208,6 @@ def _validate_directory_root(scope: str, scope_id: str, kind: str, root: str) ->
         raise ResourceUriGrammarError("malformed_path", "files 只属于 workspace 或 gateway scope")
 
 
-def _validate_extension_root(scope: str, scope_id: str, tails: Sequence[str]) -> None:
-    if scope != "gateway" or len(tails) < 4:
-        raise ResourceUriGrammarError("malformed_path", "扩展包必须定位 Gateway 内的 Backend、profile、publisher 和 name")
-    if _GATEWAY_ID.fullmatch(scope_id) is None:
-        raise ResourceUriGrammarError("invalid_character", "扩展包必须使用真实 Gateway ID")
-    for label, value in zip(("backend id", "profile id", "extension publisher", "extension name"), tails[:4], strict=True):
-        _validate_dynamic_segment(value, field=label)
-
-
 def _parsed(
     scope: str,
     scope_id: str,
@@ -301,13 +292,6 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
             raise ResourceUriGrammarError("malformed_path", "Folder 容器必须使用 Workspace 内的单个稳定 Folder ID")
         _validate_dynamic_segment(tails[0], field="folder id")
         return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
-
-    if kind == "extensions":
-        _validate_extension_root(scope, body[0], tails)
-        children = [_decode_file_segment(segment) for segment in tails[4:]]
-        prefix = () if authority is None else (authority,)
-        uri = _SCHEME + "/".join((*prefix, scope, *body[:3], *tails[:4], *(_encode_file_segment(child) for child in children)))
-        return _parsed(scope, body[0], kind, (*tails[:4], *children), "/".join(tails[:4]), uri, authority)
 
     if kind in {"skills", "files", "attachments"}:
         if not tails:
@@ -425,9 +409,6 @@ def resource_display_uri(
         tail_segments = (
             tail_segments[0], *(_encode_file_segment(segment) for segment in tail_segments[1:])
         )
-    elif kind == "extensions":
-        _validate_extension_root(scope, scope_id, tail_segments)
-        tail_segments = (*tail_segments[:4], *(_encode_file_segment(segment) for segment in tail_segments[4:]))
     prefix = () if gateway_authority is None else (gateway_authority,)
     if kind == "workspace":
         if scope != "workspace" or tail_segments:
@@ -436,16 +417,6 @@ def resource_display_uri(
     else:
         uri = _SCHEME + "/".join((*prefix, scope, scope_id, "resources", kind, *tail_segments))
     return parse_resource_uri(uri).display_uri
-
-
-def extension_package_uri(*, gateway_id: str, backend_id: str, profile_id: str,
-                          extension_id: str, relative_segments: Sequence[str] = ()) -> str:
-    """包版本由独立 ExtensionKey 选择；此地址不扩展普通文件工具的读写能力。"""
-    parts = extension_id.split(".")
-    if len(parts) != 2:
-        raise ResourceUriGrammarError("invalid_character", "扩展 ID 必须为 publisher.name")
-    return resource_display_uri(scope="gateway", scope_id=gateway_id, kind="extensions", gateway_authority=gateway_id,
-        tail_segments=(backend_id, profile_id, *parts, *relative_segments))
 
 
 def file_uri_root(uri: str) -> str:

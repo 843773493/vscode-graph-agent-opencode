@@ -94,7 +94,6 @@ async def get_gateway_diagnostics(
                 selected_workspace_id=workspace_id,
                 selected_log_id=log_id,
                 tail_lines=tail_lines,
-                extension_management=getattr(request.app.state, "extension_management", None),
                 service_plugins=getattr(request.app.state, "service_plugins", None),
                 observation=getattr(request.app.state, "runtime_observation", None),
             )

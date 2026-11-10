@@ -16,7 +16,7 @@ if (commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：${
 const output = join(repository, 'out/build/workbench-typecheck');
 await rm(output, { recursive: true, force: true });
 const { projectedRoot, targets } = await projectTypecheckSources({ repository, root, output,
-  paths: transformedSourcePaths, commit, runtime: 'browser' });
+  paths: transformedSourcePaths, commit });
 const configuration = join(projectedRoot, 'tsconfig_typecheck.jsonc');
 // 配置位于投影的 Workbench 根，保留原 include、外部客户端与 node_modules 解析关系。
 await writeFile(configuration, JSON.stringify({ extends: join(projectedRoot, 'tsconfig.jsonc'), compilerOptions: { preserveSymlinks: true },

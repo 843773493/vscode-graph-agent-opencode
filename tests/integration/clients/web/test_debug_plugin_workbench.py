@@ -20,9 +20,6 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
-from tests.integration.workspace_services.extension_host.test_extension_management import (
-    management_runtime as management_runtime,  # noqa: PLC0414 - HEAD 旧工作台组件
-)
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
@@ -33,14 +30,6 @@ from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_test_workspace,
 )
-
-
-@pytest.fixture(autouse=True)
-def debug_workbench_runtime(management_runtime, runtime_manifest_path: Path) -> None:
-    _context, component, runtime = management_runtime
-    manifest = json.loads(runtime_manifest_path.read_text(encoding="utf-8"))
-    manifest["extension_host"] = {"node_executable": str(runtime.executable), "component_root": str(component)}
-    runtime_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
 @pytest.fixture

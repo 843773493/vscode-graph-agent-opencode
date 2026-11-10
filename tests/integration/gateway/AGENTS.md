@@ -29,4 +29,4 @@
 
 `test_gateway_logging.py` 使用显式 `runtime_logging_app.py` 测试组合，仍运行真实 Gateway、受管 Backend／Node、HTTP 校验和 SQLite 事务；故障只让发出的前置条件过期，不替换进程状态或写入业务结果。终端验收通过模型回放驱动真实 `exec_command`，同时核 wire、canonical、用户定点详情与工作区专用记录。测试组合不进入产品启动入口，模型响应复用统一 model_stream 资产与编码。
 
-- Gateway测试入口包装原lifespan时必须原样yield其state，使正式runner在listener关闭前取得原扩展管理owner；联邦协议、目标路由与原生目录发布的测试组合不得吞掉该句柄或创建替代owner。Backend测试组合仍沿Workspace生命周期。
+- Gateway 测试组合包装产品 lifespan 时必须原样 yield `state`，保留 `after_http_startup` 与 `before_http_shutdown` 回调供 runner 调用；不得用已退役的 Extension Management owner 替代生命周期状态合同。Backend 测试组合仍沿 Workspace 生命周期。

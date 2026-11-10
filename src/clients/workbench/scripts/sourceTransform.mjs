@@ -4,33 +4,18 @@ import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTr
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
-import { extensionHostStateSourcePaths, transformExtensionHostState } from './extensionHostStateTransform.mjs';
-import { extensionInstanceSourcePaths, transformExtensionInstances } from './extensions/extensionInstanceTransform.mjs';
-import { extensionRunningSourcePaths, transformExtensionRunning } from './extensions/extensionRunningTransform.mjs';
 import { extensionBrowserSourcePaths, transformExtensionBrowser } from './extensions/extensionBrowserTransform.mjs';
 import { extensionManagementSourcePaths, transformExtensionManagement } from './extensions/extensionManagementTransform.mjs';
-import { extensionOwnerSourcePaths, transformExtensionOwner } from './extensions/extensionOwnerTransform.mjs';
-import { extensionStatusSourcePaths, transformExtensionStatus } from './extensions/extensionStatusTransform.mjs';
-import { extensionEnablementSourcePaths, transformExtensionEnablement } from './extensions/extensionEnablementTransform.mjs';
 import { extensionDocumentSourcePaths, transformExtensionDocuments } from './extensions/extensionDocumentTransform.mjs';
 import { extensionTabsSourcePaths, transformExtensionTabs } from './extensions/extensionTabsTransform.mjs';
 import { extensionLanguageFeaturesSourcePaths, transformExtensionLanguageFeatures } from './extensions/extensionLanguageFeaturesTransform.mjs';
 import { extensionWorkspaceSymbolsSourcePaths, transformExtensionWorkspaceSymbols } from './extensions/extensionWorkspaceSymbolsTransform.mjs';
-import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
-import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
-import { configurationContributionSourcePaths, transformConfigurationContributions } from './extensions/configurationContributionTransform.mjs';
-import { configurationRegistrySourcePaths, transformConfigurationRegistry } from './extensions/configurationRegistryTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
-import { nativeManagementSourcePaths, transformNativeManagement } from './nativeManagementTransform.mjs';
 import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './settingsEditorScopeTransform.mjs';
 import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEditorTransform.mjs';
 import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
-import { extensionTerminalSourcePaths, transformExtensionTerminal } from './extensions/extensionTerminalTransform.mjs';
-import { extensionDebugSourcePaths, transformExtensionDebug } from './extensions/extensionDebugTransform.mjs';
 import { pluginDebugSourcePaths, transformPluginDebug } from './pluginDebugTransform.mjs';
 import { pluginCommandSourcePaths, transformPluginCommands } from './pluginCommandTransform.mjs';
-import { extensionTasksSourcePaths, transformExtensionTasks } from './extensions/extensionTasksTransform.mjs';
-import { extensionNotebookSourcePaths, transformExtensionNotebookApi, transformExtensionNotebooks } from './extensions/extensionNotebookTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -55,8 +40,6 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts',
   'src/vs/editor/contrib/documentSymbols/browser/outlineModel.ts',
   'src/vs/workbench/services/extensionManagement/browser/webExtensionsScannerService.ts',
-  'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts',
-  'src/vs/platform/extensionManagement/common/extensionsScannerService.ts',
   'src/vs/workbench/browser/parts/editor/editorGroupView.ts',
   'src/vs/workbench/browser/parts/editor/editorPanes.ts',
   'src/vs/workbench/browser/parts/editor/editorWithViewState.ts',
@@ -72,36 +55,18 @@ export const transformedSourcePaths = [...new Set([
   ...outlineSourcePaths,
   ...fileDialogSourcePaths,
   ...mcpSourcePaths,
-  ...extensionHostStateSourcePaths,
-  ...extensionInstanceSourcePaths,
-  ...extensionRunningSourcePaths,
   ...extensionBrowserSourcePaths,
   ...extensionManagementSourcePaths,
-  ...extensionOwnerSourcePaths,
-  ...extensionStatusSourcePaths,
-  ...extensionEnablementSourcePaths,
   ...extensionDocumentSourcePaths,
-  ...extensionNotebookSourcePaths,
   ...extensionTabsSourcePaths,
   ...extensionLanguageFeaturesSourcePaths,
   ...extensionWorkspaceSymbolsSourcePaths,
-  ...extensionStorageSourcePaths,
-  ...extensionTerminalSourcePaths,
-  // 带原生进程依赖的入口由下面的 Node 清单及其真实 tsconfig 检查。
-  ...extensionDebugSourcePaths.filter(path => !path.includes('/node/')),
   ...pluginDebugSourcePaths,
   ...pluginCommandSourcePaths,
-  ...extensionTasksSourcePaths.filter(path => !path.includes('/node/')),
-  ...extensionConfigurationSourcePaths, ...configurationContributionSourcePaths, ...configurationRegistrySourcePaths,
   ...extensionFileEventsSourcePaths,
   ...settingsEditorScopeSourcePaths,
   ...settingsEditorSourcePaths,
   ...settingsTreeScopeSourcePaths,
-])];
-
-export const nodeTransformedSourcePaths = [...new Set([
-  ...transformedSourcePaths, ...extensionDebugSourcePaths, ...extensionTasksSourcePaths, ...nativeManagementSourcePaths,
-  'src/vs/platform/log/node/spdlogLog.ts',
 ])];
 
 function replaceOnce(source, marker, replacement) {
@@ -110,7 +75,7 @@ function replaceOnce(source, marker, replacement) {
 }
 
 /** 构建与 Vite 共用上游源码定制，不改写固定子模块。 */
-export function sourceTransform(root, productConfiguration, extensions, { runtime = 'browser' } = {}) {
+export function sourceTransform(root, productConfiguration, extensions) {
   if (productConfiguration.commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：要求 ${pinnedUpstreamCommit}`);
   const upstream = join(root, 'upstream');
   const product = {
@@ -126,79 +91,14 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
-    contents = transformExtensionInstances(root, path, contents, replaceOnce);
-    contents = transformExtensionRunning(root, path, contents, replaceOnce);
     contents = transformExtensionBrowser(root, path, contents, replaceOnce);
     contents = transformExtensionManagement(root, path, contents, replaceOnce);
-    contents = transformExtensionHostState(root, path, contents, replaceOnce);
-    contents = transformExtensionOwner(root, path, contents, replaceOnce);
-    contents = transformExtensionStatus(root, path, contents, replaceOnce);
-    contents = transformExtensionEnablement(root, path, contents, replaceOnce);
     contents = transformExtensionDocuments(root, path, contents, replaceOnce);
-    contents = transformExtensionStorage(root, path, contents, replaceOnce, runtime);
-    contents = transformExtensionTerminal(root, path, contents, replaceOnce);
-    contents = transformExtensionDebug(root, path, contents, replaceOnce);
     contents = transformPluginDebug(root, path, contents, replaceOnce);
     contents = transformPluginCommands(root, path, contents, replaceOnce);
-    contents = transformExtensionTasks(root, path, contents, replaceOnce);
-    contents = transformExtensionNotebookApi(root, path, contents);
-    if (path === join(upstream, 'src/vs/platform/extensionManagement/common/abstractExtensionManagementService.ts')) {
-      // 尚未创建任何安装任务时没有可结算的结果；原 catch 会丢掉真正前置错误并返回空结果。
-      contents = replaceOnce(contents, '} catch (error) {\n\t\t\tconst getAllDepsAndPacks =',
-        `} catch (error) {
-      if (!installingExtensionsMap.size && !alreadyRequestedInstallations.length) throw error;
-      const getAllDepsAndPacks =`);
-    }
-    if (path === join(upstream, 'src/vs/platform/extensionManagement/common/extensionsScannerService.ts')) {
-      contents = replaceOnce(contents, "import { getErrorMessage } from '../../../base/common/errors.js';",
-        "import { getErrorMessage, onUnexpectedError } from '../../../base/common/errors.js';");
-      // 原缓存校验任务由 scanner 持有；dispose 的预期取消不能成为未处理 rejection。
-      contents = replaceOnce(contents, 'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches());',
-        'this.cacheValidatorThrottler.trigger(() => this.validatePendingCaches()).catch(onUnexpectedError);');
-    }
-    contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce, runtime);
-    if (runtime === 'node' && path === join(upstream, 'src/vs/platform/extensionManagement/node/extensionManagementService.ts')) {
-      contents = replaceOnce(contents, "import { isEngineValid } from '../../extensions/common/extensionValidator.js';",
-        "import { isEngineValid, validateExtensionManifest } from '../../extensions/common/extensionValidator.js';\nimport Severity from '../../../base/common/severity.js';");
-      // 沿原 ExtensionKey 和 scanner 的包根语义预检，先拒绝原扫描器也会标 invalid 的候选，不能发布后才失败。
-      contents = replaceOnce(contents, 'const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });',
-        `const extensionLocation = joinPath(this.extensionsScannerService.userExtensionsLocation, new ExtensionKey({ id: extensionId }, manifest.version).toString().toLowerCase());
-      const errors = validateExtensionManifest(this.productService.version, this.productService.date, extensionLocation, manifest, false)
-        .filter(([severity]) => severity === Severity.Error);
-      if (errors.length) throw new ExtensionManagementError(errors.map(([, message]) => message).join('\\n'), ExtensionManagementErrorCode.Invalid);
-      const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });`);
-    }
-    if (runtime === 'node' && path === join(upstream, 'src/vs/platform/log/node/spdlogLog.ts')) {
-      // 只在 native addon 边界使用 Windows 长路径；日志资源 URI 和目录归属保持原样。
-      contents = "import { toNamespacedPath } from 'node:path';\n" + contents;
-      contents = replaceOnce(contents, 'createAsyncRotatingLogger(name, logfilePath, filesize, filecount)',
-        'createAsyncRotatingLogger(name, toNamespacedPath(logfilePath), filesize, filecount)');
-    }
-    if (runtime === 'node' && path === join(upstream, 'src/vs/workbench/api/common/extHostExtensionService.ts')) {
-      contents = `import { retainNodeExtensionVersions } from ${JSON.stringify(join(root, 'node/extensionHostReferences.js'))};\n` + contents;
-      // 先沿原流程注册 API actors，再在运行 barrier 打开前取得实际版本引用。
-      contents = replaceOnce(contents, 'this._almostReadyToRunExtensions.open();',
-        `if (this._initData.isTargetExtensionHost) {
-        try { await retainNodeExtensionVersions(this._myRegistry.getAllExtensionDescriptions()); }
-        catch (error) { this.terminate('运行版本准入失败：' + String(error), 1); throw error; }
-      }
-      this._almostReadyToRunExtensions.open();`);
-      contents = replaceOnce(contents, 'const searchTree = await this._createExtensionPathIndex(myRegistry.getAllExtensionDescriptions());',
-        'if (this._initData.isTargetExtensionHost) await retainNodeExtensionVersions(myRegistry.getAllExtensionDescriptions());\n      const searchTree = await this._createExtensionPathIndex(myRegistry.getAllExtensionDescriptions());');
-    }
-    // Node 宿主复用共同状态与编辑版本合同，不能带入只属于 renderer 的 FileService 和 UI 定制。
-    if (runtime === 'node') {
-      if (path === join(upstream, 'src/vs/workbench/api/common/extHost.api.impl.ts')) {
-        contents = transformMcp(root, path, contents, replaceOnce);
-      }
-      return transformNativeManagement(root, path, contents, replaceOnce);
-    }
-    contents = transformFileDialog(root, path, contents, replaceOnce);
-    contents = transformExtensionConfiguration(root, path, contents, replaceOnce);
-    contents = transformConfigurationContributions(root, path, contents, replaceOnce);
-    contents = transformConfigurationRegistry(root, path, contents, replaceOnce);
+    contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
-    contents = transformExtensionNotebooks(root, path, contents, replaceOnce);
+    contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformSettingsEditor(root, path, contents, replaceOnce);
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);

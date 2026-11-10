@@ -58,5 +58,3 @@ tests/unit/gateway/
 - 测试必须使用临时目录隔离 Gateway 状态。
 - 测试目录结构应与 `app/gateway/` 的生产模块边界对应。
 - SSH 配置的 Include 展开覆盖真实符号链接环、三平台原生错误和日志次错，并核对原连接列表响应及修复后显式重试；`ssh -G` 非零退出须在日志 sink 失败时仍保留原解析错误、完整进程输出和显式重试能力。配置文件与原生产者保留在隔离 fixture 中，不访问用户 SSH 配置。
-
-- 原Gateway lifespan测试同时核ASGI yielded state与`app.state`持有同一扩展管理owner，不能为listener关闭顺序创建第二owner或独立安装队列。

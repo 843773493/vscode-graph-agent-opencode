@@ -32,9 +32,8 @@ export function buildTransientDevelopmentUnit({
   environment = process.env,
   cwd = process.cwd(),
   bunExecutable = process.execPath,
-  args = [],
 } = {}) {
-  const layout = resolveDevelopmentLayout({ environment, cwd, args });
+  const layout = resolveDevelopmentLayout({ environment, cwd });
   const unitName = developmentSystemdUnitName(layout);
   const serviceName = `${unitName}.service`;
   const readyFile = path.join(
@@ -56,14 +55,6 @@ export function buildTransientDevelopmentUnit({
   const command = [
     path.resolve(bunExecutable),
     path.join(layout.projectRoot, "scripts", "launch", "dev.mjs"),
-    ...(layout.extensionHost === null
-      ? []
-      : [
-          "--extension-host-node",
-          layout.extensionHost.nodeExecutable,
-          "--extension-host-component",
-          layout.extensionHost.componentRoot,
-        ]),
   ];
   const systemdRunArguments = [
     "--user",
@@ -316,7 +307,7 @@ export async function main(args = process.argv.slice(2)) {
   if (!new Set(["start", "stop", "status"]).has(action)) {
     throw new Error(`未知 dev systemd 操作: ${action}`);
   }
-  const unit = buildTransientDevelopmentUnit({ args: args.slice(1) });
+  const unit = buildTransientDevelopmentUnit();
   if (action === "start") await start(unit);
   if (action === "stop") stop(unit);
   if (action === "status") await status(unit);

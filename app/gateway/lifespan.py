@@ -71,9 +71,6 @@ from app.gateway.runtime.consumer_protocol import (
     runtime_fencing_token_digest,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.extension_management import (
-    extension_management_lifespan,
-)
 from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
@@ -230,9 +227,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         for slot in service_plugins.slots.values():
             if slot.process is not None and slot.process.is_alive():
                 yield "plugin", slot.process.pid
-        if (extension_management is not None and extension_management.process is not None
-                and extension_management.process.is_alive()):
-            yield "extension-management", extension_management.process.pid
 
     # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
     async with (
@@ -242,12 +236,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             update_policy=gateway_config.local_skill_updates,
             sources=gateway_config.skill_sources,
         ).lifespan() as skill_source_owner,
-        extension_management_lifespan(
-            get_boxteam_home(),
-            logging_startup={"revision": gateway_config.revision,
-                "level": cast(str, runtime_logging["level"]), "pretty": cast(bool, runtime_logging["pretty"])},
-            preserve_for_handoff=should_preserve_for_handoff,
-        ) as extension_management,
         plugin_runtime_lifespan(
             home=get_boxteam_home(), gateway_id=gateway_id,
             skill_sources=skill_source_owner,
@@ -266,7 +254,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         app.state.runtime_observation = runtime_observation
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
-        app.state.extension_management = extension_management
         app.state.service_plugins = service_plugins
         workspace_plugin_bindings = WorkspacePluginBindings(registry, service_plugins)
         app.state.workspace_plugin_bindings = workspace_plugin_bindings
@@ -580,7 +567,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                             fencing_token_digest=runtime_fencing_token_digest(claim.fencing_token),
                             fence_check=assert_pending_apply_claim,
                             record=logging_progress_recorder(gateway_state, claim.fencing_token),
-                            extension_management=extension_management,
                             service_plugins=service_plugins,
                         ).stage(), *_gateway_pending_runtime_consumer_stages(
                             app, generation=startup_generation,
@@ -679,7 +665,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                     startup_logging_result = await GatewayRuntimeConsumerTransaction((RuntimeLoggingConsumer(
                         registry=registry, candidate=gateway_config, generation=startup_generation,
                         fencing_token_digest=None, fence_check=None, record=lambda detail: None,
-                        extension_management=extension_management,
                         service_plugins=service_plugins,
                     ).stage(),)).apply()
                     await startup_logging_result.finalize()
@@ -713,8 +698,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                                     errors.append(error)
                     if errors:
                         raise ExceptionGroup("Gateway 监听关闭前 Backend 未完成退出", errors)
-                if extension_management is not None:
-                    await extension_management.quiesce()
 
             yield {"after_http_startup": after_http_startup, "before_http_shutdown": before_http_shutdown}
             if startup_error is not None:

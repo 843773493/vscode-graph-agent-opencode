@@ -46,7 +46,6 @@ def control_client():
 @pytest.mark.parametrize(("service", "path"), [
     ("gateway", "/api/gateway/internal/runtime-logging"),
     ("backend", "/api/v1/internal/runtime-logging"),
-    ("extension-management", "/internal/runtime-logging"),
     ("plugin", "/internal/runtime-logging"),
 ])
 async def test_status_uses_private_process_channel(
@@ -85,7 +84,7 @@ async def test_control_rejects_nonlocal_or_ambiguous_targets(control_client, url
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changes", [{"service": "extension-management"}, {"pid": 43211}])
+@pytest.mark.parametrize("changes", [{"service": "gateway"}, {"pid": 43211}])
 async def test_status_rejects_different_process(control_client, logging_state, changes) -> None:
     async with control_client(lambda _: httpx.Response(200, json={"data": logging_state | changes})) as client:
         with pytest.raises(RuntimeLoggingConflictError, match="身份"):

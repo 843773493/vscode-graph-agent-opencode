@@ -268,9 +268,6 @@ async def health(
     if isinstance(startup_ready, asyncio.Future):
         await asyncio.shield(startup_ready)
     request.app.state.federation_channel_owner.assert_healthy()
-    extension_management = request.app.state.extension_management
-    if extension_management is not None:
-        extension_management.assert_healthy()
     return APIResponse(
         data=GatewayHealthDTO(
             gateway_id=request.app.state.gateway_id,

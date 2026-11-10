@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 
@@ -21,7 +21,6 @@ from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayCon
 from app.gateway.lifespan import lifespan
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import WorkspaceTarget
-from app.gateway.runtime.extension_management import GatewayExtensionManagement
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
@@ -65,7 +64,7 @@ async def stub_management(request: Request) -> JSONResponse:
 
 
 @asynccontextmanager
-async def protocol_lifespan(application: FastAPI) -> AsyncIterator[dict[str, GatewayExtensionManagement | None]]:
+async def protocol_lifespan(application: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitable[None]] | None]]:
     async with lifespan(application) as state:
         # 装具只预置已连接远端及凭据；被测路由、HTTP 客户端与响应解析均为生产实现。
         FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(

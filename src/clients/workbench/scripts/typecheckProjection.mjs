@@ -2,8 +2,8 @@ import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promis
 import { dirname, join, relative, sep } from 'node:path';
 import { sourceTransform } from './sourceTransform.mjs';
 
-/** 两个运行面的类型检查均读取正式构建的转换结果，未变源码只建立链接。 */
-export async function projectTypecheckSources({ repository, root, output, paths, commit, runtime }) {
+/** 类型检查读取正式构建的转换结果，未变源码只建立链接。 */
+export async function projectTypecheckSources({ repository, root, output, paths, commit }) {
   const overlay = join(output, 'repository');
   await rm(overlay, { recursive: true, force: true });
   const projectedRoot = join(overlay, relative(repository, root));
@@ -20,7 +20,7 @@ export async function projectTypecheckSources({ repository, root, output, paths,
   await project();
   const product = JSON.parse(await readFile(join(root, 'upstream/product.json'), 'utf8'));
   const manifest = JSON.parse(await readFile(join(root, 'upstream/package.json'), 'utf8'));
-  const transform = sourceTransform(projectedRoot, { ...product, version: manifest.version, commit, quality: 'stable' }, [], { runtime });
+  const transform = sourceTransform(projectedRoot, { ...product, version: manifest.version, commit, quality: 'stable' }, []);
   for (const path of paths) {
     const destination = join(projectedRoot, 'upstream', path);
     await mkdir(dirname(destination), { recursive: true });

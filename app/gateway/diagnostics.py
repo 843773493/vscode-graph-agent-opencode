@@ -39,7 +39,6 @@ from app.schemas.gateway.diagnostics import (
 from app.schemas.gateway.workspaces import GatewayConnectionKind
 
 if TYPE_CHECKING:
-    from app.gateway.runtime.extension_management import GatewayExtensionManagement
     from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 
 _MAX_READ_BYTES = 256 * 1024
@@ -278,7 +277,6 @@ def _scope_log_candidates(
 
 async def _logging_process_diagnostics(
     registry: GatewayWorkspaceRegistry, selected_workspace_id: str | None, candidates: list[_LogCandidate],
-    extension_management: GatewayExtensionManagement | None = None,
     service_plugins: GatewayPluginRuntime | None = None,
 ) -> list[GatewayDiagnosticProcessDTO]:
     async def observe(process: RuntimeLoggingProcess) -> GatewayDiagnosticProcessDTO:
@@ -303,7 +301,7 @@ async def _logging_process_diagnostics(
 
     async with registry.backend_topology_lock, httpx.AsyncClient(trust_env=False) as client:
         control = RuntimeLoggingProcessControl(client=client, token=get_gateway_local_token())
-        processes = runtime_logging_processes(registry, control, extension_management, service_plugins)
+        processes = runtime_logging_processes(registry, control, service_plugins)
         return list(await asyncio.gather(*(
             observe(process) for process in processes
             if selected_workspace_id is None or not process.workspace_ids or selected_workspace_id in process.workspace_ids
@@ -320,7 +318,6 @@ async def collect_gateway_diagnostics(
     selected_workspace_id: str | None = None,
     selected_log_id: str | None = None,
     tail_lines: int = 300,
-    extension_management: GatewayExtensionManagement | None = None,
     service_plugins: GatewayPluginRuntime | None = None,
     observation: RuntimeObservation | None = None,
 ) -> GatewayDiagnosticsDTO:
@@ -418,7 +415,7 @@ async def collect_gateway_diagnostics(
             include_tail=is_selected,
         )
         log_results.append(log_dto)
-    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, extension_management, service_plugins)
+    processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, service_plugins)
     observed = observation.status() if observation is not None else None
     plugin_observations = await service_plugins.observation_status(selected_workspace_id) if service_plugins else []
     collection_failed = observed is not None and (

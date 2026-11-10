@@ -22,6 +22,6 @@ Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显�
 
 运行日志与 Gateway 自有日志使用同一联邦客户端的 `runtime_log` 查询；每个 Gateway 的每种明确来源各一条分支，同时选择时保留两者。工作区只筛选关联进程，共享文件不按工作区重复查询。原行引用仅作具名诊断定位动作，不新造资源 URI，接受后交给原 Gateway 诊断视图精确读取。
 
-`#` 的明确工作区范围仅调用完整包含于该范围的目标宿主符号 Provider；部分宿主视图和没有 Provider 时显示具体原因，不查询 Web／其它目标后再过滤。原符号排序、接受、resolve 和取消继续由原 SymbolsQuickAccessProvider 持有；默认列表的符号聚合仍为 TODO。
+`#` 的明确工作区范围必须等于原 IWorkspaceContextService 的完整窗口工作区集合，确认后才调用原 WorkspaceSymbolProviderRegistry。部分范围和没有 Provider 时显示具体原因，不查其它目标后过滤，不恢复旧用户宿主。原排序、接受、resolve 和取消继续由原 SymbolsQuickAccessProvider 持有。
 
-明确范围的 `#` 沿原 getWorkspaceSymbols 的可选失败回调保留成功候选，失败行从原 Provider 的宿主绑定派生目标和具体原因；异步拒绝由同次 await 捕获，取消后不发布迟到错误。原无范围查询、公开符号命令和其它未传回调的消费者保持原宽容语义，不复制聚合或维护第二份符号索引。分支重试与增量发布仍须沿原 Picker 迁齐。
+明确范围沿原 getWorkspaceSymbols 的可选失败回调保留成功候选并报告具体原因；取消后不发布迟到错误。原无范围查询、公开符号命令和未传回调的消费者保持原宽容语义，不复制聚合或维护第二份符号索引。分支重试与增量发布仍须沿原 Picker 迁齐。

@@ -191,7 +191,6 @@ def _gateway_runtime_consumer_stages(
             registry=registry, candidate=candidate, generation=generation,
             fencing_token_digest=fencing_token_digest, fence_check=fence_check,
             record=logging_progress_recorder(state_store, fencing_token),
-            extension_management=getattr(app.state, "extension_management", None),
             service_plugins=getattr(app.state, "service_plugins", None),
         ).stage())
     catalog_search_service = getattr(

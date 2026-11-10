@@ -34,49 +34,11 @@ async function exercise(mode) {
     if (!['identity', 'gateway', 'offline', 'duplicate'].includes(mode)) expect(result.commandError).toBeUndefined();
     expect(result.requests.filter(item => item.path.startsWith('/api/v1/'))
       .every(item => item.owner.gateway_id === result.target.gateway_id && item.owner.workspace_id === result.target.workspace_id)).toBe(true);
-    const discovery = result.requests.filter(item => item.path === '/api/gateway/extension-configurations/targets');
-    if (mode === 'selected-remote') {
-      expect(discovery).toHaveLength(1);
-      expect(discovery[0]).toMatchObject({ method: 'POST', body: { protocol_version: 1,
-        gateway_id: result.target.gateway_id, gateway_connection_id: 'connection-a' } });
-    } else expect(discovery).toEqual([]);
     return result;
   } finally { await context.close(); }
 }
 const writes = result => result.requests.filter(item => item.path.startsWith('/api/v1/') && item.method !== 'GET');
 const puts = result => result.requests.filter(item => item.method === 'PUT');
-
-for (const mode of ['choose', 'cancel', 'scopes', 'identity', 'gateway', 'mismatch']) test(`管理视图目标 ${mode} 不依赖工作区且不任取同目标连接`, async () => {
-  const context = await browser.newContext();
-  try {
-    const page = await context.newPage();
-    await page.goto(server.url.href);
-    const result = await page.evaluate(mode => import('/target-settings.mjs').then(module => module.managementTargetContract(mode)), mode);
-    expect(result.initial).toMatchObject({ gateway_id: 'gateway-entry', connection_kind: 'local' });
-    expect(result.initialSettings).toMatchObject({ gateway_id: 'gateway-entry', connection_kind: 'local' });
-    expect(result.explicit).toMatchObject({ gateway_id: 'gateway-c' });
-    expect(result.explicit.gateway_connection_id).toBeUndefined();
-    const expectedRequests = ['/api/gateway/management/gateways'];
-    if (['choose', 'cancel', 'scopes'].includes(mode)) expectedRequests.push('/api/gateway/extension-targets');
-    if (mode === 'cancel' || mode === 'scopes') expectedRequests.push('/api/gateway/management/gateways');
-    if (mode === 'scopes') expectedRequests.push('/api/gateway/extension-configurations/targets');
-    expect(result.requests).toEqual(expectedRequests);
-    if (['choose', 'cancel', 'scopes'].includes(mode)) {
-      expect(result.error).toBeUndefined();
-      expect(result.selected).toMatchObject({ gateway_id: 'gateway-b', gateway_connection_id: 'connection-b1', backend_id: '22222222-2222-4222-8222-222222222222' });
-      expect(result.picks[0]).toHaveLength(3);
-      expect(result.toolbar.title).toBe('目标：同一目标');
-      expect(result.picks[0][2].detail).toBe('远端离线');
-      if (mode === 'cancel') expect(result.picks[1].map(item => item.picked)).toEqual([false, true, false]);
-      if (mode === 'scopes') expect(result.settings).toMatchObject({ gateway_id: 'gateway-b', gateway_connection_id: 'connection-b2',
-        backend_id: '22222222-2222-4222-8222-222222222222' });
-      else expect(result.settings.gateway_id).toBe('gateway-entry');
-    } else {
-      expect(result.error).toContain(mode === 'mismatch' ? '不属于' : '已改变');
-      expect(result.selected.gateway_id).toBe(mode === 'gateway' ? 'new-entry' : 'gateway-entry');
-    }
-  } finally { await context.close(); }
-});
 
 for (const mode of ['cancel-target', 'cancel-source', 'cancel-input', 'cancel-confirm', 'readonly']) test(`${mode} 原命令取消或只读来源零保存`, async () => {
   const result = await exercise(mode);
@@ -92,7 +54,7 @@ for (const mode of ['cancel-target', 'cancel-source', 'cancel-input', 'cancel-co
   else expect(writes(result)).toEqual([]);
 });
 
-for (const mode of ['save', 'focus', 'delete', 'pending', 'selected-remote', 'explicit-remote']) test(`${mode} AST单键编辑、完整CAS和同意图保存，导航不改投`, async () => {
+for (const mode of ['save', 'focus', 'delete', 'pending']) test(`${mode} AST单键编辑、完整CAS和同意图保存，导航不改投`, async () => {
   const result = await exercise(mode), [preflight, saved] = writes(result);
   expect(writes(result).map(item => item.method)).toEqual(['POST', 'PUT']);
   expect(preflight.body).toEqual(saved.body);
@@ -112,7 +74,7 @@ for (const mode of ['save', 'focus', 'delete', 'pending', 'selected-remote', 'ex
   }
 });
 
-test('默认管理目标是页面原生Gateway，不取活动远端工作区', async () => {
+test('默认配置目标是页面原生Gateway，不取活动远端工作区', async () => {
   const result = await exercise('save');
   expect(result.choices.find(item => item.title === '选择业务配置目标').labels).toEqual(['原目标 A']);
   expect(result.requests.some(item => item.path === '/api/gateway/management/gateways')).toBe(false);

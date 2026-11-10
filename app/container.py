@@ -30,7 +30,6 @@ from app.core.path_utils import (
     SessionCatalogComponents,
     build_session_catalog_components,
     catalog_provider_scope,
-    get_boxteam_home,
     get_session_catalog_components,
     get_user_config_root,
     workspace_context,
@@ -117,11 +116,6 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
-from app.services.infrastructure.extension_host.management import (
-    ExtensionManagementClient,
-)
-from app.services.infrastructure.extension_host.owner import NodeExtensionHostOwner
-from app.services.infrastructure.extension_host.runtime import load_node_host_runtime
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -454,11 +448,6 @@ class WorkspaceContainerRegistry:
         self._mounted_workspaces = mounted_workspaces
         self._project_root = project_root
         self._clock_ports = clock_ports
-        node_host_runtime = load_node_host_runtime() if backend_id is not None else None
-        extension_management = ExtensionManagementClient.from_environment(backend_id) if backend_id is not None else None
-        self._extension_hosts = NodeExtensionHostOwner(backend_id=backend_id, mounted_workspaces=mounted_workspaces,
-            runtime=node_host_runtime, home=get_boxteam_home(), environment=os.environ,
-            startup_timeout=10, management=extension_management) if backend_id is not None else None
         self._containers: dict[str, AppContainer] = {}
         self._catalog_components: dict[str, SessionCatalogComponents] = {}
         self._pending_catalog_closes: set[str] = set()
@@ -472,13 +461,6 @@ class WorkspaceContainerRegistry:
     @property
     def workspace_ids(self) -> tuple[str, ...]:
         return self._mounted_workspaces.workspace_ids
-
-    @property
-    def extension_hosts(self) -> NodeExtensionHostOwner:
-        self._require_open()
-        if self._extension_hosts is None:
-            raise RuntimeError("Backend 尚未绑定稳定身份，不能管理 Node 宿主")
-        return self._extension_hosts
 
     def _require_open(self) -> None:
         if self._closed:
@@ -523,7 +505,6 @@ class WorkspaceContainerRegistry:
                             workspace_root=mount.workspace_root,
                             startup_mount=mount,
                             clock_ports=self._clock_ports,
-                            extension_hosts=self._extension_hosts,
                         )
                     components = self.get_catalog_components(
                         mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
@@ -563,19 +544,10 @@ class WorkspaceContainerRegistry:
     def close_admission(self) -> None:
         """线程排队或原生关闭持锁前撤销装配准入；锁内仍须复核。"""
         self._closed = True
-        if self._extension_hosts is not None:
-            self._extension_hosts.close_admission()
-
-    async def close_extension_hosts(self) -> None:
-        """工作区服务开始排空前，停止宿主准入并核实原进程退出。"""
-        if self._extension_hosts is not None:
-            await self._extension_hosts.close()
 
     def close(self) -> None:
         """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
         self.close_admission()
-        if self._extension_hosts is not None and not self._extension_hosts.drained:
-            raise RuntimeError("Node 宿主尚未回收，须先 await close_extension_hosts()")
         with self._lock:
             errors: list[Exception] = []
             for workspace_id in tuple(self._catalog_components):
@@ -616,7 +588,6 @@ def _build_app_container(
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
     construction: ExitStack,
-    extension_hosts: NodeExtensionHostOwner | None = None,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
     if workspace_root is None:
@@ -1265,7 +1236,6 @@ def build_app_container(
     workspace_root: str | Path,
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
-    extension_hosts: NodeExtensionHostOwner | None = None,
 ) -> AppContainer:
     """在显式工作区上下文中装配唯一完整服务图。"""
 
@@ -1281,7 +1251,6 @@ def build_app_container(
                 startup_mount=startup_mount,
                 clock_ports=clock_ports,
                 construction=construction,
-                extension_hosts=extension_hosts,
             )
             # 未发布服务图的持久owner由构造作用域回收；成功后交给原WorkspaceLifespan。
             construction.pop_all()

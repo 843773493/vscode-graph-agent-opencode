@@ -40,7 +40,6 @@ class BackendLifespan:
         self._model_stream = model_stream
         self._close_owner: asyncio.Task[None] | None = None
         self._steps: deque[tuple[str, CloseAction]] = deque([
-            ("extension_hosts", self._close_extension_hosts),
             ("workspaces", self._close_workspaces),
             ("catalog", self._close_registry),
             ("maintenance", self._close_access),
@@ -122,10 +121,6 @@ class BackendLifespan:
             self._steps.popleft()
         self._application.state.workspace_container_registry = None
         self._application.state.workspace_lifespan = None
-
-    async def _close_extension_hosts(self) -> None:
-        if self.registry is not None:
-            await self.registry.close_extension_hosts()
 
     async def _close_workspaces(self) -> None:
         # 按挂载逆序发起，各自的依赖链仍由创建它的原Workspace任务串行关闭。

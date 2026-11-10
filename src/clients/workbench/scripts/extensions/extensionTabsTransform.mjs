@@ -2,13 +2,12 @@ import { join } from 'node:path';
 
 export const extensionTabsSourcePaths = ['src/vs/workbench/api/browser/mainThreadEditorTabs.ts'];
 
-/** 标签仍由原 MainThread owner 持有；组内索引属于该宿主实际可见的同一数组。 */
 export function transformExtensionTabs(root, path, source, replaceOnce) {
   if (path !== join(root, 'upstream', extensionTabsSourcePaths[0])) return source;
-  let contents = `import { hostOwnsWorkspaceResource } from ${JSON.stringify(join(root, 'src/extensions/targetUris.js'))};\n` + source;
-  contents = replaceOnce(contents, "import { ILogService } from '../../../platform/log/common/log.js';\n", '');
+  let contents = replaceOnce(source, "import { ILogService } from '../../../platform/log/common/log.js';\n", '');
   contents = replaceOnce(contents, "import { isGroupEditorMoveEvent } from '../../common/editor/editorGroupModel.js';\n", '');
-  contents = replaceOnce(contents, 'extHostContext: IExtHostContext,', 'private readonly extHostContext: IExtHostContext,');
+  contents = replaceOnce(contents, "import { URI } from '../../../base/common/uri.js';\n", '');
+  contents = replaceOnce(contents, "import { EditorResourceAccessor, GroupModelChangeKind, SideBySideEditor } from '../../common/editor.js';", "import { GroupModelChangeKind } from '../../common/editor.js';");
   contents = replaceOnce(contents, '\t\t@ILogService private readonly _logService: ILogService,\n', '');
   contents = replaceOnce(contents, 'private readonly _proxy: IExtHostEditorTabsShape;', `private readonly _proxy: IExtHostEditorTabsShape;
   private _ready = false;
@@ -28,51 +27,20 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
       this._createTabsModel();
     });`);
   contents = replaceOnce(contents, '\tdispose(): void {', '\tdispose(): void {\n    this._disposed = true;\n    this._tabGroupModel = [];');
-  contents = replaceOnce(contents, 'private _generateTabId(editor: EditorInput, groupId: number) {', `private _generateTabId(editor: EditorInput, groupId: number) {
-    if (this.extHostContext.extensionHost.targetContext) {
-      // 目标标签 ID 只标识原 EditorInput，不夹带 MultiDiff source 或本机路径。
-      let id = this._editorIds.get(editor);
-      if (id === undefined) this._editorIds.set(editor, id = ++this._nextEditorId);
-      return groupId + '~' + id;
-    }`);
+  const idStart = contents.indexOf('\n\tprivate _generateTabId(');
+  const idEnd = contents.indexOf('\n\t/**\n\t * Called whenever a group activates', idStart);
+  if (idStart < 0 || idEnd < 0) throw new Error('原 MainThreadEditorTabs 标签 ID 边界已变化');
+  contents = replaceOnce(contents, contents.slice(idStart, idEnd), `
+  private _generateTabId(editor: EditorInput, groupId: number): string {
+    let id = this._editorIds.get(editor);
+    if (id === undefined) this._editorIds.set(editor, id = ++this._nextEditorId);
+    return groupId + '~' + id;
+  }`);
+
   const start = contents.indexOf('\n\t/**\n\t * Called whenever a group activates');
   const end = contents.indexOf('\n\t//#region Messages received from Ext Host', start);
   if (start < 0 || end < 0) throw new Error('原 MainThreadEditorTabs 模型更新边界已变化');
   contents = replaceOnce(contents, contents.slice(start, end), `
-  private _acceptsEditor(editor: EditorInput): boolean {
-    if (!this.extHostContext.extensionHost.targetContext) return true;
-    const owns = (uri: URI | undefined) => !!uri && hostOwnsWorkspaceResource(this.extHostContext.extensionHost, uri);
-    if (editor instanceof MultiDiffEditorInput) {
-      const resources = editor.resources.get() ?? [];
-      // 整个 EditorInput 是关闭／移动单位；归属检查包含原 DTO 未编码的单边项与跳转位置。
-      return resources.length > 0 && resources.every(resource => {
-        const endpoints = [resource.originalUri, resource.modifiedUri, resource.goToFileUri].filter((uri): uri is URI => !!uri);
-        return endpoints.length > 0 && endpoints.every(owns);
-      });
-    }
-    if (editor instanceof MergeEditorInput) return [editor.base, editor.input1.uri, editor.input2.uri, editor.resource].every(owns);
-    if (editor instanceof SideBySideEditorInput) return this._acceptsEditor(editor.primary) && this._acceptsEditor(editor.secondary);
-    if (editor instanceof InteractiveEditorInput) return owns(editor.resource) && owns(editor.inputResource);
-    // TODO: terminal／webview／chat 等无工作区文件的标签，待各 API owner 提供目标归属后接入。
-    return owns(editor.resource);
-  }
-
-  private _projectedIndex(group: IEditorGroup, editor: EditorInput): number {
-    return group.editors.filter(candidate => this._acceptsEditor(candidate)).indexOf(editor);
-  }
-
-  private _trackMultiDiff(group: IEditorGroup, editor: EditorInput): void {
-    if (!(editor instanceof MultiDiffEditorInput)) return;
-    const id = this._generateTabId(editor, group.id);
-    if (this._multiDiffEditorInputListeners.has(id)) return;
-    this._multiDiffEditorInputListeners.set(id, Event.fromObservableLight(editor.resources)(() => {
-      const currentGroup = this._editorGroupsService.getGroup(group.id);
-      if (!this._disposed && currentGroup?.editors.includes(editor)) {
-        this._refreshTab(currentGroup, editor);
-      }
-    }));
-  }
-
   private _removeTab(groupId: number, editor: EditorInput): void {
     const id = this._generateTabId(editor, groupId), tabs = this._groupLookup.get(groupId)?.tabs;
     const index = tabs?.findIndex(tab => tab.id === id) ?? -1;
@@ -82,31 +50,37 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
     this._proxy.$acceptTabOperation({ groupId, index, tabDto, kind: TabModelOperationKind.TAB_CLOSE });
   }
 
+  private _trackMultiDiff(group: IEditorGroup, editor: EditorInput): void {
+    if (!(editor instanceof MultiDiffEditorInput)) return;
+    const id = this._generateTabId(editor, group.id);
+    if (this._multiDiffEditorInputListeners.has(id)) return;
+    this._multiDiffEditorInputListeners.set(id, Event.fromObservableLight(editor.resources)(() => {
+      const currentGroup = this._editorGroupsService.getGroup(group.id);
+      if (!this._disposed && currentGroup?.editors.includes(editor)) this._refreshTab(currentGroup, editor);
+    }));
+  }
+
   private _refreshTab(group: IEditorGroup, editor: EditorInput, moved = false): void {
     this._trackMultiDiff(group, editor);
     const tabs = this._groupLookup.get(group.id)?.tabs;
     if (!tabs) throw new Error('标签事件先于所属编辑器组发布：' + group.id);
-    if (!this._acceptsEditor(editor)) { this._removeTab(group.id, editor); this._syncActiveTabs(group); return; }
     const editorIndex = group.editors.indexOf(editor);
     if (editorIndex < 0) throw new Error('标签事件缺少原 EditorInput');
     const id = this._generateTabId(editor, group.id), oldIndex = tabs.findIndex(tab => tab.id === id);
     const updated = this._buildTabObject(group, editor, editorIndex);
     if (oldIndex < 0) {
-      const index = this._projectedIndex(group, editor);
-      tabs.splice(index, 0, updated);
+      tabs.splice(editorIndex, 0, updated);
       this._tabInfoLookup.set(id, { group, editorInput: editor, tab: updated });
-      this._proxy.$acceptTabOperation({ groupId: group.id, index, tabDto: updated, kind: TabModelOperationKind.TAB_OPEN });
+      this._proxy.$acceptTabOperation({ groupId: group.id, index: editorIndex, tabDto: updated, kind: TabModelOperationKind.TAB_OPEN });
     } else {
       const tab = tabs[oldIndex];
       Object.assign(tab, updated);
-      const index = moved ? this._projectedIndex(group, editor) : oldIndex;
-      if (moved && index !== oldIndex) {
-        tabs.splice(oldIndex, 1); tabs.splice(index, 0, tab);
-        this._proxy.$acceptTabOperation({ groupId: group.id, index, oldIndex, tabDto: tab, kind: TabModelOperationKind.TAB_MOVE });
+      if (moved && editorIndex !== oldIndex) {
+        tabs.splice(oldIndex, 1); tabs.splice(editorIndex, 0, tab);
+        this._proxy.$acceptTabOperation({ groupId: group.id, index: editorIndex, oldIndex, tabDto: tab, kind: TabModelOperationKind.TAB_MOVE });
       }
-      this._proxy.$acceptTabOperation({ groupId: group.id, index, tabDto: tab, kind: TabModelOperationKind.TAB_UPDATE });
+      this._proxy.$acceptTabOperation({ groupId: group.id, index: moved ? editorIndex : oldIndex, tabDto: tab, kind: TabModelOperationKind.TAB_UPDATE });
     }
-    this._syncActiveTabs(group);
   }
 
   private _syncActiveTabs(group: IEditorGroup): void {
@@ -141,7 +115,7 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
       group.editors.forEach((editor, index) => {
         const id = this._generateTabId(editor, group.id);
         if (editor instanceof MultiDiffEditorInput) multiDiffIds.add(id);
-        if (!this._acceptsEditor(editor)) return;
+        this._trackMultiDiff(group, editor);
         const updated = this._buildTabObject(group, editor, index);
         const tab = previous.get(id)?.tab ?? updated;
         if (tab !== updated) Object.assign(tab, updated);
@@ -152,7 +126,6 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
     });
     for (const id of this._multiDiffEditorInputListeners.keys()) if (!multiDiffIds.has(id)) this._multiDiffEditorInputListeners.deleteAndDispose(id);
     this._proxy.$acceptEditorTabModel(this._tabGroupModel);
-    for (const group of this._editorGroupsService.groups) for (const editor of group.editors) this._trackMultiDiff(group, editor);
   }
 
   private _updateTabsModel({ groupId, event }: IEditorsChangeEvent): void {
@@ -160,7 +133,6 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
     const group = this._editorGroupsService.getGroup(groupId);
     switch (event.kind) {
       case GroupModelChangeKind.GROUP_ACTIVE: this._syncActiveGroups(); return;
-      // add／remove／move 的布局 owner 已发布结构；逐组 index 通知不再重复整窗同步。
       case GroupModelChangeKind.GROUP_INDEX:
       case GroupModelChangeKind.GROUP_LABEL:
       case GroupModelChangeKind.GROUP_LOCKED:
@@ -178,84 +150,91 @@ export function transformExtensionTabs(root, path, source, replaceOnce) {
         return;
       default:
         if (!group || !event.editor) throw new Error('标签变更事件缺少原编辑器组或 EditorInput');
-        // modal editor 没有进入原 groups 模型，不向普通 TabGroups 发布。
         if (!this._groupLookup.has(groupId)) return;
         this._refreshTab(group, event.editor, event.kind === GroupModelChangeKind.EDITOR_MOVE);
     }
   }
 
   private _assertRunning(): void {
-    if (this._disposed) throw new Error('标签所属宿主代际已经关闭');
+    if (this._disposed) throw new Error('标签同步已经释放');
   }
 
   private _isCurrentTab(info: TabInfo): boolean {
     return this._tabInfoLookup.get(info.tab.id)?.tab === info.tab
       && this._editorGroupsService.getGroup(info.group.id) === info.group
-      && info.group.editors.includes(info.editorInput) && this._acceptsEditor(info.editorInput);
+      && info.group.editors.includes(info.editorInput);
   }
 
   private _assertTab(tabId: string, info = this._tabInfoLookup.get(tabId)): TabInfo | undefined {
     this._assertRunning();
-    if (this.extHostContext.extensionHost.targetContext && (!info || !this._isCurrentTab(info))) {
-      throw new Error('标签不属于发起宿主的当前工作区视图：' + tabId);
-    }
+    if (info && !this._isCurrentTab(info)) throw new Error('标签请求已过期：' + tabId);
     return info;
   }
 `);
-  contents = replaceOnce(contents, '\t\tconst groupId = columnToEditorGroup(this._editorGroupsService, this._configurationService, viewColumn);\n\t\tconst tabInfo = this._tabInfoLookup.get(tabId);', '\t\tconst tabInfo = this._assertTab(tabId);');
-  contents = replaceOnce(contents, '\t\tlet targetGroup: IEditorGroup | undefined;', '\t\tconst groupId = columnToEditorGroup(this._editorGroupsService, this._configurationService, viewColumn);\n\t\tlet targetGroup: IEditorGroup | undefined;');
+
+  contents = replaceOnce(contents,
+    '\t$moveTab(tabId: string, index: number, viewColumn: EditorGroupColumn, preserveFocus?: boolean): void {',
+    '\t$moveTab(tabId: string, index: number, viewColumn: EditorGroupColumn, preserveFocus?: boolean): void {\n\t\tthis._assertRunning();');
+  contents = replaceOnce(contents,
+    '\t\tconst groupId = columnToEditorGroup(this._editorGroupsService, this._configurationService, viewColumn);\n\t\tconst tabInfo = this._tabInfoLookup.get(tabId);',
+    '\t\tconst groupId = columnToEditorGroup(this._editorGroupsService, this._configurationService, viewColumn);\n\t\tconst tabInfo = this._assertTab(tabId);');
   const moveStart = contents.indexOf('\n\t\t// Similar logic to if index is out of bounds');
   const moveEnd = contents.indexOf('\n\t\t// Move the editor to the target group', moveStart);
   if (moveStart < 0 || moveEnd < 0) throw new Error('原标签移动索引边界已变化');
   contents = replaceOnce(contents, contents.slice(moveStart, moveEnd), `
     this._assertTab(tabId, tabInfo);
     const editorInput = tabInfo.editorInput;
-    const visible = targetGroup.editors.filter(editor => editor !== editorInput && this._acceptsEditor(editor));
-    if (sourceGroup === targetGroup && this._projectedIndex(sourceGroup, editorInput) === (index < 0 || index > visible.length ? visible.length : index)) return;
-    const anchor = visible[index < 0 || index > visible.length ? visible.length : index];
+    const sourceIndex = sourceGroup.editors.indexOf(editorInput);
+    const available = targetGroup.editors.filter(editor => editor !== editorInput);
+    const targetIndex = Math.max(0, Math.min(index, available.length));
+    const anchor = available[targetIndex];
     index = anchor ? targetGroup.editors.indexOf(anchor) : targetGroup.editors.length;
-    if (sourceGroup === targetGroup && sourceGroup.editors.indexOf(editorInput) < index) index--;
+    if (sourceGroup === targetGroup && sourceIndex < index) index--;
+    if (sourceGroup === targetGroup && sourceIndex === index) return;
 `);
   const closeStart = contents.indexOf('\n\tasync $closeTab('), closeEnd = contents.indexOf('\n\tasync $closeGroup(', closeStart);
   if (closeStart < 0 || closeEnd < 0) throw new Error('原标签关闭边界已变化');
   contents = replaceOnce(contents, contents.slice(closeStart, closeEnd), `
   async $closeTab(tabIds: string[], preserveFocus?: boolean): Promise<boolean> {
     this._assertRunning();
-    const groups = new Map<IEditorGroup, TabInfo[]>();
-    // 先核整批，再按原组关闭；保留原 Tab DTO，不能把同输入重开的标签当成原请求。
-    for (const info of tabIds.map(id => this._assertTab(id))) {
+    const groups: Map<IEditorGroup, TabInfo[]> = new Map();
+    for (const tabId of tabIds) {
+      const info = this._assertTab(tabId);
       if (!info) continue;
-      const tabs = groups.get(info.group);
-      if (tabs) tabs.push(info); else groups.set(info.group, [info]);
+      const infos = groups.get(info.group);
+      if (infos) infos.push(info); else groups.set(info.group, [info]);
     }
     const results: boolean[] = [];
-    for (const [group, tabs] of groups) {
+    for (const [group, infos] of groups) {
       this._assertRunning();
-      if (this.extHostContext.extensionHost.targetContext && tabs.some(info => !this._isCurrentTab(info))) {
-        throw new Error('待关闭标签已经失效；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');
-      }
-      results.push(await group.closeEditors(tabs.map(info => info.editorInput), { preserveFocus }));
-      if (this._disposed && results.length < groups.size) throw new Error('标签宿主代际已经关闭；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');
+      if (infos.some(info => !this._isCurrentTab(info))) throw new Error('标签请求已过期；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');
+      results.push(await group.closeEditors(infos.map(info => info.editorInput), { preserveFocus }));
+      if (this._disposed && results.length < groups.size) throw new Error('标签同步已经释放；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');
     }
     return results.every(result => result);
   }
 `);
-  contents = replaceOnce(contents, 'const groupCloseResults: boolean[] = [];', `this._assertRunning();
+  const groupCloseStart = contents.indexOf('\n\tasync $closeGroup(');
+  const groupCloseEnd = contents.indexOf('\n\t//#endregion', groupCloseStart);
+  if (groupCloseStart < 0 || groupCloseEnd < 0) throw new Error('原标签组关闭边界已变化');
+  contents = replaceOnce(contents, contents.slice(groupCloseStart, groupCloseEnd), `
+  async $closeGroup(groupIds: number[], preserveFocus?: boolean): Promise<boolean> {
+    this._assertRunning();
     const groups = groupIds.map(id => this._editorGroupsService.getGroup(id));
-    if (this.extHostContext.extensionHost.targetContext && groupIds.some((id, index) => !groups[index] || !this._groupLookup.has(id))) throw new Error('编辑器组不属于发起宿主的当前标签模型');
-    const groupCloseResults: boolean[] = [];`);
-  contents = replaceOnce(contents, 'groupCloseResults.push(await group.closeAllEditors());', `this._assertRunning();
-        if (this.extHostContext.extensionHost.targetContext && group !== groups[index]) {
-          throw new Error('待关闭编辑器组已经失效；前序关闭结果=' + JSON.stringify(groupCloseResults) + '，未执行后继关闭');
-        }
-        const editors = group.editors.filter(editor => this._tabInfoLookup.has(this._generateTabId(editor, group.id)) && this._acceptsEditor(editor));
-        groupCloseResults.push(await (this.extHostContext.extensionHost.targetContext
-          ? group.closeEditors(editors, { preserveFocus }) : group.closeAllEditors()));
-        if (this._disposed) {
-          if (index + 1 < groupIds.length) throw new Error('标签宿主代际已经关闭；前序关闭结果=' + JSON.stringify(groupCloseResults) + '，未执行后继关闭');
-          return groupCloseResults.every(result => result);
-        }`);
-  contents = replaceOnce(contents, 'for (const groupId of groupIds) {', 'for (const [index, groupId] of groupIds.entries()) {');
-  contents = replaceOnce(contents, 'group.count === 0 && this._editorGroupsService.getGroup(group.id)', 'group.count === 0 && this._editorGroupsService.getGroup(group.id) === group');
+    const results: boolean[] = [];
+    for (const [index, group] of groups.entries()) {
+      this._assertRunning();
+      if (!group) continue;
+      if (this._editorGroupsService.getGroup(group.id) !== group) throw new Error('编辑器组请求已过期；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');
+      results.push(await group.closeAllEditors());
+      if (this._disposed) {
+        if (groups.slice(index + 1).some(group => group !== undefined)) throw new Error('标签同步已经释放；前序关闭结果=' + JSON.stringify(results) + '，未执行后继关闭');
+        return results.every(result => result);
+      }
+      if (group.count === 0 && this._editorGroupsService.getGroup(group.id) === group) this._editorGroupsService.removeGroup(group);
+    }
+    return results.every(result => result);
+  }
+`);
   return contents;
 }

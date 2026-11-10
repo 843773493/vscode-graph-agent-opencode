@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { parseArgs } from "node:util";
 
 export const DEVELOPMENT_BASE_PORTS = Object.freeze({
   backend: 8010,
@@ -24,26 +23,7 @@ export function parseDevelopmentPortOffset(rawValue) {
 export function resolveDevelopmentLayout({
   environment = process.env,
   cwd = process.cwd(),
-  args = [],
 } = {}) {
-  const { values } = parseArgs({ args, strict: false, allowPositionals: true,
-    options: {
-      "extension-host-node": { type: "string" },
-      "extension-host-component": { type: "string" },
-    } });
-  const hasExtensionHostNode = values["extension-host-node"] !== undefined;
-  const hasExtensionHostComponent = values["extension-host-component"] !== undefined;
-  if (hasExtensionHostNode !== hasExtensionHostComponent) {
-    throw new Error("--extension-host-node 与 --extension-host-component 必须成对提供");
-  }
-  for (const [option, value] of [
-    ["--extension-host-node", values["extension-host-node"]],
-    ["--extension-host-component", values["extension-host-component"]],
-  ]) {
-    if (value !== undefined && !value.trim()) {
-      throw new Error(`${option} 必须提供非空路径`);
-    }
-  }
   const projectRoot = path.resolve(
     environment.BOXTEAM_PROJECT_ROOT?.trim() || cwd,
   );
@@ -72,12 +52,6 @@ export function resolveDevelopmentLayout({
     defaultWorkspaceRoot,
     portOffset,
     ports,
-    extensionHost: hasExtensionHostNode
-      ? {
-          nodeExecutable: path.resolve(cwd, values["extension-host-node"]),
-          componentRoot: path.resolve(cwd, values["extension-host-component"]),
-        }
-      : null,
   };
 }
 

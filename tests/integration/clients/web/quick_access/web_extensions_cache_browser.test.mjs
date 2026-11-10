@@ -20,7 +20,6 @@ export { createFileSystemProviderError, FileSystemProviderErrorCode } from '${up
 export { UriIdentityService } from '${upstream}platform/uriIdentity/common/uriIdentityService.js';
 export { ConfigurationService } from '${upstream}platform/configuration/common/configurationService.js';
 export { NullPolicyService } from '${upstream}platform/policy/common/policy.js';
-export { InMemoryUserDataProfilesService } from '${upstream}platform/userDataProfile/common/userDataProfile.js';
 export { InMemoryStorageService, StorageScope, StorageTarget } from '${upstream}platform/storage/common/storage.js';
 export { ExtensionStorageService } from '${upstream}platform/extensionManagement/common/extensionStorage.js';
 export { NullLogService } from '${upstream}platform/log/common/log.js';
@@ -32,7 +31,7 @@ export { isWeb } from '${upstream}base/common/platform.js';
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 const moduleUrl = `data:text/javascript;base64,${(await readFile(bundle)).toString('base64')}`;
 const receipt = {
-  boundary: '真实Chromium中运行原扫描器、内建扫描器、manifest兼容性、FileService、URI identity及内存配置／profile／扩展存储服务；仅资源读取、gallery和lifecycle为受控依赖。合法记录经原addExtension生成后复制到缓存，坏项／坏正文及Provider读权限错误为显式故障注入，不证明市场安装、Gateway或扩展宿主。',
+  boundary: '真实Chromium中运行 sourceTransform 后的原 system／custom builtin scanner、manifest兼容性、FileService、URI identity及内存配置／扩展存储服务；仅资源读取、gallery和lifecycle为受控依赖。缓存项只作为坏项／坏正文和Provider读取错误的故障预备，不证明安装、Gateway或扩展宿主。',
   checks: [],
 };
 let browser;
@@ -45,7 +44,6 @@ afterAll(async () => {
   try { await run.close(); }
   finally { await writeFile(join(run.artifactsDir, 'web-extensions-cache-browser-checks.json'), JSON.stringify(receipt, null, 2) + '\n'); }
 });
-
 async function exerciseInBrowser({ moduleUrl, kind }) {
   globalThis._VSCODE_FILE_ROOT = 'https://extensions.invalid/out/';
   const m = await import(moduleUrl);
@@ -74,8 +72,7 @@ async function exerciseInBrowser({ moduleUrl, kind }) {
   const identity = new m.UriIdentityService(files);
   const environment = { userRoamingDataHome: m.URI.parse('vscode-userdata:/User'), cacheHome: m.URI.parse('vscode-userdata:/Cache'),
     options: {}, isBuilt: false, disableWorkspaceTrust: true };
-  const product = { version: '1.145.0' }, profiles = new m.InMemoryUserDataProfilesService(environment, files, identity, log);
-  const profile = profiles.defaultProfile.extensionsResource, settings = profiles.defaultProfile.settingsResource;
+  const product = { version: '1.145.0' }, settings = m.URI.parse('vscode-userdata:/User/settings.json');
   await files.createFolder(environment.userRoamingDataHome);
   await files.writeFile(settings, m.VSBuffer.fromString('{}'));
   const configuration = new m.ConfigurationService(settings, files, new m.NullPolicyService(), log);
@@ -101,7 +98,7 @@ async function exerciseInBrowser({ moduleUrl, kind }) {
   const gallery = { isEnabled: () => true, async getExtensions() { galleryCalls.push('getExtensions'); throw new Error('本测试不允许市场网络读取'); } };
   const builtin = new m.BuiltinExtensionsScannerService(environment, identity, loader, product, log);
   const service = new m.WebExtensionsScannerService(environment, builtin, files, log, gallery, properties, loader,
-    extensionStorage, storage, product, profiles, identity, { when: () => new Promise(() => {}) });
+    extensionStorage, storage, product, { when: () => new Promise(() => {}) });
   const attempt = async operation => {
     try {
       const value = await operation();
@@ -113,38 +110,35 @@ async function exerciseInBrowser({ moduleUrl, kind }) {
     }
   };
   try {
-    const installed = await service.addExtension(location, {}, profile);
-    if (!installed.isValid) throw new Error(`原addExtension生成的测试记录无效：${JSON.stringify(installed.validations)}`);
-    const original = (await files.readFile(profile)).value.toString(), good = JSON.parse(original)[0];
-    // 复制原安装记录仅用于缓存故障注入，不把缓存预备当作市场安装证据。
-    if (kind !== 'profile') await files.writeFile(profile, m.VSBuffer.fromString('[]'));
-    const target = kind === 'profile' ? profile : m.URI.joinPath(environment.userRoamingDataHome,
+    const cacheEntry = { identifier: { id: 'cache-probe.browser-probe' }, version: '2.0.0', location: location.toJSON(),
+      manifest: manifest('2.0.0'), defaultManifestTranslations: null };
+    const validCache = JSON.stringify([cacheEntry]);
+    const target = m.URI.joinPath(environment.userRoamingDataHome,
       kind === 'system' ? 'systemExtensionsCache.json' : 'customBuiltinExtensionsCache.json');
     const sources = [
-      { name: 'invalid-entry-before-valid', text: JSON.stringify([{ identifier: { id: 'cache-probe.broken' }, version: '1.0.0' }, good]) },
+      { name: 'invalid-entry-before-valid', text: JSON.stringify([{ identifier: { id: 'cache-probe.broken' }, version: '1.0.0' }, cacheEntry]) },
       { name: 'invalid-json', text: '{"broken":' },
       { name: 'unknown-structure', text: '{"unknownFormat":1}' },
-      { name: 'read-permission-denied', text: original, denied: true },
+      { name: 'read-permission-denied', text: validCache, denied: true },
     ];
     const results = [], readsBefore = resourceReads.length;
     for (const source of sources) {
       await files.writeFile(target, m.VSBuffer.fromString(source.text));
       const firstRead = provider.reads.length;
       provider.denied = source.denied ? target.toString() : undefined;
-      let scan, add;
+      let scan;
       try {
-        scan = await attempt(() => kind === 'system' ? service.scanSystemExtensions() : service.scanUserExtensions(profile));
-        if (kind === 'profile') add = await attempt(() => service.addExtension(location, {}, profile));
+        scan = await attempt(() => kind === 'system' ? service.scanSystemExtensions() : service.scanCustomBuiltinExtensions());
       } finally { provider.denied = undefined; }
       const readPaths = provider.reads.slice(firstRead);
-      results.push({ name: source.name, scan, add, readPaths,
+      results.push({ name: source.name, scan, readPaths,
         sourcePreserved: (await files.readFile(target)).value.toString() === source.text });
     }
     return { isWeb: m.isWeb, nodeProcess: typeof globalThis.process, kind, target: target.toString(), results, galleryCalls,
-      extraResourceReads: kind === 'profile' ? undefined : resourceReads.slice(readsBefore) };
+      extraResourceReads: resourceReads.slice(readsBefore) };
   } finally {
     service.dispose(); extensionStorage.dispose(); storage.dispose(); properties.dispose(); trust.dispose();
-    configuration.dispose(); profiles.dispose(); identity.dispose(); files.dispose(); provider.dispose(); log.dispose();
+    configuration.dispose(); identity.dispose(); files.dispose(); provider.dispose(); log.dispose();
   }
 }
 
@@ -173,22 +167,5 @@ for (const kind of ['system', 'custom']) test(`${kind}派生缓存跳过前置�
     expect(observed.scan.ok).toBe(true);
     const versions = observed.name === 'invalid-entry-before-valid' ? ['2.0.0'] : kind === 'system' ? ['1.0.0'] : [];
     expect(observed.scan.extensions).toEqual(versions.map(version => ({ id: 'cache-probe.browser-probe', version, isValid: true })));
-  }
-});
-
-test('同类profile故障拒绝扫描和新增并保留原字节，权限失败保持原错误类别', async () => {
-  const result = await exercise('profile');
-  for (const observed of result.results) {
-    expect(observed.readPaths.filter(path => path === result.target)).toHaveLength(2);
-    expect(observed.sourcePreserved).toBe(true);
-    expect(observed.scan.ok).toBe(false);
-    expect(observed.add.ok).toBe(false);
-    if (observed.name === 'read-permission-denied') {
-      for (const failure of [observed.scan, observed.add]) {
-        expect(failure.originalPermissionError).toBe(true);
-        expect(failure.name).toBe('NoPermissions (FileSystemError)');
-        expect(failure.message).toContain('缓存测试具名读取权限失败');
-      }
-    }
   }
 });

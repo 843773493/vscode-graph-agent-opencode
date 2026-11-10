@@ -153,6 +153,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     name: f"{gateway_public_pb2.DESCRIPTOR.package}.{name}"
     for name in (
+        "GatewayManagementTargetDTO",
         "GatewayDirectoryListDTO", "NativeDirectoryBindRequest",
         "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
         "GatewayResourceAddressRequest", "GatewayResourceAddressDTO",
@@ -179,22 +180,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "ActivateGatewayWorkspaceResultDTO", "WorkspaceFolderCreateRequest", "WorkspaceNavigationNodeUpdateRequest",
         "WorkspaceNavigationPlacementRequest", "WorkspaceNavigationReorderRequest",
         "WorkspaceNavigationTreeDTO", "WorkspaceNavigationBreadcrumbDTO",
-        "ExtensionHostTargetRequest", "ExtensionHostTargetDTO",
-        "ExtensionTargetDTO",
-        "ExtensionTargetViewDTO", "ExtensionTargetListRequest", "ExtensionTargetListDTO",
         "GatewayManagementDirectoryDTO",
-        "ExtensionInstallationInventoryRequest", "ExtensionInstallationInventoryDTO",
-        "ExtensionInstallationInstallRequest", "ExtensionInstallationInstallDTO",
-        "ExtensionInstallationUninstallRequest", "ExtensionInstallationUninstallDTO",
-        "ExtensionInstallationGalleryRequest", "ExtensionInstallationGalleryDTO",
-        "ExtensionInstallationMetadataRequest",
-        "ExtensionConfigurationTargetRequest", "ExtensionConfigurationTargetListRequest",
-        "ExtensionConfigurationTargetListDTO", "ExtensionConfigurationViewDTO", "ExtensionConfigurationContributionDTO",
-        "ExtensionConfigurationProfileViewRequest", "ExtensionConfigurationProfileFileRequest", "ExtensionConfigurationProfileWriteRequest",
-        "ExtensionConfigurationViewRequest", "ExtensionConfigurationFileRequest",
-        "ExtensionConfigurationWriteRequest", "ExtensionConfigurationStatDTO", "ExtensionConfigurationReadDTO",
-        "ExtensionConfigurationEventDTO",
-        "ExtensionPackageFileRequest", "ExtensionPackageStatDTO", "ExtensionPackageReadDTO",
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
@@ -225,7 +211,6 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "PluginCommandSnapshotDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandSnapshotDTO"],
-    "ExtensionConfigurationEventDTO": gateway_public_pb2.DESCRIPTOR.message_types_by_name["ExtensionConfigurationEventDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
     "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],

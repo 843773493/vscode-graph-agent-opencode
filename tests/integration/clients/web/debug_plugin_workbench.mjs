@@ -274,9 +274,13 @@ try {
   assert.notEqual(otherPaused.pid, result.pid);
   assert.equal(otherPaused.debugger_binding.instance_id, ready.instance.instance_id);
   assert.equal((await state()).call_stack[0].line, 3);
-  // 后端暂停先于原 Debug UI 的焦点更新；沿真实调用栈明确选择要停止的运行。
-  await page.locator('.debug-call-stack .session .name')
-    .getByText('Other Thread Node · Debug focus destination', { exact: true }).click();
+  const debugSessionName = name => page.locator('.debug-call-stack .session .name').getByText(name, { exact: true });
+  const selectedDebugSessionName = () => page.locator('.debug-toolbar .select-container .monaco-select-box')
+    .evaluate(element => element.selectedOptions[0]?.textContent);
+  // 通过真实调用栈选择要停止的运行，并确认 Debug Session 选择器已同步焦点。
+  const otherDebugSession = debugSessionName('Other Thread Node · Debug focus destination');
+  await otherDebugSession.click();
+  await expect.poll(selectedDebugSessionName).toBe('Other Thread Node · Debug focus destination');
   await expect(page.locator('.debug-variables')).toContainText('state');
   await command('workbench.action.debug.stop');
   await expect.poll(async () => (await otherState()).status, { timeout: 15_000 }).toBe('exited');
@@ -331,12 +335,24 @@ try {
   }
   result.agentSharedRun = true;
   result.phase = 'lost-evaluate-response';
+  // REPL 命令使用当前 Debug 会话；停止另一个 Thread 后先显式选回暂停中的原 run。
+  const originalDebugSession = debugSessionName('UI shared Node · Debug UI shared run');
+  await originalDebugSession.click();
+  await expect.poll(selectedDebugSessionName).toBe('UI shared Node · Debug UI shared run');
+  await expect.poll(async () => (await state()).status).toBe('paused');
+  result.replSelection = { sessionId: owner.sessionId, threadId: owner.threadId, runId: result.runId };
   loseEvaluation = true;
   await command('workbench.debug.action.focusRepl');
   const consoleInput = page.locator('.repl-input-wrapper .monaco-editor').filter({ visible: true });
   await consoleInput.click();
   await page.keyboard.insertText('state.counter += 1');
   await page.keyboard.press('Enter');
+  await expect.poll(() => result.dap.filter(item => item.direction === 'out' && item.value.command === 'evaluate'
+    && item.value.arguments?.expression === 'state.counter += 1').length).toBe(1);
+  const evaluateRequests = result.dap.filter(item => item.direction === 'out' && item.value.command === 'evaluate'
+    && item.value.arguments?.expression === 'state.counter += 1');
+  assert.equal(evaluateRequests.length, 1);
+  assert.equal(evaluateRequests[0].channel, `/api/v1/debug/node/runs/${result.runId}/dap`);
   await expect.poll(() => result.responseLoss?.response.success).toBe(true);
   assert.equal(result.responseLoss.response.body.result, '14');
   // UI 连接失效不停止目标；从原业务入口读取事实，副作用只执行一次。
