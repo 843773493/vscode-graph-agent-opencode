@@ -16,7 +16,10 @@ from app.gateway.runtime.process_lifecycle import (
 
 
 @pytest.fixture
-def exit_notification_process():
+def exit_notification_process(monkeypatch: pytest.MonkeyPatch):
+    # 固定发行 Python 未编译 os.pidfd_open，仍须得到真正的内核退出通知。
+    if sys.platform == "linux":
+        monkeypatch.delattr(os, "pidfd_open", raising=False)
     process = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"], stdin=subprocess.PIPE)
     try:
         yield process

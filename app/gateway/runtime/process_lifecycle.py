@@ -74,7 +74,9 @@ async def wait_process_exit(pid: int) -> None:
                 flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT)], 0)
             descriptor = queue.fileno()
         else:
-            descriptor = os.pidfd_open(pid)
+            from app.runtime.linux_process import open_process_descriptor
+
+            descriptor = open_process_descriptor(pid)
         def complete() -> None:
             if not exited.done():
                 exited.set_result(None)
