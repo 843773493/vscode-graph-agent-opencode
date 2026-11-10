@@ -10,6 +10,9 @@ import { managementGateway } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
 import { configureServicePlugin } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
+import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesEditorInput.js';
+import { captureSettingsLocation } from './editor.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import type { IUntypedFileEditorInput } from '../../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -124,5 +127,18 @@ for (const operation of ['sourceStatus', 'rebaseSource'] as const) registerActio
       ...document.layers.map(layer => ({ label: `来源层 ${layer.source_key}`, description: `${layer.layer} · 优先级 ${layer.precedence} · ${layer.writable ? '可写' : '只读'}`, detail: JSON.stringify(layer.payload) })),
       ...document.origins.map(origin => ({ label: origin.path, description: origin.source_key, detail: `被遮蔽：${origin.shadowed_sources.join('、') || '无'}` })),
     ], { title: '目标设置来源与生效状态', prompt: `${document.gateway_id}${'workspace_id' in document ? ' · ' + document.workspace_id : ' · Gateway'} · ${document.source_key}` });
+  }
+});
+
+registerAction2(class extends Action2 {
+  constructor() { super({ id: 'boxteam.settings.openTarget', title: { value: '打开目标业务设置', original: 'Open Target Business Settings' },
+    category: { value: 'BoxTeam 设置', original: 'BoxTeam Settings' }, f1: true }); }
+  async run(accessor: ServicesAccessor): Promise<void> {
+    const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
+    const cancellation = new CancellationTokenSource();
+    try {
+      const captured = await captureSettingsLocation(parent, cancellation.token);
+      if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
+    } finally { cancellation.dispose(); }
   }
 });

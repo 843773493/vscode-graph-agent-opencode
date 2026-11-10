@@ -16,7 +16,7 @@ const run = await TestRunContext.fromTestFile('tests/integration/clients/web/tes
 const result = { phase: 'initialize', pageErrors: [], consoleErrors: [], nodeChannels: [], bindings: [],
   receipts: [], writes: [], snapshots: [], rejectedResources: [],
   runtimeKind: fixture.runtime_kind,
-  boundary: '正式 Workbench、真实 Gateway 及同 Backend 双根；原 API 安装所选 Web／Node 扩展，经原挂接命令激活真实 Worker／Node 进程。配置更新经公开 getConfiguration/update、原 renderer writer 和目标 Python 文件服务；原设置 UI 打开同一稳定 view 的 JSON，真实键盘制造 dirty、原保存处理外改冲突，公开并发更新验证原队列。外改仅在产品实际写出 .code-workspace 后模拟；无模型调用，不代替 Relay、Windows、Electron 或全部竞态验收。' };
+  boundary: '正式 Workbench、真实 Gateway 及同 Backend 双根；原 API 安装所选 Web／Node 扩展，经原挂接命令激活真实 Worker／Node 进程。配置更新经公开 getConfiguration/update、原 renderer writer 和目标 Python 文件服务；原文件打开命令打开同一稳定 view 的 JSON，真实键盘制造 dirty、原保存处理外改冲突，公开并发更新验证原队列。外改仅在产品实际写出 .code-workspace 后模拟；无模型调用，不代替 Relay、Windows、Electron 或全部竞态验收。' };
 const pending = [];
 let page, failure;
 const save = () => writeFile(output, JSON.stringify(result, null, 2) + '\n');
@@ -197,15 +197,8 @@ try {
   await expect(autoSave).toBeVisible();
   await expect(autoSave.locator('option:checked')).toHaveText('off');
   result.autoSaveDisabledViaProduct = true;
-  await settings.getByRole('button', { name: '目标：本地 · 当前工作台', exact: true }).click();
-  await expect(picker).toBeVisible();
-  await picker.locator('.monaco-list-row').filter({ hasText: '本地' }).first().click();
-  await expect(settings.getByRole('button', { name: '目标：本地 · ' + fixture.backend_id, exact: true })).toBeVisible();
-  // 原 SettingsTargetsWidget 顺序为本地、远端、workspace、folder；不依赖动态 view 显示名。
-  const scopes = settings.locator('.settings-tabs-widget .action-item');
-  await expect(scopes).toHaveCount(4);
-  await scopes.nth(2).click();
-  await action('settings.switchToJSON');
+  // 宿主公开配置仍使用原文件 owner；业务设置表单已迁正式来源，不再承担旧 view 导航。
+  await action('_workbench.open', workspaceOf(result.binding).configuration.resource_uri, [undefined, { pinned: true }]);
   await action('workbench.action.moveModalEditorToMain');
   await expect(page.locator('.monaco-modal-editor-block')).toHaveCount(0);
   const text = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();

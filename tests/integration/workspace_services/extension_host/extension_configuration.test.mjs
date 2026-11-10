@@ -12,11 +12,9 @@ const upstream = './src/clients/workbench/upstream/src/vs/';
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
 await build({ stdin: { resolveDir: resolve('.'), contents: `
 export { targetConfigurationServices } from './src/clients/workbench/src/extensions/configuration.js';
-export { targetConfigurationSourceFilter } from './src/clients/workbench/src/extensions/targetContext.js';
-export { acquireConfigurationContributions, acceptRuntimeConfigurationExtensions } from '${upstream}workbench/api/common/configurationExtensionPoint.js';
+export { acceptRuntimeConfigurationExtensions } from '${upstream}workbench/api/common/configurationExtensionPoint.js';
 export { ExtensionIdentifier } from '${upstream}platform/extensions/common/extensions.js';
-export { DefaultSettings } from '${upstream}workbench/services/preferences/common/preferencesModels.js';
-export { registerTargetConfigurationFiles, rebindTargetConfigurationFiles, retainTargetConfigurationFile } from './src/clients/workbench/src/extensions/configurationFiles.js';
+export { registerTargetConfigurationFiles } from './src/clients/workbench/src/extensions/configurationFiles.js';
 export { TargetUriTransformer } from './src/clients/workbench/src/extensions/targetUris.js';
 export { MainThreadConfiguration } from '${upstream}workbench/api/browser/mainThreadConfiguration.js';
 export { ExtHostConfigProvider } from '${upstream}workbench/api/common/extHostConfiguration.js';
@@ -281,166 +279,7 @@ test('相同配置传输引用共享SSE并按最后引用释放，不合并不�
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
 
-test('显式同归属重连切换后续读写和 watch，旧在途写入冻结且失去新引用不回退', async () => {
-  const { context, page } = await open();
-  try {
-    const result = await page.evaluate(async () => {
-      const p = globalThis.probe, m = p.m, a = await p.make('A', ['A1', 'A2']), b = await p.make('B');
-      const { gateway_id, backend_id, view_id, workspace_ids, initialization } = a.binding;
-      const old = { kind: 'settings', gatewayConnectionId: 'old-route', connection: {
-        protocol_version: 1, gateway_id, backend_id, view_id, workspace_ids, profile_id: 'default', extensions: [],
-        context: { os: initialization.os, remote_settings: initialization.environment.remote_settings, workspace: initialization.workspace },
-      } };
-      const resource = m.URI.parse(a.remote.resource_uri), workspace = m.URI.parse(a.config.resource_uri), provider = p.files.getProvider('boxteam');
-      const oldReference = m.rebindTargetConfigurationFiles(p.files, [old]), watch = p.files.watch(resource);
-      await new Promise(resolve => setTimeout(resolve, 0));
-      let entered, release;
-      const waiting = new Promise(resolve => { entered = resolve; });
-      p.transport.pause = { route: 'old-route', entered, promise: new Promise(resolve => { release = resolve; }) };
-      const pending = provider.writeFile(resource, new TextEncoder().encode('{"draft":"old-in-flight"}'), { create: true, overwrite: true });
-      await waiting;
-      const oldRequest = p.transport.requests.find(item => item.endpoint.endsWith('/write') && item.body.gateway_connection_id === 'old-route');
-      const next = { ...old, gatewayConnectionId: 'new-route' };
-      const nextReference = m.rebindTargetConfigurationFiles(p.files, [next]);
-      oldReference.dispose(); a.store.dispose();
-      const oldSignalBeforeSettlement = oldRequest.signal.aborted;
-      const lateOldReference = m.registerTargetConfigurationFiles(p.files, old);
-      await provider.readFile(resource); await provider.stat(workspace);
-      const modelReference = m.retainTargetConfigurationFile(p.files, resource);
-      const newSubscription = p.transport.subscribers.find(item => item.body.gateway_connection_id === 'new-route');
-      const sameReference = m.rebindTargetConfigurationFiles(p.files, [next]);
-      const sameWatch = p.transport.subscribers.find(item => item.body.gateway_connection_id === 'new-route') === newSubscription;
-      sameReference.dispose(); nextReference.dispose();
-      await provider.writeFile(resource, new TextEncoder().encode('{"draft":"new-after-ui-close"}'), { create: true, overwrite: true });
-      const newWrite = p.transport.requests.findLast(item => item.endpoint.endsWith('/write') && item.body.gateway_connection_id === 'new-route');
-      let rejectedOwner;
-      try { m.rebindTargetConfigurationFiles(p.files, [{ ...next, gatewayConnectionId: 'rejected-route' },
-        { ...next, connection: { ...next.connection, profile_id: 'foreign-profile' } }]); }
-      catch (error) { rejectedOwner = error.message; }
-      const activeRoutes = p.transport.subscribers.filter(item => item.body.backend_id === backend_id).map(item => item.body.gateway_connection_id);
-      modelReference.dispose();
-      const unavailable = await provider.readFile(resource).then(() => undefined, error => error.message);
-      lateOldReference.dispose();
-      const oldStillPending = !oldRequest.signal.aborted;
-      p.transport.pause = undefined; release(); await pending;
-      const oldSignalAfterSettlement = oldRequest.signal.aborted;
-      const operations = p.transport.requests.filter(item => item.body.gateway_connection_id === 'new-route')
-        .map(item => ({ operation: item.endpoint.split('/').at(-1), resource: item.body.resource_uri }));
-      watch.dispose();
-      return { oldSignalBeforeSettlement, oldStillPending, oldSignalAfterSettlement, oldBody: oldRequest.body,
-        newBody: newWrite.body, sameWatch, activeRoutes, unavailable, rejectedOwner, operations,
-        other: b.owner.getValue('probe.machine'), resource: resource.toString(), workspace: workspace.toString() };
-    });
-    expect(result.oldSignalBeforeSettlement).toBe(false); expect(result.oldStillPending).toBe(true); expect(result.oldSignalAfterSettlement).toBe(true);
-    expect(result.oldBody.gateway_connection_id).toBe('old-route');
-    expect(Buffer.from(result.oldBody.content_base64, 'base64').toString()).toBe('{"draft":"old-in-flight"}');
-    expect(result.newBody.gateway_connection_id).toBe('new-route');
-    expect(Buffer.from(result.newBody.content_base64, 'base64').toString()).toBe('{"draft":"new-after-ui-close"}');
-    expect(result.sameWatch).toBe(true); expect(result.activeRoutes).toEqual(['new-route']); expect(result.other).toBe('B-remote');
-    expect(result.unavailable).toContain('未绑定'); expect(result.rejectedOwner).toContain('不能改变');
-    expect(result.operations).toContainEqual({ operation: 'read', resource: result.resource });
-    expect(result.operations).toContainEqual({ operation: 'stat', resource: result.workspace });
-    checks.push('显式同归属换连接：原Provider冻结旧write正文/signal并等结算，后续read/stat/write及SSE只走新route，同route复用watch，model引用保留新传输且零旧route回退');
-  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
-});
-
-test('显式连接的共享profile随原view关闭继续使用同连接另一view，最后关闭不回旧连接', async () => {
-  const { context, page } = await open();
-  try {
-    const result = await page.evaluate(async () => {
-      const p = globalThis.probe, m = p.m, a = await p.make('A', ['A1', 'A2']), c = await p.make('C', ['C1', 'C2'], a);
-      const scope = host => {
-        const { gateway_id, backend_id, view_id, workspace_ids, initialization } = host.binding;
-        return { kind: 'settings', gatewayConnectionId: 'new-route', connection: {
-          protocol_version: 1, gateway_id, backend_id, view_id, workspace_ids, profile_id: 'default', extensions: [],
-          context: { os: initialization.os, remote_settings: initialization.environment.remote_settings, workspace: initialization.workspace },
-        } };
-      };
-      const first = scope(a), second = scope(c), resource = m.URI.parse(a.remote.resource_uri), provider = p.files.getProvider('boxteam');
-      const oldReference = p.lifetime.add(m.registerTargetConfigurationFiles(p.files, { ...first, gatewayConnectionId: 'old-route' }));
-      const transition = p.lifetime.add(m.rebindTargetConfigurationFiles(p.files, [first, second]));
-      const firstReference = p.lifetime.add(m.registerTargetConfigurationFiles(p.files, first));
-      const secondReference = p.lifetime.add(m.registerTargetConfigurationFiles(p.files, second));
-      const watch = p.lifetime.add(p.files.watch(resource));
-      transition.dispose(); a.store.dispose(); c.store.dispose();
-      await new Promise(resolve => setTimeout(resolve, 0));
-      const before = p.transport.subscribers.map(item => item.body.workspace_ids);
-      firstReference.dispose();
-      const remainingRead = await provider.readFile(resource).then(value => new TextDecoder().decode(value), error => error.message);
-      const after = p.transport.subscribers.map(item => ({ route: item.body.gateway_connection_id, roots: item.body.workspace_ids }));
-      await provider.writeFile(resource, new TextEncoder().encode('{"continued":"C"}'), { create: true, overwrite: true });
-      const writtenRoots = p.transport.requests.findLast(item => item.endpoint.endsWith('/write')).body.workspace_ids;
-      let changes = 0;
-      const listener = p.lifetime.add(provider.onDidChangeFile(() => changes++));
-      p.transport.subscribers.find(item => item.body.gateway_connection_id === 'new-route')
-        .send('changes', { changes: [{ resource_uri: resource.toString(), kind: 'edit' }], overflow: false });
-      await new Promise(resolve => setTimeout(resolve, 0));
-      secondReference.dispose();
-      const unavailable = await provider.readFile(resource).then(() => undefined, error => error.message);
-      oldReference.dispose(); watch.dispose(); listener.dispose();
-      return { before, after, remainingRead, writtenRoots, changes, unavailable };
-    });
-    expect(result.before).toEqual([['A1', 'A2']]);
-    expect(result.remainingRead).toContain('A-remote');
-    expect(result.after).toEqual([{ route: 'new-route', roots: ['C1', 'C2'] }]);
-    expect(result.writtenRoots).toEqual(['C1', 'C2']); expect(result.changes).toBe(1);
-    expect(result.unavailable).toContain('未绑定');
-    checks.push('显式新连接的共享profile沿剩余view保持读写/watch归属，最后新连接引用关闭仍拒绝旧连接');
-  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
-});
-
-test('独立设置声明进入原扩展点和配置模型，目标默认值与窗口隔离且按最后来源撤销', async () => {
-  const { context, page } = await open();
-  try {
-    const result = await page.evaluate(async () => {
-      const p = globalThis.probe, m = p.m, a = await p.make('A'), b = await p.make('B'), window = await p.make('Window');
-      a.store.dispose(); b.store.dispose();
-      const declaration = label => ({ extension_id: 'fixture.schema-' + label.toLowerCase(), name: 'schema-' + label, publisher: 'fixture',
-        display_name: '目标 ' + label + ' 设置', configuration: { title: '目标 ' + label, properties: {
-          ['schema' + label + '.own']: { type: 'string', default: label + '-schema', scope: 'window' },
-        } }, configuration_defaults: { 'probe.value': label + '-default', '[typescript]': { 'probe.value': label + '-language' } },
-        capabilities: null, enabled_api_proposals: [] });
-      const prepare = async (host, entry) => {
-        const { gateway_id, backend_id, view_id, workspace_ids, initialization } = host.binding;
-        const scope = { kind: 'settings', connection: { protocol_version: 1, gateway_id, backend_id, view_id, workspace_ids, profile_id: 'default',
-          context: { os: initialization.os, remote_settings: initialization.environment.remote_settings, workspace: initialization.workspace }, extensions: [entry] } };
-        const lifetime = p.lifetime.add(new m.DisposableStore());
-        const child = await m.targetConfigurationServices(p.parent, scope, lifetime);
-        const owner = child.invokeFunction(accessor => accessor.get(m.IConfigurationService));
-        const defaults = lifetime.add(new m.DefaultSettings([], m.ConfigurationTarget.USER_REMOTE, owner, m.targetConfigurationSourceFilter(scope)));
-        return { owner, lifetime, defaults, scope };
-      };
-      const first = await prepare(a, declaration('A')), same = await prepare(a, declaration('A')), other = await prepare(b, declaration('B'));
-      const snapshot = view => ({ builtin: view.owner.inspect('probe.value').defaultValue,
-        language: view.owner.inspect('probe.value', { overrideIdentifier: 'typescript' }).defaultValue,
-        ownA: view.owner.getValue('schemaA.own'), ownB: view.owner.getValue('schemaB.own'),
-        keys: view.defaults.getRegisteredGroups().flatMap(group => group.sections.flatMap(section => section.settings.map(setting => setting.key))) });
-      const before = { a: snapshot(first), b: snapshot(other), window: window.owner.inspect('probe.value').defaultValue,
-        windowLanguage: window.owner.inspect('probe.value', { overrideIdentifier: 'typescript' }).defaultValue };
-      first.lifetime.dispose();
-      const afterFirst = snapshot(same);
-      const registry = m.Registry.as(m.Extensions.Configuration);
-      const retained = !!registry.getConfigurationProperties()['schemaA.own'];
-      same.lifetime.dispose();
-      const afterLast = { a: !!registry.getConfigurationProperties()['schemaA.own'], b: !!registry.getConfigurationProperties()['schemaB.own'],
-        window: window.owner.inspect('probe.value').defaultValue, other: snapshot(other) };
-      other.lifetime.dispose();
-      return { before, afterFirst, retained, afterLast };
-    });
-    expect(result.before.a).toMatchObject({ builtin: 'A-default', language: 'A-language', ownA: 'A-schema' });
-    expect(result.before.b).toMatchObject({ builtin: 'B-default', language: 'B-language', ownB: 'B-schema' });
-    expect(result.before.a.ownB).toBeUndefined(); expect(result.before.b.ownA).toBeUndefined();
-    expect(result.before.a.keys).toContain('schemaA.own'); expect(result.before.a.keys).not.toContain('schemaB.own');
-    expect(result.before.b.keys).toContain('schemaB.own'); expect(result.before.b.keys).not.toContain('schemaA.own');
-    expect(result.before.window).toBe('default'); expect(result.before.windowLanguage).toBe('default');
-    expect(result.afterFirst).toEqual(result.before.a); expect(result.retained).toBe(true);
-    expect(result.afterLast.a).toBe(false); expect(result.afterLast.b).toBe(true);
-    expect(result.afterLast.other).toEqual(result.before.b); expect(result.afterLast.window).toBe('default');
-    checks.push('配置声明沿原扩展点/WorkspaceService/DefaultSettings进入目标模型；A/B内置和语言默认值隔离，窗口不消费configurationOnly，租约最后引用才撤销');
-  } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
-});
-
-test('原配置来源owner拒绝冲突、保留运行来源，并让同ID更新真实替换schema和defaults', async () => {
+test('原配置来源owner拒绝同批声明冲突，并让同ID更新真实替换schema和defaults', async () => {
   const { context, page } = await open();
   try {
     const result = await page.evaluate(() => {
@@ -450,11 +289,9 @@ test('原配置来源owner拒绝冲突、保留运行来源，并让同ID更新�
           configurationDefaults: { 'probe.value': value } } });
       const first = declaration('first');
       m.acceptRuntimeConfigurationExtensions([first], message => messages.push(message));
-      const lease = m.acquireConfigurationContributions([first], message => messages.push(message));
       let conflict;
-      try { m.acquireConfigurationContributions([declaration('conflict')], message => messages.push(message)); }
+      try { m.acceptRuntimeConfigurationExtensions([first, declaration('conflict')], message => messages.push(message)); }
       catch (error) { conflict = error.message; }
-      lease.dispose();
       const retained = registry.getConfigurationProperties()['replacement.value'].default;
       m.acceptRuntimeConfigurationExtensions([declaration('second')], message => messages.push(message));
       const updated = registry.getConfigurationProperties()['replacement.value'].default;
@@ -466,7 +303,7 @@ test('原配置来源owner拒绝冲突、保留运行来源，并让同ID更新�
     expect(result.conflict).toContain('冲突'); expect(result.retained).toBe('first');
     expect(result.updated).toBe('second'); expect(result.defaultValue).toBe('second');
     expect(result.policy).toBe('replacement.value'); expect(result.removed).toBe(true); expect(result.messages).toEqual([]);
-    checks.push('运行与设置租约共享同ID；冲突预检拒绝，释放设置不撤运行，同ID新内容经原delta替换schema/defaults/policy');
+    checks.push('同批同ID声明冲突预检拒绝且保留原发布，同ID新内容经原delta替换schema/defaults/policy');
   } finally { await page.evaluate(() => globalThis.probe.lifetime.dispose()); await context.close(); }
 });
 

@@ -83,6 +83,8 @@
 - [ ] 7.2 保留标题工具栏目标 Quick Input、默认本地、各视图独立选择，冻结详情／在途操作／草稿目标；迟到查询不串列表，焦点和来源路径不改投目标。
 - [ ] 7.3 从plugins[].contributes.configuration渲染目标参数，表单与JSONC共用原writer；关闭保留已安装schema但不启用工具／Skill，卸载释放schema；未绑定参数限原登记容器保留且未生效，JSONC按容器结构编辑删除、重绑定严格验证，域外未知仍拒绝，无影子schema或第二enabled，删除旧配置桥。
   - 2026-11-10 正式来源 JSONC 边界：Gateway／Workspace 表单与 JSONC 统一经 ConfigurationSourceOwner 使用原 list／read／preflight／CAS／幂等 writer；FileService 只适配原文本编辑器，保留 dirty、关闭及热退出备份，显式保存，不直接写来源文件。目标和来源冻结，实际并发409保留草稿并要求显式重新预检；响应丢失仅查询原键，零PUT重放；刷新恢复保留旧CAS，未覆盖并发来源。只读inline来源补稳定key；相对schema直接消费原文档json_schema，错误schema请求由6次降至0。真实Gateway／托管Backend／正式Workbench两个浏览器用例2 passed／174.04秒，补刷新恢复1 passed／91.79秒；189份转换源码类型、正式构建及inline来源两条短验通过。最小复审删除多余状态与包装，未新增配置合并或业务存储。准确命令、源码指纹及原始结果见 `out/tests/temp/2026/11/10/settings_source_editor/artifacts/verification.json`。原SettingsEditor业务表单迁移、旧宿主配置桥整体退役、双目标不同schema页面及真实Relay／原生平台仍未完成，7.3／10.6不勾完。
+  - 2026-11-10 原 SettingsEditor 表单迁移边界：原 SettingsEditor2Input／Settings2EditorModel 按编辑器组读取正式来源及确切绑定版本的包 schema，表单与来源 JSONC 共用原文本模型、undo、dirty、显式保存和备份；不向窗口配置单例注册业务字段。目标／来源随输入冻结，切目标打开新输入；只读来源禁用表单，秘密沿原受保护参数入口，业务语言覆盖明确拒绝。已移除设置专用 profile／view／FileEditorInput 重绑及旧配置发现投影；Node／Web 宿主仍用的配置文件与公开 API 暂保留，后续随宿主整体退役，不将有效消费者误删。最终正式 Gateway／托管 Backend／Workbench／Chromium 1 passed／110.21秒，核同一来源草稿、显式表单保存、实际409、刷新后旧CAS和未知提交零重放、停用纯声明参数及零旧配置桥请求；最终定向60 pass／485断言（四项AI迟到搜索回归已迁回），186份转换源码类型及同源码正式构建通过。旧宿主网络消费者缺已准备的 Node host 制品而跳过，不计通过。命令、源码指纹、失败原件及最小复审见 `out/tests/temp/2026/11/10/settings_source_form/artifacts/verification.json`。双目标不同 schema 页面、实时安装声明变更与真实 Relay／原生平台尚未闭合，7.3／10.6保持未勾选。
+
 - [ ] 7.4 在原命令／Quick Input／Opener 接入自有插件管理与状态，迁齐 ext／MCP／设置入口及来源提示；需要重开资源时只消费原寻址 owner 的正式地址，不自造 grammar。
 - [ ] 7.5 真实页面验证无公网源零请求、本地多插件包安装、当前 Gateway／当前工作区插件开关与重启及新建默认值、部分失败批量操作和整包引用冲突卸载；保存与实际启动状态分开，焦点不改投。
 

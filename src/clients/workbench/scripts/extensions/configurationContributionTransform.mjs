@@ -7,7 +7,7 @@ export const configurationContributionSourcePaths = [
   'src/vs/workbench/services/extensions/common/extensionsRegistry.ts',
 ];
 
-/** 配置贡献仍由原扩展点校验和发布；运行来源与独立设置来源只在这个 owner 合并。 */
+/** 运行配置贡献仍由原扩展点校验和发布；同 ID 更新走原 registry 的 remove/add delta。 */
 export function transformConfigurationContributions(root, path, source, replaceOnce) {
   const paths = configurationContributionSourcePaths.map(value => join(root, 'upstream', value));
   if (path === paths[1]) {
@@ -29,57 +29,47 @@ export function transformConfigurationContributions(root, path, source, replaceO
   if (path !== paths[0]) return source;
   source = replaceOnce(source, 'ExtensionsRegistry, IExtensionPointUser', 'ExtensionsRegistry, ExtensionMessageCollector');
   source = replaceOnce(source, 'ExtensionIdentifierMap, IExtensionManifest', 'ExtensionIdentifierMap, IExtensionManifest, IExtensionDescription');
-  source = replaceOnce(source, "import { Disposable } from '../../../base/common/lifecycle.js';", "import { Disposable, IDisposable, toDisposable } from '../../../base/common/lifecycle.js';\nimport type { IMessage } from '../../services/extensions/common/extensions.js';");
+  source = replaceOnce(source, "import { Disposable } from '../../../base/common/lifecycle.js';", "import { Disposable } from '../../../base/common/lifecycle.js';\nimport type { IMessage } from '../../services/extensions/common/extensions.js';");
   source = replaceOnce(source, 'let _configDelta: IConfigurationDelta | undefined;', `let _configDelta: IConfigurationDelta | undefined;
 
-export type ConfigurationExtensionDescription = Pick<IExtensionDescription,
-  'identifier' | 'name' | 'publisher' | 'displayName' | 'contributes' | 'capabilities' | 'enabledApiProposals' | 'isBuiltin'>;
-type ConfigurationDescription = ConfigurationExtensionDescription & { configurationOnly?: boolean };
+type ConfigurationDescription = Pick<IExtensionDescription,
+  'identifier' | 'name' | 'publisher' | 'displayName' | 'contributes' | 'capabilities' | 'enabledApiProposals'>;
 interface ConfigurationUser<T> {
   description: ConfigurationDescription;
   value: T;
   collector: ExtensionMessageCollector;
 }
-interface ConfigurationSource {
-  extensions: readonly ConfigurationExtensionDescription[];
+interface RuntimeConfigurationEntry {
+  description: ConfigurationDescription;
   messageHandler: (message: IMessage) => void;
 }
-let runtimeSource: ConfigurationSource = { extensions: [], messageHandler: () => {} };
-let settingsSources = new Map<symbol, ConfigurationSource>();
-let published = new Map<string, { description: ConfigurationDescription; messageHandler: ConfigurationSource['messageHandler'] }>();
+let published = new Map<string, RuntimeConfigurationEntry>();
 
 function configurationSemantics(description: ConfigurationDescription) {
   return { name: description.name, publisher: description.publisher, displayName: description.displayName,
     configuration: description.contributes?.configuration, defaults: description.contributes?.configurationDefaults,
-    untrusted: description.capabilities?.untrustedWorkspaces, proposals: description.enabledApiProposals ?? [],
-    configurationOnly: description.configurationOnly, isBuiltin: description.isBuiltin };
+    untrusted: description.capabilities?.untrustedWorkspaces, proposals: description.enabledApiProposals ?? [] };
 }
 
 function configurationSource(description: ConfigurationDescription) {
-  return { id: description.identifier.value, displayName: description.displayName,
-    configurationOnly: description.configurationOnly, isBuiltin: description.isBuiltin };
+  return { id: description.identifier.value, displayName: description.displayName };
 }
 
-function publishConfigurationSources(runtime: ConfigurationSource, sources: ReadonlyMap<symbol, ConfigurationSource>): void {
+export function acceptRuntimeConfigurationExtensions(extensions: readonly IExtensionDescription[], messageHandler: (message: IMessage) => void): void {
   const next: typeof published = new Map();
-  for (const [index, source] of [runtime, ...sources.values()].entries()) {
-    for (const extension of source.extensions) {
-      if (!extension.contributes?.configuration && !extension.contributes?.configurationDefaults) continue;
-      const key = extension.identifier.value.toLowerCase(), existing = next.get(key);
-      const description = { ...extension, configurationOnly: index === 0 ? undefined : true };
-      if (existing) {
-        if (!objects.equals(configurationSemantics({ ...existing.description, configurationOnly: undefined }),
-          configurationSemantics({ ...description, configurationOnly: undefined }))) {
-          throw new Error('扩展配置声明与窗口中已有来源冲突，请关闭旧设置或停用冲突版本：' + extension.identifier.value);
-        }
-      } else next.set(key, { description, messageHandler: source.messageHandler });
+  for (const extension of extensions) {
+    if (!extension.contributes?.configuration && !extension.contributes?.configurationDefaults) continue;
+    const key = extension.identifier.value.toLowerCase(), existing = next.get(key);
+    if (existing && !objects.equals(configurationSemantics(existing.description), configurationSemantics(extension))) {
+      throw new Error('同一扩展 ID 的配置声明冲突：' + extension.identifier.value);
     }
+    if (!existing) next.set(key, { description: extension, messageHandler });
   }
   const changed = (key: string) => !objects.equals(configurationSemantics(published.get(key)!.description), configurationSemantics(next.get(key)!.description));
   const removed = [...published].filter(([key]) => !next.has(key) || changed(key)).map(([, value]) => value);
   const added = [...next].filter(([key]) => !published.has(key) || changed(key)).map(([, value]) => value);
   if (removed.length || added.length) {
-    const users = <K extends 'configuration' | 'configurationDefaults'>(entries: typeof added, point: K): ConfigurationUser<NonNullable<IExtensionDescription['contributes']>[K]>[] =>
+    const users = <K extends 'configuration' | 'configurationDefaults'>(entries: readonly RuntimeConfigurationEntry[], point: K): ConfigurationUser<NonNullable<IExtensionDescription['contributes']>[K]>[] =>
       entries.filter(entry => entry.description.contributes?.[point] !== undefined).map(entry => ({
         description: entry.description, value: entry.description.contributes![point],
         collector: new ExtensionMessageCollector(entry.messageHandler, entry.description, point),
@@ -89,25 +79,6 @@ function publishConfigurationSources(runtime: ConfigurationSource, sources: Read
     handleConfigurations(users(added, 'configuration'), users(removed, 'configuration'));
   }
   published = next;
-}
-
-export function acceptRuntimeConfigurationExtensions(extensions: readonly IExtensionDescription[], messageHandler: ConfigurationSource['messageHandler']): void {
-  const source = { extensions, messageHandler };
-  publishConfigurationSources(source, settingsSources);
-  runtimeSource = source;
-}
-
-export function acquireConfigurationContributions(extensions: readonly ConfigurationExtensionDescription[], messageHandler: ConfigurationSource['messageHandler']): IDisposable {
-  const key = Symbol(), sources = new Map(settingsSources);
-  sources.set(key, { extensions, messageHandler });
-  publishConfigurationSources(runtimeSource, sources);
-  settingsSources = sources;
-  return toDisposable(() => {
-    const remaining = new Map(settingsSources);
-    remaining.delete(key);
-    publishConfigurationSources(runtimeSource, remaining);
-    settingsSources = remaining;
-  });
 }
 `);
   source = replaceOnce(source, 'defaultConfigurationExtPoint.setHandler((extensions, { added, removed }) => {',

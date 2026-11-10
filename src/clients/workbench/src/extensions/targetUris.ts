@@ -12,7 +12,7 @@ import type { IExtensionHost } from '../../upstream/src/vs/workbench/services/ex
 import { WorkspaceFolder } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import { IStoredWorkspaceFolder, toWorkspaceFolders } from '../../upstream/src/vs/platform/workspaces/common/workspaces.js';
 import type { IWorkspaceEditDto } from '../../upstream/src/vs/workbench/api/common/extHost.protocol.js';
-import { targetOperatingSystem, targetSettings, targetWorkspace, type TargetConfigurationContext } from './targetContext.js';
+import { targetOperatingSystem, targetSettings, targetWorkspace, type TargetExtensionContext } from './targetContext.js';
 
 class TargetNativeUris extends ExtUri {
   constructor(private readonly windows: boolean) { super(() => windows); }
@@ -28,7 +28,7 @@ export class TargetWorkspaceResources {
   protected readonly windows: boolean;
   protected readonly configurations: readonly { native: URI; uri: URI }[];
   private readonly viewConfiguration: URI | undefined;
-  constructor(context: TargetConfigurationContext) {
+  constructor(context: TargetExtensionContext) {
     const workspace = targetWorkspace(context), settings = targetSettings(context);
     this.windows = targetOperatingSystem(context) === 'windows';
     this.viewConfiguration = workspace.configuration ? URI.parse(workspace.configuration.resource_uri) : undefined;

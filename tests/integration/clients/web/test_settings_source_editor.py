@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from zipfile import ZipFile
 
 import commentjson
 import httpx
@@ -45,6 +46,15 @@ async def test_settings_source_editor_preserves_owner_and_draft(
             provider["api_key"] = "source-editor-unused-key"
     configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{ports.port(20)}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    package_path = context.artifacts_dir / "source-settings-package.zip"
+    manifest = {"manifest_version": 1, "extension_contract_version": 1, "package_id": "source.settings-probe",
+        "version": "1.0.0", "name": "正式来源设置验证", "plugins": [{"id": "preference", "name": "来源参数",
+            "instance_scope": "gateway", "requires": [{"extension_point": "configuration", "version": 1}],
+            "contributes": {"configuration": {"type": "object", "additionalProperties": False,
+                "properties": {"visible": {"type": "boolean", "default": False},
+                    "password": {"type": "string", "writeOnly": True}}}}}]}
+    with ZipFile(package_path, "w") as archive:
+        archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
         port=ports.port(20), boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
@@ -57,7 +67,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         result_path = context.artifacts_dir / "settings-source-editor.json"
         environment = os.environ | {
             "BOXTEAM_SETTINGS_SOURCE_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
-                "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
+                "artifacts": str(context.artifacts_dir), "resultPath": str(result_path), "packagePath": str(package_path)}),
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
         }
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
@@ -73,5 +83,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         assert result["gateway_saved"] and result["workspace_saved"]
         assert result["conflict_kept_draft"] and result["unknown_not_replayed"]
         assert result["readonly"] and result["frozen_owner"]
+        assert result["original_settings_form_saved"] and result["draft_restored_after_reload"]
+        assert result["plugin_schema_saved_without_runtime"] and result["form_and_json_share_draft"]
     finally:
         close_gateway_process(gateway)

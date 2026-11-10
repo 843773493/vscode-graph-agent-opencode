@@ -51,7 +51,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
   private readonly edits = new Map<string, SourceEdit>();
   constructor(private readonly dialogs: IDialogService, private readonly notifications: INotificationService) { super(); }
 
-  edit(resource: URI): SourceEdit {
+  private edit(resource: URI): SourceEdit {
     const key = resource.toString();
     let edit = this.edits.get(key);
     if (!edit) {
@@ -73,6 +73,11 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
       this.edits.set(key, edit); this.update(resource, edit, document);
     }
     return resource;
+  }
+  currentDocument(resource: URI): SourceDocument {
+    const document = this.edit(resource).document;
+    if (!document) throw new Error('配置来源尚未读取');
+    return document;
   }
   release(resource: URI): void { this.edits.delete(resource.toString()); }
   invalidate(): void { for (const edit of this.edits.values()) edit.invalidated = true; }

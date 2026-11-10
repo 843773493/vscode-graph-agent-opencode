@@ -1,4 +1,4 @@
-"""原设置编辑器经过真实 Gateway 保存目标 profile，JSON 和重开共用文件 owner。"""
+"""尚未退役的 Web／Node 宿主配置作用域验收；业务设置由 source editor 用例覆盖。"""
 
 from __future__ import annotations
 
@@ -50,60 +50,6 @@ def settings_management_component(management_runtime, runtime_manifest_path: Pat
     monkeypatch.setenv("BOXTEAM_TEST_MCP_RUNTIME_MANIFEST", str(manifest))
     monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(manifest))
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
-
-
-async def test_settings_editor_saves_target_json_and_restores_same_profile(
-    shared_backend_case: SharedBackendCase, vsix_factory,
-) -> None:
-    case = shared_backend_case
-    workspace = case.roots[0]
-    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
-    assert chromium, "设置编辑器验收需要真实 Chromium"
-    workspace_config = (workspace / ".boxteam/workspace.jsonc").read_bytes()
-    vsix = vsix_factory(workspace, "1.0.0", "settings-only", manifest_overrides={
-        "contributes": {"configuration": {"title": "独立安装设置", "properties": {
-            "schemaProbe.independent": {"type": "string", "default": "schema-default", "scope": "window",
-                "description": "无需运行扩展宿主即可发现与保存"}}},
-            "configurationDefaults": {"editor.tabSize": 3, "[typescript]": {"editor.tabSize": 5}}},
-    })
-    listing = await case.data("GET", "/api/gateway/workspaces")
-    target = listing["active_workspace"]
-    directory = await case.data("POST", "/api/gateway/extension-configurations/targets",
-        json={"protocol_version": 1, "gateway_id": target["gateway_id"]})
-    backend_id, = directory["backend_ids"]
-    install = {"protocol_version": 1, "gateway_id": target["gateway_id"], "backend_id": backend_id,
-        "workspace_ids": [target["workspace_id"]], "source_uri": resource_display_uri(scope="workspace",
-            scope_id=target["workspace_id"], kind="files", tail_segments=("root", vsix.name), gateway_authority=target["gateway_id"])}
-    result_path = case.context.artifacts_dir / "settings-editor-browser.json"
-    supervisor = Path.cwd() / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
-    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
-        "bun", "tests/integration/clients/web/settings_editor_target.mjs"]
-    with chromium_temporary_environment(case.context.runtime_root_for_node(os.environ["PYTEST_CURRENT_TEST"]) / "chromium-tmp") as temporary:
-        result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=135, check=False,
-            env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
-                "BOXTEAM_BROWSER_SETTINGS_INSTALL": json.dumps(install),
-                "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url).rstrip("/"), "BOXTEAM_BROWSER_RESULT_PATH": str(result_path)})
-    (case.context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
-    (case.context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
-    (case.context.artifacts_dir / "browser-process.json").write_text(json.dumps({
-        "command": command, "exit_code": result.returncode,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    assert result.returncode == 0, result.stdout + result.stderr
-    browser = json.loads(result_path.read_text(encoding="utf-8"))
-    assert browser["phase"] == "complete" and browser["pageErrors"] == []
-    assert browser["hostChannels"] == [], "独立设置不需要扩展宿主"
-    assert browser["writes"] and all("generation" not in item for item in browser["writes"])
-    assert browser["jsonSavedAfterClosingSettingsUI"] and browser["jsonReturnedToTargetUI"] and browser["restoredTarget"]
-    assert browser["independentSchemaSaved"]
-    binding = browser["binding"]
-    uri = urlsplit(binding["context"]["remote_settings"]["native_uri"])
-    assert uri.scheme == "file" and not uri.netloc
-    native = Path(url2pathname(uri.path)).resolve()
-    assert native.is_relative_to(case.boxteam_home.resolve())
-    assert commentjson.loads(native.read_text(encoding="utf-8")) == {"http.proxy": "http://target.invalid:8080", "http.proxyStrictSSL": False}
-    assert (workspace / ".boxteam/workspace.jsonc").read_bytes() == workspace_config
-    assert all(write["gateway_id"] == binding["gateway_id"] and write["backend_id"] == binding["backend_id"]
-        and write["profile_id"] == binding["profile_id"] for write in browser["writes"])
 
 
 @pytest.mark.parametrize("runtime_kind", ["web", "node"])

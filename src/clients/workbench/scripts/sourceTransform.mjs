@@ -19,7 +19,7 @@ import { extensionWorkspaceSymbolsSourcePaths, transformExtensionWorkspaceSymbol
 import { extensionStorageSourcePaths, transformExtensionStorage } from './extensions/extensionStorageTransform.mjs';
 import { extensionConfigurationSourcePaths, transformExtensionConfiguration } from './extensions/extensionConfigurationTransform.mjs';
 import { configurationContributionSourcePaths, transformConfigurationContributions } from './extensions/configurationContributionTransform.mjs';
-import { configurationRegistrySourcePaths, transformConfigurationRegistry, transformConfigurationSourceTypes } from './extensions/configurationRegistryTransform.mjs';
+import { configurationRegistrySourcePaths, transformConfigurationRegistry } from './extensions/configurationRegistryTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
 import { nativeManagementSourcePaths, transformNativeManagement } from './nativeManagementTransform.mjs';
 import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './settingsEditorScopeTransform.mjs';
@@ -130,7 +130,6 @@ export function sourceTransform(root, productConfiguration, extensions, { runtim
     contents = transformExtensionRunning(root, path, contents, replaceOnce);
     contents = transformExtensionBrowser(root, path, contents, replaceOnce);
     contents = transformExtensionManagement(root, path, contents, replaceOnce);
-    contents = transformConfigurationSourceTypes(root, path, contents, replaceOnce);
     contents = transformExtensionHostState(root, path, contents, replaceOnce);
     contents = transformExtensionOwner(root, path, contents, replaceOnce);
     contents = transformExtensionStatus(root, path, contents, replaceOnce);

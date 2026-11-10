@@ -1,209 +1,197 @@
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
-import { Event } from '../../upstream/src/vs/base/common/event.js';
-import { DisposableStore, IDisposable, MutableDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { Emitter } from '../../upstream/src/vs/base/common/event.js';
+import { parse, type ParseError } from '../../upstream/src/vs/base/common/json.js';
+import { applyEdits, setProperty } from '../../upstream/src/vs/base/common/jsonEdit.js';
+import { Disposable, DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
+import { ConfigurationTarget, IConfigurationService, type IConfigurationValue } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import { ConfigurationScope } from '../../upstream/src/vs/platform/configuration/common/configurationRegistry.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
-import { ConfigurationTarget } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
-import { SyncDescriptor } from '../../upstream/src/vs/platform/instantiation/common/descriptors.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { ServiceCollection } from '../../upstream/src/vs/platform/instantiation/common/serviceCollection.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
-import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
-import { PreferencesSearchService } from '../../upstream/src/vs/workbench/contrib/preferences/browser/preferencesSearch.js';
-import { IPreferencesSearchService } from '../../upstream/src/vs/workbench/contrib/preferences/common/preferences.js';
-import { PreferencesService } from '../../upstream/src/vs/workbench/services/preferences/browser/preferencesService.js';
-import { IPreferencesService } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
-import type { ISettingsEditorOptions } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
-import { ITextFileService } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
-import type { ITextFileEditorModel } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
-import { extUri, joinPath } from '../../upstream/src/vs/base/common/resources.js';
-import type { ExtensionConfigurationTargetRequest, ExtensionConfigurationViewDTO, ExtensionConfigurationTargetListDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import { gateway } from '../agentApi.js';
+import { ITextModelService } from '../../upstream/src/vs/editor/common/services/resolverService.js';
+import { DefaultSettings, Settings2EditorModel, nullRange } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesModels.js';
+import type { ISetting, ISettingsGroup } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
+import { ITextFileService, type ITextFileEditorModel } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
-import { targetConfigurationServices } from '../extensions/configuration.js';
-import { registerTargetConfigurationFiles, rebindTargetConfigurationFiles, retainTargetConfigurationFile } from '../extensions/configurationFiles.js';
-import { TargetWorkspaceResources } from '../extensions/targetUris.js';
-import type { TargetConfigurationContext } from '../extensions/targetContext.js';
-import { targetSettings, targetWorkspace } from '../extensions/targetContext.js';
+import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { gateway } from '../agentApi.js';
 import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { workspaceFileSource } from '../workspaceFiles.js';
+import { configSourceFiles, configSourceEditorUri } from './sourceEditor.js';
+import { ConfigurationSourceOwner, type SourceDocument } from './sourceOwner.js';
 import { ITargetSettingsContext, type TargetSettingsLocation } from './scope.js';
 
-export function settingsEditorIdentity(location: TargetSettingsLocation): string {
-  return JSON.stringify([location.gateway_id, location.backend_id, location.profile_id, location.view_id, location.workspace_ids]);
+type Schema = Record<string, unknown>;
+interface SourceSetting { path: string[]; schema: Schema }
+function object(value: unknown): Schema { return value && typeof value === 'object' && !Array.isArray(value) ? value as Schema : {}; }
+function at(value: unknown, path: readonly string[]): unknown {
+  for (const key of path) { if (!value || typeof value !== 'object') return undefined; value = (value as Schema)[key]; }
+  return value;
 }
 
-/** 历史只保存稳定归属；恢复交原 Gateway registry 解析当前唯一连接，歧义仍明确拒绝。 */
+export function settingsEditorIdentity(location: TargetSettingsLocation): string {
+  return JSON.stringify([location.gateway_id, location.workspace_id, location.source_key]);
+}
 export function settingsHistoryLocation(location: TargetSettingsLocation): Omit<TargetSettingsLocation, 'gateway_connection_id'> {
   const { gateway_connection_id: _route, ...stable } = location;
   return stable;
 }
-
-/** 活跃输入保留明确连接；持久化边界另行投影稳定归属。 */
 export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
-  if (!value || typeof value !== 'object') throw new Error('设置历史缺少明确目标');
-  const location = value as Record<string, unknown>;
-  if (location.version !== 1 || !['gateway_id', 'backend_id', 'profile_id', 'view_id', 'name'].every(key => typeof location[key] === 'string' && location[key])
-    || !Array.isArray(location.workspace_ids) || !location.workspace_ids.every(id => typeof id === 'string' && id)
-    || location.gateway_connection_id !== undefined && typeof location.gateway_connection_id !== 'string') throw new Error('设置历史目标格式无效');
-  return { version: 1, gateway_id: location.gateway_id as string, backend_id: location.backend_id as string,
-    profile_id: location.profile_id as string, view_id: location.view_id as string, name: location.name as string,
-    workspace_ids: [...location.workspace_ids], gateway_connection_id: location.gateway_connection_id as string | undefined };
+  const location = object(value);
+  if (location.version !== 2 || !['gateway_id', 'source_key', 'name'].every(key => typeof location[key] === 'string' && location[key])
+    || location.workspace_id !== undefined && (typeof location.workspace_id !== 'string' || !location.workspace_id)
+    || location.gateway_connection_id !== undefined && typeof location.gateway_connection_id !== 'string') throw new Error('设置历史缺少正式来源和目标，请重新选择设置来源');
+  return { version: 2, gateway_id: location.gateway_id as string, source_key: location.source_key as string, name: location.name as string,
+    workspace_id: location.workspace_id as string | undefined, gateway_connection_id: location.gateway_connection_id as string | undefined };
 }
 
-/** 同一 profile／folder JSON 使用文件本身的规范归属，不继承首次打开它的偶然 view。 */
-export function settingsFileLocation(location: TargetSettingsLocation, context: TargetConfigurationContext, resource: URI): TargetSettingsLocation {
-  if (extUri.isEqual(resource, URI.parse(targetSettings(context).resource_uri))) return { ...location, view_id: 'settings-profile', workspace_ids: [] };
-  const workspace = targetWorkspace(context), resources = new TargetWorkspaceResources(context);
-  const index = resources.folders.findIndex(folder => extUri.isEqual(joinPath(folder.uri, '.vscode/settings.json'), resource));
-  return index < 0 ? location : { ...location, view_id: 'settings-folder', workspace_ids: [workspace.folders[index].workspace_id] };
-}
-
-export function settingsFileOptions(context: TargetConfigurationContext, resource: URI): ISettingsEditorOptions {
-  if (extUri.isEqual(resource, URI.parse(targetSettings(context).resource_uri))) return { target: ConfigurationTarget.USER_REMOTE };
-  const workspace = targetWorkspace(context);
-  if (workspace.configuration && extUri.isEqual(resource, URI.parse(workspace.configuration.resource_uri))) return { target: ConfigurationTarget.WORKSPACE };
-  const folder = new TargetWorkspaceResources(context).folders.find(folder => extUri.isEqual(joinPath(folder.uri, '.vscode/settings.json'), resource));
-  if (!folder) throw new Error('文件不是当前目标的设置来源');
-  return { target: ConfigurationTarget.WORKSPACE_FOLDER, folderUri: folder.uri };
-}
-
-/** 入口只冻结明确目标；不启动扩展宿主，不把焦点作为后续保存的路由。 */
-export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')): Promise<{
-  location: TargetSettingsLocation; context: TargetConfigurationContext & { kind: 'settings' };
-}> {
-  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort(new CancellationError()));
+/** 原目标选择只读来源目录，不再发现或准备 Extension Host 的 profile/view。 */
+export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')):
+Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefined> {
+  const quick = parent.invokeFunction(accessor => accessor.get(IQuickInputService));
+  const controller = new AbortController(), cancelled = token.onCancellationRequested(() => controller.abort(new CancellationError()));
   try {
     if (token.isCancellationRequested) throw new CancellationError();
-    let backendId = target.backend_id;
-    if (!backendId) {
-      const directory = await gateway.request<ExtensionConfigurationTargetListDTO>(
-        '/api/gateway/extension-configurations/targets', { method: 'POST', signal: controller.signal,
-          body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id }) });
-      controller.signal.throwIfAborted();
-      if (directory.protocol_version !== 1 || directory.gateway_id !== target.gateway_id) throw new Error('配置目标目录不属于所选 Gateway');
-      if (!directory.backend_ids.length) throw new Error('所选 Gateway 没有可用的配置目标，请显式启动 Backend 后重试');
-      if (directory.backend_ids.length === 1) backendId = directory.backend_ids[0];
-      else if (directory.backend_ids.length) {
-        backendId = await parent.invokeFunction(accessor => accessor.get(IQuickInputService)).pick(directory.backend_ids.map(id => ({
-          label: id, description: target.name,
-        })), { title: '选择设置配置域', placeHolder: '配置将保存到这个 Backend 的默认 profile' }, token).then(value => value?.label);
-      }
-      if (!backendId) throw new CancellationError();
+    const workspaces = await gateway.workspaces(false);
+    controller.signal.throwIfAborted();
+    const scope = await quick.pick([{ label: 'Gateway 配置', description: target.name, workspaceId: undefined as string | undefined },
+      ...workspaces.items.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({ label: workspace.name,
+        description: '工作区 · ' + workspace.status, workspaceId: workspace.workspace_id }))], { title: '选择设置来源的所属目标', prompt: target.gateway_id }, token);
+    if (!scope) return;
+    const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id, workspace_id: scope.workspaceId });
+    const listed = await owner.list(controller.signal);
+    controller.signal.throwIfAborted();
+    const selected = await quick.pick(listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
+      description: `${source.layer} · ${source.presence} · 优先级 ${source.precedence}`, detail: source.uri ?? undefined })),
+    { title: '选择正式配置来源', prompt: `${target.gateway_id} · ${scope.label}` }, token);
+    if (!selected) return;
+    const document = await owner.read(selected.label, undefined, controller.signal);
+    controller.signal.throwIfAborted();
+    return { location: { ...owner.target, version: 2, source_key: selected.label, name: scope.label }, document };
+  } finally { cancelled.dispose(); controller.abort(); }
+}
+
+/** 原 Settings2EditorModel 的目标局部 schema 投影；不注册全局业务配置。 */
+class SourceDefaults extends DefaultSettings {
+  constructor(private readonly source: SourceSettings, ...args: ConstructorParameters<typeof DefaultSettings>) { super(...args); }
+  override getSettingsGroups(): ISettingsGroup[] { return [{ id: 'mostCommonlyUsed', title: '常用', sections: [], range: nullRange, titleRange: nullRange }, ...this.source.groups]; }
+  override getRegisteredGroups(): ISettingsGroup[] { return this.source.groups; }
+}
+
+export class SourceSettings extends Disposable {
+  private readonly changed = this._register(new Emitter<void>());
+  readonly onDidChange = this.changed.event;
+  private readonly fields = new Map<string, SourceSetting>();
+  readonly groups: ISettingsGroup[] = [];
+  readonly resource: URI;
+  constructor(readonly location: TargetSettingsLocation, readonly model: ITextFileEditorModel, private readonly files: IFileService,
+    private readonly schemas: PluginConfigurationSchemasDTO) {
+    super();
+    this.resource = configSourceEditorUri(location, location.source_key);
+    this.buildFields();
+    this._register(model.onDidChangeContent(() => this.changed.fire()));
+    this._register(model.onDidSave(() => this.changed.fire()));
+    this._register(model.onDidChangeDirty(() => this.changed.fire()));
+  }
+  get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
+  createModel(parent: IInstantiationService): Settings2EditorModel {
+    const defaults = parent.invokeFunction(accessor => new SourceDefaults(this, [], ConfigurationTarget.USER_REMOTE, accessor.get(IConfigurationService)));
+    this._register(defaults);
+    const model = parent.createInstance(Settings2EditorModel, defaults);
+    return model;
+  }
+  inspect(key: string, language?: string): IConfigurationValue<unknown> {
+    const field = this.fields.get(key);
+    if (!field || language) return {};
+    const errors: ParseError[] = [], payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
+    if (errors.length) throw new Error('来源草稿 JSONC 无效，请打开来源修正后继续编辑表单');
+    const local = at(payload, field.path), effective = at(this.document.source_effective, field.path);
+    const selected = this.document.layers.find(layer => layer.source_key === this.location.source_key);
+    let inherited = field.schema.default;
+    for (const layer of this.document.layers.filter(layer => selected && layer.precedence < selected.precedence).sort((a, b) => a.precedence - b.precedence)) {
+      const value = at(layer.payload, field.path);
+      if (value !== undefined) inherited = value;
     }
-    const roots = parent.invokeFunction(accessor => accessor.get(IWorkspaceContextService)).getWorkspace().folders;
-    const workspaceIds = roots.filter(folder => folder.uri.scheme === 'boxteam-file').map(folder => workspaceFileSource(folder.uri))
-      .filter(owner => owner.gatewayId === target.gateway_id).filter(owner => {
-        const registered = workspaceContext.getSnapshot().workspaces.find(workspace => workspace.gateway_id === owner.gatewayId && workspace.workspace_id === owner.workspaceId);
-        if (!registered?.backend_id) throw new Error('工作区尚无已确认的 Backend 身份，请重新读取原目标');
-        return registered.backend_id === backendId;
-      }).map(owner => owner.workspaceId);
-    const request: ExtensionConfigurationTargetRequest = { protocol_version: 1, gateway_id: target.gateway_id,
-      backend_id: backendId, view_id: 'default', workspace_ids: workspaceIds, gateway_connection_id: target.gateway_connection_id };
-    const prepared = await prepareSettingsContext(request, controller.signal);
-    return { location: { version: 1, gateway_id: target.gateway_id, backend_id: backendId, view_id: request.view_id,
-      workspace_ids: workspaceIds, profile_id: prepared.connection.profile_id, name: target.name, gateway_connection_id: target.gateway_connection_id }, context: prepared };
-  } finally { cancellation.dispose(); controller.abort(); }
+    return { defaultValue: inherited, userRemoteValue: local, userRemote: { value: local },
+      value: local !== undefined ? local : effective, default: { value: inherited } };
+  }
+  edit(key: string, value: unknown, language?: string): void {
+    if (language) throw new Error('业务配置不支持语言覆盖，请清除 @lang 过滤');
+    const field = this.fields.get(key);
+    if (!field) throw new Error('设置不属于当前来源 schema');
+    if (!this.document.writable) throw new Error('当前配置来源只读');
+    if (field.schema.writeOnly === true) throw new Error('秘密参数请使用受保护的插件参数入口');
+    const text = this.model.textEditorModel!, source = text.getValue(), errors: ParseError[] = [];
+    parse(source, errors);
+    if (errors.length) throw new Error('来源草稿 JSONC 无效，未修改正文');
+    const edits = setProperty(source, field.path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
+    text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
+  }
+  private buildFields(): void {
+    const root = this.document.json_schema;
+    if (!root) throw new Error('配置 owner 没有返回来源 schema');
+    const visit = (schema: Schema, path: string[], fields: ISetting[], schemaRoot: Schema) => {
+      if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/')) schema = object(at(schemaRoot, schema.$ref.slice(2).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))));
+      const properties = object(schema.properties);
+      if (schema.writeOnly !== true && Object.keys(properties).length) {
+        for (const [name, child] of Object.entries(properties)) visit(object(child), [...path, name], fields, schemaRoot);
+        return;
+      }
+      if (!path.length || schema.const !== undefined) return;
+      // 点分键只作原设置树身份；保留真实 JSON 路径，避免包 ID 中的点与层级碰撞。
+      const key = path.map(part => encodeURIComponent(part).replaceAll('.', '%2E')).join('.'), secret = schema.writeOnly === true;
+      const setting: ISetting = { key, title: typeof schema.title === 'string' ? schema.title : path.at(-1), value: schema.default,
+        description: [typeof schema.description === 'string' ? schema.description : '', ...(secret ? ['秘密值不回显；请使用“编辑目标插件参数”管理秘密。'] : [])],
+        descriptionRanges: [], range: nullRange, keyRange: nullRange, valueRange: nullRange, overrides: [], scope: ConfigurationScope.MACHINE,
+        type: secret ? undefined : schema.type as string | string[] | undefined, enum: schema.enum as string[] | undefined,
+        arrayItemType: typeof object(schema.items).type === 'string' ? object(schema.items).type as string : undefined };
+      this.fields.set(key, { path, schema }); fields.push(setting);
+    };
+    for (const [name, candidate] of Object.entries(object(root.properties))) {
+      if (['$schema', 'config_version'].includes(name)) continue;
+      const settings: ISetting[] = []; visit(object(candidate), [name], settings, root);
+      if (settings.length) this.groups.push({ id: name, title: name, sections: [{ settings }], range: nullRange, titleRange: nullRange });
+    }
+    const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
+    for (const plugin of this.schemas.plugins) {
+      if (!Array.isArray(bindings) || !bindings.some(binding => binding?.package_id === plugin.package_id && binding?.plugin_id === plugin.plugin_id && binding?.package_version === plugin.package_version)) continue;
+      if (!plugin.configuration_schema) throw new Error('安装清单缺少配置 schema');
+      const settings: ISetting[] = [];
+      visit(plugin.configuration_schema, ['plugins', 'configuration', 'values', plugin.package_id, plugin.plugin_id], settings, plugin.configuration_schema);
+      for (const setting of settings) setting.extensionInfo = { id: `${plugin.package_id}/${plugin.plugin_id}`, displayName: plugin.name };
+      this.groups.push({ id: `${plugin.package_id}/${plugin.plugin_id}`, title: `${plugin.name} · ${plugin.package_version}`, sections: [{ settings }], range: nullRange, titleRange: nullRange,
+        extensionInfo: { id: `${plugin.package_id}/${plugin.plugin_id}`, displayName: plugin.name } });
+    }
+  }
 }
 
-export async function prepareSettingsContext(target: ExtensionConfigurationTargetRequest | TargetSettingsLocation, signal: AbortSignal): Promise<TargetConfigurationContext & { kind: 'settings' }> {
-  const controller = new AbortController();
-  let entry = workspaceContext.getSnapshot().gatewayId;
-  const invalidate = () => controller.abort(new CancellationError());
-  const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
-  const releaseContext = workspaceContext.subscribe(() => {
-    const current = workspaceContext.getSnapshot().gatewayId;
-    // 历史还原可早于导航初始化；首次取得入口身份不算切换。
-    if (entry === null) entry = current;
-    else if (current !== entry) invalidate();
-  });
-  const requestSignal = AbortSignal.any([signal, controller.signal]);
-  try {
-    requestSignal.throwIfAborted();
-    const request: ExtensionConfigurationTargetRequest = { protocol_version: 1, gateway_id: target.gateway_id, backend_id: target.backend_id,
-      view_id: target.view_id, workspace_ids: [...target.workspace_ids], gateway_connection_id: target.gateway_connection_id };
-    const connection = await gateway.request<ExtensionConfigurationViewDTO>('/api/gateway/extension-configurations/prepare', {
-      method: 'POST', body: JSON.stringify(request), signal: requestSignal,
-    });
-    requestSignal.throwIfAborted();
-    if (connection.protocol_version !== 1 || connection.gateway_id !== target.gateway_id || connection.backend_id !== target.backend_id
-      || connection.view_id !== target.view_id || connection.workspace_ids.length !== target.workspace_ids.length
-      || connection.workspace_ids.some((id, index) => id !== target.workspace_ids[index])
-      || 'profile_id' in target && connection.profile_id !== target.profile_id) throw new Error('配置准备回执不属于原目标、profile 或有序视图');
-    const context = { kind: 'settings' as const, connection, gatewayConnectionId: target.gateway_connection_id };
-    new TargetWorkspaceResources(context);
-    return context;
-  } finally { releaseUser(); releaseContext(); controller.abort(); }
-}
-
-/** 每组在原 group child 上派生原服务，避免覆盖组的 context key 与进度服务。 */
-export async function settingsEditorServices(parent: IInstantiationService, location: TargetSettingsLocation,
-  context: TargetConfigurationContext, lifetime: DisposableStore): Promise<IInstantiationService> {
-  const services = new ServiceCollection([ITargetSettingsContext, { _serviceBrand: undefined, target: { location, configuration: context } }],
-    [IPreferencesService, new SyncDescriptor(PreferencesService)], [IPreferencesSearchService, new SyncDescriptor(PreferencesSearchService)]);
-  return targetConfigurationServices(parent, context, lifetime, services);
-}
 
 export async function prepareSettingsPane(parent: IInstantiationService, location: TargetSettingsLocation,
-  initialContext: TargetConfigurationContext | undefined, lifetime: DisposableStore, token: CancellationToken, resource?: URI): Promise<IInstantiationService> {
-  const controller = new AbortController(), cancellation = token.onCancellationRequested(() => controller.abort(new CancellationError()));
-  let entry = workspaceContext.getSnapshot().gatewayId;
+  document: SourceDocument | undefined, lifetime: DisposableStore, token: CancellationToken): Promise<IInstantiationService> {
+  const controller = new AbortController(), cancel = token.onCancellationRequested(() => controller.abort(new CancellationError()));
+  const entry = workspaceContext.getSnapshot().gatewayId;
   const invalidate = () => controller.abort(new CancellationError());
-  const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
-  const releaseContext = workspaceContext.subscribe(() => {
-    const current = workspaceContext.getSnapshot().gatewayId;
-    if (entry === null) entry = current;
-    else if (current !== entry) invalidate();
-  });
+  const auth = onGatewayUserSessionInvalidated(0, invalidate), context = workspaceContext.subscribe(() => { if (entry && workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); });
   try {
     if (token.isCancellationRequested) throw new CancellationError();
-    const context = initialContext ?? await prepareSettingsContext(location, controller.signal);
-    if (resource) {
-      const resources = new TargetWorkspaceResources(context);
-      if (!resources.ownsConfigurationResource(resource) && !resources.folders.some(folder => extUri.isEqual(joinPath(folder.uri, '.vscode/settings.json'), resource))) {
-        throw new Error('设置 JSON 资源不属于已冻结的 profile 或工作区视图');
-      }
-    }
-    const child = await settingsEditorServices(parent, location, context, lifetime);
+    const files = parent.invokeFunction(accessor => accessor.get(IFileService));
+    const owner = new ConfigurationSourceOwner(location);
+    const loaded = document ?? await owner.read(location.source_key, undefined, controller.signal);
     controller.signal.throwIfAborted();
-    return child;
-  } finally { releaseUser(); releaseContext(); cancellation.dispose(); controller.abort(); }
-}
-
-const retainedFileModels = new WeakMap<ITextFileEditorModel, MutableDisposable<IDisposable>>();
-
-/** 原文件模型换传输引用，不重载正文、etag 或原保存队列。 */
-export function rebindSettingsFiles(parent: IInstantiationService, contexts: readonly TargetConfigurationContext[]): IDisposable {
-  const files = parent.invokeFunction(accessor => accessor.get(IFileService));
-  const reference = rebindTargetConfigurationFiles(files, contexts);
-  const resources = contexts.flatMap(context => [targetSettings(context), targetWorkspace(context).configuration]).filter(value => !!value).map(value => URI.parse(value.resource_uri));
-  for (const resource of resources) {
+    const resource = configSourceFiles(files).prepareEditor(location, location.source_key, loaded);
+    const schemas = await gateway.request<PluginConfigurationSchemasDTO>('/api/gateway/service-plugins/configuration-schemas', {
+      method: 'POST', body: JSON.stringify({ gateway_id: location.gateway_id, gateway_connection_id: location.gateway_connection_id, workspace_id: location.workspace_id }), signal: controller.signal });
+    controller.signal.throwIfAborted();
+    if (schemas.gateway_id !== location.gateway_id || (schemas.workspace_id ?? undefined) !== location.workspace_id) throw new Error('配置 schema 回执不属于原目标');
+    const reference = await parent.invokeFunction(accessor => accessor.get(ITextModelService)).createModelReference(resource);
+    lifetime.add(reference);
+    controller.signal.throwIfAborted();
     const model = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files.get(resource);
-    const retained = model && retainedFileModels.get(model);
-    if (retained) retained.value = retainTargetConfigurationFile(files, resource);
-  }
-  return reference;
-}
-
-/** JSON 文件模型持有独立传输引用，关闭设置面板不会中止原 TextFileService 的保存。 */
-export async function retainSettingsFile<T>(parent: IInstantiationService, context: TargetConfigurationContext, resource: URI,
-  open: () => Promise<T>): Promise<T> {
-  const files = parent.invokeFunction(accessor => accessor.get(IFileService));
-  const reference: IDisposable = registerTargetConfigurationFiles(files, context);
-  let retained = false;
-  try {
-    const result = await open();
-    const model = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files.get(resource);
-    if (model && !retainedFileModels.has(model)) {
-      const lease = new MutableDisposable<IDisposable>();
-      // resolve 可能迟于显式重选完成；模型只能保留当前传输，不能复活旧 route。
-      lease.value = resource.scheme === 'boxteam' ? retainTargetConfigurationFile(files, resource) : reference;
-      retainedFileModels.set(model, lease);
-      Event.once(model.onWillDispose)(() => { retainedFileModels.delete(model); lease.dispose(); });
-      retained = resource.scheme !== 'boxteam';
-    }
-    return result;
-  } finally { if (!retained) reference.dispose(); }
+    if (!model) throw new Error('设置来源没有原文本文件模型');
+    const source = lifetime.add(new SourceSettings(location, model, files, schemas));
+    return parent.createChild(new ServiceCollection([ITargetSettingsContext, { _serviceBrand: undefined, target: source }]), lifetime);
+  } finally { auth(); context(); cancel.dispose(); controller.abort(); }
 }

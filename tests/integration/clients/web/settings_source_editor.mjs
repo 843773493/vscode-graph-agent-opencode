@@ -14,6 +14,8 @@ try {
   page.setDefaultTimeout(15_000);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   page.on('pageerror', error => result.pageErrors.push(error.message));
+  result.consoleErrors = [];
+  page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
   page.on('request', request => {
     const url = new URL(request.url());
     if (!url.pathname.includes('/config/sources/')) return;
@@ -162,6 +164,78 @@ try {
   assert((await api(workspacePath, { headers: workspaceHeaders })).jsonc.includes('本次提交响应丢失'));
   result.unknown_not_replayed = true;
   result.transportFault = '真实 PUT 提交成功后由 Playwright 丢弃响应；原键 GET 确认，不重发 PUT';
+
+  result.phase = 'manifest-settings-without-runtime';
+  await api('/api/gateway/service-plugins/install', { method: 'POST', body: { gateway_id: health.gateway_id, path: input.packagePath } });
+  const beforeBinding = await api(gatewayPath, { headers: gatewayHeaders });
+  const binding = { package_id: 'source.settings-probe', package_version: '1.0.0', plugin_id: 'preference', enabled: false };
+  const bindingIntent = { gateway_id: health.gateway_id, source_key: beforeBinding.source_key,
+    jsonc: update(beforeBinding.jsonc, ['plugins', 'runtime', 'entries'], [binding]), base_file_digest: beforeBinding.file_digest,
+    base_layer_revision: beforeBinding.layer_revision, base_layer_digest: beforeBinding.layer_digest,
+    expected_active_revision: beforeBinding.active_revision, expected_active_digest: beforeBinding.active_digest, idempotency_key: randomUUID() };
+  await api(gatewayPath + '/preflight', { method: 'POST', headers: gatewayHeaders, body: bindingIntent });
+  await api(gatewayPath, { method: 'PUT', headers: gatewayHeaders, body: bindingIntent });
+  // 原 JSON 标签仍持有旧 CAS；先沿正式 revert 读回新来源，不能由测试给模型注入基线。
+  await open('Gateway 配置', 'gateway_mutable_override');
+  await command('workbench.action.files.revert');
+
+  result.phase = 'original-settings-editor';
+  const oldHostRequests = [];
+  const hostRequest = request => { if (new URL(request.url()).pathname.includes('/extension-configurations/')) oldHostRequests.push(request.url()); };
+  page.on('request', hostRequest);
+  const openingForm = command('boxteam.settings.openTarget');
+  await pick('Gateway 配置'); await pick('gateway_mutable_override'); await openingForm;
+  const settings = page.locator('.settings-editor:visible').last();
+  await expect(settings).toBeVisible();
+  await expect(settings.locator('.settings-context-label')).toContainText(health.gateway_id);
+  await command('settings.action.search');
+  await page.keyboard.insertText('@id:logging.runtime.pretty');
+  const pretty = settings.locator('[data-key="logging.runtime.pretty"]');
+  await expect(pretty).toBeVisible();
+  const expectedPretty = !parse((await api(gatewayPath, { headers: gatewayHeaders })).jsonc).logging.runtime.pretty;
+  const beforeFormWrite = result.writes.length;
+  await pretty.getByRole('checkbox').click();
+  await expect(tab).toHaveClass(/\bdirty\b/);
+  // 表单先改原文本草稿；打开 JSON、回到表单仍共享同一 dirty 模型，未自动提交。
+  await command('settings.switchToJSON');
+  await expect(tab).toContainText('gateway_mutable_override');
+  await expect(tab).toHaveClass(/\bdirty\b/);
+  await text.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Control+C');
+  const sharedDraft = await page.evaluate(() => navigator.clipboard.readText());
+  assert.equal(parse(sharedDraft).logging.runtime.pretty, expectedPretty);
+  const returningForm = command('boxteam.settings.openTarget');
+  await pick('Gateway 配置'); await pick('gateway_mutable_override'); await returningForm;
+  await expect(settings).toBeVisible();
+  assert.equal(result.writes.length, beforeFormWrite);
+  result.form_and_json_share_draft = true;
+  const formSaved = command('workbench.action.files.save');
+  await expect(modal).toContainText('保存目标配置来源');
+  await modal.getByRole('button', { name: '保存来源', exact: true }).click();
+  await formSaved;
+  await expect.poll(async () => parse((await api(gatewayPath, { headers: gatewayHeaders })).jsonc).logging.runtime.pretty).toBe(expectedPretty);
+  await command('settings.action.search');
+  await page.keyboard.press('Control+A'); await page.keyboard.insertText('@modified @id:logging.runtime.pretty');
+  await expect(pretty).toBeVisible();
+  await command('settings.action.search');
+  await page.keyboard.press('Control+A'); await page.keyboard.insertText('@ext:source.settings-probe/preference');
+  const parameter = settings.locator('[data-key="plugins.configuration.values.source%2Esettings-probe.preference.visible"]');
+  await expect(parameter).toBeVisible();
+  await parameter.getByRole('checkbox').click();
+  await expect(tab).toHaveClass(/\bdirty\b/);
+  const parameterSaved = command('workbench.action.files.save');
+  await expect(modal).toContainText('保存目标配置来源');
+  await modal.getByRole('button', { name: '保存来源', exact: true }).click(); await parameterSaved;
+  const pluginDocument = await api(gatewayPath, { headers: gatewayHeaders });
+  assert.equal(parse(pluginDocument.jsonc).plugins.configuration.values['source.settings-probe'].preference.visible, true);
+  const runtime = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: health.gateway_id } });
+  assert(runtime.plugins.filter(plugin => plugin.binding.package_id === binding.package_id).every(plugin => !plugin.instance));
+  result.plugin_schema_saved_without_runtime = true;
+  await command('settings.switchToJSON');
+  await expect(text).toBeVisible();
+  await expect(tab).toContainText('gateway_mutable_override');
+  assert.deepEqual(oldHostRequests, [], '正式来源设置不能调用旧 profile/view 配置桥');
+  page.off('request', hostRequest);
+  result.original_settings_form_saved = true;
 
   result.phase = 'readonly-and-state';
   const sources = await api('/api/gateway/config/sources', { headers: gatewayHeaders });

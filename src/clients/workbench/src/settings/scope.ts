@@ -1,25 +1,20 @@
 import { createDecorator } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { InstantiationType, registerSingleton } from '../../upstream/src/vs/platform/instantiation/common/extensions.js';
-import type { TargetConfigurationContext } from '../extensions/targetContext.js';
+import type { SourceSettings } from './editor.js';
+import type { SourceTarget } from './sourceOwner.js';
 
-export interface TargetSettingsLocation {
-  readonly version: 1;
-  readonly gateway_id: string;
-  readonly backend_id: string;
-  readonly profile_id: string;
-  readonly view_id: string;
-  readonly workspace_ids: readonly string[];
+export interface TargetSettingsLocation extends SourceTarget {
+  readonly version: 2;
+  readonly source_key: string;
   readonly name: string;
-  readonly gateway_connection_id?: string;
 }
 
-/** 仅承载当前设置输入的冻结归属；配置模型和文件仍由原 owner 持有。 */
+/** 每个原 SettingsEditor 只消费自己的来源投影，不修改窗口配置 registry。 */
 export const ITargetSettingsContext = createDecorator<ITargetSettingsContext>('boxteamTargetSettingsContext');
 export interface ITargetSettingsContext {
   readonly _serviceBrand: undefined;
-  readonly target: { readonly location: TargetSettingsLocation; readonly configuration: TargetConfigurationContext } | undefined;
+  readonly target: SourceSettings | undefined;
 }
-
 class WindowSettingsContext implements ITargetSettingsContext {
   declare readonly _serviceBrand: undefined;
   readonly target = undefined;

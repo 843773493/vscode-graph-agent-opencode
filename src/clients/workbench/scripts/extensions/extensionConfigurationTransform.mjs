@@ -5,7 +5,6 @@ export const extensionConfigurationSourcePaths = [
   'src/vs/workbench/services/configuration/browser/configuration.ts',
   'src/vs/workbench/api/browser/mainThreadConfiguration.ts',
   'src/vs/platform/configuration/common/configurationModels.ts',
-  'src/vs/platform/configuration/common/configurations.ts',
 ];
 
 /** 每个目标视图使用原配置模型；原窗口及 Remote 入口继续使用各自已登记的来源。 */
@@ -14,9 +13,8 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
   if (path === paths[0]) {
     let contents = replaceOnce(source,
       '{ remoteAuthority, configurationCache }: { remoteAuthority?: string; configurationCache: IConfigurationCache },',
-      `{ remoteAuthority, configurationCache, remoteSettingsResource, resolveWorkspaceFolders, configurationSourceFilter }: {
+      `{ remoteAuthority, configurationCache, remoteSettingsResource, resolveWorkspaceFolders }: {
         remoteAuthority?: string; configurationCache: IConfigurationCache; remoteSettingsResource?: URI;
-        configurationSourceFilter?: (source: ConfigurationDefaultSource | undefined) => boolean;
         resolveWorkspaceFolders?: (folders: IStoredWorkspaceFolder[], configuration: URI) => WorkspaceFolder[];
       },`);
     contents = replaceOnce(contents, 'private configurationEditing: Promise<ConfigurationEditing> | undefined;',
@@ -27,8 +25,6 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
       `this.configurationCache = configurationCache;
       this.remoteSettingsResource = remoteSettingsResource;
       this.resolveWorkspaceFolders = resolveWorkspaceFolders ?? ((folders, configuration) => toWorkspaceFolders(folders, configuration, this.uriIdentityService.extUri));`);
-    contents = replaceOnce(contents, 'new DefaultConfiguration(userDataProfileService.currentProfile.id, configurationCache, environmentService, logService)',
-      'new DefaultConfiguration(userDataProfileService.currentProfile.id, configurationCache, environmentService, logService, configurationSourceFilter)');
     contents = replaceOnce(contents, 'new RemoteUserConfiguration(remoteAuthority, configurationCache, fileService, uriIdentityService, remoteAgentService, logService)',
       'new RemoteUserConfiguration(remoteAuthority, configurationCache, fileService, uriIdentityService, remoteAgentService, logService, remoteSettingsResource)');
     contents = replaceOnce(contents, 'ConfigurationModel, ConfigurationChangeEvent, mergeChanges',
@@ -83,21 +79,6 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
       'const remoteSettingsResource = this.remoteSettingsResource ?? (await this.remoteAgentService.getEnvironment())?.settingsPath ?? null;');
   }
   if (path === paths[1]) {
-    source = replaceOnce(source, 'IConfigurationRegistry,', 'IConfigurationRegistry, ConfigurationDefaultSource,');
-    // 目标默认值从原来源重新投影，不能读取窗口已合并的 defaults 缓存。
-    source = replaceOnce(source, 'logService: ILogService,\n\t) {\n\t\tsuper(logService);',
-      `logService: ILogService,
-    private readonly configurationSourceFilter?: (source: ConfigurationDefaultSource | undefined) => boolean,
-\t) {
-    super(logService, configurationSourceFilter ?? (source => typeof source !== 'object' || !source?.configurationOnly));`);
-    source = replaceOnce(source, '\t\treturn this.cachedConfigurationDefaultsOverrides;',
-      '\t\treturn this.configurationSourceFilter ? {} : this.cachedConfigurationDefaultsOverrides;');
-    source = replaceOnce(source, '\t\tawait this.initializeCachedConfigurationDefaultsOverrides();',
-      '\t\tif (!this.configurationSourceFilter) await this.initializeCachedConfigurationDefaultsOverrides();');
-    source = replaceOnce(source, '\tprivate async updateCachedConfigurationDefaultsOverrides(): Promise<void> {',
-      '\tprivate async updateCachedConfigurationDefaultsOverrides(): Promise<void> {\n    if (this.configurationSourceFilter) return;');
-    source = replaceOnce(source, 'if (defaultConfiguration.donotCache) {',
-      "if (defaultConfiguration.donotCache || typeof defaultConfiguration.source === 'object' && defaultConfiguration.source?.configurationOnly) {");
     const start = source.indexOf('export class RemoteUserConfiguration extends Disposable {');
     const end = source.indexOf('\nclass FileServiceBasedRemoteUserConfiguration', start);
     let contents = source.slice(start, end);
@@ -197,13 +178,6 @@ export function transformExtensionConfiguration(root, path, source, replaceOnce)
     return replaceOnce(contents, '\n\t\tif (options.exclude?.includes(key)) {', `
       if (options.propertyFilter && !options.propertyFilter(key, propertySchema ?? excludedPropertySchema)) return false;
 \n\t\tif (options.exclude?.includes(key)) {`);
-  }
-  if (path === paths[4]) {
-    let contents = replaceOnce(source, 'IConfigurationRegistry,', 'IConfigurationRegistry, ConfigurationDefaultSource,');
-    contents = replaceOnce(contents, 'constructor(private readonly logService: ILogService) {',
-      'constructor(private readonly logService: ILogService, private readonly sourceFilter?: (source: ConfigurationDefaultSource | undefined) => boolean) {');
-    contents = replaceOnce(contents, 'registry.getConfigurationProperties()', 'registry.getConfigurationProperties(this.sourceFilter)');
-    return replaceOnce(contents, 'registry.getExcludedConfigurationProperties()', 'registry.getExcludedConfigurationProperties(this.sourceFilter)');
   }
   return source;
 }

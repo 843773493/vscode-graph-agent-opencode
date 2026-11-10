@@ -10,7 +10,7 @@ assert(fixture?.base_url && fixture.base_url_b && fixture.targets && output, '�
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/test_empty_target_web.py').prepare();
 const observations = () => ({ pageErrors: [], nodeChannels: [], nodeResolves: [], writes: [], preparations: [] });
 const result = { phase: 'initialize', a: observations(), b: observations(), receipts: [],
-  boundary: '正式 Workbench、真实双 Gateway/Backend、原安装器与 Web Worker；A 设置 UI 经 Relay 写 B，B 公开配置 API 反向通知 A。SSH/隧道是具名 loopback 装具，不代替真实 SSH、Windows 或 Electron。' };
+  boundary: '正式 Workbench、真实双 Gateway/Backend、原安装器与 Web Worker；A 经 Relay 写 B 原宿主配置，B Worker 公开配置 API 回写，A 经同一文件 owner 读取；不验证已退役的 profile/view 设置 UI。SSH/隧道是具名 loopback 装具，不代替真实 SSH、Windows 或 Electron。' };
 const pending = [], pages = [];
 const save = () => writeFile(output, JSON.stringify(result, null, 2) + '\n');
 const phase = async value => { result.phase = value; await save(); };
@@ -66,52 +66,38 @@ try {
   const read = page => query(page, 'boxteam.settingsProbe.read');
   await expect.poll(async () => (await read(a)).value, { timeout: 20_000 }).toBe('target-default');
   await expect.poll(async () => (await read(b)).value, { timeout: 20_000 }).toBe('target-default');
-  await phase('choose-remote-settings');
-  await command(a, 'workbench.action.openSettings2');
-  const editor = a.locator('.settings-editor:visible');
-  await expect(editor).toBeVisible();
-  await editor.getByRole('button', { name: '目标：本地 · 当前工作台', exact: true }).click();
-  const picker = a.locator('.quick-input-widget:visible');
-  await expect(picker).toBeVisible();
-  await picker.locator('.monaco-list-row').filter({ hasText: 'Settings Target B' }).click();
-  const targetName = '目标：Settings Target B · ' + fixture.targets.b.backend_id;
-  await expect(editor.getByRole('button', { name: targetName, exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(editor.locator('.settings-context-label')).toContainText('范围：目标用户');
-  await Promise.all(pending);
-  result.binding = result.a.preparations.at(-1);
-  assert.equal(result.binding.gateway_id, fixture.targets.b.gateway_id);
-  assert.equal(result.binding.backend_id, fixture.targets.b.backend_id);
-  await command(a, 'settings.action.search');
-  await a.keyboard.insertText('@ext:boxteam-probe.settings-browser @id:targetSettingsProbe.value');
-  const input = editor.locator('[data-key="targetSettingsProbe.value"] .setting-item-control input');
-  await expect(input).toBeVisible(); await expect(input).toHaveValue('target-default');
-  await phase('ui-writes-B-worker-reads');
-  await input.fill('from-A-UI');
-  await command(a, 'workbench.action.files.save');
-  await expect.poll(async () => (await read(b)).value, { timeout: 20_000 }).toBe('from-A-UI');
+  await phase('original-host-profile-transport');
+  // 这里只验证仍在使用的宿主配置 API；业务设置表单由正式来源验收覆盖。
+  const prepared = await api(a, '/api/gateway/extension-configurations/prepare', 'POST', {
+    protocol_version: 1, ...fixture.targets.b, workspace_ids: [fixture.workspace_id],
+  });
+  result.binding = prepared;
+  assert.equal(prepared.gateway_id, fixture.targets.b.gateway_id);
+  assert.equal(prepared.backend_id, fixture.targets.b.backend_id);
+  const resource = prepared.context.remote_settings.resource_uri;
+  const target = { protocol_version: 1, gateway_id: prepared.gateway_id, backend_id: prepared.backend_id,
+    view_id: prepared.view_id, workspace_ids: prepared.workspace_ids, profile_id: prepared.profile_id, resource_uri: resource };
+  await phase('relay-writes-B-worker-reads');
+  await api(a, '/api/gateway/extension-configurations/write', 'POST', { ...target,
+    content_base64: Buffer.from(JSON.stringify({ 'targetSettingsProbe.value': 'from-A-API' })).toString('base64'),
+    options: { create: true, overwrite: true, unlock: false, atomic: false, append: false } });
+  await expect.poll(async () => (await read(b)).value, { timeout: 20_000 }).toBe('from-A-API');
   const remote = await read(b);
-  assert(remote.worker); assert.equal(remote.inspect.globalValue, 'from-A-UI');
-  assert.equal(remote.inspect.globalRemoteValue, 'from-A-UI');
+  assert(remote.worker); assert.equal(remote.inspect.globalValue, 'from-A-API');
+  assert.equal(remote.inspect.globalRemoteValue, 'from-A-API');
   assert.equal(remote.inspect.globalLocalValue, undefined);
-  assert(remote.events.includes('from-A-UI'));
-  result.afterUiWrite = remote;
+  assert(remote.events.includes('from-A-API'));
+  result.afterRelayWrite = remote;
   result.localValue = (await read(a)).value;
   assert.equal(result.localValue, 'target-default');
-  await phase('worker-writes-original-ui-observes');
-  // 原 SettingsEditor 对正在编辑的控件延迟重绘；移到搜索框后核真实外部通知。
-  await command(a, 'settings.action.search');
-  assert(await input.evaluate(element => element !== element.ownerDocument.activeElement));
-  // B 的原公开 API 写同一 profile；A 当前编辑器继续绑定 B，不借页面焦点重选。
-  await b.bringToFront();
+  await phase('worker-writes-relay-reads');
   const updated = await query(b, 'boxteam.settingsProbe.update', 'from-B-worker');
   assert.equal(updated.value, 'from-B-worker');
-  await expect(input).toHaveValue('from-B-worker', { timeout: 20_000 });
+  const body = await api(a, '/api/gateway/extension-configurations/read', 'POST', target);
+  const values = JSON.parse(Buffer.from(body.content_base64, 'base64').toString('utf8'));
+  assert.equal(values['targetSettingsProbe.value'], 'from-B-worker');
   assert.equal((await read(a)).value, 'target-default');
-  await command(a, 'settings.action.search'); await a.keyboard.press('Control+A');
-  await a.keyboard.insertText('@modified @ext:boxteam-probe.settings-browser');
-  await expect(input).toBeVisible(); await expect(input).toHaveValue('from-B-worker');
-  await expect(editor.getByRole('button', { name: targetName, exact: true })).toBeVisible();
-  result.uiValue = await input.inputValue(); result.remoteValue = (await read(b)).value;
+  result.relayValue = values['targetSettingsProbe.value']; result.remoteValue = (await read(b)).value;
   result.afterWorkerWrite = await read(b);
   for (const state of [result.a, result.b]) {
     assert.deepEqual(state.pageErrors, []); assert.deepEqual(state.nodeChannels, []); assert.deepEqual(state.nodeResolves, []);

@@ -284,7 +284,7 @@ exports.activate = context => context.subscriptions.push(vscode.commands.registe
     assert any(item["path"].endswith("/extension-hosts/resolve") for item in observations)
 
 
-async def test_settings_ui_and_target_browser_share_native_configuration(
+async def test_target_browser_and_relay_share_native_host_configuration(
     target_gateway_network: TargetGatewayNetwork, vsix_factory,
 ) -> None:
     network = target_gateway_network
@@ -362,7 +362,7 @@ exports.activate = context => {
         result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=195, check=False,
             env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_TARGET_SETTINGS": json.dumps({
-                    "base_url": str(local.base_url).rstrip("/"), "base_url_b": str(remote.base_url).rstrip("/"), "targets": targets})})
+                    "base_url": str(local.base_url).rstrip("/"), "base_url_b": str(remote.base_url).rstrip("/"), "targets": targets, "workspace_id": network.workspace_id})})
     (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
     (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
     (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}, indent=2), encoding="utf-8")
@@ -383,7 +383,7 @@ exports.activate = context => {
     assert all((root / ".boxteam/workspace.jsonc").read_bytes() == original
         for root, original in zip(network.workspace_roots, originals, strict=True))
     assert browser["localValue"] == "target-default"
-    assert browser["remoteValue"] == browser["uiValue"] == "from-B-worker"
+    assert browser["remoteValue"] == browser["relayValue"] == "from-B-worker"
     assert browser["a"]["writes"] and all(write["gateway_id"] == gateway_b and write["backend_id"] == targets["b"]["backend_id"]
         and "generation" not in write for write in browser["a"]["writes"])
 

@@ -1,8 +1,5 @@
 import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
-import Severity from '../../upstream/src/vs/base/common/severity.js';
-import { ExtensionIdentifier } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
-import { acquireConfigurationContributions, type ConfigurationExtensionDescription } from '../../upstream/src/vs/workbench/api/common/configurationExtensionPoint.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -20,33 +17,19 @@ import { IRemoteAgentService } from '../../upstream/src/vs/workbench/services/re
 import { IUserDataProfileService } from '../../upstream/src/vs/workbench/services/userDataProfile/common/userDataProfile.js';
 import { registerTargetConfigurationFiles } from './configurationFiles.js';
 import { TargetWorkspaceResources } from './targetUris.js';
-import { targetConfigurationSourceFilter, targetProfileId, targetSettings, targetWorkspace, type TargetConfigurationContext } from './targetContext.js';
+import { targetProfileId, targetSettings, targetWorkspace, type TargetExtensionContext } from './targetContext.js';
 
 /** 原 WorkspaceService 同时持有配置与 context；所有 MainThread customer 从同一 child 取得它。 */
-export async function targetConfigurationServices(parent: IInstantiationService, context: TargetConfigurationContext,
+export async function targetConfigurationServices(parent: IInstantiationService, context: TargetExtensionContext,
   lifetime: DisposableStore, services = new ServiceCollection()): Promise<IInstantiationService> {
   const workspace = targetWorkspace(context), settings = targetSettings(context), binding = context.connection;
   const resources = new TargetWorkspaceResources(context);
   const owner = parent.invokeFunction(accessor => {
     const files = accessor.get(IFileService), environment = accessor.get(IBrowserWorkbenchEnvironmentService);
-    if (context.kind === 'settings') {
-      const descriptions: ConfigurationExtensionDescription[] = context.connection.extensions.map(extension => ({
-        identifier: new ExtensionIdentifier(extension.extension_id), name: extension.name, publisher: extension.publisher,
-        displayName: extension.display_name ?? undefined, isBuiltin: false,
-        contributes: { configuration: extension.configuration ?? undefined, configurationDefaults: extension.configuration_defaults ?? undefined },
-        capabilities: (extension.capabilities ?? undefined) as ConfigurationExtensionDescription['capabilities'],
-        enabledApiProposals: extension.enabled_api_proposals as ConfigurationExtensionDescription['enabledApiProposals'],
-      }));
-      const log = accessor.get(ILogService);
-      lifetime.add(acquireConfigurationContributions(descriptions, message => {
-        if (message.type === Severity.Error) log.error(message.message); else log.warn(message.message);
-      }));
-    }
     lifetime.add(registerTargetConfigurationFiles(files, context));
     const cache = new ConfigurationCache(['boxteam', 'boxteam-file', 'vscode-userdata'], environment, files);
     return lifetime.add(new WorkspaceService({ remoteAuthority: JSON.stringify([binding.gateway_id, binding.backend_id, targetProfileId(context)]),
       configurationCache: cache, remoteSettingsResource: URI.parse(settings.resource_uri),
-      configurationSourceFilter: context.kind === 'settings' ? targetConfigurationSourceFilter(context) : undefined,
       resolveWorkspaceFolders: (folders, configuration) => resources.workspaceFolders(folders, configuration),
     }, environment, accessor.get(IUserDataProfileService), accessor.get(IUserDataProfilesService), files,
     accessor.get(IRemoteAgentService), accessor.get(IUriIdentityService), accessor.get(ILogService), accessor.get(IPolicyService)));
