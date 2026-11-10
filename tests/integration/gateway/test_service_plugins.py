@@ -15,7 +15,11 @@ import pytest
 
 from app.schemas.gateway.service_plugin import PluginSlotStatusDTO
 from tests.harness.python.run_context import TestRunContext
-from tests.support.plugin_package import install_plugin, native_plugin_target
+from tests.support.plugin_package import (
+    expect_plugin_install_failure,
+    install_plugin,
+    native_plugin_target,
+)
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -163,10 +167,10 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         return [{"package_id": "probe.tools", "package_version": version, "plugin_id": plugin,
             "enabled": python_enabled if plugin == "python" else True} for plugin in ("python", "node", "declarations")]
 
-    def package(version: str, mode: str = '') -> Path:
+    def package(version: str, mode: str = '', *, target: dict[str, object] | None = None) -> Path:
         path = context.artifacts_dir / f"probe-{version}.zip"
         manifest = {"manifest_version": 1, "package_id": "probe.tools", "version": version,
-            "target": native_plugin_target("python", "node"),
+            "target": native_plugin_target("python", "node") if target is None else target,
             "name": "真实受控插件", "extension_contract_version": 1, "plugins": [
                 {"id": runtime, "name": runtime, "instance_scope": "gateway",
                  "requires": [{"extension_point": "services", "version": 1},
@@ -231,6 +235,21 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert echo(python).raise_for_status().json()["version"] == "1.0.0"
         assert echo(node).raise_for_status().json()["version"] == "1.0.0"
         assert "/plugins/packages/" not in echo(python).json()["cwd"]
+        for index, field in enumerate(("version", "abi")):
+            target_environment = json.loads(json.dumps(native_plugin_target("python", "node")))
+            target_environment["node"][field] = "0.0.0" if field == "version" else "0"
+            incompatible = package(f"6.0.{index}", target=target_environment)
+            rejected = expect_plugin_install_failure(
+                lambda endpoint, payload: exchange("POST", endpoint, payload),
+                gateway_id=gateway_id, path=str(incompatible),
+                expected_digest=hashlib.sha256(incompatible.read_bytes()).hexdigest(),
+            )
+            assert rejected.error and "Node 运行时不匹配" in rejected.error
+            assert "package=" in rejected.error and "gateway=" in rejected.error and "完整插件 ZIP" in rejected.error
+            assert states() == current, "不兼容制品不能改变旧绑定、revision或实际实例"
+            assert echo(python).raise_for_status().json()["version"] == "1.0.0"
+            assert echo(node).raise_for_status().json()["version"] == "1.0.0"
+        assert installed_content() == original_content, "不兼容制品不能发布或修改原安装内容"
         private_value = "gateway-private-input-sentinel"
         private_request = {**target, "package_id": "probe.tools", "plugin_id": "python", "package_version": "1.0.0",
             "source_key": "gateway_mutable_override", "parameter_pointer": "/credentialValue", "value": private_value}

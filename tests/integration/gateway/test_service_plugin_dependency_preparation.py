@@ -91,7 +91,7 @@ def _python_lock(dependency_version: str = "1.0.0") -> str:
 
 def _plugin_archive(path: Path, *, package_version: str, python_version: str = "1.0.0",
     entry_content: str | None = None, include_dependency: bool = True,
-    lock_dependency_version: str | None = None) -> Path:
+    lock_dependency_version: str | None = None, target: dict[str, object] | None = None) -> Path:
     manifest = {
         "manifest_version": 1,
         "package_id": "dependency.probe",
@@ -108,7 +108,7 @@ def _plugin_archive(path: Path, *, package_version: str, python_version: str = "
             "entrypoint": ["entry.py"],
             "management_protocol_version": 1,
         }],
-        "target": native_plugin_target("python"),
+        "target": native_plugin_target("python") if target is None else target,
     }
     project = (
         "[project]\nname = 'plugin-dependency-fixture'\nversion = '1.0.0'\n"
@@ -303,6 +303,41 @@ def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
         reply = call(ready).raise_for_status().json()
         assert reply["value"] == "locked-dependency-ready"
         assert reply["instance_id"] == ready["instance"]["instance_id"]
+
+        native_target = native_plugin_target("python")
+        for field, value in (("os", "windows" if native_target["os"] != "windows" else "linux"),
+                             ("architecture", "arm64" if native_target["architecture"] == "x64" else "x64"),
+                             ("version", "0.0.0"), ("abi", "cp000")):
+            target = json.loads(json.dumps(native_target))
+            (target["python"] if field in {"version", "abi"} else target)[field] = value
+            incompatible = _plugin_archive(context.artifacts_dir / f"incompatible-{field}.zip",
+                package_version=f"4.0.{len(evidence)}", target=target)
+            rejected = expect_install_failure(incompatible)
+            assert rejected.error and "package=" in rejected.error and "gateway=" in rejected.error
+            assert "完整插件 ZIP" in rejected.error
+            assert next(item for item in status()["plugins"] if item["binding"]["plugin_id"] == "probe") == ready
+            assert call(ready).raise_for_status().json()["value"] == "locked-dependency-ready"
+        inventory = exchange("POST", "/api/gateway/service-plugins/inventory",
+            {"gateway_id": gateway_id}).raise_for_status().json()["data"]["packages"]
+        assert {item["manifest"]["version"] for item in inventory} == {"1.0.0"}
+        source_path = "/api/gateway/config/sources/gateway_mutable_override"
+        source = exchange("GET", source_path).raise_for_status().json()["data"]
+        candidate = commentjson.loads(source["jsonc"])
+        candidate["plugins"]["runtime"]["entries"][0]["package_version"] = "99.0.0"
+        missing_version = exchange("PUT", source_path, {
+            "gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+            "jsonc": json.dumps(candidate), "base_file_digest": source["file_digest"],
+            "base_layer_revision": source["layer_revision"], "base_layer_digest": source["layer_digest"],
+            "expected_active_revision": source["active_revision"], "expected_active_digest": source["active_digest"],
+            "idempotency_key": "plugin-dependency-missing-version",
+        })
+        assert missing_version.status_code == 422
+        assert "dependency.probe@99.0.0" in missing_version.text and "此确切版本" in missing_version.text
+        retained_source = exchange("GET", source_path).raise_for_status().json()["data"]
+        for field in ("file_digest", "layer_revision", "layer_digest", "active_revision", "active_digest"):
+            assert retained_source[field] == source[field]
+        assert next(item for item in status()["plugins"] if item["binding"]["plugin_id"] == "probe") == ready
+        assert call(ready).raise_for_status().json()["value"] == "locked-dependency-ready"
 
         restarted = exchange("POST", "/api/gateway/service-plugins/restart", {
             "gateway_id": gateway_id,

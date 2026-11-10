@@ -28,10 +28,12 @@ def validate_runtime_target(target: PluginPackageTarget | None, *, runtimes: set
     target_os = target.os
     current_os = {"linux": "linux", "win32": "windows", "darwin": "macos"}.get(sys.platform)
     if current_os != target_os:
-        raise RuntimeError(f"插件目标操作系统不匹配: package={target_os}, gateway={current_os or sys.platform}")
+        raise RuntimeError(f"插件目标操作系统不匹配: package={target_os}, gateway={current_os or sys.platform}；"
+                           "请获取目标 Gateway 操作系统对应的完整插件 ZIP")
     architecture = {"AMD64": "x64", "x86_64": "x64", "aarch64": "arm64", "ARM64": "arm64"}.get(platform.machine())
     if architecture != target.architecture:
-        raise RuntimeError(f"插件目标架构不匹配: package={target.architecture}, gateway={architecture or platform.machine()}")
+        raise RuntimeError(f"插件目标架构不匹配: package={target.architecture}, gateway={architecture or platform.machine()}；"
+                           "请获取目标 Gateway 架构对应的完整插件 ZIP")
     _validate_system_baseline(target.system_baseline, target_os)
     if "node" in runtimes:
         runtime = target.node
@@ -42,7 +44,8 @@ def validate_runtime_target(target: PluginPackageTarget | None, *, runtimes: set
         node = _node_runtime(node_executable)
         if node["version"] != runtime.version or node["abi"] != runtime.abi:
             raise RuntimeError(
-                f"插件 Node 运行时不匹配: package={runtime.version}/{runtime.abi}, gateway={node['version']}/{node['abi']}"
+                f"插件 Node 运行时不匹配: package={runtime.version}/{runtime.abi}, gateway={node['version']}/{node['abi']}；"
+                "请获取匹配目标应用 Node 版本和 ABI 的完整插件 ZIP，或安装匹配的应用版本；不会现场编译"
             )
     if "python" in runtimes:
         if target.python is None:
@@ -51,7 +54,8 @@ def validate_runtime_target(target: PluginPackageTarget | None, *, runtimes: set
         if runtime["version"] != target.python.version or runtime["abi"] != target.python.abi:
             raise RuntimeError(
                 f"插件 Python 运行时不匹配: package={target.python.version}/{target.python.abi}, "
-                f"gateway={runtime['version']}/{runtime['abi']}"
+                f"gateway={runtime['version']}/{runtime['abi']}；"
+                "请获取匹配目标应用 Python 版本和 ABI 的完整插件 ZIP，或安装匹配的应用版本"
             )
 
 
@@ -76,7 +80,8 @@ def _validate_system_baseline(baseline: str, target_os: str) -> None:
     current = _version_tuple(actual[1] if target_os == "linux" else actual[0])
     if current < required:
         raise RuntimeError(f"插件系统基线不满足: required={label} {baseline.removeprefix(prefix)}, "
-                           f"gateway={actual[1] if target_os == 'linux' else actual[0]}")
+                           f"gateway={actual[1] if target_os == 'linux' else actual[0]}；"
+                           "请获取兼容目标系统基线的完整插件 ZIP，或在满足基线的系统运行")
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:

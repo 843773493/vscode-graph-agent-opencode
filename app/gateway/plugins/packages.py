@@ -495,7 +495,8 @@ def _directory_digest(source: Path, entries: tuple[str, ...]) -> str:
 
 def _read_installed(path: Path) -> InstalledPluginPackage:
     if path.is_symlink() or path.parent.is_symlink() or not path.is_dir():
-        raise FileNotFoundError(f"插件包版本不存在或不是普通目录: {path.name}")
+        raise FileNotFoundError(f"插件包版本不存在或不是普通目录: {path.parent.name}@{path.name}；"
+                                "请在目标 Gateway 安装此确切版本的兼容完整插件 ZIP，不会自动改用其他版本")
     metadata_path = path / ".boxteam-plugin.json"
     if metadata_path.is_symlink():
         raise RuntimeError("已安装插件元数据不能是符号链接")
