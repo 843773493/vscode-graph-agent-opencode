@@ -14,21 +14,27 @@ from zipfile import ZipFile
 
 import commentjson
 import httpx
+import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
+from tests.integration.gateway.test_service_plugins import NODE_PLUGIN, PYTHON_PLUGIN
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
+from tests.support.plugin_package import native_plugin_target
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.workspaces import install_test_workspace_config, prepare_default_test_workspace
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 
 @pytest.fixture
@@ -89,6 +95,13 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                      "credential": {"type": "string", "minLength": 8, "writeOnly": True}}}}},
         ],
     }
+    if scenario == "single":
+        manifest["target"] = native_plugin_target("python", "node")
+        for plugin, runtime in zip(manifest["plugins"], ("python", "node"), strict=True):
+            plugin.update({"runtime": runtime, "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"],
+                "management_protocol_version": 1})
+            plugin["requires"].append({"extension_point": "services", "version": 1})
+            plugin["contributes"]["services"] = [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]
     if scenario == "batch":
         manifest["plugins"].append({
             "id": "workspace-required", "name": "缺少必填参数", "instance_scope": "workspace",
@@ -98,6 +111,10 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         })
     with ZipFile(package_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
+        if scenario == "single":
+            archive.writestr("entry.py", PYTHON_PLUGIN)
+            archive.writestr("local_module.py", "VALUE = 1\n")
+            archive.writestr("entry.mjs", NODE_PLUGIN)
     version_paths = []
     if scenario == "single":
         for version in ("1.1.0", "2.0.0"):
@@ -109,6 +126,9 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             path = context.artifacts_dir / f"ui-plugin-package-{version}.zip"
             with ZipFile(path, "w") as archive:
                 archive.writestr("plugin.jsonc", json.dumps(candidate, ensure_ascii=False))
+                archive.writestr("entry.py", PYTHON_PLUGIN)
+                archive.writestr("local_module.py", "VALUE = 1\n")
+                archive.writestr("entry.mjs", NODE_PLUGIN)
             version_paths.append(str(path))
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
         port=plugin_gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
@@ -143,6 +163,12 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         else:
             assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
             assert result["installed"] and result["uninstalled"]
+            assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
+            assert result["runtimeVersions"] == ["1.1.0", "1.0.0"]
+            assert result["closedBindingBlockedUninstall"]
+            assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])
+            packages_root = context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/ui.preference-probe"
+            assert not packages_root.exists(), "完整卸载后包版本目录仍存在"
             assert result["explicitVersionSwitch"] and result["installKeptBindings"]
             assert result["disabledVersionStayedDisabled"] and result["invalidVersionKeptBinding"]
             assert result["referencedUninstall"]["status"] == 409

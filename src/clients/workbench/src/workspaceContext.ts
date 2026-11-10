@@ -51,4 +51,12 @@ export const workspaceContext = {
     })().finally(() => { refreshing = undefined; });
     return refreshing;
   },
+  async ensureReady(): Promise<WorkspaceSnapshot> {
+    const current = this.getSnapshot();
+    if (current.loading || current.error || !current.gatewayId) await this.refresh();
+    const ready = this.getSnapshot();
+    if (ready.error) throw new Error(ready.error);
+    if (!ready.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
+    return ready;
+  },
 };

@@ -19,6 +19,7 @@ import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
 import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gateway } from '../agentApi.js';
 import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
+import { workspaceContext } from '../workspaceContext.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
@@ -142,6 +143,7 @@ export class ServicePluginPackagesView extends ViewPane {
   }
 
   private async renderPackages(container: HTMLElement, revision: number, scope: Scope): Promise<void> {
+    await workspaceContext.ensureReady();
     const target = managementGateway('extensions');
     const workspace = scope === 'workspace' ? (this.workspaceTarget ?? await choosePluginWorkspace(target, this.quickInput)) : undefined;
     if (revision !== this.refreshRevision) return;
@@ -472,8 +474,11 @@ async function observeInstallation(progress: IProgressService, notifications: IN
 }
 
 export async function installServicePluginPackage(accessor: ServicesAccessor): Promise<void> {
+  const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
+  const progress = accessor.get(IProgressService);
+  await workspaceContext.ensureReady();
   const target = managementGateway('extensions');
-  await installPackageFromView(accessor.get(IQuickInputService), accessor.get(INotificationService), accessor.get(IProgressService),
+  await installPackageFromView(quickInput, notifications, progress,
     { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id });
 }
 

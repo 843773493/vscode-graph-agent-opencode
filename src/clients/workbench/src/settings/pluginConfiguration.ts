@@ -338,8 +338,9 @@ export function writeOnlyFields(schema: Record<string, unknown> | undefined, pre
 export async function configureServicePlugin(accessor: ServicesAccessor): Promise<void> {
   const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
   const dialogs = accessor.get(IDialogService);
+  const initial = await workspaceContext.ensureReady();
   const target = managementGateway('settings');
-  const initialGateway = workspaceContext.getSnapshot().gatewayId;
+  const initialGateway = initial.gatewayId;
   const cancellation = new CancellationTokenSource();
   const invalidate = () => cancellation.cancel();
   const releaseAuth = onGatewayTokenInvalidated(0, invalidate);

@@ -113,6 +113,7 @@
   - 2026-11-10 旧Gallery引导收口：持续复用同一Luna max，删除测试欢迎页的扩展搜索、新手引导外部键位包探测／安装及聊天输入中的安装聊天扩展补全；保留测试原能力、主题选择及Agent／MCP补全。仅迁齐原sourceTransform接点，不建替代市场或兼容桥。最终定向4项通过、136份实际转换源码类型零诊断及正式79扩展Web构建通过；早期解析与未用声明失败原件均保留。主线程复审未混入并行图片认证修改；本片未称三个入口逐项真实浏览器验收，7.4／8组全范围仍保留。准确命令、指纹及全部原件见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/legacy-extension-entry-*-final.*`。
   - 2026-11-10 旧详情入口清理：同一 sourceTransform 迁齐通知／状态栏／Issue Quick Access、快捷键来源、设置、profile、账户偏好、聊天及语言选择等15个固定上游路径，删除已退役 extension.open／_extensions.manage 与旧详情点击；来源文本、原通知动作、Issue Reporter、profile选择、账户偏好、语言切换与有效MCP配置入口保留，不建兼容桥。Luna max 持续复审修复精确锚点及未用声明，44项短验／266断言、132份实际转换源码类型零诊断；复用同源码正式79扩展构建及真实插件管理页面1 passed／116.22秒，未将这条页面流程称作15入口逐项交互验收。已不再注册的旧 Extensions 内部字符串未按关键词扩大删除，真实平台与全部旧交互未验。原始输出、指纹见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/extension-details-typecheck-v1.receipt`，产品原件见范围管理切片。
 - [ ] 7.5 真实页面验证无公网源零请求、本地多插件包安装、当前 Gateway／当前工作区插件开关与重启及新建默认值、部分失败批量操作和整包引用冲突卸载；保存与实际启动状态分开，焦点不改投。
+  - 2026-11-10 Workbench完整运行闭环：原单包场景升级为同包Python Gateway／Node Workspace真实插件，经页面安装、三范围CAS绑定、实际业务调用、启用／关闭态显式切版、刷新保留原实例、独立重启、停用仍引用409、解绑及卸载，核全部旧PID退出与物理版本目录删除；原批量部分失败、目标冻结、默认值只写模板及未知保存查询断言保持。精确完整Git归档2 passed／205.19秒，零pageErrors、单包零外部请求；暴露并修复reload时Gateway尚未就绪，以及await后使用失效ServicesAccessor两处真实缺陷。140份转换源码类型检查、正式Workbench构建、11项／55断言命令反例、两份Python类型零诊断、Ruff与语法通过，同源码构建复用。最小复审只复用原workspaceContext屏障，无新账本／fallback；Gateway范围页面显式restart、Windows／真实SSH／Electron和源码外发行未由本片完整验收，7.5宽项保持未勾选。tree、源码指纹、原件和失败归因见 `out/tests/temp/2026/11/10/plugin_management_loop/artifacts/ui-verification.json`。
 
 ## 8. 旧体系物理删除与发行
 

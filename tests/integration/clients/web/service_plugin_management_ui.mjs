@@ -6,7 +6,7 @@ import { parse as parseJsonc } from 'jsonc-parser';
 
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [],
-  privateInputWrites: [], installed: false, uninstalled: false };
+  privateInputWrites: [], installed: false, uninstalled: false, exitedPids: [], runtimeVersions: [] };
 const pluginRequests = [];
 const managementReads = [];
 let privateInputRequestCount = 0;
@@ -53,17 +53,17 @@ try {
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  const api = (path, options = {}) => page.evaluate(async ({ path, options }) => {
+  const api = (path, options = {}, raw = false) => page.evaluate(async ({ path, options, raw }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
       'Content-Type': 'application/json', ...(options.headers ?? {}) },
       body: options.body && JSON.stringify(options.body) });
     const envelope = await response.json();
-    if (!response.ok || envelope.code !== 0 || envelope.request_id !== response.headers.get('X-Request-ID')) {
+    if (!response.ok || (!raw && envelope.code !== 0) || envelope.request_id !== response.headers.get('X-Request-ID')) {
       throw new Error(`${path}: ${response.status} ${JSON.stringify(envelope)}`);
     }
-    return envelope.data;
-  }, { path, options });
+    return raw ? envelope : envelope.data;
+  }, { path, options, raw });
   result.initialization = [];
   for (const path of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) {
     result.initialization.push({ path, data: await api(path) });
@@ -133,15 +133,18 @@ try {
   };
   const enable = async (name, sourceKey, confirmLabel) => {
     await openPlugin(name);
-    const toggle = view.locator('.service-plugin-details button').first();
+    const toggle = view.getByRole('button', { name: '启用此范围', exact: true });
     await expect(toggle).toHaveText('启用此范围');
     await toggle.click();
     await pick(sourceKey);
     await pick(confirmLabel);
     await expect(quick).not.toBeVisible();
-    await expect(view.locator('.service-plugin-details button').first()).toHaveText('停用此范围');
+    await expect(view.getByRole('button', { name: '停用此范围', exact: true })).toBeVisible();
   };
   const unbind = async (name, sourceKey, confirmLabel) => {
+    const before = await runtimeSlot(name.includes('gateway-preference') ? 'gateway-preference' : 'workspace-preference',
+      sourceKey === 'workspace_root_mutable_override' ? active.workspace_id : undefined);
+    if (before?.instance) result.exitedPids.push(before.instance.process_id);
     await openPlugin(name);
     await view.locator('.service-plugin-details button').filter({ hasText: '解除此范围绑定' }).click();
     await pick(sourceKey);
@@ -149,7 +152,24 @@ try {
     await expect(quick).not.toBeVisible();
     await expect(view.getByRole('button', { name: '解除此范围绑定', exact: true })).toHaveCount(0);
   };
+
+  const runtimeSlot = async (pluginId, workspaceId) => {
+    const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } });
+    return snapshot.plugins.find(item => item.binding.package_id === 'ui.preference-probe' && item.binding.plugin_id === pluginId
+      && (item.binding.workspace_id ?? null) === (workspaceId ?? null));
+  };
+  const callRuntime = async slot => {
+    assert.equal(slot.gateway_id, active.gateway_id); assert.equal(slot.state, 'ready'); assert(slot.instance);
+    const query = new URLSearchParams({ package_version: slot.binding.package_version,
+      ...(slot.binding.workspace_id ? { workspace_id: slot.binding.workspace_id } : {}) });
+    const value = await api(`/api/gateway/service-plugins/${slot.binding.package_id}/${slot.binding.plugin_id}/instances/${slot.instance.instance_id}/services/echo/value?${query}`, {}, true);
+    assert.equal(value.instance_id, slot.instance.instance_id); assert.equal(value.version, slot.binding.package_version);
+    assert.equal(value.pid, slot.instance.process_id);
+    result.exitedPids.push(value.pid);
+    return value;
+  };
   await enable('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  const firstGateway = await runtimeSlot('gateway-preference'); await callRuntime(firstGateway);
   result.configOwners.push('gateway');
   result.phase = 'referenced-uninstall';
   const referencedUninstall = page.waitForResponse(response => response.request().method() === 'POST'
@@ -269,6 +289,9 @@ try {
     await pick('确认保存 Gateway 插件绑定');
     assert.equal((await saved).status(), 200);
     await expect(view.getByLabel('插件配置与运行版本')).toContainText(`配置：${enabled ? '启用' : '停用'} @${version}`);
+    const slot = await runtimeSlot('gateway-preference');
+    if (enabled) { await callRuntime(slot); result.runtimeVersions.push(slot.instance.package_version); }
+    else { assert.equal(slot.state, 'stopped'); assert.equal(slot.instance, null); }
     assert.deepEqual(configuredGateway(await gatewaySource()), { package_id: 'ui.preference-probe', plugin_id: 'gateway-preference',
       package_version: version, enabled });
   };
@@ -282,11 +305,19 @@ try {
   await expect(quick).not.toBeVisible();
   assert.equal(sourceWriteRequestCount, writesBeforeInvalid);
   assert.equal((await gatewaySource()).jsonc, beforeInvalid.jsonc);
+  assert.equal((await runtimeSlot('gateway-preference')).binding.package_version, '1.0.0');
   result.invalidVersionKeptBinding = true;
   await openVersion('1.0.0');
   await view.getByRole('button', { name: '停用此范围', exact: true }).click();
   await pick('gateway_mutable_override'); await pick('确认保存 Gateway 插件绑定');
   await expect(view.getByRole('button', { name: '启用此范围', exact: true })).toBeVisible();
+  result.exitedPids.push(beforeInstallRuntime.plugins.find(item => item.binding.plugin_id === 'gateway-preference').instance.process_id);
+  const disabledUninstall = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
+  await packageRowFor('1.0.0').getByRole('button', { name: '卸载整个包', exact: true }).click(); await pick('卸载整包');
+  assert.equal((await disabledUninstall).status(), 409);
+  assert.equal((await runtimeSlot('gateway-preference')).binding.enabled, false);
+  result.closedBindingBlockedUninstall = true;
   await switchVersion('1.1.0', false);
   await switchVersion('1.0.0', false);
   result.disabledVersionStayedDisabled = true;
@@ -304,6 +335,25 @@ try {
   await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
   await verifyScopeReads('workspace', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status',
     '/api/v1/config/sources', '/api/v1/config/sources/workspace_root_mutable_override']);
+
+  await expect.poll(async () => (await runtimeSlot('workspace-preference', active.workspace_id))?.state).toBe('ready');
+  const workspaceReady = await runtimeSlot('workspace-preference', active.workspace_id); await callRuntime(workspaceReady);
+  const gatewayReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayReady);
+  assert.notEqual(gatewayReady.instance.process_id, workspaceReady.instance.process_id);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
+  assert.equal((await runtimeSlot('gateway-preference')).instance.instance_id, gatewayReady.instance.instance_id);
+  assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, workspaceReady.instance.instance_id);
+  await view.getByLabel('插件管理范围').selectOption('workspace'); await pick(workspaceName);
+  await openPlugin('工作区偏好 · workspace-preference');
+  const restarted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
+  await view.getByRole('button', { name: '重启实例', exact: true }).click(); assert.equal((await restarted).status(), 200);
+  const workspaceRestart = await runtimeSlot('workspace-preference', active.workspace_id);
+  assert.notEqual(workspaceRestart.instance.instance_id, workspaceReady.instance.instance_id); await callRuntime(workspaceRestart);
+  assert.equal((await runtimeSlot('gateway-preference')).instance.instance_id, gatewayReady.instance.instance_id);
+  result.exitedPids.push(workspaceReady.instance.process_id);
+  result.reloadKeptInstances = true;
   result.configOwners.push('workspace');
   await editParameters('workspace_root_mutable_override', '确认保存工作区插件参数', '工作区独立参数');
   await setSecret('工作区偏好 · workspace-preference', 'workspace_root_mutable_override',
@@ -378,6 +428,10 @@ try {
   await packageRow.getByRole('button', { name: '卸载整个包', exact: true }).click();
   await pick('卸载整包');
   await expect(view).toContainText('尚无插件包', { timeout: 30_000 });
+  assert.equal(await runtimeSlot('gateway-preference'), undefined);
+  assert.equal(await runtimeSlot('workspace-preference', active.workspace_id), undefined);
+  result.exitedPids.push(gatewayReady.instance.process_id, workspaceRestart.instance.process_id);
+  result.actualRuntimeLoop = true;
   result.uninstalled = true;
   const residual = await api('/api/gateway/config/sources/gateway_mutable_override');
   assert.equal(parseJsonc(residual.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');

@@ -65,18 +65,24 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
     gateway, options.generateUuid ?? (() => 'operation-original'), observeInstallation,
     error => error instanceof Error ? error.message : String(error), requireOwner, read, installationKey, runPluginInstallation);
   const quickInputToken = {}, notificationToken = {}, progressToken = {};
-  const run = new Function('managementGateway', 'IQuickInputService', 'INotificationService', 'IProgressService', 'installPackageFromView',
+  const run = new Function('managementGateway', 'IQuickInputService', 'INotificationService', 'IProgressService', 'installPackageFromView', 'workspaceContext',
     `${declaration('installServicePluginPackage')}\nreturn installServicePluginPackage;`)(
     () => typeof options.target === 'function' ? options.target() : options.target ?? {
       gateway_id: 'gateway-original', gateway_connection_id: 'connection-original',
-    }, quickInputToken, notificationToken, progressToken, install);
+    }, quickInputToken, notificationToken, progressToken, install, { ensureReady: options.ensureReady ?? (async () => {}) });
+  let accessorActive = false;
   const accessor = { get(token) {
+    if (!accessorActive) throw new Error('服务 accessor 仅在同步命令调用期间有效');
     if (token === quickInputToken) return { pick: async () => picks.shift(), input: async () => inputs.shift() };
     if (token === notificationToken) return notifications;
     if (token === progressToken) return { withProgress: (_options, operation) => operation({ report() {} }) };
     throw new Error('测试收到未知 Workbench 服务');
   } };
-  return () => run(accessor);
+  return () => {
+    accessorActive = true;
+    try { return run(accessor); }
+    finally { accessorActive = false; }
+  };
 }
 
 function createInstaller(request, picks, inputs, observed) {
@@ -91,6 +97,23 @@ function operation(gatewayId = 'gateway-original', operationId = 'operation-orig
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), `${JSON.stringify({
   path: sourcePath, sha256: sourceFingerprint,
 }, null, 2)}\n`));
+
+test('Gateway 就绪前不打开安装向导，就绪后使用同步取得的原命令服务', async () => {
+  const ready = Promise.withResolvers(), entered = Promise.withResolvers();
+  const calls = [], observed = [], picks = [{ kind: 'zip' }], inputs = ['/tmp/plugin.zip'];
+  const command = createInstallCommand(async (path, body) => {
+    calls.push({ path, body });
+    return operation();
+  }, picks, inputs, observed, { ensureReady: async () => { entered.resolve(); await ready.promise; } });
+  const pending = command();
+  await entered.promise;
+  expect(picks).toHaveLength(1);
+  expect(calls).toEqual([]);
+  ready.resolve();
+  await pending;
+  expect(calls.map(call => call.path.split('/').at(-1))).toEqual(['install']);
+  expect(observed).toHaveLength(1);
+});
 
 test('安装回执 owner 不匹配时只读取目标 Gateway 的原 operation_id', async () => {
   for (const invalid of [operation('gateway-other'), operation('gateway-original', 'operation-other')]) {
