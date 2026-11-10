@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +21,9 @@ import pytest
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
+)
+from tests.integration.gateway.test_plugin_install_operations import (
+    plugin_source as plugin_source,  # noqa: PLC0414 - 复用真实HTTP来源和同一套目录／制品响应。
 )
 from tests.integration.gateway.test_service_plugins import NODE_PLUGIN, PYTHON_PLUGIN
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -62,6 +66,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     web_workbench_assets: Path,
     scenario: str,
     plugin_gateway_port: int,
+    plugin_source: dict,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "插件管理 UI 验收需要真实 Chromium"
@@ -130,6 +135,15 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                 archive.writestr("local_module.py", "VALUE = 1\n")
                 archive.writestr("entry.mjs", NODE_PLUGIN)
             version_paths.append(str(path))
+        # 同一不可变新版包同时供来源安装与后续显式切版消费，不另造模型或安装实现。
+        content = Path(version_paths[0]).read_bytes()
+        plugin_source["content"] = content
+        plugin_source["artifact"] = {
+            "package_id": manifest["package_id"], "package_version": "1.1.0", "target": manifest["target"],
+            "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
+            "url": plugin_source["base_url"] + "/plugin.zip", "filename": "ui-plugin-package-1.1.0.zip",
+        }
+        plugin_source["release_download"].set()
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
         port=plugin_gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
@@ -139,11 +153,26 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             workspace_list = client.get("/api/gateway/workspaces").raise_for_status().json()["data"]
             assert workspace_list["active_workspace"]
             assert workspace_list["active_workspace"]["gateway_id"] == health["gateway_id"]
+            if scenario == "single":
+                source_path = "/api/gateway/config/sources/gateway_mutable_override"
+                document = client.get(source_path).raise_for_status().json()["data"]
+                source = commentjson.loads(document["jsonc"])
+                source.setdefault("plugins", {})["sources"] = {"entries": [{
+                    "source_id": "proof", "protocol_version": 1, "base_url": plugin_source["base_url"], "enabled": True,
+                }]}
+                saved = client.put(source_path, json={
+                    "gateway_id": health["gateway_id"], "source_key": "gateway_mutable_override", "jsonc": json.dumps(source),
+                    "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+                    "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+                    "expected_active_digest": document["active_digest"], "idempotency_key": "plugin-ui-source",
+                }).raise_for_status().json()["data"]
+                assert saved["edit"]["state"] == "active", saved
         result_path = context.artifacts_dir / "plugin-management-ui.json"
         driver = "tests/integration/clients/web/" + ("plugin_batch_management_ui.mjs" if scenario == "batch" else "service_plugin_management_ui.mjs")
         environment = os.environ | {
             "BOXTEAM_PLUGIN_UI_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
                 "packagePath": str(package_path), "versionPaths": version_paths,
+                "sourceArtifact": plugin_source["artifact"] if scenario == "single" else None,
                 "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
         }
@@ -165,6 +194,12 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["installed"] and result["uninstalled"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
             assert result["gatewayRestartedIndependently"]
+            assert result["sourceUpdate"]["artifact"]["digest"] == plugin_source["artifact"]["digest"]
+            assert result["sourceUpdate"]["status"] == "succeeded"
+            assert plugin_source["calls"] == [
+                {"path": "/catalog", "query": {"query": ["ui.preference-probe"]}},
+                {"path": "/plugin.zip", "query": {}},
+            ]
             assert result["runtimeVersions"] == ["1.1.0", "1.0.0"]
             assert result["closedBindingBlockedUninstall"]
             assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])

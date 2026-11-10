@@ -267,8 +267,23 @@ try {
     item.package_id === 'ui.preference-probe' && item.plugin_id === 'gateway-preference');
   const beforeInstall = await gatewaySource();
   const beforeInstallRuntime = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } });
-  for (const path of input.versionPaths) {
-    await installButton.click(); await pick('ZIP 文件'); await inputQuick(path);
+  for (const [index, path] of input.versionPaths.entries()) {
+    await installButton.click();
+    if (index === 0) {
+      await pick('自有来源'); await pick('proof'); await inputQuick('ui.preference-probe');
+      const installing = page.waitForRequest(request => request.method() === 'POST'
+        && new URL(request.url()).pathname.endsWith('/service-plugins/install'));
+      await pick('ui.preference-probe@1.1.0');
+      const request = (await installing).postDataJSON();
+      assert.equal(request.gateway_id, active.gateway_id);
+      assert.equal(request.source_id, 'proof'); assert.equal(request.catalog_revision, 'catalog-v1');
+      assert.deepEqual(request.artifact, input.sourceArtifact);
+      await expect(packageRowFor('1.1.0')).toBeVisible();
+      result.sourceUpdate = await api('/api/gateway/service-plugins/install-operation',
+        { method: 'POST', body: { gateway_id: active.gateway_id, operation_id: request.operation_id } });
+      assert.equal(result.sourceUpdate.status, 'succeeded');
+      assert.equal(result.sourceUpdate.artifact.digest, input.sourceArtifact.digest);
+    } else { await pick('ZIP 文件'); await inputQuick(path); }
     await expect(view.locator('.service-plugin-package')).toHaveCount(path === input.versionPaths[0] ? 2 : 3);
   }
   assert.equal((await gatewaySource()).jsonc, beforeInstall.jsonc);

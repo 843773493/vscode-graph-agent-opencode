@@ -46,7 +46,7 @@ def plugin_source(request: pytest.FixtureRequest) -> Iterator[dict]:
             elif parsed.path == "/plugin.zip":
                 state["download_started"].set()
                 assert state["release_download"].wait(20), "测试未释放下载响应"
-                body = content
+                body = state["content"]
             else:
                 self.send_error(404)
                 return
@@ -56,7 +56,7 @@ def plugin_source(request: pytest.FixtureRequest) -> Iterator[dict]:
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, _format: str, *args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
