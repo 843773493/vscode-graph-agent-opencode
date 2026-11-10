@@ -14,7 +14,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { ITextModelService } from '../../upstream/src/vs/editor/common/services/resolverService.js';
 import { DefaultSettings, Settings2EditorModel, nullRange } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesModels.js';
 import type { ISetting, ISettingsGroup } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
-import { ITextFileService, type ITextFileEditorModel } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
+import { ITextFileService, type ITextFileEditorModel, type ITextFileEditorModelManager } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gateway } from '../agentApi.js';
@@ -82,19 +82,22 @@ class SourceDefaults extends DefaultSettings {
 }
 
 export class SourceSettings extends Disposable {
-  private readonly changed = this._register(new Emitter<void>());
+  private readonly changed = this._register(new Emitter<boolean>());
   readonly onDidChange = this.changed.event;
   private readonly fields = new Map<string, SourceSetting>();
   readonly groups: ISettingsGroup[] = [];
   readonly resource: URI;
   constructor(readonly location: TargetSettingsLocation, readonly model: ITextFileEditorModel, private readonly files: IFileService,
-    private readonly schemas: PluginConfigurationSchemasDTO) {
+    private readonly schemas: PluginConfigurationSchemasDTO, textFiles: ITextFileEditorModelManager) {
     super();
     this.resource = configSourceEditorUri(location, location.source_key);
     this.buildFields();
-    this._register(model.onDidChangeContent(() => this.changed.fire()));
-    this._register(model.onDidSave(() => this.changed.fire()));
-    this._register(model.onDidChangeDirty(() => this.changed.fire()));
+    this._register(model.onDidChangeContent(() => this.changed.fire(false)));
+    const reload = () => { this.buildFields(); this.changed.fire(true); };
+    // 正式保存和还原已更新原 owner 回执；重新投影绑定版本，不逐次输入重建 schema。
+    this._register(model.onDidSave(reload));
+    this._register(textFiles.onDidRevert(reverted => { if (reverted === model) reload(); }));
+    this._register(model.onDidChangeDirty(() => this.changed.fire(false)));
   }
   get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
   createModel(parent: IInstantiationService): Settings2EditorModel {
@@ -131,6 +134,8 @@ export class SourceSettings extends Disposable {
     text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
   }
   private buildFields(): void {
+    this.fields.clear();
+    this.groups.length = 0;
     const root = this.document.json_schema;
     if (!root) throw new Error('配置 owner 没有返回来源 schema');
     const visit = (schema: Schema, path: string[], fields: ISetting[], schemaRoot: Schema) => {
@@ -189,9 +194,10 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
     const reference = await parent.invokeFunction(accessor => accessor.get(ITextModelService)).createModelReference(resource);
     lifetime.add(reference);
     controller.signal.throwIfAborted();
-    const model = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files.get(resource);
+    const textFiles = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files;
+    const model = textFiles.get(resource);
     if (!model) throw new Error('设置来源没有原文本文件模型');
-    const source = lifetime.add(new SourceSettings(location, model, files, schemas));
+    const source = lifetime.add(new SourceSettings(location, model, files, schemas, textFiles));
     return parent.createChild(new ServiceCollection([ITargetSettingsContext, { _serviceBrand: undefined, target: source }]), lifetime);
   } finally { auth(); context(); cancel.dispose(); controller.abort(); }
 }

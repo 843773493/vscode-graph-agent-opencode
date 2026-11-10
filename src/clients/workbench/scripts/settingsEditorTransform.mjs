@@ -212,9 +212,11 @@ export class SettingsEditor2 extends EditorPane {`);
       save: () => this.flushSettingsUpdates(), revert: () => this.discardSettingsUpdates(),
     }));
     const source = this.targetSettingsContext.target;
-    if (source) this.modelDisposables.add(source.onDidChange(() => {
+    if (source) this.modelDisposables.add(source.onDidChange(reload => {
       this.settingsContextHeader?.update();
-      this.onConfigUpdate(undefined, false, false).catch(error => this.logService.error(error));
+      if (reload) this.cancelSettingsSearch();
+      (reload ? this.refreshInstalledExtensionsList() : Promise.resolve())
+        .then(() => this.onConfigUpdate(undefined, reload, reload)).catch(error => this.logService.error(error));
     }));`);
     contents = replaceOnce(contents, '\t\tconst installedExtensions = await this.extensionManagementService.getInstalled();', `    if (this.targetSettingsContext.target) {
       this.installedExtensionIds = this.targetSettingsContext.target.groups.flatMap(group => group.extensionInfo?.id ? [group.extensionInfo.id] : []);

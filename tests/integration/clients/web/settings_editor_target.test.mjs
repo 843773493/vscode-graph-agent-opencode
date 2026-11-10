@@ -218,7 +218,7 @@ function location(overrides = {}) {
     gateway_connection_id: 'connection-A', ...overrides };
 }
 
-function makeTextFileModel(initial) {
+function makeTextFileModel(initial, notifyReverted) {
   const content = new Emitter(), savedEvent = new Emitter(), dirtyEvent = new Emitter();
   let value = initial, saved = initial, dirty = false;
   const textEditorModel = {
@@ -241,7 +241,7 @@ function makeTextFileModel(initial) {
       if (dirty) { this.saveCalls++; saved = value; dirty = false; dirtyEvent.fire(); savedEvent.fire(); }
       return true;
     },
-    async revert() { this.revertCalls++; setValue(saved); },
+    async revert() { this.revertCalls++; setValue(saved); notifyReverted(this); },
   };
 }
 
@@ -261,13 +261,15 @@ function makeSource(locationValue) {
       { source_key: locationValue.source_key, precedence: 10, payload: {} },
     ],
   };
-  const model = makeTextFileModel(jsonc), provider = { currentDocument(resource) {
+  const reverted = new Emitter();
+  const model = makeTextFileModel(jsonc, value => reverted.fire(value)), provider = { currentDocument(resource) {
     if (resource.toString() !== configSourceEditorUri(locationValue, locationValue.source_key).toString()) throw new Error('来源资源身份不匹配');
     return document;
   } };
   const files = { getProvider: () => provider };
-  const source = new SourceSettings(locationValue, model, files, { plugins: [] });
-  return { source, model, document, provider, files };
+  const textFileModels = { onDidRevert: reverted.event };
+  const source = new SourceSettings(locationValue, model, files, { plugins: [] }, textFileModels);
+  return { source, model, document, provider, files, textFileModels };
 }
 
 function childServices(source, configurationCalls) {
@@ -309,7 +311,7 @@ scenario('source Input 身份只由 Gateway、工作区和 source key 决定，�
 
 scenario('来源 schema 只构造当前 Settings2EditorModel，JSONC 表单编辑保持路径、注释和继承投影', async () => {
   const target = location(), f = makeSource(target), configurationCalls = [];
-  const targetSettings = new SourceSettings(target, f.model, f.files, { plugins: [] });
+  const targetSettings = new SourceSettings(target, f.model, f.files, { plugins: [] }, f.textFileModels);
   const child = childServices(targetSettings, configurationCalls).child;
   try {
     const model = targetSettings.createModel(child), groups = model.settingsGroups;
@@ -367,6 +369,39 @@ scenario('source Input 通过原文本模型报告 dirty、显式 save 与 rever
     expect(dirtyEvents).toContain(true);
     expect(dirtyEvents.at(-1)).toBe(false);
   } finally { lifetime.dispose(); input.dispose(); targetSettings.dispose(); prepareSettingsPaneImplementation = async () => { throw new Error('该测试尚未提供来源 Pane 准备结果'); }; }
+});
+
+scenario('来源正式保存和还原后替换确切绑定版本的 schema，解除 B 不影响 A', async () => {
+  const a = makeSource(location()), b = makeSource(location({ workspace_id: 'workspace-B' }));
+  const binding = version => ({ package_id: 'schema.probe', plugin_id: 'preference', package_version: version, enabled: false });
+  const schemas = { plugins: [
+    { package_id: 'schema.probe', plugin_id: 'preference', package_version: '1.0.0', name: '版本一',
+      configuration_schema: { type: 'object', properties: { mode: { type: 'string', default: 'first' }, onlyOne: { type: 'boolean' } } } },
+    { package_id: 'schema.probe', plugin_id: 'preference', package_version: '2.0.0', name: '版本二',
+      configuration_schema: { type: 'object', properties: { mode: { type: 'boolean', default: true }, onlyTwo: { type: 'number' } } } },
+  ] };
+  const receipt = (fixture, version) => {
+    fixture.document.source_effective = { plugins: { runtime: { entries: version ? [binding(version)] : [] } } };
+    fixture.model.textEditorModel.pushEditOperations(null, [{ text: JSON.stringify(fixture.document.source_effective) }]);
+  };
+  receipt(a, '1.0.0'); receipt(b, '2.0.0');
+  const sourceA = new SourceSettings(location(), a.model, a.files, schemas, a.textFileModels);
+  const sourceB = new SourceSettings(location({ workspace_id: 'workspace-B' }), b.model, b.files, schemas, b.textFileModels);
+  const fields = source => source.groups.filter(group => group.extensionInfo).flatMap(group => group.sections.flatMap(section => section.settings));
+  const mode = source => fields(source).find(setting => setting.key.endsWith('.mode'));
+  try {
+    expect(mode(sourceA)).toMatchObject({ type: 'string', value: 'first' });
+    expect(mode(sourceB)).toMatchObject({ type: 'boolean', value: true });
+    receipt(b, '1.0.0'); await b.model.save();
+    expect(mode(sourceB)).toMatchObject({ type: 'string', value: 'first' });
+    expect(fields(sourceB).map(setting => setting.key)).not.toContain('plugins.configuration.values.schema%2Eprobe.preference.onlyTwo');
+    receipt(b, undefined); await b.model.save();
+    expect(fields(sourceB)).toEqual([]);
+    expect(() => sourceB.edit('plugins.configuration.values.schema%2Eprobe.preference.mode', 'stale')).toThrow('不属于当前来源');
+    expect(mode(sourceA)).toMatchObject({ type: 'string', value: 'first' });
+    receipt(b, '2.0.0'); await b.model.revert();
+    expect(mode(sourceB)).toMatchObject({ type: 'boolean', value: true });
+  } finally { sourceA.dispose(); sourceB.dispose(); a.source.dispose(); b.source.dispose(); }
 });
 
 scenario('Pane 取消来源准备后不绑定迟到模型，释放已取得的文本引用', async () => {
