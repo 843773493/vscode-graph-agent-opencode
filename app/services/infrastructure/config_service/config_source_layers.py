@@ -38,6 +38,7 @@ from app.services.infrastructure.config_service.config_agent_tools import (
     ConfigAgentToolsMixin,
 )
 from app.services.infrastructure.config_service.config_service_common import (
+    _INLINE_SOURCE_KEY,
     _SOURCE_LAYER_AUTHORITY,
     release_inline_config_uri_for_file,
 )
@@ -152,6 +153,7 @@ class ConfigSourceLayersMixin:
                 layer="inline",
                 precedence=0,
                 loaded=True,
+                source_key=_INLINE_SOURCE_KEY,
             ),
         ]
         config = self._read_config_source(self._inline_config_path)

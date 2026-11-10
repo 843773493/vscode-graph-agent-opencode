@@ -8,7 +8,7 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
 import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
-import type { ExtensionTargetListDTO, ExtensionConfigurationTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import type { ExtensionTargetListDTO, GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
 
@@ -187,21 +187,6 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
       controller.signal.throwIfAborted();
       if (!picked) return;
       let target: ManagementTarget = { ...picked.target, gateway_connection_id: picked.target.gateway_connection_id ?? undefined };
-      if (scope === 'settings') {
-        const directory = await gateway.request<ExtensionConfigurationTargetListDTO>('/api/gateway/extension-configurations/targets', {
-          method: 'POST', body: JSON.stringify({ protocol_version: 1, gateway_id: target.gateway_id,
-            gateway_connection_id: target.gateway_connection_id }), signal: controller.signal,
-        });
-        controller.signal.throwIfAborted();
-        if (directory.protocol_version !== 1 || directory.gateway_id !== target.gateway_id) throw new Error('设置配置目录不属于所选 Gateway');
-        if (!directory.backend_ids.length) throw new Error('所选 Gateway 没有可用的配置目标，请显式启动 Backend 后重试');
-        const backendId = directory.backend_ids.length === 1 ? directory.backend_ids[0] : (await quickInput.pick(directory.backend_ids.map(id => ({
-          label: id, description: target.name,
-        })), { title: `选择设置配置域 · ${target.name}`, placeHolder: '后续设置输入固定到该 Backend 的 profile' }, cancellation.token))?.label;
-        controller.signal.throwIfAborted();
-        if (!backendId) return;
-        target = { ...target, backend_id: backendId };
-      }
       selections.set(scope, { entryGatewayId: entry, target });
       if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
       if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }

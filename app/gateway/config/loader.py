@@ -87,6 +87,7 @@ def load_gateway_config(
             layer=inline_layer,
             precedence=inline_precedence,
             loaded=True,
+            source_key="inline:0",
         )
     ]
     loaded_persisted_snapshot = False

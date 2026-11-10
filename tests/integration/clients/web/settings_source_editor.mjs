@@ -1,0 +1,195 @@
+import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { chromium } from 'playwright';
+import { expect } from 'playwright/test';
+import { parse, modify, applyEdits } from 'jsonc-parser';
+
+const input = JSON.parse(process.env.BOXTEAM_SETTINGS_SOURCE_FIXTURE);
+const result = { phase: 'initialization', pageErrors: [], writes: [], preflights: [], sourceReads: [], responses: [] };
+let browser, page;
+try {
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
+  page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  page.setDefaultTimeout(15_000);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  page.on('pageerror', error => result.pageErrors.push(error.message));
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (!url.pathname.includes('/config/sources/')) return;
+    const body = request.postData() ? JSON.parse(request.postData()) : undefined;
+    const record = { path: url.pathname, query: url.search, gateway_id: body?.gateway_id, workspace_id: body?.workspace_id,
+      idempotency_key: body?.idempotency_key, jsonc_bytes: body?.jsonc?.length };
+    if (request.method() === 'PUT') result.writes.push(record);
+    else if (request.method() === 'POST') result.preflights.push(record);
+    else result.sourceReads.push(record);
+  });
+  page.on('response', response => { if (new URL(response.url()).pathname.includes('/config/sources/')) result.responses.push({ path: new URL(response.url()).pathname, status: response.status() }); });
+  const command = (id, ...args) => page.evaluate(async ({ id, args }) => { await globalThis.workbench.commands.executeCommand(id, ...args); }, { id, args });
+  const api = (path, options = {}) => page.evaluate(async ({ path, options }) => {
+    const auth = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
+    const response = await fetch(path, { ...options, headers: { 'X-Local-Token': auth.token, 'Content-Type': 'application/json', ...(options.headers ?? {}) },
+      body: options.body && JSON.stringify(options.body) });
+    const envelope = await response.json();
+    if (!response.ok || envelope.code !== 0 || envelope.request_id !== response.headers.get('X-Request-ID')) throw new Error(`${path}: ${response.status} ${JSON.stringify(envelope)}`);
+    return envelope.data;
+  }, { path, options });
+  await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  const health = await api('/api/gateway/health');
+  const workspaces = await api('/api/gateway/workspaces');
+  await api('/api/v1/workspace');
+  const active = workspaces.active_workspace;
+  assert(active?.workspace_id && active.gateway_id === health.gateway_id);
+  const workspace = workspaces.items.find(item => item.workspace_id === active.workspace_id && item.gateway_id === health.gateway_id);
+  const gatewayHeaders = { 'X-BoxTeam-Target-Gateway-Id': health.gateway_id };
+  const workspaceHeaders = { ...gatewayHeaders, 'X-BoxTeam-Workspace-Id': active.workspace_id };
+  result.owner = { gatewayId: health.gateway_id, workspaceId: active.workspace_id };
+  const quick = page.locator('.quick-input-widget');
+  const modal = page.locator('.monaco-dialog-box[role="dialog"]');
+  const text = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
+  const tab = page.locator('.tabs-container .tab.active:visible').last();
+  const pick = async label => {
+    await expect(quick).toBeVisible();
+    await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click();
+  };
+  const open = async (target, source) => {
+    const opened = command('boxteam.settings.openSource');
+    await pick(target); await pick(source); await opened;
+    await expect(text).toBeVisible();
+    await expect(tab).toContainText(source + '.jsonc');
+  };
+  const replace = async content => {
+    await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.press('Control+A');
+    await page.evaluate(value => navigator.clipboard.writeText(value), content);
+    await page.keyboard.press('Control+V');
+    await expect(tab).toHaveClass(/\bdirty\b/);
+  };
+  const save = async () => {
+    const saved = command('workbench.action.files.save');
+    await expect(modal).toContainText('保存目标配置来源', { timeout: 30_000 });
+    await modal.getByRole('button', { name: '保存来源', exact: true }).click();
+    await saved;
+    await expect(tab).not.toHaveClass(/\bdirty\b/);
+  };
+  const gatewayPath = '/api/gateway/config/sources/gateway_mutable_override';
+  const workspacePath = '/api/v1/config/sources/workspace_root_mutable_override';
+  const update = (jsonc, path, value) => applyEdits(jsonc, modify(jsonc, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
+  result.phase = 'gateway-save';
+  await open('Gateway 配置', 'gateway_mutable_override');
+  let gatewayDocument = await api(gatewayPath, { headers: gatewayHeaders });
+  const gatewayDraft = '// Gateway 来源注释\n' + update(gatewayDocument.jsonc, ['logging', 'runtime', 'level'], 'debug');
+  await replace(gatewayDraft);
+  // 保留 Web 默认 autoSave；来源编辑必须自行只允许显式保存。
+  await page.waitForTimeout(1500);
+  assert.equal(result.writes.length, 0);
+  await save();
+  gatewayDocument = await api(gatewayPath, { headers: gatewayHeaders });
+  assert.equal(parse(gatewayDocument.jsonc).logging.runtime.level, 'debug');
+  assert(gatewayDocument.jsonc.includes('// Gateway 来源注释'));
+  assert(gatewayDocument.edit === null || gatewayDocument.edit === undefined);
+  result.gateway_saved = true;
+
+  result.phase = 'workspace-save-with-frozen-owner';
+  await open(workspace.name, 'workspace_root_mutable_override');
+  let workspaceDocument = await api(workspacePath, { headers: workspaceHeaders });
+  const workspaceDraft = '// Workspace 来源注释\n' + update(workspaceDocument.jsonc, ['default_agent'], 'default');
+  await replace(workspaceDraft);
+  // 焦点切换到 Gateway 设置再返回，原工作区文件的目标不随管理选择变化。
+  await command('workbench.action.previousEditor');
+  await command('workbench.action.nextEditor');
+  await save();
+  workspaceDocument = await api(workspacePath, { headers: workspaceHeaders });
+  assert.equal(parse(workspaceDocument.jsonc).default_agent, 'default');
+  assert(workspaceDocument.jsonc.includes('// Workspace 来源注释'));
+  const workspaceWrite = result.writes.find(record => record.path === workspacePath);
+  assert.equal(workspaceWrite.workspace_id, active.workspace_id);
+  result.workspace_saved = true; result.frozen_owner = true;
+
+  result.phase = 'real-cas-conflict';
+  const draft = workspaceDocument.jsonc + '\n// 冲突时必须保留的草稿\n';
+  await replace(draft);
+  // 并发修改也经正式 source 入口，不能由测试预写文件或数据库制造保存成功。
+  const external = { gateway_id: health.gateway_id, workspace_id: active.workspace_id, source_key: workspaceDocument.source_key,
+    jsonc: workspaceDocument.jsonc + '\n// 另一编辑者已提交\n', base_file_digest: workspaceDocument.file_digest,
+    base_layer_revision: workspaceDocument.layer_revision, base_layer_digest: workspaceDocument.layer_digest,
+    expected_active_revision: workspaceDocument.active_revision, expected_active_digest: workspaceDocument.active_digest, idempotency_key: randomUUID() };
+  await api(workspacePath + '/preflight', { method: 'POST', headers: workspaceHeaders, body: external });
+  await api(workspacePath, { method: 'PUT', headers: workspaceHeaders, body: external });
+  // 原热退出备份须带上编辑时的 CAS；刷新不能把旧草稿换成最新来源基线。
+  page.once('dialog', dialog => dialog.accept());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  await expect(text).toContainText('冲突时必须保留的草稿');
+  await expect(tab).toHaveClass(/\bdirty\b/);
+  result.draft_restored_after_reload = true;
+  const count = result.writes.length;
+  const rejectedPreflight = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === workspacePath + '/preflight' && response.status() === 409);
+  await command('workbench.action.files.save');
+  await rejectedPreflight;
+  await expect(page.locator('.notification-list-item-message').filter({ hasText: '草稿已保留' })).toBeVisible();
+  assert.equal(result.writes.length, count, '预检冲突不得发起 PUT');
+  await expect(text).toContainText('冲突时必须保留的草稿');
+  await expect(tab).toHaveClass(/\bdirty\b/);
+  assert((await api(workspacePath, { headers: workspaceHeaders })).jsonc.includes('另一编辑者已提交'));
+  result.conflict_kept_draft = true;
+  const rebased = command('boxteam.settings.rebaseSource');
+  await expect(modal).toContainText('以最新来源重新预检');
+  await modal.getByRole('button', { name: '使用最新基线', exact: true }).click(); await rebased;
+  await expect(text).toContainText('冲突时必须保留的草稿'); await save();
+
+  result.phase = 'committed-response-lost';
+  await replace(draft + '// 本次提交响应丢失\n');
+  let intercepted = 0;
+  const dropSavedResponse = async route => {
+    if (route.request().method() !== 'PUT') { await route.continue(); return; }
+    intercepted++;
+    // 真正的 owner 已完成提交后丢弃响应；这是显式传输故障替身。
+    const response = await route.fetch();
+    assert.equal(response.status(), 200);
+    await route.abort('connectionreset');
+  };
+  await page.route('**/api/v1/config/sources/workspace_root_mutable_override', dropSavedResponse);
+  const beforeUnknown = result.writes.length;
+  await save();
+  await page.unroute('**/api/v1/config/sources/workspace_root_mutable_override', dropSavedResponse);
+  assert.equal(intercepted, 1); assert.equal(result.writes.length, beforeUnknown + 1);
+  const originalKey = result.writes.at(-1).idempotency_key;
+  assert(result.sourceReads.some(record => new URLSearchParams(record.query).get('idempotency_key') === originalKey));
+  assert((await api(workspacePath, { headers: workspaceHeaders })).jsonc.includes('本次提交响应丢失'));
+  result.unknown_not_replayed = true;
+  result.transportFault = '真实 PUT 提交成功后由 Playwright 丢弃响应；原键 GET 确认，不重发 PUT';
+
+  result.phase = 'readonly-and-state';
+  const sources = await api('/api/gateway/config/sources', { headers: gatewayHeaders });
+  const inline = sources.sources.find(source => source.layer === 'inline' && source.source_key);
+  assert(inline);
+  await open('Gateway 配置', inline.source_key);
+  const readonlyBefore = result.writes.length;
+  await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// 不得写入\n');
+  await expect(tab).not.toHaveClass(/\bdirty\b/);
+  assert.equal(result.writes.length, readonlyBefore);
+  await expect(text).not.toContainText('不得写入');
+  await open(workspace.name, 'inline');
+  await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// 工作区内置来源不得写入\n');
+  await expect(tab).not.toHaveClass(/\bdirty\b/);
+  await expect(text).not.toContainText('工作区内置来源不得写入');
+  assert.equal(result.writes.length, readonlyBefore);
+  result.readonly = true;
+  const status = command('boxteam.settings.sourceStatus');
+  await expect(quick).toBeVisible(); await expect(quick).toContainText('来源层');
+  await page.keyboard.press('Escape'); await status;
+  assert(!result.sourceReads.some(record => /\/(gateway_schema|workspace_schema)$/.test(record.path)), 'schema 必须复用 owner 文档，不能请求虚构来源');
+  assert.deepEqual(result.pageErrors, []);
+  result.phase = 'complete';
+} catch (error) {
+  result.error = error.stack ?? String(error);
+  if (page) await page.screenshot({ path: `${input.artifacts}/settings-source-editor-failure.png`, fullPage: true });
+  throw error;
+} finally {
+  await writeFile(input.resultPath, JSON.stringify(result, null, 2) + '\n');
+  await browser?.close();
+}

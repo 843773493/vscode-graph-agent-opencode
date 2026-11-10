@@ -82,6 +82,7 @@
   - 2026-11-09 管理 UI 入口切片：原 Extensions 容器直接消费自有包，Gateway／明确工作区／新建默认值分别经原来源预检及 CAS 保存；旧 VSIX 安装入口和管理测试退役，有效文件对话框回归迁为独立30项并通过。欢迎页、教程及语言菜单移除旧市场引导，ext 只保留包管理。真实 Gateway／Backend／正式 Workbench 验本地声明包安装、三范围保存与解绑、整包卸载、MCP 查询及零外部请求，1 passed／107.10秒；最终转换入口41项通过，最终 Web 构建通过。197份转换源码类型检查只保留与完整HEAD基线相同的 revealDiagnosticLog 诊断，新增0，不记全绿。参数schema／批量部分失败／旧ext:与@id:搜索调用方／远端与原生客户端及旧宿主整体删除仍未完成，本组任务不勾选。候选隔离了并行认证改动；命令、源码指纹、原始输出及浏览器产物见 `out/tests/temp/2026/11/09/plugin_management/artifacts/`。
 - [ ] 7.2 保留标题工具栏目标 Quick Input、默认本地、各视图独立选择，冻结详情／在途操作／草稿目标；迟到查询不串列表，焦点和来源路径不改投目标。
 - [ ] 7.3 从plugins[].contributes.configuration渲染目标参数，表单与JSONC共用原writer；关闭保留已安装schema但不启用工具／Skill，卸载释放schema；未绑定参数限原登记容器保留且未生效，JSONC按容器结构编辑删除、重绑定严格验证，域外未知仍拒绝，无影子schema或第二enabled，删除旧配置桥。
+  - 2026-11-10 正式来源 JSONC 边界：Gateway／Workspace 表单与 JSONC 统一经 ConfigurationSourceOwner 使用原 list／read／preflight／CAS／幂等 writer；FileService 只适配原文本编辑器，保留 dirty、关闭及热退出备份，显式保存，不直接写来源文件。目标和来源冻结，实际并发409保留草稿并要求显式重新预检；响应丢失仅查询原键，零PUT重放；刷新恢复保留旧CAS，未覆盖并发来源。只读inline来源补稳定key；相对schema直接消费原文档json_schema，错误schema请求由6次降至0。真实Gateway／托管Backend／正式Workbench两个浏览器用例2 passed／174.04秒，补刷新恢复1 passed／91.79秒；189份转换源码类型、正式构建及inline来源两条短验通过。最小复审删除多余状态与包装，未新增配置合并或业务存储。准确命令、源码指纹及原始结果见 `out/tests/temp/2026/11/10/settings_source_editor/artifacts/verification.json`。原SettingsEditor业务表单迁移、旧宿主配置桥整体退役、双目标不同schema页面及真实Relay／原生平台仍未完成，7.3／10.6不勾完。
 - [ ] 7.4 在原命令／Quick Input／Opener 接入自有插件管理与状态，迁齐 ext／MCP／设置入口及来源提示；需要重开资源时只消费原寻址 owner 的正式地址，不自造 grammar。
 - [ ] 7.5 真实页面验证无公网源零请求、本地多插件包安装、当前 Gateway／当前工作区插件开关与重启及新建默认值、部分失败批量操作和整包引用冲突卸载；保存与实际启动状态分开，焦点不改投。
 

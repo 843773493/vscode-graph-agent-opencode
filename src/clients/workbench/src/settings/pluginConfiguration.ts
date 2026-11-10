@@ -5,19 +5,16 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import type { GatewayConfigSourceDocumentDTO, GatewayConfigSourceEditRequest, GatewayConfigSourcesDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWriteRequest, PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
 import { gatewayWorkspaceRequestHeaders, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
 import { managementGateway } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { ConfigurationSourceOwner, sourceBaseline, type SourceDocument } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
-type ConfigDocument = GatewayConfigSourceDocumentDTO | ConfigSourceDocumentDTO;
-type ConfigIntent = GatewayConfigSourceEditRequest | ConfigSourceEditRequest;
+type ConfigDocument = SourceDocument;
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 type Source = { source_key?: string | null; layer: string; presence: string; uri?: string | null; writable?: boolean };
 type PrivateParameter = { pointer: string; schema: Record<string, unknown> };
@@ -55,22 +52,20 @@ async function chooseSource(quickInput: IQuickInputService, sources: Source[], t
 }
 
 export async function readWorkspaceDefaults(target: ReturnType<typeof managementGateway>): Promise<PluginBinding[]> {
-  const query = target.gateway_connection_id ? `?gateway_connection_id=${encodeURIComponent(target.gateway_connection_id)}` : '';
-  const headers = targetHeader(target.gateway_id);
-  const sources = await gateway.request<GatewayConfigSourcesDTO>(`/api/gateway/config/sources${query}`, { headers });
+  const owner = new ConfigurationSourceOwner(target);
+  const sources = await owner.list();
   const source = [...sources.sources].filter(item => item.loaded && item.source_key).sort((a, b) => b.precedence - a.precedence)[0];
   if (!source?.source_key) throw new Error('Gateway 没有可读取 workspace_defaults 的配置来源');
-  const document = await gateway.request<GatewayConfigSourceDocumentDTO>(
-    `/api/gateway/config/sources/${encodeURIComponent(source.source_key)}${query}`, { headers });
-  if (document.gateway_id !== target.gateway_id || document.source_key !== source.source_key) throw new Error('workspace_defaults 文档不属于目标 Gateway 来源');
+  const document = await owner.read(source.source_key);
   return bindingsAt(document.source_effective, ['plugins', 'workspace_defaults', 'entries']);
 }
 
 export async function readWorkspaceBindings(target: GatewayWorkspaceRequestTarget): Promise<PluginBinding[]> {
-  const listed = await listConfigSources(0, target);
+  const owner = new ConfigurationSourceOwner(target);
+  const listed = await owner.list();
   const source = listed.sources.filter(item => item.loaded && item.source_key).sort((a, b) => b.precedence - a.precedence)[0];
   if (!source?.source_key) throw new Error('工作区没有可读取插件绑定的配置来源');
-  const document = await getConfigSourceDocument(0, target, source.source_key);
+  const document = await owner.read(source.source_key);
   // 期望由原配置 owner 返回；Gateway 的异步交接回执只用于显示实际状态。
   return bindingsAt(document.source_effective, ['plugins', 'runtime', 'entries'])
     .map(binding => ({ ...binding, workspace_id: target.workspace_id }));
@@ -81,30 +76,12 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   editParameters = false, privateParameter?: PrivateParameter, check = () => {}): Promise<void> {
   check();
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
-  let document: ConfigDocument;
-  let route: { gateway_id: string; workspace_id?: string };
-  let source: Source;
-  let gatewaySource = false;
-  if (scope !== 'workspace') {
-    const query = gatewayTarget.gateway_connection_id ? `?gateway_connection_id=${encodeURIComponent(gatewayTarget.gateway_connection_id)}` : '';
-    const headers = targetHeader(gatewayTarget.gateway_id);
-    const listed = await gateway.request<GatewayConfigSourcesDTO>(`/api/gateway/config/sources${query}`, { headers });
-    const selected = await chooseSource(quickInput, listed.sources, '选择 Gateway 插件配置来源');
-    if (!selected) return;
-    source = selected;
-    route = { gateway_id: gatewayTarget.gateway_id };
-    document = await gateway.request<GatewayConfigSourceDocumentDTO>(
-      `/api/gateway/config/sources/${encodeURIComponent(source.source_key!)}${query}`, { headers });
-    gatewaySource = true;
-  } else {
-    if (!workspaceTarget) throw new Error('当前没有已选择的工作区');
-    route = workspaceTarget;
-    const listed = await listConfigSources(0, workspaceTarget);
-    const selected = await chooseSource(quickInput, listed.sources, '选择工作区插件配置来源');
-    if (!selected) return;
-    source = selected;
-    document = await getConfigSourceDocument(0, workspaceTarget, source.source_key!);
-  }
+  if (scope === 'workspace' && !workspaceTarget) throw new Error('当前没有已选择的工作区');
+  const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspaceTarget! : gatewayTarget);
+  const selected = await chooseSource(quickInput, (await owner.list()).sources, scope === 'workspace' ? '选择工作区插件配置来源' : '选择 Gateway 插件配置来源');
+  if (!selected) return;
+  const source = selected;
+  const document = await owner.read(source.source_key!);
   check();
   if (privateParameter || editParameters) {
     const bound = bindingsAt(document.effective, ['plugins', 'runtime', 'entries']).find(item => sameBinding(item, binding));
@@ -191,39 +168,17 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   }
   if (jsonc === document.jsonc) return;
   check();
-  const intent = Object.freeze({ ...route, source_key: source.source_key!, jsonc,
-    base_file_digest: document.file_digest, base_layer_revision: document.layer_revision, base_layer_digest: document.layer_digest,
-    expected_active_revision: document.active_revision, expected_active_digest: document.active_digest,
-    idempotency_key: crypto.randomUUID() }) as ConfigIntent;
-  let saved: ConfigDocument;
+  const intent = owner.intent(source.source_key!, jsonc, sourceBaseline(document));
   const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
   const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数' : '插件绑定';
-  if (gatewaySource) {
-    const query = gatewayTarget.gateway_connection_id ? `?gateway_connection_id=${encodeURIComponent(gatewayTarget.gateway_connection_id)}` : '';
-    const headers = targetHeader(gatewayTarget.gateway_id);
-    const key = encodeURIComponent(source.source_key!);
-    const preflight = await gateway.request<{ document?: GatewayConfigSourceDocumentDTO; changed_paths: string[] }>(
-      `/api/gateway/config/sources/${key}/preflight${query}`, { method: 'POST', headers, body: JSON.stringify(intent) });
-    if (!preflight.document || preflight.document.gateway_id !== gatewayTarget.gateway_id || preflight.document.source_key !== source.source_key) throw new Error('Gateway 配置预检回执归属不匹配');
-    const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存 Gateway ${confirmation}`, save: true,
-      description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
-    { title: '确认配置提交' });
-    if (!accepted?.save) return;
-    check();
-    saved = await gateway.request<GatewayConfigSourceDocumentDTO>(`/api/gateway/config/sources/${key}${query}`,
-      { method: 'PUT', headers, body: JSON.stringify(intent) });
-    if (saved.gateway_id !== gatewayTarget.gateway_id || saved.source_key !== source.source_key || saved.edit?.idempotency_key !== intent.idempotency_key) throw new Error('Gateway 配置保存回执归属不匹配');
-  } else {
-    const workspace = workspaceTarget!;
-    const preflight = await preflightConfigSource(0, workspace, intent as ConfigSourceEditRequest);
-    const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存工作区${confirmation}`, save: true,
-      description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
-    { title: '确认配置提交' });
-    if (!accepted?.save) return;
-    check();
-    saved = await saveConfigSource(0, workspace, intent as ConfigSourceEditRequest);
-    if (saved.edit?.idempotency_key !== intent.idempotency_key) throw new Error('工作区配置保存回执没有原提交身份');
-  }
+  const preflight = await owner.preflight(intent);
+  check();
+  const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存${scope === 'workspace' ? '工作区' : ' Gateway '}${confirmation}`, save: true,
+    description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
+  { title: '确认配置提交' });
+  if (!accepted?.save) return;
+  check();
+  const saved = await owner.save(intent);
   const state = saved.edit?.state;
   const detail = `${saved.edit?.source_saved ? '来源已保存' : '来源未确认保存'} · ${state}。${saved.status?.last_error ?? saved.status?.reason ?? ''}`;
   if (state === 'rejected' || state === 'recovery_required') {
