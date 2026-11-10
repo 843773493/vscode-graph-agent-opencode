@@ -15,6 +15,8 @@ from typing import BinaryIO, Literal, Protocol, TextIO, cast
 from anyio.abc import Process
 from anyio.streams.file import FileReadStream, FileWriteStream
 
+from app.runtime.windows_fs import process_working_directory
+
 
 class _NativeHandle(Protocol):
     def __int__(self) -> int: ...
@@ -142,7 +144,7 @@ def open_windows_process(command: Sequence[str], *, env: Mapping[str, str],
             executable = command[0] if ntpath.isabs(command[0]) else None
             process_handle, thread_handle, pid, _ = win32process.CreateProcess(executable, subprocess.list2cmdline(command),
                 None, None, True, win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW, dict(env),
-                str(cwd) if cwd is not None else None, startup)
+                process_working_directory(cwd), startup)
             process = cast(_NativeHandle, cast(object, process_handle))
             thread = cast(_NativeHandle, cast(object, thread_handle))
             owned.callback(abort_process, process)

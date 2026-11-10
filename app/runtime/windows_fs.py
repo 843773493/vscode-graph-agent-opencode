@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 _PRIVATE_SIDS = ("S-1-3-4", "S-1-5-18", "S-1-5-32-544")
+
+
+def process_working_directory(directory: str | Path | None) -> str | None:
+    """CreateProcess 的 cwd 仍受 MAX_PATH 限制；短名只改变同一目录的原生表示。"""
+    if directory is None:
+        return None
+    value = os.path.abspath(directory)
+    if len(value.encode("utf-16-le")) < 520:
+        return value
+    import win32api
+
+    with _native_errors(Path(value)):
+        shortened = win32api.GetShortPathName(value)
+    if len(shortened.encode("utf-16-le")) >= 520:
+        raise OSError(errno.ENAMETOOLONG, "Windows 进程工作目录超出 MAX_PATH，且没有可用的短路径", value)
+    return shortened
 
 
 @contextmanager

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import json
@@ -274,6 +275,42 @@ def test_log_close_failure_does_not_replace_startup_failure(
     assert any("error_type=OSError, errno=5" in note for note in failure.value.__notes__)
     assert all("/private/runtime" not in note for note in failure.value.__notes__)
     assert any(record.exc_info and record.exc_info[1] is cleanup_error for record in caplog.records)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows CreateProcess")
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_long_working_directory_starts_in_the_original_directory(
+    tmp_path: Path, asynchronous: bool,
+) -> None:
+    from app.core.atomic_fs import native_io_path
+    from app.runtime.windows_process import open_windows_process
+
+    directory = tmp_path
+    while len(str(directory)) < 280:
+        directory /= "插件工作目录 with spaces"
+    native_io_path(directory).mkdir(parents=True)
+    command = [sys.executable, "-c",
+        "from pathlib import Path; Path('relative-output.txt').write_text('same-directory', encoding='utf-8')"]
+    with (tmp_path / "child.log").open("w", encoding="utf-8") as output:
+        if asynchronous:
+            child = open_windows_process(command, cwd=directory, env=dict(os.environ),
+                stdout=output, stderr=output)
+            try:
+                assert await asyncio.wait_for(child.wait(), 10) == 0
+            finally:
+                if child.returncode is None:
+                    child.kill()
+                    await asyncio.wait_for(child.wait(), 10)
+                await child.aclose()
+        else:
+            process = _spawn_logged_process(command, log_file=output, cwd=directory, detached=True)
+            try:
+                assert process.wait(timeout=10) == 0
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+    assert (native_io_path(directory) / "relative-output.txt").read_text(encoding="utf-8") == "same-directory"
 
 
 @pytest.fixture

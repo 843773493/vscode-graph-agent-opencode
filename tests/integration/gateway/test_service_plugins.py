@@ -95,11 +95,11 @@ def plugin_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
     workspace = Path(integration_workspace_root_path)
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
-    config = commentjson.loads(config_path.read_text())
+    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     for provider in config["llm"]["providers"]:
         if "api_key" in provider:
             provider["api_key"] = "plugin-lifecycle-unused-key"
-    config_path.write_text(json.dumps(config))
+    config_path.write_text(json.dumps(config), encoding="utf-8")
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
         port=unused_tcp_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
@@ -345,7 +345,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
                 "package_id": "probe.tools", "package_version": version}).raise_for_status()
         assert inventory()["packages"] == []
     finally:
-        (context.artifacts_dir / "plugin-flow.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
+        (context.artifacts_dir / "plugin-flow.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @pytest.mark.parametrize("shared_package", [False, True], ids=["separate-packages", "same-package"])
@@ -358,11 +358,11 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
     home = context.boxteam_home_for_node(request.node.nodeid)
     config_path = install_test_workspace_config(workspace_root=workspace,
         config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
-    config = commentjson.loads(config_path.read_text())
+    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     for provider in config["llm"]["providers"]:
         if "api_key" in provider:
             provider["api_key"] = "cold-runtime-unused-key"
-    config_path.write_text(json.dumps(config))
+    config_path.write_text(json.dumps(config), encoding="utf-8")
     gateway = None
     bindings = [{"package_id": "cold.tools" if shared_package else f"cold.{runtime}", "package_version": "1.0.0",
         "plugin_id": runtime, "enabled": True} for runtime in ("node", "python")]

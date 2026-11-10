@@ -22,6 +22,7 @@ from app.gateway.runtime.process_groups import (
     _wait_until_closed,
 )
 from app.gateway.runtime.process_logs import ProcessLogFile, ProcessLogOwnership
+from app.runtime.windows_fs import process_working_directory
 
 logger = logging.getLogger(__name__)
 
@@ -613,7 +614,7 @@ def _spawn_logged_process(
         stage = "spawn"
         process = subprocess.Popen(
             command,
-            cwd=cwd,
+            cwd=process_working_directory(cwd) if os.name == "nt" else cwd,
             env=child_environment,
             stdin=subprocess.DEVNULL if detached else None,
             stdout=log_file,

@@ -30,6 +30,7 @@
   - 2026-11-10 启动中关闭顺序验收：真实 Gateway 原来源 PUT 开启，ready 屏障持有期间发出关闭；关闭尚未提交时等待同一 reload owner，开启先 active、关闭随后 active，关闭回执后 stopped／enabled=false／instance=null，仅一个实际启动且 PID 已退出。未发现已接受关闭后迟到 ready，不为未提交请求新增状态机；原启动 ready 期限为10秒，本屏障测试不作耗时基准。定向集成1 passed／17.23秒，Ruff与compileall通过；原件见 `out/tests/temp/2026/11/10/plugin_start_close_priority/artifacts/receipt.json`。停止总期限耗尽及跨平台竞争仍未验，2.6／14.5不勾完。
 
 - [ ] 2.7 验Backend重启、Gateway换代、候选失败及完整停机；仅原接管合同保留真实实例和日志归属，原journal判提交事实，失败不停止其他owner进程，不新增候选恢复器、跨owner补偿或全域持久参与者对账。
+  - 2026-11-10 Windows 实例目录启动：真实预构建 Python 插件开启曾在262字符的合法实例目录报 WinError267；同目录原路径和扩展路径均失败，系统短名对照成功。公共 Windows I/O 层以短名向 CreateProcess 交付同一 cwd，同步 Gateway 与异步 Job 两入口迁齐；无短名且仍超系统限制时明确拒绝，不改包／Home归属或借临时目录。真实 Windows 中文／空格长cwd两项及完整依赖包安装→调用→显式重启→再次调用通过，精确HTTP原件已回收；较宽批102 passed／10 skipped，同时有6 failed／8 errors的既有日志断言及进程关闭问题，交原Sol继续归因，不记全绿。Linux公共进程107 passed／2 skipped，双语言完整管理1 passed／54.36秒；三份生产源码Pyright零错误（16条Linux缺Windows实现源码告警）、Ruff通过。Windows双语言流程已过私有参数／重启／换版，在协议拒绝后关闭处失败，未称完整验收。准确命令、指纹、原始失败／成功记录见 `out/tests/temp/2026/11/10/plugin_windows_delivery/artifacts/verification.json`；源码外发行、真实Relay与原生客户端仍待验，宽项不勾完。
 
 ## 3. 自有包、来源占位与安装
 

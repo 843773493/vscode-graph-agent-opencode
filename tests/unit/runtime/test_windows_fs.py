@@ -52,6 +52,23 @@ def test_readonly_handle_denial_remains_a_permission_error(tmp_path: Path) -> No
         path.chmod(0o600)
 
 
+def test_long_process_directory_without_short_names_is_explicitly_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import errno
+
+    import win32api
+
+    directory = tmp_path
+    while len(str(directory)) < 280:
+        directory /= "long-directory"
+    monkeypatch.setattr(win32api, "GetShortPathName", lambda value: value)
+    with pytest.raises(OSError) as raised:
+        windows_fs.process_working_directory(directory)
+    assert raised.value.errno == errno.ENAMETOOLONG
+    assert raised.value.filename == str(directory)
+
+
 def test_exclusive_rename_keeps_both_files_on_conflict(tmp_path: Path) -> None:
     import pywintypes
 
