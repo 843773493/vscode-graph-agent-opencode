@@ -131,6 +131,7 @@ async def test_native_service_publishes_installed_package_identity(
 
 @pytest.mark.parametrize(("workspace_id", "binding_workspace", "expected_status"), [
     ("00000000-0000-4000-8000-000000000001", None, 502),
+    ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000001", 502),
     ("invalid", None, 422),
     ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", 422),
 ])
@@ -149,7 +150,7 @@ async def test_gateway_service_keeps_caller_workspace_separate_from_instance(
             headers={"X-BoxTeam-Workspace-Id": workspace_id})
     assert response.status_code == expected_status
     if expected_status == 502:
-        assert calls[0].headers["X-BoxTeam-Workspace-Id"] == workspace_id
+        assert calls[0].headers.get_list("X-BoxTeam-Workspace-Id") == [workspace_id]
     else:
         assert calls == []
 

@@ -158,7 +158,7 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
         headers.update({"X-Local-Token": token, "X-Request-ID": get_request_id(connection),
                         "X-BoxTeam-Gateway-Id": gateway_id})
         if binding.workspace_id is not None:
-            headers["X-BoxTeam-Workspace-Id"] = binding.workspace_id
+            headers["x-boxteam-workspace-id"] = binding.workspace_id
         if binding.package_id == "boxteam.developer-tools" and binding.plugin_id == "terminal" and not websocket:
             # PTY 管理只接受原生 Backend owner 通道；浏览器只持一次性 WS grant。
             if auth.kind != "local" or not isinstance(connection, Request):
