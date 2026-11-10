@@ -660,13 +660,15 @@ class GatewayPluginRuntime:
         self._publish()
         if slot.process is not None:
             deadline = time.monotonic() + 8
-            shutdown_error: httpx.HTTPError | None = None
+            shutdown_error: httpx.HTTPError | TimeoutError | None = None
             if slot.process.is_alive() and slot.receipt is not None:
                 try:
-                    response = await self.client.post(str(slot.base_url) + "/internal/plugin/shutdown",
-                        headers={"X-Local-Token": str(slot.token)}, timeout=max(0.01, deadline - time.monotonic()))
-                    response.raise_for_status()
-                except httpx.HTTPError as error:
+                    # 确认响应占剩余预算的一半，持续发送正文也不能挤掉实际进程回收。
+                    async with asyncio.timeout(max(0, (deadline - time.monotonic()) / 2)):
+                        response = await self.client.post(str(slot.base_url) + "/internal/plugin/shutdown",
+                            headers={"X-Local-Token": str(slot.token)}, timeout=None)
+                        response.raise_for_status()
+                except (httpx.HTTPError, TimeoutError) as error:
                     shutdown_error = error
             # 原 close 在优雅退出失败后还会核强制回收；两段共享剩余期限。
             await run_sync_shielded(slot.process.close, timeout_seconds=max(0, (deadline - time.monotonic()) / 2))
