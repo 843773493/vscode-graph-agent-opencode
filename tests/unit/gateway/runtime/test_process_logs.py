@@ -340,7 +340,7 @@ def logged_process(tmp_path: Path):
 def windows_service_log(tmp_path, monkeypatch, managed_process_stub_factory, windows_process_tree_stub):
     tree = windows_process_tree_stub
     root = tree.add_process(4321, parent_pid=None, starttime=1.0)
-    worker = tree.add_process(5001, parent_pid=4321, starttime=2.0)
+    tree.add_process(5001, parent_pid=4321, starttime=2.0)
     store = ProcessLogStore(tmp_path / "logs")
     stream = store.open("backend", 12345)
     process = managed_process_stub_factory(timeout_once=False)
@@ -352,22 +352,15 @@ def windows_service_log(tmp_path, monkeypatch, managed_process_stub_factory, win
     stream.begin_spawn()
     stream.ownership.bind_process(root.pid)
     managed = ManagedProcess(process, stream)
-    stopped = []
-    def stop(pid, *, force):
-        stopped.append((pid, force))
-        assert pid == root.pid
-        root.alive = worker.alive = False
-        process.returncode = 0
-    monkeypatch.setattr("app.gateway.runtime.process_lifecycle._taskkill_process_tree", stop)
     try:
-        yield store, managed, tree, stopped
+        yield store, managed, tree
     finally:
         stream.close()
         stream.release_ownership()
 
 
 def test_windows_writer_and_root_survive_detach_adopt_and_complete_close(windows_service_log) -> None:
-    store, managed, tree, stopped = windows_service_log
+    store, managed, tree = windows_service_log
     stream = managed.log_file
     sink = dict(stream.sink)
     inode = stream.ownership.path.stat().st_ino
@@ -383,7 +376,7 @@ def test_windows_writer_and_root_survive_detach_adopt_and_complete_close(windows
     adopted = AdoptedManagedProcess(5001, log_ownership=ownership)
     assert adopted.pid == 5001 and adopted.is_alive()
     adopted.close(timeout_seconds=0.01)
-    assert stopped == [(4321, False)]
+    assert tree.processes[4321].terminate_calls == tree.processes[5001].terminate_calls == 1
     assert not tree.processes[4321].alive
     assert not tree.processes[5001].alive
     assert not ownership.record_path.exists()
@@ -391,14 +384,14 @@ def test_windows_writer_and_root_survive_detach_adopt_and_complete_close(windows
 
 
 def test_windows_single_pid_record_keeps_root_equal_to_writer(windows_service_log) -> None:
-    store, managed, _tree, stopped = windows_service_log
+    store, managed, tree = windows_service_log
     managed.confirm_service_identity(4321)
     stream = managed.log_file
     assert "process_tree_root" not in stream.ownership.read()
     ownership = store.adopt("backend", 12345, {"pid": 4321, "log_sink": dict(stream.sink)})
     adopted = AdoptedManagedProcess(4321, log_ownership=ownership)
     adopted.close(timeout_seconds=0.01)
-    assert stopped == [(4321, False)]
+    assert tree.processes[4321].terminate_calls == 1
 
 
 @pytest.mark.parametrize(("fault", "error_type"), [
@@ -408,7 +401,7 @@ def test_windows_single_pid_record_keeps_root_equal_to_writer(windows_service_lo
     ("invalid-root", TypeError),
 ])
 def test_windows_adoption_rejects_changed_or_incomplete_tree_identity(windows_service_log, fault, error_type) -> None:
-    store, managed, tree, stopped = windows_service_log
+    store, managed, tree = windows_service_log
     managed.confirm_service_identity(5001)
     stream = managed.log_file
     record = stream.ownership.read()
@@ -431,13 +424,13 @@ def test_windows_adoption_rejects_changed_or_incomplete_tree_identity(windows_se
     with pytest.raises(error_type, match="不属于|已被替换|已变化|不完整|非法"):
         ownership = store.adopt("backend", 12345, {"pid": 5001, "log_sink": dict(stream.sink)})
         AdoptedManagedProcess(5001, log_ownership=ownership)
-    assert stopped == [] and tree.processes[5001].alive
+    assert tree.processes[5001].alive
 
 
 def test_writer_publication_failure_retains_original_record_and_owned_descendants(
     windows_service_log, monkeypatch,
 ) -> None:
-    _store, managed, tree, stopped = windows_service_log
+    _store, managed, tree = windows_service_log
     stream = managed.log_file
     before = stream.ownership.record_path.read_bytes()
     original = ProcessLogOwnership.write
@@ -455,7 +448,7 @@ def test_writer_publication_failure_retains_original_record_and_owned_descendant
     managed.process.returncode = 0
     managed.close(timeout_seconds=0.01)
     assert tree.processes[5001].terminate_calls == 1
-    assert not tree.processes[5001].alive and stopped == []
+    assert not tree.processes[5001].alive
     assert not stream.ownership.record_path.exists()
 
 

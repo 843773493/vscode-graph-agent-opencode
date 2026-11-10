@@ -237,27 +237,6 @@ def _terminate_windows_process_tree(
             ) from error
 
 
-# TODO(windows-graceful-stop): 未完成就绪／身份核验的无窗口服务仍走 taskkill /T，
-# 期限后 /F 回收须报告失败；已验证 Backend／Browser／Terminal 统一走原认证 HTTP。
-def _taskkill_process_tree(pid: int, *, force: bool) -> None:
-    arguments = ["taskkill", "/T"]
-    if force:
-        arguments.append("/F")
-    arguments.extend(["/PID", str(pid)])
-    result = subprocess.run(
-        arguments,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 and force and _windows_process_is_alive(pid):
-        raise RuntimeError(
-            "Windows 进程树清理失败: "
-            f"pid={pid}, force={force}, stderr={result.stderr.strip()}"
-        )
-
-
 def _windows_process_is_alive(pid: int) -> bool:
     """用系统进程 API 查询 Windows PID，避免周期性启动 tasklist 子进程。"""
     import psutil
@@ -515,11 +494,9 @@ class AdoptedManagedProcess:
         try:
             if os.name == "posix":
                 os.killpg(self.pid, signal.SIGTERM)
-            elif self._windows_root_is_alive():
-                _taskkill_process_tree(self._windows_root_pid, force=False)
             else:
                 _terminate_windows_process_tree(
-                    self._windows_descendant_start_times,
+                    self._windows_owned_process_start_times(),
                     force=False,
                 )
         except ProcessLookupError:
@@ -543,10 +520,8 @@ class AdoptedManagedProcess:
                 if os.name == "posix":
                     os.killpg(self.pid, signal.SIGKILL)
                 else:
-                    if self._windows_root_is_alive():
-                        _taskkill_process_tree(self._windows_root_pid, force=True)
                     _terminate_windows_process_tree(
-                        self._windows_descendant_start_times,
+                        self._windows_owned_process_start_times(),
                         force=True,
                     )
             except ProcessLookupError:
@@ -575,6 +550,12 @@ class AdoptedManagedProcess:
         if self._windows_root_start_time is not None:
             return _windows_process_tree_is_alive({self._windows_root_pid: self._windows_root_start_time})
         return _windows_process_is_alive(self._windows_root_pid)
+
+    def _windows_owned_process_start_times(self) -> WindowsProcessStartTimesByPid:
+        processes = dict(self._windows_descendant_start_times)
+        if self._windows_root_start_time is not None:
+            processes[self._windows_root_pid] = self._windows_root_start_time
+        return processes
 
     def _close_target_is_alive(self) -> bool:
         if os.name != "posix":

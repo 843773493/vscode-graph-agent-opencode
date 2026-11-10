@@ -20,7 +20,7 @@ from app.gateway.runtime.log_query import (
 @pytest.fixture
 def log_path(tmp_path: Path) -> Path:
     path = tmp_path / "backend.log"
-    path.write_text("未命中\n😀中文 needle 中 needle\r\n最后 needle", encoding="utf-8")
+    path.write_bytes("未命中\n😀中文 needle 中 needle\r\n最后 needle".encode())
     return path
 
 
@@ -91,7 +91,7 @@ def test_rotation_and_deletion_do_not_redirect_reference(log_path: Path) -> None
 
 def test_line_budget_provides_progress_without_false_complete(tmp_path: Path) -> None:
     path = tmp_path / "many.log"
-    path.write_text("ordinary\n" * 512 + "needle\n", encoding="utf-8")
+    path.write_bytes(("ordinary\n" * 512 + "needle\n").encode())
     budget = LogQueryBudget.create()
     first = query_runtime_log(path, "needle", limit=5, budget=budget)
     assert first.items == [] and first.limited_reason == "scan_limit"
@@ -147,3 +147,24 @@ def test_symbolic_link_is_not_a_diagnostic_log(log_path: Path) -> None:
     linked.symlink_to(log_path)
     with pytest.raises(RuntimeError, match="普通文件"):
         query_runtime_log(linked, "needle", limit=1, budget=LogQueryBudget.create())
+
+
+def test_cursor_and_exact_read_share_native_windows_file_identity(
+    log_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = ("volume-serial", "windows-file-index")
+    monkeypatch.setattr(
+        "app.gateway.runtime.log_query.runtime_log_path_identity",
+        lambda _path: identity,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.log_query.runtime_log_file_identity",
+        lambda _descriptor: identity,
+    )
+
+    page = query_runtime_log(log_path, "needle", limit=1, budget=LogQueryBudget.create())
+    reference = page.items[0].reference
+
+    assert page.observation.identity == (reference.device, reference.inode)
+    assert reference.device == identity[0] and reference.inode == identity[1]
+    assert read_runtime_log_record(log_path, reference) == "😀中文 needle 中 needle"

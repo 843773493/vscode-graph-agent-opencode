@@ -12,6 +12,11 @@ from pathlib import Path
 from time import monotonic, time
 from typing import BinaryIO, Literal
 
+from app.runtime.log_file_identity import (
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
+
 LogQueryLimit = Literal["result_limit", "scan_limit", "byte_limit", "deadline", "item_size_limit"]
 MAX_LOG_QUERY_LINES = 512
 MAX_LOG_QUERY_BYTES = 8 * 1024 * 1024
@@ -35,8 +40,8 @@ class LogFileObservation:
     changed_ns: int
 
     @classmethod
-    def from_stat(cls, value: os.stat_result) -> LogFileObservation:
-        return cls(str(value.st_dev), str(value.st_ino), value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    def from_stat(cls, value: os.stat_result, identity: tuple[str, str]) -> LogFileObservation:
+        return cls(*identity, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
     @property
     def identity(self) -> tuple[str, str]:
@@ -100,11 +105,13 @@ def open_runtime_log(path: Path) -> Iterator[tuple[BinaryIO, LogFileObservation]
     metadata = path.stat(follow_symlinks=False)
     if not stat.S_ISREG(metadata.st_mode):
         raise RuntimeError("诊断日志路径必须是普通文件，不能是符号链接")
-    before = LogFileObservation.from_stat(metadata)
     with path.open("rb") as stream:
-        opened = LogFileObservation.from_stat(os.fstat(stream.fileno()))
-        if opened != before:
+        identity = runtime_log_file_identity(stream.fileno())
+        if runtime_log_path_identity(path) != identity:
             raise _stale_cursor("file_changed", "诊断日志在打开时变化，请重新查询")
+        opened = LogFileObservation.from_stat(
+            os.fstat(stream.fileno()), identity,
+        )
         yield stream, opened
 
 
@@ -113,8 +120,9 @@ def _check_observation(path: Path, stream: BinaryIO, observation: LogFileObserva
         current = path.stat(follow_symlinks=False)
     except FileNotFoundError as error:
         raise _stale_cursor("file_deleted", "诊断日志已删除，请重新查询") from error
-    if not stat.S_ISREG(current.st_mode) or LogFileObservation.from_stat(current) != observation or (
-        LogFileObservation.from_stat(os.fstat(stream.fileno())) != observation
+    if not stat.S_ISREG(current.st_mode) or runtime_log_path_identity(path) != observation.identity or (
+        LogFileObservation.from_stat(os.fstat(stream.fileno()),
+            runtime_log_file_identity(stream.fileno())) != observation
     ):
         raise _stale_cursor("file_changed", "诊断日志已追加、轮转或改写，请重新查询")
 
@@ -210,7 +218,7 @@ def read_runtime_log_record(path: Path, reference: LogRecordReference) -> str:
             if not 0 <= reference.start < reference.end <= len(text):
                 raise stale("position_out_of_bounds", "运行日志命中位置已失效")
             current = path.stat(follow_symlinks=False)
-            if not stat.S_ISREG(current.st_mode) or LogFileObservation.from_stat(current).identity != observation.identity:
+            if not stat.S_ISREG(current.st_mode) or runtime_log_path_identity(path) != observation.identity:
                 raise stale("file_replaced", "原运行日志已轮转或替换")
             return text
     except FileNotFoundError as error:
