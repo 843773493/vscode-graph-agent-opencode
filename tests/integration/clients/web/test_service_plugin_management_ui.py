@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -18,6 +19,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -27,24 +29,43 @@ from tests.support.processes.gateway import (
 )
 
 
+@pytest.fixture
+def plugin_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    ports = integration_port_block_for_file(Path(request.node.path))
+    lease, probes = E2EProcessLease.acquire_available(
+        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json",
+        range(ports.port(20), ports.end + 1),
+    )
+    try:
+        (context.artifacts_dir / "port-allocation.json").write_text(json.dumps({
+            "gateway_port": lease.ports[0], "bind_probes": probes,
+        }, indent=2) + "\n", encoding="utf-8")
+        yield lease.ports[0]
+    finally:
+        lease.release()
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["single", "batch"])
 async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     web_workbench_assets: Path,
+    scenario: str,
+    plugin_gateway_port: int,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "插件管理 UI 验收需要真实 Chromium"
     workspace_root = Path(integration_workspace_root_path)
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    ports = integration_port_block_for_file(Path(request.node.fspath))
     config_path = Path(integration_workspace_config_path)
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
     for provider in configuration["llm"]["providers"]:
         if "api_key" in provider:
             provider["api_key"] = "plugin-ui-unused-key"
-    configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{ports.port(20)}"
+    configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{plugin_gateway_port}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "ui-plugin-package.zip"
     manifest = {
@@ -63,10 +84,17 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                      "credential": {"type": "string", "minLength": 8, "writeOnly": True}}}}},
         ],
     }
+    if scenario == "batch":
+        manifest["plugins"].append({
+            "id": "workspace-required", "name": "缺少必填参数", "instance_scope": "workspace",
+            "requires": [{"extension_point": "configuration", "version": 1}],
+            "contributes": {"configuration": {"type": "object", "required": ["label"],
+                "properties": {"label": {"type": "string"}}}},
+        })
     with ZipFile(package_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
-        port=ports.port(20), boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+        port=plugin_gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
@@ -75,22 +103,27 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert workspace_list["active_workspace"]
             assert workspace_list["active_workspace"]["gateway_id"] == health["gateway_id"]
         result_path = context.artifacts_dir / "plugin-management-ui.json"
+        driver = "tests/integration/clients/web/" + ("plugin_batch_management_ui.mjs" if scenario == "batch" else "service_plugin_management_ui.mjs")
         environment = os.environ | {
             "BOXTEAM_PLUGIN_UI_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
                 "packagePath": str(package_path), "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
         }
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
-            run = await asyncio.to_thread(subprocess.run, ["bun", "tests/integration/clients/web/service_plugin_management_ui.mjs"],
+            run = await asyncio.to_thread(subprocess.run, ["bun", driver],
                 cwd=Path.cwd(), env=environment | temporary, capture_output=True, text=True, timeout=210, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(run.stdout, encoding="utf-8")
         (context.artifacts_dir / "browser.stderr.raw").write_text(run.stderr, encoding="utf-8")
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"exit_code": run.returncode,
-            "command": ["bun", "tests/integration/clients/web/service_plugin_management_ui.mjs"]}, indent=2) + "\n", encoding="utf-8")
+            "command": ["bun", driver]}, indent=2) + "\n", encoding="utf-8")
         assert run.returncode == 0, f"真实插件管理 UI 失败：\n{run.stdout}\n{run.stderr}\n{result_path}"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["phase"] == "complete" and not result["pageErrors"]
-        assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
-        assert result["installed"] and result["uninstalled"]
+        if scenario == "batch":
+            assert result["targetFrozen"] and result["partialFailure"] and result["lostResponseQueried"]
+            assert result["defaultsOnly"] and result["cancelledWithoutWrite"]
+        else:
+            assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
+            assert result["installed"] and result["uninstalled"]
     finally:
         close_gateway_process(gateway)

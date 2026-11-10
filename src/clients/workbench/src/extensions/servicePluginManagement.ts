@@ -11,6 +11,7 @@ import { IThemeService } from '../../upstream/src/vs/platform/theme/common/theme
 import { IHoverService } from '../../upstream/src/vs/platform/hover/browser/hover.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
+import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { timeout } from '../../upstream/src/vs/base/common/async.js';
@@ -21,7 +22,7 @@ import { managementGateway, onDidChangeExtensionManagementTarget } from '../mana
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 
-import { manageConfig, readWorkspaceDefaults, readWorkspaceBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
+import { manageConfig, setPluginBindings, readWorkspaceDefaults, readWorkspaceBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
 
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -45,7 +46,8 @@ export class ServicePluginPackagesView extends ViewPane {
     @IQuickInputService private readonly quickInput: IQuickInputService,
     @INotificationService private readonly notifications: INotificationService,
     @ICommandService private readonly commands: ICommandService,
-    @IProgressService private readonly progress: IProgressService) {
+    @IProgressService private readonly progress: IProgressService,
+    @IDialogService private readonly dialogs: IDialogService) {
     super(options, keybindings, contextMenu, configuration, contextKeys, descriptors, instantiation, opener, theme, hover);
     this._register(onDidChangeExtensionManagementTarget(() => {
       this.refreshRevision++;
@@ -79,8 +81,7 @@ export class ServicePluginPackagesView extends ViewPane {
     });
     const install = append(this.controls, $('button'));
     install.textContent = '安装插件包';
-    install.addEventListener('click', () => void this.commands.executeCommand('boxteam.plugins.installPackage')
-      .catch(error => this.notifications.error(errorsText(error))));
+    install.addEventListener('click', () => void this.runOperation(() => this.commands.executeCommand('boxteam.plugins.installPackage')));
     this.content = append(container, $('.service-plugin-packages-content'));
     void this.refresh();
   }
@@ -157,6 +158,40 @@ export class ServicePluginPackagesView extends ViewPane {
       append(packageSection, $('h3')).textContent = `${manifest.name} · ${manifest.package_id}@${manifest.version}`;
       append(packageSection, $('p')).textContent = manifest.description ?? '';
       const packageActions = append(packageSection, $('.service-plugin-package-actions'));
+      const batchButtons = [true, false].map(enabled => {
+        const button = append(packageActions, $('button')) as HTMLButtonElement;
+        button.textContent = enabled ? '全部启用此范围' : '全部停用此范围';
+        button.addEventListener('click', () => void this.runOperation(async () => {
+          batchButtons.forEach(item => { item.disabled = true; });
+          try {
+            const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
+            const owner = `Gateway ${target.gateway_id} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
+            const confirmation = await this.dialogs.confirm({ message: `${enabled ? '启用' : '停用'} ${manifest.package_id}@${manifest.version} 的当前范围插件？`,
+              detail: `${owner}\n纳入：${matching.map(plugin => plugin.id).join('、')}\n排除（固定范围不匹配）：${excluded.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、') || '无'}\n`
+                + (scope === 'defaults' ? '仅修改以后新建工作区的默认值，不操作当前实例。' : '每个插件独立提交，失败不回滚已完成的操作。'),
+              primaryButton: enabled ? '全部启用此范围' : '全部停用此范围' });
+            if (!confirmation.confirmed) return;
+            const results = await setPluginBindings(scope, target, workspace, this.quickInput,
+              matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled })), enabled);
+            if (!results) return;
+            let current: PluginRuntimeStatusDTO | undefined, readError: string | undefined;
+            if (scope !== 'defaults') {
+              try { current = await gateway.request<PluginRuntimeStatusDTO>('/api/gateway/service-plugins/status', { method: 'POST', body: JSON.stringify(pluginTarget) }); }
+              catch (error) { readError = errorsText(error); }
+            }
+            const lines = results.map(({ binding: item, configuration }) => {
+              const actual = current?.plugins.find(slot => slot.binding?.package_id === item.package_id
+                && slot.binding.plugin_id === item.plugin_id && slot.binding.package_version === item.package_version
+                && (scope === 'workspace' ? slot.binding.workspace_id === workspace?.workspace_id : slot.binding.workspace_id == null));
+              const state = scope === 'defaults' ? '仅修改新建默认值，未操作当前实例' : readError ? `运行状态读取失败：${readError}`
+                : actual ? `${actual.binding?.enabled ? '启用' : '停用'} · ${actual.declarative ? '声明式，无运行实例' : actual.state}${actual.error ? ` · ${actual.error}` : ''}${actual.instance ? ` · 实例 ${actual.instance.instance_id}` : ''}` : '未发布运行状态';
+              return `${owner} · ${item.package_id}/${item.plugin_id}@${item.package_version}\n配置：${configuration}\n实际：${state}`;
+            });
+            await this.dialogs.info('插件批量操作结果', lines.join('\n\n'));
+          } finally { batchButtons.forEach(item => { item.disabled = false; }); }
+        }));
+        return button;
+      });
       const installInput = append(packageActions, $('button'));
       installInput.textContent = '重新安装/更新';
       installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, this.progress, pluginTarget)));
@@ -179,7 +214,7 @@ export class ServicePluginPackagesView extends ViewPane {
           this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status); });
         append(row, $('span')).textContent = scope === 'defaults'
           ? `${binding?.enabled ? '新建时启用' : binding ? '新建时停用' : '未加入默认值'} · 不代表已运行`
-          : `${binding?.enabled ? '启用' : '停用'} · ${status?.state ?? (plugin.runtime ? '未运行' : '声明式')}`;
+          : `${binding?.enabled ? '启用' : '停用'} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}`;
         if (revision === this.refreshRevision && this.selected?.packageId === manifest.package_id && this.selected.pluginId === plugin.id && this.selected.version === manifest.version) {
           this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status);
         }
@@ -197,7 +232,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const details = append(container, $('section.service-plugin-details'));
     append(details, $('h3')).textContent = `${manifest.package_id}/${plugin.id}`;
     append(details, $('p')).textContent = scope === 'defaults' ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
-      : `${plugin.instance_scope} · ${status?.state ?? '未运行'}${status?.error ? ` · ${status.error}` : ''}`;
+      : `${plugin.instance_scope} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}${status?.error ? ` · ${status.error}` : ''}`;
     append(details, $('p')).textContent = `Gateway ${target.gateway_id}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
     const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
     const toggle = append(details, $('button'));

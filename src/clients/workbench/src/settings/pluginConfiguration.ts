@@ -11,7 +11,7 @@ import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspa
 import { gateway } from '../agentApi.js';
 import { managementGateway } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { ConfigurationSourceOwner, sourceBaseline, type SourceDocument } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
 type ConfigDocument = SourceDocument;
@@ -35,6 +35,15 @@ function sourceBindings(document: ConfigDocument, path: string[]): PluginBinding
   return bindingsAt(parse(document.jsonc), path);
 }
 
+function bindingJsonc(document: ConfigDocument, path: string[], binding: ConfigurationBinding, enabled: boolean | null): string {
+  const updated = sourceBindings(document, path).slice();
+  const index = updated.findIndex(item => sameBinding(item, binding));
+  if (enabled === null) { if (index >= 0) updated.splice(index, 1); }
+  else if (index < 0) updated.push({ ...binding, enabled });
+  else updated[index] = { ...binding, enabled };
+  return updateJsonc(document.jsonc, path, updated);
+}
+
 function bindingsAt(value: unknown, path: string[]): PluginBinding[] {
   let current: unknown = value;
   for (const key of path) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
@@ -49,6 +58,25 @@ async function chooseSource(quickInput: IQuickInputService, sources: Source[], t
     detail: source.uri ?? undefined, source,
   })), { title, placeHolder: '选择原配置来源；写入仍由来源 owner 的 CAS 决定', canPickMany: false });
   return selected?.source;
+}
+
+type SourceSaveResult = { document: SourceDocument } | { error: string };
+
+async function saveSourceEdit(owner: ConfigurationSourceOwner,
+  intent: ReturnType<ConfigurationSourceOwner['intent']>): Promise<SourceSaveResult> {
+  try {
+    return { document: await owner.save(intent) };
+  } catch (saveError) {
+    const original = saveError instanceof Error ? saveError.message : String(saveError);
+    try {
+      const document = await owner.read(intent.source_key, intent.idempotency_key);
+      if (document.edit) return { document };
+      return { error: `保存结果未确认 · 原提交 ${intent.idempotency_key} 查询未找到 edit 记录 · 原错误：${original} · 不会重放` };
+    } catch (readError) {
+      const query = readError instanceof Error ? readError.message : String(readError);
+      return { error: `保存结果未确认 · 原提交 ${intent.idempotency_key} 查询失败：${query} · 原错误：${original} · 不会重放` };
+    }
+  }
 }
 
 export async function readWorkspaceDefaults(target: ReturnType<typeof managementGateway>): Promise<PluginBinding[]> {
@@ -69,6 +97,43 @@ export async function readWorkspaceBindings(target: GatewayWorkspaceRequestTarge
   // 期望由原配置 owner 返回；Gateway 的异步交接回执只用于显示实际状态。
   return bindingsAt(document.source_effective, ['plugins', 'runtime', 'entries'])
     .map(binding => ({ ...binding, workspace_id: target.workspace_id }));
+}
+
+export async function setPluginBindings(scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,
+  quickInput: IQuickInputService, bindings: ConfigurationBinding[], enabled: boolean): Promise<{ binding: ConfigurationBinding; configuration: string }[] | undefined> {
+  if (scope === 'workspace' && !workspace) throw new Error('当前没有已选择的工作区');
+  const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspace! : target);
+  let selected: Source | undefined;
+  try {
+    selected = await chooseSource(quickInput, (await owner.list()).sources,
+      scope === 'workspace' ? '选择工作区插件配置来源' : '选择 Gateway 插件配置来源');
+  } catch (error) {
+    return bindings.map(binding => ({ binding, configuration: `未提交 · ${error instanceof Error ? error.message : String(error)}` }));
+  }
+  if (!selected?.source_key) return;
+  const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
+  const results: { binding: ConfigurationBinding; configuration: string }[] = [];
+  for (const binding of bindings) {
+    let intent: ReturnType<ConfigurationSourceOwner['intent']>;
+    try {
+      // 每项重新取得来源基线；独立提交保留部分成功，不重试冲突或回滚兄弟插件。
+      const document = await owner.read(selected.source_key);
+      if (!document.writable) throw new Error(`配置来源 ${selected.source_key} 只读`);
+      const jsonc = bindingJsonc(document, path, binding, enabled);
+      if (jsonc === document.jsonc) {
+        results.push({ binding, configuration: `无需修改 · ${sourceStatus(document)}` });
+        continue;
+      }
+      intent = owner.intent(selected.source_key, jsonc, sourceBaseline(document));
+      await owner.preflight(intent);
+    } catch (error) {
+      results.push({ binding, configuration: `未提交 · ${error instanceof Error ? error.message : String(error)}` });
+      continue;
+    }
+    const saved = await saveSourceEdit(owner, intent);
+    results.push({ binding, configuration: 'document' in saved ? sourceStatus(saved.document) : saved.error });
+  }
+  return results;
 }
 
 export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
@@ -158,27 +223,28 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
     }
     jsonc = updateJsonc(document.jsonc, parameterPath, values);
   } else {
-    const original = sourceBindings(document, path);
-    const index = original.findIndex(item => sameBinding(item, binding));
-    const updated = original.slice();
-    if (enabled === null) { if (index >= 0) updated.splice(index, 1); }
-    else if (index < 0) updated.push({ ...binding, enabled });
-    else updated[index] = { ...binding, enabled };
-    jsonc = updateJsonc(document.jsonc, path, updated);
+    jsonc = bindingJsonc(document, path, binding, enabled);
   }
   if (jsonc === document.jsonc) return;
   check();
   const intent = owner.intent(source.source_key!, jsonc, sourceBaseline(document));
   const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
   const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数' : '插件绑定';
-  const preflight = await owner.preflight(intent);
+  let preflight: Awaited<ReturnType<typeof owner.preflight>>;
+  try { preflight = await owner.preflight(intent); }
+  catch (error) {
+    notification.error(`未提交 · ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
   check();
   const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存${scope === 'workspace' ? '工作区' : ' Gateway '}${confirmation}`, save: true,
     description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
   { title: '确认配置提交' });
   if (!accepted?.save) return;
   check();
-  const saved = await owner.save(intent);
+  const result = await saveSourceEdit(owner, intent);
+  if ('error' in result) { notification.error(result.error); return; }
+  const saved = result.document;
   const state = saved.edit?.state;
   const detail = `${saved.edit?.source_saved ? '来源已保存' : '来源未确认保存'} · ${state}。${saved.status?.last_error ?? saved.status?.reason ?? ''}`;
   if (state === 'rejected' || state === 'recovery_required') {
