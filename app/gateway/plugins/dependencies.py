@@ -143,7 +143,7 @@ def validate_prebuilt_dependencies(root: Path, *, runtimes: set[str], digest: st
     node_modules = root / "node_modules"
     if node_manifest.is_file():
         manifest = json.loads(node_manifest.read_text(encoding="utf-8"))
-        locked_versions = _validate_node_lock(node_manifest, node_lock) if node_lock.is_file() else {}
+        locked_packages = _validate_node_lock(node_manifest, node_lock) if node_lock.is_file() else {}
         declared = _node_requirements(manifest)
         if declared and "node" not in runtimes:
             raise ValueError("仅 Node 代码插件可包含 Node 运行依赖")
@@ -151,10 +151,10 @@ def validate_prebuilt_dependencies(root: Path, *, runtimes: set[str], digest: st
             raise ValueError("声明 Node 运行依赖时必须同时提供 bun.lock")
         if declared and not node_modules.is_dir():
             raise ValueError("Node 插件缺少已准备的 node_modules")
-        if not declared.issubset(locked_versions):
+        if not declared.issubset(locked_packages):
             raise ValueError("Bun 锁文件缺少 package.json 声明的依赖")
         if node_modules.exists():
-            _validate_node_modules(root, manifest, locked_versions)
+            _validate_node_modules(root, manifest, locked_packages)
     elif node_lock.exists() or node_modules.exists():
         raise ValueError("Node bun.lock 与 node_modules 必须由同包 package.json 声明")
     if cache_key is not None:
@@ -231,7 +231,7 @@ def _locked_requirement(value: object) -> str:
     return f"{name}[{','.join(extras)}]{specifier}" + (f" ; {marker}" if marker else "")
 
 
-def _validate_node_lock(manifest_path: Path, lock_path: Path) -> dict[str, set[str]]:
+def _validate_node_lock(manifest_path: Path, lock_path: Path) -> dict[str, set[tuple[str, str]]]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     lock = commentjson.loads(lock_path.read_text(encoding="utf-8"))
     if lock.get("lockfileVersion") != 1 or not isinstance(lock.get("workspaces", {}).get(""), dict):
@@ -245,7 +245,7 @@ def _validate_node_lock(manifest_path: Path, lock_path: Path) -> dict[str, set[s
     packages = lock.get("packages", {})
     if not isinstance(packages, dict):
         raise TypeError("Bun 锁文件 packages 必须是对象")
-    versions: dict[str, set[str]] = {}
+    packages_by_reference: dict[str, set[tuple[str, str]]] = {}
     for key, package in packages.items():
         if not isinstance(package, list) or len(package) != 4 or not isinstance(package[0], str):
             raise ValueError("Bun 锁文件只允许带完整性摘要的 registry 依赖")
@@ -265,9 +265,10 @@ def _validate_node_lock(manifest_path: Path, lock_path: Path) -> dict[str, set[s
                 raise ValueError("Bun 锁文件不支持本机路径或 workspace 依赖")
         if not isinstance(key, str):
             raise TypeError("Bun 锁文件 package key 必须是字符串")
-        versions.setdefault(key, set()).add(version)
-        versions.setdefault(name, set()).add(version)
-    return versions
+        package_identity = (name, version)
+        packages_by_reference.setdefault(key, set()).add(package_identity)
+        packages_by_reference.setdefault(name, set()).add(package_identity)
+    return packages_by_reference
 
 
 def _node_dependency_sets(manifest: dict[str, object]) -> tuple[set[str], set[str]]:
@@ -317,7 +318,7 @@ def _resolve_node_package(root: Path, owner: Path, name: str) -> Path | None:
 
 
 def _validate_node_modules(root: Path, manifest: dict[str, object],
-                           locked_versions: dict[str, set[str]]) -> None:
+                           locked_packages: dict[str, set[tuple[str, str]]]) -> None:
     required, optional = _node_dependency_sets(manifest)
     pending: list[tuple[Path, str, bool]] = []
     pending.extend((root, name, True) for name in required)
@@ -340,9 +341,9 @@ def _validate_node_modules(root: Path, manifest: dict[str, object],
         if not isinstance(installed, dict):
             raise TypeError(f"Node 插件依赖 package.json 必须是对象: {name}")
         installed_name, installed_version = installed.get("name"), installed.get("version")
-        locked_versions_for_package = locked_versions.get(name, set())
+        locked_packages_for_dependency = locked_packages.get(name, set())
         if (not isinstance(installed_name, str) or not isinstance(installed_version, str)
-                or installed_version not in locked_versions_for_package):
+                or (installed_name, installed_version) not in locked_packages_for_dependency):
             raise ValueError(f"Node 插件依赖版本与 bun.lock 不一致: {name}")
         dependencies, optional_dependencies = _node_dependency_sets(installed)
         pending.extend((package, dependency, True) for dependency in dependencies)

@@ -165,6 +165,67 @@ def test_missing_node_transitive_dependency_rejects_before_publish(
     assert not (tmp_path / "packages/prebuilt.node/1.0.0").exists()
 
 
+def test_node_package_name_must_match_the_locked_dependency_identity_before_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("测试主机没有 Node")
+    target = native_plugin_target("node")
+    monkeypatch.setenv("BOXTEAM_NODE_BIN", str(Path(node).resolve(strict=True)))
+    monkeypatch.setattr(dependencies, "_node_runtime", lambda _path: target["node"])
+    complete = tmp_path / "complete.zip"
+    _node_archive(complete)
+    mismatched = tmp_path / "mismatched-package-name.zip"
+    with zipfile.ZipFile(complete) as source, zipfile.ZipFile(mismatched, "w") as output:
+        for entry in source.infolist():
+            content = source.read(entry.filename)
+            if entry.filename == "node_modules/node-dependency/package.json":
+                package = json.loads(content)
+                package["name"] = "different-package"
+                content = json.dumps(package).encode()
+            output.writestr(entry.filename, content)
+
+    store = PluginPackageStore(tmp_path / "packages")
+    with pytest.raises(ValueError, match="版本与 bun.lock 不一致"):
+        store.install_zip(mismatched)
+    assert not (tmp_path / "packages/prebuilt.node/1.0.0").exists()
+
+
+def test_node_alias_uses_locked_package_identity_and_remains_installable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("测试主机没有 Node")
+    target = native_plugin_target("node")
+    monkeypatch.setenv("BOXTEAM_NODE_BIN", str(Path(node).resolve(strict=True)))
+    monkeypatch.setattr(dependencies, "_node_runtime", lambda _path: target["node"])
+    complete = tmp_path / "complete.zip"
+    _node_archive(complete)
+    alias_archive = tmp_path / "alias.zip"
+    with zipfile.ZipFile(complete) as source, zipfile.ZipFile(alias_archive, "w") as output:
+        for entry in source.infolist():
+            name, content = entry.filename, source.read(entry.filename)
+            if name == "package.json":
+                package = json.loads(content)
+                package["dependencies"] = {"dependency-alias": "npm:node-dependency@1.0.0"}
+                content = json.dumps(package).encode()
+            elif name == "bun.lock":
+                lock = json.loads(content)
+                lock["workspaces"][""]["dependencies"] = {
+                    "dependency-alias": "npm:node-dependency@1.0.0",
+                }
+                lock["packages"]["dependency-alias"] = lock["packages"].pop("node-dependency")
+                content = json.dumps(lock).encode()
+            elif name.startswith("node_modules/node-dependency/"):
+                name = name.replace("node_modules/node-dependency/", "node_modules/dependency-alias/", 1)
+            output.writestr(name, content)
+
+    installed = PluginPackageStore(tmp_path / "packages").install_zip(alias_archive)
+    assert (installed.root / "node_modules/dependency-alias/package.json").is_file()
+
+
 def test_missing_python_transitive_dependency_rejects_before_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = native_plugin_target("python")
     monkeypatch.setattr(dependencies, "_python_runtime", lambda _path: target["python"])
