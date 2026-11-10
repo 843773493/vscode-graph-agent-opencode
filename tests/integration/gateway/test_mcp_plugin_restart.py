@@ -23,11 +23,11 @@ from tests.support.plugin_package import install_plugin_async
 
 
 async def test_explicit_plugin_restart_invalidates_old_instance_without_automatic_replay(
-    mcp_plugin_case: McpPluginCase,
+    mcp_plugin_case: McpPluginCase, prepared_mcp_stdio_package: Path,
 ):
     case = mcp_plugin_case
     artifacts = case.context.artifacts_dir
-    archive = _package(artifacts / "mcp-stdio.zip")
+    archive = _package(artifacts / "mcp-stdio.zip", prepared_mcp_stdio_package)
     await install_plugin_async(
         lambda path, payload: case.client.post(path, json=payload),
         gateway_id=case.gateway_id,

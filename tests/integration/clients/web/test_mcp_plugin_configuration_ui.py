@@ -38,11 +38,11 @@ def mcp_ui_assets(web_workbench_assets: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_add_plugin_service_and_http_from_original_workbench(
-    mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory,
+    mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory, prepared_mcp_stdio_package: Path,
 ) -> None:
     case = mcp_plugin_case
     artifacts = case.context.artifacts_dir
-    archive = _package(artifacts / "mcp-stdio.zip")
+    archive = _package(artifacts / "mcp-stdio.zip", prepared_mcp_stdio_package)
     await install_plugin_async(lambda path, body: case.client.post(path, json=body),
         gateway_id=case.gateway_id, path=str(archive),
         expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest())

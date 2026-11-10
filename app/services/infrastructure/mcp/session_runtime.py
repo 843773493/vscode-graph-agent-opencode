@@ -25,6 +25,7 @@ from app.services.infrastructure.mcp.oauth import (
 )
 from app.services.infrastructure.mcp.private_inputs import McpPrivateInputStore
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
+from app.services.infrastructure.mcp.tool_definitions import PluginToolSource
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -98,11 +99,12 @@ class _GatewayMcpResponseStream(httpx.AsyncByteStream):
 
 
 class _McpServerSession:
-    def __init__(self, session: ClientSession) -> None:
+    def __init__(self, session: ClientSession, source: PluginToolSource | None = None) -> None:
         self._session = session
+        self._source = source
 
     async def list_tools(self) -> list[BaseTool]:
-        return await list_mcp_tools(self._session)
+        return await list_mcp_tools(self._session, source=self._source)
 
     def supports_tool_list_changed(self) -> bool:
         capabilities = self._session.get_server_capabilities()
@@ -121,6 +123,7 @@ async def production_mcp_session_factory(
     config_service: ConfigService | None = None,
 ) -> AsyncIterator[McpServerSessionPort]:
     auth = oauth_provider
+    route_identity: dict[str, str] = {}
     if server.oauth is not None and auth is None:
         if workspace_root is None:
             raise ValueError("MCP OAuth session 必须显式指定所属工作区")
@@ -147,21 +150,23 @@ async def production_mcp_session_factory(
             "X-BoxTeam-Gateway-Id": service_ref.gateway_id,
             TARGET_GATEWAY_ID_HEADER: service_ref.gateway_id,
         }
-        route_identity: dict[str, str] = {}
-
         async def pin_instance(request: httpx.Request) -> None:
             instance_id = route_identity.get("instance_id")
             if instance_id is not None:
                 request.headers["X-BoxTeam-Plugin-Instance-Id"] = instance_id
 
         async def capture_instance(response: httpx.Response) -> None:
-            instance_id = response.headers.get("X-BoxTeam-Plugin-Instance-Id")
-            if response.is_success and not instance_id:
-                raise ValueError("Gateway MCP 插件响应缺少实际实例身份")
-            if instance_id is not None:
-                previous = route_identity.setdefault("instance_id", instance_id)
-                if previous != instance_id:
-                    raise McpPluginInstanceChanged("Gateway MCP 请求改投了不同插件实例")
+            if not response.is_success:
+                return
+            if response.headers.get("X-BoxTeam-Plugin-Gateway-Id") != service_ref.gateway_id:
+                raise McpPluginInstanceChanged("Gateway MCP 插件响应来自不同目标")
+            for key, header in (("instance_id", "X-BoxTeam-Plugin-Instance-Id"),
+                                ("package_digest", "X-BoxTeam-Plugin-Package-Digest")):
+                value = response.headers.get(header)
+                if not value:
+                    raise ValueError(f"Gateway MCP 插件响应缺少实际来源身份: {header}")
+                if route_identity.setdefault(key, value) != value:
+                    raise McpPluginInstanceChanged("Gateway MCP 请求改投了不同插件实例或包")
 
         client = httpx.AsyncClient(
             headers=headers,
@@ -224,7 +229,12 @@ async def production_mcp_session_factory(
                 CancellableMcpClientSession(read, write, message_handler=message_handler) as session,
             ):
                 await session.initialize()
-                yield _McpServerSession(session)
+                source = None
+                if server.service is not None:
+                    source = PluginToolSource.from_metadata({
+                        **server.service.model_dump(), **route_identity, "contract_version": 1,
+                    })
+                yield _McpServerSession(session, source)
         except* (httpx.HTTPError, McpPluginInstanceChanged) as error:
             # SDK task group 已排空；还须等外层 client 正常关闭，才能确认本地释放。
             # 混合异常的其余原因仍直接抛出，不把真实清理失败归为通信失败。

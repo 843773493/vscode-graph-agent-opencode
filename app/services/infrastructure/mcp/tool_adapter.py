@@ -21,12 +21,13 @@ from app.services.infrastructure.mcp.invocation import (
     confirm_mcp_result,
     mcp_call_scope,
 )
+from app.services.infrastructure.mcp.tool_definitions import PluginToolSource
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 from mcp.shared.exceptions import McpError
 
 
-def _adapt_tool(session: ClientSession, definition: mcp_types.Tool) -> BaseTool:
+def _adapt_tool(session: ClientSession, definition: mcp_types.Tool, source: PluginToolSource | None) -> BaseTool:
     model_tool_schema_validator(definition.inputSchema)
 
     async def invoke(tool_call_id: str, tool_name: str, arguments: dict[str, object], /):
@@ -90,6 +91,11 @@ def _adapt_tool(session: ClientSession, definition: mcp_types.Tool) -> BaseTool:
 
     annotations = definition.annotations.model_dump() if definition.annotations is not None else {}
     metadata = {**annotations, **({"_meta": definition.meta} if definition.meta is not None else {})}
+    # 来源由本地已认证的插件路由交付，远端 annotations 不能自称产品或插件工具。
+    metadata.pop("plugin_tool_source", None)
+    metadata.pop("product_tool_contract", None)
+    if source is not None:
+        metadata["plugin_tool_source"] = source.to_dict()
     return CallBoundStructuredTool(
         name=definition.name,
         description=definition.description or "",
@@ -101,14 +107,14 @@ def _adapt_tool(session: ClientSession, definition: mcp_types.Tool) -> BaseTool:
     )
 
 
-async def list_mcp_tools(session: ClientSession) -> list[BaseTool]:
+async def list_mcp_tools(session: ClientSession, *, source: PluginToolSource | None = None) -> list[BaseTool]:
     """完整读取后才返回；重复 cursor 和任何无效定义均使整次刷新失败。"""
     tools: list[BaseTool] = []
     cursor: str | None = None
     seen: set[str] = set()
     while True:
         page = await session.list_tools(cursor=cursor)
-        tools.extend(_adapt_tool(session, definition) for definition in page.tools)
+        tools.extend(_adapt_tool(session, definition, source) for definition in page.tools)
         cursor = page.nextCursor
         if cursor is None:
             return tools

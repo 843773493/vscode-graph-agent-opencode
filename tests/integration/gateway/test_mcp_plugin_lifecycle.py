@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import sys
+import zipfile
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ import httpx
 import psutil
 import pytest
 
+from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -38,6 +40,9 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.trace import get_trace_payload
+
+SKILL_NAME = "mcp-plugin-probe-guide"
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,22 @@ async def mcp_plugin_case(
 
 def _package(path: Path, prepared_package: Path) -> Path:
     path.write_bytes(prepared_package.read_bytes())
+    return path
+
+
+def _skill_package(path: Path, prepared_package: Path) -> Path:
+    # 复用完整运行依赖，仅在测试包声明中加入真实服务工具关联。
+    with zipfile.ZipFile(prepared_package) as source, zipfile.ZipFile(path, "w") as archive:
+        manifest = commentjson.loads(source.read("plugin.jsonc").decode())
+        plugin, = manifest["plugins"]
+        plugin["requires"].append({"extension_point": "skills", "version": 1})
+        plugin["contributes"]["skills"] = [{"id": "probe-guide", "path": "guides/probe", "tool_bindings": [{
+            "tool_id": "mcp__probe__probe", "service_id": "mcp", "contract_version": 1,
+            "schema_hash": extension_schema_hash({"type": "object", "description": "完整输入契约"}),
+        }]}]
+        for entry in source.infolist():
+            archive.writestr(entry, json.dumps(manifest).encode() if entry.filename == "plugin.jsonc" else source.read(entry))
+        archive.writestr("guides/probe/SKILL.md", f"---\nname: {SKILL_NAME}\ndescription: MCP plugin tool guide\n---\nFrozen probe instructions.\n")
     return path
 
 
@@ -279,6 +300,39 @@ async def _agent_call(case: McpPluginCase, *, phase: str) -> list[dict]:
     return records
 
 
+async def _assert_tool_skill_source(case: McpPluginCase, records: list[dict], *, phase: str,
+                                   source: dict[str, object] | None) -> None:
+    identity = records[1]["identity"]
+    session, thread = identity["session_id"], identity["thread_id"]
+    client = case.client
+    search_call_id = f"mcp-plugin-{phase}-0"
+    search_result = next(message for message in records[1]["request"]["messages"]
+        if message.get("role") == "tool" and message.get("tool_call_id") == search_call_id)
+    discovered, = json.loads(search_result["content"])["results"]
+    association, = discovered["skill_associations"]
+    assert association["skill_name"] == SKILL_NAME
+    assert association["status"] == ("available" if source else "unavailable")
+    if source:
+        assert association["tool_source"] == source
+        assert discovered["skill_names"] == [SKILL_NAME]
+    else:
+        assert association["reason"] == "plugin-service-source-unverified"
+        assert discovered["skill_names"] == []
+    traces = await client.get(f"/api/v1/sessions/{session}/traces")
+    traces.raise_for_status()
+    tool_events = [item for item in traces.json()["data"]["items"]
+        if item["type"] in {"tool_call_start", "tool_call_end"}
+        and get_trace_payload(item).get("tool_name") == "mcp__probe__probe"]
+    assert len(tool_events) == 4
+    assert all(item["skill_names"] == ([SKILL_NAME] if source else []) for item in tool_events)
+    with RolloutCheckpointSaver(case.workspace_root / ".boxteam/sessions") as cold:
+        frozen = cold.load_tool_call_extension_catalog(session, thread_id=thread,
+            tool_call_id=f"mcp-plugin-{phase}-1", model_call_id=identity["model_call_id"], tool_ids=frozenset({"mcp__probe__probe"}))
+        definition, = frozen.definitions
+        frozen_association, = definition.skill_associations
+        assert frozen_association.to_dict() == association
+
+
 async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
     mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory, prepared_mcp_stdio_package: Path,
 ) -> None:
@@ -288,13 +342,19 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
     definitions = artifacts / "definitions.json"
     receipts = artifacts / "receipts.jsonl"
     definitions.write_text(json.dumps({"probe": {"type": "object"}, "second": {"type": "object"}}), encoding="utf-8")
-    archive = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
+    archive = _skill_package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
+    package_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    tool_source: dict[str, object] = {
+        "gateway_id": case.gateway_id, "workspace_id": case.workspace_id, "package_id": "boxteam.mcp-stdio",
+        "plugin_id": "stdio", "package_version": "0.1.0", "package_digest": package_digest,
+        "service_id": "mcp", "contract_version": 1,
+    }
     try:
         await install_plugin_async(
             lambda path, payload: case.client.post(path, json=payload),
             gateway_id=case.gateway_id,
             path=str(archive),
-            expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+            expected_digest=package_digest,
         )
         await _publish(case, {"plugins": {
             "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "enabled": True}]},
@@ -312,7 +372,9 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
             },
         }}}}, "mcp-plugin-connect")
         before = await _catalog(case)
-        await _agent_call(case, phase="before")
+        records = await _agent_call(case, phase="before")
+        await _assert_tool_skill_source(case, records, phase="before",
+            source={**tool_source, "instance_id": plugin["instance"]["instance_id"]})
         instance = plugin["instance"]
         plugin_process = psutil.Process(instance["process_id"])
         child_processes = plugin_process.children(recursive=True)
@@ -339,7 +401,9 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
         cold_plugin = await _plugin(case, state="ready")
         assert cold_plugin["instance"]["instance_id"] != instance["instance_id"]
         cold_catalog = await _catalog(case)
-        await _agent_call(case, phase="cold-start")
+        records = await _agent_call(case, phase="cold-start")
+        await _assert_tool_skill_source(case, records, phase="cold-start",
+            source={**tool_source, "instance_id": cold_plugin["instance"]["instance_id"]})
         instance = cold_plugin["instance"]
         plugin_process = psutil.Process(instance["process_id"])
         child_processes = plugin_process.children(recursive=True)
@@ -367,7 +431,9 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
         assert after["connection_ref"] != cold_catalog["connection_ref"], (
             "Backend 重启必须建立新的逻辑 client generation"
         )
-        await _agent_call(case, phase="after")
+        records = await _agent_call(case, phase="after")
+        await _assert_tool_skill_source(case, records, phase="after",
+            source={**tool_source, "instance_id": after_plugin["instance"]["instance_id"]})
         actual = [json.loads(line) for line in receipts.read_text(encoding="utf-8").splitlines()]
         assert sorted(actual, key=lambda row: (row["arguments"]["phase"], row["arguments"]["result_mode"])) == [
             {"name": "probe", "arguments": {"result_mode": mode, "phase": phase, **({"call_mode": "progress"} if mode == "success" else {})}}
@@ -390,7 +456,8 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
             remote, = response.json()["data"]
             assert remote["server_id"] == "probe" and remote["status"] == "ready"
             assert remote["transport"] == "streamable_http" and remote.get("service") is None
-            await _agent_call(case, phase="external")
+            records = await _agent_call(case, phase="external")
+            await _assert_tool_skill_source(case, records, phase="external", source=None)
             assert observed and observed[0]["x-mcp-target"] == "external-probe"
             assert "x-local-token" not in observed[0], "Gateway 管理凭据不能交付第三方 MCP"
             assert http_requests and all(headers.get("x-request-id") for headers in http_requests), (

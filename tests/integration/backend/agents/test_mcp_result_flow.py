@@ -93,11 +93,11 @@ async def result_client(
     scripted_gateway_process: replay_case.ScriptedGatewayState,
     scripted_client: httpx.AsyncClient,
     request: pytest.FixtureRequest,
-    result_server_receipts_path: Path,
+    result_server_receipts_path: Path, prepared_mcp_stdio_package: Path,
 ) -> AsyncIterator[httpx.AsyncClient]:
     client = scripted_client
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    package = _package(context.artifacts_dir / "mcp-bridge.zip")
+    package = _package(context.artifacts_dir / "mcp-bridge.zip", prepared_mcp_stdio_package)
     gateway_id, workspace_id = scripted_gateway_process.gateway_id, scripted_gateway_process.workspace_id
     target = SimpleNamespace(client=client, gateway_id=gateway_id, workspace_id=workspace_id)
     await install_plugin_async(

@@ -7,7 +7,7 @@ import logging
 import re
 from collections.abc import AsyncIterable, Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated
 
 import httpx
@@ -70,6 +70,7 @@ class _ServiceRoute:
     instance_id: str
     gateway_id: str
     remote: bool = False
+    package_digest: str | None = field(default=None, kw_only=True)
 
 
 @contextmanager
@@ -113,6 +114,10 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
                  if key not in {"token", "target_gateway_id"}]
         headers = {key: value for key, value in connection.headers.items()
                    if key.lower() in {"content-type", "content-encoding", "accept", "last-event-id", "mcp-session-id", "mcp-protocol-version", "x-boxteam-plugin-instance-id"}}
+        header_instance = connection.headers.get("X-BoxTeam-Plugin-Instance-Id")
+        if instance_id is not None and header_instance is not None and instance_id != header_instance:
+            raise ValueError("插件实例路径与请求头身份冲突")
+        selected_instance = instance_id or header_instance
         if remote is not None:
             headers.update(remote.headers)
             url = build_upstream_url(remote.base_url, (), connection.url.path.lstrip("/"))
@@ -125,7 +130,7 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             registry.add_commit_observer(check_remote)
             try:
                 check_remote()
-                yield _ServiceRoute(url.copy_merge_params(tuple(query)), headers, retired, instance_id or "", gateway_id, True)
+                yield _ServiceRoute(url.copy_merge_params(tuple(query)), headers, retired, selected_instance or "", gateway_id, True)
             finally:
                 registry.remove_commit_observer(check_remote)
             return
@@ -135,16 +140,12 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
             if target.connection_kind != "local":
                 raise LookupError("插件服务不属于原生工作区")
         owner = connection.app.state.service_plugins
-        header_instance = connection.headers.get("X-BoxTeam-Plugin-Instance-Id")
-        if instance_id is not None and header_instance is not None and instance_id != header_instance:
-            raise ValueError("插件实例路径与请求头身份冲突")
-        selected_instance = instance_id or header_instance
         if selected_instance is None:
             slot = owner.slots.get(owner.key(binding))
             if slot is None or slot.receipt is None:
                 raise LookupError("插件绑定尚无可用实例")
             selected_instance = slot.receipt.instance_id
-        base_url, token, stopped = owner.service(binding, service_id=service_id,
+        base_url, token, stopped, package_digest = owner.service(binding, service_id=service_id,
             instance_id=selected_instance, websocket=websocket)
         headers.update({"X-Local-Token": token, "X-Request-ID": get_request_id(connection),
                         "X-BoxTeam-Gateway-Id": gateway_id})
@@ -175,7 +176,8 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
                         raise PermissionError("Browser 操作 actor 无效")
                     headers["X-BoxTeam-Actor"] = actor
         query = [(key, value) for key, value in query if key not in {"package_version", "workspace_id"}]
-        yield _ServiceRoute(build_upstream_url(base_url, (), path).copy_merge_params(tuple(query)), headers, stopped, selected_instance, gateway_id)
+        yield _ServiceRoute(build_upstream_url(base_url, (), path).copy_merge_params(tuple(query)), headers, stopped,
+            selected_instance, gateway_id, package_digest=package_digest)
 
 
 async def _watch_access(connection: HTTPConnection, auth: GatewayAuthContext, stopped: asyncio.Event,
@@ -256,18 +258,22 @@ class _ServiceResponse(StreamingResponse):
             headers=filter_hop_by_hop_headers((key, value) for key, value in response.headers.items()
                 if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS | {
                     "set-cookie", "content-length", "content-encoding",
-                    "x-boxteam-plugin-instance-id", "x-boxteam-plugin-gateway-id"}))
+                    "x-boxteam-plugin-instance-id", "x-boxteam-plugin-gateway-id", "x-boxteam-plugin-package-digest"}))
         if route.remote and response.is_success:
             remote_instance = response.headers.get("X-BoxTeam-Plugin-Instance-Id")
             remote_gateway = response.headers.get("X-BoxTeam-Plugin-Gateway-Id")
-            if (not remote_instance or not remote_gateway or remote_instance != route.instance_id
+            if (not remote_instance or not remote_gateway or (route.instance_id and remote_instance != route.instance_id)
                 or remote_gateway != route.gateway_id):
                 raise ValueError("远端插件服务未返回有效的原始实例身份")
             self.headers["X-BoxTeam-Plugin-Instance-Id"] = remote_instance
             self.headers["X-BoxTeam-Plugin-Gateway-Id"] = remote_gateway
+            if package_digest := response.headers.get("X-BoxTeam-Plugin-Package-Digest"):
+                self.headers["X-BoxTeam-Plugin-Package-Digest"] = package_digest
         elif not route.remote and route.instance_id:
             self.headers["X-BoxTeam-Plugin-Instance-Id"] = route.instance_id
             self.headers["X-BoxTeam-Plugin-Gateway-Id"] = route.gateway_id
+            if route.package_digest is not None:
+                self.headers["X-BoxTeam-Plugin-Package-Digest"] = route.package_digest
         self.request, self.auth, self.route, self.body = request, auth, route, body
         self.capabilities = capabilities
 

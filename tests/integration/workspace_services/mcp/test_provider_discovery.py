@@ -81,7 +81,7 @@ def _save(path: Path, value: object) -> None:
 @pytest.fixture
 async def provider_case(
     integration_workspace_root_path: str, integration_workspace_config_path: str,
-    integration_backend_port: int,
+    integration_backend_port: int, prepared_mcp_stdio_package: Path,
 ) -> AsyncIterator[ProviderCase]:
     if not os.environ.get("CCTQ_API_KEY"):
         pytest.fail("UNMET_PREREQUISITE: CCTQ_API_KEY 未配置；本验收不能回退到模型回放")
@@ -102,7 +102,7 @@ async def provider_case(
     config["mcp"] = {"servers": {}}
     _save(config_path, config)
     gateway_port = integration_backend_port + 1
-    package = _package(artifacts / "mcp-bridge.zip")
+    package = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
     backend = await asyncio.to_thread(
         start_backend_process, workspace_root=str(workspace), port=integration_backend_port,
         log_name="real-provider-discovery",

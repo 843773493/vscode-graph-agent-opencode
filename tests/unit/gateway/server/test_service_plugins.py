@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from httpx import ASGITransport
 
 from app.core.trace_middleware import TraceMiddleware
@@ -18,10 +18,15 @@ from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.plugins.workspaces import WorkspacePluginBindings
+from app.gateway.proxy_upstream import UpstreamResponseBody
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
-from app.gateway.server.service_plugin_proxy import router
+from app.gateway.server.service_plugin_proxy import (
+    _ServiceResponse,
+    _ServiceRoute,
+    router,
+)
 
 
 @pytest.fixture
@@ -49,7 +54,8 @@ async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         skill_sources=skill_sources)
     await owner.client.aclose()
     owner.client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
-    monkeypatch.setattr(owner, "service", lambda *args, **kwargs: ("http://127.0.0.1:49152/services/echo", "private", stopped))
+    monkeypatch.setattr(owner, "service", lambda *args, **kwargs: (
+        "http://127.0.0.1:49152/services/echo", "private", stopped, "a" * 64))
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
@@ -103,6 +109,45 @@ async def test_service_path_cannot_escape_declared_service(plugin_proxy: tuple[F
             "/api/gateway/service-plugins/probe.tools/probe/instances/original/services/echo/%252e%252e/internal?package_version=1.0.0")
     assert response.status_code == 422
     assert calls == []
+
+
+async def test_native_service_publishes_installed_package_identity(
+    plugin_proxy: tuple[FastAPI, list[httpx.Request]],
+) -> None:
+    app, _ = plugin_proxy
+    owner = app.state.service_plugins
+    await owner.client.aclose()
+    owner.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
+        headers={"X-BoxTeam-Plugin-Package-Digest": "forged", "X-BoxTeam-Plugin-Instance-Id": "forged"},
+        json={"result": "ready"})))
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/gateway/service-plugins/probe.tools/probe/instances/original/services/echo/read?package_version=1.0.0")
+    assert response.status_code == 200
+    assert response.headers["X-BoxTeam-Plugin-Package-Digest"] == "a" * 64
+    assert response.headers["X-BoxTeam-Plugin-Instance-Id"] == "original"
+    assert response.headers["X-BoxTeam-Plugin-Gateway-Id"] == owner.gateway_id
+
+
+@pytest.mark.parametrize("instance_id", ["", "original", "wrong-instance"])
+async def test_relay_preserves_native_service_identity(instance_id: str) -> None:
+    request = Request({"type": "http", "headers": []})
+    response = httpx.Response(200, headers={"X-BoxTeam-Plugin-Gateway-Id": "native-gateway",
+        "X-BoxTeam-Plugin-Instance-Id": "original", "X-BoxTeam-Plugin-Package-Digest": "b" * 64})
+    body = UpstreamResponseBody(response)
+    route = _ServiceRoute(httpx.URL("http://native/services/mcp"), {}, asyncio.Event(),
+        instance_id, "native-gateway", True)
+    try:
+        if instance_id == "wrong-instance":
+            with pytest.raises(ValueError, match="原始实例身份"):
+                _ServiceResponse(body, request=request, auth=GatewayAuthContext(kind="local"), route=route, response=response)
+        else:
+            result = _ServiceResponse(body, request=request, auth=GatewayAuthContext(kind="local"), route=route, response=response)
+            assert result.headers["X-BoxTeam-Plugin-Instance-Id"] == "original"
+            assert result.headers["X-BoxTeam-Plugin-Gateway-Id"] == "native-gateway"
+            assert result.headers["X-BoxTeam-Plugin-Package-Digest"] == "b" * 64
+    finally:
+        await body.aclose()
 
 
 async def test_creation_handoff_observes_completed_start_before_marking_signature_processed() -> None:

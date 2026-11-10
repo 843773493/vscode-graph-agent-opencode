@@ -28,7 +28,7 @@ from tests.support.plugin_package import install_plugin_async
 
 
 async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promotion(
-    mcp_plugin_case: McpPluginCase,
+    mcp_plugin_case: McpPluginCase, prepared_mcp_stdio_package: Path,
 ) -> None:
     case = mcp_plugin_case
     artifacts = case.context.artifacts_dir
@@ -41,7 +41,7 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
     definitions.write_text(json.dumps({"probe": {"type": "object"}, "second": {"type": "object"}}),
                            encoding="utf-8")
 
-    archive = _package(artifacts / "mcp-bridge.zip")
+    archive = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
     await install_plugin_async(
         lambda path, payload: case.client.post(path, json=payload),
         gateway_id=case.gateway_id,

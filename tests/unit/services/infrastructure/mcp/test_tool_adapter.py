@@ -8,6 +8,7 @@ from mcp import types
 from mcp.client.session import ClientSession
 
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
+from app.services.infrastructure.mcp.tool_definitions import PluginToolSource
 
 
 @pytest.fixture
@@ -30,6 +31,26 @@ async def test_sdk_adapter_reads_every_page(sdk_session: MagicMock) -> None:
     tools = await list_mcp_tools(sdk_session)
     assert [tool.name for tool in tools] == ["one", "two"]
     assert [call.kwargs for call in sdk_session.list_tools.await_args_list] == [{"cursor": None}, {"cursor": "next"}]
+
+
+@pytest.mark.parametrize("plugin_transport", [False, True])
+async def test_sdk_adapter_uses_only_local_plugin_identity(sdk_session: MagicMock, plugin_transport: bool) -> None:
+    source = PluginToolSource(gateway_id="native-gateway", package_id="proof.tools", plugin_id="tools",
+        package_version="1.0.0", package_digest="a" * 64, service_id="mcp", workspace_id="workspace",
+        contract_version=1, instance_id="actual-instance")
+    sdk_session.list_tools.return_value = types.ListToolsResult(tools=[types.Tool(name="probe",
+        inputSchema={"type": "object"}, annotations=types.ToolAnnotations.model_validate({
+            "readOnlyHint": True, "plugin_tool_source": {**source.to_dict(), "instance_id": "forged-instance"},
+            "product_tool_contract": ("probe", 1)}), _meta={"server-detail": "retained"})])
+    target, = await list_mcp_tools(sdk_session, source=source if plugin_transport else None)
+    assert target.metadata is not None
+    assert target.metadata["readOnlyHint"] is True
+    assert target.metadata["_meta"] == {"server-detail": "retained"}
+    assert "product_tool_contract" not in target.metadata
+    if plugin_transport:
+        assert target.metadata["plugin_tool_source"] == source.to_dict()
+    else:
+        assert "plugin_tool_source" not in target.metadata
 
 
 async def test_sdk_adapter_rejects_repeated_cursor(sdk_session: MagicMock) -> None:

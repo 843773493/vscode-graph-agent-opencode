@@ -114,6 +114,7 @@ class PluginSlot:
     revision: str
     declaration: ServicePluginManifest
     gateway_id: str
+    package_digest: str = field(kw_only=True)
     parameters: dict[str, JsonValue] = field(default_factory=dict)
     parameters_revision: str = field(init=False)
     process: ManagedProcess | AdoptedManagedProcess | None = None
@@ -403,6 +404,7 @@ class GatewayPluginRuntime:
                     self._publish()
                     return slot.describe()
             slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values,
+                package_digest=self.packages.get(binding.package_id, binding.package_version).digest,
                 log_id=previous.log_id if previous is not None and not binding.enabled else None)
             self.slots[key] = slot
             try:
@@ -604,7 +606,8 @@ class GatewayPluginRuntime:
                 key = self.key(record.binding)
                 if path != self._record(key):
                     raise ValueError("插件进程发现记录与原槽位不符")
-                slot = PluginSlot(record.binding, record.revision, self.declaration(record.binding), self.gateway_id)
+                slot = PluginSlot(record.binding, record.revision, self.declaration(record.binding), self.gateway_id,
+                    package_digest=self.packages.get(record.binding.package_id, record.binding.package_version).digest)
                 slot.parameters_revision = record.parameters_revision
                 if await self._adopt(slot, record):
                     adopted[key] = slot
@@ -661,7 +664,7 @@ class GatewayPluginRuntime:
         self._publish()
 
     def service(self, binding: PluginBinding, *, service_id: str, instance_id: str,
-                websocket: bool = False) -> tuple[str, str, asyncio.Event]:
+                websocket: bool = False) -> tuple[str, str, asyncio.Event, str]:
         slot = self.slots.get(self.key(binding))
         if slot is None or slot.binding != binding:
             raise LookupError("插件绑定不可用或版本已切换")
@@ -675,7 +678,7 @@ class GatewayPluginRuntime:
         if websocket != (service.protocol in {"websocket", "dap"}):
             raise LookupError("连接传输与插件声明的服务协议不符")
         assert slot.base_url is not None and slot.token is not None
-        return slot.base_url + "/services/" + service_id, slot.token, slot.stopped
+        return slot.base_url + "/services/" + service_id, slot.token, slot.stopped, slot.package_digest
 
     def references(self, package_id: str, version: str) -> list[str]:
         return [

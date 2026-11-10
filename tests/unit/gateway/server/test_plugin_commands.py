@@ -51,6 +51,7 @@ async def command_gateway(tmp_path: Path) -> AsyncIterator[tuple[FastAPI, list[h
             "required_capabilities": ["file_write"]}]}})
     binding = PluginBinding(package_id="proof.commands", package_version="1.0.0", plugin_id="command", enabled=True)
     slot = PluginSlot(binding=binding, revision="revision", declaration=declaration, gateway_id=gateway_id,
+        package_digest="a" * 64,
         base_url="http://127.0.0.1:12345", token="private", state="ready",
         receipt=PluginInstanceStatus.model_validate({"gateway_id": gateway_id,
             **binding.model_dump(exclude={"enabled"}), "instance_scope": "gateway", "instance_id": "original",
