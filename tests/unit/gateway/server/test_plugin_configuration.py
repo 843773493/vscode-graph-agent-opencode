@@ -201,3 +201,39 @@ async def test_configuration_schemas_rejects_without_configuration_read(
     assert response.status_code == 403
     assert "configuration_read" in response.json()["detail"]
     assert owner.slots == {}
+
+
+@pytest.mark.parametrize("capabilities", [
+    ("configuration_read",),
+    ("service_plugin_installation_manage",),
+    ("service_plugin_runtime_manage",),
+    ("configuration_read", "service_plugin_installation_manage", "service_plugin_runtime_manage"),
+])
+async def test_private_input_requires_configuration_write_before_creating_a_private_version(
+    plugin_configuration_gateway: tuple[FastAPI, GatewayPluginRuntime, GatewayWorkspaceRegistry],
+    capabilities: tuple[str, ...],
+) -> None:
+    app, owner, _ = plugin_configuration_gateway
+    app.state.federation_policy_store.publish({"default_effect": "deny", "rules": [
+        {"capability": capability, "effect": "allow",
+         "principal_ref": principal_ref_for_gateway(PEER_GATEWAY_ID)}
+        for capability in capabilities
+    ]})
+    secret = "unauthorized-plugin-private-sentinel"
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/gateway/service-plugins/private-inputs", json={
+            "gateway_id": GATEWAY_ID,
+            "package_id": "gateway.settings",
+            "plugin_id": "settings",
+            "package_version": "1.0.0",
+            "source_key": "gateway_mutable_override",
+            "parameter_pointer": "/credential",
+            "value": secret,
+        })
+
+    assert response.status_code == 403
+    assert "configuration_write" in response.json()["detail"]
+    assert secret not in response.text
+    assert not owner.private_inputs.directory.exists()
+    assert owner.slots == {}

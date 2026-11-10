@@ -158,6 +158,29 @@ def test_corrupt_private_file_error_does_not_echo_file_contents(private_inputs):
     assert sentinel not in str(caught.value)
 
 
+@pytest.mark.parametrize("serialized", ["null", '["non-object-private-secret-sentinel"]'])
+def test_non_object_private_file_has_explicit_error_without_echoing_contents(private_inputs, serialized):
+    reference = private_inputs.write(
+        package_id="probe.tools",
+        plugin_id="probe",
+        parameter_pointer="/credential",
+        value=Secret("private-sentinel"),
+    )
+    path = private_inputs.directory / f"{reference.version}.json"
+    file_permissions.prepare_readonly_directory_removal(private_inputs.directory)
+    path.write_text(serialized)
+
+    with pytest.raises(ValueError, match="文件结构无效") as caught:
+        private_inputs.resolve(
+            {"credential": reference.model_dump(mode="json")},
+            package_id="probe.tools",
+            plugin_id="probe",
+            schema=_CREDENTIAL_SCHEMA,
+        )
+
+    assert "non-object-private-secret-sentinel" not in str(caught.value)
+
+
 def test_write_only_reference_and_resolved_value_both_obey_schema(private_inputs):
     schema = _CREDENTIAL_SCHEMA
     with pytest.raises(ValueError, match="writeOnly") as caught:

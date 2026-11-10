@@ -56,8 +56,11 @@ async def workspace_plugin_parameters(
         values = plugin_parameters(active.to_dict()).get(binding.package_id, {}).get(binding.plugin_id, {})
         store = PluginPrivateInputStore(directory=container.workspace_root / ".boxteam/credentials/plugins",
             gateway_id=gateway_id, workspace_id=container.workspace_id)
-        resolved = store.resolve(values, package_id=binding.package_id, plugin_id=binding.plugin_id,
-            schema=payload.configuration_schema)
+        try:
+            resolved = store.resolve(values, package_id=binding.package_id, plugin_id=binding.plugin_id,
+                schema=payload.configuration_schema)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     response.headers["Cache-Control"] = "no-store"
     return APIResponse(data=PluginParameterDelivery(values=Secret({binding.package_id: {binding.plugin_id: resolved}})),
         request_id=request_id)

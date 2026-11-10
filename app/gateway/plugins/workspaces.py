@@ -303,6 +303,14 @@ class WorkspacePluginBindings:
                 headers={"X-Local-Token": get_gateway_local_token(), "X-Request-ID": request_id,
                          "X-BoxTeam-Workspace-Id": binding.workspace_id,
                          "X-BoxTeam-Gateway-Id": self.registry.gateway_id})
+            if response.status_code == 409:
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = None
+                detail = body.get("detail") if isinstance(body, dict) else None
+                if isinstance(detail, str) and detail:
+                    raise ValueError(detail) from None
             response.raise_for_status()
             result = APIResponse[PluginParameterDelivery].model_validate_json(response.content)
             if result.code != 0 or result.request_id != request_id or result.data is None:

@@ -105,6 +105,7 @@
 - [ ] 9.2 用 Python／Node 两个真实插件验证同管理合同、范围隔离、同包独立进程、ready 身份、关闭／重启及实际退出；工具／命令／Skill 不触发启动，不以健康响应替代业务。
 - [ ] 9.3 真实验证终端命令／输出及重附加、浏览器操作／画面、MCP stdio 工具结果；核 Gateway 转发路径与 request_id、本次迁移执行链无 Backend spawn 旁路、跨工作区零资源混用；调试场景沿第11组验，python_exec／条件脚本／ffmpeg 不新增迁移测试，不宣称 Backend 所有内部进程皆移除。
 - [ ] 9.4 以本地 A 和真实远端 B 验原生／Relay 同一实例和最终判权，权限撤销、断流、旧运行身份和结果未知零重放；受控替身只能计 Integration，不称真实远端 E2E。
+  - 2026-11-10 通用秘密参数产品切片：真实 Gateway／托管 Workspace／正式 Workbench／Chromium 经 UI 安装同包两种 scope 插件、密码输入、受保护保存及原 source CAS，普通配置只含各自引用；Escape 与最终确认取消均零写入。两个真实插件分别消费原 owner 的秘密并只返回摘要，Workbench 显式重启后新实例复用原值、无重复输入；1 passed／124.55秒，页面错误为空。权限短验7项覆盖无 configuration_write 时零私有写入和零实例启动，私有文件短验19项覆盖损坏正文不回显；参数交付4项核缺失／非法引用返回409并保留原request_id，Gateway保留owner的具体原因；Python 类型零诊断，正式构建由同次产品装具完成。前三次产品失败均为新驱动定位／等待问题，修正驱动后通过，未放宽产品断言。准确命令、源码指纹与原始结果见 `out/tests/temp/2026/11/10/plugin_private_inputs_product/artifacts/main/verification.json`。本片不证明秘密更换／CAS冲突、清除揭示下层／active与pending保护、未引用版本回收、复杂schema秘密表单、真实Relay或Windows／SSH／Electron／源码外发行完成；6.1／7.3／9.4保持未勾选。
 - [ ] 9.5 覆盖更新保留旧运行版本、有引用卸载拒绝、无公网源零请求、遥测关闭零额外采集及部分失败真实展示，确认旧格式／路由／启动入口不可达。
 - [ ] 9.6 按风险测量普通服务状态／设置读取和经 Gateway 的轻量真实业务请求，记录数据规模、原始样本、p95／max、request_id 及软件内总耗时；遵守现有交互总预算，不把冷启动／安装或每层独立长 timeout 放入普通请求。
 - [ ] 9.7 运行相关静态分析、协议生成一致性与真实类型；前端改动完成 bun run --cwd src/clients/web build，可复用同源码产品构建；所有测试使用进程外超时和内存保护，失败先归因，不无证据重复长跑。

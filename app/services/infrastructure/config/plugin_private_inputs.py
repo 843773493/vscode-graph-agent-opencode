@@ -213,6 +213,8 @@ class PluginPrivateInputStore:
                     raise ValueError(f"插件私有输入版本不存在: {reference.version}") from None
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     raise ValueError("插件私有输入文件 JSON 无效") from None
+                if not isinstance(saved, dict):
+                    raise ValueError("插件私有输入文件结构无效")
                 if saved.get("reference") != reference.model_dump(mode="json") or "value" not in saved:
                     raise ValueError("插件私有输入文件与引用身份不一致")
                 return cast(JsonValue, saved["value"])
