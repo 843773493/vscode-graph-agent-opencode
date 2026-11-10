@@ -35,6 +35,8 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts',
   'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts',
   'src/vs/workbench/contrib/search/browser/searchView.ts',
+  'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
+  'src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/services/textfile/common/textEditorService.ts',
@@ -115,6 +117,42 @@ export function sourceTransform(root, productConfiguration, extensions) {
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);
     contents = transformExtensionWorkspaceSymbols(root, path, contents, replaceOnce);
+    if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts')) {
+      contents = replaceOnce(contents,
+        "import { AgentPluginDiscoveryPriority, IAgentPluginService, agentPluginDiscoveryRegistry } from '../common/plugins/agentPluginService.js';",
+        "import { IAgentPluginService } from '../common/plugins/agentPluginService.js';");
+      contents = replaceOnce(contents,
+        "import { AgentPluginService, ConfiguredAgentPluginDiscovery, CopilotCliAgentPluginDiscovery, ExtensionAgentPluginDiscovery, MarketplaceAgentPluginDiscovery } from '../common/plugins/agentPluginServiceImpl.js';",
+        "import { AgentPluginService } from '../common/plugins/agentPluginServiceImpl.js';");
+      for (const registration of [
+        'agentPluginDiscoveryRegistry.register(new SyncDescriptor(ConfiguredAgentPluginDiscovery), AgentPluginDiscoveryPriority.Configured);',
+        'agentPluginDiscoveryRegistry.register(new SyncDescriptor(MarketplaceAgentPluginDiscovery), AgentPluginDiscoveryPriority.Marketplace);',
+        'agentPluginDiscoveryRegistry.register(new SyncDescriptor(ExtensionAgentPluginDiscovery), AgentPluginDiscoveryPriority.Extension);',
+        'agentPluginDiscoveryRegistry.register(new SyncDescriptor(CopilotCliAgentPluginDiscovery), AgentPluginDiscoveryPriority.CopilotCli);',
+      ]) {
+        contents = replaceOnce(contents, `${registration}\n`, '');
+      }
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts')) {
+      contents = `import { Disposable } from '../../../../../base/common/lifecycle.js';
+import { observableValue, type IObservable } from '../../../../../base/common/observable.js';
+import { IAgentPluginEnablementService, IAgentPluginService, type IAgentPlugin } from './agentPluginService.js';
+import { type IEnablementModel } from '../enablement.js';
+
+/** 旧Code OSS Agent Plugin发现链已从产品构建中退役。 */
+export class AgentPluginService extends Disposable implements IAgentPluginService {
+  declare readonly _serviceBrand: undefined;
+
+  public readonly plugins: IObservable<readonly IAgentPlugin[]>;
+  public readonly enablementModel: IEnablementModel;
+
+  constructor(@IAgentPluginEnablementService enablementModel: IAgentPluginEnablementService) {
+    super();
+    this.plugins = observableValue<readonly IAgentPlugin[]>('discoveredAgentPlugins', []);
+    this.enablementModel = enablementModel;
+  }
+}`;
+    }
     if (path === join(upstream, 'src/vs/platform/workspaces/common/workspaces.ts')) {
       // 不透明文件根已在 URI.path 内编码；原 skipEncoding 会让重读时的 URI.parse 折叠路径段。
       contents = replaceOnce(contents, 'export function getStoredWorkspaceFolder(folderURI: URI, forceAbsolute: boolean, folderName: string | undefined, targetConfigFolderURI: URI, extUri: IExtUri): IStoredWorkspaceFolder {',
