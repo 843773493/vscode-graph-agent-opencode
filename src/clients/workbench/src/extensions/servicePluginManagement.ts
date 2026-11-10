@@ -89,7 +89,8 @@ export class ServicePluginPackagesView extends ViewPane {
     });
     const install = append(this.controls, $('button'));
     install.textContent = '安装插件包';
-    install.addEventListener('click', () => void this.runOperation(() => this.commands.executeCommand('boxteam.plugins.installPackage')));
+    install.addEventListener('click', () => void this.commands.executeCommand('boxteam.plugins.installPackage')
+      .catch(error => this.notifications.error(errorsText(error))));
     this.content = append(container, $('.service-plugin-packages-content'));
     void this.refresh();
   }

@@ -42,6 +42,7 @@ test('实际插件管理注册只提供自有入口，搜索和安装回执仍�
   const workbench = Symbol('workbench'), views = Symbol('views');
   const calls: unknown[] = [];
   let accessorValid = true;
+  let installFailure: unknown;
   const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(actions.map(node => node.getText()).join('\n'));
   new Function('CommandsRegistry', 'Action2', 'registerAction2', 'IExtensionsWorkbenchService', 'IViewsService',
     'localize2', 'refreshIcon', 'MenuId', 'ContextKeyExpr', 'VIEWLET_ID', 'installServicePluginPackage', javascript)(
@@ -50,7 +51,10 @@ test('实际插件管理注册只提供自有入口，搜索和安装回执仍�
     (Action: new () => { options: { id: string }; run(accessor: object): unknown }) => {
       const action = new Action(); commands.set(action.options.id, accessor => action.run(accessor));
     }, workbench, views, (_key: string, value: string) => ({ value, original: value }), {}, { ViewContainerTitle: 'title' },
-    { equals: () => ({}) }, 'extensions', async () => { calls.push('install'); accessorValid = false; },
+    { equals: () => ({}) }, 'extensions', async () => {
+      calls.push('install'); accessorValid = false;
+      if (installFailure) throw installFailure;
+    },
   );
   expect([...commands.keys()].sort()).toEqual([
     'boxteam.plugins.installPackage', 'workbench.extensions.action.clearExtensionsSearchResults',
@@ -70,7 +74,21 @@ test('实际插件管理注册只提供自有入口，搜索和安装回执仍�
   await commands.get('boxteam.plugins.installPackage')!(accessor);
   expect(calls).toEqual(['@mcp', '', 'install', 'refresh']);
   accessorValid = true;
+  calls.length = 0;
+  installFailure = new Error('原安装失败');
+  await expect(commands.get('boxteam.plugins.installPackage')!(accessor)).rejects.toBe(installFailure);
+  expect(calls).toEqual(['install', 'refresh']);
+  accessorValid = true;
+  calls.length = 0;
   rejectRefresh = true;
+  let combinedFailure: unknown;
+  try { await commands.get('boxteam.plugins.installPackage')!(accessor); }
+  catch (error) { combinedFailure = error; }
+  expect(combinedFailure).toBeInstanceOf(AggregateError);
+  expect((combinedFailure as AggregateError).errors).toEqual([installFailure, failure]);
+  expect(calls).toEqual(['install', 'refresh']);
+  accessorValid = true;
+  calls.length = 0;
   await expect(commands.get('workbench.extensions.action.refreshExtension')!(accessor)).rejects.toBe(failure);
 });
 

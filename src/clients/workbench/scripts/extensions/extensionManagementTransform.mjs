@@ -286,9 +286,18 @@ registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.plugins.installPackage', title: localize2('installPluginPackage', '安装插件包'), f1: true }); }
   async run(accessor: ServicesAccessor): Promise<void> {
     const viewsService = accessor.get(IViewsService);
-    await installServicePluginPackage(accessor);
     const container = viewsService.getActiveViewPaneContainerWithId(VIEWLET_ID) as IExtensionsViewPaneContainer | undefined;
-    await container?.refresh();
+    let installError: unknown, installFailed = false;
+    try { await installServicePluginPackage(accessor); }
+    catch (error) { installError = error; installFailed = true; }
+    try { await container?.refresh(); }
+    catch (refreshError) {
+      if (installFailed) throw new AggregateError([installError, refreshError], '插件包安装失败：'
+        + (installError instanceof Error ? installError.message : String(installError)) + '；库存刷新失败：'
+        + (refreshError instanceof Error ? refreshError.message : String(refreshError)));
+      throw refreshError;
+    }
+    if (installFailed) throw installError;
   }
 });
 `;

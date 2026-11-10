@@ -41,20 +41,6 @@ function classCallback(className, methodName, sourceFragment, bindings = {}) {
     error => error instanceof Error ? error.message : String(error), ...Object.values(bindings));
 }
 
-function classMethod(className, methodName) {
-  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
-  const owner = parsed.statements.find(statement => statement.name?.text === className);
-  const method = owner?.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === methodName);
-  if (!method?.body) throw new Error(`实际源码缺少 ${sourcePath}#${className}.${methodName}`);
-  const modifiers = method.modifiers?.filter(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword);
-  const functionNode = ts.factory.createFunctionExpression(modifiers, undefined, undefined, undefined,
-    method.parameters, method.type, method.body);
-  const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, functionNode, parsed);
-  const transpiled = ts.transpile(`const runOperation = ${printed};`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
-  return new Function('errorsText', `${transpiled}\nreturn runOperation;`)(
-    error => error instanceof Error ? error.message : String(error));
-}
-
 function createInstallCommand(request, picks, inputs, observed, options = {}) {
   const gateway = { async request(path, requestOptions = {}) { return request(path, JSON.parse(requestOptions.body ?? '{}')); } };
   const requireOwner = new Function(`${declaration('requireInstallationOwner')}\nreturn requireInstallationOwner;`)();
@@ -163,7 +149,7 @@ test('插件目录 owner 错误或分页 revision 变化时不提交安装', asy
   }
 });
 
-test('View 安装按钮与 F1 对同一 Gateway 制品共用原安装操作', async () => {
+test('View 安装按钮委派原安装命令，与 F1 对同一 Gateway 制品共用原安装操作', async () => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers(), duplicate = Promise.withResolvers();
   const calls = [], observed = [], ids = [], messages = [];
   const notifications = { info(message) { messages.push(message); duplicate.resolve(); }, error() {} };
@@ -187,7 +173,6 @@ test('View 安装按钮与 F1 对同一 Gateway 制品共用原安装操作', as
     viewCommand = installCommand();
     return viewCommand;
   } }, notifications, async refresh() { refreshCount += 1; } };
-  view.runOperation = classMethod('ServicePluginPackagesView', 'runOperation').bind(view);
   onInstallClick.call(view);
   await duplicate.promise;
 
@@ -197,8 +182,7 @@ test('View 安装按钮与 F1 对同一 Gateway 制品共用原安装操作', as
   release.resolve();
   await Promise.all([f1, viewCommand]);
   expect(observed).toHaveLength(1);
-  await Promise.resolve();
-  expect(refreshCount).toBe(1);
+  expect(refreshCount).toBe(0);
 });
 
 test('相同制品失败或取消结清后可重新创建安装操作', async () => {
