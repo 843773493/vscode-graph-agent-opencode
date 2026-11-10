@@ -45,7 +45,7 @@ def plugin_source(request: pytest.FixtureRequest) -> Iterator[dict]:
                     "catalog_revision": "catalog-v1", "items": [state["artifact"]], "next_cursor": None}).encode()
             elif parsed.path == "/plugin.zip":
                 state["download_started"].set()
-                assert state["release_download"].wait(20), "测试未释放下载响应"
+                assert state["release_download"].wait(state.get("download_wait_seconds", 20)), "测试未释放下载响应"
                 body = state["content"]
             else:
                 self.send_error(404)

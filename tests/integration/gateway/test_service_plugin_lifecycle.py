@@ -14,6 +14,9 @@ import httpx
 import psutil
 
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.gateway.test_plugin_install_operations import (
+    plugin_source as plugin_source,  # noqa: PLC0414 - 换代与普通安装共用真实来源响应及下载屏障。
+)
 from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.scope import register_test_process, unregister_test_process
 
@@ -235,6 +238,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
     request,
     unused_tcp_port: int,
     integration_workspace_root_path: str,
+    plugin_source: dict,
 ) -> None:
     project_root = Path.cwd().resolve()
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -384,6 +388,30 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             document = _json_request(client, "GET", source_path)["data"]
             assert isinstance(document, dict)
             config = commentjson.loads(str(document["jsonc"]))
+            config.setdefault("plugins", {})["sources"] = {"entries": [{
+                "source_id": "proof", "protocol_version": 1, "base_url": plugin_source["base_url"], "enabled": True,
+            }]}
+            source_saved = _json_request(client, "PUT", source_path, {
+                "gateway_id": gateway_id, "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
+                "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+                "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+                "expected_active_digest": document["active_digest"], "idempotency_key": "launcher-plugin-source",
+            })["data"]
+            assert isinstance(source_saved, dict) and source_saved["edit"]["state"] == "active"
+            catalog = _json_request(client, "POST", "/api/gateway/service-plugins/source-catalog",
+                {"gateway_id": gateway_id, "source_id": "proof", "query": "source"})["data"]
+            assert isinstance(catalog, dict)
+            acquisition = {"gateway_id": gateway_id, "source_id": "proof", "catalog_revision": catalog["catalog_revision"],
+                "artifact": catalog["items"][0]}
+            operation = {"gateway_id": gateway_id, "operation_id": "launcher-inflight-install"}
+            plugin_source["download_wait_seconds"] = 120
+            accepted = _json_request(client, "POST", "/api/gateway/service-plugins/install", acquisition | operation)["data"]
+            assert isinstance(accepted, dict) and accepted["status"] in {"pending", "running"}
+            assert plugin_source["download_started"].wait(10), "下载尚未到达原HTTP来源"
+
+            document = _json_request(client, "GET", source_path)["data"]
+            assert isinstance(document, dict)
+            config = commentjson.loads(str(document["jsonc"]))
             config["runtime"]["gateway"]["process"]["health"]["poll_interval_seconds"] += 0.25
             config["logging"]["runtime"] = {"level": "warning", "pretty": False}
             pending_save = _json_request(client, "PUT", source_path, {
@@ -421,6 +449,21 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             next_data = next_health["data"]
             assert isinstance(next_data, dict)
             assert next_data["gateway_id"] == gateway_id
+            in_flight = _json_request(client, "POST", "/api/gateway/service-plugins/install-operation", operation)["data"]
+            assert isinstance(in_flight, dict) and in_flight["status"] == "running"
+            assert in_flight["artifact"] == accepted["artifact"], "换代不能另建安装或改写冻结制品"
+            cancelled = _json_request(client, "POST", "/api/gateway/service-plugins/cancel-install", operation)["data"]
+            assert isinstance(cancelled, dict) and cancelled["cancel_requested"]
+            plugin_source["release_download"].set()
+            terminal = _wait_for(client, "/api/gateway/service-plugins/install-operation",
+                lambda value: isinstance(value.get("data"), dict) and value["data"]["status"] == "cancelled",
+                method="POST", payload=operation, process=launcher)["data"]
+            assert plugin_source["calls"] == [
+                {"path": "/catalog", "query": {"query": ["source"]}}, {"path": "/plugin.zip", "query": {}},
+            ], "查询／跨代取消不得再次请求来源"
+            after_cancel = _json_request(client, "POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id})["data"]
+            assert isinstance(after_cancel, dict)
+            assert all(item["manifest"]["package_id"] != "source.proof" for item in after_cancel["packages"])
             _wait_for(client, "/api/gateway/config/reload-status",
                 lambda value: isinstance(value.get("data"), dict)
                 and value["data"].get("state") == "active"
@@ -468,6 +511,8 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             register_test_process(launcher, launcher.terminate)
             cold_plugins = [_wait_for_plugin(client, gateway_id, launcher, plugin_id=plugin_id,
                 workspace_id=owner) for plugin_id, owner in (("probe", None), ("workspace-probe", workspace_id))]
+            assert _json_request(client, "POST", "/api/gateway/service-plugins/install-operation", operation)["data"] == terminal
+            assert len(plugin_source["calls"]) == 2, "普通冷启动不得重放已取消下载"
             cold_processes = []
             for old, cold in zip((plugin_after, workspace_after), cold_plugins, strict=True):
                 cold_instance, old_instance = cold["instance"], old["instance"]
@@ -493,6 +538,8 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
                 "workspace_exited": True,
                 "cold_restored_instances": [item["instance"] for item in cold_plugins],
                 "cold_stop_returncode": cold_stop.returncode,
+                "inflight_install": {"accepted": accepted, "after_handoff": in_flight, "terminal": terminal,
+                    "source_calls": plugin_source["calls"]},
             }, ensure_ascii=False, indent=2), encoding="utf-8")
     finally:
         if launcher is not None:
