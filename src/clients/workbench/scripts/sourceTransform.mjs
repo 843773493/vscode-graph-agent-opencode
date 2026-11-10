@@ -11,6 +11,9 @@ import { extensionTabsSourcePaths, transformExtensionTabs } from './extensions/e
 import { extensionLanguageFeaturesSourcePaths, transformExtensionLanguageFeatures } from './extensions/extensionLanguageFeaturesTransform.mjs';
 import { extensionWorkspaceSymbolsSourcePaths, transformExtensionWorkspaceSymbols } from './extensions/extensionWorkspaceSymbolsTransform.mjs';
 import { extensionFileEventsSourcePaths, transformExtensionFileEvents } from './extensions/extensionFileEventsTransform.mjs';
+import { testingExtensionSourcePaths, transformTestingExtensions } from './testingExtensionTransform.mjs';
+import { onboardingKeymapSourcePaths, transformOnboardingKeymaps } from './onboardingKeymapTransform.mjs';
+import { chatExtensionCompletionSourcePaths, transformChatExtensionCompletion } from './chatExtensionCompletionTransform.mjs';
 import { settingsEditorScopeSourcePaths, transformSettingsEditorScope } from './settingsEditorScopeTransform.mjs';
 import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEditorTransform.mjs';
 import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
@@ -46,6 +49,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
   'src/vs/platform/workspaces/common/workspaces.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
+  'src/vs/platform/product/common/product.ts',
   'src/vs/workbench/contrib/webview/common/webview.ts',
   'src/vs/workbench/api/common/extHostWebview.ts',
   'src/vs/workbench/contrib/webview/browser/resourceLoading.ts',
@@ -64,6 +68,9 @@ export const transformedSourcePaths = [...new Set([
   ...pluginDebugSourcePaths,
   ...pluginCommandSourcePaths,
   ...extensionFileEventsSourcePaths,
+  ...testingExtensionSourcePaths,
+  ...onboardingKeymapSourcePaths,
+  ...chatExtensionCompletionSourcePaths,
   ...settingsEditorScopeSourcePaths,
   ...settingsEditorSourcePaths,
   ...settingsTreeScopeSourcePaths,
@@ -83,6 +90,8 @@ export function sourceTransform(root, productConfiguration, extensions) {
     // 官方 1.145.0 资源匹配当前 Webview v6 协议；保留原 UUID 子域隔离，替换上游陈旧的 v4 地址。
     webviewContentExternalBaseUrlTemplate: 'https://{{uuid}}.vscode-cdn.net/stable/a717861c07586a53d83b80d742cd3f59b20a6273/out/vs/workbench/contrib/webview/browser/pre/',
   };
+  // 当前工作台不支持外部 VSIX 键位包，产品配置不再注入其 Gallery 标识。
+  delete product.onboardingKeymaps;
   return async function transformSource(path, source) {
     // 严格文本锚点使用统一行尾，不改写固定上游的检出原件。
     let contents = source.replace(/\r\n/g, '\n');
@@ -98,6 +107,9 @@ export function sourceTransform(root, productConfiguration, extensions) {
     contents = transformPluginCommands(root, path, contents, replaceOnce);
     contents = transformExtensionLanguageFeatures(root, path, contents, replaceOnce);
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
+    contents = transformTestingExtensions(root, path, contents, replaceOnce);
+    contents = transformOnboardingKeymaps(root, path, contents, replaceOnce);
+    contents = transformChatExtensionCompletion(root, path, contents);
     contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformSettingsEditor(root, path, contents, replaceOnce);
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
