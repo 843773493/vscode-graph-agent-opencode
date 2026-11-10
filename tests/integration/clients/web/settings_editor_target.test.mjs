@@ -272,7 +272,7 @@ function makeSource(locationValue) {
   const owner = { async configurationSchemas(signal) { schemaRequests.push(signal); return { plugins: [] }; } };
   provider.configurationSchemas = () => owner.configurationSchemas();
   const notifications = { error: error => errors.push(error) };
-  const source = new SourceSettings(locationValue, model, files, { plugins: [] }, textFileModels, owner, notifications);
+  const source = new SourceSettings(locationValue, model, files, { plugins: [] }, textFileModels);
   return { source, model, document, provider, files, textFileModels, owner, notifications, schemaRequests, errors };
 }
 
@@ -315,7 +315,7 @@ scenario('source Input 身份只由 Gateway、工作区和 source key 决定，�
 
 scenario('来源 schema 只构造当前 Settings2EditorModel，JSONC 表单编辑保持路径、注释和继承投影', async () => {
   const target = location(), f = makeSource(target), configurationCalls = [];
-  const targetSettings = new SourceSettings(target, f.model, f.files, { plugins: [] }, f.textFileModels, f.owner, f.notifications);
+  const targetSettings = new SourceSettings(target, f.model, f.files, { plugins: [] }, f.textFileModels);
   const child = childServices(targetSettings, configurationCalls).child;
   try {
     const model = targetSettings.createModel(child), groups = model.settingsGroups;
@@ -389,8 +389,8 @@ scenario('来源正式保存和还原后替换确切绑定版本的 schema，解
     fixture.model.textEditorModel.pushEditOperations(null, [{ text: JSON.stringify(fixture.document.source_effective) }]);
   };
   receipt(a, '1.0.0'); receipt(b, '2.0.0');
-  const sourceA = new SourceSettings(location(), a.model, a.files, schemas, a.textFileModels, a.owner, a.notifications);
-  const sourceB = new SourceSettings(location({ workspace_id: 'workspace-B' }), b.model, b.files, schemas, b.textFileModels, b.owner, b.notifications);
+  const sourceA = new SourceSettings(location(), a.model, a.files, schemas, a.textFileModels);
+  const sourceB = new SourceSettings(location({ workspace_id: 'workspace-B' }), b.model, b.files, schemas, b.textFileModels);
   const fields = source => source.groups.filter(group => group.extensionInfo).flatMap(group => group.sections.flatMap(section => section.settings));
   const mode = source => fields(source).find(setting => setting.key.endsWith('.mode'));
   try {
@@ -408,49 +408,26 @@ scenario('来源正式保存和还原后替换确切绑定版本的 schema，解
   } finally { sourceA.dispose(); sourceB.dispose(); a.source.dispose(); b.source.dispose(); }
 });
 
-scenario('设置打开后安装新版：只在绑定缺失版本时补读，旧查询不覆盖后续解绑，关闭后不发布', async () => {
-  const f = makeSource(location()), requests = [], errors = [];
+scenario('安装事件替换声明后按当前绑定展示，保存不补读，卸载与失效移除字段', async () => {
+  const f = makeSource(location());
   const plugin = version => ({ package_id: 'schema.probe', plugin_id: 'preference', package_version: version, name: version,
     configuration_schema: { type: 'object', properties: { mode: { type: version === '1.0.0' ? 'string' : 'boolean' } } } });
-  f.source.dispose();
-  f.provider.configurationSchemas = () => { const reply = Promise.withResolvers(); requests.push(reply); return reply.promise; };
-  const binding = version => ({ ...plugin(version), enabled: false });
   const setBinding = version => {
-    f.document.source_effective = { plugins: { runtime: { entries: version ? [binding(version)] : [] } } };
+    f.document.source_effective = { plugins: { runtime: { entries: version ? [{ ...plugin(version), enabled: false }] : [] } } };
     f.model.textEditorModel.pushEditOperations(null, [{ text: JSON.stringify(f.document.source_effective) }]);
   };
-  const fields = source => source.groups.filter(group => group.extensionInfo).flatMap(group => group.sections.flatMap(section => section.settings));
-  setBinding('1.0.0');
-  const source = new SourceSettings(location(), f.model, f.files, { plugins: [plugin('1.0.0')] }, f.textFileModels, f.owner, { error: error => errors.push(error) });
+  const fields = () => f.source.groups.filter(group => group.extensionInfo).flatMap(group => group.sections.flatMap(section => section.settings));
   try {
-    await f.model.save(); expect(requests).toHaveLength(0);
-    setBinding('2.0.0'); await f.model.save(); expect(requests).toHaveLength(1);
-    expect(fields(source)).toEqual([]);
-    requests[0].resolve({ plugins: [plugin('1.0.0'), plugin('2.0.0')] });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(fields(source)[0].type).toBe('boolean');
-    f.model.textEditorModel.pushEditOperations(null, [{ text: f.model.textEditorModel.getValue() + ' ' }]);
-    await f.model.save(); expect(requests).toHaveLength(1);
-    setBinding('3.0.0'); await f.model.save(); expect(requests).toHaveLength(2);
+    setBinding('1.0.0'); await f.model.save(); expect(fields()).toEqual([]);
+    f.source.replaceSchemas({ plugins: [plugin('1.0.0'), plugin('2.0.0')] });
+    expect(fields()[0].type).toBe('string');
+    setBinding('2.0.0'); await f.model.save(); expect(fields()[0].type).toBe('boolean');
+    expect(f.schemaRequests).toEqual([]);
     setBinding(undefined); await f.model.save();
-    requests[1].resolve({ plugins: [plugin('3.0.0')] });
-    await new Promise(resolve => setTimeout(resolve, 0)); expect(fields(source)).toEqual([]);
-    setBinding('4.0.0'); await f.model.revert(); expect(requests).toHaveLength(3);
-    requests[2].reject(new Error('目标 schema 读取失败'));
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(errors.map(error => error.message)).toEqual(['目标 schema 读取失败']);
-    await f.model.revert(); expect(requests).toHaveLength(4);
-    source.dispose();
-    requests[3].resolve({ plugins: [plugin('4.0.0')] });
-    await new Promise(resolve => setTimeout(resolve, 0)); expect(fields(source)).toEqual([]);
-    const noConfiguration = new SourceSettings(location(), f.model, f.files, { plugins: [] }, f.textFileModels, f.owner, { error: error => errors.push(error) });
-    try {
-      setBinding('5.0.0'); await f.model.save(); expect(requests).toHaveLength(5);
-      requests[4].resolve({ plugins: [] }); await new Promise(resolve => setTimeout(resolve, 0));
-      f.model.textEditorModel.pushEditOperations(null, [{ text: f.model.textEditorModel.getValue() + ' ' }]);
-      await f.model.save(); expect(requests).toHaveLength(5);
-    } finally { noConfiguration.dispose(); }
-  } finally { source.dispose(); f.source.dispose(); }
+    f.source.replaceSchemas({ plugins: [plugin('1.0.0')] }); expect(fields()).toEqual([]);
+    setBinding('1.0.0'); await f.model.revert(); expect(fields()[0].type).toBe('string');
+    f.source.replaceSchemas(undefined); expect(fields()).toEqual([]);
+  } finally { f.source.dispose(); }
 });
 
 scenario('配置声明沿冻结目标读取并拒绝错误 Gateway 或 workspace 回执', async () => {
@@ -458,6 +435,7 @@ scenario('配置声明沿冻结目标读取并拒绝错误 Gateway 或 workspace
   let receipt = { gateway_id: 'gateway-B', workspace_id: 'workspace-B', plugins: [] };
   const Owner = evaluate(await source('src/settings/sourceOwner.ts', true), ['ConfigurationSourceOwner'], {
     gateway: { request: async (path, options) => { calls.push({ path, ...options }); return receipt; } },
+    watchPluginConfigurationSchemas: async (target, signal) => { calls.push({ target, signal }); },
   }).ConfigurationSourceOwner;
   const target = { gateway_id: 'gateway-B', workspace_id: 'workspace-B', gateway_connection_id: 'route-B' };
   const owner = new Owner({ ...target, version: 2, name: '展示名称' }), abort = new AbortController();
@@ -466,6 +444,8 @@ scenario('配置声明沿冻结目标读取并拒绝错误 Gateway 或 workspace
   expect(JSON.parse(calls[0].body)).toEqual(target);
   expect(calls[0].headers['X-BoxTeam-Target-Gateway-Id']).toBe('gateway-B');
   expect(calls[0].signal).toBe(abort.signal);
+  await owner.watchConfigurationSchemas(abort.signal, () => {});
+  expect(calls[1]).toEqual({ target, signal: abort.signal });
   for (const wrong of [{ gateway_id: 'gateway-A' }, { workspace_id: 'workspace-A' }]) {
     receipt = { ...target, ...wrong, plugins: [] };
     await expect(owner.configurationSchemas()).rejects.toThrow('不属于原目标');
@@ -473,29 +453,37 @@ scenario('配置声明沿冻结目标读取并拒绝错误 Gateway 或 workspace
 });
 
 
-scenario('同来源分屏只共享在途声明读取，成功和失败结清后均重新读取', async () => {
-  const Files = evaluate(await source('src/settings/sourceEditor.ts', true), ['ConfigurationSourceFiles'], { Disposable }, ['configurationSchemas']).ConfigurationSourceFiles;
-  const files = Object.create(Files.prototype), requests = [];
-  const owner = { target: { gateway_connection_id: 'route-A' }, configurationSchemas() { const reply = Promise.withResolvers(); requests.push(reply); return reply.promise; } };
-  const edit = { owner };
-  files.edit = () => edit;
-  const a = files.configurationSchemas(undefined, owner, 'v1'), b = files.configurationSchemas(undefined, owner, 'v1');
-  expect(a).toBe(b); expect(requests).toHaveLength(1);
-  requests[0].resolve({ plugins: [] }); await a; expect(edit.schemaLoading).toBeUndefined();
-  const c = files.configurationSchemas(undefined, owner, 'v1'); expect(c).not.toBe(a); expect(requests).toHaveLength(2);
-  requests[1].reject(new Error('声明读取失败'));
-  await expect(c).rejects.toThrow('声明读取失败'); expect(edit.schemaLoading).toBeUndefined();
-  const d = files.configurationSchemas(undefined, owner, 'v1'); expect(requests).toHaveLength(3);
-  requests[2].resolve({ plugins: [] }); await d;
-  const old = files.configurationSchemas(undefined, owner, 'v1');
-  const otherRoute = files.configurationSchemas(undefined, { ...owner, target: { gateway_connection_id: 'route-B' } }, 'v1');
-  const newer = files.configurationSchemas(undefined, owner, 'v2');
-  expect(requests).toHaveLength(6);
-  requests[3].resolve({ plugins: [] }); await old;
-  expect(files.configurationSchemas(undefined, owner, 'v2')).toBe(newer);
-  requests[4].resolve({ plugins: [] }); await otherRoute;
-  expect(files.configurationSchemas(undefined, owner, 'v2')).toBe(newer);
-  requests[5].resolve({ plugins: [] }); await newer;
+scenario('同来源分屏共享声明订阅，最后视图关闭回收，异路由与错误不串用', async () => {
+  const Files = evaluate(await source('src/settings/sourceEditor.ts', true), ['ConfigurationSourceFiles'],
+    { Disposable, getErrorMessage: error => error.message }, ['observeConfigurationSchemas', 'release']).ConfigurationSourceFiles;
+  const files = Object.create(Files.prototype), requests = [], received = [[], [], []], errors = [];
+  const owner = { target: { gateway_connection_id: 'route-A' }, watchConfigurationSchemas(signal, next) {
+    const reply = Promise.withResolvers(); requests.push({ signal, next, ...reply }); return reply.promise;
+  } };
+  const edit = { owner }; files.edit = () => edit;
+  const observer = index => ({ next: value => received[index].push(value), error: error => errors.push(error.message) });
+  const a = files.observeConfigurationSchemas(undefined, owner, observer(0));
+  const b = files.observeConfigurationSchemas(undefined, owner, observer(1));
+  expect(requests).toHaveLength(1);
+  const first = { plugins: [] }; requests[0].next(first);
+  expect(received[0]).toEqual([first]); expect(received[1]).toEqual([first]);
+  const late = files.observeConfigurationSchemas(undefined, owner, observer(2));
+  expect(received[2]).toEqual([first]); expect(requests).toHaveLength(1);
+  const other = files.observeConfigurationSchemas(undefined,
+    { ...owner, target: { gateway_connection_id: 'route-B' } }, observer(2));
+  expect(requests).toHaveLength(2);
+  a.dispose(); b.dispose(); expect(requests[0].signal.aborted).toBe(false);
+  late.dispose(); expect(requests[0].signal.aborted).toBe(true);
+  requests[0].next({ plugins: ['retired'] }); expect(received[0]).toEqual([first]);
+  requests[1].reject(new Error('配置读取授权已撤销'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(errors).toEqual(['配置读取授权已撤销']);
+  other.dispose(); expect(requests[1].signal.aborted).toBe(true); expect(edit.schemaStreams.size).toBe(0);
+  const resource = { toString: () => 'same-source' };
+  files.edits = new Map([[resource.toString(), edit]]);
+  files.observeConfigurationSchemas(resource, owner, observer(0));
+  files.release(resource);
+  expect(requests[2].signal.aborted).toBe(true); expect(files.edits.size).toBe(0);
 });
 
 scenario('Pane 取消来源准备后不绑定迟到模型，释放已取得的文本引用', async () => {

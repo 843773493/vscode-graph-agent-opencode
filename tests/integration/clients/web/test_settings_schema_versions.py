@@ -132,6 +132,7 @@ async def test_saved_bindings_refresh_only_their_settings_schema(
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert result["isolated_versions"] and result["same_input_refreshed"]
     assert result["late_installed_schema_refreshed"] and result["ordinary_save_zero_schema_requests"]
+    assert result["cross_client_install"]
     assert (
         result["unbind_released_only_owner"]
         and result["residue_preserved"]

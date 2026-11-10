@@ -5,13 +5,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import zipfile
+from collections.abc import AsyncIterator
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 
 from app.api.runtime_control import verify_local_control_request
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    stream_sse_with_heartbeat,
+)
+from app.core.async_channel import run_channel
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
@@ -19,9 +27,18 @@ from app.gateway.auth import (
     verify_gateway_access,
     verify_gateway_token,
 )
-from app.gateway.federation.policy import require_federation_capability
+from app.gateway.federation.policy import (
+    federation_capability_allowed,
+    require_federation_capability,
+)
 from app.gateway.plugins.sources import enabled_source, read_catalog, source_status
-from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
+from app.gateway.proxy_upstream import (
+    TARGET_GATEWAY_ID_HEADER,
+    UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    UpstreamResponseBody,
+    parse_target_gateway_id,
+    send_upstream_request,
+)
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
     gateway_plugin_bindings,
@@ -30,6 +47,10 @@ from app.gateway.runtime.service_plugins.runtime import (
 from app.gateway.server.management_routes import (
     check_management_route,
     management_gateway_route,
+)
+from app.gateway.server.service_plugin_proxy import (
+    _PluginSnapshotResponse,
+    plugin_gateway_route,
 )
 from app.schemas.canonical_params import CanonicalWorkspaceId
 from app.schemas.gateway.plugin_installation import (
@@ -66,6 +87,7 @@ from app.schemas.gateway.service_plugin_workspace import (
     WorkspacePluginValidation,
 )
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.sse import sse_responses
 from app.services.infrastructure.config.plugin_private_inputs import (
     validate_private_input,
 )
@@ -227,14 +249,26 @@ async def configuration_schemas(payload: PluginConfigurationSchemasRequest, requ
         if response.is_error:
             raise HTTPException(response.status_code, response.json().get("detail"))
         return APIResponse[PluginConfigurationSchemasDTO].model_validate_json(response.content)
+    _configuration_schema_access(payload, request, auth)
+    return APIResponse(data=await _configuration_schema_snapshot(payload, request, auth, owner),
+                       request_id=get_request_id(request))
+
+
+def _configuration_schema_access(payload: PluginConfigurationSchemasRequest, request: Request,
+                                 auth: GatewayAuthContext) -> None:
     require_federation_capability(request, auth, "configuration_read")
     if payload.workspace_id is not None:
         try:
-            target = request.app.state.registry.resolve((owner.gateway_id, payload.workspace_id))
+            target = request.app.state.registry.resolve((payload.gateway_id, payload.workspace_id))
         except LookupError as error:
             raise HTTPException(409, "配置 schema 所属工作区未登记在当前 Gateway") from error
         if target.connection_kind != "local":
             raise HTTPException(409, "配置 schema 必须由工作区所属的原生 Gateway 提供")
+
+
+async def _configuration_schema_snapshot(payload: PluginConfigurationSchemasRequest, request: Request,
+                                         auth: GatewayAuthContext, owner: GatewayPluginRuntime,
+) -> PluginConfigurationSchemasDTO:
     scope = "workspace" if payload.workspace_id is not None else "gateway"
     packages = await asyncio.to_thread(owner.packages.inventory)
     plugins = [PluginConfigurationSchemaDTO(package_id=package.manifest.package_id,
@@ -242,9 +276,92 @@ async def configuration_schemas(payload: PluginConfigurationSchemasRequest, requ
         instance_scope=plugin.instance_scope, configuration_schema=plugin.contributes.configuration)
         for package in packages for plugin in package.manifest.plugins
         if plugin.instance_scope == scope and plugin.contributes.configuration is not None]
-    require_federation_capability(request, auth, "configuration_read")
-    return APIResponse(data=PluginConfigurationSchemasDTO(gateway_id=owner.gateway_id,
-        workspace_id=payload.workspace_id, plugins=plugins), request_id=get_request_id(request))
+    _configuration_schema_access(payload, request, auth)
+    return PluginConfigurationSchemasDTO(gateway_id=owner.gateway_id,
+        workspace_id=payload.workspace_id, plugins=plugins)
+
+
+@router.post("/api/gateway/service-plugins/configuration-schemas/events", response_class=StreamingResponse,
+    responses=sse_responses("目标安装域的完整配置声明快照", {"snapshot": PluginConfigurationSchemasDTO}))
+async def configuration_schema_events(payload: PluginConfigurationSchemasRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
+) -> StreamingResponse:
+    references = ExitStack()
+    body: UpstreamResponseBody | None = None
+    handed_off = False
+    try:
+        remote = references.enter_context(plugin_gateway_route(request, payload, auth))
+        require_federation_capability(request, auth, "configuration_read")
+        if remote is None:
+            _configuration_schema_access(payload, request, auth)
+            stopped, changed = asyncio.Event(), asyncio.Event()
+            loop = asyncio.get_running_loop()
+
+            def installed() -> None:
+                loop.call_soon_threadsafe(changed.set)
+
+            def registered() -> None:
+                try:
+                    _configuration_schema_access(payload, request, auth)
+                except (HTTPException, LookupError):
+                    loop.call_soon_threadsafe(stopped.set)
+
+            owner.packages.add_change_observer(installed)
+            references.callback(owner.packages.remove_change_observer, installed)
+            registry = request.app.state.registry
+            registry.add_commit_observer(registered)
+            references.callback(registry.remove_commit_observer, registered)
+
+            async def installed_change() -> None:
+                await changed.wait()
+
+            async def frames() -> AsyncIterator[str]:
+                while not stopped.is_set():
+                    # 先清唤醒再读原库存，读取期间提交的发布不会丢失。
+                    changed.clear()
+                    policy_changed = request.app.state.federation_policy_store.changed
+                    if not federation_capability_allowed(request, auth, "configuration_read"):
+                        return
+                    snapshot = await _configuration_schema_snapshot(payload, request, auth, owner)
+                    if stopped.is_set():
+                        return
+                    yield f"event: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+                    await run_channel(installed_change(), policy_changed.wait())
+
+            source = stream_sse_with_heartbeat(frames(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+                                               close_source_on_exit=True)
+        else:
+            client = request.app.state.http_client
+            upstream = client.build_request("POST", remote.url, headers=remote.headers,
+                json=payload.model_dump(mode="json", exclude={"gateway_connection_id"}), timeout=None)
+            response = await send_upstream_request(client, upstream,
+                response_headers_timeout_seconds=UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS)
+            body = UpstreamResponseBody(response)
+            if response.is_error:
+                await response.aread()
+                raise HTTPException(response.status_code, response.json().get("detail"))
+            if (response.headers.get("X-Request-ID") != get_request_id(request)
+                or response.headers.get("content-type", "").split(";", 1)[0] != "text/event-stream"):
+                raise ValueError("配置声明事件的请求身份或协议不符")
+            source, stopped = body, remote.stopped
+        result = _PluginSnapshotResponse(source, request=request, auth=auth, stopped=stopped,
+            close=references.close, body=body, capabilities=("configuration_read",))
+        handed_off = True
+        return result
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    finally:
+        if not handed_off:
+            try:
+                if body is not None:
+                    await body.aclose()
+            finally:
+                references.close()
 
 
 @router.post("/api/gateway/service-plugins/inventory")

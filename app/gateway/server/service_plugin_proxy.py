@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import AsyncIterable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated
@@ -27,6 +27,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from app.api.runtime_control import verify_local_control_request
+from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
 from app.core.async_channel import close_channel, run_channel
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
@@ -51,7 +52,7 @@ from app.gateway.server.management_routes import (
     management_gateway_route,
 )
 from app.schemas.canonical_params import CanonicalWorkspaceId
-from app.schemas.gateway.service_plugin import PluginBinding
+from app.schemas.gateway.service_plugin import PluginBinding, PluginTarget
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -69,6 +70,32 @@ class _ServiceRoute:
     instance_id: str
     gateway_id: str
     remote: bool = False
+
+
+@contextmanager
+def plugin_gateway_route(request: Request, payload: PluginTarget,
+                   auth: GatewayAuthContext) -> Iterator[_ServiceRoute | None]:
+    with management_gateway_route(request, gateway_id=payload.gateway_id,
+        gateway_connection_id=payload.gateway_connection_id, auth=auth) as remote:
+        if remote is not None:
+            stopped = asyncio.Event()
+
+            def check() -> None:
+                try:
+                    check_management_route(request, remote)
+                except LookupError:
+                    stopped.set()
+
+            registry = request.app.state.registry
+            registry.add_commit_observer(check)
+            try:
+                check()
+                yield _ServiceRoute(httpx.URL(remote.base_url + request.url.path), remote.headers,
+                    stopped, "", payload.gateway_id, True)
+            finally:
+                registry.remove_commit_observer(check)
+            return
+        yield None
 
 
 @contextmanager
@@ -170,6 +197,53 @@ async def _watch_access(connection: HTTPConnection, auth: GatewayAuthContext, st
     else:
         await run_channel(retired(), policy())
     raise LookupError("插件原实例或 Gateway 路由已退役")
+
+
+class _PluginSnapshotResponse(StreamingResponse):
+    """原订阅持有原路由；撤权、换代和响应头发送失败都结清它。"""
+
+    def __init__(self, source: AsyncIterable[bytes | str], *, request: Request, auth: GatewayAuthContext,
+                 stopped: asyncio.Event, close: Callable[[], None], body: UpstreamResponseBody | None,
+                 capabilities: tuple[Capability, ...] = ("read",)) -> None:
+        super().__init__(source, media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+        self.request, self.auth, self.stopped, self.close, self.body = request, auth, stopped, close, body
+        self.capabilities = capabilities
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        started, completed = False, False
+        revoked: HTTPException | None = None
+
+        async def forward(message: Message) -> None:
+            nonlocal started, completed
+            if message["type"] == "http.response.start":
+                started = True
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                completed = True
+            await send(message)
+
+        async def watch() -> None:
+            nonlocal revoked
+            try:
+                await _watch_access(self.request, self.auth, self.stopped, self.capabilities)
+            except LookupError as error:
+                revoked = HTTPException(409, str(error))
+            except HTTPException as error:
+                revoked = error
+
+        try:
+            await run_channel(super().__call__(scope, receive, forward), watch())
+            if revoked is not None:
+                if not started:
+                    await JSONResponse(status_code=revoked.status_code, content={"detail": revoked.detail,
+                        "request_id": get_request_id(self.request)})(scope, receive, send)
+                elif not completed:
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+        finally:
+            try:
+                if self.body is not None:
+                    await self.body.aclose()
+            finally:
+                self.close()
 
 
 class _ServiceResponse(StreamingResponse):

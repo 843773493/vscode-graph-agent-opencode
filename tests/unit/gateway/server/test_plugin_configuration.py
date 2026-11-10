@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
+from starlette.types import Message, Scope
 
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
@@ -237,3 +239,57 @@ async def test_private_input_requires_configuration_write_before_creating_a_priv
     assert secret not in response.text
     assert not owner.private_inputs.directory.exists()
     assert owner.slots == {}
+
+
+@pytest.mark.parametrize("workspace_id", [None, WORKSPACE_ID])
+async def test_configuration_schema_events_follow_publication_and_revoke_without_runtime_access(
+    plugin_configuration_gateway: tuple[FastAPI, GatewayPluginRuntime, GatewayWorkspaceRegistry],
+    tmp_path: Path, workspace_id: str | None,
+) -> None:
+    app, owner, registry = plugin_configuration_gateway
+    incoming: asyncio.Queue[Message] = asyncio.Queue()
+    outgoing: asyncio.Queue[Message] = asyncio.Queue()
+    payload = {"gateway_id": GATEWAY_ID, "workspace_id": workspace_id}
+    path = CONFIGURATION_SCHEMAS_PATH + "/events"
+    await incoming.put({"type": "http.request", "body": json.dumps(payload).encode(), "more_body": False})
+    scope: Scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": "POST", "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": b"",
+        "headers": [(b"content-type", b"application/json"), (b"x-request-id", b"installed-schema-events")],
+        "client": ("127.0.0.1", 12345), "server": ("test", 80)}
+    running = asyncio.create_task(app(scope, incoming.get, outgoing.put))
+
+    async def snapshot() -> dict[str, object]:
+        message = await asyncio.wait_for(outgoing.get(), 3)
+        assert message["type"] == "http.response.body"
+        return json.loads(message["body"].decode().split("data: ", 1)[1])
+
+    try:
+        start = await asyncio.wait_for(outgoing.get(), 3)
+        assert start["type"] == "http.response.start" and start["status"] == 200
+        assert (b"x-request-id", b"installed-schema-events") in start["headers"]
+        first = await snapshot()
+        assert first["gateway_id"] == GATEWAY_ID and first["workspace_id"] == workspace_id
+        assert first["plugins"] == []
+        await asyncio.to_thread(_install, owner, tmp_path, package_id="events.settings", version="1.0.0",
+            plugin_id="settings", scope="workspace" if workspace_id else "gateway",
+            configuration_schema={"type": "object", "properties": {"mode": {"type": "boolean"}}})
+        installed = await snapshot()
+        plugins = installed["plugins"]
+        assert isinstance(plugins, list)
+        assert [(item["package_id"], item["package_version"]) for item in plugins] == [("events.settings", "1.0.0")]
+        assert owner.slots == {}
+        await asyncio.to_thread(owner.packages.uninstall, "events.settings", "1.0.0")
+        assert (await snapshot())["plugins"] == []
+        if workspace_id is None:
+            app.state.federation_policy_store.publish({"default_effect": "deny", "rules": []})
+        else:
+            registry.remove((GATEWAY_ID, workspace_id))
+        final = await asyncio.wait_for(outgoing.get(), 3)
+        assert final == {"type": "http.response.body", "body": b"", "more_body": False}
+        await asyncio.wait_for(running, 3)
+        assert owner.packages._change_observers == ()
+        assert registry._commit_observers == []
+        assert owner.slots == {}
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)

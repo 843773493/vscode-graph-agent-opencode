@@ -8,7 +8,7 @@ import { installPlugin } from '../../../support/plugin_package.mjs';
 
 const input = JSON.parse(process.env.BOXTEAM_SETTINGS_SCHEMA_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], requests: [], writes: [], oldHostRequests: [], schemaRequests: [] };
-let browser, page;
+let browser, page, installerPage;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
   page = await browser.newPage({ viewport: { width: 1800, height: 1100 } });
@@ -17,7 +17,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(error.message));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
-    if (path.endsWith('/service-plugins/configuration-schemas')) result.schemaRequests.push(request.postDataJSON());
+    if (path.includes('/service-plugins/configuration-schemas')) result.schemaRequests.push(request.postDataJSON());
     if (path.includes('/extension-configurations/')) result.oldHostRequests.push(path);
     if (request.method() === 'PUT' && path.includes('/config/sources/')) {
       const body = request.postDataJSON();
@@ -28,8 +28,8 @@ try {
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
     await globalThis.workbench.commands.executeCommand(id, ...args);
   }, { id, args });
-  const api = async (path, options = {}, expectedStatus = 200) => {
-    const reply = await page.evaluate(async ({ path, options }) => {
+  const api = async (path, options = {}, expectedStatus = 200, caller = page) => {
+    const reply = await caller.evaluate(async ({ path, options }) => {
       const auth = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
       const response = await fetch(path, { ...options, headers: { 'X-Local-Token': auth.token, 'Content-Type': 'application/json', ...(options.headers ?? {}) },
         body: options.body && JSON.stringify(options.body) });
@@ -128,7 +128,11 @@ try {
   await command('workbench.action.focusFirstEditorGroup');
   await command('settings.switchToJSON');
   await expect(field(b, 'onlyTwo')).toBeVisible();
-  await installPlugin(api, { gateway_id: health.gateway_id, path: input.packagePaths[2] });
+  installerPage = await browser.newPage();
+  await installerPage.goto(input.baseUrl + '/api/gateway/health');
+  await installPlugin((path, options, status) => api(path, options, status, installerPage),
+    { gateway_id: health.gateway_id, path: input.packagePaths[2] });
+  result.cross_client_install = true;
   const beforeLateBinding = await api(sourcePath, { headers: headers(b) });
   let lateBinding = update(beforeLateBinding.jsonc, ['plugins', 'runtime', 'entries'], [binding('3.0.0')]);
   lateBinding = update(lateBinding, ['plugins', 'configuration', 'values', 'schema.probe', 'preference'], { mode: 'late-B' });
@@ -140,11 +144,11 @@ try {
   await expect(field(b, 'onlyThree')).toBeVisible();
   await expect(field(b, 'mode').getByRole('textbox')).toHaveValue('late-B');
   await expect(field(b, 'onlyTwo')).toHaveCount(0);
-  assert.equal(result.schemaRequests.length, schemaReadsBeforeSave + 1, '原 B 表单只补读一次新绑定版本');
+  assert.equal(result.schemaRequests.length, schemaReadsBeforeSave, '其他窗口安装已推送声明，保存绑定不再补读');
   result.late_installed_schema_refreshed = true;
   await command('workbench.action.focusSecondEditorGroup');
   await field(b, 'mode').getByRole('textbox').fill('late-B-updated'); await save();
-  assert.equal(result.schemaRequests.length, schemaReadsBeforeSave + 1, '普通参数保存不能重新读取安装声明');
+  assert.equal(result.schemaRequests.length, schemaReadsBeforeSave, '普通参数保存不能重新读取安装声明');
   result.ordinary_save_zero_schema_requests = true;
   await command('workbench.action.focusFirstEditorGroup');
   await command('workbench.action.closeEditorsAndGroup');

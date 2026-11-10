@@ -88,52 +88,22 @@ export class SourceSettings extends Disposable {
   private readonly fields = new Map<string, SourceSetting>();
   readonly groups: ISettingsGroup[] = [];
   readonly resource: URI;
-  private schemaLoad: AbortController | undefined;
-  private schemaBindings: string;
   constructor(readonly location: TargetSettingsLocation, readonly model: ITextFileEditorModel, private readonly files: IFileService,
-    private schemas: PluginConfigurationSchemasDTO, textFiles: ITextFileEditorModelManager,
-    private readonly owner: ConfigurationSourceOwner, private readonly notifications: INotificationService) {
+    private schemas: PluginConfigurationSchemasDTO | undefined, textFiles: ITextFileEditorModelManager) {
     super();
     this.resource = configSourceEditorUri(location, location.source_key);
-    this.schemaBindings = this.bindingVersions();
     this.buildFields();
     this._register(model.onDidChangeContent(() => this.changed.fire(false)));
-    const reload = () => this.reloadSchemas();
-    // 只在正式保存／还原缺少确切版本时重读安装声明；普通输入与保存不重复查询。
+    const reload = () => { this.buildFields(); this.changed.fire(true); };
+    // 声明由安装事件更新；正式保存／还原只重建当前绑定的字段，不再补读库存。
     this._register(model.onDidSave(reload));
     this._register(textFiles.onDidRevert(reverted => { if (reverted === model) reload(); }));
     this._register(model.onDidChangeDirty(() => this.changed.fire(false)));
-    this._register({ dispose: () => this.schemaLoad?.abort() });
   }
-  private bindingVersions(): string {
-    const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
-    return JSON.stringify(Array.isArray(bindings) ? bindings.map(binding =>
-      [binding.package_id, binding.plugin_id, binding.package_version]).sort() : []);
-  }
-  private reloadSchemas(): void {
-    this.schemaLoad?.abort();
-    this.schemaLoad = undefined;
+  replaceSchemas(schemas: PluginConfigurationSchemasDTO | undefined): void {
+    this.schemas = schemas;
     this.buildFields();
     this.changed.fire(true);
-    const versions = this.bindingVersions();
-    if (versions === this.schemaBindings) return;
-    const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
-    if (!Array.isArray(bindings) || !bindings.some(binding => !this.schemas.plugins.some(plugin =>
-      plugin.package_id === binding.package_id && plugin.plugin_id === binding.plugin_id && plugin.package_version === binding.package_version))) {
-      this.schemaBindings = versions;
-      return;
-    }
-    const load = new AbortController();
-    this.schemaLoad = load;
-    void configSourceFiles(this.files).configurationSchemas(this.resource, this.owner, versions).then(schemas => {
-      if (load.signal.aborted) return;
-      this.schemas = schemas;
-      this.schemaBindings = versions;
-      this.buildFields();
-      this.changed.fire(true);
-    }).catch(error => {
-      if (!load.signal.aborted) this.notifications.error(error);
-    }).finally(() => { if (this.schemaLoad === load) this.schemaLoad = undefined; });
   }
   get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
   createModel(parent: IInstantiationService): Settings2EditorModel {
@@ -197,7 +167,7 @@ export class SourceSettings extends Disposable {
       if (settings.length) this.groups.push({ id: name, title: name, sections: [{ settings }], range: nullRange, titleRange: nullRange });
     }
     const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
-    for (const plugin of this.schemas.plugins) {
+    for (const plugin of this.schemas?.plugins ?? []) {
       if (!Array.isArray(bindings) || !bindings.some(binding => binding?.package_id === plugin.package_id && binding?.plugin_id === plugin.plugin_id && binding?.package_version === plugin.package_version)) continue;
       if (!plugin.configuration_schema) throw new Error('安装清单缺少配置 schema');
       const settings: ISetting[] = [];
@@ -223,8 +193,6 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
     const loaded = document ?? await owner.read(location.source_key, undefined, controller.signal);
     controller.signal.throwIfAborted();
     const resource = configSourceFiles(files).prepareEditor(location, location.source_key, loaded);
-    const schemas = await owner.configurationSchemas(controller.signal);
-    controller.signal.throwIfAborted();
     const reference = await parent.invokeFunction(accessor => accessor.get(ITextModelService)).createModelReference(resource);
     lifetime.add(reference);
     controller.signal.throwIfAborted();
@@ -232,7 +200,20 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
     const model = textFiles.get(resource);
     if (!model) throw new Error('设置来源没有原文本文件模型');
     const notifications = parent.invokeFunction(accessor => accessor.get(INotificationService));
-    const source = lifetime.add(new SourceSettings(location, model, files, schemas, textFiles, owner, notifications));
+    const initial = Promise.withResolvers<void>();
+    let source: SourceSettings | undefined, schemas: PluginConfigurationSchemasDTO | undefined;
+    const subscription = lifetime.add(configSourceFiles(files).observeConfigurationSchemas(resource, owner, {
+      next: value => { schemas = value; source?.replaceSchemas(value); initial.resolve(); },
+      error: error => { if (source) { source.replaceSchemas(undefined); notifications.error(error); } else initial.reject(error); },
+    }));
+    const aborted = () => { subscription.dispose(); initial.reject(new CancellationError()); };
+    controller.signal.addEventListener('abort', aborted, { once: true });
+    try {
+      await initial.promise;
+      controller.signal.throwIfAborted();
+      source = lifetime.add(new SourceSettings(location, model, files, schemas, textFiles));
+    } finally { controller.signal.removeEventListener('abort', aborted); }
+    lifetime.add({ dispose: onGatewayUserSessionInvalidated(0, () => { subscription.dispose(); source?.replaceSchemas(undefined); }) });
     return parent.createChild(new ServiceCollection([ITargetSettingsContext, { _serviceBrand: undefined, target: source }]), lifetime);
   } finally { auth(); context(); cancel.dispose(); controller.abort(); }
 }

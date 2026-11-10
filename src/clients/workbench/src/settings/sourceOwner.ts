@@ -2,6 +2,7 @@ import type { GatewayConfigSourceDocumentDTO, GatewayConfigSourceEditRequest, Ga
 import type { ConfigSourceDocumentDTO, ConfigSourceEditRequest } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../web/src/api/configSources.js';
+import { watchPluginConfigurationSchemas } from '../../../web/src/api/pluginConfigurationSchemas.js';
 import { gateway } from '../agentApi.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 
@@ -18,7 +19,10 @@ export function sourceBaseline(document: SourceDocument): SourceBaseline {
 /** 表单与 JSONC 共用原配置 owner；这里只选择传输，不合并配置或判定生效。 */
 export class ConfigurationSourceOwner {
   readonly target: SourceTarget;
-  constructor(target: SourceTarget) { this.target = Object.freeze({ ...target }); }
+  constructor(target: SourceTarget) {
+    this.target = Object.freeze({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id,
+      workspace_id: target.workspace_id });
+  }
   private get workspace(): GatewayWorkspaceRequestTarget { return { gateway_id: this.target.gateway_id, workspace_id: this.target.workspace_id! }; }
   private path(sourceKey?: string, operation = '', idempotencyKey?: string): string {
     const query = new URLSearchParams();
@@ -42,6 +46,9 @@ export class ConfigurationSourceOwner {
       throw new Error('配置 schema 回执不属于原目标');
     }
     return schemas;
+  }
+  watchConfigurationSchemas(signal: AbortSignal, onSnapshot: (snapshot: PluginConfigurationSchemasDTO) => void): Promise<void> {
+    return watchPluginConfigurationSchemas(this.target, signal, onSnapshot);
   }
   private document(document: SourceDocument, sourceKey: string, key?: string): SourceDocument {
     if (document.gateway_id !== this.target.gateway_id || ('workspace_id' in document ? document.workspace_id : undefined) !== this.target.workspace_id

@@ -61,6 +61,18 @@ class PluginPackageStore:
         root.mkdir(parents=True, exist_ok=True)
         self.root = root.resolve(strict=True)
         self._lock_path = self.root / ".install.lock"
+        self._change_observers: tuple[Callable[[], None], ...] = ()
+
+    def add_change_observer(self, observer: Callable[[], None]) -> None:
+        self._change_observers = (*self._change_observers, observer)
+
+    def remove_change_observer(self, observer: Callable[[], None]) -> None:
+        self._change_observers = tuple(item for item in self._change_observers if item is not observer)
+
+    def _notify_changed(self) -> None:
+        # 安装线程只通知实际发布；订阅者把唤醒交回其事件循环，不保存另一份库存。
+        for observer in self._change_observers:
+            observer()
 
     def inspect_zip(self, path: Path, expected_digest: str | None = None) -> tuple[PluginPackageManifest, str]:
         """受理时校验并冻结 ZIP 的身份；发布仍会再次验证同一文件摘要。"""
@@ -223,6 +235,7 @@ class PluginPackageStore:
             shutil.rmtree(installed.root)
             if package_dir.exists() and not any(package_dir.iterdir()):
                 package_dir.rmdir()
+        self._notify_changed()
 
     def _publish(
         self,
@@ -286,6 +299,7 @@ class PluginPackageStore:
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
+        self._notify_changed()
         return InstalledPluginPackage(manifest=manifest, digest=digest, root=destination)
 
 

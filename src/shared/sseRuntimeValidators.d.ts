@@ -8,3 +8,4 @@ export const validatePersistentTaskListDTO: { (value: unknown): boolean; errors?
 export const validateFederatedSearchEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateConfigEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validatePluginCommandSnapshotDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validatePluginConfigurationSchemasDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };

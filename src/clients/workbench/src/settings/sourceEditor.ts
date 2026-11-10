@@ -34,6 +34,11 @@ function sourceLocation(resource: URI): { target: SourceTarget; sourceKey: strin
 }
 
 export interface ConfigSourceBackup { baseline?: SourceBaseline; submissionKey?: string }
+interface SchemaObserver { next: (schemas: PluginConfigurationSchemasDTO) => void; error: (error: Error) => void }
+interface SchemaStream {
+  route?: string; abort: AbortController; observers: Set<SchemaObserver>;
+  current?: PluginConfigurationSchemasDTO; failure?: Error;
+}
 interface SourceEdit extends ConfigSourceBackup {
   owner: ConfigurationSourceOwner;
   sourceKey: string;
@@ -42,7 +47,7 @@ interface SourceEdit extends ConfigSourceBackup {
   initial?: SourceDocument;
   loading?: Promise<SourceDocument>;
   invalidated: boolean;
-  schemaLoading?: { route?: string; bindings: string; request: Promise<PluginConfigurationSchemasDTO> };
+  schemaStreams?: Set<SchemaStream>;
 }
 
 /** 只适配原文本文件生命周期；正文、预检、CAS 和提交事实全部由原配置 owner 提供。 */
@@ -81,19 +86,43 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     if (!document) throw new Error('配置来源尚未读取');
     return document;
   }
-  configurationSchemas(resource: URI, owner: ConfigurationSourceOwner, bindings: string): Promise<PluginConfigurationSchemasDTO> {
+  observeConfigurationSchemas(resource: URI, owner: ConfigurationSourceOwner, observer: SchemaObserver): IDisposable {
     const edit = this.edit(resource);
-    // 同一来源的多个编辑器组只合并在途读取；结清即释放，不缓存另一份安装库存。
-    let pending = edit.schemaLoading;
-    if (!pending || pending.route !== owner.target.gateway_connection_id || pending.bindings !== bindings) {
-      pending = { route: owner.target.gateway_connection_id, bindings, request: owner.configurationSchemas().finally(() => {
-        if (edit.schemaLoading === pending) edit.schemaLoading = undefined;
-      }) };
-      edit.schemaLoading = pending;
+    const streams = edit.schemaStreams ??= new Set<SchemaStream>();
+    let stream = [...streams].find(item => item.route === owner.target.gateway_connection_id);
+    if (!stream) {
+      stream = { route: owner.target.gateway_connection_id, abort: new AbortController(), observers: new Set() };
+      streams.add(stream);
+      const active = stream;
+      void owner.watchConfigurationSchemas(active.abort.signal, schemas => {
+        if (active.abort.signal.aborted) return;
+        active.current = schemas;
+        for (const listener of active.observers) listener.next(schemas);
+      }).catch(error => {
+        if (active.abort.signal.aborted) return;
+        active.current = undefined;
+        active.failure = new Error(getErrorMessage(error), { cause: error });
+        for (const listener of active.observers) listener.error(active.failure);
+      });
     }
-    return pending.request;
+    stream.observers.add(observer);
+    if (stream.current) observer.next(stream.current);
+    if (stream.failure) observer.error(stream.failure);
+    const active = stream;
+    return { dispose: () => {
+      active.observers.delete(observer);
+      if (!active.observers.size) { active.abort.abort(); streams.delete(active); }
+    } };
   }
-  release(resource: URI): void { this.edits.delete(resource.toString()); }
+  release(resource: URI): void {
+    const key = resource.toString();
+    for (const stream of this.edits.get(key)?.schemaStreams ?? []) stream.abort.abort();
+    this.edits.delete(key);
+  }
+  override dispose(): void {
+    for (const key of this.edits.keys()) this.release(URI.parse(key));
+    super.dispose();
+  }
   invalidate(): void { for (const edit of this.edits.values()) edit.invalidated = true; }
   backup(resource: URI): ConfigSourceBackup {
     const edit = this.edits.get(resource.toString());
