@@ -55,14 +55,15 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
         payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    interrupted_creation = getattr(request, "param", "normal") in {"interrupted", "deleted"}
+    interrupted_creation = getattr(request, "param", "normal") in {"interrupted", "deleted", "cancelled"}
     creation_gate = context.artifacts_dir / "creation.blocked"
     if interrupted_creation:
         creation_gate.touch()
     gateway = start_gateway_process(workspace_root=gateway_workspace, default_backend_url=None,
         port=unused_tcp_port,
         asgi_app="tests.integration.gateway.plugin_creation_app:app" if interrupted_creation else "app.gateway.main:app",
-        extra_env={"BOXTEAM_PLUGIN_CREATION_TEST_GATE": str(creation_gate),
+        extra_env={"BOXTEAM_PLUGIN_CREATION_TEST_MODE": getattr(request, "param", "normal"),
+            "BOXTEAM_PLUGIN_CREATION_TEST_GATE": str(creation_gate),
             "BOXTEAM_PLUGIN_CREATION_TEST_AUDIT": str(context.artifacts_dir / "creation-attempts.jsonl")}
             if interrupted_creation else None,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
@@ -398,7 +399,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-@pytest.mark.parametrize("workspace_plugin_case", ["normal", "interrupted", "deleted"], indirect=True)
+@pytest.mark.parametrize("workspace_plugin_case", ["normal", "interrupted", "deleted", "cancelled"], indirect=True)
 def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(workspace_plugin_case, request: pytest.FixtureRequest) -> None:
     """模板提交、创建、配置交接与卸载引用均经过真实产品入口。"""
     client, context, workspaces = workspace_plugin_case
@@ -428,8 +429,13 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
     def create(root, name, *, new):
         response = exchange("POST", "/api/gateway/managed-workspaces", {
             "root_path": str(root), "name": name, "create_directory": new,
-        }).raise_for_status().json()["data"]
-        return next(item["workspace_id"] for item in response["items"] if item["name"] == name)
+        })
+        if new and request.node.callspec.params["workspace_plugin_case"] == "cancelled":
+            assert response.status_code == 503, response.text
+            assert "controlled creation request cancelled after identity" in response.text
+            response = exchange("GET", "/api/gateway/managed-workspaces")
+        data = response.raise_for_status().json()["data"]
+        return next(item["workspace_id"] for item in data["items"] if item["name"] == name)
 
     def document(workspace_id, intent_id=None):
         query = f"?idempotency_key={intent_id}" if intent_id else ""
@@ -474,6 +480,27 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         assert not new_root.exists()
         new_id = create(new_root, "New", new=True)
         gate = context.artifacts_dir / "creation.blocked"
+        if request.node.callspec.params["workspace_plugin_case"] == "cancelled":
+            attempts = [json.loads(line) for line in (context.artifacts_dir / "creation-attempts.jsonl").read_text(encoding="utf-8").splitlines()]
+            frozen, = [item["creation"] for item in attempts if item["workspace_id"] == new_id]
+            assert frozen["revision"] == saved["active_digest"]
+            assert frozen["bindings"] == [{**binding, "workspace_id": None}]
+            defaults([]).raise_for_status()
+            blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+                "package_id": "probe.defaults", "package_version": "1.0.0"})
+            assert blocked.status_code == 409 and new_id in blocked.text, blocked.text
+            state = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]
+            assert all(item["binding"].get("workspace_id") != new_id for item in state["plugins"])
+            listing = exchange("GET", "/api/gateway/managed-workspaces").raise_for_status().json()["data"]
+            cancelled, = [item for item in listing["items"] if item["workspace_id"] == new_id]
+            assert cancelled["status"] == "offline", cancelled
+            removed = exchange("DELETE", f"/api/gateway/managed-workspaces/{new_id}").raise_for_status().json()["data"]
+            assert all(item["workspace_id"] != new_id for item in removed["items"])
+            exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+                "package_id": "probe.defaults", "package_version": "1.0.0"}).raise_for_status()
+            assert new_root.is_dir(), "取消登记后删除托管不删除用户目录"
+            assert document(existing_id)["effective"]["plugins"]["runtime"]["entries"] == []
+            return
         if gate.exists():
             # 原创建入口已经登记冻结 intent；原 writer 的真实 HTTP 验证被受控拒绝。
             deadline = time.monotonic() + 30
