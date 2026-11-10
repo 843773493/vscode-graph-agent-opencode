@@ -53,17 +53,18 @@ try {
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  const api = (path, options = {}, raw = false) => page.evaluate(async ({ path, options, raw }) => {
+  const api = (path, options = {}, raw = false, expectedStatus = 200) => page.evaluate(async ({ path, options, raw, expectedStatus }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
       'Content-Type': 'application/json', ...(options.headers ?? {}) },
       body: options.body && JSON.stringify(options.body) });
     const envelope = await response.json();
-    if (!response.ok || (!raw && envelope.code !== 0) || envelope.request_id !== response.headers.get('X-Request-ID')) {
+    if (response.status !== expectedStatus || (response.ok && !raw && envelope.code !== 0)
+      || envelope.request_id !== response.headers.get('X-Request-ID')) {
       throw new Error(`${path}: ${response.status} ${JSON.stringify(envelope)}`);
     }
     return raw ? envelope : envelope.data;
-  }, { path, options, raw });
+  }, { path, options, raw, expectedStatus });
   result.initialization = [];
   for (const path of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) {
     result.initialization.push({ path, data: await api(path) });
@@ -127,8 +128,11 @@ try {
   result.installed = true;
   result.phase = 'gateway-binding';
 
+  const packageRowFor = version => view.locator('.service-plugin-package').filter({
+    has: page.getByRole('heading', { name: `UI 配置验证包 · ui.preference-probe@${version}`, exact: true }),
+  });
   const openPlugin = async name => {
-    await view.getByRole('button', { name, exact: true }).click();
+    await packageRowFor('1.0.0').getByRole('button', { name, exact: true }).click();
     await expect(view.locator('.service-plugin-details')).toBeVisible();
   };
   const enable = async (name, sourceKey, confirmLabel) => {
@@ -158,6 +162,30 @@ try {
     return snapshot.plugins.find(item => item.binding.package_id === 'ui.preference-probe' && item.binding.plugin_id === pluginId
       && (item.binding.workspace_id ?? null) === (workspaceId ?? null));
   };
+  const skillSourcePath = `/api/gateway/skill-sources/${active.gateway_id}/workspaces/${active.workspace_id}`;
+  const guideEntries = async () => (await api(skillSourcePath)).entries.filter(entry =>
+    entry.plugin?.package_id === 'ui.preference-probe' && entry.plugin.plugin_id === 'workspace-guide');
+  const readGuide = async version => {
+    await expect.poll(async () => (await guideEntries()).map(entry => entry.plugin.package_version)).toEqual([version]);
+    const entries = await guideEntries();
+    assert.equal(entries.length, 1);
+    const entry = entries[0];
+    assert.equal(entry.plugin.workspace_id, active.workspace_id);
+    assert.equal(entry.plugin.package_version, version);
+    const content = await api(`${skillSourcePath}/navigation`, { method: 'POST',
+      body: { uri: entry.display_uri, operation: 'read' } });
+    assert(content.content.includes(`UI_SKILL_${version}`));
+    const slot = await runtimeSlot('workspace-guide', active.workspace_id);
+    assert.equal(slot.declarative, true);
+    assert.equal(slot.binding.enabled, true);
+    assert.equal(slot.binding.package_version, version);
+    assert.equal(slot.instance, null);
+    assert.equal(slot.log_id, null);
+    (result.declarativeSkillVersions ??= []).push(version);
+    return entry;
+  };
+  assert.deepEqual(await guideEntries(), []);
+  assert.equal(await runtimeSlot('workspace-guide', active.workspace_id), undefined);
   const callRuntime = async slot => {
     assert.equal(slot.gateway_id, active.gateway_id); assert.equal(slot.state, 'ready'); assert(slot.instance);
     const query = new URLSearchParams({ package_version: slot.binding.package_version,
@@ -259,9 +287,6 @@ try {
   assert.equal((await gatewaySecretClear).status(), 200);
 
   result.phase = 'explicit-version-switch';
-  const packageRowFor = version => view.locator('.service-plugin-package').filter({
-    has: page.getByRole('heading', { name: `UI 配置验证包 · ui.preference-probe@${version}`, exact: true }),
-  });
   const gatewaySource = () => api('/api/gateway/config/sources/gateway_mutable_override');
   const configuredGateway = document => document.source_effective.plugins.runtime.entries.find(item =>
     item.package_id === 'ui.preference-probe' && item.plugin_id === 'gateway-preference');
@@ -273,8 +298,11 @@ try {
     const installing = page.waitForRequest(request => request.method() === 'POST'
       && new URL(request.url()).pathname.endsWith('/service-plugins/install'));
     await installButton.click(); await pick('ZIP 文件'); await inputQuick(candidate.path);
-    const request = (await installing).postDataJSON();
+    const installingRequest = await installing;
+    const request = installingRequest.postDataJSON();
     assert.equal(request.gateway_id, active.gateway_id);
+    const accepted = await installingRequest.response();
+    assert.equal(accepted?.status(), 200);
     await expect.poll(async () => (await api('/api/gateway/service-plugins/install-operation',
       { method: 'POST', body: { gateway_id: active.gateway_id, operation_id: request.operation_id } })).status).toBe('failed');
     const operation = await api('/api/gateway/service-plugins/install-operation',
@@ -367,6 +395,46 @@ try {
   await switchVersion('1.1.0', false);
   await switchVersion('1.0.0', false);
   result.disabledVersionStayedDisabled = true;
+
+  result.phase = 'declarative-skill-lifecycle';
+  await view.getByLabel('插件管理范围').selectOption('workspace'); await pick(workspaceName);
+  await enable('工作区指南 · workspace-guide', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
+  await expect(view.getByRole('button', { name: '重启实例', exact: true })).toHaveCount(0);
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('声明式，无运行实例');
+  const firstGuide = await readGuide('1.0.0');
+  await packageRowFor('1.1.0').getByRole('button', { name: '工作区指南 · workspace-guide', exact: true }).click();
+  await view.getByRole('button', { name: '切换到此版本（保留开关）', exact: true }).click();
+  await pick('workspace_root_mutable_override'); await pick('确认保存工作区插件绑定');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：启用 @1.1.0');
+  const updatedGuide = await readGuide('1.1.0');
+  assert.notEqual(firstGuide.display_uri, updatedGuide.display_uri);
+  await api(`${skillSourcePath}/navigation`, { method: 'POST',
+    body: { uri: firstGuide.display_uri, operation: 'read' } }, true, 404);
+  await view.getByRole('button', { name: '停用此范围', exact: true }).click();
+  await pick('workspace_root_mutable_override'); await pick('确认保存工作区插件绑定');
+  await expect(view.getByRole('button', { name: '启用此范围', exact: true })).toBeVisible();
+  await expect.poll(guideEntries).toEqual([]);
+  const stoppedGuide = await runtimeSlot('workspace-guide', active.workspace_id);
+  assert.equal(stoppedGuide.binding.enabled, false);
+  assert.equal(stoppedGuide.instance, null);
+  await api(`${skillSourcePath}/navigation`, { method: 'POST',
+    body: { uri: updatedGuide.display_uri, operation: 'read' } }, true, 404);
+  const guideUninstall = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
+  await packageRowFor('1.1.0').getByRole('button', { name: '卸载整个包', exact: true }).click(); await pick('卸载整包');
+  const guideConflict = await guideUninstall;
+  assert.equal(guideConflict.status(), 409);
+  const guideConflictBody = await guideConflict.json();
+  assert.equal(guideConflictBody.request_id, guideConflict.headers()['x-request-id']);
+  assert.match(JSON.stringify(guideConflictBody), new RegExp(`workspace-configuration:${active.workspace_id}:workspace-guide`));
+  await view.getByRole('button', { name: '解除此范围绑定', exact: true }).click();
+  await pick('workspace_root_mutable_override'); await pick('确认保存工作区插件绑定');
+  await expect(view.getByRole('button', { name: '解除此范围绑定', exact: true })).toHaveCount(0);
+  await expect.poll(() => runtimeSlot('workspace-guide', active.workspace_id)).toBeUndefined();
+  assert.equal((await runtimeSlot('gateway-preference')).binding.enabled, false);
+  result.declarativeSkillLoop = true;
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  result.phase = 'explicit-version-switch';
   for (const version of ['1.1.0', '2.0.0']) {
     await packageRowFor(version).getByRole('button', { name: '卸载整个包', exact: true }).click();
     await pick('卸载整包');

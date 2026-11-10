@@ -108,6 +108,11 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                 "management_protocol_version": 1})
             plugin["requires"].append({"extension_point": "services", "version": 1})
             plugin["contributes"]["services"] = [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]
+        manifest["plugins"].append({
+            "id": "workspace-guide", "name": "工作区指南", "instance_scope": "workspace",
+            "requires": [{"extension_point": "skills", "version": 1}],
+            "contributes": {"skills": [{"id": "guide", "path": "guides/ui"}]},
+        })
     if scenario == "batch":
         manifest["plugins"].append({
             "id": "workspace-required", "name": "缺少必填参数", "instance_scope": "workspace",
@@ -115,12 +120,17 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             "contributes": {"configuration": {"type": "object", "required": ["label"],
                 "properties": {"label": {"type": "string"}}}},
         })
-    with ZipFile(package_path, "w") as archive:
-        archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
-        if scenario == "single":
-            archive.writestr("entry.py", PYTHON_PLUGIN)
-            archive.writestr("local_module.py", "VALUE = 1\n")
-            archive.writestr("entry.mjs", NODE_PLUGIN)
+    def write_package(path: Path, package: dict) -> None:
+        with ZipFile(path, "w") as archive:
+            archive.writestr("plugin.jsonc", json.dumps(package, ensure_ascii=False))
+            if scenario == "single":
+                archive.writestr("entry.py", PYTHON_PLUGIN)
+                archive.writestr("local_module.py", "VALUE = 1\n")
+                archive.writestr("entry.mjs", NODE_PLUGIN)
+                archive.writestr("guides/ui/SKILL.md", "---\nname: ui-package-guide\n"
+                    f"description: UI 插件包指南\n---\nUI_SKILL_{package['version']}\n")
+
+    write_package(package_path, manifest)
     version_paths = []
     incompatible_packages = []
     if scenario == "single":
@@ -129,13 +139,10 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             candidate["version"] = version
             if version == "2.0.0":
                 for plugin in candidate["plugins"]:
-                    plugin["contributes"]["configuration"]["properties"]["label"] = {"type": "number"}
+                    if "configuration" in plugin["contributes"]:
+                        plugin["contributes"]["configuration"]["properties"]["label"] = {"type": "number"}
             path = context.artifacts_dir / f"ui-plugin-package-{version}.zip"
-            with ZipFile(path, "w") as archive:
-                archive.writestr("plugin.jsonc", json.dumps(candidate, ensure_ascii=False))
-                archive.writestr("entry.py", PYTHON_PLUGIN)
-                archive.writestr("local_module.py", "VALUE = 1\n")
-                archive.writestr("entry.mjs", NODE_PLUGIN)
+            write_package(path, candidate)
             version_paths.append(str(path))
         for index, runtime in enumerate(("node", "python")):
             current_runtime = target_environment[runtime]
@@ -144,11 +151,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             candidate["version"] = f"8.0.{index}"
             candidate["target"][runtime]["abi"] = "0"
             path = context.artifacts_dir / f"incompatible-{runtime}.zip"
-            with ZipFile(path, "w") as archive:
-                archive.writestr("plugin.jsonc", json.dumps(candidate, ensure_ascii=False))
-                archive.writestr("entry.py", PYTHON_PLUGIN)
-                archive.writestr("local_module.py", "VALUE = 1\n")
-                archive.writestr("entry.mjs", NODE_PLUGIN)
+            write_package(path, candidate)
             incompatible_packages.append({"path": str(path), "version": candidate["version"],
                 "runtime": "Node" if runtime == "node" else "Python",
                 "required": f"{candidate['target'][runtime]['version']}/0",
@@ -224,6 +227,8 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["installed"] and result["uninstalled"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
             assert result["gatewayRestartedIndependently"]
+            assert result["declarativeSkillLoop"]
+            assert result["declarativeSkillVersions"] == ["1.0.0", "1.1.0"]
             assert len(result["incompatibleInstalls"]) == len(incompatible_packages) == 2
             assert all(item["status"] == "failed" and item["bindingKept"]
                 for item in result["incompatibleInstalls"])
