@@ -18,18 +18,83 @@ function declaration(name) {
   return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
 }
 
-function createInstaller(request, picks, inputs, observed) {
-  const install = new Function('gateway', 'generateUuid', 'observeInstallation', 'errorsText',
-    ['requireInstallationOwner', 'readInstallation', 'installPackageFromView'].map(declaration).join('\n')
-      + '\nreturn installPackageFromView;')(
-    { async request(path, options = {}) { return request(path, JSON.parse(options.body ?? '{}')); } },
-    () => 'operation-original',
-    async (_progress, _notifications, _target, operationId, operation) => observed.push({ operationId, operation }),
+function classCallback(className, methodName, sourceFragment, bindings = {}) {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === className);
+  const method = owner?.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === methodName);
+  let callback;
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.name.text === 'addEventListener' && node.getText(parsed).includes(sourceFragment)) callback = node.arguments[1];
+    ts.forEachChild(node, visit);
+  }
+  if (method) visit(method.body);
+  if (!callback || !ts.isArrowFunction(callback)) throw new Error(`实际源码缺少 ${sourcePath}#${className}.${methodName} 的 ${sourceFragment} 事件`);
+  const body = ts.isBlock(callback.body) ? callback.body : ts.factory.createBlock([
+    ts.factory.createReturnStatement(callback.body),
+  ], true);
+  const functionNode = ts.factory.createFunctionExpression(undefined, undefined, undefined, undefined,
+    callback.parameters, callback.type, body);
+  const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, functionNode, parsed);
+  const names = ['errorsText', ...Object.keys(bindings)];
+  return new Function(...names, `return function(...args) { return (${printed}).call(this, ...args); };`)(
+    error => error instanceof Error ? error.message : String(error), ...Object.values(bindings));
+}
+
+function classMethod(className, methodName) {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === className);
+  const method = owner?.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === methodName);
+  if (!method?.body) throw new Error(`实际源码缺少 ${sourcePath}#${className}.${methodName}`);
+  const modifiers = method.modifiers?.filter(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword);
+  const functionNode = ts.factory.createFunctionExpression(modifiers, undefined, undefined, undefined,
+    method.parameters, method.type, method.body);
+  const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, functionNode, parsed);
+  const transpiled = ts.transpile(`const runOperation = ${printed};`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  return new Function('errorsText', `${transpiled}\nreturn runOperation;`)(
     error => error instanceof Error ? error.message : String(error));
-  return install({
-    pick: async () => picks.shift(),
-    input: async () => inputs.shift(),
-  }, { info() {} }, {}, { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' });
+}
+
+function createInstallCommand(request, picks, inputs, observed, options = {}) {
+  const gateway = { async request(path, requestOptions = {}) { return request(path, JSON.parse(requestOptions.body ?? '{}')); } };
+  const requireOwner = new Function(`${declaration('requireInstallationOwner')}\nreturn requireInstallationOwner;`)();
+  const read = new Function('gateway', 'requireInstallationOwner',
+    `${declaration('readInstallation')}\nreturn readInstallation;`)(gateway, requireOwner);
+  const activePluginInstallations = options.activePluginInstallations ?? new Map();
+  const installationKey = new Function(`${declaration('installationKey')}\nreturn installationKey;`)();
+  const runPluginInstallation = new Function('activePluginInstallations', 'installationKey',
+    `${declaration('runPluginInstallation')}\nreturn runPluginInstallation;`)(activePluginInstallations, installationKey);
+  const notifications = options.notifications ?? { info() {}, error() {} };
+  const observe = new Function('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText',
+    `${declaration('observeInstallation')}\nreturn observeInstallation;`)(gateway, async () => {}, { Notification: 1 }, 120_000, read,
+    error => error instanceof Error ? error.message : String(error));
+  const observeInstallation = options.observeInstallation
+    ?? (async (progress, notificationService, target, operationId, result) => {
+      observed.push({ operationId, operation: result });
+      return observe(progress, notificationService, target, operationId, result);
+    });
+  const install = new Function('gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
+    'readInstallation', 'installationKey', 'runPluginInstallation',
+    `${declaration('installPackageFromView')}\nreturn installPackageFromView;`)(
+    gateway, options.generateUuid ?? (() => 'operation-original'), observeInstallation,
+    error => error instanceof Error ? error.message : String(error), requireOwner, read, installationKey, runPluginInstallation);
+  const quickInputToken = {}, notificationToken = {}, progressToken = {};
+  const run = new Function('managementGateway', 'IQuickInputService', 'INotificationService', 'IProgressService', 'installPackageFromView',
+    `${declaration('installServicePluginPackage')}\nreturn installServicePluginPackage;`)(
+    () => typeof options.target === 'function' ? options.target() : options.target ?? {
+      gateway_id: 'gateway-original', gateway_connection_id: 'connection-original',
+    }, quickInputToken, notificationToken, progressToken, install);
+  const accessor = { get(token) {
+    if (token === quickInputToken) return { pick: async () => picks.shift(), input: async () => inputs.shift() };
+    if (token === notificationToken) return notifications;
+    if (token === progressToken) return { withProgress: (_options, operation) => operation({ report() {} }) };
+    throw new Error('测试收到未知 Workbench 服务');
+  } };
+  return () => run(accessor);
+}
+
+function createInstaller(request, picks, inputs, observed) {
+  return createInstallCommand(request, picks, inputs, observed)();
 }
 
 function operation(gatewayId = 'gateway-original', operationId = 'operation-original') {
@@ -96,4 +161,134 @@ test('插件目录 owner 错误或分页 revision 变化时不提交安装', asy
     expect(calls[2].body.cursor).toBe('next-page');
     expect(observed).toEqual([]);
   }
+});
+
+test('View 安装按钮与 F1 对同一 Gateway 制品共用原安装操作', async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), duplicate = Promise.withResolvers();
+  const calls = [], observed = [], ids = [], messages = [];
+  const notifications = { info(message) { messages.push(message); duplicate.resolve(); }, error() {} };
+  const installCommand = createInstallCommand(async (path, body) => {
+    calls.push({ path, body });
+    return { gateway_id: body.gateway_id, operation_id: body.operation_id, status: 'running', artifact: undefined, cancel_requested: false };
+  }, [{ kind: 'zip' }, { kind: 'zip' }], ['/tmp/plugin.zip', '/tmp/plugin.zip'], observed, {
+    notifications, generateUuid: () => { const id = `operation-${ids.length + 1}`; ids.push(id); return id; },
+    observeInstallation: async (_progress, _notifications, _target, operationId, result) => {
+      observed.push({ operationId, operation: result }); entered.resolve(); await release.promise;
+    },
+  });
+  const f1 = installCommand();
+  await entered.promise;
+
+  let viewCommand;
+  const onInstallClick = classCallback('ServicePluginPackagesView', 'renderBody', "boxteam.plugins.installPackage");
+  let refreshCount = 0;
+  const view = { commands: { executeCommand(id) {
+    expect(id).toBe('boxteam.plugins.installPackage');
+    viewCommand = installCommand();
+    return viewCommand;
+  } }, notifications, async refresh() { refreshCount += 1; } };
+  view.runOperation = classMethod('ServicePluginPackagesView', 'runOperation').bind(view);
+  onInstallClick.call(view);
+  await duplicate.promise;
+
+  expect(calls.filter(call => call.path.endsWith('/install'))).toHaveLength(1);
+  expect(ids).toEqual(['operation-1']);
+  expect(messages).toEqual(['相同插件制品的原安装操作仍在进行，正在等待该操作']);
+  release.resolve();
+  await Promise.all([f1, viewCommand]);
+  expect(observed).toHaveLength(1);
+  await Promise.resolve();
+  expect(refreshCount).toBe(1);
+});
+
+test('相同制品失败或取消结清后可重新创建安装操作', async () => {
+  for (const outcome of ['failed', 'cancelled']) {
+    const calls = [], observed = [], ids = [];
+    const installCommand = createInstallCommand(async (path, body) => {
+      calls.push({ path, body });
+      if (path.endsWith('/install')) {
+        const status = calls.filter(call => call.path.endsWith('/install')).length === 1 ? 'running' : 'succeeded';
+        return { gateway_id: body.gateway_id, operation_id: body.operation_id, status, artifact: undefined, cancel_requested: false };
+      }
+      if (path.endsWith('/install-operation') && calls.filter(call => call.path.endsWith('/install')).length === 1) {
+        return { gateway_id: body.gateway_id, operation_id: body.operation_id, status: outcome, artifact: undefined,
+          cancel_requested: outcome === 'cancelled' };
+      }
+      throw new Error(`不应请求 ${path}`);
+    }, [{ kind: 'zip' }, { kind: 'zip' }], ['/tmp/plugin.zip', '/tmp/plugin.zip'], observed, {
+      generateUuid: () => { const id = `operation-${ids.length + 1}`; ids.push(id); return id; },
+    });
+    await expect(installCommand()).rejects.toThrow(`安装 ${outcome}`);
+    await installCommand();
+    expect(calls.filter(call => call.path.endsWith('/install')).map(call => call.body.operation_id)).toEqual(['operation-1', 'operation-2']);
+  }
+});
+
+test('不同 Gateway 或不同本地制品的安装操作可并发进入原 owner', async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), calls = [], observed = [], ids = [];
+  let enteredCount = 0;
+  const targets = [
+    { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' },
+    { gateway_id: 'gateway-other', gateway_connection_id: 'connection-other' },
+    { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' },
+  ];
+  const installCommand = createInstallCommand(async (path, body) => {
+    calls.push({ path, body });
+    return { gateway_id: body.gateway_id, operation_id: body.operation_id, status: 'running', artifact: undefined, cancel_requested: false };
+  }, [{ kind: 'zip' }, { kind: 'zip' }, { kind: 'zip' }], ['/tmp/plugin.zip', '/tmp/plugin.zip', '/tmp/plugin-other.zip'], observed, {
+    target: () => targets.shift(),
+    generateUuid: () => { const id = `operation-${ids.length + 1}`; ids.push(id); return id; },
+    observeInstallation: async (_progress, _notifications, target, operationId, result) => {
+      observed.push({ target, operationId, operation: result });
+      if (++enteredCount === 3) entered.resolve();
+      await release.promise;
+    },
+  });
+  const first = installCommand(), second = installCommand(), third = installCommand();
+  await entered.promise;
+  expect(calls.filter(call => call.path.endsWith('/install')).map(call => call.body.gateway_id).sort())
+    .toEqual(['gateway-original', 'gateway-original', 'gateway-other']);
+  expect(calls.filter(call => call.path.endsWith('/install')).map(call => call.body.path).sort())
+    .toEqual(['/tmp/plugin-other.zip', '/tmp/plugin.zip', '/tmp/plugin.zip']);
+  expect(ids).toEqual(['operation-1', 'operation-2', 'operation-3']);
+  release.resolve();
+  await Promise.all([first, second, third]);
+});
+
+test('卸载按钮在发起确认与请求流程前立即禁用，阻止同一按钮重复提交', () => {
+  const uninstall = { disabled: false };
+  let operationStarted = false;
+  const onUninstallClick = classCallback('ServicePluginPackagesView', 'renderPackages', 'uninstallPackageFromView', {
+    uninstall,
+    pluginTarget: { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' },
+    manifest: { package_id: 'sample', version: '1.0.0' },
+    uninstallPackageFromView: async () => {},
+  });
+
+  onUninstallClick.call({ runOperation() { operationStarted = uninstall.disabled; return Promise.resolve(); } });
+
+  expect(uninstall.disabled).toBe(true);
+  expect(operationStarted).toBe(true);
+});
+
+test('重启按钮在请求运行时立即禁用，阻止同一 revision 重复重启', () => {
+  const restart = { disabled: false };
+  let operationStarted = false;
+  const onRestartClick = classCallback('ServicePluginPackagesView', 'showDetails', '/api/gateway/service-plugins/restart', { restart });
+
+  onRestartClick.call({ runOperation() { operationStarted = restart.disabled; return Promise.resolve(); } });
+
+  expect(restart.disabled).toBe(true);
+  expect(operationStarted).toBe(true);
+});
+
+test('秘密参数按钮在向导启动前立即禁用，避免重复创建不可变秘密版本', () => {
+  const secret = { disabled: false };
+  let operationStarted = false;
+  const onSecretClick = classCallback('ServicePluginPackagesView', 'showDetails', 'false, field', { secret });
+
+  onSecretClick.call({ runOperation() { operationStarted = secret.disabled; return Promise.resolve(); } });
+
+  expect(secret.disabled).toBe(true);
+  expect(operationStarted).toBe(true);
 });

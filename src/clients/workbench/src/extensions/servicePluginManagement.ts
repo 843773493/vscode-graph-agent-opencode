@@ -26,6 +26,7 @@ import { manageConfig, setPluginBindings, readWorkspaceDefaults, readWorkspaceBi
 
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
+const activePluginInstallations = new Map<string, Promise<void>>();
 
 function requireInstallationOwner(target: PluginTarget, operationId: string, operation: PluginInstallOperationDTO): PluginInstallOperationDTO {
   if (operation.gateway_id !== target.gateway_id || operation.operation_id !== operationId) {
@@ -207,7 +208,10 @@ export class ServicePluginPackagesView extends ViewPane {
       const references = [...runtime.configured_bindings, ...defaults].filter(item => item.package_id === manifest.package_id && item.package_version === manifest.version);
       uninstall.disabled = references.length > 0;
       uninstall.title = references.length ? `先解除所有 ${references.length} 个当前绑定，再卸载包` : '';
-      uninstall.addEventListener('click', () => void this.runOperation(() => uninstallPackageFromView(this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version)));
+      uninstall.addEventListener('click', () => {
+        uninstall.disabled = true;
+        void this.runOperation(() => uninstallPackageFromView(this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version));
+      });
       for (const plugin of matching) {
         const binding = (scope === 'defaults' ? defaults : workspaceBindings ?? runtime.configured_bindings).find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id
           && item.package_version === manifest.version && (scope !== 'workspace' ? item.workspace_id == null : item.workspace_id === workspace?.workspace_id));
@@ -261,10 +265,13 @@ export class ServicePluginPackagesView extends ViewPane {
         this.quickInput, this.notifications, bindingValue, null, true)));
       const privateFields = writeOnlyFields(plugin.contributes?.configuration);
       for (const field of privateFields) {
-        const secret = append(details, $('button'));
+        const secret = append(details, $('button')) as HTMLButtonElement;
         secret.textContent = `管理秘密参数 ${field.pointer}`;
-        secret.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
-          this.quickInput, this.notifications, bindingValue, null, false, field)));
+        secret.addEventListener('click', () => {
+          secret.disabled = true;
+          void this.runOperation(() => manageConfig(scope, target, workspace,
+            this.quickInput, this.notifications, bindingValue, null, false, field));
+        });
       }
       if (plugin.contributes?.configuration) {
         const schema = append(details, $('pre'));
@@ -273,13 +280,16 @@ export class ServicePluginPackagesView extends ViewPane {
       }
     }
     if (status?.revision && plugin.runtime) {
-      const restart = append(details, $('button'));
+      const restart = append(details, $('button')) as HTMLButtonElement;
       restart.textContent = '重启实例';
-      restart.addEventListener('click', () => void this.runOperation(async () => {
-        await gateway.request('/api/gateway/service-plugins/restart', { method: 'POST', body: JSON.stringify({ gateway_id: target.gateway_id,
-          gateway_connection_id: target.gateway_connection_id, package_id: manifest.package_id, package_version: manifest.version,
-          plugin_id: plugin.id, revision: status.revision, ...(workspace ? { workspace_id: workspace.workspace_id } : {}) }) });
-      }));
+      restart.addEventListener('click', () => {
+        restart.disabled = true;
+        void this.runOperation(async () => {
+          await gateway.request('/api/gateway/service-plugins/restart', { method: 'POST', body: JSON.stringify({ gateway_id: target.gateway_id,
+            gateway_connection_id: target.gateway_connection_id, package_id: manifest.package_id, package_version: manifest.version,
+            plugin_id: plugin.id, revision: status.revision, ...(workspace ? { workspace_id: workspace.workspace_id } : {}) }) });
+        });
+      });
     }
   }
 }
@@ -335,20 +345,48 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
     if (!path) return;
     acquisition = { path, development_directory: type.kind === 'directory', artifact: undefined };
   }
-  const operationId = generateUuid();
-  let operation: PluginInstallOperationDTO;
-  try {
-    operation = requireInstallationOwner(target, operationId, await gateway.request<PluginInstallOperationDTO>(
-      '/api/gateway/service-plugins/install',
-      { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) }));
-  } catch (error) {
-    // 仅查询原操作；响应丢失不能变成第二次安装。
-    try { operation = await readInstallation(target, operationId); }
-    catch (queryError) {
-      throw new Error(`安装响应未确认：${errorsText(error)}。原操作查询失败：${errorsText(queryError)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`);
+  await runPluginInstallation(target, acquisition, notifications, async () => {
+    const operationId = generateUuid();
+    let operation: PluginInstallOperationDTO;
+    try {
+      operation = requireInstallationOwner(target, operationId, await gateway.request<PluginInstallOperationDTO>(
+        '/api/gateway/service-plugins/install',
+        { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) }));
+    } catch (error) {
+      // 仅查询原操作；响应丢失不能变成第二次安装。
+      try { operation = await readInstallation(target, operationId); }
+      catch (queryError) {
+        throw new Error(`安装响应未确认：${errorsText(error)}。原操作查询失败：${errorsText(queryError)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`);
+      }
     }
+    await observeInstallation(progress, notifications, target, operationId, operation);
+  });
+}
+
+function installationKey(target: PluginTarget, acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>): string {
+  const artifact = acquisition.artifact;
+  return JSON.stringify([
+    target.gateway_id, target.gateway_connection_id ?? null,
+    acquisition.source_id ?? null, acquisition.catalog_revision ?? null,
+    artifact ?? [acquisition.development_directory, acquisition.path, acquisition.expected_digest ?? null],
+  ]);
+}
+
+async function runPluginInstallation(target: PluginTarget,
+  acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>,
+  notifications: INotificationService, submit: () => Promise<void>): Promise<void> {
+  const key = installationKey(target, acquisition);
+  let pending = activePluginInstallations.get(key);
+  if (!pending) {
+    pending = Promise.resolve().then(submit);
+    activePluginInstallations.set(key, pending);
+  } else {
+    notifications.info('相同插件制品的原安装操作仍在进行，正在等待该操作');
   }
-  await observeInstallation(progress, notifications, target, operationId, operation);
+  try { await pending; }
+  finally {
+    if (activePluginInstallations.get(key) === pending) activePluginInstallations.delete(key);
+  }
 }
 
 async function readInstallation(target: PluginTarget, operationId: string): Promise<PluginInstallOperationDTO> {
