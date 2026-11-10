@@ -59,8 +59,8 @@ def plugin_uninstall_race_case(request: pytest.FixtureRequest, unused_tcp_port: 
         artifacts_dir=context.artifacts_dir,
         asgi_app="tests.integration.gateway.service_plugin_uninstall_race_app:create_gateway_app",
     )
+    evidence: list[dict[str, object]] = []
     try:
-        evidence: list[dict[str, object]] = []
         with httpx.Client(
             base_url=f"http://127.0.0.1:{gateway.port}",
             headers=LOCAL_TOKEN_HEADERS,
@@ -69,10 +69,9 @@ def plugin_uninstall_race_case(request: pytest.FixtureRequest, unused_tcp_port: 
         ) as client:
             yield client, context, workspace, evidence
     finally:
-        if "evidence" in locals():
-            (context.artifacts_dir / "plugin-uninstall-race-http.json").write_text(
-                json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
-            )
+        (context.artifacts_dir / "plugin-uninstall-race-http.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
         close_gateway_process(gateway)
 
 
@@ -236,3 +235,99 @@ def test_uninstall_serializes_after_pending_binding_publication(plugin_uninstall
         and package["manifest"]["version"] == "1.0.0"
         for package in inventory.json()["data"]["packages"]
     )
+
+
+def test_uninstall_waits_for_real_skill_read_after_version_switch(
+    plugin_uninstall_race_case, request: pytest.FixtureRequest,
+) -> None:
+    """安装和绑定由原入口生成，真实文件读取结清前仅旧版本受阻。"""
+    client, context, _, evidence = plugin_uninstall_race_case
+    package_id = "race.skill"
+    request_counter = itertools.count(1)
+
+    def exchange(method: str, path: str, body: dict[str, object] | None = None) -> httpx.Response:
+        request_id = f"plugin-skill-read-{next(request_counter)}"
+        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id})
+        assert response.headers["X-Request-ID"] == request_id
+        payload = response.json()
+        if "request_id" in payload:
+            assert payload["request_id"] == request_id
+        evidence.append({"method": method, "path": path, "request_id": request_id,
+                         "status": response.status_code, "body": payload})
+        return response
+
+    gateway_id = exchange("GET", "/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+    package_root = context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages" / package_id
+    workspace_id = exchange("GET", "/api/gateway/workspaces").raise_for_status().json()["data"]["items"][0]["workspace_id"]
+    skill_path = f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}"
+    for version in ("1.0.0", "2.0.0"):
+        path = context.artifacts_dir / f"{package_id}-{version}.zip"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("plugin.jsonc", json.dumps({
+                "package_id": package_id, "version": version, "name": "读取引用探针",
+                "plugins": [{"id": "guide", "name": "说明", "instance_scope": "gateway",
+                    "requires": [{"extension_point": "skills", "version": 1}],
+                    "contributes": {"skills": [{"id": "guide", "path": "guide"}]}}],
+            }))
+            archive.writestr("guide/SKILL.md", f"---\nname: uninstall-read-probe\ndescription: Read lease\n---\nBODY_{version}\n")
+        install_plugin(lambda endpoint, body: exchange("POST", endpoint, body),
+                       gateway_id=gateway_id, path=str(path))
+
+    def bind(version: str | None) -> None:
+        path = "/api/gateway/config/sources/gateway_mutable_override"
+        document = exchange("GET", path).raise_for_status().json()["data"]
+        source = commentjson.loads(document["jsonc"])
+        source.setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [{
+            "package_id": package_id, "package_version": version, "plugin_id": "guide", "enabled": True,
+        }]}
+        saved = exchange("PUT", path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+            "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
+            "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+            "idempotency_key": f"read-bind-{version}"}).raise_for_status().json()["data"]
+        assert saved["edit"]["state"] == "active", saved
+
+    def published(version: str) -> dict:
+        data = exchange("GET", skill_path).raise_for_status().json()["data"]
+        entry, = [item for item in data["entries"] if (item.get("plugin") or {}).get("package_id") == package_id]
+        assert entry["plugin"]["package_version"] == version, entry
+        return entry
+
+    def uninstall(version: str) -> httpx.Response:
+        return exchange("POST", "/api/gateway/service-plugins/uninstall", {
+            "gateway_id": gateway_id, "package_id": package_id, "package_version": version,
+        })
+
+    def read(uri: str) -> httpx.Response:
+        return exchange("POST", skill_path + "/navigation", {"uri": uri, "operation": "read", "timeout_ms": 30000})
+
+    bind("1.0.0")
+    old = published("1.0.0")
+    exchange("POST", "/__test/service-plugin-race/arm-read", {"uri": old["display_uri"]}).raise_for_status()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        reading = executor.submit(read, old["display_uri"])
+        try:
+            exchange("POST", "/__test/service-plugin-race/wait-read").raise_for_status()
+            bind("2.0.0")
+            current = published("2.0.0")
+            assert current["display_uri"] != old["display_uri"]
+            assert "BODY_2.0.0" in read(current["display_uri"]).raise_for_status().json()["data"]["content"]
+            assert read(old["display_uri"]).status_code == 404
+            blocked = uninstall("1.0.0")
+            assert blocked.status_code == 409 and f"skill-read:{package_id}:1.0.0" in blocked.text, blocked.text
+            assert "configuration:" not in blocked.text and "workspace-configuration:" not in blocked.text
+            assert (package_root / "1.0.0/guide/SKILL.md").is_file()
+            assert not reading.done(), "旧版本实际读取未结束，不能提前释放引用"
+        finally:
+            exchange("POST", "/__test/service-plugin-race/release-read").raise_for_status()
+        revoked = reading.result(timeout=10)
+    assert revoked.status_code == 404, revoked.text
+    uninstall("1.0.0").raise_for_status()
+    assert not (package_root / "1.0.0").exists()
+    assert (package_root / "2.0.0/guide/SKILL.md").is_file()
+    assert "BODY_2.0.0" in read(current["display_uri"]).raise_for_status().json()["data"]["content"]
+    packages = exchange("POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id}).raise_for_status().json()["data"]["packages"]
+    assert [item["manifest"]["version"] for item in packages if item["manifest"]["package_id"] == package_id] == ["2.0.0"]
+    bind(None)
+    uninstall("2.0.0").raise_for_status()
+    assert not package_root.exists()
