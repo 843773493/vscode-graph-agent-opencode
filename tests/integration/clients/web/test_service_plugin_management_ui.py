@@ -164,6 +164,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
             assert result["installed"] and result["uninstalled"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
+            assert result["gatewayRestartedIndependently"]
             assert result["runtimeVersions"] == ["1.1.0", "1.0.0"]
             assert result["closedBindingBlockedUninstall"]
             assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])

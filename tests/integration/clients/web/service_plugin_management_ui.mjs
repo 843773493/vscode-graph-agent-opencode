@@ -338,13 +338,27 @@ try {
 
   await expect.poll(async () => (await runtimeSlot('workspace-preference', active.workspace_id))?.state).toBe('ready');
   const workspaceReady = await runtimeSlot('workspace-preference', active.workspace_id); await callRuntime(workspaceReady);
-  const gatewayReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayReady);
+  let gatewayReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayReady);
   assert.notEqual(gatewayReady.instance.process_id, workspaceReady.instance.process_id);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
   assert.equal((await runtimeSlot('gateway-preference')).instance.instance_id, gatewayReady.instance.instance_id);
   assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, workspaceReady.instance.instance_id);
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  await openPlugin('Gateway 偏好 · gateway-preference');
+  const gatewayRestarted = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
+  await view.getByRole('button', { name: '重启实例', exact: true }).click();
+  const gatewayRestartResponse = await gatewayRestarted;
+  assert.equal(gatewayRestartResponse.status(), 200);
+  const gatewayRestart = await runtimeSlot('gateway-preference');
+  assert.notEqual(gatewayRestart.instance.instance_id, gatewayReady.instance.instance_id);
+  await callRuntime(gatewayRestart);
+  assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, workspaceReady.instance.instance_id);
+  result.exitedPids.push(gatewayReady.instance.process_id);
+  result.gatewayRestartedIndependently = true;
+  gatewayReady = gatewayRestart;
   await view.getByLabel('插件管理范围').selectOption('workspace'); await pick(workspaceName);
   await openPlugin('工作区偏好 · workspace-preference');
   const restarted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));

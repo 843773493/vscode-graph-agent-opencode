@@ -18,9 +18,9 @@ from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.scope import register_test_process, unregister_test_process
 
 _PLUGIN_SOURCE = '''
-import asyncio, os, sys
+import asyncio, json, os, sys
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import uvicorn
 from app.core.logging_config import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
@@ -31,6 +31,10 @@ async def shutdown(): server.should_exit = True
 app = FastAPI()
 app.add_middleware(TraceMiddleware)
 app.include_router(plugin_command_router({}, shutdown=shutdown))
+@app.get('/services/probe/value')
+async def value(request: Request):
+    return {**json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE']),
+        'pid': os.getpid(), 'request_id': request.headers.get('X-Request-ID')}
 server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=int(os.environ['BOXTEAM_PLUGIN_PORT']),
     log_config=None))
 asyncio.run(server.serve())
@@ -105,6 +109,12 @@ def _package_archive(path: Path) -> None:
             "id": "instructions", "name": "无进程说明", "instance_scope": "gateway",
             "requires": [{"extension_point": "skills", "version": 1}],
             "contributes": {"skills": [{"id": "guide", "path": "guides/declarative"}]},
+        }, {
+            "id": "workspace-probe", "name": "工作区实例", "instance_scope": "workspace",
+            "requires": [{"extension_point": "services", "version": 1}],
+            "contributes": {"services": [{"service_id": "probe", "service_type": "terminal", "protocol": "http"}]},
+            "runtime": "python", "entrypoint": ["nested/runtime/plugin.py"],
+            "management_protocol_version": 1,
         }],
     }
     with zipfile.ZipFile(path, "w") as archive:
@@ -164,6 +174,9 @@ def _wait_for_plugin(
     client: httpx.Client,
     gateway_id: str,
     process: subprocess.Popen[str],
+    *,
+    plugin_id: str = "probe",
+    workspace_id: str | None = None,
 ) -> dict[str, object]:
     response = _wait_for(
         client,
@@ -172,7 +185,8 @@ def _wait_for_plugin(
             isinstance(value.get("data"), dict)
             and any(
                 isinstance(item, dict)
-                and item.get("binding", {}).get("plugin_id") == "probe"
+                and item.get("binding", {}).get("plugin_id") == plugin_id
+                and item.get("binding", {}).get("workspace_id") == workspace_id
                 and item.get("state") == "ready"
                 for item in value["data"].get("plugins", [])
             )
@@ -184,7 +198,8 @@ def _wait_for_plugin(
     )
     data = response["data"]
     assert isinstance(data, dict)
-    return next(item for item in data["plugins"] if item["binding"]["plugin_id"] == "probe")
+    return next(item for item in data["plugins"] if item["binding"]["plugin_id"] == plugin_id
+                and item["binding"].get("workspace_id") == workspace_id)
 
 
 def _same_process(process: psutil.Process) -> bool:
@@ -234,6 +249,9 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
     for provider in workspace_config["llm"]["providers"]:
         if "api_key" in provider:
             provider["api_key"] = "lifecycle-test-unused-key"
+    workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = (
+        f"http://127.0.0.1:{unused_tcp_port}"
+    )
     config_path.write_text(json.dumps(workspace_config), encoding="utf-8")
     runtime_manifest = project_root / "out/development-runtime/runtime-manifest.json"
     python = project_root / ".venv/bin/python"
@@ -277,7 +295,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             stderr=launcher_stderr,
             text=True,
         )
-        register_test_process(launcher, lambda: launcher.terminate())
+        register_test_process(launcher, launcher.terminate)
         base_url = f"http://127.0.0.1:{unused_tcp_port}"
         with httpx.Client(base_url=base_url, headers={"X-Local-Token": token},
             timeout=10, trust_env=False) as client:
@@ -291,9 +309,52 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             gateway_id = initial_data["gateway_id"]
             _install_and_enable(client, gateway_id=gateway_id, archive=archive)
             before_handoff = _wait_for_plugin(client, gateway_id, launcher)
-            workspaces = _json_request(client, "GET", "/api/gateway/workspaces")["data"]
+            workspaces = _wait_for(client, "/api/gateway/workspaces",
+                lambda value: isinstance(value.get("data"), dict) and bool(value["data"].get("items")),
+                process=launcher)["data"]
             assert isinstance(workspaces, dict)
             workspace_id = workspaces["items"][0]["workspace_id"]
+            _json_request(client, "GET", f"/api/v1/workspaces/{workspace_id}/workspace")
+            workspace_source_path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
+            workspace_document = _json_request(client, "GET", workspace_source_path)["data"]
+            assert isinstance(workspace_document, dict)
+            workspace_config = commentjson.loads(str(workspace_document["jsonc"]))
+            workspace_config.setdefault("plugins", {})["runtime"] = {"entries": [{
+                "package_id": "launcher.lifecycle", "plugin_id": "workspace-probe",
+                "package_version": "1.0.0", "enabled": True,
+            }]}
+            workspace_saved = _json_request(client, "PUT", workspace_source_path, {
+                "gateway_id": gateway_id, "workspace_id": workspace_id,
+                "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(workspace_config),
+                "base_file_digest": workspace_document["file_digest"],
+                "base_layer_revision": workspace_document["layer_revision"],
+                "base_layer_digest": workspace_document["layer_digest"],
+                "expected_active_revision": workspace_document["active_revision"],
+                "expected_active_digest": workspace_document["active_digest"],
+                "idempotency_key": "launcher-workspace-plugin-enable",
+            })
+            workspace_saved_data = workspace_saved["data"]
+            assert isinstance(workspace_saved_data, dict)
+            assert workspace_saved_data["edit"]["state"] == "active"
+            workspace_before = _wait_for_plugin(client, gateway_id, launcher,
+                plugin_id="workspace-probe", workspace_id=workspace_id)
+
+            def call_plugin(item: dict) -> None:
+                binding, instance = item["binding"], item["instance"]
+                query = f"package_version={binding['package_version']}"
+                if binding["workspace_id"] is not None:
+                    query += f"&workspace_id={binding['workspace_id']}"
+                response = client.get(f"/api/gateway/service-plugins/launcher.lifecycle/{binding['plugin_id']}/instances/"
+                    f"{instance['instance_id']}/services/probe/value?{query}",
+                    headers={"X-Request-ID": f"launcher-business-{instance['instance_id']}"})
+                value = response.raise_for_status().json()
+                assert value["pid"] == instance["process_id"]
+                assert value["instance_id"] == instance["instance_id"]
+                assert value["workspace_id"] == binding["workspace_id"]
+                assert value["request_id"] == response.headers["X-Request-ID"]
+
+            call_plugin(before_handoff)
+            call_plugin(workspace_before)
             skills_path = f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}"
             original_skills = _json_request(client, "GET", skills_path)["data"]
             assert isinstance(original_skills, dict)
@@ -370,6 +431,11 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             assert isinstance(instance_after, dict)
             assert instance_after["process_id"] == plugin_pid_before
             assert instance_after["instance_id"] == instance_id_before
+            workspace_after = _wait_for_plugin(client, gateway_id, launcher,
+                plugin_id="workspace-probe", workspace_id=workspace_id)
+            assert workspace_after["instance"] == workspace_before["instance"], "Gateway 接管不能替换工作区实例"
+            call_plugin(plugin_after)
+            call_plugin(workspace_after)
             assert _json_request(client, "GET", skills_path)["data"] == original_skills, "接管须恢复原代码与纯声明贡献，不能改变说明来源代际"
             active_config = _json_request(client, "GET", source_path)["data"]
             assert isinstance(active_config, dict)
@@ -381,12 +447,40 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             plugin_process = psutil.Process(plugin_pid)
             instance_id = instance_after["instance_id"]
             assert plugin_pid > 0 and instance_id
+            workspace_instance = workspace_after["instance"]
+            assert isinstance(workspace_instance, dict)
+            workspace_process = psutil.Process(workspace_instance["process_id"])
 
             stopped = _stop_launcher(launcher, node=node, project_root=project_root,
                 environment=environment)
             assert stopped.returncode == 0, stopped.stderr
             plugin_process.wait(timeout=20)
             assert not _same_process(plugin_process)
+            workspace_process.wait(timeout=20)
+            assert not _same_process(workspace_process)
+            unregister_test_process(launcher)
+
+            # 完整停机后的恢复沿已保存配置，不复用旧进程或手工补建运行状态。
+            launcher = subprocess.Popen(
+                [node, "packages/launcher/bin/boxteam.mjs", "start", "--no-open"],
+                cwd=project_root, env=environment, stdout=launcher_stdout, stderr=launcher_stderr, text=True,
+            )
+            register_test_process(launcher, launcher.terminate)
+            cold_plugins = [_wait_for_plugin(client, gateway_id, launcher, plugin_id=plugin_id,
+                workspace_id=owner) for plugin_id, owner in (("probe", None), ("workspace-probe", workspace_id))]
+            cold_processes = []
+            for old, cold in zip((plugin_after, workspace_after), cold_plugins, strict=True):
+                cold_instance, old_instance = cold["instance"], old["instance"]
+                assert isinstance(cold_instance, dict) and isinstance(old_instance, dict)
+                assert cold_instance["instance_id"] != old_instance["instance_id"]
+                assert cold["binding"] == old["binding"]
+                call_plugin(cold)
+                cold_processes.append(psutil.Process(cold_instance["process_id"]))
+            cold_stop = _stop_launcher(launcher, node=node, project_root=project_root, environment=environment)
+            assert cold_stop.returncode == 0, cold_stop.stderr
+            for process in cold_processes:
+                process.wait(timeout=20)
+                assert not _same_process(process)
             (artifacts / "lifecycle.json").write_text(json.dumps({
                 "initial_gateway_pid": initial_gateway_pid,
                 "replaced_gateway_pid": next_data["process_id"],
@@ -395,6 +489,10 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
                 "candidate_ref": candidate_ref,
                 "launcher_stop_returncode": stopped.returncode,
                 "plugin_exited": True,
+                "workspace_preserved_instance": workspace_after["instance"],
+                "workspace_exited": True,
+                "cold_restored_instances": [item["instance"] for item in cold_plugins],
+                "cold_stop_returncode": cold_stop.returncode,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
     finally:
         if launcher is not None:
