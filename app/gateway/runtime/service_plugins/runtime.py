@@ -340,7 +340,6 @@ class GatewayPluginRuntime:
         bindings = {self.key(binding): binding for binding in entries}
         if len(bindings) != len(entries) or any(binding.workspace_id != workspace_id for binding in entries):
             raise ValueError("插件绑定必须唯一且属于当前配置 owner 的范围")
-        self.validate_bindings(entries, workspace_id=workspace_id, parameters=parameters)
         # 配置已经提交；启动失败只改实际回执，不回滚 enabled。
         for key, slot in tuple(self.slots.items()):
             if slot.binding.workspace_id == workspace_id and key not in bindings:
@@ -380,7 +379,8 @@ class GatewayPluginRuntime:
                 self._publish()
                 return previous.describe()
             declaration = self.declaration(binding)
-            if binding.enabled and declaration.runtime is not None:
+            # 已有实例的显式重启／替换仍须先预检，不能先停旧实例再发现目标不兼容。
+            if previous is not None and binding.enabled and declaration.runtime is not None:
                 self.validate_target(binding)
             if restart and (not binding.enabled or declaration.runtime is None):
                 raise ValueError("只有已开启的代码插件可以重启")
@@ -398,6 +398,9 @@ class GatewayPluginRuntime:
             self.slots[key] = slot
             try:
                 if binding.enabled and declaration.runtime is not None:
+                    # 冷恢复的失败属于这个绑定，不阻断 Gateway 或其它插件。
+                    if previous is None:
+                        self.validate_target(binding)
                     await self._start(key, slot, delivered_parameters=delivered_parameters)
                 self.skill_sources.publish_plugin(binding, self.packages)
             except asyncio.CancelledError:
@@ -698,7 +701,6 @@ async def plugin_runtime_lifespan(*, home: Path, gateway_id: str,
             "observation": {"revision": revision(), **{name: cast(dict[str, object], payload()[name])["runtime"]
                 for name in ("telemetry", "statistics")}}})
     try:
-        owner.validate(payload())
         yield owner
     finally:
         await owner.close(preserve=preserve())

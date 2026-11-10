@@ -30,12 +30,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 from app.core.logging_config import configure_application_logging
+from app.core.trace_middleware import TraceMiddleware
 from app.runtime.plugin_commands import plugin_command_router
 configure_application_logging(service='lifecycle-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
 async def shutdown(): server.should_exit = True
 app = FastAPI()
+app.add_middleware(TraceMiddleware)
 @app.middleware('http')
 async def controlled_fault(request, call_next):
     if request.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
@@ -318,3 +320,112 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert inventory()["packages"] == []
     finally:
         (context.artifacts_dir / "plugin-flow.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
+
+
+def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindings(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int,
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace = Path(integration_workspace_root_path)
+    home = context.boxteam_home_for_node(request.node.nodeid)
+    config_path = install_test_workspace_config(workspace_root=workspace,
+        config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
+    config = commentjson.loads(config_path.read_text())
+    for provider in config["llm"]["providers"]:
+        if "api_key" in provider:
+            provider["api_key"] = "cold-runtime-unused-key"
+    config_path.write_text(json.dumps(config))
+    gateway = None
+    bindings = [{"package_id": f"cold.{runtime}", "package_version": "1.0.0",
+        "plugin_id": runtime, "enabled": True} for runtime in ("node", "python")]
+    source_path = "/api/gateway/config/sources/gateway_mutable_override"
+
+    def save(client: httpx.Client, document: dict, enabled: bool) -> httpx.Response:
+        config = commentjson.loads(document["jsonc"])
+        config.setdefault("plugins", {})["runtime"] = {"entries": [
+            {**binding, "enabled": enabled if binding["plugin_id"] == "node" else True}
+            for binding in bindings]}
+        return client.put(source_path, json={"gateway_id": gateway_id,
+            "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
+            "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+            "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+            "expected_active_digest": document["active_digest"],
+            "idempotency_key": f"cold-binding-{document['file_digest']}-{enabled}"})
+
+    def states(client: httpx.Client) -> dict:
+        response = client.post("/api/gateway/service-plugins/status", json={"gateway_id": gateway_id})
+        return {item["binding"]["plugin_id"]: item for item in response.raise_for_status().json()["data"]["plugins"]}
+
+    try:
+        gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
+            port=unused_tcp_port, boxteam_home=home, artifacts_dir=context.artifacts_dir)
+        with httpx.Client(base_url=f"http://127.0.0.1:{unused_tcp_port}", headers=LOCAL_TOKEN_HEADERS,
+                          timeout=30, trust_env=False) as client:
+            gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+            for runtime, source, entrypoint in (("node", NODE_PLUGIN, "entry.mjs"),
+                                               ("python", PYTHON_PLUGIN, "entry.py")):
+                archive_path = context.artifacts_dir / f"cold-{runtime}.zip"
+                manifest = {"manifest_version": 1, "package_id": f"cold.{runtime}", "version": "1.0.0",
+                    "name": runtime, "target": native_plugin_target(runtime), "extension_contract_version": 1,
+                    "plugins": [{"id": runtime, "name": runtime, "instance_scope": "gateway",
+                        "runtime": runtime, "entrypoint": [entrypoint], "management_protocol_version": 1,
+                        "requires": [{"extension_point": "services", "version": 1}],
+                        "contributes": {"services": [{"service_id": "echo", "service_type": "terminal",
+                            "protocol": "http"}]}}]}
+                with zipfile.ZipFile(archive_path, "w") as archive:
+                    archive.writestr("plugin.jsonc", json.dumps(manifest))
+                    archive.writestr(entrypoint, source)
+                    if runtime == "python":
+                        archive.writestr("local_module.py", "VALUE = 1\n")
+                install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
+                    gateway_id=gateway_id, path=str(archive_path),
+                    expected_digest=hashlib.sha256(archive_path.read_bytes()).hexdigest())
+            document = client.get(source_path).raise_for_status().json()["data"]
+            assert save(client, document, True).raise_for_status().json()["data"]["edit"]["state"] == "active"
+            initial = states(client)
+            assert {item["state"] for item in initial.values()} == {"ready"}
+            saved = client.get(source_path).raise_for_status().json()["data"]
+            client.get("/api/gateway/workspaces", timeout=90).raise_for_status()
+
+        close_gateway_process(gateway)
+        gateway = None
+        assert all(not psutil.pid_exists(item["instance"]["process_id"]) for item in initial.values())
+        # 模拟应用运行环境不再提供 Node；保存的包、配置与 enabled 都来自真实产品入口。
+        gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
+            port=unused_tcp_port, boxteam_home=home, artifacts_dir=context.artifacts_dir,
+            extra_env={"BOXTEAM_NODE_BIN": ""})
+        with httpx.Client(base_url=f"http://127.0.0.1:{unused_tcp_port}", headers=LOCAL_TOKEN_HEADERS,
+                          timeout=30, trust_env=False) as client:
+            current = states(client)
+            assert current["node"]["binding"] == bindings[0] | {"workspace_id": None}
+            assert current["node"]["state"] == "failed" and current["node"]["instance"] is None
+            assert "BOXTEAM_NODE_BIN" in current["node"]["error"]
+            python = current["python"]
+            assert python["state"] == "ready"
+            assert python["instance"]["instance_id"] != initial["python"]["instance"]["instance_id"]
+            echo_path = (f"/api/gateway/service-plugins/cold.python/python/instances/"
+                f"{python['instance']['instance_id']}/services/echo/value?package_version=1.0.0")
+            assert client.get(echo_path).raise_for_status().json()["pid"] == python["instance"]["process_id"]
+            document = client.get(source_path).raise_for_status().json()["data"]
+            assert document["jsonc"] == saved["jsonc"]
+            assert document["active_revision"] == saved["active_revision"]
+            failed_restart = client.post("/api/gateway/service-plugins/restart", json={
+                "gateway_id": gateway_id, "package_id": "cold.node", "package_version": "1.0.0",
+                "plugin_id": "node", "revision": current["node"]["revision"]})
+            assert failed_restart.status_code == 409 and "BOXTEAM_NODE_BIN" in failed_restart.text
+            disabled = save(client, document, False).raise_for_status().json()["data"]
+            assert disabled["edit"]["state"] == "active"
+            assert states(client)["node"]["state"] == "stopped"
+            document = client.get(source_path).raise_for_status().json()["data"]
+            rejected = save(client, document, True)
+            assert rejected.status_code == 422 and "BOXTEAM_NODE_BIN" in rejected.text
+            assert client.get(source_path).raise_for_status().json()["data"]["file_digest"] == document["file_digest"]
+            final = states(client)
+            assert final["node"]["binding"]["enabled"] is False
+            assert final["python"]["instance"] == python["instance"], "失败候选不能停止仍可用的兄弟实例"
+            client.get("/api/gateway/workspaces", timeout=90).raise_for_status()
+            (context.artifacts_dir / "cold-runtime.json").write_text(json.dumps({
+                "initial": initial, "unavailable": current, "final": final}, ensure_ascii=False, indent=2))
+    finally:
+        if gateway is not None:
+            close_gateway_process(gateway)
