@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -141,3 +142,40 @@ async def test_failed_replacement_reports_stage_and_does_not_restore_or_repeat(
             owner.service(desired, service_id="echo", instance_id=failed.instance.instance_id)
     unchanged = await owner.apply_binding(desired, revision="unrelated", parameters={})
     assert unchanged["error"] == failed.error and len(processes) == (1 if stage == "start" else 2)
+
+
+async def test_cancelled_start_with_cleanup_failure_publishes_failed_slot_and_preserves_group(
+    blocked_plugin: tuple[GatewayPluginRuntime, list[Mock], PluginBinding], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, processes, original = blocked_plugin
+    processes[0].close.side_effect = None
+    desired = original.model_copy(update={"package_version": "2.0.0"})
+    process = Mock(spec=ManagedProcess)
+    process.is_alive.return_value = True
+    cancellation = asyncio.CancelledError("启动任务取消")
+    cleanup = RuntimeError("新进程未能回收")
+    failure = BaseExceptionGroup(
+        f"插件启动失败: {cancellation}；原进程回收失败: {cleanup}；目标进程未结清",
+        [cancellation, cleanup],
+    )
+
+    async def fail_after_cleanup(_key, slot: PluginSlot, *, delivered_parameters=None) -> None:
+        slot.process, slot.process_version = process, slot.binding.package_version
+        raise failure
+
+    monkeypatch.setattr(owner, "_start", fail_after_cleanup)
+    with pytest.raises(BaseExceptionGroup) as caught:
+        await owner.apply_binding(desired, revision="changed", parameters={})
+
+    assert caught.value is failure
+    assert caught.value.exceptions == (cancellation, cleanup)
+    slot = owner.slots[owner.key(desired)]
+    assert slot.binding == desired and slot.state == "failed"
+    assert "启动任务取消" in (slot.error or "") and "新进程未能回收" in (slot.error or "")
+    assert "目标进程未结清" in (slot.error or "")
+    assert slot.process is process and slot.process_version == "2.0.0"
+
+    unchanged = await owner.apply_binding(desired, revision="unrelated", parameters={})
+    assert unchanged["state"] == "failed" and unchanged["error"] == slot.error
+    assert unchanged["binding"] == desired.model_dump(mode="json")
+    assert processes[0].close.call_count == 1 and process.close.call_count == 0

@@ -420,6 +420,10 @@ class GatewayPluginRuntime:
             except asyncio.CancelledError:
                 slot.state, slot.error = "failed", f"{stage}被取消；需显式重启"
                 raise
+            except BaseExceptionGroup as error:
+                slot.state, slot.error = "failed", f"{stage}失败: {error}"
+                logger.exception("插件启动及清理失败: slot=%s", key)
+                raise
             except Exception as error:
                 slot.state, slot.error = "failed", f"{stage}失败: {error}"
                 logger.exception("插件启动或贡献发布失败: slot=%s", key)
