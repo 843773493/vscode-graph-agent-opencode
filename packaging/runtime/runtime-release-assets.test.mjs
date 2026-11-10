@@ -286,6 +286,10 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
         if (command === nodeExecutable && args[0] === "--print") {
           return { status: 0, stdout: JSON.stringify({ version: "22.17.0", abi: "127", glibc: "2.35" }) };
         }
+        if (command === nodeExecutable && args.includes("await import('./src/shared/serverPluginRuntime.mjs');")) {
+          assert.equal(options.cwd, path.join(runtimePackageRoot, "application"));
+          return { status: 0, stdout: "" };
+        }
         if (command === "bun" && args[0] === "run" && args[1] === "build") {
           const relativeRoot = path.relative(fixtureRoot, options.cwd);
           const marker = `fixture-frontend:${relativeRoot}`;
@@ -400,6 +404,9 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
     event.startsWith("bun install --production"));
   assert(nodeDependencyInstall >= 0, "构建入口必须先准备产品 Node 依赖");
   assert(nodeDependencyInstall < buildEvents.indexOf("developer-tools.zip"));
+  const runtimeImport = buildEvents.findIndex((event) => event.includes("await import('./src/shared/serverPluginRuntime.mjs');"));
+  assert(runtimeImport > nodeDependencyInstall, "必须用目标 Node 校验发行应用的插件管理依赖");
+  assert(runtimeImport < buildEvents.indexOf("developer-tools.zip"));
   assert(buildEvents.indexOf("developer-tools.zip") < buildEvents.indexOf("mcp-stdio.zip"));
   assert(buildEvents.indexOf("mcp-stdio.zip") < buildEvents.indexOf("npm pack"));
   if (mode === "windows-native") {

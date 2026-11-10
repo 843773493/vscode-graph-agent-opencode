@@ -70,6 +70,7 @@ export const NODE_RUNTIME_WINDOWS_X64 = Object.freeze({
 
 export const NODE_RUNTIME_DEPENDENCIES = Object.freeze({
   "@bufbuild/protobuf": "2.14.0",
+  ajv: "8.20.0",
   "node-pty": "1.1.0",
   playwright: "1.61.1",
   ws: "8.18.0",

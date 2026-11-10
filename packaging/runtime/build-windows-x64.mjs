@@ -125,6 +125,9 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
     run(nodeExecutable, [path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
       cwd: path.join(applicationRoot, "node_modules/node-pty"),
     });
+    run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
+      cwd: applicationRoot,
+    });
   }
 }
 

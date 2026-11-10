@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
@@ -47,10 +49,14 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
     if not asset_input:
         pytest.skip("需要 BOXTEAM_TEST_RUNTIME_ASSET 指向已构建的 Linux runtime tgz")
     asset = Path(asset_input).resolve(strict=True)
+    launcher_input = os.environ.get("BOXTEAM_TEST_PREPARED_LAUNCHER")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     initial = runtime / "installed"
     initial.mkdir(parents=True)
+    if launcher_input:
+        # 安装阶段准备一次 Launcher 依赖；运行阶段仅复制不可变制品，不使用包管理器。
+        shutil.copytree(Path(launcher_input).resolve(strict=True), initial / "launcher")
     with tarfile.open(asset) as archive:
         archive.extractall(initial, filter="data")
     relocated = runtime / "relocated distribution"
@@ -62,7 +68,9 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
     python = package / manifest["python_executable"]
     node = package / manifest["node"]["executable"]
     ports = integration_port_block_for_file(Path(request.node.path))
-    gateway_url = f"http://127.0.0.1:{ports.port(21)}"
+    gateway_port = 8014 if launcher_input else ports.port(21)
+    backend_port = 8010 if launcher_input else ports.port(20)
+    gateway_url = f"http://127.0.0.1:{gateway_port}"
     workspace = prepare_test_workspace(workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
     config_path = install_test_workspace_config(workspace_root=workspace,
@@ -86,7 +94,7 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
         "BOXTEAM_PYTHON_BIN": str(python), "BOXTEAM_WEB_ASSETS": str(package / manifest["web_assets"]),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": str(package / manifest["chromium_executable"]),
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace), "WORKSPACE_ROOT": str(workspace),
-        "BOXTEAM_GATEWAY_URL": gateway_url, "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(20)),
+        "BOXTEAM_GATEWAY_URL": gateway_url, "BOXTEAM_DEFAULT_BACKEND_PORT": str(backend_port),
         "PATH": str(empty_path), "XDG_CACHE_HOME": str(runtime / "empty-cache"),
         "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"})
     command = [str(python), "-m", "configs.boxteam", "initialize", "--project-root", str(application)]
@@ -101,15 +109,33 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
         "asset": str(asset), "sha256": asset_digest,
         "runtime_manifest": manifest, "application": str(application), "python": str(python), "node": str(node),
         "gateway_url": gateway_url, "path": str(empty_path), "home": str(home),
+        "entrypoint": "launcher" if launcher_input else "gateway",
     }, indent=2) + "\n", encoding="utf-8")
     with (context.artifacts_dir / "gateway.stdout.raw").open("w") as stdout, (
         context.artifacts_dir / "gateway.stderr.raw"
     ).open("w") as stderr:
-        process = subprocess.Popen([str(python), "-m", "app.runtime.http_server", "app.gateway.main:app",
-            "--host", "127.0.0.1", "--port", str(ports.port(21)), "--shutdown-on-stdin-eof"],
-            cwd=application, env=environment, stdin=subprocess.PIPE, text=True, stdout=stdout, stderr=stderr)
+        command = ([str(node), str(relocated / "launcher/bin/boxteam.mjs"), "--no-open"]
+            if launcher_input else [str(python), "-m", "app.runtime.http_server", "app.gateway.main:app",
+                "--host", "127.0.0.1", "--port", str(gateway_port), "--shutdown-on-stdin-eof"])
+        process = subprocess.Popen(command, cwd=application, env=environment,
+            stdin=subprocess.PIPE, text=True, stdout=stdout, stderr=stderr)
         try:
-            wait_for_http_ok(gateway_url + "/api/gateway/health", process)
+            if launcher_input:
+                # Launcher由子进程监听；直接Gateway装具的根PID监听检查不适用于它。
+                deadline = time.monotonic() + 60
+                with httpx.Client(timeout=1, trust_env=False) as readiness:
+                    while True:
+                        assert process.poll() is None, "Launcher在就绪前退出"
+                        try:
+                            response = readiness.get(gateway_url + "/api/gateway/health")
+                        except httpx.TransportError:
+                            assert time.monotonic() < deadline, "Launcher的Gateway未在期限内就绪"
+                            time.sleep(0.2)
+                            continue
+                        response.raise_for_status()
+                        break
+            else:
+                wait_for_http_ok(gateway_url + "/api/gateway/health", process)
             with httpx.Client(base_url=gateway_url, timeout=90, trust_env=False) as client:
                 credential = client.get("/api/gateway/auth/local-credential",
                     headers={"Sec-Fetch-Site": "same-origin"}).raise_for_status().json()["data"]["token"]
@@ -120,7 +146,14 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
                 client.get("/api/v1/workspace").raise_for_status()
                 yield client, context, package, home
         finally:
-            terminate_process(process, timeout_seconds=150, stdin_eof=True)
+            if launcher_input:
+                # 正式停止命令等待Launcher PID消失；先收割本测试持有的Popen。
+                with subprocess.Popen([str(node), str(relocated / "launcher/bin/boxteam.mjs"), "stop"],
+                    cwd=application, env=environment, text=True, stdout=stdout, stderr=stderr) as stopper:
+                    process.wait(timeout=150)
+                    assert stopper.wait(timeout=20) == 0
+            else:
+                terminate_process(process, timeout_seconds=150, stdin_eof=True)
 
 
 def test_relocated_distribution_completes_service_plugin_lifecycle(distribution_gateway) -> None:

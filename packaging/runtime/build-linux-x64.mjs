@@ -92,6 +92,9 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
   run(nodeExecutable, [path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
     cwd: nodePtyRoot,
   });
+  run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
+    cwd: applicationRoot,
+  });
 }
 
 function installChromium(applicationRoot, chromiumRoot, nodeExecutable) {
