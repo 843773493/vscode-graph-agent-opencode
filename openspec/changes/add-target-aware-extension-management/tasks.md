@@ -7,8 +7,10 @@
 ## 1. 边界、合同与旧调用清点
 
 - [ ] 1.1 全仓清点格式／市场／安装／配置／运行／UI／协议生成／打包的直接和间接消费者，按D17核 default／agent-collaboration／debugging 及动态 MCP／custom 工具与进程调用；建立每条迁移链的旧入口、权威 owner、新入口和物理删除清单，保护共享工作树改动与历史原件。
-- [ ] 1.2 冻结多插件包 plugin.jsonc／标准 .zip／已准备的显式开发目录：根包含package_id／包版本、合同及目标制品兼容信息，plugins 每项含作为外部plugin_id的稳定 id、固定 scope、requires／contributes 和条件必需运行入口；无根级运行入口兼容、components／component_id／modules／features 或贡献第二开关，纯声明插件无 runtime。
-- [ ] 1.3 冻结 package_id／plugin_id、唯一 gateway／workspace 生命周期槽位、当前包版本属性、service_id、instance_id 与业务资源身份；不按版本双起；插件管理回执服务清单可空，服务ID只作业务路由；同包插件独立进程，同插件跨工作区独立实例，不按端口／显示名合并。
+- [x] 1.2 冻结多插件包 plugin.jsonc／标准 .zip／已准备的显式开发目录：根包含package_id／包版本、合同及目标制品兼容信息，plugins 每项含作为外部plugin_id的稳定 id、固定 scope、requires／contributes 和条件必需运行入口；无根级运行入口兼容、components／component_id／modules／features 或贡献第二开关，纯声明插件无 runtime。
+  - 2026-11-10 当前合同独立收口：多插件包由 `app/schemas/gateway/service_plugin.py` 与 proto 唯一声明，根与插件均拒绝未知字段；ZIP和显式准备目录使用同一解析，代码字段条件必需，纯Skill无runtime。包合同及依赖59项、真实双语言管理、纯声明正式页面均已有原件；当前格式完成不代表第8组所有旧消费者已清空。
+- [x] 1.3 冻结 package_id／plugin_id、唯一 gateway／workspace 生命周期槽位、当前包版本属性、service_id、instance_id 与业务资源身份；不按版本双起；插件管理回执服务清单可空，服务ID只作业务路由；同包插件独立进程，同插件跨工作区独立实例，不按端口／显示名合并。
+  - 2026-11-10 当前合同独立收口：runtime唯一key为(package_id, plugin_id, workspace_id)，Gateway归实例owner，版本是binding属性；ready按完整身份核验，服务清单允许空。真实双语言、双工作区与Launcher换代证明独立PID、换版先退出旧PID及原实例接管；纯声明正式页面无instance。原件见 `plugin_distribution_loop/artifacts/launcher-ui-verification.json`、`windows-stop-query-verification.json` 和 `ui-declarative-verification.json`。
 - [ ] 1.4 在现有协议 owner 完成 ready／status／shutdown／诊断 apply／status／统计能力，按第10组补扩展点版本、注册及具名命令输入／结果／进度／取消的真实序列化；迁齐 proto／OpenAPI／客户端生成与真实类型，不添加通用 method 或脚本接口。
   - 2026-11-09 管理能力准入收口：启动与接管共用 ready 校验，缺 status／shutdown／observation 任一管理能力不发布实例；诊断请求删除重复能力检查。通用 Python／Node、依赖包及流式测试迁到正式公共管理实现，保留错误 ready、缺能力、关闭失败与业务流故障。精确候选真实 Gateway 双插件安装／私有参数／重启／换版／拒绝缺能力及无 uv 依赖包两项通过（59.35秒）；原流式与诊断两项通过，Terminal 真实停止短测通过。首轮两失败确认为测试配置缺失模型环境凭据，fixture 改用不调用模型的占位密钥后补验；不改产品或放宽断言。原件见 `out/tests/temp/2026/11/09/plugin_readiness/artifacts/`。1.4 含未完成的完整扩展注册范围，继续保持未勾选。
 - [ ] 1.5 登记独立 service_plugin_installation_manage／service_plugin_runtime_manage，迁齐默认拒绝、原生目标／Relay 判权与 schema；配置和业务访问仍使用原 owner 权限，旧三项安装／宿主能力消费者全部清理。
@@ -16,7 +18,8 @@
 
 ## 2. Gateway 统一托管与流式代理
 
-- [ ] 2.1 原 Gateway runtime 按插件绑定托管，复用进程组、日志、就绪、退出核实和接管；同包独立入口／句柄，不建第二 supervisor 或共享进程内的部分关闭框架。
+- [x] 2.1 原 Gateway runtime 按插件绑定托管，复用进程组、日志、就绪、退出核实和接管；同包独立入口／句柄，不建第二 supervisor 或共享进程内的部分关闭框架。
+  - 2026-11-10 当前合同独立收口：绑定直接复用ManagedProcess／AdoptedManagedProcess、原进程组与ProcessLogStore，进程启动／接管／停止同一owner。Linux双语言完整管理、双scope Launcher换代及冷恢复、Windows实际退出与日志查询已通过；无第二supervisor。原件见 `plugin_distribution_loop/artifacts/launcher-ui-verification.json`、`windows-stop-query-verification.json` 及 `reinstall-after-unbind-verification.json`。
   - Gateway 范围基础切片已接入 ZIP／显式开发目录安装、配置来源 CAS 启停、Python／Node 独立进程、纯声明零进程和精确实例 HTTP 路由。真实 Gateway 集成通过安装→启用→独立重启→崩溃显式恢复→切版→错误 ready→shutdown 失败仍实际退出→解除绑定／卸载；工作区认证交付、真实服务迁移与旧体系删除仍未完成，不将该切片算整项通过。
 - [ ] 2.2 由Workspace配置owner在原启动／配置变更通知或用户显式重试时认证交付已提交非秘密绑定，缺输入等待、认证失败报错，普通状态读不重交付；Backend单独重启或Gateway正常接管保留核实原实例；按固定scope实现Gateway单实例／workspace独立实例及纯声明零进程，随所属完整生命周期恢复已开启绑定，原配置owner持有开关，Tab／导航不改enabled。
   - 2026-11-08 工作区交付切片（`858f726b0`）：原来源 CAS／active 与 pending 引用经认证交付，完整工作区停止／恢复驱动对应实例，Backend safe restart 保留原实例。发布前验证与卸载共用原拓扑锁，真实并发证明卸载先完成时候选冲突且 active 不变。精确 Git tree 隔离检查为 197 项单元／合同及 3 项真实集成通过；首轮归档未加载既有测试环境导致秘密引用无法解析，显式加载后通过，未修改产品逻辑。证据见 `out/tests/temp/2026/11/08/plugin_workspace_owner/artifacts/verification-v1.json`。真实 Terminal／Browser、工作区插件的 Gateway 换代与远端流量尚未闭合，本项保持未勾选。
@@ -41,10 +44,12 @@
 
 ## 3. 自有包、来源占位与安装
 
-- [ ] 3.1 在目标唯一安装 owner 校验整包 plugins、七类贡献、确切版本／目标平台制品、发行 Node／Python 版本及原生 ABI、完整运行依赖、归档路径与摘要，安全解包后原子发布；允许已准备的 node_modules／可重定位 Python 依赖，不部分安装、不接受只有锁文件的缺依赖包，不支持根级单入口或逐插件下载／版本。
+- [x] 3.1 在目标唯一安装 owner 校验整包 plugins、七类贡献、确切版本／目标平台制品、发行 Node／Python 版本及原生 ABI、完整运行依赖、归档路径与摘要，安全解包后原子发布；允许已准备的 node_modules／可重定位 Python 依赖，不部分安装、不接受只有锁文件的缺依赖包，不支持根级单入口或逐插件下载／版本。
+  - 2026-11-10 当前合同独立收口：唯一PluginPackageStore按整包manifest、七类贡献、目标运行时／ABI、完整锁定传递依赖及归档路径校验后原子发布；同安装链接受ZIP和准备目录，缺依赖与不兼容均发布前拒绝。包／依赖59项、Linux双语言、Windows完整管理及Relay按B拒绝已有原件，见 `legacy_host_boundary_luna_max/artifacts/package-boundary-review-final-receipt.txt`、`plugin_distribution_loop/artifacts/relay-compatibility-verification.json`。第9.8源码外断网发行矩阵仍独立未完成。
   - 2026-11-10 安装包平台边界清理：复用Luna max连续审查并小修，ZIP／开发目录共用Windows非法名称及大小写前缀冲突准入，精确重复条目直接由原entries判断，删除重复集合；安装目录身份在发布前拒绝保留名及大小写别名。Python .pth沿CPython site.addpackage真实行语义，包内相对路径保留，最终仅一次resolve核包根，不增加执行／普通请求扫描。两份包测试59 passed，Ruff与四文件Pyright零诊断；真实Windows完整MCP重启同批1 passed／82.86秒（保留既有GBK reader warning），不替代全平台归档负例。准确diff、指纹与CPython原件见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/package-boundary-review-final-receipt.txt`；未新增兼容或恢复框架。
   - 2026-11-10 Node 制品身份准入：安装 owner 同时核对 Bun 锁定依赖的实际包名与版本，拒绝同版本冒名包，合法 npm alias 按锁内真实身份校验。包依赖／原子安装定向25项通过，真实 Gateway 完整制品安装→绑定→调用→显式重启→再次调用1 passed／20.55秒；相关Ruff及生产Pyright零诊断。新增身份反例经同一 PluginPackageStore 安装入口证明发布前拒绝，未称已覆盖HTTP负例；最小复审只扩展原锁定元数据，无新账本或逐调用扫描。准确命令、指纹、原件见 `out/tests/temp/2026/11/10/plugin_artifact_admission/artifacts/verification.json`。Windows／Relay、源码外发行和完整运行时／ABI提示矩阵未由本片验收，3.1／3.7宽项保持未勾选。
-- [ ] 3.2 将 Bun／uv 锁定依赖准备及 node-pty 具名受控原生构建迁到生成 ZIP 前的发布工具链，迁齐清单、锁文件、打包校验、发行和测试；包内带齐依赖／必要资源，Python 不复制带绝对路径的 .venv。删除 Gateway／Backend 安装时执行包管理器、下载依赖、编译及源码安装分路，不保留开发中间态兼容；缓存／凭据隔离仅留构建阶段，禁止任意 hook。
+- [x] 3.2 将 Bun／uv 锁定依赖准备及 node-pty 具名受控原生构建迁到生成 ZIP 前的发布工具链，迁齐清单、锁文件、打包校验、发行和测试；包内带齐依赖／必要资源，Python 不复制带绝对路径的 .venv。删除 Gateway／Backend 安装时执行包管理器、下载依赖、编译及源码安装分路，不保留开发中间态兼容；缓存／凭据隔离仅留构建阶段，禁止任意 hook。
+  - 2026-11-10 当前合同独立收口：Bun／uv准备及唯一node-pty受控构建已迁到scripts/plugins发布工具，Bun冻结锁且ignore-scripts，复用正常缓存并隔离凭据；Linux／Windows构建及发行清单迁齐。安装owner仅校验和发布，不运行安装器／编译器，无源码安装分路；Python带可重定位site-packages。现有完整Linux构建和Windows包运行原件见 `plugin_distribution_loop/artifacts/distribution-verification.json`、`windows-stop-query-verification.json`；完整源码外／断网／Electron验收仍由9.8跟进。
   - 历史证据（已被预构建交付要求取代，非当前实现指令）：2026-11-09 Bun 安装切片：Node 插件仅使用 Bun 文本锁与 frozen install，移除 npm 安装分支及每次空缓存；目标 Node 和具名 node-gyp 构建保持。发行 manifest 明确提供 Bun 1.3.11／uv 0.11.26／node-gyp 10.3.1，配置读取目录隔离但复用正常缓存。精确候选的安装／缓存／原子发布20项、Launcher／Windows依赖接线37项通过；本地凭据 canary 正反例及目标 Node22 ABI127 的真实PTY加载／执行通过。正式 ZIP 经真实 Gateway 安装后完整 Workbench Debug 流程1 passed／150.57秒，证明新安装链可用；业务场景后续复用这一不可变包。Python类型零诊断，Ruff和Node语法通过。Windows wheel布局已核实，完整Windows与源码外发行安装仍未验；准确命令、输出与指纹见 `out/tests/temp/2026/11/09/bun_plugin_install/artifacts/`。
   - 2026-11-09 完整预构建切片：Bun／uv 依赖准备及 node-pty 具名构建已前移 ZIP 发布命令，Gateway 安装只校验、解包和原子发布；删除安装工具注入、包内 .venv 和 Backend bridge 源码依赖，Python 使用发行解释器及包内 site-packages。目标 OS／架构／系统基线、Node／Python 版本与 ABI 沿 proto 生成链发布，并在安装及绑定生效前校验；Node／Python 传递依赖缺失明确拒绝。候选包／依赖／Skill 27项、Launcher 27项及最终打包接线21项通过；最终真实 Gateway 双运行时安装／调用／重启场景通过，Python 包在 PATH 无 uv 时完整安装／导入／调用／重启1项通过（19.21秒，含退出），MCP真实Gateway／Thread循环原件为1项通过（122.52秒）。5份产品源码 Pyright 零诊断，Ruff、协议一致性、真实前端类型及正式 Web 构建通过；现成完整 ZIP 在新安装路径发布，包内 node-pty 执行及 Python bridge 依赖导入通过。准确命令、成功／失败输出和指纹见 `out/tests/temp/2026/11/09/plugin_prebuilt_delivery/artifacts/`。该切片当时尚未携带 npm 发行物固定 Node，现由第8组后续切片补齐；源码外空缓存断网、Windows／SSH、Electron 及完整 release 尚未验，不勾完第3／8／9／15组。
   - 2026-11-10 Windows预构建修复：MCP发布脚本按显式相对路径排除原根plugin.jsonc，再写唯一目标清单，删除平台相关绝对路径后缀判断。Windows重复路径422已确认消除；Linux真实完整包安装／运行／冷启动通过，发布期仍复用原uv锁及正常缓存，安装期无依赖准备。最终语法、Python类型和Ruff通过；同收据 `out/tests/temp/2026/11/10/plugin_distribution_loop/artifacts/mcp-startup-verification.json`。
@@ -154,7 +159,8 @@
 ## 9. 验收、性能和复杂度复审
 
 - [ ] 9.1 为当前 specs 的场景建立最小证据映射；先定向合同／单元与真实类型，再按受影响纵向链运行真实 Gateway／目标工作区／完整 Workbench 产品流程，不默认全套串行。
-- [ ] 9.2 用 Python／Node 两个真实插件验证同管理合同、范围隔离、同包独立进程、ready 身份、关闭／重启及实际退出；工具／命令／Skill 不触发启动，不以健康响应替代业务。
+- [x] 9.2 用 Python／Node 两个真实插件验证同管理合同、范围隔离、同包独立进程、ready 身份、关闭／重启及实际退出；工具／命令／Skill 不触发启动，不以健康响应替代业务。
+  - 2026-11-10 当前合同独立收口：Python／Node真实进程共用管理合同、独立启停／重启及版本切换均经原API／正式页面验证，ready核完整身份，旧PID退出且旧身份409。双workspace及gateway范围分别验收，纯Skill启停／换版全程instance与log为空；普通状态／业务及Skill读取不触发启动。原件见 `plugin_distribution_loop/artifacts/launcher-ui-verification.json`、`windows-stop-query-verification.json`、`ui-declarative-verification.json`；不将Linux页面扩为Windows页面或真实SSH。
 - [ ] 9.3 真实验证终端命令／输出及重附加、浏览器操作／画面、MCP stdio 工具结果；核 Gateway 转发路径与 request_id、本次迁移执行链无 Backend spawn 旁路、跨工作区零资源混用；调试场景沿第11组验，python_exec／条件脚本／ffmpeg 不新增迁移测试，不宣称 Backend 所有内部进程皆移除。
 - [ ] 9.4 以本地 A 和真实远端 B 验原生／Relay 同一实例和最终判权，权限撤销、断流、旧运行身份和结果未知零重放；受控替身只能计 Integration，不称真实远端 E2E。
   - 2026-11-10 通用秘密参数产品切片：真实 Gateway／托管 Workspace／正式 Workbench／Chromium 经 UI 安装同包两种 scope 插件、密码输入、受保护保存及原 source CAS，普通配置只含各自引用；Escape 与最终确认取消均零写入。两个真实插件分别消费原 owner 的秘密并只返回摘要，Workbench 显式重启后新实例复用原值、无重复输入；1 passed／124.55秒，页面错误为空。权限短验7项覆盖无 configuration_write 时零私有写入和零实例启动，私有文件短验19项覆盖损坏正文不回显；参数交付4项核缺失／非法引用返回409并保留原request_id，Gateway保留owner的具体原因；Python 类型零诊断，正式构建由同次产品装具完成。前三次产品失败均为新驱动定位／等待问题，修正驱动后通过，未放宽产品断言。准确命令、源码指纹与原始结果见 `out/tests/temp/2026/11/10/plugin_private_inputs_product/artifacts/main/verification.json`。本片不证明秘密更换／CAS冲突、清除揭示下层／active与pending保护、未引用版本回收、复杂schema秘密表单、真实Relay或Windows／SSH／Electron／源码外发行完成；6.1／7.3／9.4保持未勾选。
@@ -226,7 +232,8 @@
 ## 14. 插件 UI 开关与新建默认值闭环
 
 - [ ] 14.1 按D0／D2／D3全链统一 Plugin Package／Plugin／Contribution／Runtime Instance 和 plugins 字段，迁齐协议／生成物／manifest／注册身份／UI／测试；无 root contributes、module／feature 或包级enabled双轨，历史引用区不改。
-- [ ] 14.2 原配置族增加精确插件 enabled 与 plugins.workspace_defaults.entries，冻结默认空／数组整体替换／键唯一／只允许已安装workspace插件、无秘密及现有覆盖层；当前workspace不走用户层fan-out，schema与真实序列化迁齐，不修改用户环境。
+- [x] 14.2 原配置族增加精确插件 enabled 与 plugins.workspace_defaults.entries，冻结默认空／数组整体替换／键唯一／只允许已安装workspace插件、无秘密及现有覆盖层；当前workspace不走用户层fan-out，schema与真实序列化迁齐，不修改用户环境。
+  - 2026-11-10 当前合同独立收口：原Gateway／Workspace schema与writer使用精确enabled及默认空workspace_defaults数组，按原层级整体替换并拒绝重复键／未安装或非workspace插件／秘密字段。真实默认值创建、已有workspace不继承、模板不启进程、清空仅影响后建及正式页面保存已验；原件见 `plugin_creation_retry/artifacts/verification.json` 和 `plugin_distribution_loop/artifacts/ui-defaults-verification.json`。创建取消等14.3生命周期仍单独保留。
 - [ ] 14.3 原创建intent冻结模板revision／条目，在原安装互斥内建立版本引用，经原writer初始化配置并认证交付；完成交接由workspace绑定接替intent引用，取消／失败明确结清，无引用空隙或循环等待；重试保持原输入，挂接已有workspace不套模板，无新账本／引用图／定期修复。
   - 2026-11-10 创建默认值重试验收：原创建入口生成冻结 intent，原 Workspace writer 的真实 HTTP 验证被显式测试组合拒绝后保留 rejected 候选；模板清空仍由原 intent 阻止卸载。沿原停止／启动重试同一候选，继续使用原 revision／条目，之后新建取得新模板，完成交接后卸载仅报告工作区绑定引用，解绑可卸载。精确候选正常创建／中断重试两项通过（119.09秒），相关短回归43项通过；Ruff通过，类型诊断与修改前40条完全一致且新增代码零诊断。两参数场景的新目录已按测试节点隔离。证据见 `out/tests/temp/2026/11/10/plugin_creation_retry/artifacts/verification.json`；真实创建取消／删除、跨平台及14.3／14.6其余宽场景尚未补齐，不将该切片算整项完成。
   - 2026-11-10 创建中断后删除验收：真实创建入口冻结默认值并在原HTTP验证失败后保留intent；清空模板仍拒绝卸载。经原managed-workspaces DELETE移除目标后，registry、插件槽位与配置交付均无该工作区，包可卸载，已有工作区保持无绑定，用户目录保留。定向产品1 passed／42.48秒，原取消／模板短测2 passed／0.94秒；Ruff通过，类型与前批40条既有诊断完全一致。最小复审无新生产分支／引用账本；真实取消全过程和跨平台仍未验，14.3保持未勾选。原件、命令与指纹见 `out/tests/temp/2026/11/10/plugin_distribution_loop/artifacts/creation-delete-verification.json`。
