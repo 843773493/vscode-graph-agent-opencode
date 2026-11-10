@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 _OWNERSHIP_LOCK = RLock()
 
 
+def runtime_log_id(path: Path) -> str:
+    """沿原诊断入口定位日志，不把物理位置作为公开引用。"""
+    return f"gateway:file:{path.name}"
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessLogOwnership:
     path: Path

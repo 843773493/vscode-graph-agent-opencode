@@ -1078,6 +1078,11 @@ export declare type PluginSlotStatusDTO = Message<"boxteam.gateway.v2.PluginSlot
    * @generated from field: string instance_scope = 8;
    */
   instanceScope: string;
+
+  /**
+   * @generated from field: optional string log_id = 9;
+   */
+  logId?: string | undefined;
 };
 
 /**

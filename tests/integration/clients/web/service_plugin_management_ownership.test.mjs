@@ -276,3 +276,30 @@ test('秘密参数按钮在向导启动前立即禁用，避免重复创建不�
   expect(secret.disabled).toBe(true);
   expect(operationStarted).toBe(true);
 });
+
+test('实例日志只读取原 Gateway 回执的精确日志，保留限长及不可用错误', async () => {
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original' };
+  const calls = [];
+  let receipt = { gateway_id: target.gateway_id, selected_log_id: 'opaque-log-id',
+    logs: [{ log_id: 'opaque-log-id', status: 'available', truncated: true, tail: 'probe stdout\nprobe stderr' }] };
+  const read = new Function('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({
+    request: async (path, options) => { calls.push({ path, options }); return receipt; },
+  });
+  expect(await read(target, 'opaque-log-id')).toBe('仅显示最近的日志尾部。\nprobe stdout\nprobe stderr');
+  const query = new URL(calls[0].path, 'http://local.invalid');
+  expect(query.pathname).toBe('/api/gateway/diagnostics');
+  expect(query.searchParams.get('log_id')).toBe('opaque-log-id');
+  expect(query.searchParams.get('gateway_connection_id')).toBe('route-original');
+  expect(calls[0].options.headers).toEqual({ 'X-BoxTeam-Target-Gateway-Id': target.gateway_id });
+  receipt = { ...receipt, gateway_id: 'other' };
+  await expect(read(target, 'opaque-log-id')).rejects.toThrow('不属于原 Gateway 或日志');
+  receipt = { ...receipt, gateway_id: target.gateway_id, selected_log_id: 'other' };
+  await expect(read(target, 'opaque-log-id')).rejects.toThrow('不属于原 Gateway 或日志');
+  receipt = { ...receipt, selected_log_id: 'opaque-log-id', logs: [] };
+  await expect(read(target, 'opaque-log-id')).rejects.toThrow('原实例日志不在目标诊断回执中');
+  receipt.logs = [{ log_id: 'opaque-log-id', status: 'empty' }];
+  expect(await read(target, 'opaque-log-id')).toBe('当前实例日志为空。');
+  receipt.logs = [{ log_id: 'opaque-log-id', status: 'unavailable', error: '原日志已删除' }];
+  await expect(read(target, 'opaque-log-id')).rejects.toThrow('原日志已删除');
+  expect(calls).toHaveLength(6);
+});

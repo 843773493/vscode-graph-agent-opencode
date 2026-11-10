@@ -406,7 +406,7 @@ class PluginInventoryResultDTO(_message.Message):
     def __init__(self, packages: _Optional[_Iterable[_Union[InstalledPluginPackageDTO, _Mapping]]] = ..., sources: _Optional[_Union[PluginSourceStatusDTO, _Mapping]] = ...) -> None: ...
 
 class PluginSlotStatusDTO(_message.Message):
-    __slots__ = ("binding", "revision", "state", "error", "declarative", "instance", "gateway_id", "instance_scope")
+    __slots__ = ("binding", "revision", "state", "error", "declarative", "instance", "gateway_id", "instance_scope", "log_id")
     BINDING_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -415,6 +415,7 @@ class PluginSlotStatusDTO(_message.Message):
     INSTANCE_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    LOG_ID_FIELD_NUMBER: _ClassVar[int]
     binding: PluginBinding
     revision: str
     state: str
@@ -423,7 +424,8 @@ class PluginSlotStatusDTO(_message.Message):
     instance: PluginInstanceView
     gateway_id: str
     instance_scope: str
-    def __init__(self, binding: _Optional[_Union[PluginBinding, _Mapping]] = ..., revision: _Optional[str] = ..., state: _Optional[str] = ..., error: _Optional[str] = ..., declarative: _Optional[bool] = ..., instance: _Optional[_Union[PluginInstanceView, _Mapping]] = ..., gateway_id: _Optional[str] = ..., instance_scope: _Optional[str] = ...) -> None: ...
+    log_id: str
+    def __init__(self, binding: _Optional[_Union[PluginBinding, _Mapping]] = ..., revision: _Optional[str] = ..., state: _Optional[str] = ..., error: _Optional[str] = ..., declarative: _Optional[bool] = ..., instance: _Optional[_Union[PluginInstanceView, _Mapping]] = ..., gateway_id: _Optional[str] = ..., instance_scope: _Optional[str] = ..., log_id: _Optional[str] = ...) -> None: ...
 
 class PluginRuntimeStatusDTO(_message.Message):
     __slots__ = ("plugins", "configured_bindings", "workspace_configurations")

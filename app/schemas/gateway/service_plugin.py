@@ -343,6 +343,7 @@ class PluginSlotStatusDTO(_PluginValue):
     error: str | None = None
     declarative: bool
     instance: PluginInstanceView | None = None
+    log_id: str | None = None
 
 
 class WorkspacePluginConfigurationDTO(_PluginValue):

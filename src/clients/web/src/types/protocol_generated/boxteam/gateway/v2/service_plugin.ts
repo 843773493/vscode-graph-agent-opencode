@@ -246,6 +246,7 @@ export interface PluginSlotStatusDTO {
   instance?: PluginInstanceView | undefined;
   gateway_id: string;
   instance_scope: string;
+  log_id?: string | undefined;
 }
 
 export interface PluginRuntimeStatusDTO {
@@ -1888,6 +1889,7 @@ function createBasePluginSlotStatusDTO(): PluginSlotStatusDTO {
     instance: undefined,
     gateway_id: "",
     instance_scope: "",
+    log_id: undefined,
   };
 }
 
@@ -1902,6 +1904,7 @@ export const PluginSlotStatusDTO: MessageFns<PluginSlotStatusDTO> = {
       instance: isSet(object.instance) ? PluginInstanceView.fromJSON(object.instance) : undefined,
       gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
       instance_scope: isSet(object.instance_scope) ? globalThis.String(object.instance_scope) : "",
+      log_id: isSet(object.log_id) ? globalThis.String(object.log_id) : undefined,
     };
   },
 
@@ -1931,6 +1934,9 @@ export const PluginSlotStatusDTO: MessageFns<PluginSlotStatusDTO> = {
     if (message.instance_scope !== "") {
       obj.instance_scope = message.instance_scope;
     }
+    if (message.log_id !== undefined) {
+      obj.log_id = message.log_id;
+    }
     return obj;
   },
 
@@ -1951,6 +1957,7 @@ export const PluginSlotStatusDTO: MessageFns<PluginSlotStatusDTO> = {
       : undefined;
     message.gateway_id = object.gateway_id ?? "";
     message.instance_scope = object.instance_scope ?? "";
+    message.log_id = object.log_id ?? undefined;
     return message;
   },
 };

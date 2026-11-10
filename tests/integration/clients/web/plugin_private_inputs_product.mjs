@@ -187,6 +187,36 @@ try {
   assert.notEqual(workspaceRestart.instance.instance_id, workspaceReady.instance.instance_id);
   const gatewayAfterRestart = await call(gatewayRestart), workspaceAfterRestart = await call(workspaceRestart, active.workspace_id);
   assert.equal(gatewayAfterRestart.credential_digest, digest(gatewaySecret)); assert.equal(workspaceAfterRestart.credential_digest, digest(workspaceSecret));
+  const readInstanceLog = async (scope, name, instance, otherInstance, loggedInstance = instance.instance) => {
+    await openPlugin(scope, name);
+    const request = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/diagnostics');
+    await view.getByRole('button', { name: '查看实例日志', exact: true }).click();
+    const response = await request;
+    assert.equal(response.status(), 200);
+    assert.equal(response.request().headers()['x-boxteam-target-gateway-id'], health.gateway_id);
+    const receipt = await response.json();
+    assert.equal(receipt.request_id, response.headers()['x-request-id']);
+    assert.equal(receipt.data.gateway_id, health.gateway_id);
+    assert.equal(new URL(response.url()).searchParams.get('log_id'), instance.log_id);
+    assert.equal(receipt.data.selected_log_id, instance.log_id);
+    const output = view.getByLabel('插件实例日志');
+    await expect(output).toContainText(`plugin-instance-log ${instance.binding.plugin_id} ${loggedInstance.instance_id}`);
+    assert(!(await output.textContent()).includes(otherInstance.instance.instance_id));
+    assert(!secretValues.some(value => receipt.data.logs.some(log => log.tail?.includes(value))));
+  };
+  result.phase = 'instance-logs';
+  await readInstanceLog('gateway', 'Gateway 私有输入探针 · gateway-probe', gatewayRestart, gatewayReady);
+  result.instance_logs_gateway = true;
+  await readInstanceLog('workspace', '工作区私有输入探针 · workspace-probe', workspaceRestart, gatewayRestart);
+  result.instance_logs_workspace = true;
+  await openPlugin('gateway', 'Gateway 私有输入探针 · gateway-probe');
+  await view.getByRole('button', { name: '停用此范围', exact: true }).click();
+  await pick(sourceGateway); await pick('确认保存 Gateway 插件绑定'); await expect(quick).not.toBeVisible();
+  const stopped = await waitStatus('gateway-probe', undefined, item => item.state === 'stopped' && !item.binding.enabled);
+  assert.equal(stopped.log_id, gatewayRestart.log_id);
+  assert.equal(stopped.instance, null);
+  await readInstanceLog('gateway', 'Gateway 私有输入探针 · gateway-probe', stopped, workspaceRestart, gatewayRestart.instance);
+  result.stopped_instance_logs = true;
   result.gateway_rebuilt = true; result.workspace_rebuilt = true; result.phase = 'complete';
   await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {

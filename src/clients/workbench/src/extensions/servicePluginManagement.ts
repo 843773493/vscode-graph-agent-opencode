@@ -21,6 +21,7 @@ import { gateway } from '../agentApi.js';
 import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
+import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 
 import { manageConfig, setPluginBindings, readWorkspaceDefaults, readWorkspaceBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
 
@@ -247,6 +248,19 @@ export class ServicePluginPackagesView extends ViewPane {
     append(details, $('p')).textContent = scope === 'defaults' ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
       : `${plugin.instance_scope} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}${status?.error ? ` · ${status.error}` : ''}`;
     append(details, $('p')).textContent = `Gateway ${target.gateway_id}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
+    const logId = status?.log_id;
+    if (logId) {
+      const logs = append(details, $('button')) as HTMLButtonElement;
+      logs.textContent = '查看实例日志';
+      const output = append(details, $('pre'));
+      output.setAttribute('aria-label', '插件实例日志');
+      logs.addEventListener('click', () => {
+        logs.disabled = true;
+        void readPluginInstanceLog(target, logId).then(text => { output.textContent = text; })
+          .catch(error => { output.textContent = errorsText(error); this.notifications.error(errorsText(error)); })
+          .finally(() => { logs.disabled = false; });
+      });
+    }
     const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
     const toggle = append(details, $('button'));
     toggle.textContent = binding?.enabled ? '停用此范围' : '启用此范围';
@@ -293,6 +307,20 @@ export class ServicePluginPackagesView extends ViewPane {
       });
     }
   }
+}
+
+async function readPluginInstanceLog(target: PluginTarget, logId: string): Promise<string> {
+  const query = new URLSearchParams({ log_id: logId, tail_lines: '300' });
+  if (target.gateway_connection_id) query.set('gateway_connection_id', target.gateway_connection_id);
+  const diagnostics = await gateway.request<GatewayDiagnosticsDTO>(`/api/gateway/diagnostics?${query}`, {
+    headers: { 'X-BoxTeam-Target-Gateway-Id': target.gateway_id },
+  });
+  if (diagnostics.gateway_id !== target.gateway_id || diagnostics.selected_log_id !== logId) throw new Error('实例日志回执不属于原 Gateway 或日志');
+  const log = diagnostics.logs.find(item => item.log_id === logId);
+  if (!log) throw new Error('原实例日志不在目标诊断回执中');
+  if (log.status === 'empty') return '当前实例日志为空。';
+  if (log.status !== 'available') throw new Error(log.error ?? '原实例日志当前不可读');
+  return `${log.truncated ? '仅显示最近的日志尾部。\n' : ''}${log.tail}`;
 }
 
 async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService,

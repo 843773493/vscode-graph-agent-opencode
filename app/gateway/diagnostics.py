@@ -26,6 +26,7 @@ from app.gateway.runtime.logging_control import (
     RuntimeLoggingProcessControl,
     runtime_logging_processes,
 )
+from app.gateway.runtime.process_logs import runtime_log_id
 from app.schemas.gateway.diagnostics import (
     GatewayDiagnosticLogDTO,
     GatewayDiagnosticLoggingStateDTO,
@@ -97,6 +98,7 @@ def _process_log_path(service: str, port: int | None) -> Path | None:
 
 def _candidate_gateway_logs(
     known_workspace_files: set[str], *, max_entries: int = _MAX_GATEWAY_LOG_ENTRIES,
+    selected_log_id: str | None = None,
 ) -> list[_LogCandidate]:
     candidates = [_launcher_log_candidate()]
     log_dir = get_runtime_log_root()
@@ -123,12 +125,12 @@ def _candidate_gateway_logs(
     newest_log_entries = heapq.nlargest(
         max_entries,
         gateway_log_entries(),
-        key=lambda log_entry: log_entry[:2],
+        key=lambda log_entry: (runtime_log_id(log_entry[2]) == selected_log_id, *log_entry[:2]),
     )
     for _, _, log_path in newest_log_entries:
         candidates.append(
             _LogCandidate(
-                log_id=f"gateway:file:{log_path.name}",
+                log_id=runtime_log_id(log_path),
                 source="gateway",
                 service="gateway_runtime",
                 label=f"Gateway 运行日志 · {log_path.name}",
@@ -371,7 +373,7 @@ async def collect_gateway_diagnostics(
             for candidate in workspace_candidates
             if candidate.log_path is not None
         }
-        gateway_candidates = _candidate_gateway_logs(known_workspace_files)
+        gateway_candidates = _candidate_gateway_logs(known_workspace_files, selected_log_id=selected_log_id)
     else:
         gateway_candidates = [_launcher_log_candidate()]
     candidates = _scope_log_candidates(

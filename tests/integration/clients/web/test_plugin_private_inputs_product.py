@@ -38,6 +38,7 @@ from app.core.logging_config import configure_application_logging
 from app.runtime.plugin_commands import plugin_command_router
 configure_application_logging(service='private-input-product-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
+print('plugin-instance-log ' + identity['plugin_id'] + ' ' + identity['instance_id'], flush=True)
 parameters = json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS'])
 async def shutdown(): server.should_exit = True
 app = FastAPI()
@@ -153,5 +154,6 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["phase"] == "complete" and result["gateway_rebuilt"] and result["workspace_rebuilt"]
         assert result["secret_values_absent"] and not result["pageErrors"]
+        assert result["instance_logs_gateway"] and result["instance_logs_workspace"] and result["stopped_instance_logs"]
     finally:
         close_gateway_process(gateway)

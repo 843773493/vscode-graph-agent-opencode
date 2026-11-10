@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from json import JSONDecodeError
+from os import utime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -84,6 +85,27 @@ def test_diagnostics_finds_role_logs_and_launcher_override(
     assert _launcher_log_path() == override
     candidates = _candidate_gateway_logs({paths[1].name})
     assert {candidate.log_path for candidate in candidates} == {override, paths[0], paths[2]}
+
+
+def test_explicit_instance_log_stays_readable_outside_recent_log_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path))
+    contract = load_runtime_log_contract()
+    root = contract.root_for(tmp_path)
+    old = contract.path_for(root, "service-plugin", "old-instance")
+    newer = contract.path_for(root, "service-plugin", "new-instance")
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_text("old instance output")
+    newer.write_text("new instance output")
+    utime(old, (1, 1))
+    utime(newer, (2, 2))
+    selected = f"gateway:file:{old.name}"
+    # 显式选择仍受原目录和列表上限约束，不能因新日志挤出原实例。
+    recent = _candidate_gateway_logs(set(), max_entries=1)
+    assert {item.log_path for item in recent} == {_launcher_log_path(), newer}
+    explicit = _candidate_gateway_logs(set(), max_entries=1, selected_log_id=selected)
+    assert {item.log_path for item in explicit} == {_launcher_log_path(), old}
 
 
 @pytest.mark.parametrize("native_path", [

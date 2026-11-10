@@ -293,6 +293,13 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         failed = bind(entries("3.0.0"))
         assert failed["python"]["state"] == "failed"
         assert failed["python"]["binding"]["enabled"] is True
+        assert failed["python"]["log_id"] and failed["python"]["instance"] is None
+        diagnostic = client.get("/api/gateway/diagnostics", params={
+            "log_id": failed["python"]["log_id"], "tail_lines": 30,
+        }).raise_for_status().json()["data"]
+        assert diagnostic["selected_log_id"] == failed["python"]["log_id"]
+        failed_log, = [log for log in diagnostic["logs"] if log["log_id"] == failed["python"]["log_id"]]
+        assert failed_log["status"] in {"available", "empty"}, failed_log
         assert failed["node"]["state"] == "ready", "单个插件失败不能阻断兄弟启动"
         assert not psutil.pid_exists(before_failure["instance"]["process_id"])
         assert echo(before_failure).status_code == 409

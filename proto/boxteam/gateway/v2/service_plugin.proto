@@ -241,6 +241,7 @@ message PluginSlotStatusDTO {
   optional PluginInstanceView instance = 6;
   string gateway_id = 7;
   string instance_scope = 8;
+  optional string log_id = 9;
 }
 
 message PluginRuntimeStatusDTO {

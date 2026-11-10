@@ -34,7 +34,7 @@ from app.gateway.runtime.process_lifecycle import (
     _spawn_logged_process,
     wait_process_exit,
 )
-from app.gateway.runtime.process_logs import ProcessLogStore
+from app.gateway.runtime.process_logs import ProcessLogStore, runtime_log_id
 from app.gateway.runtime.process_ports import allocate_local_port
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime.workspace_process import (
@@ -119,6 +119,7 @@ class PluginSlot:
     process: ManagedProcess | AdoptedManagedProcess | None = None
     process_version: str | None = None
     receipt: PluginInstanceStatus | None = None
+    log_id: str | None = None
     base_url: str | None = None
     token: str | None = None
     error: str | None = None
@@ -142,6 +143,7 @@ class PluginSlot:
                 "binding": self.binding.model_dump(mode="json"), "revision": self.revision,
                 "state": self.state, "error": self.error,
                 "declarative": self.declaration.runtime is None,
+                "log_id": self.log_id,
                 "instance": self.receipt.model_dump(mode="json", exclude={"log_sink"}) if self.receipt else None}
 
 
@@ -400,7 +402,8 @@ class GatewayPluginRuntime:
                     logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
                     self._publish()
                     return slot.describe()
-            slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values)
+            slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values,
+                log_id=previous.log_id if previous is not None and not binding.enabled else None)
             self.slots[key] = slot
             try:
                 if binding.enabled and declaration.runtime is not None:
@@ -506,6 +509,7 @@ class GatewayPluginRuntime:
             executable = node_executable or ""
             environment.pop("NODE_PATH", None)
         log_file = self.logs.open("service-plugin", instance_id)
+        slot.log_id = runtime_log_id(self.logs.path_for("service-plugin", instance_id))
         process = _spawn_logged_process([executable, str(root / entrypoint[0]), *entrypoint[1:]],
             log_file=log_file, cwd=working_directory, env=environment, detached=True)
         del environment["BOXTEAM_PLUGIN_PARAMETERS"]
@@ -568,6 +572,7 @@ class GatewayPluginRuntime:
             raise ValueError("插件回执 PID 与原创建进程不符")
         ownership = self.logs.adopt("service-plugin", receipt.instance_id,
             {"pid": receipt.process_id, "log_sink": receipt.log_sink})
+        slot.log_id = runtime_log_id(ownership.path)
         slot.process = AdoptedManagedProcess(receipt.process_id, ownership)
         slot.process_version = record.binding.package_version
         slot.receipt, slot.base_url, slot.token, slot.state = receipt, record.base_url, record.token, "ready"
