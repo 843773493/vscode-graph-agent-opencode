@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import shutil
@@ -27,6 +28,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.workspaces import install_test_workspace_config, prepare_default_test_workspace
 
 
 @pytest.fixture
@@ -50,7 +52,6 @@ def plugin_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
 @pytest.mark.parametrize("scenario", ["single", "batch"])
 async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     request: pytest.FixtureRequest,
-    integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     web_workbench_assets: Path,
     scenario: str,
@@ -58,9 +59,13 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "插件管理 UI 验收需要真实 Chromium"
-    workspace_root = Path(integration_workspace_root_path)
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    config_path = Path(integration_workspace_config_path)
+    # 参数化场景各持有自己的来源和私有引用，不能将前一 Gateway 的秘密引用带入新 Home。
+    workspace_root = prepare_default_test_workspace(workspace_root=context.workspace_root / scenario,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=Path.cwd() / "resources/skills", fresh_identity=True)
+    config_path = install_test_workspace_config(workspace_root=workspace_root,
+        config_path=Path(integration_workspace_config_path), schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
     for provider in configuration["llm"]["providers"]:
         if "api_key" in provider:
@@ -93,6 +98,18 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         })
     with ZipFile(package_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
+    version_paths = []
+    if scenario == "single":
+        for version in ("1.1.0", "2.0.0"):
+            candidate = copy.deepcopy(manifest)
+            candidate["version"] = version
+            if version == "2.0.0":
+                for plugin in candidate["plugins"]:
+                    plugin["contributes"]["configuration"]["properties"]["label"] = {"type": "number"}
+            path = context.artifacts_dir / f"ui-plugin-package-{version}.zip"
+            with ZipFile(path, "w") as archive:
+                archive.writestr("plugin.jsonc", json.dumps(candidate, ensure_ascii=False))
+            version_paths.append(str(path))
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
         port=plugin_gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
@@ -106,7 +123,8 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         driver = "tests/integration/clients/web/" + ("plugin_batch_management_ui.mjs" if scenario == "batch" else "service_plugin_management_ui.mjs")
         environment = os.environ | {
             "BOXTEAM_PLUGIN_UI_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
-                "packagePath": str(package_path), "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
+                "packagePath": str(package_path), "versionPaths": version_paths,
+                "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
         }
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
@@ -125,6 +143,8 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         else:
             assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
             assert result["installed"] and result["uninstalled"]
+            assert result["explicitVersionSwitch"] and result["installKeptBindings"]
+            assert result["disabledVersionStayedDisabled"] and result["invalidVersionKeptBinding"]
             assert result["referencedUninstall"]["status"] == 409
             assert result["workspaceHandoff"]["workspace_id"] == result["owner"]["workspaceId"]
             assert {scope: len(reads) for scope, reads in result["scopeReads"].items()} == {

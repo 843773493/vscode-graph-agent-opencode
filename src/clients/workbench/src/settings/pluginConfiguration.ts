@@ -35,8 +35,13 @@ function sourceBindings(document: ConfigDocument, path: string[]): PluginBinding
   return bindingsAt(parse(document.jsonc), path);
 }
 
-function bindingJsonc(document: ConfigDocument, path: string[], binding: ConfigurationBinding, enabled: boolean | null): string {
+function bindingJsonc(document: ConfigDocument, path: string[], binding: ConfigurationBinding, enabled: boolean | null | 'preserve'): string {
   const updated = sourceBindings(document, path).slice();
+  if (enabled === 'preserve') {
+    const current = updated.find(item => sameBinding(item, binding));
+    if (!current) throw new Error('所选来源没有此插件绑定，请选择持有绑定的原来源；不会复制其它层的绑定');
+    enabled = current.enabled;
+  }
   const index = updated.findIndex(item => sameBinding(item, binding));
   if (enabled === null) { if (index >= 0) updated.splice(index, 1); }
   else if (index < 0) updated.push({ ...binding, enabled });
@@ -178,7 +183,7 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
 }
 
 export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
-  quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null,
+  quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null | 'preserve',
   editParameters = false, privateParameter?: PrivateParameter, check = () => {}): Promise<void> {
   check();
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
@@ -281,7 +286,8 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   if (jsonc === document.jsonc) return;
   check();
   const intent = owner.intent(source.source_key!, jsonc, sourceBaseline(document));
-  const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
+  const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : enabled === 'preserve'
+    ? `切换至 ${binding.package_version}，保留原开关` : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
   const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数' : '插件绑定';
   let preflight: Awaited<ReturnType<typeof owner.preflight>>;
   try { preflight = await owner.preflight(intent); }

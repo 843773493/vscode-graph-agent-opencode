@@ -11,15 +11,16 @@ const run = await TestRunContext.fromTestFile('tests/integration/clients/web/set
 const path = 'src/clients/workbench/src/settings/pluginConfiguration.ts';
 const source = await readFile(path, 'utf8');
 const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = ['privateParameterLocation', 'updateJsonc', 'containsWriteOnly', 'writeOnlyFields'];
+const names = ['privateParameterLocation', 'updateJsonc', 'containsWriteOnly', 'writeOnlyFields', 'sourceBindings', 'bindingsAt', 'bindingJsonc'];
 const code = names.map(name => {
   const node = parsed.statements.find(item => item.name?.text === name);
   if (!node) throw new Error(`实际源码缺少 ${name}`);
   return ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
 }).join('\n');
-const factory = new Function('parse', 'parseTree', 'applyEdits', 'setProperty',
-  `${ts.transpile(code, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })}\nreturn { privateParameterLocation, updateJsonc, writeOnlyFields };`);
-const { privateParameterLocation, updateJsonc, writeOnlyFields } = factory(parse, parseTree, applyEdits, setProperty);
+const factory = new Function('parse', 'parseTree', 'applyEdits', 'setProperty', 'sameBinding',
+  `${ts.transpile(code, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })}\nreturn { privateParameterLocation, updateJsonc, writeOnlyFields, bindingJsonc };`);
+const { privateParameterLocation, updateJsonc, writeOnlyFields, bindingJsonc } = factory(parse, parseTree, applyEdits, setProperty,
+  (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), JSON.stringify({ path,
   sha256: createHash('sha256').update(source).digest('hex'),
 }, null, 2) + '\n'));
@@ -65,4 +66,21 @@ test('复杂 schema 只给具名位置入口，前端不解析分支或建立第
   $defs: { entry: { allOf: [{ properties: { token: { type: 'integer', writeOnly: true } } }] } } };
   expect(writeOnlyFields(schema)).toEqual([{ pointer: '/direct', schema: schema.properties.direct }, { pointer: '', schema: {} }]);
   expect(writeOnlyFields({ properties: { ordinary: { type: 'string' } } })).toEqual([]);
+});
+
+test('显式切版只修改所选来源，保留本层开关及兄弟，不物化其它层', () => {
+  for (const path of [['plugins', 'runtime', 'entries'], ['plugins', 'workspace_defaults', 'entries']]) {
+    for (const enabled of [false, true]) {
+      const sibling = { ...binding, plugin_id: 'sibling', package_version: '4.0.0', enabled: true };
+      const payload = entries => ({ plugins: { [path[1]]: { entries } } });
+      const doc = { jsonc: JSON.stringify(payload([{ ...binding, package_version: '1.0.0', enabled }, sibling])),
+        source_effective: payload([{ ...binding, package_version: '9.0.0', enabled: !enabled }]) };
+      const value = parse(bindingJsonc(doc, path, { ...binding, package_version: '2.0.0', enabled: true }, 'preserve'));
+      expect(value.plugins[path[1]].entries).toEqual([{ ...binding, package_version: '2.0.0', enabled }, sibling]);
+      expect(() => bindingJsonc({ ...doc, jsonc: JSON.stringify(payload([sibling])) }, path, binding, 'preserve'))
+        .toThrow('所选来源没有此插件绑定');
+    }
+  }
+  expect(() => bindingJsonc({ jsonc: '{}', source_effective: {} }, ['plugins', 'runtime', 'entries'], binding, 'preserve'))
+    .toThrow('所选来源没有此插件绑定');
 });

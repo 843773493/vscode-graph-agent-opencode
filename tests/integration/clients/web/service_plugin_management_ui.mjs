@@ -238,6 +238,66 @@ try {
   await pick('确认保存 Gateway 插件秘密参数');
   assert.equal((await gatewaySecretClear).status(), 200);
 
+  result.phase = 'explicit-version-switch';
+  const packageRowFor = version => view.locator('.service-plugin-package').filter({
+    has: page.getByRole('heading', { name: `UI 配置验证包 · ui.preference-probe@${version}`, exact: true }),
+  });
+  const gatewaySource = () => api('/api/gateway/config/sources/gateway_mutable_override');
+  const configuredGateway = document => document.source_effective.plugins.runtime.entries.find(item =>
+    item.package_id === 'ui.preference-probe' && item.plugin_id === 'gateway-preference');
+  const beforeInstall = await gatewaySource();
+  const beforeInstallRuntime = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } });
+  for (const path of input.versionPaths) {
+    await installButton.click(); await pick('ZIP 文件'); await inputQuick(path);
+    await expect(view.locator('.service-plugin-package')).toHaveCount(path === input.versionPaths[0] ? 2 : 3);
+  }
+  assert.equal((await gatewaySource()).jsonc, beforeInstall.jsonc);
+  assert.deepEqual(await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } }), beforeInstallRuntime);
+  result.installKeptBindings = true;
+  const openVersion = async version => {
+    await packageRowFor(version).getByRole('button', { name: 'Gateway 偏好 · gateway-preference', exact: true }).click();
+    await expect(view.locator('.service-plugin-details')).toBeVisible();
+  };
+  const switchVersion = async (version, enabled) => {
+    await openVersion(version);
+    await expect(view.getByRole('button', { name: '编辑参数 JSON', exact: true })).toHaveCount(0);
+    await view.getByRole('button', { name: '切换到此版本（保留开关）', exact: true }).click();
+    await pick('gateway_mutable_override');
+    await expect(quick).toContainText(`切换至 ${version}，保留原开关`);
+    const saved = page.waitForResponse(response => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
+    await pick('确认保存 Gateway 插件绑定');
+    assert.equal((await saved).status(), 200);
+    await expect(view.getByLabel('插件配置与运行版本')).toContainText(`配置：${enabled ? '启用' : '停用'} @${version}`);
+    assert.deepEqual(configuredGateway(await gatewaySource()), { package_id: 'ui.preference-probe', plugin_id: 'gateway-preference',
+      package_version: version, enabled });
+  };
+  await switchVersion('1.1.0', true);
+  await switchVersion('1.0.0', true);
+  const beforeInvalid = await gatewaySource(), writesBeforeInvalid = sourceWriteRequestCount;
+  await openVersion('2.0.0');
+  await view.getByRole('button', { name: '切换到此版本（保留开关）', exact: true }).click();
+  await pick('gateway_mutable_override');
+  await expect(page.locator('.notifications-toasts')).toContainText('未提交');
+  await expect(quick).not.toBeVisible();
+  assert.equal(sourceWriteRequestCount, writesBeforeInvalid);
+  assert.equal((await gatewaySource()).jsonc, beforeInvalid.jsonc);
+  result.invalidVersionKeptBinding = true;
+  await openVersion('1.0.0');
+  await view.getByRole('button', { name: '停用此范围', exact: true }).click();
+  await pick('gateway_mutable_override'); await pick('确认保存 Gateway 插件绑定');
+  await expect(view.getByRole('button', { name: '启用此范围', exact: true })).toBeVisible();
+  await switchVersion('1.1.0', false);
+  await switchVersion('1.0.0', false);
+  result.disabledVersionStayedDisabled = true;
+  for (const version of ['1.1.0', '2.0.0']) {
+    await packageRowFor(version).getByRole('button', { name: '卸载整个包', exact: true }).click();
+    await pick('卸载整包');
+    await expect(packageRowFor(version)).toHaveCount(0);
+  }
+  await enable('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  result.explicitVersionSwitch = true;
+
   await view.getByLabel('插件管理范围').selectOption('workspace');
   await pick(workspaceName);
   await expect(view).toContainText('工作区偏好 · workspace-preference');

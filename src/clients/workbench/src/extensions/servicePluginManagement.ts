@@ -220,10 +220,9 @@ export class ServicePluginPackagesView extends ViewPane {
       });
       for (const plugin of matching) {
         const binding = (scopeBindings ?? runtime!.configured_bindings).find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id
-          && item.package_version === manifest.version && (scope !== 'workspace' ? item.workspace_id == null : item.workspace_id === workspace?.workspace_id));
+          && (scope !== 'workspace' ? item.workspace_id == null : item.workspace_id === workspace?.workspace_id));
         const status = runtime?.plugins.find(item => item.gateway_id === target.gateway_id
           && item.binding?.package_id === manifest.package_id && item.binding.plugin_id === plugin.id
-          && item.binding.package_version === manifest.version
           && (scope === 'workspace' ? item.binding.workspace_id === workspace?.workspace_id : item.binding.workspace_id == null));
         const row = append(packageSection, $('article'));
         const open = append(row, $('button'));
@@ -231,8 +230,9 @@ export class ServicePluginPackagesView extends ViewPane {
         open.addEventListener('click', () => { this.selected = { packageId: manifest.package_id, pluginId: plugin.id, version: manifest.version };
           this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status); });
         append(row, $('span')).textContent = scope === 'defaults'
-          ? `${binding?.enabled ? '新建时启用' : binding ? '新建时停用' : '未加入默认值'} · 不代表已运行`
-          : `${binding?.enabled ? '启用' : '停用'} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}`;
+          ? `${binding?.enabled ? '新建时启用' : binding ? '新建时停用' : '未加入默认值'}${binding ? ` @${binding.package_version}` : ''} · 不代表已运行`
+          : `${binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定'} · ${status?.instance
+            ? `${status.state} @${status.instance.package_version}` : plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}`;
         if (revision === this.refreshRevision && this.selected?.packageId === manifest.package_id && this.selected.pluginId === plugin.id && this.selected.version === manifest.version) {
           this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status);
         }
@@ -252,6 +252,12 @@ export class ServicePluginPackagesView extends ViewPane {
     append(details, $('p')).textContent = scope === 'defaults' ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
       : `${plugin.instance_scope} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}${status?.error ? ` · ${status.error}` : ''}`;
     append(details, $('p')).textContent = `Gateway ${target.gateway_id}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
+    const versions = append(details, $('p'));
+    versions.setAttribute('aria-label', '插件配置与运行版本');
+    versions.textContent = `配置：${binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定'} · `
+      + (scope === 'defaults' ? '仅新建默认值，未操作当前实例' : status?.instance
+        ? `实际：${status.state} @${status.instance.package_version}${status.error ? ` · ${status.error}` : ''}`
+        : plugin.runtime ? `实际：${status?.state ?? '未运行'}` : '声明式，无运行实例');
     const logId = status?.log_id;
     if (logId) {
       const logs = append(details, $('button')) as HTMLButtonElement;
@@ -266,23 +272,36 @@ export class ServicePluginPackagesView extends ViewPane {
       });
     }
     const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
-    const toggle = append(details, $('button'));
-    toggle.textContent = binding?.enabled ? '停用此范围' : '启用此范围';
-    toggle.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, !binding?.enabled)));
-    if (binding) {
+    const otherVersion = binding && binding.package_version !== manifest.version;
+    if (otherVersion) {
+      const switchVersion = append(details, $('button')) as HTMLButtonElement;
+      switchVersion.textContent = '切换到此版本（保留开关）';
+      switchVersion.addEventListener('click', () => {
+        switchVersion.disabled = true;
+        void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, 'preserve'));
+      });
+    } else {
+      const toggle = append(details, $('button'));
+      toggle.textContent = binding?.enabled ? '停用此范围' : '启用此范围';
+      toggle.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, !binding?.enabled)));
+    }
+    if (binding && !otherVersion) {
       const unbind = append(details, $('button'));
       unbind.textContent = '解除此范围绑定';
       unbind.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, null)));
     }
     if (scope !== 'defaults') {
       append(details, $('p')).textContent = binding
-        ? `参数按 ${manifest.package_id}/${plugin.id}@${manifest.version} 校验；保存与实际运行分别报告。`
+        ? `当前绑定 ${manifest.package_id}/${plugin.id}@${binding.package_version}；保存与实际运行分别报告。`
         : '插件未绑定，参数仅留在原来源且未生效；绑定时按确切版本完整校验。';
-      const parameters = append(details, $('button'));
-      parameters.textContent = '编辑参数 JSON';
-      parameters.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
-        this.quickInput, this.notifications, bindingValue, null, true)));
-      const privateFields = writeOnlyFields(plugin.contributes?.configuration);
+      if (otherVersion) append(details, $('p')).textContent = '切换绑定后才能按此版本编辑参数；安装新版本不会自动切换。';
+      else {
+        const parameters = append(details, $('button'));
+        parameters.textContent = '编辑参数 JSON';
+        parameters.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
+          this.quickInput, this.notifications, bindingValue, null, true)));
+      }
+      const privateFields = otherVersion ? [] : writeOnlyFields(plugin.contributes?.configuration);
       for (const field of privateFields) {
         const secret = append(details, $('button')) as HTMLButtonElement;
         secret.textContent = field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数';
@@ -298,7 +317,7 @@ export class ServicePluginPackagesView extends ViewPane {
         schema.textContent = JSON.stringify(plugin.contributes.configuration, null, 2);
       }
     }
-    if (status?.revision && plugin.runtime) {
+    if (status?.revision && plugin.runtime && binding?.enabled && !otherVersion && status.binding?.package_version === manifest.version) {
       const restart = append(details, $('button')) as HTMLButtonElement;
       restart.textContent = '重启实例';
       restart.addEventListener('click', () => {
