@@ -27,6 +27,13 @@ import { manageConfig, setPluginBindings, readWorkspaceDefaults, readWorkspaceBi
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
+function requireInstallationOwner(target: PluginTarget, operationId: string, operation: PluginInstallOperationDTO): PluginInstallOperationDTO {
+  if (operation.gateway_id !== target.gateway_id || operation.operation_id !== operationId) {
+    throw new Error(`插件安装操作回执不属于原 Gateway 或 operation_id：${operationId}`);
+  }
+  return operation;
+}
+
 /** 原 Extensions Viewlet 中展示 Gateway 自有插件模型，不伪造 IExtension 或 Gallery 对象。 */
 export class ServicePluginPackagesView extends ViewPane {
   private scope: Scope = 'gateway';
@@ -180,7 +187,7 @@ export class ServicePluginPackagesView extends ViewPane {
               catch (error) { readError = errorsText(error); }
             }
             const lines = results.map(({ binding: item, configuration }) => {
-              const actual = current?.plugins.find(slot => slot.binding?.package_id === item.package_id
+              const actual = current?.plugins.find(slot => slot.gateway_id === target.gateway_id && slot.binding?.package_id === item.package_id
                 && slot.binding.plugin_id === item.plugin_id && slot.binding.package_version === item.package_version
                 && (scope === 'workspace' ? slot.binding.workspace_id === workspace?.workspace_id : slot.binding.workspace_id == null));
               const state = scope === 'defaults' ? '仅修改新建默认值，未操作当前实例' : readError ? `运行状态读取失败：${readError}`
@@ -204,7 +211,8 @@ export class ServicePluginPackagesView extends ViewPane {
       for (const plugin of matching) {
         const binding = (scope === 'defaults' ? defaults : workspaceBindings ?? runtime.configured_bindings).find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id
           && item.package_version === manifest.version && (scope !== 'workspace' ? item.workspace_id == null : item.workspace_id === workspace?.workspace_id));
-        const status = scope === 'defaults' ? undefined : runtime.plugins.find(item => item.binding?.package_id === manifest.package_id && item.binding.plugin_id === plugin.id
+        const status = scope === 'defaults' ? undefined : runtime.plugins.find(item => item.gateway_id === target.gateway_id
+          && item.binding?.package_id === manifest.package_id && item.binding.plugin_id === plugin.id
           && item.binding.package_version === manifest.version
           && (scope === 'workspace' ? item.binding.workspace_id === workspace?.workspace_id : item.binding.workspace_id == null));
         const row = append(packageSection, $('article'));
@@ -298,18 +306,26 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
     if (!source) return;
     const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id });
     if (query === undefined) return;
-    let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision = '';
+    let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision: string | undefined;
     while (!selected) {
       const page = await gateway.request<PluginSourceCatalogDTO>('/api/gateway/service-plugins/source-catalog',
         { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }) });
+      if (page.gateway_id !== target.gateway_id || page.source_id !== source.source.source_id) {
+        throw new Error('插件来源目录回执不属于原 Gateway 或 source_id');
+      }
+      if (revision !== undefined && page.catalog_revision !== revision) {
+        throw new Error(`插件目录分页期间版本已变化：${revision} → ${page.catalog_revision}；请重新查询`);
+      }
+      revision = page.catalog_revision;
       const items = page.items.map(artifact => ({ label: `${artifact.package_id}@${artifact.package_version}`,
         description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : '纯声明插件包', artifact }));
       const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: '下一页', description: '', artifact: undefined }] : [])],
         { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false });
       if (!choice) return;
-      if (choice.artifact) { selected = choice.artifact; revision = page.catalog_revision; }
+      if (choice.artifact) selected = choice.artifact;
       else cursor = page.next_cursor;
     }
+    if (!revision) throw new Error('插件来源目录缺少 catalog_revision');
     acquisition = { source_id: source.source.source_id, catalog_revision: revision, artifact: selected,
       development_directory: false, path: '' };
   } else {
@@ -322,19 +338,23 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
   const operationId = generateUuid();
   let operation: PluginInstallOperationDTO;
   try {
-    operation = await gateway.request<PluginInstallOperationDTO>('/api/gateway/service-plugins/install',
-      { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) });
+    operation = requireInstallationOwner(target, operationId, await gateway.request<PluginInstallOperationDTO>(
+      '/api/gateway/service-plugins/install',
+      { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) }));
   } catch (error) {
     // 仅查询原操作；响应丢失不能变成第二次安装。
     try { operation = await readInstallation(target, operationId); }
-    catch { throw new Error(`安装响应未确认：${errorsText(error)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`); }
+    catch (queryError) {
+      throw new Error(`安装响应未确认：${errorsText(error)}。原操作查询失败：${errorsText(queryError)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`);
+    }
   }
   await observeInstallation(progress, notifications, target, operationId, operation);
 }
 
-function readInstallation(target: PluginTarget, operationId: string): Promise<PluginInstallOperationDTO> {
-  return gateway.request('/api/gateway/service-plugins/install-operation',
+async function readInstallation(target: PluginTarget, operationId: string): Promise<PluginInstallOperationDTO> {
+  const operation = await gateway.request<PluginInstallOperationDTO>('/api/gateway/service-plugins/install-operation',
     { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) });
+  return requireInstallationOwner(target, operationId, operation);
 }
 
 async function observeInstallation(progress: IProgressService, notifications: INotificationService,
