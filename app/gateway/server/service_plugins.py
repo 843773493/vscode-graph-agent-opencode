@@ -510,6 +510,7 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
                 if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
             await run_sync_shielded(owner.packages.uninstall, payload.package_id, payload.package_version,
                 references=references)
+            owner.release_uninstalled(payload.package_id, payload.package_version)
     except (ValueError, RuntimeError, LookupError, FileNotFoundError, httpx.HTTPError) as error:
         raise HTTPException(409, str(error)) from error
     data = PluginUninstallResultDTO(package_id=payload.package_id, package_version=payload.package_version,

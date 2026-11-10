@@ -706,6 +706,14 @@ class GatewayPluginRuntime:
             if slot.process is not None and slot.binding.package_id == package_id
             and slot.process_version == version]
 
+    def release_uninstalled(self, package_id: str, version: str) -> None:
+        # 卸载已核全部真实引用；释放无进程的旧诊断，不能阻断以后重新绑定同一版本。
+        for key, slot in tuple(self.slots.items()):
+            if (slot.binding.package_id == package_id and slot.binding.package_version == version
+                    and slot.process is None):
+                del self.slots[key]
+        self._publish()
+
     async def close(self, *, preserve: bool = False) -> None:
         errors: list[Exception] = []
         for key, slot in self.slots.items():

@@ -103,6 +103,22 @@ def test_slow_shutdown_body_cannot_extend_stop_deadline(
             "package_id": "shutdown.deadline", "package_version": "1.0.0"})
         evidence.append({"uninstall_status": response.status_code, "response": response.json()})
         response.raise_for_status()
+        assert status() == []
+        if remove_binding:
+            install_plugin(lambda path, payload: client.post(path, json=payload), gateway_id=gateway_id,
+                path=str(archive_path), expected_digest=hashlib.sha256(archive_path.read_bytes()).hexdigest())
+            save([binding])
+            rebound, = status()
+            evidence.append({"rebound": rebound.model_dump(mode="json")})
+            assert rebound.state == "ready" and rebound.instance is not None
+            assert rebound.instance.instance_id != original.instance.instance_id
+            new_url = old_url.replace(original.instance.instance_id, rebound.instance.instance_id)
+            assert client.get(new_url).raise_for_status().json()["instance_id"] == rebound.instance.instance_id
+            assert client.get(old_url).status_code == 409
+            save([])
+            client.post("/api/gateway/service-plugins/uninstall", json={**target,
+                "package_id": "shutdown.deadline", "package_version": "1.0.0"}).raise_for_status()
+            assert status() == []
     finally:
         (context.artifacts_dir / "shutdown-deadline.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
