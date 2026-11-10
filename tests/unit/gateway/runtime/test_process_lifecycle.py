@@ -147,18 +147,11 @@ def test_managed_process_windows_stops_complete_process_tree(
 ) -> None:
     process = managed_process_stub_factory(timeout_once=False)
     log_file = _LogFile()
-    calls: list[list[str]] = []
     monkeypatch.setattr(os, "name", "nt")
-    monkeypatch.setattr(
-        "app.gateway.runtime.process_lifecycle.subprocess.run",
-        lambda arguments, **_: (
-            calls.append(arguments) or SimpleNamespace(returncode=0, stderr="")
-        ),
-    )
 
     ManagedProcess(process=process, log_file=log_file).close()
 
-    assert calls == [["taskkill", "/T", "/PID", "4321"]]
+    assert process.terminate_calls == 1
     assert log_file.closed is True
 
 
@@ -169,23 +162,14 @@ def test_managed_process_windows_force_kills_complete_process_tree_after_timeout
 ) -> None:
     process = managed_process_stub_factory(timeout_once=True)
     log_file = _LogFile()
-    calls: list[list[str]] = []
     monkeypatch.setattr(os, "name", "nt")
-    monkeypatch.setattr(
-        "app.gateway.runtime.process_lifecycle.subprocess.run",
-        lambda arguments, **_: (
-            calls.append(arguments) or SimpleNamespace(returncode=0, stderr="")
-        ),
-    )
 
     managed = ManagedProcess(process=process, log_file=log_file)
     with pytest.raises(TimeoutError, match="未完成优雅关闭") as raised:
         managed.close(timeout_seconds=0.01)
 
-    assert calls == [
-        ["taskkill", "/T", "/PID", "4321"],
-        ["taskkill", "/T", "/F", "/PID", "4321"],
-    ]
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
     assert process.wait_calls == 2
     assert managed.close_failure is raised.value
     assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)
@@ -222,21 +206,13 @@ def test_managed_process_windows_waits_for_descendants_after_root_exits(
 
     monkeypatch.setattr(process, "wait", wait_for_root)
     log_file = _LogFile()
-    taskkill_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        "app.gateway.runtime.process_lifecycle.subprocess.run",
-        lambda arguments, **_: (
-            taskkill_calls.append(arguments) or SimpleNamespace(returncode=0, stderr="")
-        ),
-    )
-
     managed = ManagedProcess(process=process, log_file=log_file)
     with pytest.raises(TimeoutError, match="未完成优雅关闭"):
         managed.close(timeout_seconds=0.01)
 
     assert root.alive is False
     assert child.kill_calls == 1
-    assert taskkill_calls == [["taskkill", "/T", "/PID", "4321"]]
+    assert process.terminate_calls == 1
     assert process.wait_calls == 2
     assert log_file.closed is False
 

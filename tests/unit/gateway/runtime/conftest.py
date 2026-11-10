@@ -16,9 +16,17 @@ class ManagedProcessStub:
         self.returncode: int | None = None
         self._timeout_once = timeout_once
         self.wait_calls = 0
+        self.terminate_calls = 0
+        self.kill_calls = 0
 
     def poll(self) -> int | None:
         return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+    def kill(self) -> None:
+        self.kill_calls += 1
 
     def wait(self, timeout: float) -> int:
         self.wait_calls += 1

@@ -207,8 +207,14 @@ def test_log_filesystem_failure_keeps_location_in_cause_and_diagnostics(
     assert failure.value.errno == original.errno
     assert failure.value.filename is None
     assert str(log_root) not in str(failure.value)
-    assert str(log_root) in str(original)
-    assert str(log_root) in caplog.text
+    original_paths = (original.filename, original.filename2)
+    assert any(
+        path is not None and str(log_root) in os.fsdecode(path)
+        for path in original_paths
+    )
+    diagnostic = next(record for record in caplog.records if record.exc_info)
+    assert diagnostic.args[0] == log_root
+    assert diagnostic.exc_info[1] is original
     if stage == "rotate":
         assert (role_dir / "gateway.log").read_text() == "old"
 

@@ -394,9 +394,9 @@ class ManagedProcess:
     def _terminate_group(self) -> None:
         if os.name == "posix":
             os.killpg(self.process.pid, signal.SIGTERM)
-        elif self.process.poll() is None:
-            _taskkill_process_tree(self.process.pid, force=False)
         else:
+            if self.process.poll() is None:
+                self.process.terminate()
             _terminate_windows_process_tree(
                 self._windows_descendant_start_times,
                 force=False,
@@ -412,7 +412,7 @@ class ManagedProcess:
                 return
         else:
             if self.process.poll() is None:
-                _taskkill_process_tree(self.process.pid, force=True)
+                self.process.kill()
             _terminate_windows_process_tree(
                 self._windows_descendant_start_times,
                 force=True,
