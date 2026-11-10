@@ -54,8 +54,16 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
         payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    interrupted_creation = getattr(request, "param", "normal") == "interrupted"
+    creation_gate = context.artifacts_dir / "creation.blocked"
+    if interrupted_creation:
+        creation_gate.touch()
     gateway = start_gateway_process(workspace_root=gateway_workspace, default_backend_url=None,
         port=unused_tcp_port,
+        asgi_app="tests.integration.gateway.plugin_creation_app:app" if interrupted_creation else "app.gateway.main:app",
+        extra_env={"BOXTEAM_PLUGIN_CREATION_TEST_GATE": str(creation_gate),
+            "BOXTEAM_PLUGIN_CREATION_TEST_AUDIT": str(context.artifacts_dir / "creation-attempts.jsonl")}
+            if interrupted_creation else None,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir)
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
@@ -335,6 +343,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("workspace_plugin_case", ["normal", "interrupted"], indirect=True)
 def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(workspace_plugin_case, request: pytest.FixtureRequest) -> None:
     """模板提交、创建、配置交接与卸载引用均经过真实产品入口。"""
     client, context, workspaces = workspace_plugin_case
@@ -367,8 +376,9 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         }).raise_for_status().json()["data"]
         return next(item["workspace_id"] for item in response["items"] if item["name"] == name)
 
-    def document(workspace_id):
-        return exchange("GET", f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override").raise_for_status().json()["data"]
+    def document(workspace_id, intent_id=None):
+        query = f"?idempotency_key={intent_id}" if intent_id else ""
+        return exchange("GET", f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override{query}").raise_for_status().json()["data"]
 
     binding = {"package_id": "probe.defaults", "package_version": "1.0.0", "plugin_id": "probe", "enabled": True}
     try:
@@ -404,9 +414,50 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         assert template_denied.status_code == 409 and "workspace-default" in template_denied.text, template_denied.text
         existing_id = create(workspaces[0], "Existing", new=False)
         assert document(existing_id)["effective"]["plugins"]["runtime"]["entries"] == []
-        new_root = context.workspace_root / f"new-project-{context.run_root.name}"
+        creation_suffix = f"{context.run_root.name}-{context.runtime_root_for_node(request.node.nodeid).name}"
+        new_root = context.workspace_root / f"new-project-{creation_suffix}"
         assert not new_root.exists()
         new_id = create(new_root, "New", new=True)
+        gate = context.artifacts_dir / "creation.blocked"
+        if gate.exists():
+            # 原创建入口已经登记冻结 intent；原 writer 的真实 HTTP 验证被受控拒绝。
+            deadline = time.monotonic() + 30
+            while True:
+                state = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]
+                failed = next((item for item in state["workspace_configurations"] if item["workspace_id"] == new_id), None)
+                if failed is not None and failed["state"] == "failed":
+                    break
+                assert time.monotonic() < deadline, state
+                time.sleep(0.1)
+            attempts_path = context.artifacts_dir / "creation-attempts.jsonl"
+            attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+            frozen = next(item["creation"] for item in attempts if item["workspace_id"] == new_id)
+            assert frozen["bindings"] == [{**binding, "workspace_id": None}]
+            assert frozen["revision"] == saved["active_digest"]
+            rejected = document(new_id, frozen["intent_id"])
+            assert rejected["edit"]["state"] == "rejected"
+            assert rejected["effective"]["plugins"]["runtime"]["entries"] == []
+            changed_template = defaults([]).raise_for_status().json()["data"]
+            assert changed_template["active_digest"] != frozen["revision"]
+            denied = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+                "package_id": "probe.defaults", "package_version": "1.0.0"})
+            assert denied.status_code == 409 and f"workspace-create:{new_id}:{frozen['intent_id']}" in denied.text, denied.text
+            # 缺陷消除后沿原工作区停止／启动显式重试，不能新建 intent 或读取新模板。
+            gate.unlink()
+            exchange("POST", f"/api/gateway/workspaces/{new_id}/runtime/stop").raise_for_status()
+            exchange("POST", f"/api/gateway/workspaces/{new_id}/runtime/start").raise_for_status()
+            resumed = document(new_id, frozen["intent_id"])
+            assert resumed["edit"]["state"] == "active"
+            assert resumed["edit"]["candidate_id"] == rejected["edit"]["candidate_id"]
+            attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+            assert all(item["creation"] == frozen for item in attempts if item["workspace_id"] == new_id)
+            later_root = context.workspace_root / f"later-project-{creation_suffix}"
+            later_id = create(later_root, "Later", new=True)
+            assert document(later_id)["effective"]["plugins"]["runtime"]["entries"] == []
+            attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+            later = next(item["creation"] for item in attempts if item["workspace_id"] == later_id)
+            assert later["intent_id"] != frozen["intent_id"]
+            assert later["revision"] == changed_template["active_digest"] and later["bindings"] == []
         deadline = time.monotonic() + 45
         while True:
             state = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]
@@ -421,7 +472,8 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         assert document(existing_id)["effective"]["plugins"]["runtime"]["entries"] == []
         denied = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
             "package_id": "probe.defaults", "package_version": "1.0.0"})
-        assert denied.status_code == 409 and new_id in denied.text, denied.text
+        assert denied.status_code == 409 and f"workspace-configuration:{new_id}:probe" in denied.text, denied.text
+        assert f"workspace-create:{new_id}:" not in denied.text, denied.text
         source_doc = document(new_id)
         config = commentjson.loads(source_doc["jsonc"])
         config["plugins"]["runtime"]["entries"] = []
