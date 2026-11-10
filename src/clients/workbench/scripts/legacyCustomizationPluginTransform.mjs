@@ -671,8 +671,9 @@ function removeTopLevelFunction(path, source, name) {
 
 /** 停用独立的旧 Agent Plugin 浏览视图入口。 */
 export function transformLegacyCustomizationPlugins(root, path, source, replaceOnce) {
-  const upstream = join(root, 'upstream');
-  const relative = path.startsWith(upstream) ? path.slice(upstream.length + 1).replaceAll('\\', '/') : undefined;
+  const upstream = join(root, 'upstream').replaceAll('\\', '/');
+  const normalizedPath = path.replaceAll('\\', '/');
+  const relative = normalizedPath.startsWith(upstream + '/') ? normalizedPath.slice(upstream.length + 1) : undefined;
   if (!relative || !legacyCustomizationPluginSourcePaths.includes(relative)) return source;
 
   switch (relative) {

@@ -28,6 +28,8 @@ test('停用独立插件浏览视图并从管理区隐藏插件 section', async 
   const editor = await source(editorPath);
   const transformedEditor = transformLegacyCustomizationPlugins(root, join(upstream, editorPath), editor);
   expect(transformedEditor).not.toContain('if (hasSections.has(AICustomizationManagementSection.Plugins))');
+  expect(transformedEditor).not.toContain('AICustomizationManagementSection.Plugins');
+  expect(transformedEditor).not.toContain('isPluginsSection');
   expect(transformedEditor).not.toContain("if (this.viewMode === 'pluginDetail')");
   expect(transformedEditor).not.toContain("case 'pluginDetail':");
   expect(transformedEditor).not.toContain('pluginDetail');
@@ -57,6 +59,8 @@ test('停用独立插件浏览视图并从管理区隐藏插件 section', async 
   expect(mcp).not.toContain('createInstalledPluginItem');
   expect(mcp).not.toContain('openPlugin');
   expect(mcp).toContain('getMcpEntrySource');
+  expect(mcp).toContain('label: plugin.name');
+  expect(mcp).toContain("localize('fromPlugin'");
 
   const toolsPath = 'src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts';
   const tools = transformLegacyCustomizationPlugins(root, join(upstream, toolsPath), await source(toolsPath), (input, marker, replacement) => {
@@ -64,7 +68,29 @@ test('停用独立插件浏览视图并从管理区隐藏插件 section', async 
     return input.replace(marker, replacement);
   });
   expect(tools).not.toContain('onDidRequestShowPlugin');
+  expect(tools).not.toContain('createInstalledPluginItem');
   expect(tools).toContain('selection: file.range');
+
+  const windowsRoot = 'C:\\work\\boxteam\\src\\clients\\workbench';
+  const windowsToolsPath = `${windowsRoot}\\upstream\\${toolsPath.replaceAll('/', '\\')}`;
+  const windowsTools = transformLegacyCustomizationPlugins(
+    windowsRoot,
+    windowsToolsPath,
+    await source(toolsPath),
+    (input, marker, replacement) => {
+      if (input.split(marker).length !== 2) throw new Error(`Windows 转换锚点不唯一：${marker.slice(0, 80)}`);
+      return input.replace(marker, replacement);
+    },
+  );
+  expect(windowsTools).toBe(tools);
+
+  const nonUpstream = transformLegacyCustomizationPlugins(
+    windowsRoot,
+    'C:\\work\\boxteam\\reference_repo\\src\\vs\\workbench\\' + toolsPath.slice('src/vs/workbench/'.length).replaceAll('/', '\\'),
+    await source(toolsPath),
+    () => { throw new Error('工作台转换不得匹配上游目录外的路径'); },
+  );
+  expect(nonUpstream).toBe(await source(toolsPath));
 
   const marketplacePath = 'src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMarketplaceWorkbenchService.ts';
   const marketplace = transformLegacyCustomizationPlugins(root, join(upstream, marketplacePath), await source(marketplacePath), (input, marker, replacement) => {

@@ -700,6 +700,9 @@ test('旧扩展详情入口已从用户路径移除并保留其余操作', () =>
   const legacyEntrances = [
     'mainThreadProgress.ts', 'mainThreadMessageService.ts', 'statusbarActions.ts', 'statusbarPart.ts',
     'issueQuickAccess.ts', 'keybindingsEditor.ts', 'settingsTree.ts', 'chatCustomizationDiscoveryRenderer.ts',
+    'settingsTreeModels.ts', 'chatAgentHover.ts', 'chatListRenderer.ts', 'chatMarkdownDecorationsRenderer.ts',
+    'chatInputEditorHover.ts', 'chatParticipant.contribution.ts', 'aiCustomizationManagementEditor.ts',
+    'remoteTunnel.contribution.ts',
     'userDataProfilesEditorModel.ts', 'extensionsResource.ts', 'manageTrustedExtensionsForAccountAction.ts',
     'chatLanguageModelActions.ts', 'mcpListWidget.ts', 'chatToolPicker.ts', 'localizationsActions.ts',
   ];
@@ -716,12 +719,32 @@ test('旧扩展详情入口已从用户路径移除并保留其余操作', () =>
   expect(source('keybindingsEditor.ts').text).toContain('extension.identifier.value');
   expect(source('settingsTree.ts').text).toContain("localize('dismiss', \"Dismiss\")");
   expect(source('settingsTree.ts').text).toContain('_onDidDismissExtensionSetting.fire(extensionId)');
+  expect(source('settingsTree.ts').text).not.toContain('showExtensionsWithIds');
+  expect(source('settingsTreeModels.ts').text).not.toContain('SettingsTreeNewExtensionsElement');
+  expect(source('settingsTreeModels.ts').text).not.toContain('SearchResultIdx.NewExtensions');
+  expect(source('extensionsActions.ts').text).not.toContain('showExtensionsWithIdsCommandId');
+  expect(source('chatAgentHover.ts').text).not.toContain('getChatAgentHoverOptions');
+  expect(source('chatListRenderer.ts').text).not.toContain('getChatAgentHoverOptions');
+  expect(source('chatMarkdownDecorationsRenderer.ts').text).not.toContain('getChatAgentHoverOptions');
+  expect(source('chatMarkdownDecorationsRenderer.ts').text).toContain('hover.value.setAgent(args.agentId)');
+  expect(source('chatInputEditorHover.ts').text).not.toContain('getChatAgentHoverOptions');
+  expect(source('chatInputEditorHover.ts').text).toContain('const agent = hoverPart.agent;');
+  expect(source('chatInputEditorHover.ts').text).toContain('hover.setAgent(agent.id);');
+  expect(source('chatParticipant.contribution.ts').text).not.toContain('showExtensionsWithIdsCommandId');
+  expect(source('chatParticipant.contribution.ts').text).toContain('onDidChangeExtensionsNotification');
+  expect(source('chatParticipant.contribution.ts').text).toContain("content: [mainMessage, versionMessage].join('\\n\\n')");
+  expect(source('aiCustomizationManagementEditor.ts').text).not.toContain('showExtensionsWithIdsCommandId');
+  expect(source('remoteTunnel.contribution.ts').text).not.toContain("id: 'showExtension'");
+  expect(source('remoteTunnel.contribution.ts').text).not.toContain('showExtensionsWithIds');
   expect(source('userDataProfilesEditorModel.ts').text).toContain('child.parent.type === ProfileResourceType.Extensions ? undefined');
   expect(source('extensionsResource.ts').text).toContain('checkbox: that.checkbox');
   expect(source('manageTrustedExtensionsForAccountAction.ts').text).toContain('_managePreferencesButton');
   expect(source('chatLanguageModelActions.ts').text).toContain('languageModelAuthTitle');
-  expect(source('mcpListWidget.ts').text).toContain('onDidRequestShowPlugin');
+  expect(source('mcpListWidget.ts').text).not.toContain('onDidRequestShowPlugin');
+  expect(source('mcpListWidget.ts').text).not.toContain('createInstalledPluginItem');
   expect(source('mcpListWidget.ts').text).toContain('fromExtension');
+  expect(source('mcpListWidget.ts').text).toContain('const provenance = source');
+  expect(source('mcpListWidget.ts').text).toContain('label: source.label');
   expect(source('mcpListWidget.ts').text).not.toContain('Open extension details');
   expect(source('chatToolPicker.ts').text).toContain('mcpWorkbenchService.open(source');
   expect(source('localizationsActions.ts').text).toContain('localeService.setLocale(selectedLanguage)');

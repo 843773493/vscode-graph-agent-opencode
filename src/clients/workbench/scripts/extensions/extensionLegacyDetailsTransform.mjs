@@ -9,6 +9,15 @@ export const legacyExtensionDetailsSourcePaths = [
   'src/vs/workbench/contrib/issue/browser/issueQuickAccess.ts',
   'src/vs/workbench/contrib/preferences/browser/keybindingsEditor.ts',
   'src/vs/workbench/contrib/preferences/browser/settingsTree.ts',
+  'src/vs/workbench/contrib/preferences/browser/settingsTreeModels.ts',
+  'src/vs/workbench/contrib/extensions/browser/extensionsActions.ts',
+  'src/vs/workbench/contrib/chat/browser/widget/chatAgentHover.ts',
+  'src/vs/workbench/contrib/chat/browser/widget/chatListRenderer.ts',
+  'src/vs/workbench/contrib/chat/browser/widget/chatContentParts/chatMarkdownDecorationsRenderer.ts',
+  'src/vs/workbench/contrib/chat/browser/widget/input/editor/chatInputEditorHover.ts',
+  'src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts',
+  'src/vs/workbench/contrib/chat/browser/aiCustomization/aiCustomizationManagementEditor.ts',
+  'src/vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.ts',
   'src/vs/workbench/contrib/chat/browser/chatDebug/chatCustomizationDiscoveryRenderer.ts',
   'src/vs/workbench/contrib/userDataProfile/browser/userDataProfilesEditorModel.ts',
   'src/vs/workbench/services/userDataProfile/browser/extensionsResource.ts',
@@ -135,7 +144,171 @@ export function transformLegacyExtensionDetails(root, path, source, replaceOnce)
 \t\t}));
 
 `, '');
-    return text;
+    text = replace(text,
+      'SettingsTreeGroupElement, SettingsTreeNewExtensionsElement, SettingsTreeSettingElement,',
+      'SettingsTreeGroupElement, SettingsTreeSettingElement,');
+    text = removeInterface(path, text, 'ISettingNewExtensionsTemplate');
+    text = removeClass(path, text, 'SettingNewExtensionsRenderer');
+    text = replace(text, '\nconst SETTINGS_NEW_EXTENSIONS_TEMPLATE_ID = \'settings.newExtensions.template\';', '');
+    text = replace(text, '\n\t\t\tthis._instantiationService.createInstance(SettingNewExtensionsRenderer),', '');
+    const filterStart = text.indexOf('\n\t\t// Filtered "new extensions" button');
+    const filterEnd = text.indexOf('\n\t\treturn true;', filterStart);
+    if (filterStart < 0 || filterEnd < 0) throw new Error('设置过滤中的旧插件按钮分支缺失');
+    text = text.slice(0, filterStart) + text.slice(filterEnd);
+    const childType = 'SettingsTreeGroupElement | SettingsTreeSettingElement | SettingsTreeNewExtensionsElement';
+    if (text.split(childType).length !== 3) throw new Error('设置树旧扩展节点的两个类型边界缺失');
+    text = text.replaceAll(childType, 'SettingsTreeGroupElement | SettingsTreeSettingElement');
+    text = replace(text,
+      '\t\tif (element instanceof SettingsTreeNewExtensionsElement) {\n\t\t\treturn SETTINGS_NEW_EXTENSIONS_TEMPLATE_ID;\n\t\t}\n\n',
+      '');
+    text = replace(text,
+      '\t\treturn element instanceof SettingsTreeSettingElement && element.valueType === SettingValueType.Boolean ? 78 : 104;',
+      '\t\treturn element.valueType === SettingValueType.Boolean ? 78 : 104;');
+    return pruneImports(path, text);
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/preferences/browser/settingsTreeModels.ts', null, (text, replace) => {
+    text = replace(text, '\tNewExtensions = 2,\n', '');
+    text = replace(text,
+      'export type SettingsTreeGroupChild = (SettingsTreeGroupElement | SettingsTreeSettingElement | SettingsTreeNewExtensionsElement);',
+      'export type SettingsTreeGroupChild = (SettingsTreeGroupElement | SettingsTreeSettingElement);');
+    const start = text.indexOf('\tprivate newExtensionSearchResults: ISearchResult | null = null;');
+    const end = text.indexOf('\n\tprivate searchResultCount:', start);
+    if (start < 0 || end < 0) throw new Error('设置远端新扩展搜索状态缺失');
+    text = text.slice(0, start) + text.slice(end);
+    text = replace(text, '\n\t\t\tthis.newExtensionSearchResults = this.rawSearchResults[SearchResultIdx.NewExtensions];', '');
+    const blockStart = text.indexOf('\n\t\tif (this.newExtensionSearchResults?.filterMatches.length) {');
+    const blockEnd = text.indexOf('\n\t\t}\n\t}', blockStart);
+    if (blockStart < 0 || blockEnd < 0) throw new Error('设置远端新扩展搜索结果 UI 缺失');
+    text = text.slice(0, blockStart) + text.slice(blockEnd + '\n\t\t}'.length);
+    text = replace(text, '\n\t\tthis.newExtensionSearchResults = null;', '');
+    return pruneImports(path, removeClass(path, text, 'SettingsTreeNewExtensionsElement'));
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/extensions/browser/extensionsActions.ts', null, text => {
+    const parsed = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+    const declaration = parsed.statements.filter(node => ts.isVariableStatement(node)
+      && node.declarationList.declarations.some(item => item.name.getText(parsed) === 'showExtensionsWithIdsCommandId'));
+    const registration = parsed.statements.filter(node => ts.isExpressionStatement(node)
+      && ts.isCallExpression(node.expression)
+      && node.expression.expression.getText(parsed) === 'CommandsRegistry.registerCommand'
+      && node.expression.arguments[0]?.getText(parsed) === 'showExtensionsWithIdsCommandId');
+    if (declaration.length !== 1 || registration.length !== 1) {
+      throw new Error('按 Extension ID 搜索的旧 Workbench 命令与固定上游不匹配');
+    }
+    for (const node of [...declaration, ...registration].sort((left, right) => right.getStart(parsed) - left.getStart(parsed))) {
+      text = text.slice(0, node.getFullStart()) + text.slice(node.end);
+    }
+    return pruneImports(path, text);
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/chat/browser/widget/chatAgentHover.ts', null, (text, replace) => {
+    text = text.replace("import { showExtensionsWithIdsCommandId } from '../../../extensions/browser/extensionsActions.js';\n", '');
+    const start = text.indexOf('export function getChatAgentHoverOptions(');
+    if (start < 0) throw new Error('Chat Agent 扩展详情悬浮入口缺失');
+    return pruneImports(path, text.slice(0, start));
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/chat/browser/widget/chatListRenderer.ts', null, (text, replace) => {
+    text = replace(text,
+      "import { ChatAgentHover, getChatAgentHoverOptions } from './chatAgentHover.js';",
+      "import { ChatAgentHover } from './chatAgentHover.js';");
+    text = replace(text,
+      '\t\tconst hoverOptions = getChatAgentHoverOptions(() => isResponseVM(template.currentElement) ? template.currentElement.agent : undefined, this.commandService);\n',
+      '');
+    text = replace(text,
+      '\t\ttemplateDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate(\'element\'), user, hoverContent, hoverOptions));',
+      '\t\ttemplateDisposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate(\'element\'), user, hoverContent));');
+    return replace(text,
+      '\t\t\t\t\tthis.hoverService.showInstantHover({ content, target: user, trapFocus: true, actions: hoverOptions.actions }, true);',
+      '\t\t\t\t\tthis.hoverService.showInstantHover({ content, target: user, trapFocus: true }, true);');
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/chat/browser/aiCustomization/aiCustomizationManagementEditor.ts', null, (text, replace) => {
+    text = text.replace("import { showExtensionsWithIdsCommandId } from '../../../extensions/browser/extensionsActions.js';\n", '');
+    text = replace(text,
+      '\t\tif (item.extensionId) {\n\t\t\tawait this.commandService.executeCommand(showExtensionsWithIdsCommandId, [item.extensionId]);\n\t\t}\n',
+      '');
+    return pruneImports(path, text);
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.ts', null, (text, replace) => {
+    const parsed = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+    const detailsActions = [];
+    const visit = node => {
+      if (ts.isCallExpression(node) && node.expression.getText(parsed) === 'toAction'
+          && node.getText(parsed).includes("id: 'showExtension'")) {
+        detailsActions.push(node);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+    if (detailsActions.length !== 2 || detailsActions.some(action => !ts.isArrayLiteralExpression(action.parent))) {
+      throw new Error('Remote Tunnel 的旧扩展详情动作数量或结构不符');
+    }
+    for (const action of detailsActions.sort((left, right) => right.getStart(parsed) - left.getStart(parsed))) {
+      const actions = action.parent;
+      const index = actions.elements.indexOf(action);
+      if (actions.elements.length !== 2 || index < 0) throw new Error('Remote Tunnel 的详情动作列表结构不符');
+      const start = index === 0 ? action.getFullStart() : actions.elements[index - 1].end;
+      const end = index === actions.elements.length - 1 ? action.end : actions.elements[index + 1].getFullStart();
+      text = text.slice(0, start) + text.slice(end);
+    }
+    return pruneImports(path, text);
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/chat/browser/widget/chatContentParts/chatMarkdownDecorationsRenderer.ts', null, (text, replace) => {
+    text = replace(text,
+      "import { ChatAgentHover, getChatAgentHoverOptions } from '../chatAgentHover.js';",
+      "import { ChatAgentHover } from '../chatAgentHover.js';");
+    text = replace(text,
+      "import { ICommandService } from '../../../../../../platform/commands/common/commands.js';\n",
+      '');
+    text = replace(text,
+      '\t\t@ICommandService private readonly commandService: ICommandService,\n',
+      '');
+    text = replace(text, '\t\tconst agent = this.chatAgentService.getAgent(args.agentId);\n\t\tconst hover: Lazy<ChatAgentHover>', '\t\tconst hover: Lazy<ChatAgentHover>');
+    text = replace(text,
+      '\t\t}, agent && getChatAgentHoverOptions(() => agent, this.commandService)));',
+      '\t\t}));');
+    return pruneImports(path, text);
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/chat/browser/widget/input/editor/chatInputEditorHover.ts', null, (text, replace) => {
+    text = replace(text,
+      "import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';\n",
+      '');
+    text = replace(text,
+      "import { ChatAgentHover, getChatAgentHoverOptions } from '../../chatAgentHover.js';",
+      "import { ChatAgentHover } from '../../chatAgentHover.js';");
+    text = replace(text,
+      '\t\t@ICommandService private readonly commandService: ICommandService,\n',
+      '');
+    text = replace(text,
+      '\t\tconst actions = getChatAgentHoverOptions(() => agent, this.commandService).actions;\n',
+      '');
+    text = replace(text,
+      '\t\tconst wrapper = this.instantiationService.createInstance(ChatEditorHoverWrapper, hover.domNode, actions);',
+      '\t\tconst wrapper = this.instantiationService.createInstance(ChatEditorHoverWrapper, hover.domNode, undefined);');
+    return pruneImports(path, text);
+  });
+  if (result !== undefined) return result;
+
+  result = edit('contrib/chat/browser/chatParticipant.contribution.ts', null, (text, replace) => {
+    text = text.replace("import { createCommandUri, MarkdownString } from '../../../../base/common/htmlContent.js';", "import { MarkdownString } from '../../../../base/common/htmlContent.js';");
+    text = text.replace("import { showExtensionsWithIdsCommandId } from '../../extensions/browser/extensionsActions.js';\n", '');
+    text = replace(text, '\t\tconst showExtensionLabel = localize(\'showExtension\', "Show Extension");\n', '');
+    text = replace(text, '\t\tconst commandButton = `[${showExtensionLabel}](${createCommandUri(showExtensionsWithIdsCommandId, [this.productService.defaultChatAgent?.chatExtensionId])})`;\n', '');
+    text = replace(text, 'content: [mainMessage, commandButton, versionMessage].join(\'\\n\\n\'),', 'content: [mainMessage, versionMessage].join(\'\\n\\n\'),');
+    return pruneImports(path, text);
   });
   if (result !== undefined) return result;
 
@@ -236,6 +409,9 @@ export function transformLegacyExtensionDetails(root, path, source, replaceOnce)
 \t\t}
 `, '');
     text = replace(text, '\t\tconst extensionId = entry.extensionId;\n', '');
+    text = replace(text,
+      '\t\tconst provenance = source && open\n\t\t\t? { label: source.label, ariaLabel: source.ariaLabel, open }\n\t\t\t: activeSessionServer && getActiveSessionServerProvenance(activeSessionServer, agentLabel);',
+      '\t\tconst provenance = source\n\t\t\t? { label: source.label, ...(open ? { ariaLabel: source.ariaLabel, open } : {}) }\n\t\t\t: activeSessionServer && getActiveSessionServerProvenance(activeSessionServer, agentLabel);');
     return text;
   });
   if (result !== undefined) return result;
@@ -284,6 +460,14 @@ function removeClass(path, source, name) {
   const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const declarations = parsed.statements.filter(node => ts.isClassDeclaration(node) && node.name?.text === name);
   if (declarations.length !== 1) throw new Error('待删除的旧扩展详情类缺失：' + name);
+  const declaration = declarations[0];
+  return source.slice(0, declaration.getFullStart()) + source.slice(declaration.end);
+}
+
+function removeInterface(path, source, name) {
+  const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const declarations = parsed.statements.filter(node => ts.isInterfaceDeclaration(node) && node.name.text === name);
+  if (declarations.length !== 1) throw new Error('待删除的旧扩展详情接口缺失：' + name);
   const declaration = declarations[0];
   return source.slice(0, declaration.getFullStart()) + source.slice(declaration.end);
 }
