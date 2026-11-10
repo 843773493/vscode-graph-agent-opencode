@@ -442,6 +442,20 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
                 assert closed["reconciliation_status"] == "verified", closed
                 _wait_for_close(socket)
 
+                survivor = _json(client.post("/api/v1/resources/terminals", headers=workspace_headers, json={
+                    "session_id": session["session_id"], "thread_id": session["thread_id"],
+                    "retention_scope": "workspace", "title": "Explicit plugin restart",
+                    "cwd_relative": ".", "cols": 100, "rows": 30,
+                }))["data"]
+                survivor_grant = _json(client.post(
+                    f"/api/v1/resources/{survivor['resource_id']}/transport-grant", headers=workspace_headers,
+                    json={"expected_revision": survivor["owner_revision"]},
+                ))["data"]
+                socket.close()
+                socket = connect(old_socket_url, open_timeout=10, close_timeout=3)
+                socket.send(json.dumps({"type": "attach", "terminalId": survivor["resource_id"],
+                    "grantToken": survivor_grant["grant_token"]}))
+                assert json.loads(socket.recv(timeout=10))["type"] == "attached"
                 restarted = _json(client.post("/api/gateway/service-plugins/restart", json={
                     "gateway_id": gateway_id,
                     "workspace_id": workspace_id,
@@ -464,6 +478,22 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
                 assert client.get(old_http_route, headers={
                     "X-BoxTeam-Resource-Owner": "workspace-terminal",
                 }).status_code == 409
+                missing = _json(client.get(
+                    f"/api/v1/resources/{survivor['resource_id']}", headers=workspace_headers,
+                ))["data"]
+                assert missing["status"] == "exited"
+                assert missing["reconciliation_status"] == "reconcile_required"
+                assert missing["metadata"]["os_pid"] == survivor["metadata"]["os_pid"]
+                assert "attach" not in missing["available_actions"]
+                assert missing["error"]
+                rejected = client.post(f"/api/v1/resources/{survivor['resource_id']}/transport-grant",
+                    headers=workspace_headers, json={"expected_revision": missing["owner_revision"]})
+                assert rejected.status_code == 409, rejected.text
+                current_http_route = old_http_route.replace(old_instance["instance_id"], new_instance["instance_id"])
+                records = _json(client.get(current_http_route, headers={
+                    "X-BoxTeam-Resource-Owner": "workspace-terminal",
+                }))["data"]
+                assert {record["terminal_id"] for record in records} == {resource["resource_id"], survivor["resource_id"]}
 
                 _cas_workspace_binding(client, gateway_id=gateway_id, workspace_id=workspace_id,
                     enabled=False, idempotency_key="terminal-plugin-lifecycle-disable")

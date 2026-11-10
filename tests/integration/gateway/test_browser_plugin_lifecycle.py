@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import commentjson
 import httpx
 import pytest
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
 
 from tests.harness.python.run_context import TestRunContext
@@ -273,19 +274,93 @@ def test_browser_plugin_runs_through_workspace_owner_and_exact_gateway_routes(
                 assert missing_artifact.status_code == 404, missing_artifact.text
                 assert navigated["browser"]["pages"][0]["title"] == "artifact-read"
 
+                client.post(
+                    f"/api/gateway/workspaces/{workspace_id}/runtime/restart-safe", timeout=150,
+                ).raise_for_status()
+                retained = _wait_for_browser_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id)
+                assert retained["instance"] == instance
+                recovered = _json(client.get(
+                    f"/api/v1/resources/{resource['resource_id']}", headers=workspace_headers,
+                ))["data"]
+                assert recovered["resource_id"] == resource["resource_id"]
+                assert recovered["workspace_id"] == workspace_id
+                assert recovered["status"] == "running"
+                assert recovered["reconciliation_status"] == "verified"
+                assert recovered["owner_revision"] > operated["owner_revision"]
+                assert recovered["metadata"]["pages"] == navigated["browser"]["pages"]
+                with pytest.raises(ConnectionClosed):
+                    _receive_message(socket, "attached", timeout=10)
+                recovered_grant = _json(client.post(
+                    f"/api/v1/resources/{resource['resource_id']}/transport-grant",
+                    headers=workspace_headers, json={"expected_revision": recovered["owner_revision"]},
+                ))["data"]
+                assert recovered_grant["service"] == service
+                with connect(socket_url, open_timeout=10, close_timeout=3) as recovered_socket:
+                    recovered_socket.send(json.dumps({
+                        "type": "attach", "browserId": resource["resource_id"],
+                        "grantToken": recovered_grant["grant_token"],
+                    }))
+                    assert _receive_message(recovered_socket, "attached")["browserId"] == resource["resource_id"]
+                    assert client.get(
+                        f"{service_root}/api/browsers/{resource['resource_id']}/screenshots/{screenshot_id}",
+                        params=service_params, headers=owner_headers,
+                    ).content == artifact.content
+
                 stopped = _json(client.post(f"/api/v1/resources/{resource['resource_id']}/stop",
                     headers=workspace_headers,
-                    json={"expected_revision": operated["owner_revision"]})) ["data"]
+                    json={"expected_revision": recovered["owner_revision"]})) ["data"]
                 assert stopped["status"] == "closed", stopped
                 socket.close()
 
-            _json(client.post("/api/gateway/service-plugins/restart", json={
-                "gateway_id": gateway_id, "workspace_id": workspace_id, "package_id": PACKAGE_ID,
-                "package_version": PACKAGE_VERSION, "plugin_id": PLUGIN_ID, "revision": plugin["revision"],
-            }))
-            _enable_browser(client, gateway_id=gateway_id, workspace_id=workspace_id,
-                idempotency_key="browser-plugin-lifecycle-enable-after-restart")
-            restarted = _wait_for_browser_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id)
-            assert restarted["instance"]["instance_id"] != instance["instance_id"]
+            survivor = _json(client.post("/api/v1/resources/browsers", headers=workspace_headers, json={
+                "session_id": session["session_id"], "thread_id": session["thread_id"],
+                "retention_scope": "workspace", "title": "Explicit plugin restart", "url": "about:blank",
+            }))["data"]
+            survivor_grant = _json(client.post(
+                f"/api/v1/resources/{survivor['resource_id']}/transport-grant", headers=workspace_headers,
+                json={"expected_revision": survivor["owner_revision"]},
+            ))["data"]
+            unused_survivor_grant = _json(client.post(
+                f"/api/v1/resources/{survivor['resource_id']}/transport-grant", headers=workspace_headers,
+                json={"expected_revision": survivor["owner_revision"]},
+            ))["data"]
+            with connect(socket_url, open_timeout=10, close_timeout=3) as old_socket:
+                old_socket.send(json.dumps({"type": "attach", "browserId": survivor["resource_id"],
+                    "grantToken": survivor_grant["grant_token"]}))
+                assert _receive_message(old_socket, "attached")["browserId"] == survivor["resource_id"]
+                restarted = _json(client.post("/api/gateway/service-plugins/restart", json={
+                    "gateway_id": gateway_id, "workspace_id": workspace_id, "package_id": PACKAGE_ID,
+                    "package_version": PACKAGE_VERSION, "plugin_id": PLUGIN_ID, "revision": retained["revision"],
+                }))["data"]
+                assert restarted["state"] == "ready"
+                assert restarted["instance"]["instance_id"] != instance["instance_id"]
+                with pytest.raises(ConnectionClosed):
+                    _receive_message(old_socket, "attached", timeout=10)
+            with pytest.raises(InvalidStatus) as retired_route:
+                connect(socket_url, open_timeout=5, close_timeout=1)
+            assert retired_route.value.response.status_code == 409
+            assert client.get(f"{service_root}/api/browsers", params=service_params,
+                headers=owner_headers).status_code == 409
+            checkpointed = _json(client.get(
+                f"/api/v1/resources/{survivor['resource_id']}", headers=workspace_headers,
+            ))["data"]
+            # Browser 原合同允许检查点冷恢复；保留同一资源，旧实例的传输授权不能复用。
+            assert checkpointed["resource_id"] == survivor["resource_id"]
+            assert checkpointed["status"] == "running"
+            assert checkpointed["reconciliation_status"] == "verified"
+            assert checkpointed["metadata"]["resource_state"] == "discarded"
+            assert checkpointed["metadata"]["release_reason"] == "browser_manager_startup_checkpoint_recovery"
+            current_socket_url = socket_url.replace(instance["instance_id"], restarted["instance"]["instance_id"])
+            with connect(current_socket_url, open_timeout=10, close_timeout=3) as current_socket:
+                current_socket.send(json.dumps({"type": "attach", "browserId": survivor["resource_id"],
+                    "grantToken": unused_survivor_grant["grant_token"]}))
+                assert _receive_message(current_socket, "error")["type"] == "error"
+            rejected = client.post(f"/api/v1/resources/{resource['resource_id']}/transport-grant",
+                headers=workspace_headers, json={"expected_revision": stopped["owner_revision"]})
+            assert rejected.status_code == 409, rejected.text
+            current_root = service_root.replace(instance["instance_id"], restarted["instance"]["instance_id"])
+            records = _json(client.get(f"{current_root}/api/browsers", params=service_params,
+                headers=owner_headers))["data"]
+            assert {record["browser_id"] for record in records} == {resource["resource_id"], survivor["resource_id"]}
     finally:
         close_gateway_process(gateway)
