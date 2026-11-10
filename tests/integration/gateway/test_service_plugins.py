@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -368,10 +370,27 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
 
 
 @pytest.mark.parametrize("shared_package", [False, True], ids=["separate-packages", "same-package"])
+@pytest.mark.parametrize("runtime_change", ["missing", "different-version"])
 def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindings(
     request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int,
-    shared_package: bool,
+    shared_package: bool, runtime_change: str,
 ) -> None:
+    replacement_node = ""
+    expected_error = "BOXTEAM_NODE_BIN"
+    replacement_identity = None
+    if runtime_change == "different-version":
+        alternate = os.environ.get("BOXTEAM_TEST_ALTERNATE_NODE_BIN")
+        if not alternate:
+            pytest.skip("需要 BOXTEAM_TEST_ALTERNATE_NODE_BIN 提供版本和 ABI 不同的真实 Node")
+        replacement_node = str(Path(alternate).resolve(strict=True))
+        replacement_identity = json.loads(subprocess.run([replacement_node, "--print",
+            "JSON.stringify({version:process.versions.node,abi:process.versions.modules})"],
+            text=True, capture_output=True, check=True, timeout=5).stdout)
+        original_identity = native_plugin_target("node")["node"]
+        assert isinstance(original_identity, dict)
+        assert all(replacement_identity[key] != original_identity[key] for key in ("version", "abi")), (
+            original_identity, replacement_identity)
+        expected_error = "插件 Node 运行时不匹配"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
     home = context.boxteam_home_for_node(request.node.nodeid)
@@ -387,12 +406,13 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
         "plugin_id": runtime, "enabled": True} for runtime in ("node", "python")]
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
 
-    def save(client: httpx.Client, document: dict, enabled: bool) -> httpx.Response:
+    def save(client: httpx.Client, document: dict, enabled: bool | None, *, preflight: bool = False) -> httpx.Response:
         config = commentjson.loads(document["jsonc"])
-        config.setdefault("plugins", {})["runtime"] = {"entries": [
+        config.setdefault("plugins", {})["runtime"] = {"entries": [] if enabled is None else [
             {**binding, "enabled": enabled if binding["plugin_id"] == "node" else True}
             for binding in bindings]}
-        return client.put(source_path, json={"gateway_id": gateway_id,
+        return client.request("POST" if preflight else "PUT", source_path + ("/preflight" if preflight else ""),
+            json={"gateway_id": gateway_id,
             "source_key": "gateway_mutable_override", "jsonc": json.dumps(config),
             "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
             "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
@@ -441,16 +461,19 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
         close_gateway_process(gateway)
         gateway = None
         assert all(not psutil.pid_exists(item["instance"]["process_id"]) for item in initial.values())
-        # 模拟应用运行环境不再提供 Node；保存的包、配置与 enabled 都来自真实产品入口。
+        # 保存的包和 enabled 来自产品入口；冷启动实际移除或更换目标 Node。
         gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
             port=unused_tcp_port, boxteam_home=home, artifacts_dir=context.artifacts_dir,
-            extra_env={"BOXTEAM_NODE_BIN": ""})
+            extra_env={"BOXTEAM_NODE_BIN": replacement_node})
         with httpx.Client(base_url=f"http://127.0.0.1:{unused_tcp_port}", headers=LOCAL_TOKEN_HEADERS,
                           timeout=30, trust_env=False) as client:
             current = states(client)
             assert current["node"]["binding"] == bindings[0] | {"workspace_id": None}
             assert current["node"]["state"] == "failed" and current["node"]["instance"] is None
-            assert "BOXTEAM_NODE_BIN" in current["node"]["error"]
+            assert expected_error in current["node"]["error"]
+            if replacement_identity is not None:
+                assert f"gateway={replacement_identity['version']}/{replacement_identity['abi']}" in current["node"]["error"]
+                assert "package=" in current["node"]["error"] and "完整插件 ZIP" in current["node"]["error"]
             python = current["python"]
             assert python["state"] == "ready"
             assert python["instance"]["instance_id"] != initial["python"]["instance"]["instance_id"]
@@ -463,20 +486,38 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
             failed_restart = client.post("/api/gateway/service-plugins/restart", json={
                 "gateway_id": gateway_id, "package_id": bindings[0]["package_id"], "package_version": "1.0.0",
                 "plugin_id": "node", "revision": current["node"]["revision"]})
-            assert failed_restart.status_code == 409 and "BOXTEAM_NODE_BIN" in failed_restart.text
+            assert failed_restart.status_code == 409 and expected_error in failed_restart.text
+            assert states(client) == current, "被拒的显式重启不能改变原绑定、revision或实际实例"
             disabled = save(client, document, False).raise_for_status().json()["data"]
             assert disabled["edit"]["state"] == "active"
             assert states(client)["node"]["state"] == "stopped"
             document = client.get(source_path).raise_for_status().json()["data"]
+            preflight = save(client, document, True, preflight=True)
+            assert preflight.status_code == 422 and expected_error in preflight.text
             rejected = save(client, document, True)
-            assert rejected.status_code == 422 and "BOXTEAM_NODE_BIN" in rejected.text
+            assert rejected.status_code == 422 and expected_error in rejected.text
             assert client.get(source_path).raise_for_status().json()["data"]["file_digest"] == document["file_digest"]
             final = states(client)
             assert final["node"]["binding"]["enabled"] is False
             assert final["python"]["instance"] == python["instance"], "失败候选不能停止仍可用的兄弟实例"
+            blocked = client.post("/api/gateway/service-plugins/uninstall", json={
+                "gateway_id": gateway_id, "package_id": bindings[0]["package_id"], "package_version": "1.0.0"})
+            assert blocked.status_code == 409 and "引用" in blocked.text, "失败或已关闭的配置绑定仍阻止卸载"
+            document = client.get(source_path).raise_for_status().json()["data"]
+            assert save(client, document, None).raise_for_status().json()["data"]["edit"]["state"] == "active"
+            assert states(client) == {}
+            assert not psutil.pid_exists(python["instance"]["process_id"])
+            for package_id in {binding["package_id"] for binding in bindings}:
+                client.post("/api/gateway/service-plugins/uninstall", json={
+                    "gateway_id": gateway_id, "package_id": package_id, "package_version": "1.0.0"}).raise_for_status()
+                assert not (home / "plugins/packages" / package_id / "1.0.0").exists()
+            inventory = client.post("/api/gateway/service-plugins/inventory", json={"gateway_id": gateway_id})
+            assert inventory.raise_for_status().json()["data"]["packages"] == []
             client.get("/api/gateway/workspaces", timeout=90).raise_for_status()
             (context.artifacts_dir / "cold-runtime.json").write_text(json.dumps({
-                "initial": initial, "unavailable": current, "final": final}, ensure_ascii=False, indent=2))
+                "initial": initial, "unavailable": current, "final": final,
+                "runtime_change": runtime_change, "replacement_node": replacement_node,
+                "replacement_identity": replacement_identity, "uninstalled": True}, ensure_ascii=False, indent=2))
     finally:
         if gateway is not None:
             close_gateway_process(gateway)

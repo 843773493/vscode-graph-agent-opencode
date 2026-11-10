@@ -100,7 +100,7 @@ def test_install_rejects_host_mismatched_runtime_target_before_publish(
     installed_root = tmp_path / "installed"
     store = PluginPackageStore(installed_root)
 
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(ValueError, match=message):
         store.install_zip(archive_path)
 
     assert not (installed_root / "example.tools/1.0.0").exists()
