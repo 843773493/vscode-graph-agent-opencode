@@ -54,7 +54,7 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
         payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    interrupted_creation = getattr(request, "param", "normal") == "interrupted"
+    interrupted_creation = getattr(request, "param", "normal") in {"interrupted", "deleted"}
     creation_gate = context.artifacts_dir / "creation.blocked"
     if interrupted_creation:
         creation_gate.touch()
@@ -68,8 +68,6 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=30, trust_env=False) as client:
-            # 当前提交的 Gateway 业务代理要求正式游客会话；沿公开首载入口取得 Cookie。
-            client.get("/api/gateway/users/current").raise_for_status()
             yield client, context, workspaces
     finally:
         close_gateway_process(gateway)
@@ -275,9 +273,9 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         document = exchange("GET", source_path).raise_for_status()
         assert private_value not in document.text
         assert private_reference["version"] in document.text
-        assert private_value not in (workspaces[0] / ".boxteam/workspace.jsonc").read_text()
+        assert private_value not in (workspaces[0] / ".boxteam/workspace.jsonc").read_text(encoding="utf-8")
         private_file = workspaces[0] / ".boxteam/credentials/plugins" / (private_reference["version"] + ".json")
-        assert json.loads(private_file.read_text())["value"] == private_value
+        assert json.loads(private_file.read_text(encoding="utf-8"))["value"] == private_value
         changed_a = _wait_for(lambda value: (item := status_for(value, workspace_a_id)) is not None
             and item["state"] == "ready" and item["instance"]["instance_id"] != ready_a["instance"]["instance_id"])
         assert_process_exited(ready_a["instance"]["process_id"])
@@ -343,7 +341,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-@pytest.mark.parametrize("workspace_plugin_case", ["normal", "interrupted"], indirect=True)
+@pytest.mark.parametrize("workspace_plugin_case", ["normal", "interrupted", "deleted"], indirect=True)
 def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(workspace_plugin_case, request: pytest.FixtureRequest) -> None:
     """模板提交、创建、配置交接与卸载引用均经过真实产品入口。"""
     client, context, workspaces = workspace_plugin_case
@@ -430,7 +428,7 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
                 assert time.monotonic() < deadline, state
                 time.sleep(0.1)
             attempts_path = context.artifacts_dir / "creation-attempts.jsonl"
-            attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+            attempts = [json.loads(line) for line in attempts_path.read_text(encoding="utf-8").splitlines()]
             frozen = next(item["creation"] for item in attempts if item["workspace_id"] == new_id)
             assert frozen["bindings"] == [{**binding, "workspace_id": None}]
             assert frozen["revision"] == saved["active_digest"]
@@ -442,6 +440,19 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
             denied = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
                 "package_id": "probe.defaults", "package_version": "1.0.0"})
             assert denied.status_code == 409 and f"workspace-create:{new_id}:{frozen['intent_id']}" in denied.text, denied.text
+            assert isinstance(request.node, pytest.Function)
+            if request.node.callspec.params["workspace_plugin_case"] == "deleted":
+                # 删除原创建目标必须结清 intent；不伪造配置交接，也不为卸载重启 Backend。
+                removed = exchange("DELETE", f"/api/gateway/managed-workspaces/{new_id}").raise_for_status().json()["data"]
+                assert all(item["workspace_id"] != new_id for item in removed["items"])
+                state = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]
+                assert all(item["binding"].get("workspace_id") != new_id for item in state["plugins"])
+                assert all(item["workspace_id"] != new_id for item in state["workspace_configurations"])
+                exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+                    "package_id": "probe.defaults", "package_version": "1.0.0"}).raise_for_status()
+                assert document(existing_id)["effective"]["plugins"]["runtime"]["entries"] == []
+                assert new_root.is_dir(), "移除托管不删除用户工作区数据"
+                return
             # 缺陷消除后沿原工作区停止／启动显式重试，不能新建 intent 或读取新模板。
             gate.unlink()
             exchange("POST", f"/api/gateway/workspaces/{new_id}/runtime/stop").raise_for_status()
@@ -449,12 +460,12 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
             resumed = document(new_id, frozen["intent_id"])
             assert resumed["edit"]["state"] == "active"
             assert resumed["edit"]["candidate_id"] == rejected["edit"]["candidate_id"]
-            attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+            attempts = [json.loads(line) for line in attempts_path.read_text(encoding="utf-8").splitlines()]
             assert all(item["creation"] == frozen for item in attempts if item["workspace_id"] == new_id)
             later_root = context.workspace_root / f"later-project-{creation_suffix}"
             later_id = create(later_root, "Later", new=True)
             assert document(later_id)["effective"]["plugins"]["runtime"]["entries"] == []
-            attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+            attempts = [json.loads(line) for line in attempts_path.read_text(encoding="utf-8").splitlines()]
             later = next(item["creation"] for item in attempts if item["workspace_id"] == later_id)
             assert later["intent_id"] != frozen["intent_id"]
             assert later["revision"] == changed_template["active_digest"] and later["bindings"] == []
