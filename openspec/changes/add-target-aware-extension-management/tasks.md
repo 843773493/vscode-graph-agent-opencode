@@ -140,6 +140,7 @@
 - [ ] 9.6 按风险测量普通服务状态／设置读取和经 Gateway 的轻量真实业务请求，记录数据规模、原始样本、p95／max、request_id 及软件内总耗时；遵守现有交互总预算，不把冷启动／安装或每层独立长 timeout 放入普通请求。
 - [ ] 9.7 运行相关静态分析、协议生成一致性与真实类型；前端改动完成 bun run --cwd src/clients/web build，可复用同源码产品构建；所有测试使用进程外超时和内存保护，失败先归因，不无证据重复长跑。
 - [ ] 9.8 验源码目录外、无全局 Node／Python／Bun／uv／编译器、空依赖缓存且断外网的完整发行物与本地插件 ZIP，经真实 Gateway／Workbench 安装→开启→Python／Node 业务调用→重启；核 node-pty 原生能力、Python 依赖和变更安装路径后可运行，零依赖下载／构建。覆盖缺版本／目标制品、运行时／ABI 不匹配和缺依赖均不生效并提示、旧绑定保持；复用同一构建验 Web／真实 Electron 会话及配置恢复，Linux／Windows／SSH 分别记录，不以 parity 或暖缓存替代验收。
+  - 2026-11-10 Linux 完整发行候选闭环：完整当前源码 Git tree 独立构建 runtime，含固定 Python 3.12.13／Node 22.17.0 ABI127、79 内置扩展和预构建插件 ZIP；解压后改到含空格的新路径，以空 PATH／空依赖缓存、发行 CLI 初始化 Home，真实 Gateway／Backend 完成同包双语言安装、绑定、业务调用、安装新版保持旧实例、显式切版核旧 PID 退出、独立重启、停用仍引用409、解绑和物理卸载；自带 Terminal 包实际创建 PTY，经 WS 执行 shell 标记并关闭卸载。最终1 passed／87.42秒。真实发行暴露 Python 缺少 os.pidfd_open 与代理重复工作区头两处产品缺陷，已分别修复并提交；退出监听28项、代理13项通过，四份生产／新增测试Pyright零诊断、Ruff通过，代理旧测试装具1条既存类型诊断基线一致。最小复审只沿原内核退出通知与原代理统一头名，无新owner／轮询／恢复框架。原失败、完整构建、tree／指纹及准确命令见 `out/tests/temp/2026/11/10/plugin_distribution_loop/artifacts/distribution-verification.json`。环境禁止unshare，尚未证明断外网；本片直接使用发行解释器启动服务，不代替完整Launcher／页面、Windows／真实SSH／Electron验收，9.8保持未勾选。
 - [ ] 9.9 实施后做最小充分实现复审：删除冗余适配、重复状态、fallback、额外账本和不必要完整性检查；确认只剩一套格式／来源／进程／路由链，未验证范围如实列明。
 
 ## 10. 自有贡献注册与首批能力

@@ -1,0 +1,296 @@
+"""源码外 Linux 发行物的插件安装、运行、切版与卸载闭环。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tarfile
+from collections.abc import Iterator
+from io import BytesIO
+from pathlib import Path
+from urllib.parse import urlencode
+from zipfile import ZipFile
+
+import commentjson
+import httpx
+import psutil
+import pytest
+from websockets.sync.client import connect
+
+from tests.harness.python.run_context import TestRunContext
+from tests.integration.gateway.test_service_plugin_dependency_preparation import (
+    _dependency_wheel,
+    _python_lock,
+)
+from tests.integration.gateway.test_service_plugins import NODE_PLUGIN, PYTHON_PLUGIN
+from tests.integration.gateway.test_terminal_plugin_lifecycle import (
+    _receive_output,
+    _wait_for_plugin,
+)
+from tests.support.plugin_package import install_plugin
+from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.workspace import terminate_process, wait_for_http_ok
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_test_workspace,
+)
+
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="本用例验证 Linux 发行物")
+
+
+@pytest.fixture
+def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx.Client, TestRunContext, Path, Path]]:
+    asset_input = os.environ.get("BOXTEAM_TEST_RUNTIME_ASSET")
+    if not asset_input:
+        pytest.skip("需要 BOXTEAM_TEST_RUNTIME_ASSET 指向已构建的 Linux runtime tgz")
+    asset = Path(asset_input).resolve(strict=True)
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    runtime = context.runtime_root_for_node(request.node.nodeid)
+    initial = runtime / "installed"
+    initial.mkdir(parents=True)
+    with tarfile.open(asset) as archive:
+        archive.extractall(initial, filter="data")
+    relocated = runtime / "relocated distribution"
+    initial.rename(relocated)
+    package = relocated / "package"
+    manifest_path = package / "runtime-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    application = package / manifest["application_root"]
+    python = package / manifest["python_executable"]
+    node = package / manifest["node"]["executable"]
+    ports = integration_port_block_for_file(Path(request.node.path))
+    gateway_url = f"http://127.0.0.1:{ports.port(21)}"
+    workspace = prepare_test_workspace(workspace_root=context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
+    config_path = install_test_workspace_config(workspace_root=workspace,
+        config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=application / "configs/workspace_schema.jsonc")
+    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    for provider in config["llm"]["providers"]:
+        if "api_key" in provider:
+            provider["api_key"] = "distribution-plugin-unused-key"
+    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    # 公共装具会初始化开发版 Home；发行验收必须从发行物自己的初始化入口建新 Home。
+    home = runtime / "distribution-home"
+    empty_path = runtime / "empty-path"
+    empty_path.mkdir()
+    environment = {key: value for key, value in os.environ.items()
+        if key not in {"PYTHONPATH", "PYTHONHOME"} and not key.startswith(("BOXTEAM_", "UV_", "BUN_", "npm_"))}
+    environment.update({"BOXTEAM_HOME": str(home), "HOME": str(runtime / "user-home"),
+        "BOXTEAM_PROJECT_ROOT": str(application), "BOXTEAM_RUNTIME_MANIFEST": str(manifest_path),
+        "BOXTEAM_DISTRIBUTION": manifest["distribution"], "BOXTEAM_NODE_BIN": str(node),
+        "BOXTEAM_PYTHON_BIN": str(python), "BOXTEAM_WEB_ASSETS": str(package / manifest["web_assets"]),
+        "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": str(package / manifest["chromium_executable"]),
+        "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace), "WORKSPACE_ROOT": str(workspace),
+        "BOXTEAM_GATEWAY_URL": gateway_url, "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(20)),
+        "PATH": str(empty_path), "XDG_CACHE_HOME": str(runtime / "empty-cache"),
+        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"})
+    command = [str(python), "-m", "configs.boxteam", "initialize", "--project-root", str(application)]
+    initialized = subprocess.run(command, cwd=application, env=environment,
+        text=True, capture_output=True, check=False, timeout=60)
+    (context.artifacts_dir / "initialize.stdout.raw").write_text(initialized.stdout, encoding="utf-8")
+    (context.artifacts_dir / "initialize.stderr.raw").write_text(initialized.stderr, encoding="utf-8")
+    assert initialized.returncode == 0, initialized.stderr
+    with asset.open("rb") as stream:
+        asset_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    (context.artifacts_dir / "distribution.json").write_text(json.dumps({
+        "asset": str(asset), "sha256": asset_digest,
+        "runtime_manifest": manifest, "application": str(application), "python": str(python), "node": str(node),
+        "gateway_url": gateway_url, "path": str(empty_path), "home": str(home),
+    }, indent=2) + "\n", encoding="utf-8")
+    with (context.artifacts_dir / "gateway.stdout.raw").open("w") as stdout, (
+        context.artifacts_dir / "gateway.stderr.raw"
+    ).open("w") as stderr:
+        process = subprocess.Popen([str(python), "-m", "app.runtime.http_server", "app.gateway.main:app",
+            "--host", "127.0.0.1", "--port", str(ports.port(21)), "--shutdown-on-stdin-eof"],
+            cwd=application, env=environment, stdin=subprocess.PIPE, text=True, stdout=stdout, stderr=stderr)
+        try:
+            wait_for_http_ok(gateway_url + "/api/gateway/health", process)
+            with httpx.Client(base_url=gateway_url, timeout=90, trust_env=False) as client:
+                credential = client.get("/api/gateway/auth/local-credential",
+                    headers={"Sec-Fetch-Site": "same-origin"}).raise_for_status().json()["data"]["token"]
+                client.headers["X-Local-Token"] = credential
+                active = client.get("/api/gateway/workspaces").raise_for_status().json()["data"]["active_workspace"]
+                client.headers.update({"X-BoxTeam-Target-Gateway-Id": active["gateway_id"],
+                    "X-BoxTeam-Gateway-Id": active["gateway_id"], "X-BoxTeam-Workspace-Id": active["workspace_id"]})
+                client.get("/api/v1/workspace").raise_for_status()
+                yield client, context, package, home
+        finally:
+            terminate_process(process, timeout_seconds=150, stdin_eof=True)
+
+
+def test_relocated_distribution_completes_service_plugin_lifecycle(distribution_gateway) -> None:
+    client, context, distribution, home = distribution_gateway
+    evidence: list[dict[str, object]] = []
+    gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+    workspace_id = client.headers["X-BoxTeam-Workspace-Id"]
+    manifest = json.loads((distribution / "runtime-manifest.json").read_text(encoding="utf-8"))
+    python = distribution / manifest["python_executable"]
+    node = distribution / manifest["node"]["executable"]
+    python_target = subprocess.run([str(python), "-c",
+        "import json,platform,sys;print(json.dumps({'version':platform.python_version(),'abi':f'cp{sys.version_info.major}{sys.version_info.minor}'}))"],
+        text=True, capture_output=True, check=True, timeout=10)
+    node_target = subprocess.run([str(node), "--print",
+        "JSON.stringify({version:process.versions.node,abi:process.versions.modules,glibc:process.report.getReport().header.glibcVersionRuntime})"],
+        text=True, capture_output=True, check=True, timeout=10)
+    node_identity = json.loads(node_target.stdout)
+    target = {"os": "linux", "architecture": "x64", "system_baseline": f"glibc-{node_identity.pop('glibc')}",
+        "python": json.loads(python_target.stdout), "node": node_identity}
+
+    def exchange(method: str, path: str, body: dict[str, object] | None = None) -> httpx.Response:
+        request_id = f"distribution-plugin-{len(evidence)}"
+        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id})
+        assert response.headers["X-Request-ID"] == request_id
+        payload = response.json()
+        if "request_id" in payload:
+            assert payload["request_id"] == request_id
+        evidence.append({"method": method, "path": path, "status": response.status_code, "body": payload})
+        return response
+
+    def states() -> dict[str, dict]:
+        result = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status()
+        return {item["binding"]["plugin_id"]: item for item in result.json()["data"]["plugins"]}
+
+    def bind(entries: list[dict[str, object]], *, workspace: bool = False) -> dict[str, dict]:
+        source_key = "workspace_root_mutable_override" if workspace else "gateway_mutable_override"
+        path = f"/api/v1/workspaces/{workspace_id}/config/sources/{source_key}" if workspace else f"/api/gateway/config/sources/{source_key}"
+        document = exchange("GET", path).raise_for_status().json()["data"]
+        source = commentjson.loads(document["jsonc"])
+        source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        reply = exchange("PUT", path, {"gateway_id": gateway_id,
+            **({"workspace_id": workspace_id} if workspace else {}), "source_key": source_key,
+            "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
+            "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+            "idempotency_key": f"distribution-bind-{len(evidence)}"}).raise_for_status()
+        assert reply.json()["data"]["edit"]["state"] == "active"
+        return states()
+
+    def install(path: Path) -> None:
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        install_plugin(lambda endpoint, payload: exchange("POST", endpoint, payload),
+            gateway_id=gateway_id, path=str(path), expected_digest=digest)
+
+    def echo(item: dict) -> dict:
+        binding, instance = item["binding"], item["instance"]
+        path = (f"/api/gateway/service-plugins/{binding['package_id']}/{binding['plugin_id']}/instances/"
+            f"{instance['instance_id']}/services/echo/value?package_version={binding['package_version']}")
+        result = exchange("GET", path).raise_for_status().json()
+        assert result["instance_id"] == instance["instance_id"]
+        assert result["version"] == binding["package_version"]
+        assert result["pid"] == instance["process_id"]
+        return result
+
+    def entries(version: str, *, enabled: bool = True) -> list[dict[str, object]]:
+        return [{"package_id": "distribution.probe", "plugin_id": runtime,
+            "package_version": version, "enabled": enabled} for runtime in ("python", "node")]
+
+    def require_exited(items: dict[str, dict]) -> None:
+        processes = [psutil.Process(item["instance"]["process_id"]) for item in items.values()
+            if item.get("instance") and psutil.pid_exists(item["instance"]["process_id"])]
+        _, alive = psutil.wait_procs(processes, timeout=5)
+        assert not alive, [process.pid for process in alive]
+
+    def uninstall(package_id: str, version: str) -> None:
+        exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": package_id, "package_version": version}).raise_for_status()
+        assert not (home / "plugins/packages" / package_id / version).exists()
+
+    def package(version: str) -> Path:
+        archive_path = context.artifacts_dir / f"distribution-probe-{version}.zip"
+        probe = {"manifest_version": 1, "package_id": "distribution.probe", "version": version,
+            "name": "发行闭环探针", "extension_contract_version": 1, "target": target,
+            "plugins": [{"id": runtime, "name": runtime, "instance_scope": "gateway",
+                "runtime": runtime, "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"],
+                "management_protocol_version": 1,
+                "requires": [{"extension_point": "services", "version": 1}],
+                "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}]}}
+                for runtime in ("python", "node")]}
+        with ZipFile(archive_path, "w") as archive:
+            archive.writestr("plugin.jsonc", json.dumps(probe))
+            archive.writestr("pyproject.toml", "[project]\nname='plugin-dependency-fixture'\nversion='1.0.0'\n"
+                "requires-python='==3.12.*'\ndependencies=['plugin-dependency==1.0.0']\n")
+            archive.writestr("uv.lock", _python_lock())
+            archive.writestr("entry.py", PYTHON_PLUGIN)
+            archive.writestr("entry.mjs", NODE_PLUGIN)
+            archive.writestr("local_module.py", "from plugin_dependency import VALUE\nassert VALUE == 'locked-dependency-ready'\n")
+            with ZipFile(BytesIO(_dependency_wheel())) as dependency:
+                for entry in dependency.infolist():
+                    archive.writestr(f"python/site-packages/{entry.filename}", dependency.read(entry.filename))
+        return archive_path
+
+    try:
+        install(package("1.0.0"))
+        assert states() == {}, "安装及读取不能启动插件"
+        original = bind(entries("1.0.0"))
+        for runtime, executable in (("python", python), ("node", node)):
+            assert original[runtime]["state"] == "ready"
+            result = echo(original[runtime])
+            process = psutil.Process(result["pid"])
+            assert Path(process.exe()).resolve() == executable.resolve()
+            assert process.environ()["PATH"].endswith("empty-path")
+            assert Path(process.environ()["BOXTEAM_PROJECT_ROOT"]) == distribution / "application"
+        install(package("2.0.0"))
+        assert states() == original, "安装新版不能暗中换绑或更换实例"
+        current = bind(entries("2.0.0"))
+        require_exited(original)
+        for runtime in ("python", "node"):
+            echo(current[runtime])
+            assert current[runtime]["instance"]["instance_id"] != original[runtime]["instance"]["instance_id"]
+        uninstall("distribution.probe", "1.0.0")
+        restarted = exchange("POST", "/api/gateway/service-plugins/restart", {"gateway_id": gateway_id,
+            "package_id": "distribution.probe", "package_version": "2.0.0", "plugin_id": "python",
+            "revision": current["python"]["revision"]}).raise_for_status().json()["data"]
+        require_exited({"python": current["python"]})
+        echo(restarted)
+        assert states()["node"]["instance"] == current["node"]["instance"]
+        current["python"] = restarted
+        disabled = bind(entries("2.0.0", enabled=False))
+        require_exited(current)
+        assert {item["state"] for item in disabled.values()} == {"stopped"}
+        blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": "distribution.probe", "package_version": "2.0.0"})
+        assert blocked.status_code == 409, "关闭仍保留绑定，不能卸载"
+        assert bind([]) == {}
+        uninstall("distribution.probe", "2.0.0")
+
+        # 正式自带包真正加载 node-pty 原生模块并创建 PTY，而不止探针 ready。
+        developer_tools = distribution / "application/resources/plugins/developer-tools.zip"
+        install(developer_tools)
+        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+            "plugin_id": "terminal", "enabled": True}], workspace=True)
+        terminal = _wait_for_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id, state="ready")
+        assert terminal["state"] == "ready"
+        session = exchange("POST", "/api/v1/sessions", {"title": "源码外发行 PTY"}).raise_for_status().json()["data"]
+        resource = exchange("POST", "/api/v1/resources/terminals", {"session_id": session["session_id"],
+            "thread_id": session["thread_id"], "retention_scope": "workspace", "title": "发行 node-pty",
+            "cwd_relative": ".", "cols": 100, "rows": 30}).raise_for_status().json()["data"]
+        grant = exchange("POST", f"/api/v1/resources/{resource['resource_id']}/transport-grant",
+            {"expected_revision": resource["owner_revision"]}).raise_for_status().json()["data"]
+        query = urlencode({"workspace_id": workspace_id, "package_version": "0.1.0",
+            "token": client.headers["X-Local-Token"], "target_gateway_id": gateway_id})
+        socket_url = str(client.base_url).rstrip("/").replace("http://", "ws://") + (
+            f"/api/gateway/service-plugins/boxteam.developer-tools/terminal/instances/"
+            f"{terminal['instance']['instance_id']}/services/socket/terminal?{query}")
+        with connect(socket_url, open_timeout=10, close_timeout=3) as socket:
+            socket.send(json.dumps({"type": "attach", "terminalId": resource["resource_id"],
+                "grantToken": grant["grant_token"], "cols": 100, "rows": 30}))
+            assert json.loads(socket.recv(timeout=10))["type"] == "attached"
+            # 让 shell 执行后再拼成标记，避免把输入回显误认为命令输出。
+            socket.send(json.dumps({"type": "input", "data": "printf 'distribution-%s\\n' 'native-ready'\n"}))
+            output = _receive_output(socket, "distribution-native-ready")
+            evidence.append({"terminal_output": output})
+        latest = exchange("GET", f"/api/v1/resources/{resource['resource_id']}").raise_for_status().json()["data"]
+        exchange("POST", f"/api/v1/resources/{resource['resource_id']}/stop",
+            {"expected_revision": latest["owner_revision"]}).raise_for_status()
+        bind([], workspace=True)
+        require_exited({"terminal": terminal})
+        uninstall("boxteam.developer-tools", "0.1.0")
+        context.write_result("passed", {"target": target, "exchanges": len(evidence)})
+    finally:
+        (context.artifacts_dir / "lifecycle.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
