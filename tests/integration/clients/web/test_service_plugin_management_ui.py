@@ -162,8 +162,18 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             "url": plugin_source["base_url"] + "/plugin.zip", "filename": "ui-plugin-package-1.1.0.zip",
         }
         plugin_source["release_download"].set()
+    home = context.boxteam_home_for_node(request.node.nodeid)
+    new_workspace_path = context.workspace_root / f"created-{context.run_root.name}-{scenario}"
+    later_workspace_path = context.workspace_root / f"later-{context.run_root.name}-{scenario}"
+    if scenario == "single":
+        # 新目录及插件绑定必须由产品创建；只准备该隔离 Home 的正常用户配置。
+        assert not new_workspace_path.exists() and not later_workspace_path.exists()
+        user_config = home / "config/workspace.jsonc"
+        user_config.parent.mkdir(parents=True, exist_ok=True)
+        configuration["$schema"] = "./workspace_schema.jsonc"
+        user_config.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
-        port=plugin_gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+        port=plugin_gateway_port, boxteam_home=home,
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
@@ -190,6 +200,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         environment = os.environ | {
             "BOXTEAM_PLUGIN_UI_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
                 "packagePath": str(package_path), "versionPaths": version_paths,
+                "newWorkspacePath": str(new_workspace_path), "laterWorkspacePath": str(later_workspace_path),
                 "incompatiblePackages": incompatible_packages,
                 "sourceArtifact": plugin_source["artifact"] if scenario == "single" else None,
                 "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
@@ -197,7 +208,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         }
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             run = await asyncio.to_thread(subprocess.run, ["bun", driver],
-                cwd=Path.cwd(), env=environment | temporary, capture_output=True, text=True, timeout=210, check=False)
+                cwd=Path.cwd(), env=environment | temporary, capture_output=True, text=True, timeout=300, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(run.stdout, encoding="utf-8")
         (context.artifacts_dir / "browser.stderr.raw").write_text(run.stderr, encoding="utf-8")
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"exit_code": run.returncode,
@@ -224,6 +235,9 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             ]
             assert result["runtimeVersions"] == ["1.1.0", "1.0.0"]
             assert result["closedBindingBlockedUninstall"]
+            assert result["defaultsCreatedIndependentInstance"] and result["clearedDefaultsOnlyAffectFuture"]
+            assert result["createdWorkspaceBlockedUninstall"]
+            assert result["newWorkspace"]["workspace_id"] != result["owner"]["workspaceId"]
             assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])
             packages_root = context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/ui.preference-probe"
             assert not packages_root.exists(), "完整卸载后包版本目录仍存在"

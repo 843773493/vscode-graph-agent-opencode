@@ -141,9 +141,9 @@ try {
     await expect(quick).not.toBeVisible();
     await expect(view.getByRole('button', { name: '停用此范围', exact: true })).toBeVisible();
   };
-  const unbind = async (name, sourceKey, confirmLabel) => {
+  const unbind = async (name, sourceKey, confirmLabel, workspaceId = active.workspace_id) => {
     const before = await runtimeSlot(name.includes('gateway-preference') ? 'gateway-preference' : 'workspace-preference',
-      sourceKey === 'workspace_root_mutable_override' ? active.workspace_id : undefined);
+      sourceKey === 'workspace_root_mutable_override' ? workspaceId : undefined);
     if (before?.instance) result.exitedPids.push(before.instance.process_id);
     await openPlugin(name);
     await view.locator('.service-plugin-details button').filter({ hasText: '解除此范围绑定' }).click();
@@ -437,9 +437,45 @@ try {
   await expect(view).toContainText('工作区偏好 · workspace-preference');
   await verifyScopeReads('defaults', ['/api/gateway/service-plugins/inventory', '/api/gateway/config/sources',
     '/api/gateway/config/sources/gateway_mutable_override']);
+  const existingBeforeDefaults = await runtimeSlot('workspace-preference', active.workspace_id);
+  const gatewayBeforeDefaults = await runtimeSlot('gateway-preference');
   await enable('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
   result.configOwners.push('defaults');
   assert.deepEqual(new Set(result.configOwners), new Set(['gateway', 'workspace', 'defaults']));
+  assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, existingBeforeDefaults.instance.instance_id);
+  assert.equal((await runtimeSlot('gateway-preference')).instance.instance_id, gatewayBeforeDefaults.instance.instance_id);
+
+  result.phase = 'create-from-defaults';
+  // 使用真实创建入口生成目录、身份、创建 intent 和配置交接，不由测试预写绑定。
+  const createWorkspace = async (rootPath, name) => {
+    const directory = await api('/api/gateway/managed-workspaces', { method: 'POST',
+      body: { root_path: rootPath, name, create_directory: true } });
+    const created = directory.items.find(item => item.name === name && item.gateway_id === active.gateway_id);
+    assert(created, JSON.stringify(directory));
+    return created;
+  };
+  const workspaceSource = workspaceId => api(`/api/v1/workspaces/${workspaceId}/config/sources/workspace_root_mutable_override`,
+    { headers: { 'X-BoxTeam-Workspace-Id': workspaceId } });
+  const created = await createWorkspace(input.newWorkspacePath, 'Plugin Defaults Created');
+  result.newWorkspace = { gateway_id: created.gateway_id, workspace_id: created.workspace_id };
+  await expect.poll(async () => (await runtimeSlot('workspace-preference', created.workspace_id))?.state,
+    { timeout: 30_000 }).toBe('ready');
+  const createdRuntime = await runtimeSlot('workspace-preference', created.workspace_id);
+  await callRuntime(createdRuntime);
+  assert.notEqual(createdRuntime.instance.instance_id, existingBeforeDefaults.instance.instance_id);
+  assert.notEqual(createdRuntime.instance.process_id, existingBeforeDefaults.instance.process_id);
+  assert.deepEqual((await workspaceSource(created.workspace_id)).effective.plugins.runtime.entries,
+    [{ package_id: 'ui.preference-probe', plugin_id: 'workspace-preference', package_version: '1.0.0', enabled: true }]);
+  assert.equal((await workspaceSource(active.workspace_id)).jsonc, workspaceDocument.jsonc);
+  assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, existingBeforeDefaults.instance.instance_id);
+  result.defaultsCreatedIndependentInstance = true;
+
+  await unbind('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  assert.equal((await runtimeSlot('workspace-preference', created.workspace_id)).instance.instance_id, createdRuntime.instance.instance_id);
+  const later = await createWorkspace(input.laterWorkspacePath, 'Plugin Defaults Cleared');
+  assert.deepEqual((await workspaceSource(later.workspace_id)).effective.plugins.runtime.entries, []);
+  assert.equal(await runtimeSlot('workspace-preference', later.workspace_id), undefined);
+  result.clearedDefaultsOnlyAffectFuture = true;
 
   result.phase = 'unbind-and-uninstall';
   await view.getByLabel('插件管理范围').selectOption('gateway');
@@ -448,8 +484,22 @@ try {
   await view.getByLabel('插件管理范围').selectOption('workspace');
   await pick(workspaceName);
   await unbind('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
-  await view.getByLabel('插件管理范围').selectOption('defaults');
-  await unbind('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  const createdReference = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
+  await packageRowFor('1.0.0').getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await pick('卸载整包');
+  const createdRejection = await createdReference;
+  assert.equal(createdRejection.status(), 409);
+  const createdConflict = await createdRejection.json();
+  assert.equal(createdConflict.request_id, createdRejection.headers()['x-request-id']);
+  assert.match(JSON.stringify(createdConflict), new RegExp(`workspace-configuration:${created.workspace_id}:workspace-preference`));
+  await callRuntime(createdRuntime);
+  result.createdWorkspaceBlockedUninstall = true;
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  await view.getByLabel('插件管理范围').selectOption('workspace');
+  await pick(created.name);
+  await unbind('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定', created.workspace_id);
+  await expect.poll(() => runtimeSlot('workspace-preference', created.workspace_id)).toBeUndefined();
   await view.getByLabel('插件管理范围').selectOption('gateway');
   result.phase = 'stopped-plugin-settings';
   await expect(view).toContainText('Gateway 偏好 · gateway-preference');
