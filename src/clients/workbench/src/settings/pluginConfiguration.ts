@@ -73,6 +73,26 @@ function privateParameterLocation(document: ConfigDocument, binding: Configurati
   return { path, current };
 }
 
+function privateParameterStatus(document: ConfigDocument, binding: ConfigurationBinding, pointer: string): string {
+  const parts = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
+    ...pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
+  const at = (root: unknown): unknown => parts.reduce<unknown>((value, part) =>
+    value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined, root);
+  const state = (value: unknown): string => {
+    if (value === undefined) return '未配置';
+    if (value && typeof value === 'object' && 'kind' in value && value.kind === 'plugin_private_file') return '已配置私有文件引用';
+    if (typeof value === 'string' && /^(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|env:[A-Za-z_][A-Za-z0-9_]*)$/.test(value)) return '已配置环境引用';
+    return '已配置';
+  };
+  const path = '/' + parts.map(part => part.replace(/~/g, '~0').replace(/\//g, '~1')).join('/');
+  // 归属由原 owner 的 origins 提供；引用对象逐叶标注，数组则整体归属，不能在客户端重新合并来源。
+  const sources = [...new Set(document.origins.filter(origin => origin.path === path
+    || origin.path.startsWith(path + '/') || path.startsWith(origin.path + '/')).map(origin => origin.source_key))];
+  return `当前来源 ${document.source_key}：${state(at(parse(document.jsonc)))}；来源合并：${state(at(document.source_effective))}`
+    + `${sources.length ? `（来源 ${sources.join('、')}）` : ''}；当前 active：${state(at(document.effective))}`
+    + `；active=${document.active_revision ?? '无'} / pending=${document.status?.pending_revision ?? '无'}。运行实例可能仍持有已取得的值。`;
+}
+
 async function chooseSource(quickInput: IQuickInputService, sources: Source[], title: string): Promise<Source | undefined> {
   const selected = await quickInput.pick(sources.filter(item => item.source_key).map(source => ({
     label: source.source_key!, description: `${source.layer} · ${source.presence}${source.writable === false ? ' · 只读' : ''}`,
@@ -192,10 +212,12 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
     }
     const { path: parameterPath, current } = privateParameterLocation(document, binding, privateParameter.pointer);
     const configured = current !== undefined;
-    const action = await quickInput.pick([{ label: configured ? '更换已设置秘密参数' : '设置秘密参数', clear: false },
+    const action = await quickInput.pick([{ label: configured ? '更换已设置秘密参数' : '设置秘密参数', clear: false,
+      detail: privateParameterStatus(document, binding, privateParameter.pointer) },
       ...(current !== undefined
-        ? [{ label: '清除此来源的秘密覆盖', clear: true }] : [])],
-    { title: `${binding.package_id}/${binding.plugin_id}${privateParameter.pointer}`, placeHolder: '原值不会回读；更换会创建新的不可变秘密版本' });
+        ? [{ label: '清除此来源的秘密覆盖', detail: '只删除当前来源覆盖；下层配置与在用私有版本保留。', clear: true }] : [])],
+    { title: `${binding.package_id}/${binding.plugin_id}${privateParameter.pointer}`,
+      placeHolder: '原值不会回读；更换会创建新的不可变秘密版本' });
     if (!action) return;
     if (action.clear && typeof parameterPath.at(-1) === 'number') throw new Error('不能单独清除整个秘密数组项，以免移动其它项的引用；请显式编辑此来源的完整数组');
     let storedValue: unknown;
@@ -277,7 +299,8 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   if ('error' in result) { notification.error(result.error); return; }
   const saved = result.document;
   const state = saved.edit?.state;
-  const detail = `${saved.edit?.source_saved ? '来源已保存' : '来源未确认保存'} · ${state}。${saved.status?.last_error ?? saved.status?.reason ?? ''}`;
+  const detail = `${saved.edit?.source_saved ? '来源已保存' : '来源未确认保存'} · ${state}。${saved.status?.last_error ?? saved.status?.reason ?? ''}`
+    + (privateParameter ? ` ${privateParameterStatus(saved, binding, privateParameter.pointer)}` : '');
   if (state === 'rejected' || state === 'recovery_required') {
     notification.error(detail);
   } else {

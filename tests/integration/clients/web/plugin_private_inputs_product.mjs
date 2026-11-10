@@ -3,12 +3,14 @@ import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
+import { parse as parseJsonc } from 'jsonc-parser';
 
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_PRIVATE_INPUT_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], privateWrites: [], configWrites: [], pluginResults: [],
   cancellations: [], gateway_rebuilt: false, workspace_rebuilt: false, secret_values_absent: false };
 const secretValues = ['gateway-product-private-sentinel', 'workspace-product-private-sentinel',
-  'cancelled-secret-sentinel', 'cancelled-confirm-secret-sentinel', 'structured-private-sentinel'];
+  'cancelled-secret-sentinel', 'cancelled-confirm-secret-sentinel', 'structured-private-sentinel',
+  'gateway-local-private-sentinel'];
 let browser;
 let page;
 let privateWriteCount = 0;
@@ -207,7 +209,7 @@ try {
   };
   await restartFromWorkbench('gateway', 'Gateway 私有输入探针 · gateway-probe');
   await restartFromWorkbench('workspace', '工作区私有输入探针 · workspace-probe');
-  const gatewayRestart = await waitStatus('gateway-probe', undefined, item => item.state === 'ready'
+  let gatewayRestart = await waitStatus('gateway-probe', undefined, item => item.state === 'ready'
     && item.instance.instance_id !== gatewayReady.instance.instance_id);
   const workspaceRestart = await waitStatus('workspace-probe', active.workspace_id, item => item.state === 'ready'
     && item.instance.instance_id !== workspaceReady.instance.instance_id);
@@ -238,6 +240,37 @@ try {
   result.instance_logs_gateway = true;
   await readInstanceLog('workspace', '工作区私有输入探针 · workspace-probe', workspaceRestart, gatewayRestart);
   result.instance_logs_workspace = true;
+
+  result.phase = 'private-source-inheritance';
+  const localSource = 'gateway_local_mutable_override', localSecret = secretValues[5];
+  await setSecret('gateway', 'Gateway 私有输入探针 · gateway-probe', localSource, localSecret, '/service-plugins/private-inputs');
+  const localReady = await waitStatus('gateway-probe', undefined, item => item.state === 'ready'
+    && item.instance.instance_id !== gatewayRestart.instance.instance_id);
+  assert.equal((await call(localReady)).credential_digest, digest(localSecret));
+  const localDocument = await api(`/api/gateway/config/sources/${localSource}`);
+  const localReference = localDocument.effective.plugins.configuration.values['product.private-inputs']['gateway-probe'].credential;
+  assert.notEqual(localReference.version, gatewayReference.version);
+  await openPlugin('gateway', 'Gateway 私有输入探针 · gateway-probe');
+  await view.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
+  await pick(localSource);
+  await expect(quick).toContainText(`来源合并：已配置私有文件引用（来源 ${localSource}）`);
+  await pick('清除此来源的秘密覆盖');
+  await pick('确认保存 Gateway 插件秘密参数'); await expect(quick).not.toBeVisible();
+  const inheritedNotice = page.locator('.notification-list-item')
+    .filter({ hasText: `当前来源 ${localSource}：未配置` }).last();
+  await expect(inheritedNotice).toContainText(`来源合并：已配置私有文件引用（来源 ${sourceGateway}）`);
+  await expect(inheritedNotice).toContainText('当前 active：已配置私有文件引用');
+  gatewayRestart = await waitStatus('gateway-probe', undefined, item => item.state === 'ready'
+    && item.instance.instance_id !== localReady.instance.instance_id);
+  assert.equal((await call(gatewayRestart)).credential_digest, digest(gatewaySecret));
+  const inheritedDocument = await api(`/api/gateway/config/sources/${localSource}`);
+  const lowerDocument = await api(`/api/gateway/config/sources/${sourceGateway}`);
+  assert.equal(parseJsonc(inheritedDocument.jsonc).plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, undefined);
+  assert.deepEqual(inheritedDocument.effective.plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, gatewayReference);
+  assert.deepEqual(parseJsonc(lowerDocument.jsonc).plugins.configuration.values['product.private-inputs']['gateway-probe'].credential, gatewayReference);
+  result.cleared_overlay = { lower: gatewayReference, upper: localReference };
+  result.private_source_inheritance = true;
+
   await openPlugin('gateway', 'Gateway 私有输入探针 · gateway-probe');
   await view.getByRole('button', { name: '停用此范围', exact: true }).click();
   await pick(sourceGateway); await pick('确认保存 Gateway 插件绑定'); await expect(quick).not.toBeVisible();

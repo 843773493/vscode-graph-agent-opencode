@@ -30,6 +30,7 @@ const saveCode = declaration(sourcePath, source, 'saveSourceEdit');
 const sourceOwnerFactory = new Function('gateway',
   `${sourceOwnerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus };`);
 const saveSourceEdit = new Function(`${saveCode}\nreturn saveSourceEdit;`)();
+const privateParameterStatus = new Function('parse', `${declaration(sourcePath, source, 'privateParameterStatus')}\nreturn privateParameterStatus;`)(JSON.parse);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), `${JSON.stringify(fingerprints, null, 2)}\n`));
 
 function fixture({ read, saveError = new HttpRequestError(403, 'Forbidden', 'permission denied after commit', '/config/sources', 'request-save') }) {
@@ -93,4 +94,40 @@ test('原 key 查询失败时同时保留查询错误、原错误和原 key', as
   expect(result.error).toContain('原提交查询也断开');
   expect(result.error).toContain(f.intent.idempotency_key);
   expect(result.error).toContain('不会重放');
+});
+
+test('秘密状态区分当前层、来源合并与active，不回显引用或普通值正文', () => {
+  const binding = { package_id: 'proof.package', plugin_id: 'probe' };
+  const parameters = value => ({ plugins: { configuration: { values: { 'proof.package': { probe: value } } } } });
+  const document = { source_key: 'gateway_local_mutable_override', jsonc: '{}',
+    source_effective: parameters({ credential: { kind: 'plugin_private_file', version: 'private-version-sentinel' } }),
+    effective: parameters({ credential: 'old-active-secret-sentinel' }), active_revision: 2,
+    status: { pending_revision: 3 }, origins: [{ path: '/plugins/configuration/values/proof.package/probe/credential/version',
+      source_key: 'gateway_mutable_override' }] };
+
+  const status = privateParameterStatus(document, binding, '/credential');
+
+  expect(status).toContain('当前来源 gateway_local_mutable_override：未配置');
+  expect(status).toContain('来源合并：已配置私有文件引用（来源 gateway_mutable_override）');
+  expect(status).toContain('当前 active：已配置');
+  expect(status).toContain('active=2 / pending=3');
+  expect(status).not.toContain('private-version-sentinel');
+  expect(status).not.toContain('old-active-secret-sentinel');
+});
+
+test('秘密数组项沿owner的整数组来源显示，转义字段和环境引用保持归属', () => {
+  const binding = { package_id: 'proof.package', plugin_id: 'probe' };
+  const parameters = { plugins: { configuration: { values: { 'proof.package': { probe: {
+    'a/b': [{ '~token': 'env:PLUGIN_SECRET_SENTINEL' }],
+  } } } } } };
+  const status = privateParameterStatus({ source_key: 'upper', jsonc: '{}', source_effective: parameters,
+    effective: {}, active_revision: 1, status: {}, origins: [
+      { path: '/plugins/configuration/values/proof.package/probe/a~1b', source_key: 'lower-array' },
+      { path: '/plugins/configuration/values/proof.package/probe/a~1b-extra', source_key: 'unrelated' },
+    ] }, binding, '/a~1b/0/~0token');
+
+  expect(status).toContain('来源合并：已配置环境引用（来源 lower-array）');
+  expect(status).toContain('当前 active：未配置');
+  expect(status).not.toContain('unrelated');
+  expect(status).not.toContain('PLUGIN_SECRET_SENTINEL');
 });
