@@ -7,6 +7,7 @@ import { parse as parseJsonc } from 'jsonc-parser';
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [],
   privateInputWrites: [], installed: false, uninstalled: false };
+const pluginRequests = [];
 let privateInputRequestCount = 0;
 let sourceWriteRequestCount = 0;
 let browser;
@@ -19,6 +20,7 @@ try {
   page.on('request', request => {
     const url = new URL(request.url());
     if (['http:', 'https:'].includes(url.protocol) && url.origin !== new URL(input.baseUrl).origin) result.externalRequests.push(request.url());
+    if (url.pathname.startsWith('/api/gateway/service-plugins/')) pluginRequests.push(url.pathname);
   });
   page.on('response', async response => {
     const request = response.request();
@@ -233,19 +235,52 @@ try {
   await view.getByLabel('插件管理范围').selectOption('defaults');
   await unbind('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
   await view.getByLabel('插件管理范围').selectOption('gateway');
+  result.phase = 'stopped-plugin-settings';
+  await expect(view).toContainText('Gateway 偏好 · gateway-preference');
+  const settingsRequestStart = pluginRequests.length;
+  const openSettings = async () => {
+    await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('boxteam.settings.pluginParameters'); });
+    await pick('Gateway 插件参数');
+    await pick('Gateway 偏好');
+  };
+  await openSettings();
+  await pick('查看参数 schema');
+  const schemaDialog = page.locator('.monaco-dialog-box[role="dialog"]');
+  await expect(schemaDialog).toContainText('ui.preference-probe/gateway-preference@1.0.0');
+  await expect(schemaDialog).toContainText(active.gateway_id);
+  await expect(schemaDialog).toContainText('writeOnly');
+  await schemaDialog.getByRole('button', { name: 'OK', exact: true }).click();
+  await openSettings();
+  await pick('编辑参数 JSON');
+  await pick('gateway_mutable_override');
+  await pick('编辑此来源的参数');
+  await inputQuick(JSON.stringify({ label: '设置入口独立参数' }));
+  const settingsSave = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
+  await pick('确认保存 Gateway 插件参数');
+  assert.equal((await settingsSave).status(), 200);
+  await expect(quick).not.toBeVisible();
+  assert.deepEqual(pluginRequests.slice(settingsRequestStart), [
+    '/api/gateway/service-plugins/configuration-schemas', '/api/gateway/service-plugins/configuration-schemas',
+  ]);
+  const stoppedSettings = await api('/api/gateway/config/sources/gateway_mutable_override');
+  assert.equal(parseJsonc(stoppedSettings.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');
+  assert(!stoppedSettings.effective.plugins.configuration);
+  result.stoppedSettingsWithoutRuntimeRequests = true;
+  result.phase = 'uninstall';
   const packageRow = view.locator('section').filter({ hasText: 'ui.preference-probe@1.0.0' }).first();
   await packageRow.getByRole('button', { name: '卸载整个包', exact: true }).click();
   await pick('卸载整包');
   await expect(view).toContainText('尚无插件包', { timeout: 30_000 });
   result.uninstalled = true;
   const residual = await api('/api/gateway/config/sources/gateway_mutable_override');
-  assert.equal(parseJsonc(residual.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, 'Gateway 独立参数');
+  assert.equal(parseJsonc(residual.jsonc).plugins.configuration.values['ui.preference-probe']['gateway-preference'].label, '设置入口独立参数');
   assert(!residual.effective.plugins.configuration);
   result.phase = 'mcp-search-entry';
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.search', '@mcp'));
-  const mcpView = page.getByRole('button', { name: 'MCP Servers - MCP gallery not configured Section', exact: true });
+  const mcpView = page.getByRole('button', { name: 'MCP Servers Section', exact: true });
   await expect(mcpView).toBeVisible();
-  await expect(page.getByText("The MCP gallery is not configured. Configure 'chat.mcp.gallery.serviceUrl'.", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('No MCP Servers found.', { exact: true }).first()).toBeVisible();
   await expect(view.getByLabel('插件管理范围')).toBeHidden();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.installedExtensions'));
   await expect(view.getByLabel('插件管理范围')).toBeVisible();

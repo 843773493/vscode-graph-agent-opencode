@@ -8,8 +8,17 @@ import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type Works
 import { workspaceContext } from '../workspaceContext.js';
 import { managementGateway } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
+import { configureServicePlugin } from './pluginConfiguration.js';
 
 export const defaultAgentSourceCommand = 'boxteam.settings.defaultAgentSource';
+
+registerAction2(class extends Action2 {
+  constructor() {
+    super({ id: 'boxteam.settings.pluginParameters', title: { value: '编辑目标插件参数', original: 'Edit Target Plugin Parameters' },
+      category: { value: 'BoxTeam 设置', original: 'BoxTeam Settings' }, f1: true });
+  }
+  run(accessor: ServicesAccessor): Promise<void> { return configureServicePlugin(accessor); }
+});
 
 registerAction2(class extends Action2 {
   constructor() {

@@ -41,6 +41,9 @@ from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
     InstallPluginRequest,
     PluginBinding,
+    PluginConfigurationSchemaDTO,
+    PluginConfigurationSchemasDTO,
+    PluginConfigurationSchemasRequest,
     PluginInventoryResultDTO,
     PluginRuntimeStatusDTO,
     PluginSlotStatusDTO,
@@ -205,6 +208,36 @@ async def write_gateway_private_input(payload: PluginPrivateInputWriteRequest, r
     require_federation_capability(request, auth, "configuration_write")
     response.headers["Cache-Control"] = "no-store"
     return APIResponse(data=reference, request_id=get_request_id(request))
+
+
+@router.post("/api/gateway/service-plugins/configuration-schemas")
+async def configuration_schemas(payload: PluginConfigurationSchemasRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
+) -> APIResponse[PluginConfigurationSchemasDTO]:
+    response = await relay(request, payload, auth)
+    if response is not None:
+        if response.is_error:
+            raise HTTPException(response.status_code, response.json().get("detail"))
+        return APIResponse[PluginConfigurationSchemasDTO].model_validate_json(response.content)
+    require_federation_capability(request, auth, "configuration_read")
+    if payload.workspace_id is not None:
+        try:
+            target = request.app.state.registry.resolve((owner.gateway_id, payload.workspace_id))
+        except LookupError as error:
+            raise HTTPException(409, "配置 schema 所属工作区未登记在当前 Gateway") from error
+        if target.connection_kind != "local":
+            raise HTTPException(409, "配置 schema 必须由工作区所属的原生 Gateway 提供")
+    scope = "workspace" if payload.workspace_id is not None else "gateway"
+    packages = await asyncio.to_thread(owner.packages.inventory)
+    plugins = [PluginConfigurationSchemaDTO(package_id=package.manifest.package_id,
+        package_version=package.manifest.version, plugin_id=plugin.id, name=plugin.name,
+        instance_scope=plugin.instance_scope, configuration_schema=plugin.contributes.configuration)
+        for package in packages for plugin in package.manifest.plugins
+        if plugin.instance_scope == scope and plugin.contributes.configuration is not None]
+    require_federation_capability(request, auth, "configuration_read")
+    return APIResponse(data=PluginConfigurationSchemasDTO(gateway_id=owner.gateway_id,
+        workspace_id=payload.workspace_id, plugins=plugins), request_id=get_request_id(request))
 
 
 @router.post("/api/gateway/service-plugins/inventory")

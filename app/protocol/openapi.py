@@ -47,6 +47,9 @@ from app.schemas.gateway.service_plugin import (
     InstallPluginRequest,
     PluginBinding,
     PluginCommandContribution,
+    PluginConfigurationSchemaDTO,
+    PluginConfigurationSchemasDTO,
+    PluginConfigurationSchemasRequest,
     PluginContributions,
     PluginDebuggerContribution,
     PluginExtensionRequirement,
@@ -202,6 +205,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     for name in (
         "PluginTarget", "InstallPluginRequest", "PluginVersionRequest", "RestartPluginRequest",
         "PluginPrivateInputReference", "PluginPrivateInputWriteRequest",
+        "PluginConfigurationSchemasRequest", "PluginConfigurationSchemasDTO",
         "InstalledPluginPackageDTO", "PluginInventoryResultDTO", "PluginRuntimeStatusDTO",
         "PluginSlotStatusDTO", "PluginUninstallResultDTO",
     )
@@ -276,6 +280,7 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         ServicePluginManifest, PluginPackageManifest, PluginBinding, PluginInstanceStatus, PluginTarget,
         InstallPluginRequest, PluginVersionRequest, RestartPluginRequest,
         PluginPrivateInputReference, PluginPrivateInputWriteRequest,
+        PluginConfigurationSchemasRequest, PluginConfigurationSchemaDTO, PluginConfigurationSchemasDTO,
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
         PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
         PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,

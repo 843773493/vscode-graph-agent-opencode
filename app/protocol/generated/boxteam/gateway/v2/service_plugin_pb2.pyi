@@ -357,6 +357,42 @@ class PluginTarget(_message.Message):
     gateway_connection_id: str
     def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
+class PluginConfigurationSchemasRequest(_message.Message):
+    __slots__ = ("gateway_id", "gateway_connection_id", "workspace_id")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    gateway_connection_id: str
+    workspace_id: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...
+
+class PluginConfigurationSchemaDTO(_message.Message):
+    __slots__ = ("package_id", "package_version", "plugin_id", "name", "instance_scope", "configuration_schema")
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    INSTANCE_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    CONFIGURATION_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    package_id: str
+    package_version: str
+    plugin_id: str
+    name: str
+    instance_scope: str
+    configuration_schema: _struct_pb2.Struct
+    def __init__(self, package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., plugin_id: _Optional[str] = ..., name: _Optional[str] = ..., instance_scope: _Optional[str] = ..., configuration_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class PluginConfigurationSchemasDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "plugins")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    PLUGINS_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    plugins: _containers.RepeatedCompositeFieldContainer[PluginConfigurationSchemaDTO]
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., plugins: _Optional[_Iterable[_Union[PluginConfigurationSchemaDTO, _Mapping]]] = ...) -> None: ...
+
 class PluginPrivateInputReference(_message.Message):
     __slots__ = ("kind", "gateway_id", "workspace_id", "package_id", "plugin_id", "parameter_pointer", "version")
     KIND_FIELD_NUMBER: _ClassVar[int]

@@ -211,6 +211,28 @@ export interface PluginTarget {
   gateway_connection_id?: string | undefined;
 }
 
+/** 已安装的静态配置贡献；读取不要求运行实例，也不制造绑定。 */
+export interface PluginConfigurationSchemasRequest {
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+  workspace_id?: string | undefined;
+}
+
+export interface PluginConfigurationSchemaDTO {
+  package_id: string;
+  package_version: string;
+  plugin_id: string;
+  name: string;
+  instance_scope: string;
+  configuration_schema: { [key: string]: any } | undefined;
+}
+
+export interface PluginConfigurationSchemasDTO {
+  gateway_id: string;
+  workspace_id?: string | undefined;
+  plugins: PluginConfigurationSchemaDTO[];
+}
+
 /** 私有值只进入所属配置 owner 的受限文件；普通配置和回执保存引用。 */
 export interface PluginPrivateInputReference {
   kind: string;
@@ -1625,6 +1647,155 @@ export const PluginTarget: MessageFns<PluginTarget> = {
     const message = createBasePluginTarget();
     message.gateway_id = object.gateway_id ?? "";
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginConfigurationSchemasRequest(): PluginConfigurationSchemasRequest {
+  return { gateway_id: "", gateway_connection_id: undefined, workspace_id: undefined };
+}
+
+export const PluginConfigurationSchemasRequest: MessageFns<PluginConfigurationSchemasRequest> = {
+  fromJSON(object: any): PluginConfigurationSchemasRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+    };
+  },
+
+  toJSON(message: PluginConfigurationSchemasRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginConfigurationSchemasRequest>, I>>(
+    base?: I,
+  ): PluginConfigurationSchemasRequest {
+    return PluginConfigurationSchemasRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginConfigurationSchemasRequest>, I>>(
+    object: I,
+  ): PluginConfigurationSchemasRequest {
+    const message = createBasePluginConfigurationSchemasRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.workspace_id = object.workspace_id ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginConfigurationSchemaDTO(): PluginConfigurationSchemaDTO {
+  return {
+    package_id: "",
+    package_version: "",
+    plugin_id: "",
+    name: "",
+    instance_scope: "",
+    configuration_schema: undefined,
+  };
+}
+
+export const PluginConfigurationSchemaDTO: MessageFns<PluginConfigurationSchemaDTO> = {
+  fromJSON(object: any): PluginConfigurationSchemaDTO {
+    return {
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      instance_scope: isSet(object.instance_scope) ? globalThis.String(object.instance_scope) : "",
+      configuration_schema: isObject(object.configuration_schema) ? object.configuration_schema : undefined,
+    };
+  },
+
+  toJSON(message: PluginConfigurationSchemaDTO): unknown {
+    const obj: any = {};
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.plugin_id !== "") {
+      obj.plugin_id = message.plugin_id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.instance_scope !== "") {
+      obj.instance_scope = message.instance_scope;
+    }
+    if (message.configuration_schema !== undefined) {
+      obj.configuration_schema = message.configuration_schema;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginConfigurationSchemaDTO>, I>>(base?: I): PluginConfigurationSchemaDTO {
+    return PluginConfigurationSchemaDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginConfigurationSchemaDTO>, I>>(object: I): PluginConfigurationSchemaDTO {
+    const message = createBasePluginConfigurationSchemaDTO();
+    message.package_id = object.package_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.plugin_id = object.plugin_id ?? "";
+    message.name = object.name ?? "";
+    message.instance_scope = object.instance_scope ?? "";
+    message.configuration_schema = object.configuration_schema ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginConfigurationSchemasDTO(): PluginConfigurationSchemasDTO {
+  return { gateway_id: "", workspace_id: undefined, plugins: [] };
+}
+
+export const PluginConfigurationSchemasDTO: MessageFns<PluginConfigurationSchemasDTO> = {
+  fromJSON(object: any): PluginConfigurationSchemasDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      plugins: globalThis.Array.isArray(object?.plugins)
+        ? object.plugins.map((e: any) => PluginConfigurationSchemaDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PluginConfigurationSchemasDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.plugins?.length) {
+      obj.plugins = message.plugins.map((e) => PluginConfigurationSchemaDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginConfigurationSchemasDTO>, I>>(base?: I): PluginConfigurationSchemasDTO {
+    return PluginConfigurationSchemasDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginConfigurationSchemasDTO>, I>>(
+    object: I,
+  ): PluginConfigurationSchemasDTO {
+    const message = createBasePluginConfigurationSchemasDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
+    message.plugins = object.plugins?.map((e) => PluginConfigurationSchemaDTO.fromPartial(e)) || [];
     return message;
   },
 };

@@ -205,6 +205,28 @@ message PluginTarget {
   optional string gateway_connection_id = 2;
 }
 
+// 已安装的静态配置贡献；读取不要求运行实例，也不制造绑定。
+message PluginConfigurationSchemasRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  optional string workspace_id = 3;
+}
+
+message PluginConfigurationSchemaDTO {
+  string package_id = 1;
+  string package_version = 2;
+  string plugin_id = 3;
+  string name = 4;
+  string instance_scope = 5;
+  google.protobuf.Struct configuration_schema = 6;
+}
+
+message PluginConfigurationSchemasDTO {
+  string gateway_id = 1;
+  optional string workspace_id = 2;
+  repeated PluginConfigurationSchemaDTO plugins = 3;
+}
+
 // 私有值只进入所属配置 owner 的受限文件；普通配置和回执保存引用。
 message PluginPrivateInputReference {
   string kind = 1;

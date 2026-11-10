@@ -914,6 +914,101 @@ export declare type PluginTarget = Message<"boxteam.gateway.v2.PluginTarget"> & 
 export declare const PluginTargetSchema: GenMessage<PluginTarget>;
 
 /**
+ * 已安装的静态配置贡献；读取不要求运行实例，也不制造绑定。
+ *
+ * @generated from message boxteam.gateway.v2.PluginConfigurationSchemasRequest
+ */
+export declare type PluginConfigurationSchemasRequest = Message<"boxteam.gateway.v2.PluginConfigurationSchemasRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 2;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string workspace_id = 3;
+   */
+  workspaceId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginConfigurationSchemasRequest.
+ * Use `create(PluginConfigurationSchemasRequestSchema)` to create a new message.
+ */
+export declare const PluginConfigurationSchemasRequestSchema: GenMessage<PluginConfigurationSchemasRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginConfigurationSchemaDTO
+ */
+export declare type PluginConfigurationSchemaDTO = Message<"boxteam.gateway.v2.PluginConfigurationSchemaDTO"> & {
+  /**
+   * @generated from field: string package_id = 1;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string package_version = 2;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: string plugin_id = 3;
+   */
+  pluginId: string;
+
+  /**
+   * @generated from field: string name = 4;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string instance_scope = 5;
+   */
+  instanceScope: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct configuration_schema = 6;
+   */
+  configurationSchema?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginConfigurationSchemaDTO.
+ * Use `create(PluginConfigurationSchemaDTOSchema)` to create a new message.
+ */
+export declare const PluginConfigurationSchemaDTOSchema: GenMessage<PluginConfigurationSchemaDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginConfigurationSchemasDTO
+ */
+export declare type PluginConfigurationSchemasDTO = Message<"boxteam.gateway.v2.PluginConfigurationSchemasDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 2;
+   */
+  workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginConfigurationSchemaDTO plugins = 3;
+   */
+  plugins: PluginConfigurationSchemaDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginConfigurationSchemasDTO.
+ * Use `create(PluginConfigurationSchemasDTOSchema)` to create a new message.
+ */
+export declare const PluginConfigurationSchemasDTOSchema: GenMessage<PluginConfigurationSchemasDTO>;
+
+/**
  * 私有值只进入所属配置 owner 的受限文件；普通配置和回执保存引用。
  *
  * @generated from message boxteam.gateway.v2.PluginPrivateInputReference

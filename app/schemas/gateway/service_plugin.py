@@ -33,6 +33,25 @@ class PluginTarget(_PluginValue):
     gateway_connection_id: str | None = None
 
 
+class PluginConfigurationSchemasRequest(PluginTarget):
+    workspace_id: CanonicalWorkspaceId | None = None
+
+
+class PluginConfigurationSchemaDTO(_PluginValue):
+    package_id: str = Field(min_length=1)
+    package_version: str = Field(min_length=1)
+    plugin_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    instance_scope: PluginScope
+    configuration_schema: dict[str, JsonValue]
+
+
+class PluginConfigurationSchemasDTO(_PluginValue):
+    gateway_id: str = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId | None = None
+    plugins: list[PluginConfigurationSchemaDTO]
+
+
 class InstallPluginRequest(PluginTarget):
     """从明确目标机器的原生绝对路径导入本地包或显式开发目录。"""
 
@@ -369,6 +388,9 @@ __all__ = [
     "InstalledPluginPackageDTO",
     "PluginBinding",
     "PluginCommandContribution",
+    "PluginConfigurationSchemaDTO",
+    "PluginConfigurationSchemasDTO",
+    "PluginConfigurationSchemasRequest",
     "PluginContributions",
     "PluginDebuggerContribution",
     "PluginExtensionRequirement",
