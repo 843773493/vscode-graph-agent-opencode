@@ -65,13 +65,14 @@ def test_sealed_call_timeout_rejects_unknown_supervision_fields(workspace_root):
         parse_mcp_server_configs({"supervision": {"timeout": 1}}, workspace_root=workspace_root)
 
 
-def test_plugin_config_uses_gateway_service_reference(workspace_root: Path) -> None:
+@pytest.mark.parametrize("workspace_id", [None, "00000000-0000-4000-8000-000000000001"])
+def test_plugin_config_uses_gateway_service_reference(workspace_root: Path, workspace_id: str | None) -> None:
     server, = parse_mcp_server_configs({"servers": {"mini": {
         "enabled": True,
         "transport": "plugin",
         "service": {
             "gateway_id": "gateway_00000000000000000000000000000001",
-            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            **({"workspace_id": workspace_id} if workspace_id else {}),
             "package_id": "boxteam.mcp-stdio",
             "package_version": "1.0.0",
             "plugin_id": "stdio",
@@ -82,6 +83,7 @@ def test_plugin_config_uses_gateway_service_reference(workspace_root: Path) -> N
     assert server.connection is None
     assert server.service is not None
     assert server.service.package_version == "1.0.0"
+    assert server.service.workspace_id == workspace_id
 
 
 def test_parse_config_rejects_missing_environment_variable(

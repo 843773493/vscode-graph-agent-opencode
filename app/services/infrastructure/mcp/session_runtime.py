@@ -9,11 +9,13 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeAlias
 
+import anyio
 import httpx
 from langchain_core.tools import BaseTool
 
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.workspace_identity import read_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
@@ -124,6 +126,8 @@ async def production_mcp_session_factory(
 ) -> AsyncIterator[McpServerSessionPort]:
     auth = oauth_provider
     route_identity: dict[str, str] = {}
+    route_invalidated = asyncio.Event()
+    route_error: McpPluginInstanceChanged | None = None
     if server.oauth is not None and auth is None:
         if workspace_root is None:
             raise ValueError("MCP OAuth session 必须显式指定所属工作区")
@@ -131,8 +135,11 @@ async def production_mcp_session_factory(
 
     if server.transport == "plugin":
         service_ref = server.service
-        if service_ref is None or config_service is None:
+        if service_ref is None or config_service is None or workspace_root is None:
             raise ValueError("MCP 插件服务连接缺少原 Workspace 配置 owner 或服务引用")
+        caller_workspace_id = read_workspace_id(workspace_root)
+        if service_ref.workspace_id is not None and service_ref.workspace_id != caller_workspace_id:
+            raise ValueError("MCP 插件实例不属于当前工作区")
         url = GatewayTransportConnection(
             gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"),
             config_service=config_service
@@ -140,13 +147,14 @@ async def production_mcp_session_factory(
         url += (
             f"/api/gateway/service-plugins/{service_ref.package_id}/{service_ref.plugin_id}"
             f"/services/{service_ref.service_id}/?package_version={service_ref.package_version}"
-            f"&workspace_id={service_ref.workspace_id}"
         )
+        if service_ref.workspace_id is not None:
+            url += f"&workspace_id={service_ref.workspace_id}"
         proxy_url = url
         session_url = url
         headers = {
             "X-Local-Token": get_gateway_local_token(),
-            "X-BoxTeam-Workspace-Id": service_ref.workspace_id,
+            "X-BoxTeam-Workspace-Id": caller_workspace_id,
             "X-BoxTeam-Gateway-Id": service_ref.gateway_id,
             TARGET_GATEWAY_ID_HEADER: service_ref.gateway_id,
         }
@@ -156,17 +164,27 @@ async def production_mcp_session_factory(
                 request.headers["X-BoxTeam-Plugin-Instance-Id"] = instance_id
 
         async def capture_instance(response: httpx.Response) -> None:
+            nonlocal route_error
+            detail = None
             if not response.is_success:
-                return
-            if response.headers.get("X-BoxTeam-Plugin-Gateway-Id") != service_ref.gateway_id:
-                raise McpPluginInstanceChanged("Gateway MCP 插件响应来自不同目标")
-            for key, header in (("instance_id", "X-BoxTeam-Plugin-Instance-Id"),
-                                ("package_digest", "X-BoxTeam-Plugin-Package-Digest")):
-                value = response.headers.get(header)
-                if not value:
-                    raise ValueError(f"Gateway MCP 插件响应缺少实际来源身份: {header}")
-                if route_identity.setdefault(key, value) != value:
-                    raise McpPluginInstanceChanged("Gateway MCP 请求改投了不同插件实例或包")
+                if route_identity and response.status_code in {401, 403, 404, 409}:
+                    detail = f"Gateway MCP 原插件连接已失效: HTTP {response.status_code}"
+            elif response.headers.get("X-BoxTeam-Plugin-Gateway-Id") != service_ref.gateway_id:
+                detail = "Gateway MCP 插件响应来自不同目标"
+            else:
+                for key, header in (("instance_id", "X-BoxTeam-Plugin-Instance-Id"),
+                                    ("package_digest", "X-BoxTeam-Plugin-Package-Digest")):
+                    value = response.headers.get(header)
+                    if not value:
+                        detail = f"Gateway MCP 插件响应缺少实际来源身份: {header}"
+                        break
+                    if route_identity.setdefault(key, value) != value:
+                        detail = "Gateway MCP 请求改投了不同插件实例或包"
+                        break
+            if detail is not None:
+                route_error = McpPluginInstanceChanged(detail)
+                route_invalidated.set()
+                raise route_error
 
         client = httpx.AsyncClient(
             headers=headers,
@@ -222,19 +240,32 @@ async def production_mcp_session_factory(
             on_tools_list_changed()
 
     transport_failure: BaseException | None = None
+
+    async def watch_plugin_route() -> None:
+        # SDK 会吞掉后台 GET 重连异常；沿同一响应判失效，结束原 session，不能继续伪报 ready。
+        await route_invalidated.wait()
+        assert route_error is not None
+        raise route_error
+
     async with client:
         try:
-            async with (
-                streamable_http_client(session_url, http_client=client) as (read, write, _),
-                CancellableMcpClientSession(read, write, message_handler=message_handler) as session,
-            ):
-                await session.initialize()
-                source = None
+            async with anyio.create_task_group() as group:
                 if server.service is not None:
-                    source = PluginToolSource.from_metadata({
-                        **server.service.model_dump(), **route_identity, "contract_version": 1,
-                    })
-                yield _McpServerSession(session, source)
+                    group.start_soon(watch_plugin_route)
+                try:
+                    async with (
+                        streamable_http_client(session_url, http_client=client) as (read, write, _),
+                        CancellableMcpClientSession(read, write, message_handler=message_handler) as session,
+                    ):
+                        await session.initialize()
+                        source = None
+                        if server.service is not None:
+                            source = PluginToolSource.from_metadata({
+                                **server.service.model_dump(), **route_identity, "contract_version": 1,
+                            })
+                        yield _McpServerSession(session, source)
+                finally:
+                    group.cancel_scope.cancel()
         except* (httpx.HTTPError, McpPluginInstanceChanged) as error:
             # SDK task group 已排空；还须等外层 client 正常关闭，才能确认本地释放。
             # 混合异常的其余原因仍直接抛出，不把真实清理失败归为通信失败。

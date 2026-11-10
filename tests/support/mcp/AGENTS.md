@@ -6,6 +6,7 @@
 mcp/
 ├── configuration.py   写入隔离工作区 MCP 配置
 ├── http_endpoint.py   通过真实 SDK 启动共享 Streamable HTTP schema Server
+├── gateway_plugin.py  测试包中的多会话 HTTP MCP 入口，复用 SDK 和相同响应资产
 ├── bridge_endpoint.py 运行正式 stdio 插件桥，供协议及实际断线验证
 └── session_doubles.py MCP session、工厂和 relist 控制替身
 ```

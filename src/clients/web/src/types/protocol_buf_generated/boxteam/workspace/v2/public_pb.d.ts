@@ -2697,9 +2697,11 @@ export declare type McpServiceReferenceDTO = Message<"boxteam.workspace.v2.McpSe
   gatewayId: string;
 
   /**
-   * @generated from field: string workspace_id = 2;
+   * 实例绑定范围；缺省为 Gateway 实例，调用工作区仍由原请求上下文交付。
+   *
+   * @generated from field: optional string workspace_id = 2;
    */
-  workspaceId: string;
+  workspaceId?: string | undefined;
 
   /**
    * @generated from field: string package_id = 3;

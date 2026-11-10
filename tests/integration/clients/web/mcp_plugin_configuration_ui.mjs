@@ -104,7 +104,7 @@ try {
   const saved = JSON.parse(result.writes[1].jsonc).mcp.servers;
   assert.deepEqual(Object.keys(saved).sort(), ['ui-http', 'ui-plugin']);
   assert.equal(saved['ui-plugin'].transport, 'plugin');
-  assert.equal(saved['ui-plugin'].service.workspace_id, fixture.workspaceId);
+  assert.equal(saved['ui-plugin'].service.workspace_id, fixture.scope === 'workspace' ? fixture.workspaceId : undefined);
   assert.equal(saved['ui-http'].url, fixture.endpoint);
   result.phase = 'original-directory';
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('boxteam.mcp.focus', { preserveFocus: true }));

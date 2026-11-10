@@ -65,6 +65,7 @@
 
 - [x] 5.1 使 stdio MCP 由自有插件持有管道和实际子进程，通过标准 Streamable HTTP 暴露；测试初始化、完整目录、通知、进度、取消、结构化／媒体及已声明双向能力，未支持能力如实报告。
 - [x] 5.2 将 Backend 原 MCP client、目录 owner、OAuth、执行资格和资源 lease 接到 Gateway；保留每工作区唯一逻辑连接，区分插件 instance_id 与 client connection generation，不建立第二目录或工具历史。
+  - 2026-11-10 Gateway 范围 MCP 切片：服务引用允许省略 workspace_id，以区分 Gateway 唯一插件实例与工作区实例；实际调用工作区始终由 Backend 稳定身份交付，经原生 Gateway 最终核准，不从服务引用冒充调用者。两个工作区保留各自 MCP session／connection generation、工具来源与 canonical 历史，关闭一侧连接不关闭另一侧；原插件路由失效沿已有 HTTP 响应结束原 session，不新增探活。正式 Workbench 的 Add 同时列出两种范围并保存精确引用。workspace_id 从必填变为可省略属于本轮新版合同变化，Buf breaking 对 HEAD 明确报告 presence 变化，不保留开发中间态兼容；生成一致性通过。精确候选 68 项定向检查、140 份转换源码类型和两项真实 Workbench 场景通过，原 stdio／HTTP／重启生命周期回归通过；双工作区完整调用与关闭验证、源码指纹及失败原件见 `out/tests/temp/2026/11/10/gateway_mcp_scope/artifacts/verification.json`。真实 Relay、Windows／SSH／Electron 及5.5／5.6其余范围尚未验，本片不勾完宽项。
 - [x] 5.3 迁齐 Backend stdio／managed_launch、旧 Registry variant／私有输入和动态 VSIX Provider 的配置、协议与消费者；输入改为 service binding 和原 private-input owner 的认证交付，删除旧 SDK 创建链和 fallback。
 - [x] 5.4 外部原生 HTTP MCP 经相同 Gateway 路由使用，不额外启动包装服务；核精确端点、工作区 OAuth、原错误与调用身份，不让服务范围变成凭据共享。
 - [ ] 5.5 沿唯一Backend原journal／claim→MCP候选准备→必要Gateway单插件生命周期→完整目录验证→active promotion／publication链迁齐；进程ready不发布半目录，破坏前失败保留可保持旧运行，停旧后失败记录实际阶段并结束，清理仅本次拥有资源，Gateway无第二候选状态机、自动回滚或续完候选。

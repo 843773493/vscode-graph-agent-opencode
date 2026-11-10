@@ -120,7 +120,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
       const source = this.data.service;
       line('插件服务', `${source.package_id}@${source.package_version} · ${source.plugin_id} · ${source.service_id}`);
       line('Gateway', source.gateway_id);
-      line('工作区', source.workspace_id);
+      line('插件实例范围', source.workspace_id ? `工作区 ${source.workspace_id}` : 'Gateway');
     }
     if (this.data?.unavailable_reason) line('来源不可用', this.data.unavailable_reason);
     if (this.operation) {

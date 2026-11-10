@@ -136,7 +136,7 @@ async function pluginService(target: ManagementTarget, workspace: WorkspaceChoic
   context.check();
   const ready = new Set(runtime.plugins.flatMap(slot => {
     const binding = slot.binding;
-    return slot.state === 'ready' && binding?.workspace_id === workspace.workspace_id
+    return slot.state === 'ready' && binding && (!binding.workspace_id || binding.workspace_id === workspace.workspace_id)
       ? [JSON.stringify([binding.package_id, binding.package_version, binding.plugin_id])]
       : [];
   }));
@@ -144,22 +144,23 @@ async function pluginService(target: ManagementTarget, workspace: WorkspaceChoic
     const manifest = pkg.manifest;
     if (!manifest) return [];
     return manifest.plugins.flatMap(plugin => {
-      if (plugin.instance_scope !== 'workspace' || !ready.has(JSON.stringify([manifest.package_id, manifest.version, plugin.id]))) return [];
+      if (!ready.has(JSON.stringify([manifest.package_id, manifest.version, plugin.id]))) return [];
       return (plugin.contributes?.services ?? []).filter(service => service.service_type === 'mcp' && service.protocol === 'streamable-http')
         .map(service => ({ packageId: manifest.package_id, version: manifest.version,
-          pluginId: plugin.id, pluginName: plugin.name, serviceId: service.service_id }));
+          pluginId: plugin.id, pluginName: plugin.name, serviceId: service.service_id, scope: plugin.instance_scope }));
     });
   });
   if (!choices.length) return;
   const selected = await context.quickInput.pick(choices.map(service => ({
     label: `${service.pluginName} · ${service.serviceId}`,
-    description: `${service.packageId}@${service.version} · ${service.pluginId}`,
+    description: `${service.packageId}@${service.version} · ${service.pluginId} · ${service.scope}`,
     service,
   })), { title: '选择已就绪的 MCP 插件服务', placeHolder: `${workspace.name} · ${target.gateway_id}` }, context.token);
   context.check();
   if (!selected) return;
   return { transport: 'plugin', service: {
-    gateway_id: target.gateway_id, workspace_id: workspace.workspace_id, package_id: selected.service.packageId,
+    gateway_id: target.gateway_id, ...(selected.service.scope === 'workspace' ? { workspace_id: workspace.workspace_id } : {}),
+    package_id: selected.service.packageId,
     package_version: selected.service.version, plugin_id: selected.service.pluginId, service_id: selected.service.serviceId,
   } };
 }

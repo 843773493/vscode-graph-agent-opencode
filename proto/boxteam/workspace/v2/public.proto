@@ -614,7 +614,8 @@ message WorkspaceTraceSearchResultsDTO {
 // 工作区 MCP 逻辑 Server 使用稳定的插件服务身份；运行实例由 Backend 连接生命周期冻结。
 message McpServiceReferenceDTO {
   string gateway_id = 1;
-  string workspace_id = 2;
+  // 实例绑定范围；缺省为 Gateway 实例，调用工作区仍由原请求上下文交付。
+  optional string workspace_id = 2;
   string package_id = 3;
   string package_version = 4;
   string plugin_id = 5;

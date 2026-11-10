@@ -1286,9 +1286,9 @@ class McpCatalogOwner:
 
     @staticmethod
     def _plugin_unavailable_reason(server: McpServerConfig, bindings: Sequence[PluginBinding]) -> str | None:
-        """沿同次配置发布的精确绑定判准入；配置存在不代表插件已经开启。"""
+        """Workspace 绑定随本域发布；Gateway 绑定由原生服务路由核准，不复制到这里。"""
         service = server.service
-        if service is None:
+        if service is None or service.workspace_id is None:
             return None
         binding = next((item for item in bindings
                         if (item.package_id, item.plugin_id, item.workspace_id)

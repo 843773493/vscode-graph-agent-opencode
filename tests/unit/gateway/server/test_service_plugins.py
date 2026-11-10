@@ -129,6 +129,31 @@ async def test_native_service_publishes_installed_package_identity(
     assert response.headers["X-BoxTeam-Plugin-Gateway-Id"] == owner.gateway_id
 
 
+@pytest.mark.parametrize(("workspace_id", "binding_workspace", "expected_status"), [
+    ("00000000-0000-4000-8000-000000000001", None, 502),
+    ("invalid", None, 422),
+    ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", 422),
+])
+async def test_gateway_service_keeps_caller_workspace_separate_from_instance(
+    plugin_proxy: tuple[FastAPI, list[httpx.Request]], monkeypatch: pytest.MonkeyPatch,
+    workspace_id: str, binding_workspace: str | None, expected_status: int,
+) -> None:
+    app, calls = plugin_proxy
+    registry = app.state.registry
+    monkeypatch.setattr(registry, "resolve", lambda key: WorkspaceTarget(gateway_id=registry.gateway_id,
+        workspace_id=key[1], name="caller", root_path="/caller", backend_url="", connection_kind="local"))
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/gateway/service-plugins/probe.tools/probe/instances/original/services/echo/read",
+            params={"package_version": "1.0.0", **({"workspace_id": binding_workspace} if binding_workspace else {})},
+            headers={"X-BoxTeam-Workspace-Id": workspace_id})
+    assert response.status_code == expected_status
+    if expected_status == 502:
+        assert calls[0].headers["X-BoxTeam-Workspace-Id"] == workspace_id
+    else:
+        assert calls == []
+
+
 @pytest.mark.parametrize("instance_id", ["", "original", "wrong-instance"])
 async def test_relay_preserves_native_service_identity(instance_id: str) -> None:
     request = Request({"type": "http", "headers": []})

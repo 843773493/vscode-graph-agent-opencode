@@ -647,10 +647,10 @@
     "mcpServiceReference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["gateway_id", "workspace_id", "package_id", "package_version", "plugin_id", "service_id"],
+      "required": ["gateway_id", "package_id", "package_version", "plugin_id", "service_id"],
       "properties": {
         "gateway_id": { "type": "string", "pattern": "^gateway_[0-9a-f]{32}$" },
-        "workspace_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "workspace_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
         "package_id": { "type": "string", "minLength": 1 },
         "package_version": { "type": "string", "minLength": 1 },
         "plugin_id": { "type": "string", "minLength": 1 },

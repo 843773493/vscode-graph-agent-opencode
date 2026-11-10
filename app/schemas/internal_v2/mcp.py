@@ -51,7 +51,7 @@ class McpServiceReferenceDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     gateway_id: CanonicalGatewayId
-    workspace_id: CanonicalWorkspaceId
+    workspace_id: CanonicalWorkspaceId | None = None
     package_id: str = Field(min_length=1)
     package_version: str = Field(min_length=1)
     plugin_id: str = Field(min_length=1)

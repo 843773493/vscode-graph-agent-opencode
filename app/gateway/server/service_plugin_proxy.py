@@ -20,6 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import TypeAdapter
 from starlette.requests import HTTPConnection
 from starlette.types import Message, Receive, Scope, Send
 from starlette.websockets import WebSocketState
@@ -61,6 +62,7 @@ SERVICE_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/instances/
 
 BINDING_DEBUG_RUNTIME_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/debug-runtime"
 INSTANCE_DEBUG_RUNTIME_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/instances/{instance_id}/debug-runtime"
+_workspace_id_adapter = TypeAdapter(CanonicalWorkspaceId)
 
 @dataclass(frozen=True, slots=True)
 class _ServiceRoute:
@@ -113,7 +115,12 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
         query = [(key, value) for key, value in connection.query_params.multi_items()
                  if key not in {"token", "target_gateway_id"}]
         headers = {key: value for key, value in connection.headers.items()
-                   if key.lower() in {"content-type", "content-encoding", "accept", "last-event-id", "mcp-session-id", "mcp-protocol-version", "x-boxteam-plugin-instance-id"}}
+                   if key.lower() in {"content-type", "content-encoding", "accept", "last-event-id", "mcp-session-id", "mcp-protocol-version", "x-boxteam-plugin-instance-id", "x-boxteam-workspace-id"}}
+        caller_workspace_id = connection.headers.get("X-BoxTeam-Workspace-Id")
+        if caller_workspace_id is not None:
+            _workspace_id_adapter.validate_python(caller_workspace_id)
+            if binding.workspace_id is not None and caller_workspace_id != binding.workspace_id:
+                raise ValueError("插件实例与请求工作区不一致")
         header_instance = connection.headers.get("X-BoxTeam-Plugin-Instance-Id")
         if instance_id is not None and header_instance is not None and instance_id != header_instance:
             raise ValueError("插件实例路径与请求头身份冲突")
@@ -135,8 +142,9 @@ def _route(connection: HTTPConnection, auth: GatewayAuthContext, binding: Plugin
                 registry.remove_commit_observer(check_remote)
             return
         # 工作区插件与 Backend 路由换代分离；Backend 单独重启不能退役原服务连接。
-        if binding.workspace_id is not None:
-            target = registry.resolve((gateway_id, binding.workspace_id))
+        workspace_id = binding.workspace_id or caller_workspace_id
+        if workspace_id is not None:
+            target = registry.resolve((gateway_id, workspace_id))
             if target.connection_kind != "local":
                 raise LookupError("插件服务不属于原生工作区")
         owner = connection.app.state.service_plugins

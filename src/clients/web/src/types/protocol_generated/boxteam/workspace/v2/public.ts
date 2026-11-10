@@ -622,7 +622,8 @@ export interface WorkspaceTraceSearchResultsDTO {
 /** 工作区 MCP 逻辑 Server 使用稳定的插件服务身份；运行实例由 Backend 连接生命周期冻结。 */
 export interface McpServiceReferenceDTO {
   gateway_id: string;
-  workspace_id: string;
+  /** 实例绑定范围；缺省为 Gateway 实例，调用工作区仍由原请求上下文交付。 */
+  workspace_id?: string | undefined;
   package_id: string;
   package_version: string;
   plugin_id: string;
@@ -7606,14 +7607,21 @@ export const WorkspaceTraceSearchResultsDTO: MessageFns<WorkspaceTraceSearchResu
 };
 
 function createBaseMcpServiceReferenceDTO(): McpServiceReferenceDTO {
-  return { gateway_id: "", workspace_id: "", package_id: "", package_version: "", plugin_id: "", service_id: "" };
+  return {
+    gateway_id: "",
+    workspace_id: undefined,
+    package_id: "",
+    package_version: "",
+    plugin_id: "",
+    service_id: "",
+  };
 }
 
 export const McpServiceReferenceDTO: MessageFns<McpServiceReferenceDTO> = {
   fromJSON(object: any): McpServiceReferenceDTO {
     return {
       gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
-      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
       package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
       package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
       plugin_id: isSet(object.plugin_id) ? globalThis.String(object.plugin_id) : "",
@@ -7626,7 +7634,7 @@ export const McpServiceReferenceDTO: MessageFns<McpServiceReferenceDTO> = {
     if (message.gateway_id !== "") {
       obj.gateway_id = message.gateway_id;
     }
-    if (message.workspace_id !== "") {
+    if (message.workspace_id !== undefined) {
       obj.workspace_id = message.workspace_id;
     }
     if (message.package_id !== "") {
@@ -7650,7 +7658,7 @@ export const McpServiceReferenceDTO: MessageFns<McpServiceReferenceDTO> = {
   fromPartial<I extends Exact<DeepPartial<McpServiceReferenceDTO>, I>>(object: I): McpServiceReferenceDTO {
     const message = createBaseMcpServiceReferenceDTO();
     message.gateway_id = object.gateway_id ?? "";
-    message.workspace_id = object.workspace_id ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
     message.package_id = object.package_id ?? "";
     message.package_version = object.package_version ?? "";
     message.plugin_id = object.plugin_id ?? "";

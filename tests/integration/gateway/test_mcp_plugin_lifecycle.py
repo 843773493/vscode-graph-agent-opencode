@@ -41,6 +41,10 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.trace import get_trace_payload
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 SKILL_NAME = "mcp-plugin-probe-guide"
 
@@ -63,6 +67,13 @@ async def mcp_plugin_case(
     integration_workspace_config_path: str,
 ) -> AsyncIterator[McpPluginCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    # 此装具每项使用独立 Home，业务库也必须一并重建，不能继承上一参数化场景的 active 快照。
+    prepare_default_test_workspace(workspace_root=Path(integration_workspace_root_path),
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=Path.cwd() / "resources/skills")
+    install_test_workspace_config(workspace_root=Path(integration_workspace_root_path),
+        config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     ports = integration_port_block_for_file(Path(request.node.path))
     gateway_url = f"http://127.0.0.1:{ports.port(21)}"
     config_path = Path(integration_workspace_config_path)
