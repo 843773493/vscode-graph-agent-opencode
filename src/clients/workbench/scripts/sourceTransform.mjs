@@ -5,7 +5,7 @@ import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
 import { extensionBrowserSourcePaths, transformExtensionBrowser } from './extensions/extensionBrowserTransform.mjs';
-import { extensionManagementSourcePaths, transformExtensionManagement } from './extensions/extensionManagementTransform.mjs';
+import { extensionManagementSourcePaths, transformExtensionManagement, pruneUnusedImportsAndConstants } from './extensions/extensionManagementTransform.mjs';
 import { extensionDocumentSourcePaths, transformExtensionDocuments } from './extensions/extensionDocumentTransform.mjs';
 import { extensionTabsSourcePaths, transformExtensionTabs } from './extensions/extensionTabsTransform.mjs';
 import { extensionLanguageFeaturesSourcePaths, transformExtensionLanguageFeatures } from './extensions/extensionLanguageFeaturesTransform.mjs';
@@ -19,6 +19,7 @@ import { settingsEditorSourcePaths, transformSettingsEditor } from './settingsEd
 import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './settingsTreeScopeTransform.mjs';
 import { pluginDebugSourcePaths, transformPluginDebug } from './pluginDebugTransform.mjs';
 import { pluginCommandSourcePaths, transformPluginCommands } from './pluginCommandTransform.mjs';
+import { legacyCustomizationPluginSourcePaths, transformLegacyCustomizationPlugins } from './legacyCustomizationPluginTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -37,6 +38,9 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/contrib/search/browser/searchView.ts',
   'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
   'src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts',
+  'src/vs/workbench/contrib/chat/browser/chat.view.contribution.ts',
+  'src/vs/workbench/contrib/chat/browser/chatSlashCommands.ts',
+  'src/vs/workbench/contrib/chat/browser/actions/chatPluginActions.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/services/textfile/common/textEditorService.ts',
@@ -73,6 +77,7 @@ export const transformedSourcePaths = [...new Set([
   ...testingExtensionSourcePaths,
   ...onboardingKeymapSourcePaths,
   ...chatExtensionCompletionSourcePaths,
+  ...legacyCustomizationPluginSourcePaths,
   ...settingsEditorScopeSourcePaths,
   ...settingsEditorSourcePaths,
   ...settingsTreeScopeSourcePaths,
@@ -94,13 +99,13 @@ export function sourceTransform(root, productConfiguration, extensions) {
   };
   // 当前工作台不支持外部 VSIX 键位包，产品配置不再注入其 Gallery 标识。
   delete product.onboardingKeymaps;
+  const replacements = {
+    '/*BUILD->INSERT_PRODUCT_CONFIGURATION*/': JSON.stringify(product).slice(1, -1),
+    '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
+  };
   return async function transformSource(path, source) {
     // 严格文本锚点使用统一行尾，不改写固定上游的检出原件。
     let contents = source.replace(/\r\n/g, '\n');
-    const replacements = {
-      '/*BUILD->INSERT_PRODUCT_CONFIGURATION*/': JSON.stringify(product).slice(1, -1),
-      '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
-    };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
     contents = transformExtensionBrowser(root, path, contents, replaceOnce);
     contents = transformExtensionManagement(root, path, contents, replaceOnce);
@@ -112,6 +117,7 @@ export function sourceTransform(root, productConfiguration, extensions) {
     contents = transformTestingExtensions(root, path, contents, replaceOnce);
     contents = transformOnboardingKeymaps(root, path, contents, replaceOnce);
     contents = transformChatExtensionCompletion(root, path, contents);
+    contents = transformLegacyCustomizationPlugins(root, path, contents, replaceOnce);
     contents = transformFileDialog(root, path, contents, replaceOnce);
     contents = transformSettingsEditor(root, path, contents, replaceOnce);
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
@@ -132,6 +138,32 @@ export function sourceTransform(root, productConfiguration, extensions) {
       ]) {
         contents = replaceOnce(contents, `${registration}\n`, '');
       }
+      for (const registration of [
+        "import { AgentPluginCommandsContribution } from './agentPluginCommands.js';\n",
+        "import { AgentPluginEditor } from './agentPluginEditor/agentPluginEditor.js';\n",
+        "import { AgentPluginEditorInput } from './agentPluginEditor/agentPluginEditorInput.js';\n",
+        "import { AgentPluginRecommendations } from './claudePluginRecommendations.js';\n",
+        "import { PluginAutoUpdate } from './pluginAutoUpdate.js';\n",
+        "import { PluginUrlHandler } from './pluginUrlHandler.js';\n",
+      ]) contents = replaceOnce(contents, registration, '');
+      for (const registration of [
+        'registerWorkbenchContribution2(PluginUrlHandler.ID, PluginUrlHandler, WorkbenchPhase.BlockRestore);\n',
+        'registerWorkbenchContribution2(AgentPluginRecommendations.ID, AgentPluginRecommendations, WorkbenchPhase.Eventually);\n',
+        'registerWorkbenchContribution2(AgentPluginCommandsContribution.ID, AgentPluginCommandsContribution, WorkbenchPhase.AfterRestored);\n',
+        'registerWorkbenchContribution2(PluginAutoUpdate.ID, PluginAutoUpdate, WorkbenchPhase.Eventually);\n',
+      ]) contents = replaceOnce(contents, registration, '');
+      contents = pruneUnusedImportsAndConstants(path, contents);
+      const editorRegistration = 'Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(\n\tEditorPaneDescriptor.create(\n\t\tAgentPluginEditor,\n\t\tAgentPluginEditor.ID,\n\t\tnls.localize(\'agentPlugin\', "Agent Plugin")\n\t),\n\t[\n\t\tnew SyncDescriptor(AgentPluginEditorInput)\n\t]\n);\n';
+      contents = replaceOnce(contents, editorRegistration, '');
+      contents = pruneUnusedImportsAndConstants(path, contents);
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chat.view.contribution.ts')) {
+      contents = '';
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chatSlashCommands.ts')) {
+      contents = contents.replace(/\n\t\tthis\._store\.add\(slashCommandService\.registerSlashCommand\(\{\n\t\t\tcommand: 'plugins',[\s\S]*?\n\t\t\}\)\);/, '');
+      contents = contents.replace("import { ManagePluginsAction } from './actions/chatPluginActions.js';\n", '');
+      contents = pruneUnusedImportsAndConstants(path, contents);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts')) {
       contents = `import { Disposable } from '../../../../../base/common/lifecycle.js';
