@@ -181,11 +181,17 @@ class _ServiceResponse(StreamingResponse):
         super().__init__(body, status_code=response.status_code,
             headers=filter_hop_by_hop_headers((key, value) for key, value in response.headers.items()
                 if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS | {
-                    "set-cookie", "content-length", "content-encoding"}))
-        if route.remote and (response.headers.get("X-BoxTeam-Plugin-Instance-Id") != route.instance_id
-            or response.headers.get("X-BoxTeam-Plugin-Gateway-Id") != route.gateway_id):
-            raise ValueError("远端插件响应不属于原实例")
-        if route.instance_id:
+                    "set-cookie", "content-length", "content-encoding",
+                    "x-boxteam-plugin-instance-id", "x-boxteam-plugin-gateway-id"}))
+        if route.remote and response.is_success:
+            remote_instance = response.headers.get("X-BoxTeam-Plugin-Instance-Id")
+            remote_gateway = response.headers.get("X-BoxTeam-Plugin-Gateway-Id")
+            if (not remote_instance or not remote_gateway or remote_instance != route.instance_id
+                or remote_gateway != route.gateway_id):
+                raise ValueError("远端插件服务未返回有效的原始实例身份")
+            self.headers["X-BoxTeam-Plugin-Instance-Id"] = remote_instance
+            self.headers["X-BoxTeam-Plugin-Gateway-Id"] = remote_gateway
+        elif not route.remote and route.instance_id:
             self.headers["X-BoxTeam-Plugin-Instance-Id"] = route.instance_id
             self.headers["X-BoxTeam-Plugin-Gateway-Id"] = route.gateway_id
         self.request, self.auth, self.route, self.body = request, auth, route, body
