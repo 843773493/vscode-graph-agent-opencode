@@ -98,7 +98,6 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
 
     restarted_instance = psutil.Process(current["instance"]["process_id"])
     restarted_children = restarted_instance.children(recursive=True)
-    # TODO(Windows): 深层测试安装目录使 psutil 原生 DLL 加载报路径过长；尚未完成同场景验收。
     case.restart_gateway()
     _, alive = await asyncio.to_thread(
         psutil.wait_procs, [restarted_instance, *restarted_children], timeout=5,

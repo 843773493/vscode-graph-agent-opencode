@@ -53,7 +53,7 @@ app/runtime/
 - 懒加载：需要重依赖的模块只在运行时真正使用时导入，不要提到模块顶层。
 - Windows文件系统的pywin32依赖只在`windows_fs.py`函数执行时加载；目录句柄与ACL错误保留公共文件系统的OSError子类及Windows错误码，不回退到外部权限命令或吞掉查询失败。
 - `native_file_stat.py`只补 Python 标准库未暴露的 Linux 创建时间；ctypes 在调用时加载，statx 错误保留原 errno，明确沿固定 libuv 的已核实传统 stat 分支，不构造另一套文件 I/O 层。
-- 日志的 Windows 文件身份由 `file_identity` 从实际描述符读取原生卷序列号与文件索引；Python 日志生产者和消费者统一经 `logging_contract` 使用该表示，与 Node 的 bigint fstat 一致，不混用 Python 64位卷标和 Node 路径 stat 的 device。
+- 日志的 Windows 文件身份由 `file_identity` 从实际描述符读取原生卷序列号与文件索引；Python 日志生产者和消费者统一经 `app.runtime.log_file_identity` 使用该表示，与 Node 的 bigint fstat 一致，不混用 Python 64位卷标和 Node 路径 stat 的 device。
 - `windows_process.py` 只适配通用子进程边界的长驻 Process／管道：原线程挂入 Job 前保持 suspended，失败须终止并等待原进程、释放原句柄；不承担原生命令监督器的期限／内存预算或 MCP 业务。pywin32 仅在方法执行时加载。
 - `windows_ipc.py` 仅适配当前用户受保护ACL、拒绝远程客户端的单实例字节管道；asyncio持有原句柄和流控，不增加线程、TCP回退或RPC编码。CPython私有IOCP接点限定本模块并明确标记升级复验；取消须覆盖首次调度前并等待listener结清。
 - 失败必须显式抛出包含上下文的异常，禁止静默降级。

@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from os import PathLike
+from pathlib import Path
 from typing import Any, TypeAlias, cast
 from uuid import uuid4
 
@@ -31,6 +32,10 @@ from mcp.shared.message import ServerMessageMetadata, SessionMessage
 from mcp.types import CONNECTION_CLOSED, METHOD_NOT_FOUND
 from pydantic import ValidationError
 
+from app.runtime.log_file_identity import (
+    runtime_log_file_identity,
+    runtime_log_path_identity,
+)
 from app.runtime.plugin_observation import plugin_observation_router
 
 
@@ -563,11 +568,10 @@ def create_app() -> FastAPI:
         if not isinstance(sink, dict) or set(sink) != fields or sink["role"] != "service-plugin":
             raise RuntimeError("受管进程日志去向非法")
         expected = (sink["device"], sink["inode"])
-        descriptor_ids = [os.fstat(1), os.fstat(2)]
-        if any((str(value.st_dev), str(value.st_ino)) != expected for value in descriptor_ids):
+        descriptor_ids = [runtime_log_file_identity(descriptor) for descriptor in (1, 2)]
+        if any(value != expected for value in descriptor_ids):
             raise RuntimeError("受管进程日志描述符与冻结去向不一致")
-        path_stat = os.stat(sink["path"])
-        if (str(path_stat.st_dev), str(path_stat.st_ino)) != expected:
+        if runtime_log_path_identity(Path(sink["path"])) != expected:
             raise RuntimeError("受管进程日志文件与冻结去向不一致")
         return {**identity, "status": "ready", "process_id": os.getpid(),
                 "capabilities": ["status", "shutdown", "observation"], "log_sink": sink}

@@ -115,7 +115,8 @@ export async function packMcpStdio({ projectRoot, output, target, uvExecutable, 
     files.push([manifestPath, "plugin.jsonc"]);
     for (const source of ["app/__init__.py", "app/core/__init__.py", "app/core/runtime_observation.py",
       "app/schemas/__init__.py", "app/schemas/runtime_observation.py",
-      "app/runtime/plugin_observation.py"]) {
+      "app/runtime/log_file_identity.py", "app/runtime/plugin_observation.py",
+      "app/runtime/windows_fs.py"]) {
       files.push([path.join(projectRoot, source), source]);
     }
     await writeArchive(output, files);

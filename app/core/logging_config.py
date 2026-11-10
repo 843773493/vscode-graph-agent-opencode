@@ -15,10 +15,12 @@ from app.core.identifier import create_uuid_hex
 from app.core.logging_contract import (
     RuntimeLogContract,
     load_runtime_log_contract,
+)
+from app.core.trace_middleware import get_current_request_id
+from app.runtime.log_file_identity import (
     runtime_log_file_identity,
     runtime_log_path_identity,
 )
-from app.core.trace_middleware import get_current_request_id
 
 APPLICATION_LOG_HANDLER_NAME = "boxteam-application"
 _RUNTIME_INSTANCE_ID = create_uuid_hex(namespace="runtime-logging")

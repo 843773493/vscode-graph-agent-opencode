@@ -41,6 +41,7 @@ from app.gateway.runtime.workspace_process import (
     _local_child_environment,
     resolve_python_executable,
 )
+from app.runtime.windows_fs import native_process_path
 from app.schemas.gateway.diagnostics import PluginRuntimeObservationDTO
 from app.schemas.gateway.plugin_commands import (
     PluginCommandPublication,
@@ -503,13 +504,17 @@ class GatewayPluginRuntime:
         entrypoint = slot.declaration.entrypoint
         assert entrypoint is not None
         if slot.declaration.runtime == "python":
-            executable = str(python_executable)
+            executable = (
+                native_process_path(python_executable) if os.name == "nt" else str(python_executable)
+            )
             site_packages = self.packages.python_site_packages(
                 slot.binding.package_id, slot.binding.package_version, plugin_id=slot.binding.plugin_id,
             )
             environment.pop("PYTHONPATH", None)
             if site_packages is not None:
-                environment["PYTHONPATH"] = str(site_packages)
+                environment["PYTHONPATH"] = (
+                    native_process_path(site_packages) if os.name == "nt" else str(site_packages)
+                )
             environment["PYTHONNOUSERSITE"] = "1"
         else:
             node_executable = os.environ.get("BOXTEAM_NODE_BIN")
@@ -519,7 +524,10 @@ class GatewayPluginRuntime:
             environment.pop("NODE_PATH", None)
         log_file = self.logs.open("service-plugin", instance_id)
         slot.log_id = runtime_log_id(self.logs.path_for("service-plugin", instance_id))
-        process = _spawn_logged_process([executable, str(root / entrypoint[0]), *entrypoint[1:]],
+        script_path = root / entrypoint[0]
+        if slot.declaration.runtime == "python" and os.name == "nt":
+            script_path = Path(native_process_path(script_path))
+        process = _spawn_logged_process([executable, str(script_path), *entrypoint[1:]],
             log_file=log_file, cwd=working_directory, env=environment, detached=True)
         del environment["BOXTEAM_PLUGIN_PARAMETERS"]
         slot.process = ManagedProcess(process, log_file)

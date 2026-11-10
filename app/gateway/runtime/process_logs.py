@@ -19,12 +19,14 @@ from app.core.file_permissions import restrict_private_path_access
 from app.core.logging_contract import (
     RuntimeLogContract,
     load_runtime_log_contract,
-    runtime_log_file_identity,
-    runtime_log_path_identity,
 )
 from app.gateway.runtime.process_groups import (
     _capture_posix_group_leader_start_marker,
     _posix_group_is_alive,
+)
+from app.runtime.log_file_identity import (
+    runtime_log_file_identity,
+    runtime_log_path_identity,
 )
 
 logger = logging.getLogger(__name__)

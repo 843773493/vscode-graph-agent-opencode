@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from app.core.atomic_fs import native_io_path
-from app.core.logging_contract import (
+from app.runtime import windows_fs
+from app.runtime.log_file_identity import (
     runtime_log_file_identity,
     runtime_log_path_identity,
 )
-from app.runtime import windows_fs
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows pywin32")
 
@@ -67,6 +67,17 @@ def test_long_process_directory_without_short_names_is_explicitly_rejected(
         windows_fs.process_working_directory(directory)
     assert raised.value.errno == errno.ENAMETOOLONG
     assert raised.value.filename == str(directory)
+
+
+def test_native_process_path_keeps_the_same_long_directory(tmp_path: Path) -> None:
+    directory = tmp_path
+    while len(str(directory)) < 220:
+        directory /= "long-directory"
+    directory.mkdir(parents=True)
+
+    shortened = windows_fs.native_process_path(directory)
+
+    assert Path(shortened).samefile(directory)
 
 
 def test_exclusive_rename_keeps_both_files_on_conflict(tmp_path: Path) -> None:

@@ -3,30 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.env import get_project_root
 from app.core.path_utils import get_boxteam_home
-from app.runtime import windows_fs
-
-
-def runtime_log_file_identity(descriptor: int) -> tuple[str, str]:
-    """日志所有者和消费者统一核对实际文件描述符的设备与文件身份。"""
-    if sys.platform == "win32":
-        return windows_fs.file_identity(descriptor)
-    identity = os.fstat(descriptor)
-    return str(identity.st_dev), str(identity.st_ino)
-
-
-def runtime_log_path_identity(path: Path) -> tuple[str, str]:
-    """打开当前路径再核实际句柄，避免不同运行时的路径 stat 表示不一致。"""
-    with path.open("rb") as stream:
-        return runtime_log_file_identity(stream.fileno())
 
 
 @dataclass(frozen=True, slots=True)

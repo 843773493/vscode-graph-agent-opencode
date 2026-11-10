@@ -19,12 +19,22 @@ def process_working_directory(directory: str | Path | None) -> str | None:
     value = os.path.abspath(directory)
     if len(value.encode("utf-16-le")) < 520:
         return value
+    return _native_short_path(value, "Windows 进程工作目录超出 MAX_PATH，且没有可用的短路径")
+
+
+def native_process_path(path: str | Path) -> str:
+    """将现存路径交给进程时使用其 Windows 短名，避免后续 DLL/模块名越过 MAX_PATH。"""
+    return _native_short_path(path, "Windows 进程路径超出 MAX_PATH，且没有可用的短路径")
+
+
+def _native_short_path(path: str | Path, error_message: str) -> str:
+    value = os.path.abspath(path)
     import win32api
 
     with _native_errors(Path(value)):
         shortened = win32api.GetShortPathName(value)
     if len(shortened.encode("utf-16-le")) >= 520:
-        raise OSError(errno.ENAMETOOLONG, "Windows 进程工作目录超出 MAX_PATH，且没有可用的短路径", value)
+        raise OSError(errno.ENAMETOOLONG, error_message, value)
     return shortened
 
 
