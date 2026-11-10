@@ -13,6 +13,7 @@ import httpx
 import psutil
 import pytest
 
+from app.schemas.gateway.service_plugin import PluginSlotStatusDTO
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import PYTHON_PLUGIN
 from tests.support.plugin_package import install_plugin, native_plugin_target
@@ -73,11 +74,11 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
         close_gateway_process(gateway)
 
 
-def _package(path: Path, *, package_id: str, mode: str = "") -> Path:
+def _package(path: Path, *, package_id: str, version: str = "1.0.0", mode: str = "") -> Path:
     manifest = {
         "manifest_version": 1,
         "package_id": package_id,
-        "version": "1.0.0",
+        "version": version,
         "name": "Workspace 生命周期探针",
         "target": native_plugin_target("python"),
         "extension_contract_version": 1,
@@ -104,7 +105,7 @@ def _package(path: Path, *, package_id: str, mode: str = "") -> Path:
 
 
 def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
-    workspace_plugin_case,
+    workspace_plugin_case, request: pytest.FixtureRequest,
 ) -> None:
     client, context, workspaces = workspace_plugin_case
     evidence: list[dict[str, object]] = []
@@ -150,8 +151,8 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         return next((item for item in data["plugins"]
             if item["binding"].get("workspace_id") == workspace_id and item["binding"]["plugin_id"] == "probe"), None)
 
-    def binding_for(package_id: str, *, enabled: bool = True) -> dict[str, object]:
-        return {"package_id": package_id, "package_version": "1.0.0", "plugin_id": "probe", "enabled": enabled}
+    def binding_for(package_id: str, *, enabled: bool = True, version: str = "1.0.0") -> dict[str, object]:
+        return {"package_id": package_id, "package_version": version, "plugin_id": "probe", "enabled": enabled}
 
     def write_binding(workspace_id: str, entries: list[dict[str, object]], key: str,
                       parameters: dict[str, object] | None = None, expected_status: int = 200) -> None:
@@ -182,8 +183,15 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
             return
         assert response.json()["data"]["edit"]["state"] == "active"
 
-    def wait_binding(workspace_id: str, state: str) -> dict[str, object]:
-        data = _wait_for(lambda value: (item := status_for(value, workspace_id)) is not None and item["state"] == state)
+    def wait_binding(workspace_id: str, state: str, *, version: str | None = None) -> dict[str, object]:
+        def matches(value: dict[str, object]) -> bool:
+            item = status_for(value, workspace_id)
+            if item is None:
+                return False
+            status = PluginSlotStatusDTO.model_validate(item)
+            return status.state == state and (version is None or status.binding.package_version == version)
+
+        data = _wait_for(matches)
         item = status_for(data, workspace_id)
         assert item is not None
         return item
@@ -206,16 +214,20 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         pytest.fail(f"Workspace 插件进程没有退出: pid={process_id}")
 
     def call(item: dict[str, object]) -> dict[str, object]:
-        binding, instance = item["binding"], item["instance"]
-        path = (f"/api/gateway/service-plugins/{binding['package_id']}/probe/instances/"
-            f"{instance['instance_id']}/services/echo/value")
-        return exchange("GET", path + "?package_version=1.0.0&workspace_id=" + binding["workspace_id"]).raise_for_status().json()
+        return call_response(item).raise_for_status().json()
 
     def call_response(item: dict[str, object]) -> httpx.Response:
-        binding, instance = item["binding"], item["instance"]
-        path = (f"/api/gateway/service-plugins/{binding['package_id']}/probe/instances/"
-            f"{instance['instance_id']}/services/echo/value")
-        return exchange("GET", path + "?package_version=1.0.0&workspace_id=" + binding["workspace_id"])
+        status = PluginSlotStatusDTO.model_validate(item)
+        binding, instance = status.binding, status.instance
+        assert instance is not None and binding.workspace_id is not None
+        path = (f"/api/gateway/service-plugins/{binding.package_id}/probe/instances/"
+            f"{instance.instance_id}/services/echo/value")
+        return exchange("GET", path + f"?package_version={binding.package_version}&workspace_id={binding.workspace_id}")
+
+    def uninstall(version: str) -> httpx.Response:
+        return exchange("POST", "/api/gateway/service-plugins/uninstall", {
+            "gateway_id": target_gateway, "package_id": "probe.tools", "package_version": version,
+        })
 
     try:
         # 两个 Backend 都由真实 Gateway 管理入口创建并启动。
@@ -307,14 +319,35 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         assert call(ready_a)["parameters"] == {"label": "A changed", "credentialValue": "<private-present>"}
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
 
-        write_binding(workspace_a_id, [binding_for("probe.tools", enabled=False)], "workspace-a-plugin-disable")
+        # 整包更新不改变任一绑定；显式切 A 后，B 继续使用同一旧实例及旧版本。
+        updated_archive = _package(context.artifacts_dir / "probe.tools-v2.zip", package_id="probe.tools", version="2.0.0")
+        install_plugin(lambda path, body: exchange("POST", path, body),
+            gateway_id=target_gateway, path=str(updated_archive),
+            expected_digest=hashlib.sha256(updated_archive.read_bytes()).hexdigest())
+        assert wait_binding(workspace_a_id, "ready")["instance"] == ready_a["instance"]
+        assert wait_binding(workspace_b_id, "ready")["instance"] == ready_b["instance"]
+        assert call(ready_a)["version"] == call(ready_b)["version"] == "1.0.0"
+        write_binding(workspace_a_id, [binding_for("probe.tools", version="2.0.0")], "workspace-a-plugin-switch")
+        switched_a = wait_binding(workspace_a_id, "ready", version="2.0.0")
+        assert PluginSlotStatusDTO.model_validate(switched_a).binding.package_version == "2.0.0"
+        assert call(switched_a)["version"] == "2.0.0"
+        assert call(switched_a)["credential_digest"] == hashlib.sha256(private_value.encode()).hexdigest()
+        assert_process_exited(ready_a["instance"]["process_id"])
+        assert call_response(ready_a).status_code == 409
+        assert wait_binding(workspace_b_id, "ready")["instance"] == ready_b["instance"]
+        assert call(ready_b)["version"] == "1.0.0"
+        ready_a = switched_a
+
+        write_binding(workspace_a_id, [binding_for("probe.tools", enabled=False, version="2.0.0")], "workspace-a-plugin-disable")
         assert wait_binding(workspace_a_id, "stopped")["instance"] is None
         assert_process_exited(ready_a["instance"]["process_id"])
+        blocked = uninstall("2.0.0")
+        assert blocked.status_code == 409 and f"workspace-configuration:{workspace_a_id}:probe" in blocked.text, blocked.text
         still_b = wait_binding(workspace_b_id, "ready")
         assert still_b["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
         assert call(still_b)["pid"] == ready_b["instance"]["process_id"]
 
-        write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-reenable")
+        write_binding(workspace_a_id, [binding_for("probe.tools", version="2.0.0")], "workspace-a-plugin-reenable")
         enabled_a = wait_binding(workspace_a_id, "ready")
         blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {
             "gateway_id": target_gateway, "package_id": "probe.tools", "package_version": "1.0.0",
@@ -324,6 +357,9 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         exchange("POST", f"/api/gateway/workspaces/{workspace_a_id}/runtime/stop", timeout=150).raise_for_status()
         assert wait_workspace_state(workspace_a_id, "stopped")["state"] == "stopped"
         assert_process_exited(enabled_a["instance"]["process_id"])
+        blocked = uninstall("2.0.0")
+        assert blocked.status_code == 409 and f"workspace-configuration:{workspace_a_id}:probe" in blocked.text, blocked.text
+        assert wait_workspace_state(workspace_a_id, "stopped")["state"] == "stopped", "卸载检查不能启动已停止工作区"
         assert wait_binding(workspace_b_id, "ready")["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
         exchange("POST", f"/api/gateway/workspaces/{workspace_a_id}/runtime/start", timeout=75).raise_for_status()
         restored_a = wait_binding(workspace_a_id, "ready")
@@ -336,6 +372,27 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         final_b = wait_binding(workspace_b_id, "ready")
         assert final_b["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
         assert call(final_b)["pid"] == ready_b["instance"]["process_id"]
+
+        packages = context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/probe.tools"
+        uninstall("2.0.0").raise_for_status()
+        assert not (packages / "2.0.0").exists() and (packages / "1.0.0").is_dir()
+        assert call(final_b)["version"] == "1.0.0"
+        write_binding(workspace_b_id, [binding_for("probe.tools", enabled=False)], "workspace-b-plugin-disable")
+        assert wait_binding(workspace_b_id, "stopped")["instance"] is None
+        final_b_status = PluginSlotStatusDTO.model_validate(ready_b)
+        assert final_b_status.instance is not None
+        assert_process_exited(final_b_status.instance.process_id)
+        blocked = uninstall("1.0.0")
+        assert blocked.status_code == 409 and f"workspace-configuration:{workspace_b_id}:probe" in blocked.text, blocked.text
+        write_binding(workspace_b_id, [], "workspace-b-plugin-unbind")
+        _wait_for(lambda value: status_for(value, workspace_b_id) is None)
+        uninstall("1.0.0").raise_for_status()
+        assert not (packages / "1.0.0").exists()
+        inventory = exchange("POST", "/api/gateway/service-plugins/inventory", {"gateway_id": target_gateway}).raise_for_status().json()["data"]
+        assert not any(item["manifest"]["package_id"] == "probe.tools" for item in inventory["packages"])
+        assert private_file.is_file() and json.loads(private_file.read_text(encoding="utf-8"))["value"] == private_value
+        assert private_reference["version"] in exchange("GET", source_path).raise_for_status().text
+        assert all(workspace.is_dir() for workspace in workspaces), "卸载只删除包版本，用户配置、秘密及工作区保留"
     finally:
         (context.artifacts_dir / "workspace-plugin-flow.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
