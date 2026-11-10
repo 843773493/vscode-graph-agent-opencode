@@ -13,6 +13,7 @@ import httpx
 import psutil
 import pytest
 
+from app.schemas.gateway.service_plugin import PluginSlotStatusDTO
 from tests.harness.python.run_context import TestRunContext
 from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.gateway import (
@@ -310,8 +311,26 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert running["state"] == "ready"
         stop_failed = bind(entries("4.0.0", python_enabled=False))["python"]
         assert stop_failed["state"] == "failed" and "shutdown" in stop_failed["error"]
+        stop_status = PluginSlotStatusDTO.model_validate(stop_failed)
+        assert stop_status.binding.enabled is False, "停止失败不能把已提交关闭显示为开启"
+        assert stop_status.instance == PluginSlotStatusDTO.model_validate(running).instance, "失败诊断须保留原实际实例回执"
         assert not psutil.pid_exists(running["instance"]["process_id"]), "管理响应失败也须核实实际进程退出"
-        assert bind(entries("4.0.0", python_enabled=False))["python"]["state"] == "failed", "相同配置不能洗掉停止失败回执"
+        unchanged = PluginSlotStatusDTO.model_validate(bind(entries("4.0.0", python_enabled=False))["python"])
+        assert unchanged.state == "failed" and unchanged.error == stop_status.error, "相同配置不能重试或洗掉停止失败回执"
+        running_again = PluginSlotStatusDTO.model_validate(bind(entries("4.0.0"))["python"])
+        assert running_again.instance is not None
+        replacement_failed = PluginSlotStatusDTO.model_validate(bind(entries("1.0.0"))["python"])
+        assert replacement_failed.state == "failed" and "shutdown" in str(replacement_failed.error)
+        assert replacement_failed.binding.package_version == "1.0.0", "替换失败仍须展示已提交的期望版本"
+        assert replacement_failed.instance == running_again.instance, "旧版本实际回执不能改写成新版本"
+        assert echo(running_again.model_dump(mode="json")).status_code == 409 and skill_versions() == {"node": "1.0.0"}
+        assert bind(entries("1.0.0"))["python"]["state"] == "failed", "无关配置提交不能继续未完成的换版"
+        explicitly_restarted = exchange("POST", "/api/gateway/service-plugins/restart", {**target,
+            "package_id": "probe.tools", "package_version": "1.0.0", "plugin_id": "python",
+            "revision": replacement_failed.revision}).raise_for_status().json()["data"]
+        assert explicitly_restarted["state"] == "ready"
+        assert echo(explicitly_restarted).raise_for_status().json()["version"] == "1.0.0"
+        assert not psutil.pid_exists(running_again.instance.process_id)
         assert bind([]) == {}, "解除全部绑定后不得继续展示幽灵插件"
         assert skill_versions() == {}
         for version in ("1.0.0", "2.0.0", "3.0.0", "4.0.0", "5.0.0"):

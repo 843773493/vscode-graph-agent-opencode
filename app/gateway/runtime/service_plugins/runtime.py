@@ -10,7 +10,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
@@ -117,6 +117,7 @@ class PluginSlot:
     parameters: dict[str, JsonValue] = field(default_factory=dict)
     parameters_revision: str = field(init=False)
     process: ManagedProcess | AdoptedManagedProcess | None = None
+    process_version: str | None = None
     receipt: PluginInstanceStatus | None = None
     base_url: str | None = None
     token: str | None = None
@@ -392,10 +393,13 @@ class GatewayPluginRuntime:
                 try:
                     await self._stop(key, previous)
                 except Exception as error:
-                    previous.state, previous.error = "failed", str(error)
+                    # 期望已提交，实际句柄／回执仍属于旧实例；同一输入不得再次尝试替换。
+                    slot = replace(previous, binding=binding, revision=revision, declaration=declaration,
+                        parameters=values, state="failed", error=str(error), commands={})
+                    self.slots[key] = slot
                     logger.exception("插件旧实例停止失败，拒绝并行启动: slot=%s", key)
                     self._publish()
-                    return previous.describe()
+                    return slot.describe()
             slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values)
             self.slots[key] = slot
             try:
@@ -506,6 +510,7 @@ class GatewayPluginRuntime:
             log_file=log_file, cwd=working_directory, env=environment, detached=True)
         del environment["BOXTEAM_PLUGIN_PARAMETERS"]
         slot.process = ManagedProcess(process, log_file)
+        slot.process_version = slot.binding.package_version
         deadline = time.monotonic() + 10
         try:
             while True:
@@ -564,6 +569,7 @@ class GatewayPluginRuntime:
         ownership = self.logs.adopt("service-plugin", receipt.instance_id,
             {"pid": receipt.process_id, "log_sink": receipt.log_sink})
         slot.process = AdoptedManagedProcess(receipt.process_id, ownership)
+        slot.process_version = record.binding.package_version
         slot.receipt, slot.base_url, slot.token, slot.state = receipt, record.base_url, record.token, "ready"
         self._watch_exit(slot)
         return True
@@ -640,6 +646,7 @@ class GatewayPluginRuntime:
             # 原 close 在优雅退出失败后还会核强制回收；两段共享剩余期限。
             await run_sync_shielded(slot.process.close, timeout_seconds=max(0, (deadline - time.monotonic()) / 2))
             slot.process = None
+            slot.process_version = None
             if shutdown_error is not None:
                 self._record(key).unlink(missing_ok=True)
                 slot.state = "stopped"
@@ -669,8 +676,10 @@ class GatewayPluginRuntime:
         return [
             f"runtime:{slot.binding.plugin_id}:{slot.binding.workspace_id or 'gateway'}"
             for slot in self.slots.values()
-            if slot.binding.package_id == package_id and slot.binding.package_version == version
-            and (slot.binding.enabled or slot.process is not None)]
+            if (slot.binding.package_id == package_id and slot.binding.package_version == version
+                and slot.binding.enabled)
+            or (slot.process is not None and slot.binding.package_id == package_id
+                and slot.process_version == version)]
 
     async def close(self, *, preserve: bool = False) -> None:
         errors: list[Exception] = []
