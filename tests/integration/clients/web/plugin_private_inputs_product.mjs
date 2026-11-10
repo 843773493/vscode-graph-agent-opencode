@@ -8,7 +8,7 @@ const input = JSON.parse(process.env.BOXTEAM_PLUGIN_PRIVATE_INPUT_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], privateWrites: [], configWrites: [], pluginResults: [],
   cancellations: [], gateway_rebuilt: false, workspace_rebuilt: false, secret_values_absent: false };
 const secretValues = ['gateway-product-private-sentinel', 'workspace-product-private-sentinel',
-  'cancelled-secret-sentinel', 'cancelled-confirm-secret-sentinel'];
+  'cancelled-secret-sentinel', 'cancelled-confirm-secret-sentinel', 'structured-private-sentinel'];
 let browser;
 let page;
 let privateWriteCount = 0;
@@ -81,14 +81,16 @@ try {
     await view.getByRole('button', { name: '启用此范围', exact: true }).click();
     await pick(source); await pick(confirm); await expect(quick).not.toBeVisible();
   };
-  const openSecret = async (scope, name, source) => {
+  const openSecret = async (scope, name, source, pointer) => {
     await openPlugin(scope, name);
-    await view.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
-    await pick(source); await pick('设置秘密参数');
+    await view.getByRole('button', { name: pointer ? '按位置管理秘密参数' : '管理秘密参数 /credential', exact: true }).click();
+    await pick(source);
+    if (pointer) { await expect(quick).toContainText('选择秘密参数位置'); await inputQuick(pointer); }
+    await pick('设置秘密参数');
     const field = quick.locator('input[type="password"]'); await expect(field).toHaveCount(1); return field;
   };
-  const setSecret = async (scope, name, source, value, pathSuffix) => {
-    const field = await openSecret(scope, name, source); await field.fill(value); await field.press('Enter');
+  const setSecret = async (scope, name, source, value, pathSuffix, pointer) => {
+    const field = await openSecret(scope, name, source, pointer); await field.fill(pointer ? JSON.stringify(value) : value); await field.press('Enter');
     const privatePromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith(pathSuffix));
     const configPromise = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname.endsWith(`/config/sources/${source}`));
     await pick('确认保存秘密');
@@ -139,6 +141,31 @@ try {
   result.secret_values_absent = true;
   result.references = { gateway: gatewayReference, workspace: workspaceReference };
 
+  result.phase = 'structured-secret';
+  await openPlugin('workspace', '工作区私有输入探针 · workspace-probe');
+  await view.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
+  await pick(sourceWorkspace); await pick('编辑此来源的参数');
+  const parameterInput = quick.locator('input').first();
+  const localParameters = JSON.parse(await parameterInput.inputValue());
+  localParameters.entries = [{ label: 'first' }, { label: 'untouched' }];
+  await inputQuick(JSON.stringify(localParameters));
+  await pick('确认保存工作区插件参数'); await expect(quick).not.toBeVisible();
+  const structuredSecret = secretValues[4], structuredPointer = '/entries/0/credential';
+  await setSecret('workspace', '工作区私有输入探针 · workspace-probe', sourceWorkspace,
+    structuredSecret, '/config/plugin-private-inputs', structuredPointer);
+  const structuredDocument = await api(`/api/v1/workspaces/${active.workspace_id}/config/sources/${sourceWorkspace}`,
+    { headers: { 'X-BoxTeam-Workspace-Id': active.workspace_id } });
+  const structured = structuredDocument.effective.plugins.configuration.values['product.private-inputs']['workspace-probe'];
+  assert.deepEqual(structured.credential, workspaceReference);
+  assert.equal(structured.entries.length, 2); assert.deepEqual(structured.entries[1], { label: 'untouched' });
+  assert.equal(structured.entries[0].credential.kind, 'plugin_private_file');
+  assert.equal(structured.entries[0].credential.parameter_pointer, structuredPointer);
+  assert(!JSON.stringify(structuredDocument).includes(structuredSecret));
+  assert.equal(result.privateWrites.at(-1).parameter_pointer, structuredPointer);
+  assert(result.privateWrites.every(item => item.status === 200 && !item.returnedValue));
+  assert(result.configWrites.every(item => !item.containsSecret));
+  result.structured_private_input = true;
+
   const gatewayTarget = { gateway_id: health.gateway_id };
   const status = (data, plugin, workspaceId) => data.plugins.find(item => item.binding.plugin_id === plugin
     && (workspaceId ? item.binding.workspace_id === workspaceId : item.binding.workspace_id == null));
@@ -162,6 +189,7 @@ try {
   const gatewayValue = await call(gatewayReady), workspaceValue = await call(workspaceReady, active.workspace_id);
   const digest = value => requireDigest(value);
   assert.equal(gatewayValue.credential_digest, digest(gatewaySecret)); assert.equal(workspaceValue.credential_digest, digest(workspaceSecret));
+  assert.equal(workspaceValue.nested_digest, digest(structuredSecret)); assert.deepEqual(workspaceValue.entry_labels, ['first', 'untouched']);
   result.pluginResults.push({ scope: 'gateway', credential_present: gatewayValue.credential_present, secretReturned: JSON.stringify(gatewayValue).includes(gatewaySecret) });
   result.pluginResults.push({ scope: 'workspace', credential_present: workspaceValue.credential_present, secretReturned: JSON.stringify(workspaceValue).includes(workspaceSecret) });
   assert(result.pluginResults.every(item => item.credential_present && !item.secretReturned));
@@ -187,6 +215,7 @@ try {
   assert.notEqual(workspaceRestart.instance.instance_id, workspaceReady.instance.instance_id);
   const gatewayAfterRestart = await call(gatewayRestart), workspaceAfterRestart = await call(workspaceRestart, active.workspace_id);
   assert.equal(gatewayAfterRestart.credential_digest, digest(gatewaySecret)); assert.equal(workspaceAfterRestart.credential_digest, digest(workspaceSecret));
+  assert.equal(workspaceAfterRestart.nested_digest, digest(structuredSecret));
   const readInstanceLog = async (scope, name, instance, otherInstance, loggedInstance = instance.instance) => {
     await openPlugin(scope, name);
     const request = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/diagnostics');
@@ -217,6 +246,18 @@ try {
   assert.equal(stopped.instance, null);
   await readInstanceLog('gateway', 'Gateway 私有输入探针 · gateway-probe', stopped, workspaceRestart, gatewayRestart.instance);
   result.stopped_instance_logs = true;
+  await openPlugin('workspace', '工作区私有输入探针 · workspace-probe');
+  await view.getByRole('button', { name: '按位置管理秘密参数', exact: true }).click();
+  await pick(sourceWorkspace); await expect(quick).toContainText('选择秘密参数位置');
+  await inputQuick(structuredPointer); await pick('清除此来源的秘密覆盖');
+  await pick('确认保存工作区插件秘密参数'); await expect(quick).not.toBeVisible();
+  const cleared = await waitStatus('workspace-probe', active.workspace_id, item => item.state === 'ready'
+    && item.instance.instance_id !== workspaceRestart.instance.instance_id);
+  const clearedValue = await call(cleared, active.workspace_id);
+  assert.equal(clearedValue.nested_digest, digest('')); assert.deepEqual(clearedValue.entry_labels, ['first', 'untouched']);
+  assert.equal(clearedValue.credential_digest, digest(workspaceSecret));
+  assert(result.configWrites.every(item => !item.containsSecret));
+  result.structured_private_cleared = true;
   result.gateway_rebuilt = true; result.workspace_rebuilt = true; result.phase = 'complete';
   await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {

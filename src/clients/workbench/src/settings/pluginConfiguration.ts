@@ -52,6 +52,27 @@ function bindingsAt(value: unknown, path: string[]): PluginBinding[] {
   return current as PluginBinding[];
 }
 
+function privateParameterLocation(document: ConfigDocument, binding: ConfigurationBinding, pointer: string): { path: (string | number)[]; current: unknown } {
+  if (!/^(?:\/(?:[^~\/]|~[01])*)+$/.test(pointer)) throw new Error('请输入有效 JSON Pointer，例如 /accounts/0/token');
+  const parts = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
+    ...pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
+  const path: (string | number)[] = [];
+  let current: unknown = parse(document.jsonc), effective: unknown = document.effective;
+  for (const part of parts) {
+    if (Array.isArray(current) || Array.isArray(effective)) {
+      if (!Array.isArray(current)) throw new Error('数组由下层来源提供；请先在此来源的参数 JSON 中明确保存完整数组，再管理其中的秘密');
+      if (!/^(0|[1-9][0-9]*)$/.test(part) || Number(part) >= current.length) throw new Error('秘密位置必须指向已有数组项，索引使用 0 或不带前导零的正整数');
+      const index = Number(part);
+      path.push(index); current = current[index]; effective = Array.isArray(effective) ? effective[index] : undefined;
+    } else {
+      path.push(part);
+      current = current && typeof current === 'object' ? (current as Record<string, unknown>)[part] : undefined;
+      effective = effective && typeof effective === 'object' ? (effective as Record<string, unknown>)[part] : undefined;
+    }
+  }
+  return { path, current };
+}
+
 async function chooseSource(quickInput: IQuickInputService, sources: Source[], title: string): Promise<Source | undefined> {
   const selected = await quickInput.pick(sources.filter(item => item.source_key).map(source => ({
     label: source.source_key!, description: `${source.layer} · ${source.presence}${source.writable === false ? ' · 只读' : ''}`,
@@ -158,25 +179,35 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   let jsonc: string;
   let privateInputConfirmed = false;
   if (privateParameter) {
-    const parameterPath = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
-      ...privateParameter.pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
-    let current: unknown = parse(document.jsonc);
-    for (const key of parameterPath) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
+    if (!privateParameter.pointer) {
+      const pointer = await quickInput.input({ title: '选择秘密参数位置',
+        prompt: '填写相对插件参数对象的 JSON Pointer，例如 /accounts/0/token；只允许确切版本声明的 writeOnly 字段。数组须已保存在此来源。',
+        validateInput: async value => {
+          try { privateParameterLocation(document, binding, value); return null; }
+          catch (error) { return error instanceof Error ? error.message : String(error); }
+        } });
+      if (pointer === undefined) return;
+      privateParameter = { pointer, schema: {} };
+      check();
+    }
+    const { path: parameterPath, current } = privateParameterLocation(document, binding, privateParameter.pointer);
     const configured = current !== undefined;
     const action = await quickInput.pick([{ label: configured ? '更换已设置秘密参数' : '设置秘密参数', clear: false },
       ...(current !== undefined
         ? [{ label: '清除此来源的秘密覆盖', clear: true }] : [])],
     { title: `${binding.package_id}/${binding.plugin_id}${privateParameter.pointer}`, placeHolder: '原值不会回读；更换会创建新的不可变秘密版本' });
     if (!action) return;
+    if (action.clear && typeof parameterPath.at(-1) === 'number') throw new Error('不能单独清除整个秘密数组项，以免移动其它项的引用；请显式编辑此来源的完整数组');
     let storedValue: unknown;
     if (!action.clear) {
-      const text = await quickInput.input({ title: '输入插件秘密参数', prompt: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key}`,
+      const stringInput = privateParameter.schema.type === 'string';
+      const text = await quickInput.input({ title: stringInput ? '输入插件秘密参数' : '输入插件秘密参数 JSON', prompt: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key}`,
         password: true, validateInput: async value => {
-          if (privateParameter.schema.type === 'string' || !value) return null;
-          try { JSON.parse(value); return null; } catch { return '此秘密字段需要输入有效 JSON'; }
+          if (stringInput) return null;
+          try { JSON.parse(value); return null; } catch { return '此秘密字段需要有效 JSON；字符串请加双引号'; }
         } });
       if (text === undefined) return;
-      storedValue = privateParameter.schema.type === 'string' ? text : JSON.parse(text);
+      storedValue = stringInput ? text : JSON.parse(text);
       const accepted = await quickInput.pick([{ label: '取消' }, { label: '确认保存秘密', save: true,
         description: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key} · ${binding.package_id}@${binding.package_version}/${binding.plugin_id}${privateParameter.pointer}` }],
       { title: '确认目标、来源与秘密参数' });
@@ -255,16 +286,23 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   }
 }
 
+function containsWriteOnly(schema: unknown): boolean {
+  return !!schema && typeof schema === 'object' && ((schema as Record<string, unknown>).writeOnly === true
+    || Object.values(schema).some(containsWriteOnly));
+}
+
 export function writeOnlyFields(schema: Record<string, unknown> | undefined, prefix = ''): PrivateParameter[] {
-  // TODO：补齐组合 schema 与数组项的秘密位置选择；当前表单枚举对象属性，写入口仍按完整 schema 校验。
   const properties = schema?.properties;
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return [];
-  return Object.entries(properties as Record<string, unknown>).flatMap(([key, candidate]) => {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
-    const value = candidate as Record<string, unknown>;
-    const pointer = `${prefix}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
-    return value.writeOnly === true ? [{ pointer, schema: value }] : writeOnlyFields(value, pointer);
-  });
+  const fields = properties && typeof properties === 'object' && !Array.isArray(properties)
+    ? Object.entries(properties as Record<string, unknown>).flatMap(([key, candidate]) => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+      const value = candidate as Record<string, unknown>;
+      const pointer = `${prefix}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+      return value.writeOnly === true ? [{ pointer, schema: value }] : writeOnlyFields(value, pointer);
+    }) : [];
+  // 复杂位置由用户选择，确切分支、引用和类型统一交原配置 owner 校验。
+  if (!prefix && containsWriteOnly(schema)) fields.push({ pointer: '', schema: {} });
+  return fields;
 }
 
 /** 设置发现只消费安装清单和原配置 owner，不依赖插件管理权限或运行状态。 */
@@ -301,7 +339,7 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
     const plugin = selected.plugin;
     const selectedAction = await quickInput.pick([{ label: '查看参数 schema', action: 'schema' },
       { label: '编辑参数 JSON', action: 'json' },
-      ...writeOnlyFields(plugin.configuration_schema).map(field => ({ label: `管理秘密参数 ${field.pointer}`, action: 'secret', field }))],
+      ...writeOnlyFields(plugin.configuration_schema).map(field => ({ label: field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数', action: 'secret', field }))],
     { title: `${schemas.gateway_id}${workspace ? ` · ${workspace.workspace_id}` : ''} · ${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,
       canPickMany: false }, cancellation.token);
     if (!selectedAction) return;

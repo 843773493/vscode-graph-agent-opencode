@@ -146,7 +146,7 @@ def validate_private_input(schema: Mapping[str, object] | None, source: dict[str
                 current[part] = {"kind": "plugin_private_file"}
             else:
                 current = current.setdefault(part, {})
-        elif isinstance(current, list) and part.isdecimal() and int(part) < len(current):
+        elif isinstance(current, list) and re.fullmatch(r"0|[1-9][0-9]*", part) and int(part) < len(current):
             location.append(int(part))
             if index == len(parts) - 1:
                 current[int(part)] = {"kind": "plugin_private_file"}

@@ -281,7 +281,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const privateFields = writeOnlyFields(plugin.contributes?.configuration);
       for (const field of privateFields) {
         const secret = append(details, $('button')) as HTMLButtonElement;
-        secret.textContent = `管理秘密参数 ${field.pointer}`;
+        secret.textContent = field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数';
         secret.addEventListener('click', () => {
           secret.disabled = true;
           void this.runOperation(() => manageConfig(scope, target, workspace,

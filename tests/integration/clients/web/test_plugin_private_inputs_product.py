@@ -46,7 +46,10 @@ app.include_router(plugin_command_router({}, shutdown=shutdown))
 @app.get('/services/echo/value')
 async def echo(request: Request):
     value = parameters.get('credential', '')
+    entries = parameters.get('entries', [])
+    nested = entries[0].get('credential', '') if entries else ''
     return {'instance_id': identity['instance_id'], 'credential_digest': hashlib.sha256(value.encode()).hexdigest(),
+        'nested_digest': hashlib.sha256(nested.encode()).hexdigest(), 'entry_labels': [entry['label'] for entry in entries],
         'credential_present': bool(value), 'request_id': request.headers.get('X-Request-ID')}
 server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=int(os.environ['BOXTEAM_PLUGIN_PORT']), log_config=None))
 asyncio.run(server.serve())
@@ -75,7 +78,14 @@ def _write_package(path: Path) -> None:
                     "configuration": {
                         "type": "object",
                         "additionalProperties": False,
-                        "properties": {"credential": {"type": "string", "minLength": 8, "writeOnly": True}},
+                        "$defs": {"entry": {"type": "object", "additionalProperties": False,
+                            "properties": {"label": {"type": "string"}, "credential": {
+                                "allOf": [{"type": "string", "minLength": 8, "writeOnly": True}],
+                            }}}},
+                        "properties": {
+                            "credential": {"type": "string", "minLength": 8, "writeOnly": True},
+                            "entries": {"type": "array", "items": {"$ref": "#/$defs/entry"}},
+                        },
                     },
                 },
                 "runtime": "python",
@@ -155,5 +165,6 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
         assert result["phase"] == "complete" and result["gateway_rebuilt"] and result["workspace_rebuilt"]
         assert result["secret_values_absent"] and not result["pageErrors"]
         assert result["instance_logs_gateway"] and result["instance_logs_workspace"] and result["stopped_instance_logs"]
+        assert result["structured_private_input"] and result["structured_private_cleared"]
     finally:
         close_gateway_process(gateway)

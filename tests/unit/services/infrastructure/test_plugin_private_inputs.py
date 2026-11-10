@@ -357,6 +357,15 @@ def test_private_reference_and_actual_value_validation_follow_array_ref_schema(p
         validate_private_input(schema, source, pointer, "bad")
 
 
+@pytest.mark.parametrize("index", ["00", "01", "-1", "١", "2"])
+def test_private_write_rejects_noncanonical_or_missing_array_index(index):
+    schema = {"type": "object", "properties": {"entries": {"type": "array", "items": {
+        "type": "object", "properties": {"credential": {"type": "string", "writeOnly": True}},
+    }}}}
+    with pytest.raises(ValueError, match="已有数组项"):
+        validate_private_input(schema, {"entries": [{}, {}]}, f"/entries/{index}/credential", "private-sentinel")
+
+
 def test_private_value_validation_respects_selected_oneof_branch(private_inputs):
     schema = {
         "$defs": {
