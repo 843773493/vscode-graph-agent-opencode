@@ -158,6 +158,152 @@ def test_nested_entrypoint_cannot_escape_package_root(tmp_path: Path) -> None:
         PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
 
 
+@pytest.mark.parametrize("member", [".. /outside.txt", ".. ./outside.txt", "nested/.. /outside.txt"])
+def test_zip_paths_reject_windows_parent_components_with_trailing_spaces_or_dots(
+    tmp_path: Path, member: str,
+) -> None:
+    archive_path = tmp_path / "package.zip"
+    _write_zip(archive_path, {"plugin.jsonc": b"{}", member: b"outside package"})
+
+    with pytest.raises(ValueError, match="空格或点结尾"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+@pytest.mark.parametrize("member", ["CON", "aux.txt", "nested/Lpt¹.log", "conout$.data"])
+def test_zip_paths_reject_windows_reserved_device_names(tmp_path: Path, member: str) -> None:
+    archive_path = tmp_path / "package.zip"
+    _write_zip(archive_path, {"plugin.jsonc": b"{}", member: b"not portable"})
+
+    with pytest.raises(ValueError, match="Windows 保留设备名"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+@pytest.mark.parametrize("member", ["bad?.txt", "nested/name|data"])
+def test_zip_paths_reject_windows_unsupported_filename_characters(tmp_path: Path, member: str) -> None:
+    archive_path = tmp_path / "package.zip"
+    _write_zip(archive_path, {"plugin.jsonc": b"{}", member: b"not portable"})
+
+    with pytest.raises(ValueError, match="Windows 不支持的文件名字符"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+def test_zip_paths_reject_windows_case_conflicting_parent_directories(tmp_path: Path) -> None:
+    archive_path = tmp_path / "package.zip"
+    _write_zip(archive_path, {
+        "plugin.jsonc": b"{}",
+        "Foo/first.txt": b"first",
+        "foo/second.txt": b"second",
+    })
+
+    with pytest.raises(ValueError, match="Windows 大小写折叠后冲突"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+def test_zip_paths_reject_duplicate_entries(tmp_path: Path) -> None:
+    archive_path = tmp_path / "package.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("plugin.jsonc", b"{}")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("plugin.jsonc", b"{}")
+
+    with pytest.raises(ValueError, match="重复路径"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+@pytest.mark.parametrize(
+    "member", [".VENV/python.cfg", ".NPMRC", "private/.NPMRC", ".BOXTEAM-PLUGIN.JSON"],
+)
+def test_zip_paths_reject_case_insensitive_product_private_paths(tmp_path: Path, member: str) -> None:
+    archive_path = tmp_path / "package.zip"
+    _write_zip(archive_path, {"plugin.jsonc": b"{}", member: b"private"})
+
+    with pytest.raises(ValueError, match="Python 虚拟环境|保留的元数据"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+@pytest.mark.parametrize("relative", [".NPMRC", "private/.NPMRC"])
+def test_development_directory_rejects_case_insensitive_npm_credentials_file(
+    tmp_path: Path, relative: str,
+) -> None:
+    source = tmp_path / "development-package"
+    config = source / relative
+    config.parent.mkdir(parents=True)
+    config.write_text("//registry.npmjs.org/:_authToken=private\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="npm 凭据配置"):
+        PluginPackageStore(tmp_path / "installed").install_directory(source)
+
+
+def test_development_directory_rejects_windows_case_conflicting_parent_directories(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "development-package"
+    (source / "Foo").mkdir(parents=True)
+    (source / "foo").mkdir()
+    (source / "Foo/first.txt").write_text("first", encoding="utf-8")
+    (source / "foo/second.txt").write_text("second", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Windows 大小写折叠后冲突"):
+        PluginPackageStore(tmp_path / "installed").install_directory(source)
+
+
+@pytest.mark.parametrize(("package_id", "version"), [
+    ("example.tools.", "1.0.0"),
+    ("NUL", "1.0.0"),
+    ("example.tools", "1.0.0."),
+    ("example.tools", "CON"),
+])
+def test_package_identity_rejects_windows_aliasing_directory_names(
+    tmp_path: Path, package_id: str, version: str,
+) -> None:
+    manifest = _manifest()
+    manifest["package_id"] = package_id
+    manifest["version"] = version
+    archive_path = _write_manifest_archive(tmp_path, manifest)
+
+    with pytest.raises(ValueError, match="Windows 保留或歧义目录名"):
+        PluginPackageStore(tmp_path / "installed").install_zip(archive_path)
+
+
+@pytest.mark.parametrize(
+    ("first_package_id", "first_version", "second_package_id", "second_version"),
+    [
+        ("Example.Tools", "1.0.0", "example.tools", "2.0.0"),
+        ("example.tools", "1.0.0+Build", "example.tools", "1.0.0+build"),
+    ],
+)
+def test_install_rejects_windows_case_aliases_for_package_and_version_directories(
+    tmp_path: Path,
+    configured_node_bin: str,
+    first_package_id: str,
+    first_version: str,
+    second_package_id: str,
+    second_version: str,
+) -> None:
+    store = PluginPackageStore(tmp_path / "installed")
+    first = _manifest()
+    first["package_id"] = first_package_id
+    first["version"] = first_version
+    first_dir = tmp_path / "first"
+    first_dir.mkdir()
+    first_archive = _write_manifest_archive(first_dir, first)
+    store.install_zip(first_archive)
+
+    second = _manifest()
+    second["package_id"] = second_package_id
+    second["version"] = second_version
+    second_dir = tmp_path / "second"
+    second_dir.mkdir()
+    second_archive = _write_manifest_archive(second_dir, second)
+    with pytest.raises(ValueError, match="Windows 上大小写折叠后冲突"):
+        store.install_zip(second_archive)
+
+    installed = store.inventory()
+    assert [(item.manifest.package_id, item.manifest.version) for item in installed] == [
+        (first_package_id, first_version),
+    ]
+
+
 def test_explicit_development_directory_publishes_a_manifest_driven_snapshot(
     tmp_path: Path, configured_node_bin: str,
 ) -> None:

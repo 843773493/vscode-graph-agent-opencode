@@ -35,6 +35,8 @@ _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 _MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 _MAX_FILES = 20_000
 _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$")
+_WINDOWS_RESERVED_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"})
+_WINDOWS_NUMBERED_DEVICE = re.compile(r"^(?:COM|LPT)(?:[1-9]|[¹²³])$", re.IGNORECASE)
 _NO_EXPECTED_TARGET = object()
 
 
@@ -244,12 +246,14 @@ class PluginPackageStore:
         prepare: Callable[[Path], None],
         commit_publication: Callable[[Callable[[], None]], bool] | None = None,
     ) -> InstalledPluginPackage:
+        _validate_identity(manifest.package_id, manifest.version)
+        _validate_windows_identity_sibling(self.root, manifest.package_id, "package_id")
         package_dir = self.root / manifest.package_id
         destination = package_dir / manifest.version
-        _validate_identity(manifest.package_id, manifest.version)
         if package_dir.is_symlink():
             raise RuntimeError("插件安装域包目录不能是符号链接")
         package_dir.mkdir(parents=True, exist_ok=True)
+        _validate_windows_identity_sibling(package_dir, manifest.version, "package version")
         if destination.exists():
             installed = _read_installed(destination)
             if installed.digest != digest:
@@ -335,12 +339,33 @@ def _safe_member(name: str) -> str:
         raise ValueError(f"插件包路径必须是相对 POSIX 路径: {name!r}")
     raw_name = name.removesuffix("/")
     raw_parts = raw_name.split("/")
-    path = PurePosixPath(raw_name)
-    if not path.parts or any(part in {"", ".", ".."} or ":" in part for part in raw_parts):
-        raise ValueError(f"插件包路径越界: {name!r}")
-    if path.as_posix() != "/".join(raw_parts):
-        raise ValueError(f"插件包路径含非规范分隔: {name!r}")
-    return path.as_posix()
+    for part in raw_parts:
+        if part in {"", ".", ".."} or ":" in part:
+            raise ValueError(f"插件包路径越界: {name!r}")
+        if any(ord(character) < 32 or character in '<>"|?*' for character in part):
+            raise ValueError(f"插件包路径包含 Windows 不支持的文件名字符: {name!r}")
+        if part.endswith((" ", ".")):
+            raise ValueError(f"插件包路径不能以空格或点结尾: {name!r}")
+        if _is_windows_reserved_component(part):
+            raise ValueError(f"插件包路径不能使用 Windows 保留设备名: {name!r}")
+    return "/".join(raw_parts)
+
+
+def _is_windows_reserved_component(part: str) -> bool:
+    stem = part.split(".", 1)[0].rstrip(" .").upper()
+    return stem in _WINDOWS_RESERVED_NAMES or _WINDOWS_NUMBERED_DEVICE.fullmatch(stem) is not None
+
+
+def _validate_case_insensitive_paths(names: Iterable[str]) -> None:
+    prefixes: dict[str, str] = {}
+    for name in names:
+        parts = name.split("/")
+        for depth in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:depth])
+            folded = prefix.casefold()
+            previous = prefixes.setdefault(folded, prefix)
+            if previous != prefix:
+                raise ValueError(f"插件路径在 Windows 大小写折叠后冲突: {previous} / {prefix}")
 
 
 def _zip_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
@@ -348,12 +373,12 @@ def _zip_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
     if len(infos) > _MAX_FILES:
         raise ValueError("插件 ZIP 文件数量超过限制")
     entries: dict[str, zipfile.ZipInfo] = {}
-    folded_names: set[str] = set()
     for info in infos:
         name = _safe_member(info.filename)
-        if name.split("/", 1)[0] == ".venv" or name == ".npmrc":
+        root_name = name.split("/", 1)[0].casefold()
+        if root_name == ".venv" or name.rsplit("/", 1)[-1].casefold() == ".npmrc":
             raise ValueError(f"插件包不能携带 Python 虚拟环境或 npm 凭据配置: {name}")
-        if name.casefold() in folded_names:
+        if name in entries:
             raise ValueError(f"插件 ZIP 含重复路径: {name}")
         mode = info.external_attr >> 16
         if stat.S_ISLNK(mode):
@@ -363,9 +388,9 @@ def _zip_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
             raise ValueError(f"插件 ZIP 含不支持的文件类型: {name}")
         if info.flag_bits & 0x1:
             raise ValueError(f"插件 ZIP 不支持加密条目: {name}")
-        folded_names.add(name.casefold())
         entries[name] = info
-    if ".boxteam-plugin.json" in entries:
+    _validate_case_insensitive_paths(entries)
+    if any(name.casefold() == ".boxteam-plugin.json" for name in entries):
         raise ValueError("包内不能包含安装器保留的元数据文件")
     return entries
 
@@ -375,7 +400,8 @@ def _directory_entries(source: Path) -> tuple[str, ...]:
     for item in source.rglob("*"):
         relative = item.relative_to(source).as_posix()
         _safe_member(relative)
-        if relative.split("/", 1)[0] == ".venv" or relative == ".npmrc":
+        root_name = relative.split("/", 1)[0].casefold()
+        if root_name == ".venv" or relative.rsplit("/", 1)[-1].casefold() == ".npmrc":
             raise ValueError(f"开发插件不能携带 Python 虚拟环境或 npm 凭据配置: {relative}")
         if item.is_symlink():
             raise ValueError(f"插件目录不允许符号链接: {relative}")
@@ -386,9 +412,8 @@ def _directory_entries(source: Path) -> tuple[str, ...]:
     if len(entries) > _MAX_FILES:
         raise ValueError("插件目录文件数量超过限制")
     entries.sort()
-    if len({entry.casefold() for entry in entries}) != len(entries):
-        raise ValueError("插件目录含在目标文件系统上大小写冲突的路径")
-    if ".boxteam-plugin.json" in entries:
+    _validate_case_insensitive_paths(entries)
+    if any(entry.casefold() == ".boxteam-plugin.json" for entry in entries):
         raise ValueError("包内不能包含安装器保留的元数据文件")
     return tuple(entries)
 
@@ -526,6 +551,15 @@ def _validate_identity(package_id: str, version: str) -> None:
         raise ValueError("package_id 不是有效包目录身份")
     if not _VERSION_PATTERN.fullmatch(version):
         raise ValueError("package version 不是有效目录身份")
+    if any(part.endswith((" ", ".")) or _is_windows_reserved_component(part)
+           for part in (package_id, version)):
+        raise ValueError("package_id 和 package version 不能使用 Windows 保留或歧义目录名")
+
+
+def _validate_windows_identity_sibling(parent: Path, identity: str, label: str) -> None:
+    for path in parent.iterdir():
+        if path.name != identity and path.name.casefold() == identity.casefold():
+            raise ValueError(f"{label} 与已有安装目录在 Windows 上大小写折叠后冲突: {path.name} / {identity}")
 
 
 def _sync_tree(root: Path) -> None:

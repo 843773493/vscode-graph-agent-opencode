@@ -9,7 +9,7 @@ import sys
 import tomllib
 from email.parser import Parser
 from functools import cache
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlsplit
 
 import commentjson
@@ -356,6 +356,7 @@ def _validate_node_modules(root: Path, manifest: dict[str, object],
 
 
 def _validate_python_site(root: Path, site: Path, requirements: list[Requirement]) -> None:
+    package_root = root.resolve()
     entries: dict[NormalizedName, tuple[Path, str]] = {}
     for path in site.glob("*.dist-info"):
         metadata_path = path / "METADATA"
@@ -402,8 +403,15 @@ def _validate_python_site(root: Path, site: Path, requirements: list[Requirement
                 pending.append((dependency, frozenset(requirement.extras)))
     for metadata in site.rglob("*.pth"):
         for line in metadata.read_text(encoding="utf-8").splitlines():
-            value = line.strip()
-            if not value or value.startswith("import "):
+            if not line.strip() or line.startswith("#"):
                 continue
-            if Path(value).is_absolute() or PureWindowsPath(value).is_absolute():
+            if line.startswith(("import ", "import\t")):
+                continue
+            value = line.rstrip()
+            windows_path = PureWindowsPath(value)
+            if (PurePosixPath(value).is_absolute() or windows_path.root or windows_path.drive
+                    or any(part not in {".", ".."} and part.endswith((" ", "."))
+                           for part in windows_path.parts)):
                 raise ValueError(f"Python 插件包含不可重定位的 .pth 路径: {metadata.relative_to(root)}")
+            if not site.joinpath(*windows_path.parts).resolve().is_relative_to(package_root):
+                raise ValueError(f"Python 插件 .pth 路径逃出包根: {metadata.relative_to(root)}")

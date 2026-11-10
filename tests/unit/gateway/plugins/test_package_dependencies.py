@@ -116,6 +116,7 @@ def test_python_package_installs_offline_with_complete_transitive_dependencies(
         "prebuilt.probe", "1.0.0", plugin_id="probe",
     )
 
+    assert site is not None
     assert site == installed.root / "python/site-packages"
     assert (site / "first_dependency/__init__.py").is_file()
     assert (site / "transitive_dependency/__init__.py").is_file()
@@ -241,6 +242,53 @@ def test_missing_python_transitive_dependency_rejects_before_publish(tmp_path: P
     with pytest.raises(ValueError, match="transitive-dependency"):
         store.install_zip(tmp_path / "incomplete.zip")
     assert not (tmp_path / "packages/prebuilt.probe/1.0.0").exists()
+
+
+@pytest.mark.parametrize("search_path", [
+    "../../../escape", r"..\..\..\escape", "C:escape", "../../.. .",
+    "/absolute", r"\absolute", r"C:\absolute",
+    r" import bootstrap\..\..\..\..\escape",
+    r" # bootstrap\..\..\..\..\escape",
+])
+def test_python_pth_paths_cannot_escape_the_package_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, search_path: str,
+) -> None:
+    target = native_plugin_target("python")
+    monkeypatch.setattr(dependencies, "_python_runtime", lambda _path: target["python"])
+    archive = tmp_path / "pth-path.zip"
+    _python_archive(archive)
+    with zipfile.ZipFile(archive) as source, zipfile.ZipFile(tmp_path / "candidate.zip", "w") as output:
+        for entry in source.infolist():
+            output.writestr(entry.filename, source.read(entry.filename))
+        output.writestr("python/site-packages/escape.pth", search_path)
+
+    store = PluginPackageStore(tmp_path / "packages")
+    with pytest.raises(ValueError, match=r"\.pth"):
+        store.install_zip(tmp_path / "candidate.zip")
+    assert not (tmp_path / "packages/prebuilt.probe/1.0.0").exists()
+
+
+def test_windows_python_pth_comments_and_relative_paths_are_relocatable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = native_plugin_target("python")
+    monkeypatch.setattr(dependencies, "_python_runtime", lambda _path: target["python"])
+    archive = tmp_path / "pywin32.zip"
+    _python_archive(archive)
+    with zipfile.ZipFile(archive) as source, zipfile.ZipFile(tmp_path / "candidate.zip", "w") as output:
+        for entry in source.infolist():
+            output.writestr(entry.filename, source.read(entry.filename))
+        output.writestr(
+            "python/site-packages/pywin32.pth",
+            "# comment ending in a period.\r\nwin32\r\nwin32\\lib\r\npythonwin\r\n..\\..\r\n"
+            "import pywin32_bootstrap\r\n",
+        )
+        output.writestr("python/site-packages/win32/__init__.py", b"")
+        output.writestr("python/site-packages/win32/lib/__init__.py", b"")
+        output.writestr("python/site-packages/pythonwin/__init__.py", b"")
+
+    installed = PluginPackageStore(tmp_path / "packages").install_zip(tmp_path / "candidate.zip")
+    assert installed.root.is_dir()
 
 
 def test_lock_mismatch_rejects_before_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
