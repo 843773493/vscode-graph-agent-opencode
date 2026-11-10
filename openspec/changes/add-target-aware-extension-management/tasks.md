@@ -102,6 +102,7 @@
   - 2026-11-10 复杂秘密位置入口：包详情与独立参数命令共用原密码QuickInput，支持按JSON Pointer选择数组／组合／本地$ref里的秘密字段；实际writeOnly位置、类型和分支仍交原配置owner完整校验，前端不新增schema解释器。原JSONC AST对已有数组使用数字索引，只替换／清除精确对象字段且保留兄弟；下层数组要求显式完整覆盖，整个数组项不隐式删除移位。规范索引、转义字段、取消零写、CAS及值版本保持。真实Gateway／Backend／正式Workbench／Chromium 1 passed／118.91秒，覆盖数组+$ref+allOf真实设置、实际插件交付、重启仍可用、清除且兄弟保持；原双范围秘密及日志验收继续通过。前端17项／84断言、后端24项、118份实际转换源码类型、同源码79扩展正式构建及Ruff通过；Sol复审Backend归属／覆盖／错误脱敏无新增机制。准确命令、指纹及失败原件见 `out/tests/temp/2026/11/10/plugin_structured_private_inputs/artifacts/verification.json`。真实Relay／原生平台、oneOf完整页面及私有文件未引用回收仍未验／TODO，6.1／7.3宽项不勾完。
 
 - [ ] 7.4 在原命令／Quick Input／Opener 接入自有插件管理与状态，迁齐 ext／MCP／设置入口及来源提示；需要重开资源时只消费原寻址 owner 的正式地址，不自造 grammar。
+  - 2026-11-10 旧详情入口清理：同一 sourceTransform 迁齐通知／状态栏／Issue Quick Access、快捷键来源、设置、profile、账户偏好、聊天及语言选择等15个固定上游路径，删除已退役 extension.open／_extensions.manage 与旧详情点击；来源文本、原通知动作、Issue Reporter、profile选择、账户偏好、语言切换与有效MCP配置入口保留，不建兼容桥。Luna max 持续复审修复精确锚点及未用声明，44项短验／266断言、132份实际转换源码类型零诊断；复用同源码正式79扩展构建及真实插件管理页面1 passed／116.22秒，未将这条页面流程称作15入口逐项交互验收。已不再注册的旧 Extensions 内部字符串未按关键词扩大删除，真实平台与全部旧交互未验。原始输出、指纹见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/extension-details-typecheck-v1.receipt`，产品原件见范围管理切片。
 - [ ] 7.5 真实页面验证无公网源零请求、本地多插件包安装、当前 Gateway／当前工作区插件开关与重启及新建默认值、部分失败批量操作和整包引用冲突卸载；保存与实际启动状态分开，焦点不改投。
 
 ## 8. 旧体系物理删除与发行

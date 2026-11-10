@@ -4,13 +4,14 @@ import { resolve, join } from 'node:path';
 import ts from 'typescript';
 import { sourceTransform, pinnedUpstreamCommit } from './sourceTransform.mjs';
 import { mcpSourcePaths } from './mcpTransform.mjs';
+import { legacyExtensionDetailsSourcePaths } from './extensions/extensionLegacyDetailsTransform.mjs';
 import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError, isCancellationError, getErrorMessage } from '../upstream/src/vs/base/common/errors.js';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
-const sources = new Map(await Promise.all([...mcpSourcePaths,
+const sources = new Map(await Promise.all([...mcpSourcePaths, ...legacyExtensionDetailsSourcePaths,
   'src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts',
   'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
   'src/vs/workbench/contrib/welcomeWalkthrough/browser/editor/vs_code_editor_walkthrough.ts',
@@ -693,4 +694,35 @@ test('项目原列表自身接回 Extensions 隐藏作用域，恢复后隐藏�
   expect(messageClasses.has('hidden')).toBe(true);
   const css = await readFile(join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/media/extensionsViewlet.css'), 'utf8');
   expect(css).toMatch(/\.extensions-viewlet \.hidden\s*\{\s*display:\s*none !important;\s*visibility:\s*hidden;/);
+});
+
+test('旧扩展详情入口已从用户路径移除并保留其余操作', () => {
+  const legacyEntrances = [
+    'mainThreadProgress.ts', 'mainThreadMessageService.ts', 'statusbarActions.ts', 'statusbarPart.ts',
+    'issueQuickAccess.ts', 'keybindingsEditor.ts', 'settingsTree.ts', 'chatCustomizationDiscoveryRenderer.ts',
+    'userDataProfilesEditorModel.ts', 'extensionsResource.ts', 'manageTrustedExtensionsForAccountAction.ts',
+    'chatLanguageModelActions.ts', 'mcpListWidget.ts', 'chatToolPicker.ts', 'localizationsActions.ts',
+  ];
+  for (const name of legacyEntrances) {
+    const parsed = source(name);
+    expect(parsed.parseDiagnostics).toHaveLength(0);
+    expect(parsed.text).not.toContain('extension.open');
+    expect(parsed.text).not.toContain('_extensions.manage');
+  }
+
+  expect(source('mainThreadMessageService.ts').text).toContain('actions: { primary: primaryActions }');
+  expect(source('issueQuickAccess.ts').text).toContain('workbench.action.openIssueReporter');
+  expect(source('keybindingsEditor.ts').text).toContain("$('span.extension-label')");
+  expect(source('keybindingsEditor.ts').text).toContain('extension.identifier.value');
+  expect(source('settingsTree.ts').text).toContain("localize('dismiss', \"Dismiss\")");
+  expect(source('settingsTree.ts').text).toContain('_onDidDismissExtensionSetting.fire(extensionId)');
+  expect(source('userDataProfilesEditorModel.ts').text).toContain('child.parent.type === ProfileResourceType.Extensions ? undefined');
+  expect(source('extensionsResource.ts').text).toContain('checkbox: that.checkbox');
+  expect(source('manageTrustedExtensionsForAccountAction.ts').text).toContain('_managePreferencesButton');
+  expect(source('chatLanguageModelActions.ts').text).toContain('languageModelAuthTitle');
+  expect(source('mcpListWidget.ts').text).toContain('onDidRequestShowPlugin');
+  expect(source('mcpListWidget.ts').text).toContain('fromExtension');
+  expect(source('mcpListWidget.ts').text).not.toContain('Open extension details');
+  expect(source('chatToolPicker.ts').text).toContain('mcpWorkbenchService.open(source');
+  expect(source('localizationsActions.ts').text).toContain('localeService.setLocale(selectedLanguage)');
 });

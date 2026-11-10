@@ -1,7 +1,9 @@
 import { join } from 'node:path';
 import ts from 'typescript';
+import { legacyExtensionDetailsSourcePaths, transformLegacyExtensionDetails } from './extensionLegacyDetailsTransform.mjs';
 
 export const extensionManagementSourcePaths = [
+  ...legacyExtensionDetailsSourcePaths,
   'src/vs/workbench/services/extensionManagement/common/webExtensionManagementService.ts',
   'src/vs/workbench/services/extensionManagement/common/extensionManagementService.ts',
   'src/vs/workbench/services/extensionManagement/common/extensionManagementServerService.ts',
@@ -25,6 +27,8 @@ export const extensionManagementSourcePaths = [
 
 /** 用户安装只交自有包 owner；原浏览器 scanner 只保留系统／额外内置和派生缓存。 */
 export function transformExtensionManagement(root, path, source, replaceOnce) {
+  const legacyDetailsSource = transformLegacyExtensionDetails(root, path, source, replaceOnce);
+  if (legacyDetailsSource !== undefined) return legacyDetailsSource;
   const notebookSource = transformNotebookLegacyConsumers(root, path, source, replaceOnce);
   if (notebookSource !== undefined) return notebookSource;
   if (path === join(root, 'upstream/src/vs/workbench/browser/parts/editor/editorStatus.ts')) {
