@@ -12,11 +12,21 @@ export const extensionManagementSourcePaths = [
   'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
   'src/vs/workbench/contrib/welcomeWalkthrough/browser/editor/vs_code_editor_walkthrough.ts',
   'src/vs/workbench/browser/parts/editor/editorStatus.ts',
+  'src/vs/workbench/contrib/format/browser/formatActionsNone.ts',
   'src/vs/workbench/contrib/extensions/browser/extensionsQuickAccess.ts',
+  'src/vs/workbench/contrib/notebook/browser/viewParts/notebookKernelQuickPickStrategy.ts',
+  'src/vs/workbench/contrib/notebook/browser/contrib/cellStatusBar/statusBarProviders.ts',
+  'src/vs/workbench/contrib/notebook/browser/view/renderers/backLayerWebView.ts',
+  'src/vs/workbench/contrib/notebook/browser/outputEditor/notebookOutputEditor.ts',
+  'src/vs/workbench/contrib/notebook/browser/view/cellParts/cellOutput.ts',
+  'src/vs/workbench/contrib/notebook/browser/diff/diffElementOutputs.ts',
+  'src/vs/workbench/contrib/notebook/browser/notebookBrowser.ts',
 ];
 
 /** 用户安装只交自有包 owner；原浏览器 scanner 只保留系统／额外内置和派生缓存。 */
 export function transformExtensionManagement(root, path, source, replaceOnce) {
+  const notebookSource = transformNotebookLegacyConsumers(root, path, source, replaceOnce);
+  if (notebookSource !== undefined) return notebookSource;
   if (path === join(root, 'upstream/src/vs/workbench/browser/parts/editor/editorStatus.ts')) {
     let contents = replaceOnce(source, '\t\tconst commandService = accessor.get(ICommandService);\n', '');
     contents = replaceOnce(contents, '\t\tconst galleryService = accessor.get(IExtensionGalleryService);\n', '');
@@ -26,6 +36,18 @@ export function transformExtensionManagement(root, path, source, replaceOnce) {
     if (start < 0 || end < 0) throw new Error('原语言选择器市场入口缺失');
     contents = contents.slice(0, start) + contents.slice(end);
     contents = replaceOnce(contents, '\t\tif (pick === galleryAction) {\n\t\t\tgalleryAction.run();\n\t\t\treturn;\n\t\t}\n', '');
+    return pruneUnusedImportsAndConstants(path, contents);
+  }
+  if (path === join(root, 'upstream/src/vs/workbench/contrib/format/browser/formatActionsNone.ts')) {
+    let contents = replaceOnce(source,
+      '\t\tconst extensionsWorkbenchService = accessor.get(IExtensionsWorkbenchService);\n', '');
+    contents = replaceOnce(contents, '\t\tconst dialogService = accessor.get(IDialogService);\n', '');
+    contents = replaceOnce(contents,
+      "} else {\n\t\t\tconst langName = model.getLanguageId();\n\t\t\tconst message = nls.localize('no.provider', \"There is no formatter for '{0}' files installed.\", langName);\n\t\t\tconst { confirmed } = await dialogService.confirm({\n\t\t\t\tmessage,\n\t\t\t\tprimaryButton: nls.localize({ key: 'install.formatter', comment: ['&& denotes a mnemonic'] }, \"&&Install Formatter...\")\n\t\t\t});\n\t\t\tif (confirmed) {\n\t\t\t\textensionsWorkbenchService.openSearch(`category:formatters ${langName}`);\n\t\t\t}\n\t\t}",
+      `} else {
+			const langName = model.getLanguageId();
+			notificationService.warn(nls.localize('no.provider.available', "No formatter is available for '{0}' files in this workbench.", langName));
+		}`);
     return pruneUnusedImportsAndConstants(path, contents);
   }
   if (path === join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/extensionsQuickAccess.ts')) {
@@ -245,6 +267,24 @@ function replaceMembers(path, source, ownerName, replacements) {
   return source;
 }
 
+function rewriteNotebookMethod(path, source, ownerName, methodName, createEdits) {
+  const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === ownerName);
+  if (!owner || !ts.isClassDeclaration(owner)) throw new Error('Notebook 转换类缺失：' + ownerName);
+  const method = owner.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === methodName);
+  if (!method || !ts.isMethodDeclaration(method) || !method.body) throw new Error('Notebook 转换方法缺失：' + ownerName + '.' + methodName);
+  const ifStatements = [];
+  const visit = node => {
+    if (ts.isIfStatement(node)) ifStatements.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(method.body);
+  const edits = createEdits(parsed, ifStatements);
+  if (!edits.length) throw new Error('Notebook 转换锚点缺失：' + ownerName + '.' + methodName);
+  for (const edit of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, edit.start) + edit.text + source.slice(edit.end);
+  return source;
+}
+
 /** 保留原容器与被内置服务消费的单例，删除旧用户扩展 UI 的整套注册。 */
 function pluginManagementContribution(root, path, source) {
   const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
@@ -303,6 +343,163 @@ registerAction2(class extends Action2 {
 `;
   return pruneUnusedImportsAndConstants(path,
     `import { installServicePluginPackage } from ${JSON.stringify(join(root, 'src/extensions/servicePluginManagement.js'))};\n` + contents);
+}
+
+function transformNotebookLegacyConsumers(root, path, source, replaceOnce) {
+  const notebook = join(root, 'upstream/src/vs/workbench/contrib/notebook');
+  if (path === join(notebook, 'browser/contrib/cellStatusBar/statusBarProviders.ts')) {
+    const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+    const matches = [];
+    const visit = node => {
+      if (ts.isIfStatement(node) && ts.isIdentifier(node.expression) && node.expression.text === 'registeredId'
+          && node.elseStatement?.getText(parsed).includes('workbench.extensions.search')) matches.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+    if (matches.length !== 1) throw new Error('Notebook 未知语言的旧扩展市场入口与固定上游不匹配');
+    const statement = matches[0];
+    const warning = `{
+      statusBarItems.push({
+        text: '$(dialog-warning)',
+        tooltip: localize('notebook.cell.status.unknownLanguage', "Unknown cell language: {0}", cell.language),
+        alignment: CellStatusbarAlignment.Right,
+        priority: -Number.MAX_SAFE_INTEGER + 1
+      });
+    }`;
+    return source.slice(0, statement.elseStatement.getStart(parsed)) + warning + source.slice(statement.elseStatement.end);
+  }
+  if (path === join(notebook, 'browser/view/renderers/backLayerWebView.ts')) {
+    return replaceOnce(source, "\t\t\t\t\t\t\t\t'workbench.extensions.search',\n", '');
+  }
+  if (path === join(notebook, 'browser/viewParts/notebookKernelQuickPickStrategy.ts')) {
+    let contents = source;
+    contents = replaceOnce(contents,
+      "type InstallExtensionPick = IQuickPickItem & { extensionIds: string[] };\nfunction isInstallExtensionPick(item: QuickPickInput<IQuickPickItem>): item is InstallExtensionPick {\n\treturn item.id === 'installSuggested' && 'extensionIds' in item;\n}\ntype SearchMarketplacePick = IQuickPickItem & { id: 'install' };\nfunction isSearchMarketplacePick(item: QuickPickInput<IQuickPickItem>): item is SearchMarketplacePick {\n\treturn item.id === 'install';\n}\n",
+      '');
+    contents = replaceOnce(contents,
+      'type KernelQuickPickItem = (IQuickPickItem & { autoRun?: boolean }) | SearchMarketplacePick | InstallExtensionPick | KernelPick | GroupedKernelsPick | SourcePick | KernelSourceQuickPickItem;',
+      'type KernelQuickPickItem = (IQuickPickItem & { autoRun?: boolean }) | KernelPick | GroupedKernelsPick | SourcePick | KernelSourceQuickPickItem;');
+    contents = replaceOnce(contents,
+      "\t\tconst extensionRecommendataionPromise = quickPickItems.length === 0\n\t\t\t? createCancelablePromise(token => this._showInstallKernelExtensionRecommendation(notebook, quickPick, this._extensionWorkbenchService, token))\n\t\t\t: undefined;\n",
+      '');
+    contents = replaceOnce(contents, '\t\t\textensionRecommendataionPromise?.cancel();\n', '');
+    contents = replaceOnce(contents,
+      "\t\tif (sourceActionCommands.length === 0 && matchResult.all.length === 0 && actions.length === 0) {\n\t\t\treturn await this._getKernelRecommendationsQuickPickItems(notebook, this._extensionWorkbenchService) ?? [];\n\t\t}\n",
+      '');
+    contents = replaceOnce(contents,
+      '\t\tquickPick.placeholder = localize(\'selectKernel.placeholder\', "Type to choose a kernel source");',
+      '\t\tconst sourcePlaceholder = localize(\'selectKernel.placeholder\', "Type to choose a kernel source");\n\t\tconst emptySourcePlaceholder = localize(\'selectKernel.emptySources\', "No kernels or kernel sources are available");\n\t\tquickPick.placeholder = sourcePlaceholder;');
+    contents = replaceOnce(contents,
+      '\t\t\tthis._calculdateKernelSources(editor).then(quickPickItems => {\n\t\t\t\tquickPick.items = quickPickItems;\n\t\t\t\tif (quickPick.items.length > 0) {\n\t\t\t\t\tquickPick.busy = false;\n\t\t\t\t}\n\t\t\t});',
+      '\t\t\tthis._calculdateKernelSources(editor).then(quickPickItems => {\n\t\t\t\tquickPick.items = quickPickItems;\n\t\t\t\tquickPick.placeholder = quickPickItems.length ? sourcePlaceholder : emptySourcePlaceholder;\n\t\t\t\tquickPick.busy = false;\n\t\t\t});');
+    contents = replaceOnce(contents,
+      '\t\t\t\tconst quickPickItems = await this._calculdateKernelSources(editor);\n\t\t\t\tquickPick.items = quickPickItems;\n\t\t\t\tquickPick.busy = false;',
+      '\t\t\t\tconst quickPickItems = await this._calculdateKernelSources(editor);\n\t\t\t\tquickPick.items = quickPickItems;\n\t\t\t\tquickPick.placeholder = quickPickItems.length ? sourcePlaceholder : emptySourcePlaceholder;\n\t\t\t\tquickPick.busy = false;');
+    contents = rewriteNotebookMethod(path, contents, 'KernelPickerMRUStrategy', 'displaySelectAnotherQuickPick', (parsed, ifStatements) => {
+      const matches = ifStatements.filter(node => node.expression.getText(parsed) === 'isSourcePick(selectedKernelPickItem)');
+      if (matches.length !== 1 || !matches[0].elseStatement) throw new Error('Notebook 旧 kernel 安装分支与固定上游不匹配');
+      return [{ start: matches[0].thenStatement.end, end: matches[0].elseStatement.end, text: '' }];
+    });
+    contents = replaceMembers(path, contents, 'KernelPickerStrategyBase', new Map([
+      ['constructor', `
+  constructor(
+    protected readonly _notebookKernelService: INotebookKernelService,
+    protected readonly _quickInputService: IQuickInputService,
+    protected readonly _labelService: ILabelService,
+    protected readonly _logService: ILogService,
+    protected readonly _extensionService: IExtensionService,
+    protected readonly _commandService: ICommandService
+  ) { }`],
+      ['_handleQuickPick', `
+  protected async _handleQuickPick(editor: IActiveNotebookEditor, pick: KernelQuickPickItem, _quickPickItems: KernelQuickPickItem[]): Promise<boolean> {
+    if (isKernelPick(pick)) {
+      this._selecteKernel(editor.textModel, pick.kernel);
+      return true;
+    }
+    if (isSourcePick(pick)) pick.action.runAction();
+    return true;
+  }`],
+      ['_showKernelExtension', ''],
+      ['_showInstallKernelExtensionRecommendation', ''],
+      ['_getKernelRecommendationsQuickPickItems', ''],
+      ['getSuggestedLanguage', ''],
+      ['getSuggestedKernelFromLanguage', ''],
+    ]));
+    contents = replaceMembers(path, contents, 'KernelPickerMRUStrategy', new Map([
+      ['constructor', `
+  constructor(
+    @INotebookKernelService _notebookKernelService: INotebookKernelService,
+    @IQuickInputService _quickInputService: IQuickInputService,
+    @ILabelService _labelService: ILabelService,
+    @ILogService _logService: ILogService,
+    @IExtensionService _extensionService: IExtensionService,
+    @ICommandService _commandService: ICommandService,
+    @INotebookKernelHistoryService private readonly _notebookKernelHistoryService: INotebookKernelHistoryService,
+    @IOpenerService private readonly _openerService: IOpenerService
+  ) {
+    super(_notebookKernelService, _quickInputService, _labelService, _logService, _extensionService, _commandService);
+  }`],
+    ]));
+    return pruneUnusedImportsAndConstants(path, contents);
+  }
+  if (path === join(notebook, 'browser/outputEditor/notebookOutputEditor.ts')) {
+    let contents = replaceOnce(source,
+      'return this._renderSearchForMimetype(viewModel, preferredMimeType);',
+      'return this._renderMessage(viewModel, `No renderer could be found for mimetype "${preferredMimeType}".`);');
+    contents = replaceMembers(path, contents, 'NotebookOutputEditor', new Map([['_renderSearchForMimetype', '']]));
+    return pruneUnusedImportsAndConstants(path, contents);
+  }
+  if (path === join(notebook, 'browser/diff/diffElementOutputs.ts')) {
+    let contents = replaceOnce(source,
+      'return this._renderSearchForMimetype(viewModel, preferredMimeType);',
+      'return this._renderMessage(viewModel, `No renderer could be found for mimetype "${preferredMimeType}".`);');
+    contents = replaceMembers(path, contents, 'OutputElement', new Map([['_renderSearchForMimetype', '']]));
+    return pruneUnusedImportsAndConstants(path, contents);
+  }
+  if (path === join(notebook, 'browser/view/cellParts/cellOutput.ts')) {
+    let contents = replaceOnce(source,
+      '\t\t@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,\n', '');
+    contents = replaceOnce(contents,
+      'return this._renderSearchForMimetype(viewModel, preferredMimeType);',
+      'return this._renderMessage(viewModel, `No renderer could be found for mimetype "${preferredMimeType}".`);');
+    contents = rewriteNotebookMethod(path, contents, 'CellOutputElement', '_pickActiveMimeTypeRenderer', (parsed, ifStatements) => {
+      const conditions = [
+        node => node.getText(parsed).includes('JUPYTER_RENDERER_MIMETYPES'),
+        node => node.getText(parsed).includes("pick.id === 'installRenderers'"),
+      ];
+      const edits = [];
+      for (const matchesIf of conditions) {
+        const matches = ifStatements.filter(matchesIf);
+        if (matches.length !== 1) throw new Error('Notebook renderer 旧安装分支与固定上游不匹配');
+        edits.push({ start: matches[0].getStart(parsed), end: matches[0].end, text: '' });
+      }
+      return edits;
+    });
+    contents = replaceMembers(path, contents, 'CellOutputElement', new Map([
+      ['_renderSearchForMimetype', ''],
+      ['_showJupyterExtension', ''],
+    ]));
+    return pruneUnusedImportsAndConstants(path, contents);
+  }
+  if (path === join(notebook, 'browser/notebookBrowser.ts')) {
+    const contents = replaceOnce(source,
+      '// Hardcoding viewType/extension ID for now. TODO these should be replaced once we can\n// look them up in the marketplace dynamically.',
+      '// 保留 Notebook 内置 kernel 的固定关联，供编辑器上下文状态使用。');
+    const parsed = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true);
+    const recommendations = parsed.statements.find(statement => ts.isVariableStatement(statement)
+      && statement.declarationList.declarations.some(declaration => ts.isIdentifier(declaration.name) && declaration.name.text === 'KERNEL_RECOMMENDATIONS'));
+    const recommendationType = parsed.statements.find(statement => ts.isInterfaceDeclaration(statement)
+      && statement.name.text === 'INotebookExtensionRecommendation');
+    const recommendationWrites = parsed.statements.filter(statement => ts.isExpressionStatement(statement)
+      && statement.getText(parsed).includes('KERNEL_RECOMMENDATIONS.'));
+    if (!recommendations || !recommendationType || recommendationWrites.length !== 2) {
+      throw new Error('Notebook 旧 kernel 推荐表与固定上游不匹配');
+    }
+    const start = recommendations.getFullStart();
+    const end = recommendationType.end;
+    return contents.slice(0, start) + contents.slice(end);
+  }
+  return undefined;
 }
 
 function pruneUnusedImportsAndConstants(path, source) {

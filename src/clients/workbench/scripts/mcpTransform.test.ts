@@ -16,6 +16,14 @@ const sources = new Map(await Promise.all([...mcpSourcePaths,
   'src/vs/workbench/contrib/welcomeWalkthrough/browser/editor/vs_code_editor_walkthrough.ts',
   'src/vs/workbench/browser/parts/editor/editorStatus.ts',
   'src/vs/workbench/contrib/extensions/browser/extensionsQuickAccess.ts',
+  'src/vs/workbench/contrib/format/browser/formatActionsNone.ts',
+  'src/vs/workbench/contrib/notebook/browser/viewParts/notebookKernelQuickPickStrategy.ts',
+  'src/vs/workbench/contrib/notebook/browser/contrib/cellStatusBar/statusBarProviders.ts',
+  'src/vs/workbench/contrib/notebook/browser/view/renderers/backLayerWebView.ts',
+  'src/vs/workbench/contrib/notebook/browser/outputEditor/notebookOutputEditor.ts',
+  'src/vs/workbench/contrib/notebook/browser/view/cellParts/cellOutput.ts',
+  'src/vs/workbench/contrib/notebook/browser/diff/diffElementOutputs.ts',
+  'src/vs/workbench/contrib/notebook/browser/notebookBrowser.ts',
 ].map(async path => {
   const full = join(root, 'upstream', path);
   const transformed = await transform(full, await readFile(full, 'utf8'));
@@ -179,6 +187,108 @@ test('ext快速访问仅保留原管理入口，不再包含旧市场安装实�
   expect(quickAccess).toHaveLength(1);
   expect(quickAccess[0]).toContain('ManageExtensionsQuickAccessProvider');
   expect(contribution.text).not.toContain('InstallExtensionQuickAccessProvider');
+});
+
+test('无 formatter 时只显示通知，已有 formatter 时继续执行原格式化命令', async () => {
+  const parsed = source('formatActionsNone.ts');
+  expect(parsed.text).not.toContain('IExtensionsWorkbenchService');
+  expect(parsed.text).not.toContain('IDialogService');
+  expect(parsed.text).not.toContain('openSearch');
+  const registration = parsed.statements.find(node => ts.isExpressionStatement(node)
+    && ts.isCallExpression(node.expression) && node.expression.expression.getText(parsed) === 'registerEditorAction');
+  if (!registration) throw new Error('格式化行动作注册缺失');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(registration.getText(parsed));
+  type FormatAction = { run(accessor: object, editor: object): Promise<void> };
+  let Action: (new () => FormatAction) | undefined;
+  const register = (action: new () => FormatAction) => { Action = action; };
+  const contextKey = { toNegated: () => ({}) };
+  const commandId = Symbol('ICommandService'), notificationId = Symbol('INotificationService'), featuresId = Symbol('ILanguageFeaturesService');
+  new Function('registerEditorAction', 'EditorAction', 'KeyCode', 'KeyMod', 'nls', 'ContextKeyExpr', 'KeybindingWeight', 'EditorContextKeys',
+    'ICommandService', 'INotificationService', 'ILanguageFeaturesService', javascript)(
+    register, class { constructor(readonly options: object) {} }, { KeyF: 1, KeyI: 2 }, { Shift: 1, Alt: 2, CtrlCmd: 4 },
+    { localize2: (_key: string, value: string) => ({ value }), localize: (_key: string, value: string, ...args: string[]) => value.replace('{0}', args[0] ?? '') },
+    { and: (...keys: object[]) => keys }, { EditorContrib: 1 },
+    { writable: {}, hasDocumentFormattingProvider: contextKey, editorTextFocus: {} },
+    commandId, notificationId, featuresId,
+  );
+  if (!Action) throw new Error('格式化行动作没有注册');
+
+  const commands: string[] = [], notifications: string[] = [];
+  let formatterCount = 0, tooLarge = false;
+  const services = new Map<symbol, object>([
+    [commandId, { executeCommand: async (id: string) => { commands.push(id); } }],
+    [notificationId, { warn: (message: string) => { notifications.push(message); } }],
+    [featuresId, { documentFormattingEditProvider: { all: () => Array(formatterCount) } }],
+  ]);
+  const accessor = { get(id: symbol) {
+    const service = services.get(id);
+    if (!service) throw new Error(`格式化行动作访问了未允许的服务：${String(id)}`);
+    return service;
+  } };
+  const action = new Action();
+  const run = () => action.run(accessor, { hasModel: () => true,
+    getModel: () => ({ isTooLargeForSyncing: () => tooLarge, getLanguageId: () => 'typescript' }) });
+
+  await run();
+  expect(notifications).toEqual(["No formatter is available for 'typescript' files in this workbench."]);
+  expect(commands).toEqual([]);
+  notifications.length = 0;
+  tooLarge = true;
+  await run();
+  expect(notifications).toEqual(['This file cannot be formatted because it is too large']);
+  expect(commands).toEqual([]);
+  tooLarge = false;
+  formatterCount = 1;
+  await run();
+  formatterCount = 2;
+  await run();
+  expect(commands).toEqual(['editor.action.formatDocument', 'editor.action.formatDocument.multiple']);
+});
+
+test('Notebook 只保留 kernel、source action 与 renderer 能力，不再显示旧市场入口', () => {
+  const kernelPicker = source('notebookKernelQuickPickStrategy.ts');
+  expect(kernelPicker.text).not.toContain('workbench.extensions.search');
+  expect(kernelPicker.text).not.toContain('Marketplace');
+  expect(kernelPicker.text).not.toContain('isSearchMarketplacePick');
+  expect(kernelPicker.text).not.toContain('isInstallExtensionPick');
+  expect(kernelPicker.text).not.toContain('_showKernelExtension');
+  expect(kernelPicker.text).not.toContain('_extensionWorkbenchService');
+  expect(kernelPicker.text).not.toContain('extensionIds');
+  expect(kernelPicker.text).toContain('getMatchingKernel');
+  expect(kernelPicker.text).toContain('getKernelSourceActions2');
+  expect(kernelPicker.text).toContain('getSourceActions');
+  expect(kernelPicker.text).toContain('action.runAction()');
+  expect(kernelPicker.text).toContain('No kernels or kernel sources are available');
+  const sourceActionPicker = methodBody('notebookKernelQuickPickStrategy.ts', 'KernelPickerMRUStrategy', 'displaySelectAnotherQuickPick');
+  expect(sourceActionPicker).toContain('selectedKernelPickItem.action.runAction()');
+  expect(sourceActionPicker).not.toContain('isSearchMarketplacePick');
+  expect(sourceActionPicker).not.toContain('isInstallExtensionPick');
+
+  const unknownLanguage = source('statusBarProviders.ts');
+  expect(unknownLanguage.text).not.toContain('workbench.extensions.search');
+  expect(unknownLanguage.text).toContain('Unknown cell language: {0}');
+  expect(unknownLanguage.text).toContain('CHANGE_CELL_LANGUAGE');
+
+  const webview = source('backLayerWebView.ts');
+  expect(webview.text).not.toContain('workbench.extensions.search');
+  expect(webview.text).toContain("'_notebook.selectKernel'");
+  expect(webview.text).toContain("'jupyter.viewOutput'");
+
+  for (const name of ['notebookOutputEditor.ts', 'diffElementOutputs.ts', 'cellOutput.ts']) {
+    const parsed = source(name);
+    expect(parsed.text).not.toContain('workbench.extensions.search');
+    expect(parsed.text).not.toContain('Search Marketplace');
+    expect(parsed.text).toContain('No renderer could be found');
+  }
+  const cellOutput = source('cellOutput.ts');
+  expect(cellOutput.text).not.toContain('installRenderers');
+  expect(cellOutput.text).not.toContain('extensionsWorkbenchService');
+  expect(cellOutput.text).toContain('updateMimePreferredRenderer');
+
+  const notebookBrowser = source('notebookBrowser.ts');
+  expect(notebookBrowser.text).not.toContain('KERNEL_RECOMMENDATIONS');
+  expect(notebookBrowser.text).not.toContain('INotebookExtensionRecommendation');
+  expect(notebookBrowser.text).toContain('KERNEL_EXTENSIONS');
 });
 
 test('浏览器内置管理只返回system和custom内置项，不再查询已退役的用户安装域', async () => {
