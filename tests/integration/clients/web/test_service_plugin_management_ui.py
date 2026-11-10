@@ -125,5 +125,10 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         else:
             assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
             assert result["installed"] and result["uninstalled"]
+            assert result["referencedUninstall"]["status"] == 409
+            assert result["workspaceHandoff"]["workspace_id"] == result["owner"]["workspaceId"]
+            assert {scope: len(reads) for scope, reads in result["scopeReads"].items()} == {
+                "gateway": 2, "workspace": 4, "defaults": 3,
+            }
     finally:
         close_gateway_process(gateway)

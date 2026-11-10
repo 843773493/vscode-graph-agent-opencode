@@ -148,15 +148,21 @@ export class ServicePluginPackagesView extends ViewPane {
     this.workspaceTarget = workspace;
     if (scope === 'workspace' && !workspace) { clearNode(container); append(container, $('p')).textContent = '请选择目标工作区后查看插件。'; return; }
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
-    const [inventory, runtime, defaults, workspaceBindings] = await Promise.all([
+    const [inventory, runtime, scopeBindings] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
-      gateway.request<PluginRuntimeStatusDTO>('/api/gateway/service-plugins/status', { method: 'POST', body: JSON.stringify(pluginTarget) }),
-      readWorkspaceDefaults(target),
-      workspace ? readWorkspaceBindings(workspace) : undefined,
+      scope === 'defaults' ? undefined
+        : gateway.request<PluginRuntimeStatusDTO>('/api/gateway/service-plugins/status', { method: 'POST', body: JSON.stringify(pluginTarget) }),
+      scope === 'defaults' ? readWorkspaceDefaults(target) : workspace ? readWorkspaceBindings(workspace) : undefined,
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
     clearNode(container);
     append(container, $('p')).textContent = inventory.sources?.message ?? '插件源尚未配置';
+    if (workspace) {
+      const handoff = runtime!.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
+      const summary = append(container, $('p'));
+      summary.setAttribute('aria-label', '工作区插件配置交接');
+      summary.textContent = `工作区 ${workspace.workspace_id} 配置交接：${handoff?.state ?? '尚未收到'}${handoff?.error ? ` · ${handoff.error}` : ''}`;
+    }
     for (const pkg of inventory.packages) {
       const manifest = pkg.manifest;
       if (!manifest) continue;
@@ -207,17 +213,15 @@ export class ServicePluginPackagesView extends ViewPane {
       installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, this.progress, pluginTarget)));
       const uninstall = append(packageActions, $('button')) as HTMLButtonElement;
       uninstall.textContent = '卸载整个包';
-      const references = [...runtime.configured_bindings, ...defaults].filter(item => item.package_id === manifest.package_id && item.package_version === manifest.version);
-      uninstall.disabled = references.length > 0;
-      uninstall.title = references.length ? `先解除所有 ${references.length} 个当前绑定，再卸载包` : '';
+      uninstall.title = '由目标 Gateway 检查在用引用；有引用时显示具体原因';
       uninstall.addEventListener('click', () => {
         uninstall.disabled = true;
         void this.runOperation(() => uninstallPackageFromView(this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version));
       });
       for (const plugin of matching) {
-        const binding = (scope === 'defaults' ? defaults : workspaceBindings ?? runtime.configured_bindings).find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id
+        const binding = (scopeBindings ?? runtime!.configured_bindings).find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id
           && item.package_version === manifest.version && (scope !== 'workspace' ? item.workspace_id == null : item.workspace_id === workspace?.workspace_id));
-        const status = scope === 'defaults' ? undefined : runtime.plugins.find(item => item.gateway_id === target.gateway_id
+        const status = runtime?.plugins.find(item => item.gateway_id === target.gateway_id
           && item.binding?.package_id === manifest.package_id && item.binding.plugin_id === plugin.id
           && item.binding.package_version === manifest.version
           && (scope === 'workspace' ? item.binding.workspace_id === workspace?.workspace_id : item.binding.workspace_id == null));

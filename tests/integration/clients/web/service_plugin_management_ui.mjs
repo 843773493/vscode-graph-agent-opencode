@@ -8,6 +8,7 @@ const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [],
   privateInputWrites: [], installed: false, uninstalled: false };
 const pluginRequests = [];
+const managementReads = [];
 let privateInputRequestCount = 0;
 let sourceWriteRequestCount = 0;
 let browser;
@@ -21,6 +22,10 @@ try {
     const url = new URL(request.url());
     if (['http:', 'https:'].includes(url.protocol) && url.origin !== new URL(input.baseUrl).origin) result.externalRequests.push(request.url());
     if (url.pathname.startsWith('/api/gateway/service-plugins/')) pluginRequests.push(url.pathname);
+    if ((request.method() === 'POST' && /\/service-plugins\/(inventory|status)$/.test(url.pathname))
+      || (request.method() === 'GET' && /^\/api\/(gateway|v1)\/config\/sources(?:\/[^/]+)?$/.test(url.pathname))) {
+      managementReads.push({ method: request.method(), path: url.pathname });
+    }
   });
   page.on('response', async response => {
     const request = response.request();
@@ -72,6 +77,26 @@ try {
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
   const view = page.locator('.service-plugin-packages-view');
   await expect(view).toBeVisible();
+  const verifyScopeReads = async (scope, expected) => {
+    const start = managementReads.length;
+    const statusResponse = scope === 'workspace' ? page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/gateway/service-plugins/status') : undefined;
+    await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+    await expect(view.locator('.service-plugin-package')).toBeVisible();
+    const reads = managementReads.slice(start);
+    assert.deepEqual(reads.map(item => item.path).sort(), expected.sort());
+    (result.scopeReads ??= {})[scope] = reads;
+    const summary = view.getByLabel('工作区插件配置交接');
+    if (statusResponse) {
+      const status = await (await statusResponse).json();
+      const handoff = status.data.workspace_configurations.find(item => item.workspace_id === active.workspace_id);
+      assert(handoff, '工作区启用后必须收到所属 owner 的配置交接状态');
+      await expect(summary).toContainText(`工作区 ${active.workspace_id} 配置交接：${handoff.state}`);
+      result.workspaceHandoff = handoff;
+    } else {
+      await expect(summary).toHaveCount(0);
+    }
+  };
 
   const quick = page.locator('.quick-input-widget');
   const pick = async label => {
@@ -98,6 +123,7 @@ try {
   await expect(view.locator('.service-plugin-package')).toBeVisible();
   await expect(search).toHaveValue('ui.preference-probe');
   await search.clear();
+  await verifyScopeReads('gateway', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status']);
   result.installed = true;
   result.phase = 'gateway-binding';
 
@@ -125,6 +151,22 @@ try {
   };
   await enable('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
   result.configOwners.push('gateway');
+  result.phase = 'referenced-uninstall';
+  const referencedUninstall = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/gateway/service-plugins/uninstall');
+  await view.getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await pick('卸载整包');
+  const rejection = await referencedUninstall;
+  const rejectionBody = await rejection.json();
+  assert.equal(rejection.status(), 409);
+  assert.equal(rejectionBody.request_id, rejection.headers()['x-request-id']);
+  assert.match(JSON.stringify(rejectionBody), /插件包仍被引用，不能卸载/);
+  assert.match(JSON.stringify(rejectionBody), /configuration:gateway-preference/);
+  await expect(page.locator('.notifications-toasts')).toContainText('configuration:gateway-preference');
+  await expect(view.getByRole('button', { name: '解除此范围绑定', exact: true })).toBeVisible();
+  await expect(view.getByRole('button', { name: '卸载整个包', exact: true })).toBeEnabled();
+  result.referencedUninstall = { status: rejection.status(), response: rejectionBody };
+  result.phase = 'gateway-binding';
   const editParameters = async (sourceKey, confirmation, label) => {
     await view.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
     await pick(sourceKey);
@@ -200,6 +242,8 @@ try {
   await pick(workspaceName);
   await expect(view).toContainText('工作区偏好 · workspace-preference');
   await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
+  await verifyScopeReads('workspace', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status',
+    '/api/v1/config/sources', '/api/v1/config/sources/workspace_root_mutable_override']);
   result.configOwners.push('workspace');
   await editParameters('workspace_root_mutable_override', '确认保存工作区插件参数', '工作区独立参数');
   await setSecret('工作区偏好 · workspace-preference', 'workspace_root_mutable_override',
@@ -221,6 +265,8 @@ try {
 
   await view.getByLabel('插件管理范围').selectOption('defaults');
   await expect(view).toContainText('工作区偏好 · workspace-preference');
+  await verifyScopeReads('defaults', ['/api/gateway/service-plugins/inventory', '/api/gateway/config/sources',
+    '/api/gateway/config/sources/gateway_mutable_override']);
   await enable('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
   result.configOwners.push('defaults');
   assert.deepEqual(new Set(result.configOwners), new Set(['gateway', 'workspace', 'defaults']));
