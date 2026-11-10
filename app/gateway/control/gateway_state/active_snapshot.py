@@ -213,6 +213,27 @@ class ConfigActiveSnapshotMixin:
             raise RuntimeError("Gateway active snapshot 提交后无法读取")
         return result
 
+    def list_pending_config_candidates(self, *, config_domain: str) -> tuple[ConfigPendingCandidateRecord, ...]:
+        """卸载等显式操作读取全部未结清候选，后发提交不能遮住旧引用。"""
+        store = cast("GatewayStateStore", self)
+        connection = store._database.connection()
+        try:
+            rows = connection.execute(
+                "SELECT candidate_id FROM config_pending_candidate "
+                "WHERE config_domain=? AND state NOT IN ('active','discarded','rejected') "
+                "ORDER BY pending_revision",
+                (config_domain,),
+            ).fetchall()
+        finally:
+            connection.close()
+        candidates = []
+        for row in rows:
+            candidate = store.get_pending_config_candidate(config_domain=config_domain, candidate_id=str(row[0]))
+            if candidate is None:
+                raise RuntimeError("已登记的 Gateway pending candidate 读取时消失")
+            candidates.append(candidate)
+        return tuple(candidates)
+
     def get_pending_config_candidate(
         self,
         *,

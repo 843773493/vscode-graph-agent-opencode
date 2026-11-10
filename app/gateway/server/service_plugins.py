@@ -494,8 +494,7 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
                     references.extend(f"workspace-create:{target.workspace_id}:{creation.intent_id}:{binding.plugin_id}"
                         for binding in creation.bindings
                         if binding.package_id == payload.package_id and binding.package_version == payload.package_version)
-            pending = request.app.state.gateway_state.get_pending_config_candidate(config_domain="gateway")
-            if pending is not None and pending.state not in {"active", "discarded", "rejected"}:
+            for pending in request.app.state.gateway_state.list_pending_config_candidates(config_domain="gateway"):
                 references.extend(f"candidate:{pending.candidate_id}:{binding.plugin_id}"
                     for binding in [*gateway_plugin_bindings(pending.payload), *workspace_default_bindings(pending.payload)]
                     if binding.package_id == payload.package_id and binding.package_version == payload.package_version)

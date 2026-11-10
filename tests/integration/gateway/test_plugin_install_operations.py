@@ -19,6 +19,7 @@ import pytest
 
 from tests.harness.python.run_context import TestRunContext
 from tests.support.http_server import running_http_server
+from tests.support.plugin_package import install_plugin
 
 
 @pytest.fixture
@@ -112,6 +113,90 @@ def source_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
     finally:
         if handle is not None:
             close_gateway_process(handle)
+
+
+@pytest.mark.parametrize("newer_active", [False, True], ids=["discard", "newer-active"])
+def test_pending_binding_blocks_uninstall_across_restart_until_explicit_discard(
+    source_gateway, plugin_source: dict, request: pytest.FixtureRequest, newer_active: bool,
+) -> None:
+    """普通重启保留原pending；只有原配置owner显式结清后才允许卸载。"""
+    client, context, restart = source_gateway
+    evidence: list[dict] = []
+    source_path = "/api/gateway/config/sources/gateway_mutable_override"
+
+    def exchange(method: str, path: str, body: dict | None = None) -> httpx.Response:
+        request_id = f"pending-uninstall-{len(evidence)}"
+        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id})
+        value = response.json()
+        assert response.headers["X-Request-ID"] == value["request_id"] == request_id
+        evidence.append({"method": method, "path": path, "status": response.status_code, "body": value})
+        return response
+
+    try:
+        gateway_id = exchange("GET", "/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+        target = {"gateway_id": gateway_id}
+        archive = context.artifacts_dir / "pending-package.zip"
+        archive.write_bytes(plugin_source["content"])
+        install_plugin(lambda path, body: exchange("POST", path, body), gateway_id=gateway_id, path=str(archive))
+        package_root = context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/source.proof/1.0.0"
+        baseline = exchange("GET", source_path).raise_for_status().json()["data"]
+
+        def save(entries: list[dict], key: str, *, restore_active: bool = False) -> dict:
+            document = exchange("GET", source_path).raise_for_status().json()["data"]
+            source = commentjson.loads(baseline["jsonc"] if restore_active else document["jsonc"])
+            source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+            if restore_active:
+                source.setdefault("logging", {}).setdefault("runtime", {})["level"] = "debug"
+            else:
+                source.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})["request_timeout_seconds"] = 3
+            return exchange("PUT", source_path, {**target, "source_key": "gateway_mutable_override",
+                "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
+                "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+                "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+                "idempotency_key": key}).raise_for_status().json()["data"]
+
+        def uninstall() -> httpx.Response:
+            return exchange("POST", "/api/gateway/service-plugins/uninstall", {
+                **target, "package_id": "source.proof", "package_version": "1.0.0",
+            })
+
+        saved = save([{"package_id": "source.proof", "package_version": "1.0.0",
+            "plugin_id": "declaration", "enabled": False}], "pending-binding")
+        assert saved["edit"]["state"] == "pending_restart", saved
+        status = exchange("POST", "/api/gateway/service-plugins/status", target).raise_for_status().json()["data"]
+        assert status["configured_bindings"] == [] and status["plugins"] == [], status
+        blocked = uninstall()
+        assert blocked.status_code == 409 and f"candidate:{saved['edit']['candidate_id']}:declaration" in blocked.text, blocked.text
+        assert package_root.is_dir()
+        restart()
+        status = exchange("POST", "/api/gateway/service-plugins/status", target).raise_for_status().json()["data"]
+        assert status["configured_bindings"] == [] and status["plugins"] == [], status
+        blocked = uninstall()
+        assert blocked.status_code == 409 and f"candidate:{saved['edit']['candidate_id']}:declaration" in blocked.text, blocked.text
+        if newer_active:
+            # 新的合法提交不自动结清另一个原pending，不能仅检查最新candidate。
+            assert save([], "newer-active", restore_active=True)["edit"]["state"] == "active"
+            original = exchange("GET", source_path + "?idempotency_key=pending-binding").raise_for_status().json()["data"]
+            assert original["edit"]["state"] == "pending_restart"
+            blocked = uninstall()
+            assert blocked.status_code == 409 and f"candidate:{saved['edit']['candidate_id']}:declaration" in blocked.text, blocked.text
+            assert package_root.is_dir()
+            assert plugin_source["calls"] == []
+            return
+        original = exchange("GET", source_path + "?idempotency_key=pending-binding").raise_for_status().json()["data"]
+        assert original["edit"] == saved["edit"]
+        assert original["active_revision"] == saved["active_revision"]
+        discarded = exchange("POST", "/api/gateway/config/discard-restart?candidate_ref=" + original["status"]["candidate_ref"], {
+            "expected_active_revision": original["active_revision"],
+            "expected_active_digest": original["active_digest"],
+        }).raise_for_status().json()["data"]
+        assert not discarded["restart_required"] and discarded["active_revision"] == original["active_revision"], discarded
+        uninstall().raise_for_status()
+        assert not package_root.exists()
+        assert plugin_source["calls"] == [], "本地安装、pending和重启均不应访问来源服务"
+    finally:
+        (context.artifacts_dir / "pending-uninstall-http.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def test_source_install_is_queryable_cancellable_and_never_replayed(source_gateway, plugin_source: dict) -> None:

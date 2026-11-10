@@ -47,7 +47,7 @@ async def uninstall_gateway(tmp_path: Path) -> AsyncIterator[tuple[FastAPI, Mock
         read_references=Mock(return_value=[])
     )
     app.state.gateway_state = SimpleNamespace(
-        get_pending_config_candidate=Mock(return_value=None)
+        list_pending_config_candidates=Mock(return_value=())
     )
     app.state.workspace_plugin_bindings = Mock()
     app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(
