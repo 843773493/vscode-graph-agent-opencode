@@ -230,7 +230,9 @@ class GatewayPluginRuntime:
 
     def validate_target(self, binding: PluginBinding) -> None:
         package = self.packages.get(binding.package_id, binding.package_version)
-        runtimes = {entry.runtime for entry in package.manifest.plugins if entry.runtime is not None}
+        # 安装校验整包；运行准入只核当前插件，不能让兄弟插件的环境要求串扰。
+        runtimes = {entry.runtime for entry in package.manifest.plugins
+                    if entry.id == binding.plugin_id and entry.runtime is not None}
         if not runtimes:
             return
         node_executable = os.environ.get("BOXTEAM_NODE_BIN")

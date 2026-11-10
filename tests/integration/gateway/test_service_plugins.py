@@ -322,8 +322,10 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         (context.artifacts_dir / "plugin-flow.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
 
 
+@pytest.mark.parametrize("shared_package", [False, True], ids=["separate-packages", "same-package"])
 def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindings(
     request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int,
+    shared_package: bool,
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
@@ -336,7 +338,7 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
             provider["api_key"] = "cold-runtime-unused-key"
     config_path.write_text(json.dumps(config))
     gateway = None
-    bindings = [{"package_id": f"cold.{runtime}", "package_version": "1.0.0",
+    bindings = [{"package_id": "cold.tools" if shared_package else f"cold.{runtime}", "package_version": "1.0.0",
         "plugin_id": runtime, "enabled": True} for runtime in ("node", "python")]
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
 
@@ -362,20 +364,24 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
         with httpx.Client(base_url=f"http://127.0.0.1:{unused_tcp_port}", headers=LOCAL_TOKEN_HEADERS,
                           timeout=30, trust_env=False) as client:
             gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
-            for runtime, source, entrypoint in (("node", NODE_PLUGIN, "entry.mjs"),
-                                               ("python", PYTHON_PLUGIN, "entry.py")):
-                archive_path = context.artifacts_dir / f"cold-{runtime}.zip"
-                manifest = {"manifest_version": 1, "package_id": f"cold.{runtime}", "version": "1.0.0",
-                    "name": runtime, "target": native_plugin_target(runtime), "extension_contract_version": 1,
+            packages = [("cold.tools", ("node", "python"))] if shared_package else [
+                (f"cold.{runtime}", (runtime,)) for runtime in ("node", "python")]
+            for package_id, runtimes in packages:
+                archive_path = context.artifacts_dir / f"{package_id}.zip"
+                manifest = {"manifest_version": 1, "package_id": package_id, "version": "1.0.0",
+                    "name": package_id, "target": native_plugin_target(*runtimes), "extension_contract_version": 1,
                     "plugins": [{"id": runtime, "name": runtime, "instance_scope": "gateway",
-                        "runtime": runtime, "entrypoint": [entrypoint], "management_protocol_version": 1,
+                        "runtime": runtime, "entrypoint": ["entry.mjs" if runtime == "node" else "entry.py"],
+                        "management_protocol_version": 1,
                         "requires": [{"extension_point": "services", "version": 1}],
                         "contributes": {"services": [{"service_id": "echo", "service_type": "terminal",
-                            "protocol": "http"}]}}]}
+                            "protocol": "http"}]}} for runtime in runtimes]}
                 with zipfile.ZipFile(archive_path, "w") as archive:
                     archive.writestr("plugin.jsonc", json.dumps(manifest))
-                    archive.writestr(entrypoint, source)
-                    if runtime == "python":
+                    if "node" in runtimes:
+                        archive.writestr("entry.mjs", NODE_PLUGIN)
+                    if "python" in runtimes:
+                        archive.writestr("entry.py", PYTHON_PLUGIN)
                         archive.writestr("local_module.py", "VALUE = 1\n")
                 install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
                     gateway_id=gateway_id, path=str(archive_path),
@@ -403,14 +409,14 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
             python = current["python"]
             assert python["state"] == "ready"
             assert python["instance"]["instance_id"] != initial["python"]["instance"]["instance_id"]
-            echo_path = (f"/api/gateway/service-plugins/cold.python/python/instances/"
+            echo_path = (f"/api/gateway/service-plugins/{bindings[1]['package_id']}/python/instances/"
                 f"{python['instance']['instance_id']}/services/echo/value?package_version=1.0.0")
             assert client.get(echo_path).raise_for_status().json()["pid"] == python["instance"]["process_id"]
             document = client.get(source_path).raise_for_status().json()["data"]
             assert document["jsonc"] == saved["jsonc"]
             assert document["active_revision"] == saved["active_revision"]
             failed_restart = client.post("/api/gateway/service-plugins/restart", json={
-                "gateway_id": gateway_id, "package_id": "cold.node", "package_version": "1.0.0",
+                "gateway_id": gateway_id, "package_id": bindings[0]["package_id"], "package_version": "1.0.0",
                 "plugin_id": "node", "revision": current["node"]["revision"]})
             assert failed_restart.status_code == 409 and "BOXTEAM_NODE_BIN" in failed_restart.text
             disabled = save(client, document, False).raise_for_status().json()["data"]
