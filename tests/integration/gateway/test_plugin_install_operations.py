@@ -80,6 +80,8 @@ def source_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
         close_gateway_process,
         start_gateway_process,
     )
+    from tests.support.processes.scope import unregister_test_process
+    from tests.support.processes.workspace import terminate_process
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     # 安装控制面不调用工作区；挂接外部地址避免启动不参与本场景的 Backend。
@@ -90,16 +92,26 @@ def source_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
 
     handle = start()
 
-    def restart():
+    def restart(*, crash: bool = False):
         nonlocal handle
-        close_gateway_process(handle)
+        assert handle is not None
+        previous, handle = handle, None
+        if crash:
+            # 绕过 lifespan，核真实执行者死亡；Windows 仍等待自己持有的服务器子进程。
+            terminate_process(previous.process, force=True, owned_children=previous.shutdown_children)
+            previous.stdout_file.close()
+            previous.stderr_file.close()
+            unregister_test_process(previous)
+        else:
+            close_gateway_process(previous)
         handle = start()
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{unused_tcp_port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=30, trust_env=False) as client:
             yield client, context, restart
     finally:
-        close_gateway_process(handle)
+        if handle is not None:
+            close_gateway_process(handle)
 
 
 def test_source_install_is_queryable_cancellable_and_never_replayed(source_gateway, plugin_source: dict) -> None:
@@ -185,5 +197,50 @@ def test_source_install_is_queryable_cancellable_and_never_replayed(source_gatew
             "catalog_revision": "different"}, status=409)
         exchange("/api/gateway/service-plugins/install", {**acquisition, "operation_id": "disabled-source"}, status=422)
         exchange("/api/gateway/service-plugins/install-operation", {**target, "operation_id": "missing"}, status=404)
+
+        # 下载中的关键状态由真实安装入口生成；硬退出后不能把查询变成安装恢复。
+        source_config(True)
+        next_manifest = {**plugin_source["manifest"], "version": "2.0.0"}
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr("plugin.jsonc", json.dumps(next_manifest))
+        plugin_source["content"] = archive.getvalue()
+        plugin_source["artifact"] = {**plugin_source["artifact"], "package_version": "2.0.0",
+            "digest": "sha256:" + hashlib.sha256(plugin_source["content"]).hexdigest()}
+        catalog = exchange("/api/gateway/service-plugins/source-catalog", {**target, "source_id": "proof"})
+        acquisition = {**target, "source_id": "proof", "catalog_revision": catalog["catalog_revision"],
+            "artifact": catalog["items"][0]}
+        plugin_source["download_started"].clear()
+        plugin_source["release_download"].clear()
+        accepted = exchange("/api/gateway/service-plugins/install", {**acquisition, "operation_id": "crashed-download"})
+        assert accepted["status"] == "running"
+        assert plugin_source["download_started"].wait(5)
+        before = list(plugin_source["calls"])
+        restart(crash=True)
+        plugin_source["release_download"].set()
+        unknown = settle("crashed-download")
+        assert unknown["status"] == "unknown", unknown
+        assert unknown["artifact"] == accepted["artifact"]
+        assert "执行者已退出" in unknown["error"] and "不会自动重放" in unknown["error"]
+        assert exchange("/api/gateway/service-plugins/install", {**acquisition, "operation_id": "crashed-download"}) == unknown
+        assert exchange("/api/gateway/service-plugins/cancel-install", {**target,
+            "operation_id": "crashed-download"}) == unknown
+        packages = exchange("/api/gateway/service-plugins/inventory", target)["packages"]
+        assert [item["manifest"]["version"] for item in packages] == ["1.0.0"]
+        assert plugin_source["calls"] == before
+        restart()
+        assert settle("crashed-download") == unknown
+        assert plugin_source["calls"] == before
+
+        # 只有用户显式发起另一操作，才重新下载；原未知事实继续保留。
+        exchange("/api/gateway/service-plugins/install", {**acquisition, "operation_id": "explicit-after-crash"})
+        assert settle("explicit-after-crash")["status"] == "succeeded"
+        assert len(plugin_source["calls"]) == len(before) + 1
+        assert settle("crashed-download") == unknown
+        assert exchange("/api/gateway/service-plugins/status", target)["configured_bindings"] == []
+        for version in ("1.0.0", "2.0.0"):
+            exchange("/api/gateway/service-plugins/uninstall", {**target,
+                "package_id": "source.proof", "package_version": version})
+        assert exchange("/api/gateway/service-plugins/inventory", target)["packages"] == []
     finally:
         (context.artifacts_dir / "installation-http.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
