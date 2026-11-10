@@ -43,6 +43,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     _publish,
 )
 from tests.support.api_helpers import create_session
+from tests.support.plugin_package import install_plugin_async
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -125,11 +126,12 @@ async def provider_case(
                 workspace_id = backend.workspace_id
                 target = ProviderCase(client, workspace, artifacts, receipts)
                 plugin_target = SimpleNamespace(client=client, gateway_id=gateway_id, workspace_id=workspace_id)
-                installed = await client.post("/api/gateway/service-plugins/install", json={
-                    "gateway_id": gateway_id, "path": str(package),
-                    "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
-                })
-                installed.raise_for_status()
+                await install_plugin_async(
+                    lambda path, payload: client.post(path, json=payload),
+                    gateway_id=gateway_id,
+                    path=str(package),
+                    expected_digest=hashlib.sha256(package.read_bytes()).hexdigest(),
+                )
                 await _publish(plugin_target, {"plugins": {
                     "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
                                                "plugin_id": "stdio", "enabled": True}]},

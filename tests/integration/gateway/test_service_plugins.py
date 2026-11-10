@@ -14,7 +14,7 @@ import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -182,9 +182,12 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         path = context.artifacts_dir / f"probe-{version}.zip"
         if not path.exists():
             path = package(version, mode)
-        result = exchange("POST", "/api/gateway/service-plugins/install", {**target, "path": str(path),
-            "expected_digest": hashlib.sha256(path.read_bytes()).hexdigest()})
-        result.raise_for_status()
+        install_plugin(
+            lambda endpoint, payload: exchange("POST", endpoint, payload),
+            gateway_id=gateway_id,
+            path=str(path),
+            expected_digest=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
 
     def echo(item: dict[str, object]) -> httpx.Response:
         binding, instance = item["binding"], item["instance"]

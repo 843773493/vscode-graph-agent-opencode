@@ -22,6 +22,7 @@ from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
+from tests.support.plugin_package import install_plugin_async
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -211,9 +212,11 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
             for version in BODIES:
                 archive = artifacts / f"skill-{version}.zip"
                 documents[version] = _archive(archive, version)
-                await _data(await client.post("/api/gateway/service-plugins/install", json={
-                    "gateway_id": gateway_id, "path": str(archive.resolve()),
-                }))
+                await install_plugin_async(
+                    lambda path, payload: client.post(path, json=payload),
+                    gateway_id=gateway_id,
+                    path=str(archive.resolve()),
+                )
             await _published(client, gateway_id, workspace_id, None)
             await _bind(client, gateway_id, workspace_id, "1.0.0")
             first = await _published(client, gateway_id, workspace_id, "1.0.0")

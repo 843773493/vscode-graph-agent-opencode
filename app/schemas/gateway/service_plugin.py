@@ -52,14 +52,6 @@ class PluginConfigurationSchemasDTO(_PluginValue):
     plugins: list[PluginConfigurationSchemaDTO]
 
 
-class InstallPluginRequest(PluginTarget):
-    """从明确目标机器的原生绝对路径导入本地包或显式开发目录。"""
-
-    path: str = Field(min_length=1)
-    development_directory: bool = False
-    expected_digest: str | None = None
-
-
 class PluginVersionRequest(PluginTarget):
     package_id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     package_version: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
@@ -342,16 +334,6 @@ class InstalledPluginPackageDTO(_PluginValue):
     digest: str
 
 
-class PluginSourceStatusDTO(_PluginValue):
-    configured: bool
-    message: str
-
-
-class PluginInventoryResultDTO(_PluginValue):
-    packages: list[InstalledPluginPackageDTO]
-    sources: PluginSourceStatusDTO
-
-
 class PluginSlotStatusDTO(_PluginValue):
     gateway_id: str = Field(min_length=1)
     binding: PluginBinding
@@ -384,7 +366,6 @@ class PluginUninstallResultDTO(_PluginValue):
 
 __all__ = [
     "ExtensionPoint",
-    "InstallPluginRequest",
     "InstalledPluginPackageDTO",
     "PluginBinding",
     "PluginCommandContribution",
@@ -396,7 +377,6 @@ __all__ = [
     "PluginExtensionRequirement",
     "PluginInstanceStatus",
     "PluginInstanceView",
-    "PluginInventoryResultDTO",
     "PluginKeybindingContribution",
     "PluginMenuContribution",
     "PluginPackageManifest",
@@ -409,7 +389,6 @@ __all__ = [
     "PluginServiceReference",
     "PluginSkillContribution",
     "PluginSlotStatusDTO",
-    "PluginSourceStatusDTO",
     "PluginState",
     "PluginTarget",
     "PluginToolBinding",

@@ -80,7 +80,9 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     registry.targets.return_value = ()
     registry.close.side_effect = lambda **kwargs: drain("registry")
     config = GatewayConfig(
-        payload={"logging": {"runtime": {"level": "info", "pretty": True}}, "plugins": {}},
+        payload={"logging": {"runtime": {"level": "info", "pretty": True}}, "plugins": {},
+            "telemetry": {"runtime": {"enabled": False, "sample_ratio": 1, "sample_buffer_limit": 256}},
+            "statistics": {"runtime": {"enabled": False, "collection_interval_ms": 5000}}},
         revision="pool-lifecycle-config", default_workspace_skill_groups=[],
         gateway_process_health_poll_interval_seconds=1,
         gateway_process_health_request_timeout_seconds=1,
@@ -95,6 +97,8 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     )
     for name in ("configure_application_logging", "load_boxteam_env", "get_gateway_local_token"):
         monkeypatch.setattr(gateway_lifespan, name, Mock())
+    monkeypatch.setattr(gateway_lifespan, "runtime_logging_state",
+        lambda: SimpleNamespace(runtime_instance_id="pool-runtime"))
     monkeypatch.setattr(gateway_lifespan, "_gateway_root", lambda: tmp_path)
     monkeypatch.setattr(gateway_lifespan, "GatewayStateStore", Mock(return_value=state))
     monkeypatch.setattr(gateway_lifespan, "load_or_create_gateway_id", Mock(return_value="gateway_pool"))

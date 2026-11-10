@@ -39,6 +39,7 @@ from tests.integration.workspace_services.mcp.schema_server import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.plugin_package import install_plugin_async
 
 scripted_model_replay = replay_case.scripted_model_replay
 scripted_debug_backend_port = replay_case.scripted_debug_backend_port
@@ -99,11 +100,12 @@ async def result_client(
     package = _package(context.artifacts_dir / "mcp-bridge.zip")
     gateway_id, workspace_id = scripted_gateway_process.gateway_id, scripted_gateway_process.workspace_id
     target = SimpleNamespace(client=client, gateway_id=gateway_id, workspace_id=workspace_id)
-    installed = await client.post("/api/gateway/service-plugins/install", json={
-        "gateway_id": gateway_id, "path": str(package),
-        "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
-    })
-    installed.raise_for_status()
+    await install_plugin_async(
+        lambda path, payload: client.post(path, json=payload),
+        gateway_id=gateway_id,
+        path=str(package),
+        expected_digest=hashlib.sha256(package.read_bytes()).hexdigest(),
+    )
     definitions = result_server_receipts_path.with_name("definitions.json")
     plugin_configuration = {
         "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",

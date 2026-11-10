@@ -29,6 +29,7 @@ from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 官方 SDK HTTP 服务
 )
 from tests.support.paths import chromium_temporary_environment
+from tests.support.plugin_package import install_plugin_async
 
 
 @pytest.fixture(autouse=True)
@@ -42,11 +43,9 @@ async def test_add_plugin_service_and_http_from_original_workbench(
     case = mcp_plugin_case
     artifacts = case.context.artifacts_dir
     archive = _package(artifacts / "mcp-stdio.zip")
-    installed = await case.client.post("/api/gateway/service-plugins/install", json={
-        "gateway_id": case.gateway_id, "path": str(archive),
-        "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-    })
-    installed.raise_for_status()
+    await install_plugin_async(lambda path, body: case.client.post(path, json=body),
+        gateway_id=case.gateway_id, path=str(archive),
+        expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest())
     definitions, receipts = artifacts / "definitions.json", artifacts / "receipts.jsonl"
     definitions.write_text('{"probe":{"type":"object"}}', encoding="utf-8")
     await _publish(case, {"plugins": {

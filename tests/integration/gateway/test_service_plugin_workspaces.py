@@ -15,7 +15,7 @@ import pytest
 
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import PYTHON_PLUGIN
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -227,10 +227,12 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
 
         for package_id, mode in (("probe.tools", ""), ("probe.bad", "bad-ready")):
             archive = _package(context.artifacts_dir / f"{package_id}.zip", package_id=package_id, mode=mode)
-            exchange("POST", "/api/gateway/service-plugins/install", {
-                "gateway_id": target_gateway, "path": str(archive),
-                "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-            }).raise_for_status()
+            install_plugin(
+                lambda path, body: exchange("POST", path, body),
+                gateway_id=target_gateway,
+                path=str(archive),
+                expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+            )
 
         write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-enable", {"label": "A"})
         write_binding(workspace_b_id, [binding_for("probe.tools")], "workspace-b-plugin-enable", {"label": "B"})
@@ -388,8 +390,12 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         missing = defaults([binding])
         assert missing.status_code == 422, missing.text
         archive = _package(context.artifacts_dir / "defaults.zip", package_id="probe.defaults")
-        exchange("POST", "/api/gateway/service-plugins/install", {"gateway_id": gateway_id,
-            "path": str(archive), "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest()}).raise_for_status()
+        install_plugin(
+            lambda path, body: exchange("POST", path, body),
+            gateway_id=gateway_id,
+            path=str(archive),
+            expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        )
         saved = defaults([binding]).raise_for_status().json()["data"]
         assert saved["edit"]["state"] == "active"
         assert defaults([binding, binding]).status_code == 422

@@ -35,6 +35,7 @@ _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 _MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 _MAX_FILES = 20_000
 _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$")
+_NO_EXPECTED_TARGET = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +62,52 @@ class PluginPackageStore:
         self.root = root.resolve(strict=True)
         self._lock_path = self.root / ".install.lock"
 
-    def install_zip(self, path: Path, expected_digest: str | None = None) -> InstalledPluginPackage:
+    def inspect_zip(self, path: Path, expected_digest: str | None = None) -> tuple[PluginPackageManifest, str]:
+        """受理时校验并冻结 ZIP 的身份；发布仍会再次验证同一文件摘要。"""
+        archive_path = path.resolve(strict=True)
+        if not archive_path.is_file() or archive_path.stat().st_size > _MAX_ARCHIVE_BYTES:
+            raise ValueError("插件包必须是大小不超过 256 MiB 的 ZIP 文件")
+        digest = _sha256_file(archive_path)
+        if expected_digest is not None and expected_digest.lower().removeprefix("sha256:") != digest:
+            raise ValueError("插件包摘要与请求不匹配")
+        with zipfile.ZipFile(archive_path) as archive:
+            entries = _zip_entries(archive)
+            manifest_info = entries.get("plugin.jsonc")
+            if manifest_info is None or manifest_info.is_dir():
+                raise ValueError("自有插件 ZIP 根目录必须包含 plugin.jsonc")
+            if sum(item.file_size for item in entries.values()) > _MAX_EXPANDED_BYTES:
+                raise ValueError("插件 ZIP 解压大小超过 512 MiB")
+            manifest = _parse_manifest(archive.read(manifest_info))
+            files = {name for name, info in entries.items() if not info.is_dir()}
+            _validate_package_files(manifest, files, lambda relative: archive.read(entries[relative]))
+        return manifest, digest
+
+    def inspect_directory(self, path: Path) -> tuple[PluginPackageManifest, str]:
+        """受理时校验并冻结开发目录的身份与内容摘要。"""
+        if path.is_symlink():
+            raise ValueError("开发插件源不能是符号链接")
+        source = path.resolve(strict=True)
+        if not source.is_dir():
+            raise ValueError("开发插件源必须是普通目录")
+        entries = _directory_entries(source)
+        if sum((source / name).stat().st_size for name in entries) > _MAX_EXPANDED_BYTES:
+            raise ValueError("插件目录大小超过 512 MiB")
+        if "plugin.jsonc" not in entries:
+            raise ValueError("插件目录根目录必须包含 plugin.jsonc")
+        manifest = _parse_manifest((source / "plugin.jsonc").read_bytes())
+        _validate_package_files(manifest, entries, lambda relative: (source / relative).read_bytes())
+        return manifest, _directory_digest(source, entries)
+
+    def install_zip(
+        self,
+        path: Path,
+        expected_digest: str | None = None,
+        *,
+        expected_package_id: str | None = None,
+        expected_package_version: str | None = None,
+        expected_target: object = _NO_EXPECTED_TARGET,
+        commit_publication: Callable[[Callable[[], None]], bool] | None = None,
+    ) -> InstalledPluginPackage:
         archive_path = path.resolve(strict=True)
         if not archive_path.is_file() or archive_path.stat().st_size > _MAX_ARCHIVE_BYTES:
             raise ValueError("插件包必须是大小不超过 256 MiB 的 ZIP 文件")
@@ -76,6 +122,10 @@ class PluginPackageStore:
             if sum(item.file_size for item in entries.values()) > _MAX_EXPANDED_BYTES:
                 raise ValueError("插件 ZIP 解压大小超过 512 MiB")
             manifest = _parse_manifest(archive.read(manifest_info))
+            _validate_expected_manifest(
+                manifest, package_id=expected_package_id,
+                package_version=expected_package_version, target=expected_target,
+            )
             files = {name for name, info in entries.items() if not info.is_dir()}
             read_file = lambda relative: archive.read(entries[relative])
             _validate_package_files(manifest, files, read_file)
@@ -84,9 +134,18 @@ class PluginPackageStore:
                     _extract(archive, entries, destination)
                     if _sha256_file(archive_path) != raw_digest:
                         raise RuntimeError("ZIP 源文件在发布期间发生变化；未发布包")
-                return self._publish(manifest, raw_digest, prepare)
+                return self._publish(manifest, raw_digest, prepare, commit_publication)
 
-    def install_directory(self, path: Path) -> InstalledPluginPackage:
+    def install_directory(
+        self,
+        path: Path,
+        expected_digest: str | None = None,
+        *,
+        expected_package_id: str | None = None,
+        expected_package_version: str | None = None,
+        expected_target: object = _NO_EXPECTED_TARGET,
+        commit_publication: Callable[[Callable[[], None]], bool] | None = None,
+    ) -> InstalledPluginPackage:
         if path.is_symlink():
             raise ValueError("开发插件源不能是符号链接")
         source = path.resolve(strict=True)
@@ -99,14 +158,20 @@ class PluginPackageStore:
         if "plugin.jsonc" not in entries:
             raise ValueError("插件目录根目录必须包含 plugin.jsonc")
         manifest = _parse_manifest(manifest_path.read_bytes())
+        _validate_expected_manifest(
+            manifest, package_id=expected_package_id,
+            package_version=expected_package_version, target=expected_target,
+        )
         _validate_package_files(manifest, entries, lambda relative: (source / relative).read_bytes())
         digest = _directory_digest(source, entries)
+        if expected_digest is not None and expected_digest.lower().removeprefix("sha256:") != digest:
+            raise ValueError("插件目录摘要与受理时冻结的摘要不匹配")
         with portalocker.Lock(self._lock_path, mode="a+b", timeout=30):
             def prepare(destination: Path) -> None:
                 _copy_directory(source, entries, destination)
                 if _directory_digest(destination, entries) != digest:
                     raise RuntimeError("开发插件源在发布期间发生变化；未发布包")
-            return self._publish(manifest, digest, prepare)
+            return self._publish(manifest, digest, prepare, commit_publication)
 
     def inventory(self) -> list[InstalledPluginPackage]:
         installed: list[InstalledPluginPackage] = []
@@ -159,8 +224,13 @@ class PluginPackageStore:
             if package_dir.exists() and not any(package_dir.iterdir()):
                 package_dir.rmdir()
 
-    def _publish(self, manifest: PluginPackageManifest, digest: str,
-                 prepare: Callable[[Path], None]) -> InstalledPluginPackage:
+    def _publish(
+        self,
+        manifest: PluginPackageManifest,
+        digest: str,
+        prepare: Callable[[Path], None],
+        commit_publication: Callable[[Callable[[], None]], bool] | None = None,
+    ) -> InstalledPluginPackage:
         package_dir = self.root / manifest.package_id
         destination = package_dir / manifest.version
         _validate_identity(manifest.package_id, manifest.version)
@@ -171,6 +241,8 @@ class PluginPackageStore:
             installed = _read_installed(destination)
             if installed.digest != digest:
                 raise RuntimeError(f"插件包版本不可变且摘要冲突: {manifest.package_id}@{manifest.version}")
+            if commit_publication is not None and not commit_publication(lambda: None):
+                raise PluginInstallCancelled("插件安装已取消")
             return installed
         staging = Path(tempfile.mkdtemp(prefix=".install-", dir=package_dir))
         try:
@@ -202,8 +274,15 @@ class PluginPackageStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             _sync_tree(staging)
-            os.replace(staging, destination)
-            fsync_directory(package_dir)
+            def publish() -> None:
+                os.replace(staging, destination)
+                fsync_directory(package_dir)
+
+            if commit_publication is None:
+                publish()
+            else:
+                if not commit_publication(publish):
+                    raise PluginInstallCancelled("插件安装已取消")
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
@@ -216,6 +295,25 @@ def _sha256_file(path: Path) -> str:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+class PluginInstallCancelled(RuntimeError):
+    """取消意图先于包发布提交。"""
+
+
+def _validate_expected_manifest(
+    manifest: PluginPackageManifest,
+    *,
+    package_id: str | None,
+    package_version: str | None,
+    target: object,
+) -> None:
+    if package_id is not None and manifest.package_id != package_id:
+        raise ValueError("插件包 package_id 与受理时冻结的制品不一致")
+    if package_version is not None and manifest.version != package_version:
+        raise ValueError("插件包 version 与受理时冻结的制品不一致")
+    if target is not _NO_EXPECTED_TARGET and manifest.target != target:
+        raise ValueError("插件包运行目标与受理时冻结的制品不一致")
 
 
 def _safe_member(name: str) -> str:

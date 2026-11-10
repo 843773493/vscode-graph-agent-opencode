@@ -282,12 +282,120 @@ class InstalledPluginPackageDTO(_message.Message):
     def __init__(self, manifest: _Optional[_Union[PluginPackageManifest, _Mapping]] = ..., digest: _Optional[str] = ...) -> None: ...
 
 class PluginSourceStatusDTO(_message.Message):
-    __slots__ = ("configured", "message")
+    __slots__ = ("configured", "message", "entries")
     CONFIGURED_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
     configured: bool
     message: str
-    def __init__(self, configured: _Optional[bool] = ..., message: _Optional[str] = ...) -> None: ...
+    entries: _containers.RepeatedCompositeFieldContainer[PluginSourceConfig]
+    def __init__(self, configured: _Optional[bool] = ..., message: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[PluginSourceConfig, _Mapping]]] = ...) -> None: ...
+
+class PluginSourceConfig(_message.Message):
+    __slots__ = ("source_id", "protocol_version", "base_url", "enabled")
+    SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    BASE_URL_FIELD_NUMBER: _ClassVar[int]
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
+    source_id: str
+    protocol_version: int
+    base_url: str
+    enabled: bool
+    def __init__(self, source_id: _Optional[str] = ..., protocol_version: _Optional[int] = ..., base_url: _Optional[str] = ..., enabled: _Optional[bool] = ...) -> None: ...
+
+class PluginSourceArtifact(_message.Message):
+    __slots__ = ("package_id", "package_version", "target", "digest", "url", "filename")
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    DIGEST_FIELD_NUMBER: _ClassVar[int]
+    URL_FIELD_NUMBER: _ClassVar[int]
+    FILENAME_FIELD_NUMBER: _ClassVar[int]
+    package_id: str
+    package_version: str
+    target: PluginPackageTarget
+    digest: str
+    url: str
+    filename: str
+    def __init__(self, package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., target: _Optional[_Union[PluginPackageTarget, _Mapping]] = ..., digest: _Optional[str] = ..., url: _Optional[str] = ..., filename: _Optional[str] = ...) -> None: ...
+
+class PluginSourceCatalogRequest(_message.Message):
+    __slots__ = ("gateway_id", "gateway_connection_id", "source_id", "query", "cursor")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
+    QUERY_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    gateway_connection_id: str
+    source_id: str
+    query: str
+    cursor: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., source_id: _Optional[str] = ..., query: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
+
+class PluginSourceCatalogDTO(_message.Message):
+    __slots__ = ("gateway_id", "source_id", "protocol_version", "catalog_revision", "items", "next_cursor")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    source_id: str
+    protocol_version: int
+    catalog_revision: str
+    items: _containers.RepeatedCompositeFieldContainer[PluginSourceArtifact]
+    next_cursor: str
+    def __init__(self, gateway_id: _Optional[str] = ..., source_id: _Optional[str] = ..., protocol_version: _Optional[int] = ..., catalog_revision: _Optional[str] = ..., items: _Optional[_Iterable[_Union[PluginSourceArtifact, _Mapping]]] = ..., next_cursor: _Optional[str] = ...) -> None: ...
+
+class FrozenPluginInstallArtifact(_message.Message):
+    __slots__ = ("source_kind", "package_id", "package_version", "target", "digest", "source_id", "catalog_revision", "path", "filename")
+    SOURCE_KIND_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    PACKAGE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    FILENAME_FIELD_NUMBER: _ClassVar[int]
+    source_kind: str
+    package_id: str
+    package_version: str
+    target: PluginPackageTarget
+    digest: str
+    source_id: str
+    catalog_revision: str
+    path: str
+    filename: str
+    def __init__(self, source_kind: _Optional[str] = ..., package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., target: _Optional[_Union[PluginPackageTarget, _Mapping]] = ..., digest: _Optional[str] = ..., source_id: _Optional[str] = ..., catalog_revision: _Optional[str] = ..., path: _Optional[str] = ..., filename: _Optional[str] = ...) -> None: ...
+
+class PluginInstallOperationRequest(_message.Message):
+    __slots__ = ("gateway_id", "gateway_connection_id", "operation_id")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    gateway_connection_id: str
+    operation_id: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., operation_id: _Optional[str] = ...) -> None: ...
+
+class PluginInstallOperationDTO(_message.Message):
+    __slots__ = ("gateway_id", "operation_id", "status", "artifact", "cancel_requested", "error")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_FIELD_NUMBER: _ClassVar[int]
+    CANCEL_REQUESTED_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    operation_id: str
+    status: str
+    artifact: FrozenPluginInstallArtifact
+    cancel_requested: bool
+    error: str
+    def __init__(self, gateway_id: _Optional[str] = ..., operation_id: _Optional[str] = ..., status: _Optional[str] = ..., artifact: _Optional[_Union[FrozenPluginInstallArtifact, _Mapping]] = ..., cancel_requested: _Optional[bool] = ..., error: _Optional[str] = ...) -> None: ...
 
 class PluginInventoryResultDTO(_message.Message):
     __slots__ = ("packages", "sources")
@@ -434,18 +542,26 @@ class PluginPrivateInputWriteRequest(_message.Message):
     def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., package_id: _Optional[str] = ..., plugin_id: _Optional[str] = ..., parameter_pointer: _Optional[str] = ..., value: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., package_version: _Optional[str] = ..., source_key: _Optional[str] = ...) -> None: ...
 
 class InstallPluginRequest(_message.Message):
-    __slots__ = ("gateway_id", "gateway_connection_id", "path", "development_directory", "expected_digest")
+    __slots__ = ("gateway_id", "gateway_connection_id", "path", "development_directory", "expected_digest", "operation_id", "source_id", "artifact", "catalog_revision")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     PATH_FIELD_NUMBER: _ClassVar[int]
     DEVELOPMENT_DIRECTORY_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     gateway_connection_id: str
     path: str
     development_directory: bool
     expected_digest: str
-    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., path: _Optional[str] = ..., development_directory: _Optional[bool] = ..., expected_digest: _Optional[str] = ...) -> None: ...
+    operation_id: str
+    source_id: str
+    artifact: PluginSourceArtifact
+    catalog_revision: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., path: _Optional[str] = ..., development_directory: _Optional[bool] = ..., expected_digest: _Optional[str] = ..., operation_id: _Optional[str] = ..., source_id: _Optional[str] = ..., artifact: _Optional[_Union[PluginSourceArtifact, _Mapping]] = ..., catalog_revision: _Optional[str] = ...) -> None: ...
 
 class PluginVersionRequest(_message.Message):
     __slots__ = ("gateway_id", "gateway_connection_id", "package_id", "package_version")

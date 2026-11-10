@@ -51,6 +51,9 @@ from app.gateway.control.gateway_state.apply_promotion import (
     ConfigApplyPromotionMixin,
 )
 from app.gateway.control.gateway_state.lifecycle import GatewayLifecycleMixin
+from app.gateway.control.gateway_state.plugin_install_operations import (
+    PluginInstallOperationMixin,
+)
 from app.gateway.control.gateway_state.restart_apply import (
     GatewayRestartApplyMixin,
 )
@@ -82,6 +85,7 @@ class GatewayStateStore(
     ConfigApplyClaimMixin,
     GatewayRestartIntentMixin,
     GatewayRestartApplyMixin,
+    PluginInstallOperationMixin,
 ):
     def __init__(self, *, path: Path, allow_shared_processes: bool = False) -> None:
         self._database = SQLiteStateDatabase(

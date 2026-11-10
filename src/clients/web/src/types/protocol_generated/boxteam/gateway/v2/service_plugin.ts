@@ -169,6 +169,67 @@ export interface InstalledPluginPackageDTO {
 export interface PluginSourceStatusDTO {
   configured: boolean;
   message: string;
+  entries: PluginSourceConfig[];
+}
+
+export interface PluginSourceConfig {
+  source_id: string;
+  protocol_version: number;
+  base_url?: string | undefined;
+  enabled: boolean;
+}
+
+export interface PluginSourceArtifact {
+  package_id: string;
+  package_version: string;
+  target: PluginPackageTarget | undefined;
+  digest: string;
+  url: string;
+  filename: string;
+}
+
+export interface PluginSourceCatalogRequest {
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+  source_id: string;
+  query: string;
+  cursor?: string | undefined;
+}
+
+export interface PluginSourceCatalogDTO {
+  gateway_id: string;
+  source_id: string;
+  protocol_version: number;
+  catalog_revision: string;
+  items: PluginSourceArtifact[];
+  next_cursor?: string | undefined;
+}
+
+export interface FrozenPluginInstallArtifact {
+  source_kind: string;
+  package_id: string;
+  package_version: string;
+  target: PluginPackageTarget | undefined;
+  digest: string;
+  source_id?: string | undefined;
+  catalog_revision?: string | undefined;
+  path?: string | undefined;
+  filename?: string | undefined;
+}
+
+export interface PluginInstallOperationRequest {
+  gateway_id: string;
+  gateway_connection_id?: string | undefined;
+  operation_id: string;
+}
+
+export interface PluginInstallOperationDTO {
+  gateway_id: string;
+  operation_id: string;
+  status: string;
+  artifact: FrozenPluginInstallArtifact | undefined;
+  cancel_requested: boolean;
+  error?: string | undefined;
 }
 
 export interface PluginInventoryResultDTO {
@@ -262,6 +323,10 @@ export interface InstallPluginRequest {
   path: string;
   development_directory: boolean;
   expected_digest?: string | undefined;
+  operation_id: string;
+  source_id?: string | undefined;
+  artifact: PluginSourceArtifact | undefined;
+  catalog_revision?: string | undefined;
 }
 
 export interface PluginVersionRequest {
@@ -1334,7 +1399,7 @@ export const InstalledPluginPackageDTO: MessageFns<InstalledPluginPackageDTO> = 
 };
 
 function createBasePluginSourceStatusDTO(): PluginSourceStatusDTO {
-  return { configured: false, message: "" };
+  return { configured: false, message: "", entries: [] };
 }
 
 export const PluginSourceStatusDTO: MessageFns<PluginSourceStatusDTO> = {
@@ -1342,6 +1407,9 @@ export const PluginSourceStatusDTO: MessageFns<PluginSourceStatusDTO> = {
     return {
       configured: isSet(object.configured) ? globalThis.Boolean(object.configured) : false,
       message: isSet(object.message) ? globalThis.String(object.message) : "",
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => PluginSourceConfig.fromJSON(e))
+        : [],
     };
   },
 
@@ -1353,6 +1421,9 @@ export const PluginSourceStatusDTO: MessageFns<PluginSourceStatusDTO> = {
     if (message.message !== "") {
       obj.message = message.message;
     }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => PluginSourceConfig.toJSON(e));
+    }
     return obj;
   },
 
@@ -1363,6 +1434,408 @@ export const PluginSourceStatusDTO: MessageFns<PluginSourceStatusDTO> = {
     const message = createBasePluginSourceStatusDTO();
     message.configured = object.configured ?? false;
     message.message = object.message ?? "";
+    message.entries = object.entries?.map((e) => PluginSourceConfig.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBasePluginSourceConfig(): PluginSourceConfig {
+  return { source_id: "", protocol_version: 0, base_url: undefined, enabled: false };
+}
+
+export const PluginSourceConfig: MessageFns<PluginSourceConfig> = {
+  fromJSON(object: any): PluginSourceConfig {
+    return {
+      source_id: isSet(object.source_id) ? globalThis.String(object.source_id) : "",
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      base_url: isSet(object.base_url) ? globalThis.String(object.base_url) : undefined,
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+    };
+  },
+
+  toJSON(message: PluginSourceConfig): unknown {
+    const obj: any = {};
+    if (message.source_id !== "") {
+      obj.source_id = message.source_id;
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.base_url !== undefined) {
+      obj.base_url = message.base_url;
+    }
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginSourceConfig>, I>>(base?: I): PluginSourceConfig {
+    return PluginSourceConfig.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginSourceConfig>, I>>(object: I): PluginSourceConfig {
+    const message = createBasePluginSourceConfig();
+    message.source_id = object.source_id ?? "";
+    message.protocol_version = object.protocol_version ?? 0;
+    message.base_url = object.base_url ?? undefined;
+    message.enabled = object.enabled ?? false;
+    return message;
+  },
+};
+
+function createBasePluginSourceArtifact(): PluginSourceArtifact {
+  return { package_id: "", package_version: "", target: undefined, digest: "", url: "", filename: "" };
+}
+
+export const PluginSourceArtifact: MessageFns<PluginSourceArtifact> = {
+  fromJSON(object: any): PluginSourceArtifact {
+    return {
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      target: isSet(object.target) ? PluginPackageTarget.fromJSON(object.target) : undefined,
+      digest: isSet(object.digest) ? globalThis.String(object.digest) : "",
+      url: isSet(object.url) ? globalThis.String(object.url) : "",
+      filename: isSet(object.filename) ? globalThis.String(object.filename) : "",
+    };
+  },
+
+  toJSON(message: PluginSourceArtifact): unknown {
+    const obj: any = {};
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.target !== undefined) {
+      obj.target = PluginPackageTarget.toJSON(message.target);
+    }
+    if (message.digest !== "") {
+      obj.digest = message.digest;
+    }
+    if (message.url !== "") {
+      obj.url = message.url;
+    }
+    if (message.filename !== "") {
+      obj.filename = message.filename;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginSourceArtifact>, I>>(base?: I): PluginSourceArtifact {
+    return PluginSourceArtifact.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginSourceArtifact>, I>>(object: I): PluginSourceArtifact {
+    const message = createBasePluginSourceArtifact();
+    message.package_id = object.package_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? PluginPackageTarget.fromPartial(object.target)
+      : undefined;
+    message.digest = object.digest ?? "";
+    message.url = object.url ?? "";
+    message.filename = object.filename ?? "";
+    return message;
+  },
+};
+
+function createBasePluginSourceCatalogRequest(): PluginSourceCatalogRequest {
+  return { gateway_id: "", gateway_connection_id: undefined, source_id: "", query: "", cursor: undefined };
+}
+
+export const PluginSourceCatalogRequest: MessageFns<PluginSourceCatalogRequest> = {
+  fromJSON(object: any): PluginSourceCatalogRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      source_id: isSet(object.source_id) ? globalThis.String(object.source_id) : "",
+      query: isSet(object.query) ? globalThis.String(object.query) : "",
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+    };
+  },
+
+  toJSON(message: PluginSourceCatalogRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.source_id !== "") {
+      obj.source_id = message.source_id;
+    }
+    if (message.query !== "") {
+      obj.query = message.query;
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginSourceCatalogRequest>, I>>(base?: I): PluginSourceCatalogRequest {
+    return PluginSourceCatalogRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginSourceCatalogRequest>, I>>(object: I): PluginSourceCatalogRequest {
+    const message = createBasePluginSourceCatalogRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.source_id = object.source_id ?? "";
+    message.query = object.query ?? "";
+    message.cursor = object.cursor ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginSourceCatalogDTO(): PluginSourceCatalogDTO {
+  return {
+    gateway_id: "",
+    source_id: "",
+    protocol_version: 0,
+    catalog_revision: "",
+    items: [],
+    next_cursor: undefined,
+  };
+}
+
+export const PluginSourceCatalogDTO: MessageFns<PluginSourceCatalogDTO> = {
+  fromJSON(object: any): PluginSourceCatalogDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      source_id: isSet(object.source_id) ? globalThis.String(object.source_id) : "",
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.String(object.catalog_revision) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => PluginSourceArtifact.fromJSON(e))
+        : [],
+      next_cursor: isSet(object.next_cursor) ? globalThis.String(object.next_cursor) : undefined,
+    };
+  },
+
+  toJSON(message: PluginSourceCatalogDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.source_id !== "") {
+      obj.source_id = message.source_id;
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.catalog_revision !== "") {
+      obj.catalog_revision = message.catalog_revision;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => PluginSourceArtifact.toJSON(e));
+    }
+    if (message.next_cursor !== undefined) {
+      obj.next_cursor = message.next_cursor;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginSourceCatalogDTO>, I>>(base?: I): PluginSourceCatalogDTO {
+    return PluginSourceCatalogDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginSourceCatalogDTO>, I>>(object: I): PluginSourceCatalogDTO {
+    const message = createBasePluginSourceCatalogDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.source_id = object.source_id ?? "";
+    message.protocol_version = object.protocol_version ?? 0;
+    message.catalog_revision = object.catalog_revision ?? "";
+    message.items = object.items?.map((e) => PluginSourceArtifact.fromPartial(e)) || [];
+    message.next_cursor = object.next_cursor ?? undefined;
+    return message;
+  },
+};
+
+function createBaseFrozenPluginInstallArtifact(): FrozenPluginInstallArtifact {
+  return {
+    source_kind: "",
+    package_id: "",
+    package_version: "",
+    target: undefined,
+    digest: "",
+    source_id: undefined,
+    catalog_revision: undefined,
+    path: undefined,
+    filename: undefined,
+  };
+}
+
+export const FrozenPluginInstallArtifact: MessageFns<FrozenPluginInstallArtifact> = {
+  fromJSON(object: any): FrozenPluginInstallArtifact {
+    return {
+      source_kind: isSet(object.source_kind) ? globalThis.String(object.source_kind) : "",
+      package_id: isSet(object.package_id) ? globalThis.String(object.package_id) : "",
+      package_version: isSet(object.package_version) ? globalThis.String(object.package_version) : "",
+      target: isSet(object.target) ? PluginPackageTarget.fromJSON(object.target) : undefined,
+      digest: isSet(object.digest) ? globalThis.String(object.digest) : "",
+      source_id: isSet(object.source_id) ? globalThis.String(object.source_id) : undefined,
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.String(object.catalog_revision) : undefined,
+      path: isSet(object.path) ? globalThis.String(object.path) : undefined,
+      filename: isSet(object.filename) ? globalThis.String(object.filename) : undefined,
+    };
+  },
+
+  toJSON(message: FrozenPluginInstallArtifact): unknown {
+    const obj: any = {};
+    if (message.source_kind !== "") {
+      obj.source_kind = message.source_kind;
+    }
+    if (message.package_id !== "") {
+      obj.package_id = message.package_id;
+    }
+    if (message.package_version !== "") {
+      obj.package_version = message.package_version;
+    }
+    if (message.target !== undefined) {
+      obj.target = PluginPackageTarget.toJSON(message.target);
+    }
+    if (message.digest !== "") {
+      obj.digest = message.digest;
+    }
+    if (message.source_id !== undefined) {
+      obj.source_id = message.source_id;
+    }
+    if (message.catalog_revision !== undefined) {
+      obj.catalog_revision = message.catalog_revision;
+    }
+    if (message.path !== undefined) {
+      obj.path = message.path;
+    }
+    if (message.filename !== undefined) {
+      obj.filename = message.filename;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FrozenPluginInstallArtifact>, I>>(base?: I): FrozenPluginInstallArtifact {
+    return FrozenPluginInstallArtifact.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FrozenPluginInstallArtifact>, I>>(object: I): FrozenPluginInstallArtifact {
+    const message = createBaseFrozenPluginInstallArtifact();
+    message.source_kind = object.source_kind ?? "";
+    message.package_id = object.package_id ?? "";
+    message.package_version = object.package_version ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? PluginPackageTarget.fromPartial(object.target)
+      : undefined;
+    message.digest = object.digest ?? "";
+    message.source_id = object.source_id ?? undefined;
+    message.catalog_revision = object.catalog_revision ?? undefined;
+    message.path = object.path ?? undefined;
+    message.filename = object.filename ?? undefined;
+    return message;
+  },
+};
+
+function createBasePluginInstallOperationRequest(): PluginInstallOperationRequest {
+  return { gateway_id: "", gateway_connection_id: undefined, operation_id: "" };
+}
+
+export const PluginInstallOperationRequest: MessageFns<PluginInstallOperationRequest> = {
+  fromJSON(object: any): PluginInstallOperationRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+    };
+  },
+
+  toJSON(message: PluginInstallOperationRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginInstallOperationRequest>, I>>(base?: I): PluginInstallOperationRequest {
+    return PluginInstallOperationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginInstallOperationRequest>, I>>(
+    object: I,
+  ): PluginInstallOperationRequest {
+    const message = createBasePluginInstallOperationRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.operation_id = object.operation_id ?? "";
+    return message;
+  },
+};
+
+function createBasePluginInstallOperationDTO(): PluginInstallOperationDTO {
+  return {
+    gateway_id: "",
+    operation_id: "",
+    status: "",
+    artifact: undefined,
+    cancel_requested: false,
+    error: undefined,
+  };
+}
+
+export const PluginInstallOperationDTO: MessageFns<PluginInstallOperationDTO> = {
+  fromJSON(object: any): PluginInstallOperationDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      artifact: isSet(object.artifact) ? FrozenPluginInstallArtifact.fromJSON(object.artifact) : undefined,
+      cancel_requested: isSet(object.cancel_requested) ? globalThis.Boolean(object.cancel_requested) : false,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: PluginInstallOperationDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.artifact !== undefined) {
+      obj.artifact = FrozenPluginInstallArtifact.toJSON(message.artifact);
+    }
+    if (message.cancel_requested !== false) {
+      obj.cancel_requested = message.cancel_requested;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginInstallOperationDTO>, I>>(base?: I): PluginInstallOperationDTO {
+    return PluginInstallOperationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginInstallOperationDTO>, I>>(object: I): PluginInstallOperationDTO {
+    const message = createBasePluginInstallOperationDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.operation_id = object.operation_id ?? "";
+    message.status = object.status ?? "";
+    message.artifact = (object.artifact !== undefined && object.artifact !== null)
+      ? FrozenPluginInstallArtifact.fromPartial(object.artifact)
+      : undefined;
+    message.cancel_requested = object.cancel_requested ?? false;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
@@ -1957,6 +2430,10 @@ function createBaseInstallPluginRequest(): InstallPluginRequest {
     path: "",
     development_directory: false,
     expected_digest: undefined,
+    operation_id: "",
+    source_id: undefined,
+    artifact: undefined,
+    catalog_revision: undefined,
   };
 }
 
@@ -1972,6 +2449,10 @@ export const InstallPluginRequest: MessageFns<InstallPluginRequest> = {
         ? globalThis.Boolean(object.development_directory)
         : false,
       expected_digest: isSet(object.expected_digest) ? globalThis.String(object.expected_digest) : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      source_id: isSet(object.source_id) ? globalThis.String(object.source_id) : undefined,
+      artifact: isSet(object.artifact) ? PluginSourceArtifact.fromJSON(object.artifact) : undefined,
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.String(object.catalog_revision) : undefined,
     };
   },
 
@@ -1992,6 +2473,18 @@ export const InstallPluginRequest: MessageFns<InstallPluginRequest> = {
     if (message.expected_digest !== undefined) {
       obj.expected_digest = message.expected_digest;
     }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.source_id !== undefined) {
+      obj.source_id = message.source_id;
+    }
+    if (message.artifact !== undefined) {
+      obj.artifact = PluginSourceArtifact.toJSON(message.artifact);
+    }
+    if (message.catalog_revision !== undefined) {
+      obj.catalog_revision = message.catalog_revision;
+    }
     return obj;
   },
 
@@ -2005,6 +2498,12 @@ export const InstallPluginRequest: MessageFns<InstallPluginRequest> = {
     message.path = object.path ?? "";
     message.development_directory = object.development_directory ?? false;
     message.expected_digest = object.expected_digest ?? undefined;
+    message.operation_id = object.operation_id ?? "";
+    message.source_id = object.source_id ?? undefined;
+    message.artifact = (object.artifact !== undefined && object.artifact !== null)
+      ? PluginSourceArtifact.fromPartial(object.artifact)
+      : undefined;
+    message.catalog_revision = object.catalog_revision ?? undefined;
     return message;
   },
 };

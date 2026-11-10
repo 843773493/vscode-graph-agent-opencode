@@ -12,10 +12,14 @@ import { IHoverService } from '../../upstream/src/vs/platform/hover/browser/hove
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
-import type { PluginBinding, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
+import { timeout } from '../../upstream/src/vs/base/common/async.js';
+import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
+import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gateway } from '../agentApi.js';
 import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 
 import { manageConfig, readWorkspaceDefaults, readWorkspaceBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
 
@@ -40,7 +44,8 @@ export class ServicePluginPackagesView extends ViewPane {
     @IThemeService theme: IThemeService, @IHoverService hover: IHoverService,
     @IQuickInputService private readonly quickInput: IQuickInputService,
     @INotificationService private readonly notifications: INotificationService,
-    @ICommandService private readonly commands: ICommandService) {
+    @ICommandService private readonly commands: ICommandService,
+    @IProgressService private readonly progress: IProgressService) {
     super(options, keybindings, contextMenu, configuration, contextKeys, descriptors, instantiation, opener, theme, hover);
     this._register(onDidChangeExtensionManagementTarget(() => {
       this.refreshRevision++;
@@ -140,6 +145,7 @@ export class ServicePluginPackagesView extends ViewPane {
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
     clearNode(container);
+    append(container, $('p')).textContent = inventory.sources?.message ?? '插件源尚未配置';
     for (const pkg of inventory.packages) {
       const manifest = pkg.manifest;
       if (!manifest) continue;
@@ -153,7 +159,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const packageActions = append(packageSection, $('.service-plugin-package-actions'));
       const installInput = append(packageActions, $('button'));
       installInput.textContent = '重新安装/更新';
-      installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, pluginTarget)));
+      installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, this.progress, pluginTarget)));
       const uninstall = append(packageActions, $('button')) as HTMLButtonElement;
       uninstall.textContent = '卸载整个包';
       const references = [...runtime.configured_bindings, ...defaults].filter(item => item.package_id === manifest.package_id && item.package_version === manifest.version);
@@ -235,21 +241,89 @@ export class ServicePluginPackagesView extends ViewPane {
   }
 }
 
-async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService, target: PluginTarget): Promise<void> {
-  const type = await quickInput.pick([{ label: 'ZIP 文件', development_directory: false }, { label: '开发目录', development_directory: true }],
-    { title: '安装本地插件包', canPickMany: false });
+async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService,
+  progress: IProgressService, target: PluginTarget): Promise<void> {
+  const type = await quickInput.pick([{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' },
+    { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
+    { title: `插件安装 · ${target.gateway_id}`, canPickMany: false });
   if (!type) return;
-  const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: target.gateway_id,
-    placeHolder: type.development_directory ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
-      value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null });
-  if (!path) return;
-  await gateway.request('/api/gateway/service-plugins/install', { method: 'POST', body: JSON.stringify({ ...target, path, development_directory: type.development_directory }) });
-  notifications.info('插件包已安装；正在使用 Gateway 原生库存。');
+  if (type.kind === 'query') {
+    const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id });
+    if (operationId) await observeInstallation(progress, notifications, target, operationId);
+    return;
+  }
+  let acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>;
+  if (type.kind === 'source') {
+    const inventory = await gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory',
+      { method: 'POST', body: JSON.stringify(target) });
+    const sources = inventory.sources?.entries.filter(source => source.enabled) ?? [];
+    if (!sources.length) { notifications.info(inventory.sources?.message ?? '插件源尚未配置'); return; }
+    const source = await quickInput.pick(sources.map(source => ({ label: source.source_id, source })),
+      { title: '选择自有来源', canPickMany: false });
+    if (!source) return;
+    const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id });
+    if (query === undefined) return;
+    let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision = '';
+    while (!selected) {
+      const page = await gateway.request<PluginSourceCatalogDTO>('/api/gateway/service-plugins/source-catalog',
+        { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }) });
+      const items = page.items.map(artifact => ({ label: `${artifact.package_id}@${artifact.package_version}`,
+        description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : '纯声明插件包', artifact }));
+      const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: '下一页', description: '', artifact: undefined }] : [])],
+        { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false });
+      if (!choice) return;
+      if (choice.artifact) { selected = choice.artifact; revision = page.catalog_revision; }
+      else cursor = page.next_cursor;
+    }
+    acquisition = { source_id: source.source.source_id, catalog_revision: revision, artifact: selected,
+      development_directory: false, path: '' };
+  } else {
+    const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: target.gateway_id,
+      placeHolder: type.kind === 'directory' ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
+        value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null });
+    if (!path) return;
+    acquisition = { path, development_directory: type.kind === 'directory', artifact: undefined };
+  }
+  const operationId = generateUuid();
+  let operation: PluginInstallOperationDTO;
+  try {
+    operation = await gateway.request<PluginInstallOperationDTO>('/api/gateway/service-plugins/install',
+      { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) });
+  } catch (error) {
+    // 仅查询原操作；响应丢失不能变成第二次安装。
+    try { operation = await readInstallation(target, operationId); }
+    catch { throw new Error(`安装响应未确认：${errorsText(error)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`); }
+  }
+  await observeInstallation(progress, notifications, target, operationId, operation);
+}
+
+function readInstallation(target: PluginTarget, operationId: string): Promise<PluginInstallOperationDTO> {
+  return gateway.request('/api/gateway/service-plugins/install-operation',
+    { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) });
+}
+
+async function observeInstallation(progress: IProgressService, notifications: INotificationService,
+  target: PluginTarget, operationId: string, initial?: PluginInstallOperationDTO): Promise<void> {
+  await progress.withProgress({ location: ProgressLocation.Notification,
+    title: `安装插件包 · ${target.gateway_id} · ${operationId}`, cancellable: true }, async reporter => {
+    const deadline = performance.now() + DEFAULT_API_REQUEST_TIMEOUT_MS;
+    let operation = initial ?? await readInstallation(target, operationId);
+    while (operation.status === 'pending' || operation.status === 'running') {
+      reporter.report({ message: operation.cancel_requested ? '正在结清取消请求…' : '正在安装…' });
+      if (performance.now() >= deadline) throw new Error(`等待安装结果超时，请查询原操作 ${operationId}；不会重新安装。`);
+      await timeout(300);
+      operation = await readInstallation(target, operationId);
+    }
+    if (operation.status !== 'succeeded') throw new Error(`安装 ${operation.status}：${operation.error ?? operationId}`);
+    notifications.info(`已安装 ${operation.artifact?.package_id}@${operation.artifact?.package_version}`);
+  }, () => { void gateway.request('/api/gateway/service-plugins/cancel-install',
+    { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) })
+    .catch(error => notifications.error(`取消未确认，请查询原操作 ${operationId}：${errorsText(error)}`)); });
 }
 
 export async function installServicePluginPackage(accessor: ServicesAccessor): Promise<void> {
   const target = managementGateway('extensions');
-  await installPackageFromView(accessor.get(IQuickInputService), accessor.get(INotificationService),
+  await installPackageFromView(accessor.get(IQuickInputService), accessor.get(INotificationService), accessor.get(IProgressService),
     { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id });
 }
 

@@ -20,6 +20,7 @@ from app.gateway.auth import (
     verify_gateway_token,
 )
 from app.gateway.federation.policy import require_federation_capability
+from app.gateway.plugins.sources import enabled_source, read_catalog, source_status
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
@@ -31,6 +32,14 @@ from app.gateway.server.management_routes import (
     management_gateway_route,
 )
 from app.schemas.canonical_params import CanonicalWorkspaceId
+from app.schemas.gateway.plugin_installation import (
+    InstallPluginRequest,
+    PluginInstallOperationDTO,
+    PluginInstallOperationRequest,
+    PluginInventoryResultDTO,
+    PluginSourceCatalogDTO,
+    PluginSourceCatalogRequest,
+)
 from app.schemas.gateway.plugin_private_inputs import (
     PluginParameterSchema,
     PluginPrivateInputReference,
@@ -39,12 +48,10 @@ from app.schemas.gateway.plugin_private_inputs import (
 )
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
-    InstallPluginRequest,
     PluginBinding,
     PluginConfigurationSchemaDTO,
     PluginConfigurationSchemasDTO,
     PluginConfigurationSchemasRequest,
-    PluginInventoryResultDTO,
     PluginRuntimeStatusDTO,
     PluginSlotStatusDTO,
     PluginTarget,
@@ -253,8 +260,8 @@ async def inventory(payload: PluginTarget, request: Request,
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     packages = await asyncio.to_thread(owner.packages.inventory)
     require_federation_capability(request, auth, "service_plugin_installation_manage")
-    data = PluginInventoryResultDTO.model_validate({"packages": [package.model_dump() for package in packages],
-        "sources": {"configured": False, "message": "插件源尚未配置"}})
+    data = PluginInventoryResultDTO(packages=[InstalledPluginPackageDTO.model_validate(package.model_dump()) for package in packages],
+        sources=source_status(request.app.state.gateway_config_reload.config.payload))
     return APIResponse[PluginInventoryResultDTO](data=data, request_id=get_request_id(request))
 
 
@@ -262,30 +269,86 @@ async def inventory(payload: PluginTarget, request: Request,
 async def install(payload: InstallPluginRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
-) -> APIResponse[InstalledPluginPackageDTO]:
+) -> APIResponse[PluginInstallOperationDTO]:
     # 原生路径是明确目标机器参数；联邦调用不能借本跳路径安装。
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
             raise HTTPException(response.status_code, response.json().get("detail"))
-        return APIResponse[InstalledPluginPackageDTO].model_validate(response.json())
+        return APIResponse[PluginInstallOperationDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_installation_manage")
-    if auth.kind != "local":
-        raise HTTPException(422, "远端包上传／自有来源尚未接入，不接受远端原生路径安装")
-    path = Path(payload.path)
-    if not path.is_absolute():
+    if payload.source_id is None and auth.kind != "local":
+        raise HTTPException(422, "远端安装必须选择自有来源制品，不接受远端原生路径安装")
+    if payload.path and not Path(payload.path).is_absolute():
         raise HTTPException(422, "本地包入口必须是目标机器的明确绝对路径")
     try:
-        if payload.development_directory:
-            package = await run_sync_shielded(owner.packages.install_directory, path)
-        else:
-            package = await run_sync_shielded(owner.packages.install_zip, path, payload.expected_digest)
+        operation = await request.app.state.plugin_installations.start(payload)
     except (ValueError, FileNotFoundError, zipfile.BadZipFile) as error:
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:
         raise HTTPException(409, str(error)) from error
-    return APIResponse[InstalledPluginPackageDTO](data=InstalledPluginPackageDTO.model_validate(package.model_dump()),
-        request_id=get_request_id(request))
+    require_federation_capability(request, auth, "service_plugin_installation_manage")
+    return APIResponse(data=operation, request_id=get_request_id(request))
+
+
+@router.post("/api/gateway/service-plugins/install-operation")
+async def installation_operation(payload: PluginInstallOperationRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+) -> APIResponse[PluginInstallOperationDTO]:
+    response = await relay(request, payload, auth)
+    if response is not None:
+        if response.is_error:
+            raise HTTPException(response.status_code, response.json().get("detail"))
+        return APIResponse[PluginInstallOperationDTO].model_validate_json(response.content)
+    require_federation_capability(request, auth, "service_plugin_installation_manage")
+    try:
+        operation = request.app.state.plugin_installations.get(payload.operation_id)
+    except KeyError as error:
+        raise HTTPException(404, str(error)) from error
+    return APIResponse(data=operation, request_id=get_request_id(request))
+
+
+@router.post("/api/gateway/service-plugins/cancel-install")
+async def cancel_installation(payload: PluginInstallOperationRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+) -> APIResponse[PluginInstallOperationDTO]:
+    response = await relay(request, payload, auth)
+    if response is not None:
+        if response.is_error:
+            raise HTTPException(response.status_code, response.json().get("detail"))
+        return APIResponse[PluginInstallOperationDTO].model_validate_json(response.content)
+    require_federation_capability(request, auth, "service_plugin_installation_manage")
+    try:
+        operation = request.app.state.plugin_installations.cancel(payload.operation_id)
+    except KeyError as error:
+        raise HTTPException(404, str(error)) from error
+    return APIResponse(data=operation, request_id=get_request_id(request))
+
+
+@router.post("/api/gateway/service-plugins/source-catalog")
+async def source_catalog(payload: PluginSourceCatalogRequest, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+) -> APIResponse[PluginSourceCatalogDTO]:
+    response = await relay(request, payload, auth)
+    if response is not None:
+        if response.is_error:
+            raise HTTPException(response.status_code, response.json().get("detail"))
+        return APIResponse[PluginSourceCatalogDTO].model_validate_json(response.content)
+    require_federation_capability(request, auth, "service_plugin_installation_manage")
+    try:
+        source = enabled_source(request.app.state.gateway_config_reload.config.payload, payload.source_id)
+        catalog = await read_catalog(request.app.state.plugin_download_client,
+            gateway_id=request.app.state.registry.gateway_id, source=source, request=payload)
+        if enabled_source(request.app.state.gateway_config_reload.config.payload, payload.source_id) != source:
+            raise HTTPException(409, "插件来源已变化，请重新查询目录")
+    except (ValueError, LookupError) as error:
+        raise HTTPException(422, str(error)) from error
+    except httpx.HTTPError as error:
+        detail = (f"HTTP {error.response.status_code}" if isinstance(error, httpx.HTTPStatusError)
+            else type(error).__name__)
+        raise HTTPException(502, f"插件来源目录请求失败: {detail}") from error
+    require_federation_capability(request, auth, "service_plugin_installation_manage")
+    return APIResponse(data=catalog, request_id=get_request_id(request))
 
 
 @router.post("/api/gateway/service-plugins/uninstall")

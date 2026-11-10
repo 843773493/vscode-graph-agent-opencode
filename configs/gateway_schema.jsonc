@@ -61,8 +61,20 @@
         },
         "sources": {
           "type": "object", "additionalProperties": false,
-          "properties": {"entries": {"type": "array", "default": [], "maxItems": 0,
-            "description": "自有在线目录尚未开放，当前仅支持本地 ZIP 或显式开发目录。"}}
+          "properties": {"entries": {"type": "array", "default": [],
+            "description": "自有插件来源，数组整体替换；默认不配置、不查询任何在线目录。",
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["source_id"],
+              "properties": {
+                "source_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+                "protocol_version": {"type": "integer", "const": 1, "default": 1},
+                "base_url": {"type": ["string", "null"], "format": "uri"},
+                "enabled": {"type": "boolean", "default": false}
+              },
+              "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+              "then": {"required": ["base_url"], "properties": {"base_url": {"type": "string", "minLength": 1}}}
+            }
+          }}
         },
         "runtime": {
           "type": "object", "additionalProperties": false,

@@ -61,6 +61,7 @@ from app.gateway.federation.workspace_port import (
     WorkspaceCatalogPort,
     WorkspaceSessionMainPort,
 )
+from app.gateway.plugins.installation import PluginInstallations
 from app.gateway.plugins.workspaces import WorkspacePluginBindings
 from app.gateway.routes._shared import (
     _gateway_root,
@@ -231,6 +232,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
     # Gateway 代理本机工作区时必须直连，不能把本地后端请求送入用户的 HTTP 代理。
     async with (
         httpx.AsyncClient(timeout=None, trust_env=False) as http_client,
+        httpx.AsyncClient(timeout=60, trust_env=True) as plugin_download_client,
         GatewaySkillSourceOwner(
             gateway_id=gateway_id, skills_root=get_boxteam_home() / "skills",
             update_policy=gateway_config.local_skill_updates,
@@ -255,6 +257,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
         app.state.service_plugins = service_plugins
+        plugin_installations = PluginInstallations(gateway_id, service_plugins.packages, gateway_state,
+            plugin_download_client, configuration=lambda: gateway_config_reload.config.payload)
+        app.state.plugin_installations = plugin_installations
+        app.state.plugin_download_client = plugin_download_client
         workspace_plugin_bindings = WorkspacePluginBindings(registry, service_plugins)
         app.state.workspace_plugin_bindings = workspace_plugin_bindings
         app.state.workspace_navigation_store = WorkspaceNavigationStore(
@@ -784,6 +790,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 await app.state.session_catalog_search_service.stop()
             logger.info("Gateway 正在关闭 HTTP 连接池")
             shutdown_errors: list[Exception] = []
+            try:
+                await plugin_installations.close()
+            except Exception as error:
+                shutdown_errors.append(error)
+                logger.exception("Gateway 关闭插件安装操作失败")
             try:
                 await workspace_plugin_bindings.close()
             except Exception as error:

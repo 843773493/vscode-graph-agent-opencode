@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -146,11 +146,12 @@ def test_uninstall_serializes_after_pending_binding_publication(plugin_uninstall
     )
 
     package_archive = _package(context.artifacts_dir / "race.probe.zip")
-    request("POST", "/api/gateway/service-plugins/install", {
-        "gateway_id": gateway_id,
-        "path": str(package_archive),
-        "expected_digest": hashlib.sha256(package_archive.read_bytes()).hexdigest(),
-    }).raise_for_status()
+    install_plugin(
+        lambda path, body: request("POST", path, body),
+        gateway_id=gateway_id,
+        path=str(package_archive),
+        expected_digest=hashlib.sha256(package_archive.read_bytes()).hexdigest(),
+    )
 
     source_path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
     workspace_headers = {"X-BoxTeam-Workspace-Id": workspace_id}

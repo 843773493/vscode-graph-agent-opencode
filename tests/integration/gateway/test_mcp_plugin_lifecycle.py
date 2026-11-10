@@ -31,6 +31,7 @@ from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 HTTP MCP 装具
 )
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
+from tests.support.plugin_package import install_plugin_async
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -289,11 +290,12 @@ async def test_stdio_plugin_preserves_results_and_survives_backend_restart(
     definitions.write_text(json.dumps({"probe": {"type": "object"}, "second": {"type": "object"}}), encoding="utf-8")
     archive = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)
     try:
-        response = await case.client.post("/api/gateway/service-plugins/install", json={
-            "gateway_id": case.gateway_id, "path": str(archive),
-            "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-        })
-        response.raise_for_status()
+        await install_plugin_async(
+            lambda path, payload: case.client.post(path, json=payload),
+            gateway_id=case.gateway_id,
+            path=str(archive),
+            expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        )
         await _publish(case, {"plugins": {
             "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio", "enabled": True}]},
             "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {

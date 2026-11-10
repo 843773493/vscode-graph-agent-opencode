@@ -163,6 +163,68 @@ message InstalledPluginPackageDTO {
 message PluginSourceStatusDTO {
   bool configured = 1;
   string message = 2;
+  repeated PluginSourceConfig entries = 3;
+}
+
+message PluginSourceConfig {
+  string source_id = 1;
+  int32 protocol_version = 2;
+  optional string base_url = 3;
+  bool enabled = 4;
+}
+
+message PluginSourceArtifact {
+  string package_id = 1;
+  string package_version = 2;
+  PluginPackageTarget target = 3;
+  string digest = 4;
+  string url = 5;
+  string filename = 6;
+}
+
+message PluginSourceCatalogRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string source_id = 3;
+  string query = 4;
+  optional string cursor = 5;
+}
+
+message PluginSourceCatalogDTO {
+  string gateway_id = 1;
+  string source_id = 2;
+  int32 protocol_version = 3;
+  string catalog_revision = 4;
+  repeated PluginSourceArtifact items = 5;
+  optional string next_cursor = 6;
+}
+
+message FrozenPluginInstallArtifact {
+  string source_kind = 1;
+  string package_id = 2;
+  string package_version = 3;
+  PluginPackageTarget target = 4;
+  string digest = 5;
+  optional string source_id = 6;
+  optional string catalog_revision = 7;
+  optional string path = 8;
+  reserved 9;
+  optional string filename = 10;
+}
+
+message PluginInstallOperationRequest {
+  string gateway_id = 1;
+  optional string gateway_connection_id = 2;
+  string operation_id = 3;
+}
+
+message PluginInstallOperationDTO {
+  string gateway_id = 1;
+  string operation_id = 2;
+  string status = 3;
+  FrozenPluginInstallArtifact artifact = 4;
+  bool cancel_requested = 5;
+  optional string error = 6;
 }
 
 message PluginInventoryResultDTO {
@@ -256,6 +318,10 @@ message InstallPluginRequest {
   string path = 3;
   bool development_directory = 4;
   optional string expected_digest = 5;
+  string operation_id = 6;
+  optional string source_id = 7;
+  PluginSourceArtifact artifact = 8;
+  optional string catalog_revision = 9;
 }
 
 message PluginVersionRequest {

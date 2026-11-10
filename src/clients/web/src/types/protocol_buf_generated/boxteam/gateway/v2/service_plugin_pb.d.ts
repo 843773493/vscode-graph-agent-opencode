@@ -729,6 +729,11 @@ export declare type PluginSourceStatusDTO = Message<"boxteam.gateway.v2.PluginSo
    * @generated from field: string message = 2;
    */
   message: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginSourceConfig entries = 3;
+   */
+  entries: PluginSourceConfig[];
 };
 
 /**
@@ -736,6 +741,278 @@ export declare type PluginSourceStatusDTO = Message<"boxteam.gateway.v2.PluginSo
  * Use `create(PluginSourceStatusDTOSchema)` to create a new message.
  */
 export declare const PluginSourceStatusDTOSchema: GenMessage<PluginSourceStatusDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginSourceConfig
+ */
+export declare type PluginSourceConfig = Message<"boxteam.gateway.v2.PluginSourceConfig"> & {
+  /**
+   * @generated from field: string source_id = 1;
+   */
+  sourceId: string;
+
+  /**
+   * @generated from field: int32 protocol_version = 2;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: optional string base_url = 3;
+   */
+  baseUrl?: string | undefined;
+
+  /**
+   * @generated from field: bool enabled = 4;
+   */
+  enabled: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginSourceConfig.
+ * Use `create(PluginSourceConfigSchema)` to create a new message.
+ */
+export declare const PluginSourceConfigSchema: GenMessage<PluginSourceConfig>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginSourceArtifact
+ */
+export declare type PluginSourceArtifact = Message<"boxteam.gateway.v2.PluginSourceArtifact"> & {
+  /**
+   * @generated from field: string package_id = 1;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string package_version = 2;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginPackageTarget target = 3;
+   */
+  target?: PluginPackageTarget | undefined;
+
+  /**
+   * @generated from field: string digest = 4;
+   */
+  digest: string;
+
+  /**
+   * @generated from field: string url = 5;
+   */
+  url: string;
+
+  /**
+   * @generated from field: string filename = 6;
+   */
+  filename: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginSourceArtifact.
+ * Use `create(PluginSourceArtifactSchema)` to create a new message.
+ */
+export declare const PluginSourceArtifactSchema: GenMessage<PluginSourceArtifact>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginSourceCatalogRequest
+ */
+export declare type PluginSourceCatalogRequest = Message<"boxteam.gateway.v2.PluginSourceCatalogRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 2;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string source_id = 3;
+   */
+  sourceId: string;
+
+  /**
+   * @generated from field: string query = 4;
+   */
+  query: string;
+
+  /**
+   * @generated from field: optional string cursor = 5;
+   */
+  cursor?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginSourceCatalogRequest.
+ * Use `create(PluginSourceCatalogRequestSchema)` to create a new message.
+ */
+export declare const PluginSourceCatalogRequestSchema: GenMessage<PluginSourceCatalogRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginSourceCatalogDTO
+ */
+export declare type PluginSourceCatalogDTO = Message<"boxteam.gateway.v2.PluginSourceCatalogDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string source_id = 2;
+   */
+  sourceId: string;
+
+  /**
+   * @generated from field: int32 protocol_version = 3;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string catalog_revision = 4;
+   */
+  catalogRevision: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.PluginSourceArtifact items = 5;
+   */
+  items: PluginSourceArtifact[];
+
+  /**
+   * @generated from field: optional string next_cursor = 6;
+   */
+  nextCursor?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginSourceCatalogDTO.
+ * Use `create(PluginSourceCatalogDTOSchema)` to create a new message.
+ */
+export declare const PluginSourceCatalogDTOSchema: GenMessage<PluginSourceCatalogDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.FrozenPluginInstallArtifact
+ */
+export declare type FrozenPluginInstallArtifact = Message<"boxteam.gateway.v2.FrozenPluginInstallArtifact"> & {
+  /**
+   * @generated from field: string source_kind = 1;
+   */
+  sourceKind: string;
+
+  /**
+   * @generated from field: string package_id = 2;
+   */
+  packageId: string;
+
+  /**
+   * @generated from field: string package_version = 3;
+   */
+  packageVersion: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginPackageTarget target = 4;
+   */
+  target?: PluginPackageTarget | undefined;
+
+  /**
+   * @generated from field: string digest = 5;
+   */
+  digest: string;
+
+  /**
+   * @generated from field: optional string source_id = 6;
+   */
+  sourceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string catalog_revision = 7;
+   */
+  catalogRevision?: string | undefined;
+
+  /**
+   * @generated from field: optional string path = 8;
+   */
+  path?: string | undefined;
+
+  /**
+   * @generated from field: optional string filename = 10;
+   */
+  filename?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.FrozenPluginInstallArtifact.
+ * Use `create(FrozenPluginInstallArtifactSchema)` to create a new message.
+ */
+export declare const FrozenPluginInstallArtifactSchema: GenMessage<FrozenPluginInstallArtifact>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginInstallOperationRequest
+ */
+export declare type PluginInstallOperationRequest = Message<"boxteam.gateway.v2.PluginInstallOperationRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: optional string gateway_connection_id = 2;
+   */
+  gatewayConnectionId?: string | undefined;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginInstallOperationRequest.
+ * Use `create(PluginInstallOperationRequestSchema)` to create a new message.
+ */
+export declare const PluginInstallOperationRequestSchema: GenMessage<PluginInstallOperationRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.PluginInstallOperationDTO
+ */
+export declare type PluginInstallOperationDTO = Message<"boxteam.gateway.v2.PluginInstallOperationDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string operation_id = 2;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.FrozenPluginInstallArtifact artifact = 4;
+   */
+  artifact?: FrozenPluginInstallArtifact | undefined;
+
+  /**
+   * @generated from field: bool cancel_requested = 5;
+   */
+  cancelRequested: boolean;
+
+  /**
+   * @generated from field: optional string error = 6;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginInstallOperationDTO.
+ * Use `create(PluginInstallOperationDTOSchema)` to create a new message.
+ */
+export declare const PluginInstallOperationDTOSchema: GenMessage<PluginInstallOperationDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.PluginInventoryResultDTO
@@ -1140,6 +1417,26 @@ export declare type InstallPluginRequest = Message<"boxteam.gateway.v2.InstallPl
    * @generated from field: optional string expected_digest = 5;
    */
   expectedDigest?: string | undefined;
+
+  /**
+   * @generated from field: string operation_id = 6;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: optional string source_id = 7;
+   */
+  sourceId?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.PluginSourceArtifact artifact = 8;
+   */
+  artifact?: PluginSourceArtifact | undefined;
+
+  /**
+   * @generated from field: optional string catalog_revision = 9;
+   */
+  catalogRevision?: string | undefined;
 };
 
 /**

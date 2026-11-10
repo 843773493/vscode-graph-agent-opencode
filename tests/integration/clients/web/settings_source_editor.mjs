@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { installPlugin } from '../../../support/plugin_package.mjs';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
@@ -166,7 +167,7 @@ try {
   result.transportFault = '真实 PUT 提交成功后由 Playwright 丢弃响应；原键 GET 确认，不重发 PUT';
 
   result.phase = 'manifest-settings-without-runtime';
-  await api('/api/gateway/service-plugins/install', { method: 'POST', body: { gateway_id: health.gateway_id, path: input.packagePath } });
+  await installPlugin(api, { gateway_id: health.gateway_id, path: input.packagePath });
   const beforeBinding = await api(gatewayPath, { headers: gatewayHeaders });
   const binding = { package_id: 'source.settings-probe', package_version: '1.0.0', plugin_id: 'preference', enabled: false };
   const bindingIntent = { gateway_id: health.gateway_id, source_key: beforeBinding.source_key,

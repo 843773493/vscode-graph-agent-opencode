@@ -14,6 +14,7 @@ from tests.integration.gateway.test_plugin_commands import (
     _archive,
     plugin_gateway,  # noqa: F401 — 复用真实 Gateway fixture，产物仍按当前测试路径隔离。
 )
+from tests.support.plugin_package import install_plugin
 
 FAULTY_PYTHON = PYTHON.replace(
     "async def execute(arguments, context):",
@@ -42,19 +43,27 @@ def test_plugin_actual_diagnostics_partial_failure_and_restart_inheritance(
     client, context = plugin_gateway
     evidence = []
 
-    def exchange(method: str, path: str, **kwargs) -> dict:
+    def request(method: str, path: str, **kwargs) -> httpx.Response:
         request_id = f"plugin-observation-{len(evidence)}"
         response = client.request(method, path, headers={"X-Request-ID": request_id}, **kwargs)
         data = response.json()
         evidence.append({"path": path, "status": response.status_code, "body": data})
         assert response.headers["X-Request-ID"] == data["request_id"] == request_id
+        return response
+
+    def exchange(method: str, path: str, **kwargs) -> dict:
+        response = request(method, path, **kwargs)
         response.raise_for_status()
-        return data["data"]
+        return response.json()["data"]
 
     gateway_id = exchange("GET", "/api/gateway/health")["gateway_id"]
     archive = context.artifacts_dir / "observation.zip"
     _archive(archive, prepared_developer_tools_package, python_source=FAULTY_PYTHON)
-    exchange("POST", "/api/gateway/service-plugins/install", json={"gateway_id": gateway_id, "path": str(archive)})
+    install_plugin(
+        lambda path, payload: request("POST", path, json=payload),
+        gateway_id=gateway_id,
+        path=str(archive),
+    )
     bindings = [{"package_id": "proof.commands", "package_version": "1.0.0", "plugin_id": name, "enabled": True}
                 for name in ("python", "node")]
 

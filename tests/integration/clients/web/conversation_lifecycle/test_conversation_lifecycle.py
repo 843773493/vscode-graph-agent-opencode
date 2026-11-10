@@ -37,6 +37,7 @@ from tests.support.communication.federation import (
 )
 from tests.support.e2e_control.harness import E2EProcessLease, E2ETestControlHarness
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
+from tests.support.plugin_package import install_plugin_async
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -313,11 +314,9 @@ async def section8_product_nodes(
                     "cwd": str(project), "env": section8_control.environment,
                 }}
                 package = section8_runtime / f"mcp-{name}-{server}.zip"
-                installed = await node.client.post("/api/gateway/service-plugins/install", json={
-                    "gateway_id": node.gateway_id, "path": str(package),
-                    "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
-                })
-                installed.raise_for_status()
+                await install_plugin_async(lambda path, body, current=node: current.client.post(path, json=body),
+                    gateway_id=node.gateway_id, path=str(package),
+                    expected_digest=hashlib.sha256(package.read_bytes()).hexdigest())
                 mcp_servers[server] = {"enabled": True, "transport": "plugin", "service": {
                     "gateway_id": node.gateway_id, "workspace_id": node.workspace_id,
                     "package_id": package_id, "package_version": MCP_PLUGIN_VERSION,

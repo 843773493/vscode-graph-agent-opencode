@@ -19,6 +19,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_case as mcp_plugin_case,  # noqa: PLC0414 - 共享真实 Gateway 产品装具
 )
+from tests.support.plugin_package import install_plugin_async
 
 
 async def test_explicit_plugin_restart_invalidates_old_instance_without_automatic_replay(
@@ -27,11 +28,12 @@ async def test_explicit_plugin_restart_invalidates_old_instance_without_automati
     case = mcp_plugin_case
     artifacts = case.context.artifacts_dir
     archive = _package(artifacts / "mcp-stdio.zip")
-    installed = await case.client.post("/api/gateway/service-plugins/install", json={
-        "gateway_id": case.gateway_id, "path": str(archive),
-        "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-    })
-    installed.raise_for_status()
+    await install_plugin_async(
+        lambda path, payload: case.client.post(path, json=payload),
+        gateway_id=case.gateway_id,
+        path=str(archive),
+        expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+    )
     definitions, receipts = artifacts / "definitions.json", artifacts / "receipts.jsonl"
     definitions.write_text('{"probe":{"type":"object"},"second":{"type":"object"}}', encoding="utf-8")
     await _publish(case, {"plugins": {

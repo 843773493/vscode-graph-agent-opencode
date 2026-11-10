@@ -3,13 +3,17 @@ import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { parse } from "jsonc-parser";
+import { installPlugin } from "../../../tests/support/plugin_package.mjs";
 
 export async function verifyBrowserResource(requestJson, { gatewayId, workspaceId, packagePath, url }) {
   const packageDigest = createHash("sha256").update(await readFile(packagePath)).digest("hex");
-  await requestJson("/api/gateway/service-plugins/install", {
-    method: "POST",
-    body: JSON.stringify({ gateway_id: gatewayId, path: packagePath, expected_digest: packageDigest }),
-  });
+  await installPlugin(
+    async (pathname, options) => (await requestJson(pathname, {
+      ...options,
+      body: JSON.stringify(options.body),
+    })).data,
+    { gateway_id: gatewayId, path: packagePath, expected_digest: packageDigest },
+  );
   const headers = { "X-BoxTeam-Workspace-Id": workspaceId };
   const sourcePath = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/config/sources/workspace_root_mutable_override`;
   const document = (await requestJson(sourcePath, { headers })).data;

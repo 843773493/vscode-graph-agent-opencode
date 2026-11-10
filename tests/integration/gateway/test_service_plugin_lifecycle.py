@@ -14,7 +14,7 @@ import httpx
 import psutil
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.scope import register_test_process, unregister_test_process
 
 _PLUGIN_SOURCE = '''
@@ -115,11 +115,12 @@ def _install_and_enable(
 ) -> dict[str, object]:
     from hashlib import sha256
 
-    _json_request(client, "POST", "/api/gateway/service-plugins/install", {
-        "gateway_id": gateway_id,
-        "path": str(archive),
-        "expected_digest": sha256(archive.read_bytes()).hexdigest(),
-    })
+    install_plugin(
+        lambda path, payload: client.post(path, json=payload),
+        gateway_id=gateway_id,
+        path=str(archive),
+        expected_digest=sha256(archive.read_bytes()).hexdigest(),
+    )
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
     document = _json_request(client, "GET", source_path)["data"]
     if not isinstance(document, dict):

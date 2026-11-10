@@ -218,8 +218,8 @@ def _install_remote_developer_tools_plugin(
 ) -> None:
     script = """import hashlib, json, os, shutil, subprocess, sys
 from pathlib import Path
-from urllib.request import Request, urlopen
-from tests.support.plugin_package import native_plugin_target
+import httpx
+from tests.support.plugin_package import install_plugin, native_plugin_target
 
 gateway_id, repository, package_path, port, home = sys.argv[1:]
 Path(package_path).parent.mkdir(parents=True, exist_ok=True)
@@ -234,13 +234,10 @@ subprocess.run([bun, 'scripts/plugins/pack-developer-tools.mjs', '--out', packag
     '--node-gyp', node_gyp, '--python', python],
     cwd=repository, check=True, timeout=60, capture_output=True, text=True)
 token = (Path(home) / 'state/gateway/credentials/local-token').read_text(encoding='utf-8').strip()
-payload = json.dumps({'gateway_id': gateway_id, 'path': package_path,
-    'expected_digest': hashlib.sha256(Path(package_path).read_bytes()).hexdigest()}).encode()
-request = Request(f'http://127.0.0.1:{port}/api/gateway/service-plugins/install', data=payload,
-    headers={'Content-Type': 'application/json', 'X-Local-Token': token})
-with urlopen(request, timeout=30) as response:
-    result = json.load(response)
-if result.get('code') != 0 or result.get('data', {}).get('manifest', {}).get('package_id') != 'boxteam.developer-tools':
+with httpx.Client(base_url=f'http://127.0.0.1:{port}', headers={'X-Local-Token': token}, trust_env=False) as client:
+    result = install_plugin(lambda path, body: client.post(path, json=body), gateway_id=gateway_id,
+        path=package_path, expected_digest=hashlib.sha256(Path(package_path).read_bytes()).hexdigest())
+if result.artifact.package_id != 'boxteam.developer-tools':
     raise RuntimeError(f'开发工具插件远端安装失败: {result}')
 """
     package_path = _remote_join(

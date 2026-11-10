@@ -12,6 +12,9 @@ from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v2 import plugin_commands_pb2
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.gateway.v2 import (
+    skill_sources_pb2 as gateway_skill_sources_pb2,
+)
 from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
@@ -51,7 +54,7 @@ def http_descriptor_bundle() -> FileDescriptorSet:
             collect(dependency)
         file.CopyToProto(bundle.file.add())
 
-    for descriptor in (workspace_public_pb2.DESCRIPTOR, gateway_public_pb2.DESCRIPTOR, plugin_commands_pb2.DESCRIPTOR, skill_sources_pb2.DESCRIPTOR, message_stream_pb2.DESCRIPTOR, search_public_pb2.DESCRIPTOR):
+    for descriptor in (workspace_public_pb2.DESCRIPTOR, gateway_public_pb2.DESCRIPTOR, plugin_commands_pb2.DESCRIPTOR, gateway_skill_sources_pb2.DESCRIPTOR, skill_sources_pb2.DESCRIPTOR, message_stream_pb2.DESCRIPTOR, search_public_pb2.DESCRIPTOR):
         collect(descriptor)
     return bundle
 

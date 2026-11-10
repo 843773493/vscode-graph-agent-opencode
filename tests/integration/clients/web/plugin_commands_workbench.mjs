@@ -30,7 +30,17 @@ try {
   receipt.initialization = [];
   for (const path of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) receipt.initialization.push(await api(path));
   const gatewayId = receipt.initialization[0].gateway_id;
-  await api('/api/gateway/service-plugins/install', { method: 'POST', body: { gateway_id: gatewayId, path: input.packagePath } });
+  receipt.phase = 'install-package';
+  const installing = command('boxteam.plugins.installPackage');
+  const installPicker = page.locator('.quick-input-widget').filter({ visible: true });
+  await expect(installPicker).toBeVisible();
+  await installPicker.getByRole('option').filter({ hasText: 'ZIP 文件' }).click();
+  await expect(installPicker.locator('input')).toBeVisible();
+  await installPicker.locator('input').fill(input.packagePath);
+  await page.keyboard.press('Enter');
+  await installing;
+  const installed = await api('/api/gateway/service-plugins/inventory', { method: 'POST', body: { gateway_id: gatewayId } });
+  assert(installed.packages.some(pkg => pkg.manifest.package_id === 'proof.command-ui'));
   let revision = 0;
   const bind = async enabled => {
     const path = '/api/gateway/config/sources/gateway_mutable_override', document = await api(path);

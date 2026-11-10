@@ -27,6 +27,7 @@ from app.core.file_permissions import restrict_private_path_access
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.gateway.plugins.dependencies import validate_runtime_target
 from app.gateway.plugins.packages import PluginPackageStore
+from app.gateway.plugins.sources import plugin_sources
 from app.gateway.runtime.process_lifecycle import (
     AdoptedManagedProcess,
     ManagedProcess,
@@ -240,6 +241,7 @@ class GatewayPluginRuntime:
             plugin_id=binding.plugin_id)
 
     def validate(self, payload: dict[str, object]) -> None:
+        plugin_sources(payload)
         self.validate_bindings(gateway_plugin_bindings(payload), workspace_id=None,
                                parameters=plugin_parameters(payload))
         self.validate_defaults(payload)

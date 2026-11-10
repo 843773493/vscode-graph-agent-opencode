@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { parse, modify, applyEdits } from 'jsonc-parser';
+import { installPlugin } from '../../../support/plugin_package.mjs';
 
 const input = JSON.parse(process.env.BOXTEAM_SETTINGS_SCHEMA_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], requests: [], writes: [], oldHostRequests: [] };
@@ -57,7 +58,7 @@ try {
     const directory = await api('/api/gateway/managed-workspaces', { method: 'POST', body: { root_path: rootPath, name, create_directory: false } });
     const target = directory.items.find(item => item.name === name);
     assert(target && target.gateway_id === health.gateway_id); targets.push(target);
-    await api('/api/gateway/service-plugins/install', { method: 'POST', body: { gateway_id: health.gateway_id, path: input.packagePaths[index] } });
+    await installPlugin(api, { gateway_id: health.gateway_id, path: input.packagePaths[index] });
   }
   for (const [index, target] of targets.entries()) {
     const document = await api(sourcePath, { headers: headers(target) });

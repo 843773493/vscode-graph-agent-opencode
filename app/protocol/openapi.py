@@ -42,9 +42,20 @@ from app.schemas.gateway.plugin_private_inputs import (
     PluginPrivateInputReference,
     PluginPrivateInputWriteRequest,
 )
+from app.schemas.gateway.plugin_installation import (
+    FrozenPluginInstallArtifact,
+    InstallPluginRequest,
+    PluginInstallOperationDTO,
+    PluginInstallOperationRequest,
+    PluginInventoryResultDTO,
+    PluginSourceArtifact,
+    PluginSourceCatalogDTO,
+    PluginSourceCatalogRequest,
+    PluginSourceConfig,
+    PluginSourceStatusDTO,
+)
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
-    InstallPluginRequest,
     PluginBinding,
     PluginCommandContribution,
     PluginConfigurationSchemaDTO,
@@ -55,7 +66,6 @@ from app.schemas.gateway.service_plugin import (
     PluginExtensionRequirement,
     PluginInstanceStatus,
     PluginInstanceView,
-    PluginInventoryResultDTO,
     PluginKeybindingContribution,
     PluginMenuContribution,
     PluginPackageManifest,
@@ -63,7 +73,6 @@ from app.schemas.gateway.service_plugin import (
     PluginServiceContribution,
     PluginSkillContribution,
     PluginSlotStatusDTO,
-    PluginSourceStatusDTO,
     PluginTarget,
     PluginToolBinding,
     PluginUninstallResultDTO,
@@ -194,6 +203,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
         "PluginConfigurationSchemasRequest", "PluginConfigurationSchemasDTO",
         "InstalledPluginPackageDTO", "PluginInventoryResultDTO", "PluginRuntimeStatusDTO",
         "PluginSlotStatusDTO", "PluginUninstallResultDTO",
+        "PluginSourceCatalogRequest", "PluginSourceCatalogDTO", "PluginInstallOperationRequest", "PluginInstallOperationDTO",
     )
 }
 
@@ -267,6 +277,8 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginPrivateInputReference, PluginPrivateInputWriteRequest,
         PluginConfigurationSchemasRequest, PluginConfigurationSchemaDTO, PluginConfigurationSchemasDTO,
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
+        PluginSourceConfig, PluginSourceArtifact, PluginSourceCatalogRequest, PluginSourceCatalogDTO,
+        FrozenPluginInstallArtifact, PluginInstallOperationRequest, PluginInstallOperationDTO,
         PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
         PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,
         PluginCommandInstanceRequest, PluginCommandRegistration, PluginCommandRegistrationsDTO,

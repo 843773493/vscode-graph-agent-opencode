@@ -24,6 +24,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_case as mcp_plugin_case,  # noqa: PLC0414 - 共用真实 Gateway 产品装具
 )
+from tests.support.plugin_package import install_plugin_async
 
 
 async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promotion(
@@ -41,11 +42,12 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
                            encoding="utf-8")
 
     archive = _package(artifacts / "mcp-bridge.zip")
-    response = await case.client.post("/api/gateway/service-plugins/install", json={
-        "gateway_id": case.gateway_id, "path": str(archive),
-        "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-    })
-    response.raise_for_status()
+    await install_plugin_async(
+        lambda path, payload: case.client.post(path, json=payload),
+        gateway_id=case.gateway_id,
+        path=str(archive),
+        expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+    )
 
     await _publish(case, {"plugins": {
         "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",

@@ -2,7 +2,7 @@
   "$schema": "./gateway_schema.jsonc", // load_gateway_config 使用对应 schema 校验最终 Gateway 配置。
   "config_version": 4,
   "plugins": {
-    "sources": {"entries": []}, // TODO：接自有在线目录；空源不发网络请求。
+    "sources": {"entries": []}, // 显式配置自有 HTTP(S) 来源；空源不发网络请求。
     "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。
     "workspace_defaults": {"entries": []} // 仅新建工作区继承；已有工作区独立管理。
   },

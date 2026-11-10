@@ -13,6 +13,7 @@ from app.core.path_utils import (
     get_user_gateway_schema_path,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.plugins.sources import plugin_sources
 from app.services.infrastructure.config.source_uri import inline_config_source_uri
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -226,6 +227,7 @@ def load_gateway_config(
         schema_path=resolved_schema_path,
     )
     raw_workspaces = raw_gateway_config["workspaces"]
+    plugin_sources(raw_gateway_config)
     raw_gateway_config = bound_plugin_configuration(raw_gateway_config)
     if not isinstance(raw_workspaces, list):
         raise TypeError("Gateway workspaces 配置必须是数组")

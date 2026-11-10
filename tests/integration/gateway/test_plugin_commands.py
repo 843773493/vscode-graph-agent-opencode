@@ -14,7 +14,7 @@ import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -174,8 +174,11 @@ def test_registered_commands_progress_cancel_restart_and_disabled_admission(
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
     package = context.artifacts_dir / "commands.zip"
     _archive(package, prepared_developer_tools_package)
-    client.post("/api/gateway/service-plugins/install", json={"gateway_id": gateway_id,
-        "path": str(package.resolve())}).raise_for_status()
+    install_plugin(
+        lambda path, payload: client.post(path, json=payload),
+        gateway_id=gateway_id,
+        path=str(package.resolve()),
+    )
     bindings = [{"package_id": "proof.commands", "plugin_id": runtime, "package_version": "1.0.0", "enabled": True}
                 for runtime in ("python", "node")]
 

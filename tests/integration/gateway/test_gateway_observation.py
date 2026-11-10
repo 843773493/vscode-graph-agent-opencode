@@ -15,7 +15,7 @@ import pytest
 
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import PYTHON_PLUGIN
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -51,11 +51,15 @@ def test_gateway_collection_hot_switches_through_original_source_writer(
     exchanges = []
     binding = {"package_id": "observation.probe", "plugin_id": "echo", "package_version": "1.0.0", "enabled": True}
 
-    def exchange(method: str, path: str, **kwargs) -> dict:
+    def request(method: str, path: str, **kwargs) -> httpx.Response:
         request_id = f"observation-{len(exchanges)}"
         response = client.request(method, path, headers={"X-Request-ID": request_id}, **kwargs)
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
         exchanges.append({"path": path, "status": response.status_code, "body": response.json()})
+        return response
+
+    def exchange(method: str, path: str, **kwargs) -> dict:
+        response = request(method, path, **kwargs)
         response.raise_for_status()
         return response.json()["data"]
 
@@ -93,9 +97,12 @@ def test_gateway_collection_hot_switches_through_original_source_writer(
             archive.writestr("plugin.jsonc", json.dumps(manifest))
             archive.writestr("main.py", PYTHON_PLUGIN)
             archive.writestr("local_module.py", "VALUE = 1\n")
-        exchange("POST", "/api/gateway/service-plugins/install", json={
-            "gateway_id": gateway_id, "path": str(package), "expected_digest": hashlib.sha256(package.read_bytes()).hexdigest(),
-        })
+        install_plugin(
+            lambda path, payload: request("POST", path, json=payload),
+            gateway_id=gateway_id,
+            path=str(package),
+            expected_digest=hashlib.sha256(package.read_bytes()).hexdigest(),
+        )
         initial = diagnostics()
         assert not initial["telemetry"]["enabled"] and not initial["statistics"]["enabled"]
         assert initial["requests"] is None and initial["samples"] == [] and initial["processes"] == []

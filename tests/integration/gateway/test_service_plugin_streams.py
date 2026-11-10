@@ -20,7 +20,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugins import (
     plugin_gateway as plugin_gateway,  # noqa: PLC0414 — pytest 复用原独立 Gateway fixture。
 )
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import install_plugin, native_plugin_target
 
 PLUGIN = '''
 import gzip, json, os, sys
@@ -90,8 +90,12 @@ def install_stream_plugin(client: httpx.Client, context: TestRunContext) -> Plug
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("server.py", PLUGIN)
-    client.post("/api/gateway/service-plugins/install", json={"gateway_id": gateway_id,
-        "path": str(archive_path), "expected_digest": hashlib.sha256(archive_path.read_bytes()).hexdigest()}).raise_for_status()
+    install_plugin(
+        lambda path, payload: client.post(path, json=payload),
+        gateway_id=gateway_id,
+        path=str(archive_path),
+        expected_digest=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+    )
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
     source = client.get(source_path).raise_for_status().json()["data"]
     document = commentjson.loads(source["jsonc"])

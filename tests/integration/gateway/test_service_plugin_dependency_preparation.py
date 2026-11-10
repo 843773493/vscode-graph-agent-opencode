@@ -16,7 +16,11 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.plugin_package import native_plugin_target
+from tests.support.plugin_package import (
+    expect_plugin_install_failure,
+    install_plugin,
+    native_plugin_target,
+)
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -230,12 +234,21 @@ def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
         })
         return response
 
-    def install(archive: Path) -> httpx.Response:
-        return exchange("POST", "/api/gateway/service-plugins/install", {
-            "gateway_id": gateway_id,
-            "path": str(archive),
-            "expected_digest": hashlib.sha256(archive.read_bytes()).hexdigest(),
-        })
+    def install(archive: Path):
+        return install_plugin(
+            lambda path, payload: exchange("POST", path, payload),
+            gateway_id=gateway_id,
+            path=str(archive),
+            expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        )
+
+    def expect_install_failure(archive: Path):
+        return expect_plugin_install_failure(
+            lambda path, payload: exchange("POST", path, payload),
+            gateway_id=gateway_id,
+            path=str(archive),
+            expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        )
 
     def status() -> dict[str, object]:
         response = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id})
@@ -274,13 +287,11 @@ def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
         return exchange("GET", path)
 
     try:
-        assert install(packages["good"]).status_code == 200
-        stale = install(packages["stale"])
-        assert stale.status_code == 422
-        assert "pyproject.toml 与 uv.lock 根依赖不一致" in stale.json()["detail"]
-        missing = install(packages["missing"])
-        assert missing.status_code == 422
-        assert "缺少已准备的 python/site-packages" in missing.json()["detail"]
+        assert install(packages["good"]).status == "succeeded"
+        stale = expect_install_failure(packages["stale"])
+        assert stale.error and "pyproject.toml 与 uv.lock 根依赖不一致" in stale.error
+        missing = expect_install_failure(packages["missing"])
+        assert missing.error and "缺少已准备的 python/site-packages" in missing.error
 
         inventory = exchange(
             "POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id},
@@ -302,7 +313,8 @@ def test_gateway_installs_runs_and_restarts_prepared_dependency_package(
         }).raise_for_status().json()["data"]
         assert restarted["instance"]["instance_id"] != ready["instance"]["instance_id"]
         assert call(restarted).raise_for_status().json()["value"] == "locked-dependency-ready"
-        assert install(packages["changed"]).status_code == 409, "同包版本内容不可变"
+        changed = expect_install_failure(packages["changed"])
+        assert changed.error and "摘要冲突" in changed.error, "同包版本内容不可变"
         assert call(restarted).raise_for_status().json()["value"] == "locked-dependency-ready"
     finally:
         (context.artifacts_dir / "plugin-dependency-flow.json").write_text(
