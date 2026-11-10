@@ -25,11 +25,21 @@ from app.gateway.server.service_plugin_proxy import router
 
 
 @pytest.fixture
-async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[FastAPI, list[httpx.Request]]]:
+async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[tuple[FastAPI, list[httpx.Request]]]:
     calls: list[httpx.Request] = []
+    stopped = asyncio.Event()
+    mode = getattr(request, "param", "disconnect")
 
     async def fail(request: httpx.Request) -> httpx.Response:
         calls.append(request)
+        if mode != "disconnect":
+            stopped.set()
+        if mode == "unexpected":
+            raise ExceptionGroup("传输与未知业务错误", [
+                httpx.ConnectError("具名插件连接已退出", request=request), ValueError("业务错误不能归为断网"),
+            ])
         raise httpx.ConnectError("具名插件连接已退出", request=request)
 
     skill_sources = GatewaySkillSourceOwner(gateway_id="gateway_" + "a" * 32, skills_root=tmp_path / "skills")
@@ -39,7 +49,7 @@ async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         skill_sources=skill_sources)
     await owner.client.aclose()
     owner.client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
-    monkeypatch.setattr(owner, "service", lambda *args, **kwargs: ("http://127.0.0.1:49152/services/echo", "private", asyncio.Event()))
+    monkeypatch.setattr(owner, "service", lambda *args, **kwargs: ("http://127.0.0.1:49152/services/echo", "private", stopped))
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
@@ -55,6 +65,7 @@ async def plugin_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         await skill_sources.close()
 
 
+@pytest.mark.parametrize("plugin_proxy", ["disconnect", "disconnect-and-retire"], indirect=True)
 async def test_service_connect_failure_is_attributed_without_replay(
     plugin_proxy: tuple[FastAPI, list[httpx.Request]], caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -71,6 +82,18 @@ async def test_service_connect_failure_is_attributed_without_replay(
     assert calls[0].headers["X-Request-ID"] == "plugin-original-request"
     assert calls[0].headers["X-Local-Token"] == "private"
     assert "具名插件连接已退出" in caplog.text
+
+
+@pytest.mark.parametrize("plugin_proxy", ["unexpected"], indirect=True)
+async def test_service_unexpected_group_is_not_hidden_as_connection_failure(
+    plugin_proxy: tuple[FastAPI, list[httpx.Request]], caplog: pytest.LogCaptureFixture,
+) -> None:
+    app, calls = plugin_proxy
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/gateway/service-plugins/probe.tools/probe/instances/original/services/echo/read?package_version=1.0.0")
+    assert response.status_code == 500
+    assert "业务错误不能归为断网" in caplog.text
+    assert len(calls) == 1
 
 
 async def test_service_path_cannot_escape_declared_service(plugin_proxy: tuple[FastAPI, list[httpx.Request]]) -> None:

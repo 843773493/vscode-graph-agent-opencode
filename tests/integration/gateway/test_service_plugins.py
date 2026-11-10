@@ -133,6 +133,13 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         data = exchange("POST", "/api/gateway/service-plugins/status", target).raise_for_status().json()["data"]
         return {item["binding"]["plugin_id"]: item for item in data["plugins"]}
 
+    workspace_id = exchange("GET", "/api/gateway/workspaces").raise_for_status().json()["data"]["items"][0]["workspace_id"]
+
+    def skill_versions() -> dict[str, str]:
+        data = exchange("GET", f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}").raise_for_status().json()["data"]
+        return {item["plugin"]["plugin_id"]: item["plugin"]["package_version"]
+            for item in data["entries"] if item.get("plugin") and item["plugin"]["package_id"] == "probe.tools"}
+
     def bind(entries: list[dict[str, object]], parameters: dict[str, object] | None = None) -> dict[str, object]:
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange("GET", path).raise_for_status().json()["data"]
@@ -160,8 +167,10 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
             "name": "真实受控插件", "extension_contract_version": 1, "plugins": [
                 {"id": runtime, "name": runtime, "instance_scope": "gateway",
                  "requires": [{"extension_point": "services", "version": 1},
-                    {"extension_point": "configuration", "version": 1}],
+                    {"extension_point": "configuration", "version": 1},
+                    {"extension_point": "skills", "version": 1}],
                  "contributes": {"services": [{"service_id": "echo", "service_type": "terminal", "protocol": "http"}],
+                    "skills": [{"id": "instructions", "path": f"skills/{runtime}"}],
                     "configuration": {"type": "object", "additionalProperties": False,
                         "properties": {"credentialValue": {"type": "string", "minLength": 8, "writeOnly": True}}}},
                  "runtime": runtime, "entrypoint": ["nested/custom/entry.py", mode] if runtime == "python" else ["another/plugin.mjs"],
@@ -176,6 +185,9 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
                 "'credential_digest': __import__('hashlib').sha256(json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS']).get('credentialValue', '').encode()).hexdigest(), 'version': identity['package_version'], 'cwd': os.getcwd(),"))
             archive.writestr("nested/custom/local_module.py", "VALUE = 1\n")
             archive.writestr("another/plugin.mjs", NODE_PLUGIN)
+            for runtime in ("python", "node"):
+                archive.writestr(f"skills/{runtime}/SKILL.md",
+                    f"---\nname: {runtime}-lifecycle-probe\ndescription: 插件生命周期验证\n---\n{version}\n")
         return path
 
     def install(version: str, mode: str = '') -> None:
@@ -203,6 +215,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert inventory()["sources"]["configured"] is False
         install("1.0.0")
         assert states() == {}, "安装与库存读取不能启动插件"
+        assert skill_versions() == {}, "安装不能发布未开启插件的说明"
         install("1.0.0")
         assert len(inventory()["packages"]) == 1
         original_content = installed_content()
@@ -210,6 +223,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert current["declarations"]["instance"] is None and current["declarations"]["declarative"] is True
         python, node = current["python"], current["node"]
         assert python["state"] == node["state"] == "ready"
+        assert skill_versions() == {"python": "1.0.0", "node": "1.0.0"}
         assert python["instance"]["process_id"] != node["instance"]["process_id"]
         assert echo(python).raise_for_status().json()["version"] == "1.0.0"
         assert echo(node).raise_for_status().json()["version"] == "1.0.0"
@@ -251,6 +265,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert states()["python"]["state"] == "failed"
         assert not psutil.pid_exists(python_new["instance"]["process_id"])
         assert states()["python"]["binding"]["enabled"] is True
+        assert skill_versions()["python"] == "1.0.0", "运行崩溃不能撤销已发布的静态说明"
         assert echo(python_new).status_code == 409
         assert states()["node"]["instance"] == node["instance"]
         recovered = exchange("POST", "/api/gateway/service-plugins/restart", {**target,
@@ -259,7 +274,9 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert recovered["state"] == "ready" and recovered["instance"] != python_new["instance"]
         install("2.0.0")
         assert states()["python"]["binding"]["package_version"] == "1.0.0"
+        assert skill_versions()["python"] == "1.0.0", "安装新版不能切换说明版本"
         switched = bind(entries("2.0.0"))
+        assert skill_versions() == {"python": "2.0.0", "node": "2.0.0"}
         assert echo(switched["python"]).raise_for_status().json()["version"] == "2.0.0"
         assert echo(python_new).status_code == 409
         disabled = bind(entries("2.0.0", python_enabled=False))
@@ -267,17 +284,24 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert not psutil.pid_exists(switched["python"]["instance"]["process_id"])
         assert echo(switched["python"]).status_code == 409
         assert states()["python"]["binding"]["enabled"] is False
+        assert skill_versions() == {"node": "2.0.0"}, "关闭插件须撤销新说明准入"
+        before_failure = bind(entries("2.0.0"))["python"]
         install("3.0.0", "bad-ready")
         failed = bind(entries("3.0.0"))
         assert failed["python"]["state"] == "failed"
         assert failed["python"]["binding"]["enabled"] is True
         assert failed["node"]["state"] == "ready", "单个插件失败不能阻断兄弟启动"
+        assert not psutil.pid_exists(before_failure["instance"]["process_id"])
+        assert echo(before_failure).status_code == 409
+        assert skill_versions() == {"node": "3.0.0"}, "新版启动失败必须停止该绑定后续贡献发布"
         assert bind(entries("3.0.0"))["python"]["instance"] is None, "相同绑定读取或提交不得重试启动"
+        assert skill_versions() == {"node": "3.0.0"}, "相同配置不能补发失败版本的贡献"
         install("5.0.0", "bad-capabilities")
         incomplete = bind(entries("5.0.0"))
         assert incomplete["python"]["state"] == "failed" and incomplete["python"]["instance"] is None
         assert "observation" in incomplete["python"]["error"]
         assert incomplete["node"]["state"] == "ready", "缺少必需管理能力只拒绝原插件"
+        assert skill_versions() == {"node": "5.0.0"}
         assert bind(entries("5.0.0"))["python"]["instance"] is None, "同绑定不自动重试协议拒绝"
         install("4.0.0", "bad-shutdown")
         running = bind(entries("4.0.0"))["python"]
@@ -287,6 +311,7 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
         assert not psutil.pid_exists(running["instance"]["process_id"]), "管理响应失败也须核实实际进程退出"
         assert bind(entries("4.0.0", python_enabled=False))["python"]["state"] == "failed", "相同配置不能洗掉停止失败回执"
         assert bind([]) == {}, "解除全部绑定后不得继续展示幽灵插件"
+        assert skill_versions() == {}
         for version in ("1.0.0", "2.0.0", "3.0.0", "4.0.0", "5.0.0"):
             exchange("POST", "/api/gateway/service-plugins/uninstall", {**target,
                 "package_id": "probe.tools", "package_version": version}).raise_for_status()

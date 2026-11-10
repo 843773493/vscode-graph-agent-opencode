@@ -281,6 +281,15 @@ async def service_request(package_id: str, plugin_id: str, service_id: str,
             capabilities=capabilities)
         handed_off = True
         return result
+    except ExceptionGroup as error:
+        _, unhandled = error.split((httpx.RequestError, LookupError))
+        if unhandled is not None or error.subgroup(httpx.RequestError) is None:
+            raise
+        # 断网和实例退役可能在同一轮结清；保留完整异常链并沿原连接失败出口报告。
+        logger.exception("插件上游请求失败且原实例退役: request_id=%s instance_id=%s service_id=%s",
+            get_request_id(request), instance_id, service_id)
+        raise HTTPException(502, f"插件上游连接失败: instance_id={instance_id}, service_id={service_id}, "
+            "error_type=ExceptionGroup；请查看 Gateway 服务日志") from error
     except httpx.RequestError as error:
         logger.exception("插件上游请求失败: request_id=%s instance_id=%s service_id=%s",
             get_request_id(request), instance_id, service_id)

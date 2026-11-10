@@ -198,6 +198,9 @@ class GatewayPluginRuntime:
                 slot.error = f"插件退出通知失败: {error}"
                 logger.exception("插件退出等待失败: binding=%s", slot.binding)
             else:
+                if isinstance(slot.process, ManagedProcess):
+                    # 系统退出通知不收割 Popen 子进程；在发布 failed 前回收已退出的根。
+                    slot.process.process.poll()
                 slot.error = "插件进程已退出；需显式重启，不自动重放在途操作"
             slot.state = "failed"
             slot.stopped.set()
@@ -369,7 +372,9 @@ class GatewayPluginRuntime:
                 raise ValueError("重启基线已失效，请读取原绑定")
             if (previous is not None and previous.binding == binding
                     and previous.parameters_revision == parameters_revision and not restart):
-                self.skill_sources.publish_plugin(binding, self.packages)
+                # 接管的 ready 实例在此恢复贡献；失败绑定不能借无关配置提交补发。
+                if previous.state == "ready":
+                    self.skill_sources.publish_plugin(binding, self.packages)
                 previous.parameters = values
                 previous.revision = revision
                 self._publish()
@@ -391,19 +396,17 @@ class GatewayPluginRuntime:
                     return previous.describe()
             slot = PluginSlot(binding, revision, declaration, self.gateway_id, parameters=values)
             self.slots[key] = slot
-            self.skill_sources.publish_plugin(binding, self.packages)
-            if binding.enabled and declaration.runtime is not None:
-                try:
+            try:
+                if binding.enabled and declaration.runtime is not None:
                     await self._start(key, slot, delivered_parameters=delivered_parameters)
-                except asyncio.CancelledError:
-                    slot.state, slot.error = "failed", "启动被取消；已结算原进程，需显式重启"
-                    raise
-                except Exception as error:
-                    slot.state, slot.error = "failed", str(error)
-                    logger.exception("插件启动失败: slot=%s", key)
-                finally:
-                    self._publish()
-            else:
+                self.skill_sources.publish_plugin(binding, self.packages)
+            except asyncio.CancelledError:
+                slot.state, slot.error = "failed", "启动被取消；已结算原进程，需显式重启"
+                raise
+            except Exception as error:
+                slot.state, slot.error = "failed", str(error)
+                logger.exception("插件启动或贡献发布失败: slot=%s", key)
+            finally:
                 self._publish()
             return slot.describe()
 

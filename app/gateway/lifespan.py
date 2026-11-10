@@ -556,7 +556,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                         raise RuntimeError("Gateway pending 启动缺少 apply journal")
                     if pending_apply_journal.registry_revision is None:
                         raise RuntimeError("Gateway pending 启动缺少 registry CAS 基线")
-                    gateway_state.rebase_config_apply_registry_revision(
+                    registry_baseline = gateway_state.rebase_config_apply_registry_revision(
                         apply_id=pending_apply_claim.apply_id,
                         expected_registry_revision=pending_apply_journal.registry_revision,
                     )
@@ -590,7 +590,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                         )
                     gateway_state.rebase_config_apply_registry_revision(
                         apply_id=claim.apply_id,
-                        expected_registry_revision=pending_apply_journal.registry_revision,
+                        expected_registry_revision=registry_baseline,
                     )
                     registry.assert_runtime_consumers_healthy()
                     app.state.port_forward_manager.assert_healthy()

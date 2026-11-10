@@ -91,20 +91,28 @@ def _package_archive(path: Path) -> None:
             "id": "probe",
             "name": "Lifecycle probe",
             "instance_scope": "gateway",
-            "requires": [{"extension_point": "services", "version": 1}],
+            "requires": [{"extension_point": "services", "version": 1},
+                         {"extension_point": "skills", "version": 1}],
             "contributes": {"services": [{
                 "service_id": "probe",
                 "service_type": "terminal",
                 "protocol": "http",
-            }]},
+            }], "skills": [{"id": "guide", "path": "guides/runtime"}]},
             "runtime": "python",
             "entrypoint": ["nested/runtime/plugin.py"],
             "management_protocol_version": 1,
+        }, {
+            "id": "instructions", "name": "无进程说明", "instance_scope": "gateway",
+            "requires": [{"extension_point": "skills", "version": 1}],
+            "contributes": {"skills": [{"id": "guide", "path": "guides/declarative"}]},
         }],
     }
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("nested/runtime/plugin.py", _PLUGIN_SOURCE)
+        for kind in ("runtime", "declarative"):
+            archive.writestr(f"guides/{kind}/SKILL.md",
+                f"---\nname: launcher-{kind}-guide\ndescription: 换代说明验证\n---\n{kind}\n")
 
 
 def _install_and_enable(
@@ -131,6 +139,9 @@ def _install_and_enable(
         "plugin_id": "probe",
         "package_version": "1.0.0",
         "enabled": True,
+    }, {
+        "package_id": "launcher.lifecycle", "plugin_id": "instructions",
+        "package_version": "1.0.0", "enabled": True,
     }]}
     saved = _json_request(client, "PUT", source_path, {
         "gateway_id": gateway_id,
@@ -280,6 +291,17 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             gateway_id = initial_data["gateway_id"]
             _install_and_enable(client, gateway_id=gateway_id, archive=archive)
             before_handoff = _wait_for_plugin(client, gateway_id, launcher)
+            workspaces = _json_request(client, "GET", "/api/gateway/workspaces")["data"]
+            assert isinstance(workspaces, dict)
+            workspace_id = workspaces["items"][0]["workspace_id"]
+            skills_path = f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}"
+            original_skills = _json_request(client, "GET", skills_path)["data"]
+            assert isinstance(original_skills, dict)
+            assert {entry["plugin"]["plugin_id"] for entry in original_skills["entries"] if entry.get("plugin")} == {"probe", "instructions"}
+            current = _json_request(client, "POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id})["data"]
+            assert isinstance(current, dict)
+            declarative, = [item for item in current["plugins"] if item["binding"]["plugin_id"] == "instructions"]
+            assert declarative["declarative"] is True and declarative["instance"] is None
             original_instance = before_handoff["instance"]
             assert isinstance(original_instance, dict)
             plugin_pid_before = original_instance["process_id"]
@@ -348,6 +370,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             assert isinstance(instance_after, dict)
             assert instance_after["process_id"] == plugin_pid_before
             assert instance_after["instance_id"] == instance_id_before
+            assert _json_request(client, "GET", skills_path)["data"] == original_skills, "接管须恢复原代码与纯声明贡献，不能改变说明来源代际"
             active_config = _json_request(client, "GET", source_path)["data"]
             assert isinstance(active_config, dict)
             adopted_logging = logging_state()
