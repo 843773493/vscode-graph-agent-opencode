@@ -331,5 +331,10 @@ class WorkspacePluginBindings:
                     raise ValueError(f"工作区安装引用尚未交接，不能卸载: {workspace_id}")
                 continue
             # 当前 active 或 pending 在上次通知之后仍可能变化，不能凭缓存删除版本。
-            self.snapshots[workspace_id] = await self.read(target)
+            try:
+                self.snapshots[workspace_id] = await self.read(target)
+            except httpx.HTTPError as error:
+                raise RuntimeError(
+                    f"卸载前读取工作区插件引用失败: workspace_id={workspace_id}, error={type(error).__name__}"
+                ) from error
         return self.referenced_bindings()
