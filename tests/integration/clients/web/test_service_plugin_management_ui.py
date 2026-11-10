@@ -100,8 +100,9 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                      "credential": {"type": "string", "minLength": 8, "writeOnly": True}}}}},
         ],
     }
+    target_environment = native_plugin_target("python", "node") if scenario == "single" else {}
     if scenario == "single":
-        manifest["target"] = native_plugin_target("python", "node")
+        manifest["target"] = target_environment
         for plugin, runtime in zip(manifest["plugins"], ("python", "node"), strict=True):
             plugin.update({"runtime": runtime, "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"],
                 "management_protocol_version": 1})
@@ -121,6 +122,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             archive.writestr("local_module.py", "VALUE = 1\n")
             archive.writestr("entry.mjs", NODE_PLUGIN)
     version_paths = []
+    incompatible_packages = []
     if scenario == "single":
         for version in ("1.1.0", "2.0.0"):
             candidate = copy.deepcopy(manifest)
@@ -135,6 +137,22 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                 archive.writestr("local_module.py", "VALUE = 1\n")
                 archive.writestr("entry.mjs", NODE_PLUGIN)
             version_paths.append(str(path))
+        for index, runtime in enumerate(("node", "python")):
+            current_runtime = target_environment[runtime]
+            assert isinstance(current_runtime, dict)
+            candidate = copy.deepcopy(manifest)
+            candidate["version"] = f"8.0.{index}"
+            candidate["target"][runtime]["abi"] = "0"
+            path = context.artifacts_dir / f"incompatible-{runtime}.zip"
+            with ZipFile(path, "w") as archive:
+                archive.writestr("plugin.jsonc", json.dumps(candidate, ensure_ascii=False))
+                archive.writestr("entry.py", PYTHON_PLUGIN)
+                archive.writestr("local_module.py", "VALUE = 1\n")
+                archive.writestr("entry.mjs", NODE_PLUGIN)
+            incompatible_packages.append({"path": str(path), "version": candidate["version"],
+                "runtime": "Node" if runtime == "node" else "Python",
+                "required": f"{candidate['target'][runtime]['version']}/0",
+                "actual": f"{current_runtime['version']}/{current_runtime['abi']}"})
         # 同一不可变新版包同时供来源安装与后续显式切版消费，不另造模型或安装实现。
         content = Path(version_paths[0]).read_bytes()
         plugin_source["content"] = content
@@ -172,6 +190,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         environment = os.environ | {
             "BOXTEAM_PLUGIN_UI_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
                 "packagePath": str(package_path), "versionPaths": version_paths,
+                "incompatiblePackages": incompatible_packages,
                 "sourceArtifact": plugin_source["artifact"] if scenario == "single" else None,
                 "artifacts": str(context.artifacts_dir), "resultPath": str(result_path)}),
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
@@ -194,6 +213,9 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["installed"] and result["uninstalled"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
             assert result["gatewayRestartedIndependently"]
+            assert len(result["incompatibleInstalls"]) == len(incompatible_packages) == 2
+            assert all(item["status"] == "failed" and item["bindingKept"]
+                for item in result["incompatibleInstalls"])
             assert result["sourceUpdate"]["artifact"]["digest"] == plugin_source["artifact"]["digest"]
             assert result["sourceUpdate"]["status"] == "succeeded"
             assert plugin_source["calls"] == [

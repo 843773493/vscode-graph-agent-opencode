@@ -454,6 +454,35 @@ async function readInstallation(target: PluginTarget, operationId: string): Prom
   return requireInstallationOwner(target, operationId, operation);
 }
 
+function installationFailureText(target: PluginTarget, operation: PluginInstallOperationDTO): string {
+  const artifact = operation.artifact;
+  const status = operation.status === 'cancelled' ? '已取消'
+    : operation.status === 'unknown' ? '结果未知' : '失败';
+  if (!artifact) {
+    return `插件安装${status}，但 Gateway 回执缺少必需制品详情（artifact）`
+      + `\n目标原生 Gateway：${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`
+      + `\n原操作：${operation.operation_id}\nGateway 返回错误或环境详情：${operation.error?.trim() || 'Gateway 未返回详情。'}`
+      + '\n请重新查询原操作；若仍缺少制品详情，检查目标 Gateway 的安装操作记录。';
+  }
+  const packageIdentity = `${artifact.package_id}@${artifact.package_version}`;
+  const runtimeTarget = artifact.target;
+  const requiredEnvironment = runtimeTarget
+    ? `${runtimeTarget.os}/${runtimeTarget.architecture} · ${runtimeTarget.system_baseline}`
+      + (runtimeTarget.node ? ` · Node ${runtimeTarget.node.version}/ABI ${runtimeTarget.node.abi}` : '')
+      + (runtimeTarget.python ? ` · Python ${runtimeTarget.python.version}/ABI ${runtimeTarget.python.abi}` : '')
+    : '未声明代码运行环境';
+  const error = operation.error?.trim();
+  const nextStep = operation.status === 'unknown'
+    ? '先检查目标 Gateway 当前插件包，再查询此原操作；确认发布状态前不要重新安装，不会自动重放。'
+    : operation.status === 'cancelled'
+      ? '确认目标 Gateway 未发布此版本后，可以重新安装。'
+      : '请根据 Gateway 错误修复问题后，再对该包版本重新安装。';
+  return `插件安装${status}：${packageIdentity}\n目标原生 Gateway：${target.gateway_id}`
+    + `${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`
+    + `\n原操作：${operation.operation_id}\n所需运行环境：${requiredEnvironment}`
+    + `\nGateway 返回错误或环境详情：${error || 'Gateway 未返回详情。'}\n${nextStep}`;
+}
+
 async function observeInstallation(progress: IProgressService, notifications: INotificationService,
   target: PluginTarget, operationId: string, initial?: PluginInstallOperationDTO): Promise<void> {
   await progress.withProgress({ location: ProgressLocation.Notification,
@@ -466,7 +495,7 @@ async function observeInstallation(progress: IProgressService, notifications: IN
       await timeout(300);
       operation = await readInstallation(target, operationId);
     }
-    if (operation.status !== 'succeeded') throw new Error(`安装 ${operation.status}：${operation.error ?? operationId}`);
+    if (operation.status !== 'succeeded') throw new Error(installationFailureText(target, operation));
     notifications.info(`已安装 ${operation.artifact?.package_id}@${operation.artifact?.package_version}`);
   }, () => { void gateway.request('/api/gateway/service-plugins/cancel-install',
     { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) })

@@ -267,6 +267,37 @@ try {
     item.package_id === 'ui.preference-probe' && item.plugin_id === 'gateway-preference');
   const beforeInstall = await gatewaySource();
   const beforeInstallRuntime = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } });
+  result.incompatibleInstalls = [];
+  for (const candidate of input.incompatiblePackages) {
+    result.phase = `reject-incompatible-${candidate.runtime}`;
+    const installing = page.waitForRequest(request => request.method() === 'POST'
+      && new URL(request.url()).pathname.endsWith('/service-plugins/install'));
+    await installButton.click(); await pick('ZIP 文件'); await inputQuick(candidate.path);
+    const request = (await installing).postDataJSON();
+    assert.equal(request.gateway_id, active.gateway_id);
+    await expect.poll(async () => (await api('/api/gateway/service-plugins/install-operation',
+      { method: 'POST', body: { gateway_id: active.gateway_id, operation_id: request.operation_id } })).status).toBe('failed');
+    const operation = await api('/api/gateway/service-plugins/install-operation',
+      { method: 'POST', body: { gateway_id: active.gateway_id, operation_id: request.operation_id } });
+    assert.equal(operation.artifact.package_id, 'ui.preference-probe');
+    assert.equal(operation.artifact.package_version, candidate.version);
+    assert.equal(operation.gateway_id, active.gateway_id);
+    const failure = page.locator('.notifications-toasts .notification-toast')
+      .filter({ hasText: `${candidate.runtime} 运行时不匹配` }).last();
+    await expect(failure).toContainText(`ui.preference-probe@${candidate.version}`);
+    await expect(failure).toContainText(active.gateway_id);
+    await expect(failure).toContainText(`package=${candidate.required}`);
+    await expect(failure).toContainText(`gateway=${candidate.actual}`);
+    await expect(failure).toContainText('完整插件 ZIP');
+    assert.equal((await gatewaySource()).jsonc, beforeInstall.jsonc);
+    assert.deepEqual(await api('/api/gateway/service-plugins/status',
+      { method: 'POST', body: { gateway_id: active.gateway_id } }), beforeInstallRuntime);
+    await callRuntime(beforeInstallRuntime.plugins.find(item => item.binding.plugin_id === 'gateway-preference'));
+    await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+    await expect(view.locator('.service-plugin-package')).toHaveCount(1);
+    result.incompatibleInstalls.push({ ...operation, bindingKept: true });
+  }
+  result.phase = 'explicit-version-switch';
   for (const [index, path] of input.versionPaths.entries()) {
     await installButton.click();
     if (index === 0) {

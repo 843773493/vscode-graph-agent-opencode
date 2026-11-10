@@ -48,12 +48,13 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
     `${declaration('readInstallation')}\nreturn readInstallation;`)(gateway, requireOwner);
   const activePluginInstallations = options.activePluginInstallations ?? new Map();
   const installationKey = new Function(`${declaration('installationKey')}\nreturn installationKey;`)();
+  const installationFailureText = new Function(`${declaration('installationFailureText')}\nreturn installationFailureText;`)();
   const runPluginInstallation = new Function('activePluginInstallations', 'installationKey',
     `${declaration('runPluginInstallation')}\nreturn runPluginInstallation;`)(activePluginInstallations, installationKey);
   const notifications = options.notifications ?? { info() {}, error() {} };
-  const observe = new Function('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText',
+  const observe = new Function('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText', 'installationFailureText',
     `${declaration('observeInstallation')}\nreturn observeInstallation;`)(gateway, async () => {}, { Notification: 1 }, 120_000, read,
-    error => error instanceof Error ? error.message : String(error));
+    error => error instanceof Error ? error.message : String(error), installationFailureText);
   const observeInstallation = options.observeInstallation
     ?? (async (progress, notificationService, target, operationId, result) => {
       observed.push({ operationId, operation: result });
@@ -146,6 +147,48 @@ test('安装响应未知时只查询一次原 operation_id，不重放安装', a
   expect(observed).toEqual([{ operationId: 'operation-original', operation: operation() }]);
 });
 
+test('失败、未知和取消结果保留原包、目标 Gateway、环境详情及下一步提示', async () => {
+  const outcomes = [
+    { status: 'failed', error: '插件 Node 运行时不匹配: package=22.14.0/127, gateway=20.18.0/115；请获取匹配版本的完整插件 ZIP',
+      action: '请根据 Gateway 错误修复问题后，再对该包版本重新安装' },
+    { status: 'unknown', error: '包原子发布已发生，但操作终态未确认；不会自动重放', action: '先检查目标 Gateway 当前插件包' },
+    { status: 'cancelled', error: undefined, action: '确认目标 Gateway 未发布此版本后，可以重新安装' },
+  ];
+  for (const outcome of outcomes) {
+    const artifact = { package_id: 'sample.plugin', package_version: '2.4.1',
+      target: { os: 'linux', architecture: 'x64', system_baseline: 'glibc-2.28',
+        node: { version: '22.14.0', abi: '127' }, python: undefined },
+      source_kind: 'local_zip', digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' };
+    const result = { ...operation(), status: outcome.status, artifact, error: outcome.error };
+    const calls = [];
+    const failure = await createInstaller(async (path, body) => {
+      calls.push({ path, body });
+      return result;
+    }, [{ kind: 'zip' }], ['/tmp/plugin.zip'], []).then(() => undefined, error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain(`插件安装${outcome.status === 'cancelled' ? '已取消' : outcome.status === 'unknown' ? '结果未知' : '失败'}：sample.plugin@2.4.1`);
+    expect(failure.message).toContain('目标原生 Gateway：gateway-original');
+    expect(failure.message).toContain('原操作：operation-original');
+    expect(failure.message).toContain('所需运行环境：linux/x64 · glibc-2.28 · Node 22.14.0/ABI 127');
+    if (outcome.error) expect(failure.message).toContain(`Gateway 返回错误或环境详情：${outcome.error}`);
+    expect(failure.message).toContain(outcome.action);
+    expect(calls.map(call => call.path.split('/').at(-1))).toEqual(['install']);
+  }
+});
+
+test('缺少必需 artifact 时报告协议回执缺字段并保留原 owner 与 Gateway 错误', async () => {
+  const result = { ...operation(), status: 'failed', artifact: undefined, error: '操作回执没有制品详情' };
+  const failure = await createInstaller(async () => result, [{ kind: 'zip' }], ['/tmp/plugin.zip'], [])
+    .then(() => undefined, error => error);
+
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure.message).toContain('插件安装失败，但 Gateway 回执缺少必需制品详情（artifact）');
+  expect(failure.message).toContain('目标原生 Gateway：gateway-original');
+  expect(failure.message).toContain('原操作：operation-original');
+  expect(failure.message).toContain('Gateway 返回错误或环境详情：操作回执没有制品详情');
+  expect(failure.message).toContain('请重新查询原操作');
+});
+
 test('插件目录 owner 错误或分页 revision 变化时不提交安装', async () => {
   for (const secondPage of [
     { gateway_id: 'gateway-other', source_id: 'source-original', catalog_revision: 'revision-1', items: [] },
@@ -211,21 +254,23 @@ test('View 安装按钮委派原安装命令，与 F1 对同一 Gateway 制品�
 test('相同制品失败或取消结清后可重新创建安装操作', async () => {
   for (const outcome of ['failed', 'cancelled']) {
     const calls = [], observed = [], ids = [];
+    const artifact = { package_id: 'sample.plugin', package_version: '1.0.0', target: undefined,
+      source_kind: 'local_zip', digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' };
     const installCommand = createInstallCommand(async (path, body) => {
       calls.push({ path, body });
       if (path.endsWith('/install')) {
         const status = calls.filter(call => call.path.endsWith('/install')).length === 1 ? 'running' : 'succeeded';
-        return { gateway_id: body.gateway_id, operation_id: body.operation_id, status, artifact: undefined, cancel_requested: false };
+        return { gateway_id: body.gateway_id, operation_id: body.operation_id, status, artifact, cancel_requested: false };
       }
       if (path.endsWith('/install-operation') && calls.filter(call => call.path.endsWith('/install')).length === 1) {
-        return { gateway_id: body.gateway_id, operation_id: body.operation_id, status: outcome, artifact: undefined,
+        return { gateway_id: body.gateway_id, operation_id: body.operation_id, status: outcome, artifact,
           cancel_requested: outcome === 'cancelled' };
       }
       throw new Error(`不应请求 ${path}`);
     }, [{ kind: 'zip' }, { kind: 'zip' }], ['/tmp/plugin.zip', '/tmp/plugin.zip'], observed, {
       generateUuid: () => { const id = `operation-${ids.length + 1}`; ids.push(id); return id; },
     });
-    await expect(installCommand()).rejects.toThrow(`安装 ${outcome}`);
+    await expect(installCommand()).rejects.toThrow(`插件安装${outcome === 'cancelled' ? '已取消' : '失败'}：sample.plugin@1.0.0`);
     await installCommand();
     expect(calls.filter(call => call.path.endsWith('/install')).map(call => call.body.operation_id)).toEqual(['operation-1', 'operation-2']);
   }
