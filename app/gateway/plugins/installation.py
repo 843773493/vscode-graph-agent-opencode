@@ -204,6 +204,7 @@ class PluginInstallations:
                 )
         finally:
             if temporary is not None:
+                # TODO: 硬杀进程会跳过此处而留下部分 ZIP；只在能证明原 owner 已退出后做定向清理。
                 temporary.unlink(missing_ok=True)
             self._tasks.pop(operation_id, None)
 
