@@ -31,7 +31,15 @@ def main() -> None:
                                      "cwd": str(Path.cwd()), "time": monotonic(), "effects": effects}) + "\n")
 
     async def run() -> None:
-        await serve(definitions, receipts)
+        async def observe_catalog() -> None:
+            gate_path = os.environ.get("MCP_TEST_CATALOG_GATE")
+            if gate_path is not None:
+                record("catalog-blocked")
+                while not Path(gate_path).exists():
+                    await asyncio.sleep(0.02)
+                record("catalog-released")
+
+        await serve(definitions, receipts, list_tools_observer=observe_catalog)
         if os.environ.get("MCP_TEST_SHUTDOWN") == "noncooperative":
             record("eof")
             await asyncio.Event().wait()

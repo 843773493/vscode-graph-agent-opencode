@@ -307,6 +307,9 @@ class ConfigSourceEditMixin:
 
         try:
             with service._mcp_configuration_guard(previous.to_dict(), candidate.to_dict()):
+                if service._mcp_plugin_preparation is not None:
+                    self._check_source_edit(source_key, gateway_id, request, pending)
+                    service._cancel_disabled_plugin_preparation(candidate)
                 await service.reload(candidate_applier=service._candidate_applier, idempotency_key=request.idempotency_key,
                                   before_build=save, source_edit=intent)
         except ConfigRestartRequiredError:

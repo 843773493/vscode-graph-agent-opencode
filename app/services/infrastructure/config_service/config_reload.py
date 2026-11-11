@@ -82,6 +82,19 @@ class ConfigReloadMixin:
         _workspace_state_store: WorkspaceStateStore | None
         _workspace_root: Path | None
         _CONFIG_DOMAIN: str
+        _mcp_plugin_preparation: tuple[asyncio.Task[ConfigPublication], tuple[PluginBinding, ...]] | None
+
+    def _cancel_disabled_plugin_preparation(self, candidate: ConfigSnapshot) -> None:
+        """关闭只撤销涉及该绑定的未发布准备，结算仍走原 reload／journal。"""
+        preparing = self._mcp_plugin_preparation
+        if preparing is None:
+            return
+        task, bindings = preparing
+        enabled = {(binding.package_id, binding.plugin_id, binding.workspace_id)
+            for binding in workspace_plugin_bindings_for_root(candidate.to_dict(), workspace_root=self._workspace_root)
+            if binding.enabled}
+        if any((binding.package_id, binding.plugin_id, binding.workspace_id) not in enabled for binding in bindings):
+            task.cancel()
 
     def validate_candidate(
         self,
@@ -213,6 +226,28 @@ class ConfigReloadMixin:
             committed = False
 
             async def prepare_runtime(_config: Mapping[str, object], scope: LifetimeScope) -> ConfigPublication:
+                # 仅准备阶段可由关闭撤销；同步 publication 和已发布后的排空不再取消。
+                service_keys = {(server.service.package_id, server.service.plugin_id, server.service.workspace_id)
+                    for server in parse_mcp_server_configs(_config.get("mcp"), workspace_root=self._workspace_root)
+                    if server.enabled and server.service is not None}
+                bindings = tuple(binding for binding in workspace_plugin_bindings_for_root(
+                    _config, workspace_root=self._workspace_root,
+                ) if binding.enabled and (binding.package_id, binding.plugin_id, binding.workspace_id) in service_keys)
+                if not bindings:
+                    return await prepare_connections(_config, scope)
+                task = asyncio.create_task(prepare_connections(_config, scope), name="workspace-mcp-plugin-candidate")
+                self._mcp_plugin_preparation = (task, bindings)
+                try:
+                    return await task
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and not current.cancelling():
+                        raise ConfigConflictError("MCP 插件候选已被关闭操作撤销") from None
+                    raise
+                finally:
+                    self._mcp_plugin_preparation = None
+
+            async def prepare_connections(_config: Mapping[str, object], scope: LifetimeScope) -> ConfigPublication:
                 if candidate_applier is None:
                     return lambda: None
 

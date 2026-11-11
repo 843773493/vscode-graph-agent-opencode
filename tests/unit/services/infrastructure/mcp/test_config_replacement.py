@@ -472,8 +472,9 @@ async def test_plugin_binding_controls_initialization_publication_and_old_qualif
         await owner.shutdown()
 
 
+@pytest.mark.parametrize("offline_parameters", [False, True])
 async def test_plugin_disable_freezes_new_qualification_without_waiting_for_old_lease(
-    tmp_path, event_channel_service,
+    tmp_path, event_channel_service, offline_parameters,
 ):
     workspace_id = load_or_create_workspace_id(tmp_path)
     binding = plugin_binding("1.0.0").model_copy(update={"workspace_id": workspace_id})
@@ -493,12 +494,17 @@ async def test_plugin_disable_freezes_new_qualification_without_waiting_for_old_
         candidate_config = {"mcp": proposed, "plugins": {"runtime": {"entries": [
             binding.model_copy(update={"enabled": False}).model_dump(exclude={"workspace_id"}),
         ]}}}
+        if offline_parameters:
+            candidate_config["plugins"]["configuration"] = {"values": {"boxteam.mcp-stdio": {"stdio": {"label": "offline"}}}}
+        affected, reconnects = owner.plugin_configuration_switches(previous_config, candidate_config)
+        assert affected == {"alpha"} and not reconnects
         with owner.guard_configuration(previous_config, candidate_config), pytest.raises(
             ExtensionTargetResolutionError,
         ), owner.execution_handles.execution_target(original, use):
             pytest.fail("插件关闭后不得接受新资格")
         disable, _ = await owner.prepare_config(plugin_config("1.0.0", workspace_id=workspace_id), scope, lambda _effect: None,
-            plugin_bindings=(binding.model_copy(update={"enabled": False}),))
+            plugin_bindings=(binding.model_copy(update={"enabled": False}),),
+            reconnect_server_ids=frozenset(reconnects))
         disable()
     finally:
         await scope.close()

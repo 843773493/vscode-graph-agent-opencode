@@ -383,7 +383,7 @@ class WorkspaceLifespan:
                 candidate_bindings = workspace_plugin_bindings_for_root(
                     candidate_config, workspace_root=container.workspace_root,
                 )
-                plugin_switches, _ = container.mcp_catalog_owner.plugin_configuration_switches(
+                plugin_switches, plugin_reconnects = container.mcp_catalog_owner.plugin_configuration_switches(
                     previous_config, candidate_config,
                 )
                 if (previous_config.get("mcp") != candidate_config.get("mcp")
@@ -391,7 +391,7 @@ class WorkspaceLifespan:
                     activate_mcp, mcp_tool_names = await container.mcp_catalog_owner.prepare_config(
                         candidate_config.get("mcp"), scope, record_side_effect,
                         plugin_bindings=candidate_bindings,
-                        reconnect_server_ids=frozenset(plugin_switches),
+                        reconnect_server_ids=frozenset(plugin_reconnects),
                     )
                 container.config_service.validate_candidate(candidate, mcp_tool_names=mcp_tool_names)
 

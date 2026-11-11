@@ -22,6 +22,7 @@ from app.core.path_utils import (
     get_user_workspace_config_path,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.gateway.service_plugin import PluginBinding
 from app.schemas.internal_v2.config import ConfigDTO, McpCleanupDTO
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -29,6 +30,7 @@ from app.services.infrastructure.config import (
     ConfigSnapshotStore,
     WorkspaceSourceOwner,
 )
+from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.event_cursor import ConfigEventCursor
 from app.services.infrastructure.config.instruction_inputs import (
     InstructionFileInputs,
@@ -155,6 +157,7 @@ class ConfigService(ConfigSourceLayersMixin,
             else {}
         )
         self._mcp_tool_names: frozenset[str] | None = None
+        self._mcp_plugin_preparation: tuple[asyncio.Task[ConfigPublication], tuple[PluginBinding, ...]] | None = None
         self._mcp_cleanup_provider: Callable[[], tuple[McpCleanupDTO, ...]] | None = None
         self._mcp_configuration_guard: Callable[[object, object], AbstractContextManager[None]] = lambda _previous, _candidate: nullcontext()
         self._instruction_inputs = InstructionFileInputs(instruction_file_resolver)

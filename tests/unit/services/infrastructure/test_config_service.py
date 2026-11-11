@@ -1902,15 +1902,20 @@ async def test_plugin_binding_candidate_is_validated_after_pending_and_before_pu
             assert pending.state == "applying"
             assert active is not None
             assert active.active_revision == previous_active.active_revision
-            assert json.loads(request.content) == {"bindings": [
-                {
-                    "package_id": "sample",
-                    "plugin_id": "sample-tool",
-                    "package_version": "1.0.0",
-                    "workspace_id": load_or_create_workspace_id(workspace_root),
-                    "enabled": True,
-                }
-            ], "parameters": {}}
+            parameters = {"sample": {"sample-tool": {}}}
+            assert json.loads(request.content) == {
+                "bindings": [
+                    {
+                        "package_id": "sample",
+                        "plugin_id": "sample-tool",
+                        "package_version": "1.0.0",
+                        "workspace_id": load_or_create_workspace_id(workspace_root),
+                        "enabled": True,
+                    }
+                ],
+                "parameters": parameters,
+                "delivery": {"values": parameters},
+            }
             if not gateway_accepts:
                 return httpx.Response(409, json={"detail": "未安装指定 Workspace 插件"})
             return httpx.Response(

@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import inspect
 import io
 import json
 import os
 import wave
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from mcp import types
@@ -37,7 +38,7 @@ RESULT_AUDIO_BASE64 = audio_asset()
 def build_server(
     definitions_path: Path, receipt_path: Path,
     *, call_observer: Callable[[str, dict[str, object], Headers], None] | None = None,
-    list_tools_observer: Callable[[], None] | None = None,
+    list_tools_observer: Callable[[], Awaitable[None] | None] | None = None,
     call_result_provider: Callable[[str, dict[str, object]], list[types.TextContent] | types.CallToolResult | None] | None = None,
     page_size: int | None = None,
 ) -> Server:
@@ -46,7 +47,9 @@ def build_server(
     @server.list_tools()
     async def list_tools(request: types.ListToolsRequest) -> types.ListToolsResult:
         if list_tools_observer is not None:
-            list_tools_observer()
+            observed = list_tools_observer()
+            if inspect.isawaitable(observed):
+                await observed
         definitions = json.loads(definitions_path.read_text(encoding="utf-8"))
         tools = [types.Tool(name=name, description="完整输入契约", inputSchema=schema)
                  for name, schema in definitions.items()]
@@ -129,8 +132,10 @@ def build_server(
 
 
 async def serve(definitions_path: Path, receipt_path: Path, *, page_size: int | None = None,
-                notify_changes: bool = False) -> None:
-    server = build_server(definitions_path, receipt_path, page_size=page_size)
+                notify_changes: bool = False,
+                list_tools_observer: Callable[[], Awaitable[None] | None] | None = None) -> None:
+    server = build_server(definitions_path, receipt_path, page_size=page_size,
+                          list_tools_observer=list_tools_observer)
     async with stdio_server() as (reader, writer):
         await server.run(reader, writer, server.create_initialization_options(
             notification_options=NotificationOptions(tools_changed=notify_changes),
