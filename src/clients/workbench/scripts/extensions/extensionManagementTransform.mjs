@@ -506,7 +506,7 @@ function transformNotebookLegacyConsumers(root, path, source, replaceOnce) {
   return undefined;
 }
 
-function pruneUnusedImportsAndConstants(path, source) {
+export function pruneUnusedImportsAndConstants(path, source) {
   const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const references = new Map();
   const visit = (node, inImport = false) => {
