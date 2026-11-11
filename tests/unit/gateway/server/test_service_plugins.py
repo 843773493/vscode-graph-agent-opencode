@@ -23,7 +23,7 @@ from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.plugins.workspaces import WorkspacePluginBindings
 from app.gateway.proxy_upstream import UpstreamResponseBody
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
+from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime, PluginSlot
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.server import service_plugins as management_plugins
 from app.gateway.server.service_plugin_proxy import (
@@ -37,6 +37,8 @@ from app.schemas.gateway.plugin_installation import (
     PluginInstallOperationDTO,
 )
 from app.schemas.gateway.plugin_private_inputs import PluginPrivateInputWriteRequest
+from app.schemas.gateway.service_plugin import PluginBinding
+from app.schemas.gateway.service_plugin_workspace import WorkspacePluginSnapshot
 from configs.plugin_parameters import PluginPrivateInputReference
 
 
@@ -307,3 +309,62 @@ async def test_creation_handoff_observes_completed_start_before_marking_signatur
     await reconciliation
     coordinator._initialize_creation.assert_awaited_once()
     coordinator._refresh.assert_awaited_once()
+
+
+@pytest.fixture
+def startup_plugin_handoff():
+    target = WorkspaceTarget(gateway_id="gateway_" + "a" * 32,
+        workspace_id="12345678-1234-5678-1234-567812345678", name="original", root_path="/original",
+        backend_url="http://127.0.0.1:49152", connection_kind="local", managed=True, desired_running=True)
+    registry = Mock(spec=GatewayWorkspaceRegistry)
+    registry.gateway_id = target.gateway_id
+    registry.resolve.return_value = target
+    runtime = Mock(spec=GatewayPluginRuntime)
+    runtime.slots = {}
+    runtime.apply_scope = AsyncMock()
+    coordinator = WorkspacePluginBindings(registry, runtime)
+    return target, runtime, coordinator
+
+
+async def test_startup_handoff_reports_failed_binding_without_rejecting_authenticated_snapshot(
+    startup_plugin_handoff,
+) -> None:
+    target, runtime, coordinator = startup_plugin_handoff
+    binding = PluginBinding(package_id="missing.plugin", plugin_id="probe", package_version="1.0.0",
+        enabled=True, workspace_id=target.workspace_id)
+    snapshot = WorkspacePluginSnapshot(workspace_id=target.workspace_id, backend_id="original-backend",
+        backend_generation="original-generation", revision="saved", bindings=[binding], referenced_bindings=[binding])
+    coordinator.read = AsyncMock(return_value=snapshot)
+    slot = PluginSlot(binding, "saved", None, target.gateway_id, package_digest=None,
+        state="failed", error="插件包版本不存在")
+    runtime.slots = {GatewayPluginRuntime.key(binding): slot}
+    request = cast(Request, SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(workspace_plugin_bindings=coordinator)),
+        headers={"X-BoxTeam-Backend-Generation": "original-generation"},
+        state=SimpleNamespace(request_id="original-request"),
+    ))
+    response = await management_plugins.refresh_workspace(target.workspace_id, request, wait_for_handoff=True)
+    assert response.data is not None and response.data.state == "failed"
+    assert response.data.workspace_id == target.workspace_id
+    assert response.data.error and "missing.plugin/probe" in response.data.error
+    assert coordinator.snapshots[target.workspace_id] == snapshot
+    runtime.apply_scope.assert_awaited_once_with([binding], revision="saved", workspace_id=target.workspace_id,
+        parameters={})
+
+
+@pytest.mark.parametrize("failure", ["transport", "authentication", "identity"])
+async def test_startup_handoff_still_rejects_unverified_configuration_owner(
+    startup_plugin_handoff, failure: str,
+) -> None:
+    target, runtime, coordinator = startup_plugin_handoff
+    request = httpx.Request("GET", target.backend_url + "/api/internal/service-plugins/bindings")
+    error = (httpx.ConnectError("owner 不可达", request=request) if failure == "transport" else
+        httpx.HTTPStatusError("认证失败", request=request, response=httpx.Response(403, request=request))
+        if failure == "authentication" else ValueError("原配置 owner 身份不符"))
+    coordinator.read = AsyncMock(side_effect=error)
+    with pytest.raises(type(error)) as rejected:
+        await coordinator.refresh_startup(target.workspace_id, "original-generation")
+    assert rejected.value is error
+    assert coordinator.snapshots == {}
+    runtime.apply_scope.assert_not_awaited()
+    assert coordinator.states[target.workspace_id].state == ("waiting" if failure == "transport" else "failed")

@@ -389,6 +389,14 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         assert final_b["instance"]["instance_id"] == ready_b["instance"]["instance_id"]
         assert call(final_b)["pid"] == ready_b["instance"]["process_id"]
 
+        # 单个已提交插件失败不能阻断原工作区重启、配置编辑及兄弟工作区。
+        exchange("POST", f"/api/gateway/workspaces/{workspace_a_id}/runtime/restart-safe",
+            timeout=150).raise_for_status()
+        assert workspace_identity(workspace_a_id) == workspace_a_id
+        assert wait_binding(workspace_a_id, "failed")["binding"] == failed_a["binding"]
+        assert wait_binding(workspace_b_id, "ready")["instance"] == final_b["instance"]
+        assert call(final_b)["pid"] == ready_b["instance"]["process_id"]
+
         packages = context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/probe.tools"
         uninstall("2.0.0").raise_for_status()
         assert not (packages / "2.0.0").exists() and (packages / "1.0.0").is_dir()

@@ -196,11 +196,15 @@ class WorkspacePluginBindings:
             self.states[workspace_id] = WorkspacePluginConfigurationDTO(
                 workspace_id=workspace_id, state="waiting", revision=revision, error=str(error))
             logger.warning("Workspace 插件等待配置交接: workspace_id=%s error=%s", workspace_id, error)
+            if startup_generation is not None:
+                raise
             return
         except (httpx.HTTPStatusError, ValueError, RuntimeError) as error:
             self.states[workspace_id] = WorkspacePluginConfigurationDTO(
                 workspace_id=workspace_id, state="failed", revision=revision, error=str(error))
             logger.exception("Workspace 插件配置交接失败: workspace_id=%s", workspace_id)
+            if startup_generation is not None:
+                raise
             return
         # 已提交期望与运行状态分开：非法包／启动失败不得修改原 enabled。
         self.snapshots[workspace_id] = snapshot
@@ -211,6 +215,8 @@ class WorkspacePluginBindings:
             self.states[workspace_id] = WorkspacePluginConfigurationDTO(
                 workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=str(error))
             logger.exception("Workspace 插件绑定应用失败: workspace_id=%s", workspace_id)
+            if startup_generation is not None:
+                raise
             return
         if startup_generation is not None:
             failures = []
@@ -219,7 +225,7 @@ class WorkspacePluginBindings:
                     continue
                 status = slot.describe()
                 state = status["state"]
-                requires_process = slot.binding.enabled and slot.declaration.runtime is not None
+                requires_process = slot.binding.enabled and (slot.declaration is None or slot.declaration.runtime is not None)
                 ready = (
                     state == "ready" and slot.process is not None
                     if requires_process

@@ -494,7 +494,7 @@ async def debug_runtime_websocket(
         ) as route:
             owner = websocket.app.state.service_plugins
             slot = owner.slots.get(owner.key(binding))
-            if slot is None or not any(
+            if slot is None or slot.declaration is None or not any(
                 contribution.service_id == "dap" for contribution in slot.declaration.contributes.debuggers
             ):
                 raise LookupError("插件未声明可用的 DAP 调试器服务")

@@ -216,6 +216,7 @@ def capabilities(request: Request, auth: GatewayAuthContext, slot: PluginSlot | 
                  command_id: str | None = None) -> tuple[Capability, ...]:
     required: tuple[Capability, ...] = ("send", "read")
     if slot is not None and command_id is not None:
+        assert slot.declaration is not None
         command = next(item for item in slot.declaration.contributes.commands if item.id == command_id)
         # 包发布已拒绝未知权限；每次执行及策略变更只核原业务能力。
         required = tuple(dict.fromkeys((*required, *cast(list[Capability], command.required_capabilities))))

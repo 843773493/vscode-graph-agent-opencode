@@ -114,9 +114,9 @@ def workspace_default_bindings(payload: dict[str, object]) -> list[PluginBinding
 class PluginSlot:
     binding: PluginBinding
     revision: str
-    declaration: ServicePluginManifest
+    declaration: ServicePluginManifest | None
     gateway_id: str
-    package_digest: str = field(kw_only=True)
+    package_digest: str | None = field(kw_only=True)
     parameters: dict[str, JsonValue] = field(default_factory=dict)
     parameters_revision: str = field(init=False)
     process: ManagedProcess | AdoptedManagedProcess | None = None
@@ -137,15 +137,15 @@ class PluginSlot:
         self.parameters_revision = config_revision({"parameters": self.parameters})
         self.command_validators = {command.id: (Draft202012Validator(command.arguments_schema),
                                               Draft202012Validator(command.result_schema))
-                                   for command in self.declaration.contributes.commands}
+                                   for command in self.declaration.contributes.commands} if self.declaration else {}
 
     def describe(self) -> dict[str, object]:
         if self.process is not None and self.state == "ready" and not self.process.is_alive():
             self.state, self.error = "failed", "插件进程已退出；需显式重启，不自动重放在途操作"
-        return {"gateway_id": self.gateway_id, "instance_scope": self.declaration.instance_scope,
+        return {"gateway_id": self.gateway_id, "instance_scope": "workspace" if self.binding.workspace_id is not None else "gateway",
                 "binding": self.binding.model_dump(mode="json"), "revision": self.revision,
                 "state": self.state, "error": self.error,
-                "declarative": self.declaration.runtime is None,
+                "declarative": self.declaration is not None and self.declaration.runtime is None,
                 "log_id": self.log_id,
                 "instance": self.receipt.model_dump(mode="json", exclude={"log_sink"}) if self.receipt else None}
 
@@ -176,7 +176,7 @@ class GatewayPluginRuntime:
     def command_snapshot(self, workspace_id: str | None) -> PluginCommandSnapshotDTO:
         publications = []
         for slot in self.slots.values():
-            if not slot.binding.enabled or slot.binding.workspace_id not in {None, workspace_id}:
+            if slot.declaration is None or not slot.binding.enabled or slot.binding.workspace_id not in {None, workspace_id}:
                 continue
             contributes = slot.declaration.contributes
             if not (contributes.commands or contributes.menus or contributes.keybindings):
@@ -281,7 +281,6 @@ class GatewayPluginRuntime:
         self.skill_sources.validate_plugin_bindings(bindings, self.packages, workspace_id=workspace_id)
 
     async def apply(self, payload: dict[str, object], revision: str) -> None:
-        self.validate_defaults(payload)
         await self.apply_scope(gateway_plugin_bindings(payload), revision=revision, workspace_id=None,
                                parameters=plugin_parameters(payload))
         await self.apply_observation()
@@ -363,8 +362,22 @@ class GatewayPluginRuntime:
                     finally:
                         self._publish()
         for binding in bindings.values():
-            await self.apply_binding(binding, revision=revision,
-                parameters=(parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {}))
+            values = (parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {})
+            try:
+                await self.apply_binding(binding, revision=revision, parameters=values)
+            except (OSError, LookupError, ValueError, RuntimeError, httpx.HTTPError) as error:
+                # 原来源期望已经提交；恢复失败只撤销本绑定，继续处理兄弟绑定。
+                key = self.key(binding)
+                previous = self.slots.get(key)
+                self.skill_sources.remove_plugin(key)
+                slot = (replace(previous, binding=binding, revision=revision, declaration=None,
+                    parameters=values, package_digest=None, commands={}) if previous is not None else
+                    PluginSlot(binding, revision, None, self.gateway_id, parameters=values, package_digest=None))
+                slot.state, slot.error = "failed", f"绑定不可用: {error}"
+                slot.stopped.set()
+                self.slots[key] = slot
+                logger.exception("已提交插件绑定无法恢复: slot=%s", key)
+                self._publish()
 
     async def apply_binding(self, binding: PluginBinding, *, revision: str, restart: bool = False,
                             parameters: dict[str, JsonValue],
@@ -442,6 +455,7 @@ class GatewayPluginRuntime:
         return self.directory / f"{identity}.json"
 
     def _check_receipt(self, slot: PluginSlot, receipt: PluginInstanceStatus, instance_id: str) -> None:
+        assert slot.declaration is not None
         binding, plugin = slot.binding, slot.declaration
         expected = (self.gateway_id, binding.package_id, binding.package_version, binding.plugin_id, plugin.instance_scope,
                     binding.workspace_id, instance_id, 1, 1, "ready")
@@ -459,6 +473,7 @@ class GatewayPluginRuntime:
     async def _start_parameters(
         self, slot: PluginSlot, delivered_parameters: dict[str, JsonValue] | None,
     ) -> dict[str, JsonValue]:
+        assert slot.declaration is not None
         self.validate_target(slot.binding)
         values = slot.parameters
         if slot.binding.workspace_id is None:
@@ -475,6 +490,7 @@ class GatewayPluginRuntime:
         return values
 
     async def _start(self, key: Slot, slot: PluginSlot, *, parameters: dict[str, JsonValue]) -> None:
+        assert slot.declaration is not None
         record_path = self._record(key)
         if record_path.exists():
             raise RuntimeError("原插件进程发现记录尚未接管，拒绝重复启动；需重启所属运行时")
@@ -575,17 +591,20 @@ class GatewayPluginRuntime:
                     [error, cleanup_error]) from None
             raise
 
-    async def _adopt(self, slot: PluginSlot, record: _ProcessRecord) -> bool:
+    async def _adopt(self, record: _ProcessRecord) -> PluginSlot | None:
         address = urlsplit(record.base_url)
         if (address.scheme != "http" or address.hostname != "127.0.0.1" or address.port is None
             or address.username or address.password or address.path not in {"", "/"}
-            or address.query or address.fragment or record.binding != slot.binding):
+            or address.query or address.fragment):
             raise ValueError("插件接管记录不属于精确本机实例")
         process = AdoptedManagedProcess(record.process_id)
         if not process.is_alive():
-            return False
+            return None
         if psutil.Process(record.process_id).create_time() != record.created_at:
             raise RuntimeError("插件原 PID 已复用，拒绝接管其它进程")
+        slot = PluginSlot(record.binding, record.revision, self.declaration(record.binding), self.gateway_id,
+            package_digest=self.packages.get(record.binding.package_id, record.binding.package_version).digest)
+        slot.parameters_revision = record.parameters_revision
         response = await self.client.get(record.base_url + "/internal/plugin/status",
             headers={"X-Local-Token": record.token})
         response.raise_for_status()
@@ -601,10 +620,11 @@ class GatewayPluginRuntime:
         slot.process_version = record.binding.package_version
         slot.receipt, slot.base_url, slot.token, slot.state = receipt, record.base_url, record.token, "ready"
         self._watch_exit(slot)
-        return True
+        return slot
 
     async def _command_registrations(self, slot: PluginSlot, instance_id: str, base_url: str,
                                      token: str) -> dict[str, PluginCommandRegistration]:
+        assert slot.declaration is not None
         if not slot.declaration.contributes.commands:
             return {}
         response = await self.client.get(base_url + "/internal/plugin/commands", headers={"X-Local-Token": token})
@@ -628,13 +648,11 @@ class GatewayPluginRuntime:
                 key = self.key(record.binding)
                 if path != self._record(key):
                     raise ValueError("插件进程发现记录与原槽位不符")
-                slot = PluginSlot(record.binding, record.revision, self.declaration(record.binding), self.gateway_id,
-                    package_digest=self.packages.get(record.binding.package_id, record.binding.package_version).digest)
-                slot.parameters_revision = record.parameters_revision
-                if await self._adopt(slot, record):
-                    adopted[key] = slot
-                else:
+                slot = await self._adopt(record)
+                if slot is None:
                     path.unlink()
+                else:
+                    adopted[key] = slot
         except BaseException:
             # 候选未完成接管，不关闭旧 Gateway 仍持有的实例。
             for slot in adopted.values():
@@ -706,7 +724,7 @@ class GatewayPluginRuntime:
             raise LookupError("插件未导出此服务")
         if websocket != (service.protocol in {"websocket", "dap"}):
             raise LookupError("连接传输与插件声明的服务协议不符")
-        assert slot.base_url is not None and slot.token is not None
+        assert slot.base_url is not None and slot.token is not None and slot.package_digest is not None
         return slot.base_url + "/services/" + service_id, slot.token, slot.stopped, slot.package_digest
 
     def references(self, package_id: str, version: str) -> list[str]:

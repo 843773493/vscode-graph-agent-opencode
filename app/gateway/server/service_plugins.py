@@ -119,18 +119,16 @@ async def workspace_parameter_schemas(workspace_id: CanonicalWorkspaceId, bindin
 @router.post("/api/internal/service-plugins/workspaces/{workspace_id}/refresh", include_in_schema=False,
     dependencies=[Depends(verify_gateway_token), Depends(verify_local_control_request)])
 async def refresh_workspace(workspace_id: CanonicalWorkspaceId, request: Request,
-    wait_for_ready: bool = False,
+    wait_for_handoff: bool = False,
 ) -> APIResponse[WorkspacePluginConfigurationDTO]:
     try:
-        if wait_for_ready:
+        if wait_for_handoff:
             state = await request.app.state.workspace_plugin_bindings.refresh_startup(
                 workspace_id, request.headers.get("X-BoxTeam-Backend-Generation", ""),
             )
-            if state.state != "ready":
-                raise ValueError(state.error or "Workspace 插件启动交接未就绪")
         else:
             state = request.app.state.workspace_plugin_bindings.request_refresh(workspace_id)
-    except (ValueError, LookupError) as error:
+    except (ValueError, LookupError, RuntimeError, httpx.HTTPError) as error:
         raise HTTPException(409, str(error)) from error
     return APIResponse(data=state, request_id=get_request_id(request))
 
@@ -567,6 +565,7 @@ async def debugger_contributions(
             binding.workspace_id != workspace_id
             or not binding.enabled
             or slot.state != "ready"
+            or slot.declaration is None
             or slot.process is None
             or not slot.process.is_alive()
             or receipt is None
@@ -649,7 +648,7 @@ async def restart(payload: RestartPluginRequest, request: Request,
                 raise ValueError("原配置绑定已停用或版本／revision 已变化，拒绝重启")
             result = await owner.apply_binding(binding, revision=config.revision, restart=True,
                 parameters=plugin_parameters(config.payload).get(binding.package_id, {}).get(binding.plugin_id, {}))
-    except (ValueError, LookupError) as error:
+    except (ValueError, LookupError, FileNotFoundError) as error:
         raise HTTPException(409, str(error)) from error
     data = PluginSlotStatusDTO.model_validate(result)
     return APIResponse[PluginSlotStatusDTO](data=data, request_id=get_request_id(request))

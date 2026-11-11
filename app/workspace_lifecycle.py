@@ -20,6 +20,8 @@ from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.schemas.event import Event
+from app.schemas.gateway.service_plugin import WorkspacePluginConfigurationDTO
+from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config import (
     ConfigRestartRequiredError,
     ConfigSnapshot,
@@ -507,19 +509,21 @@ class WorkspaceLifespan:
                     response = await client.post(
                         f"{gateway_url}/api/internal/service-plugins/workspaces/"
                         f"{container.workspace_id}/refresh",
-                        params={"wait_for_ready": "true"},
+                        params={"wait_for_handoff": "true"},
                         headers={
                             "X-Local-Token": get_gateway_local_token(),
                             "X-BoxTeam-Backend-Generation": os.environ["BOXTEAM_BACKEND_GENERATION"],
                         },
                     )
                     response.raise_for_status()
-                    payload = response.json()
-                if payload.get("data", {}).get("state") != "ready":
+                    state = APIResponse[WorkspacePluginConfigurationDTO].model_validate_json(response.content).data
+                if state is None or state.workspace_id != container.workspace_id or state.state not in {"ready", "failed"}:
                     raise RuntimeError(
-                        "Gateway 未确认工作区插件绑定已就绪: "
-                        f"{payload.get('data')!r}"
+                        f"Gateway 未完成原工作区插件配置交接: {state!r}"
                     )
+                if state.state == "failed":
+                    logger.error("工作区插件恢复存在失败，继续初始化独立业务: workspace_id=%s error=%s",
+                        container.workspace_id, state.error)
             with _workspace_startup_stage(container, "mcp_catalog_owner.start"):
                 await container.mcp_catalog_owner.start()
             with _workspace_startup_stage(container, "mcp_connections.start"):
