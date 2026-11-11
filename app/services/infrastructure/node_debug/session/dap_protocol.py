@@ -42,6 +42,8 @@ class NodeDebugDAPSession:
         success = True
         body: dict[str, object] = {}
         error_message: str | None = None
+        # 在等待 owner 锁前冻结本次暂停；不能把排队的旧操作改投到新暂停。
+        pause_generation = self._runtime.pause_generation
         try:
             async with (
                 self._service._admit_mutation(*self._owner),
@@ -53,7 +55,7 @@ class NodeDebugDAPSession:
                     self._frames.clear()
                     self._scopes.clear()
                 self._request_pause_generation = self._runtime.pause_generation
-                body = await self._dispatch(command, arguments)
+                body = await self._dispatch(command, arguments, pause_generation)
         except (KeyError, TypeError, ValueError, RuntimeError) as error:
             success = False
             error_message = str(error)
@@ -68,7 +70,9 @@ class NodeDebugDAPSession:
             response["body"] = {"error": {"id": 1, "format": error_message or "DAP 请求失败"}}
         return response
 
-    async def _dispatch(self, command: str, args: dict[str, object]) -> dict[str, object]:
+    async def _dispatch(
+        self, command: str, args: dict[str, object], pause_generation: int,
+    ) -> dict[str, object]:
         if command == "initialize":
             return {
                 "supportsConfigurationDoneRequest": True,
@@ -175,7 +179,7 @@ class NodeDebugDAPSession:
                 session_id=self._owner[0], thread_id=self._owner[1], action=action_by_command[command],
             ), _expected_runtime=self._runtime,
                 _expected_pause_generation=(
-                    self._request_pause_generation if command != "pause" else None
+                    pause_generation if command != "pause" else None
                 ))
             if command in {"continue", "next", "stepIn", "stepOut"}:
                 self._frames.clear()
@@ -197,9 +201,7 @@ class NodeDebugDAPSession:
                 action="evaluate", session_id=self._owner[0], thread_id=self._owner[1],
                 params=NodeDebugEvaluateParams(expression=expression, call_frame_id=call_frame_id),
             ), _expected_runtime=self._runtime,
-                _expected_pause_generation=(
-                    self._request_pause_generation if frame_id is not None else None
-                ))
+                _expected_pause_generation=pause_generation)
             result = state.last_evaluation
             if result is None:
                 raise RuntimeError("Node Debug owner 没有返回 evaluate 结果")

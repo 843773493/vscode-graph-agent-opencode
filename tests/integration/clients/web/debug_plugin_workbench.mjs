@@ -17,11 +17,14 @@ try {
   page.on('pageerror', error => result.pageErrors.push(error.message));
   let loseEvaluation = false;
   let lostEvaluationRequests = 0;
+  let loseContinue = false;
+  let lostContinueRequests = 0;
   // 只丢弃真实服务已经提交的求值回执；不替代执行、结果或状态。
   await page.routeWebSocket('**/api/v1/debug/node/runs/*/dap*', socket => {
     const server = socket.connectToServer();
     const channel = new URL(socket.url()).pathname;
     let lostSequence;
+    let lostContinueSequence;
     socket.onMessage(raw => {
       const value = JSON.parse(raw.toString());
       result.dap.push({ direction: 'out', channel, value });
@@ -29,10 +32,20 @@ try {
         lostSequence = value.seq;
         lostEvaluationRequests++;
       }
+      if (loseContinue && value.command === 'continue') {
+        lostContinueSequence = value.seq;
+        lostContinueRequests++;
+      }
       server.send(raw);
     });
     server.onMessage(raw => {
       const value = JSON.parse(raw.toString());
+      if (lostContinueSequence !== undefined && value.type === 'response' && value.request_seq === lostContinueSequence) {
+        result.continueResponseLoss = { response: value, requestCount: lostContinueRequests };
+        socket.close({ code: 1011, reason: 'integration_continue_response_lost' });
+        server.close({ code: 1000, reason: 'integration_response_lost' });
+        return;
+      }
       if (lostSequence !== undefined && value.type === 'response' && value.request_seq === lostSequence) {
         result.responseLoss = { response: value, requestCount: lostEvaluationRequests };
         socket.close({ code: 1011, reason: 'integration_evaluate_response_lost' });
@@ -281,13 +294,20 @@ try {
         const entry = pending.get(message.request_seq);
         if (entry) { pending.delete(message.request_seq); clearTimeout(entry.timer); entry.resolve(message); }
       });
+      socket.addEventListener('close', () => {
+        for (const entry of pending.values()) {
+          clearTimeout(entry.timer);
+          entry.reject(new Error('DAP probe connection closed; response unknown'));
+        }
+        pending.clear();
+      });
       const probe = {
         socket,
         request(command, args = {}) {
           const seq = ++sequence;
           return new Promise((resolve, reject) => {
             const timer = setTimeout(() => { pending.delete(seq); reject(new Error(`DAP probe timeout: ${command}`)); }, 10_000);
-            pending.set(seq, { resolve, timer });
+            pending.set(seq, { resolve, reject, timer });
             socket.send(JSON.stringify({ seq, type: 'request', command, arguments: args }));
           });
         },
@@ -379,13 +399,36 @@ try {
   assert.equal((await state()).status, 'paused');
   result.parallelThread = { runId: otherPaused.run_id, pid: otherPaused.pid, stopped: true, originalStillPaused: true };
   result.phase = 'agent-shared-run';
+  const originalDebugSession = debugSessionName('UI shared Node · Debug UI shared run');
+  await originalDebugSession.click();
+  await expect.poll(selectedDebugSessionName).toBe('UI shared Node · Debug UI shared run');
+  const raceStart = result.dap.length;
   const calls = await testControl({ action: 'plan_model', session_id: owner.sessionId, thread_id: owner.threadId, interactions: input.modelInteractions });
   result.modelCallIds = calls;
   const accepted = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`, { method: 'POST', body: {
     message: { content: '读取当前 UI 暂停运行的 state，然后将 state.counter 加十，不要重新启动。' },
     run: { mode: 'single_agent', agent_id: 'default' } } }, owner);
+  // 由真实 Node 求值输出标记进入临界区，原 UI 此时发出单步；不替代任何产品结果。
+  const raceOutput = marker => result.dap.findIndex((item, index) => index >= raceStart
+    && item.channel === `/api/v1/debug/node/runs/${result.runId}/dap`
+    && item.direction === 'in' && item.value.event === 'output' && item.value.body.output.includes(marker));
+  await expect.poll(() => raceOutput('debug-race-entered'), { timeout: 45_000 }).toBeGreaterThanOrEqual(0);
+  const competingStep = command('workbench.action.debug.stepOver');
+  await expect.poll(() => result.dap.slice(raceStart).some(item => item.direction === 'out'
+    && item.value.command === 'next')).toBe(true);
+  await competingStep;
   await expect.poll(async () => (await api(`/api/v1/jobs/${accepted.job_id}`, {}, owner)).status, { timeout: 45_000 }).toMatch(/^(completed|succeeded)$/);
+  await expect.poll(async () => (await state()).call_stack[0]?.line).toBe(4);
   paused = await state(); assert.equal(paused.run_id, result.runId); assert.equal(paused.status, 'paused');
+  const stepIndex = result.dap.findIndex((item, index) => index >= raceStart && item.direction === 'out'
+    && item.channel === `/api/v1/debug/node/runs/${result.runId}/dap` && item.value.command === 'next');
+  assert(raceOutput('debug-race-entered') < stepIndex && stepIndex < raceOutput('debug-race-leaving'),
+    'UI单步必须在真实Agent求值执行期间发出，不能用先后独立调用代替竞争验收');
+  const evaluationIndex = paused.actions.findIndex(item => item.actor === 'ai' && item.tool_name === 'evaluate_expression');
+  const stepActionIndex = paused.actions.findIndex((item, index) => index > evaluationIndex
+    && item.actor === 'human' && item.action === 'step_over');
+  assert(evaluationIndex >= 0 && stepActionIndex > evaluationIndex);
+  result.agentRace = { uiRequestDuringEvaluation: true, evaluationIndex, stepActionIndex, stoppedLine: 4 };
   assert(paused.actions.some(action => action.actor === 'ai' && action.tool_name === 'evaluate_expression'));
   const trace = await api(`/api/v1/sessions/${owner.sessionId}/traces`, {}, owner);
   const loaded = trace.items.find(item => item.type === 'tool_call_end' && item.raw?.payload?.tool_name === 'skill_load');
@@ -427,7 +470,6 @@ try {
   result.agentSharedRun = true;
   result.phase = 'lost-evaluate-response';
   // REPL 命令使用当前 Debug 会话；停止另一个 Thread 后先显式选回暂停中的原 run。
-  const originalDebugSession = debugSessionName('UI shared Node · Debug UI shared run');
   await originalDebugSession.click();
   await expect.poll(selectedDebugSessionName).toBe('UI shared Node · Debug UI shared run');
   await expect.poll(async () => (await state()).status).toBe('paused');
@@ -445,23 +487,39 @@ try {
   assert.equal(evaluateRequests.length, 1);
   assert.equal(evaluateRequests[0].channel, `/api/v1/debug/node/runs/${result.runId}/dap`);
   await expect.poll(() => result.responseLoss?.response.success).toBe(true);
-  assert.equal(result.responseLoss.response.body.result, '14');
+  assert.equal(result.responseLoss.response.body.result, '17');
   // UI 连接失效不停止目标；从原业务入口读取事实，副作用只执行一次。
   const afterLoss = await state();
   assert.equal(afterLoss.run_id, result.runId);
   assert.equal(afterLoss.status, 'paused');
-  assert.equal(afterLoss.last_evaluation.value, '14');
+  assert.equal(afterLoss.last_evaluation.value, '17');
   assert.equal(afterLoss.evaluations.filter(item => item.expression === 'state.counter += 1').length, 1);
   assert.equal(lostEvaluationRequests, 1);
-  result.phase = 'continue-and-stop';
+  result.phase = 'lost-continue-response';
   const action = action => api('/api/v1/debug/node/action', { method: 'POST', body: {
     session_id: owner.sessionId, thread_id: owner.threadId, action,
   } }, owner);
-  await action('continue');
+  // 原 run 已有的第二个消费者发出继续；只丢已成功的回执，不替代实际执行。
+  loseContinue = true;
+  result.continueWait = await page.evaluate(async () => {
+    try { return { response: await globalThis.debugDapProbe.request('continue', { threadId: 1 }) }; }
+    catch (error) { return { error: String(error) }; }
+  });
+  loseContinue = false;
+  assert.match(result.continueWait.error, /connection closed; response unknown/);
+  assert.equal(result.continueResponseLoss.response.success, true);
+  assert.equal(lostContinueRequests, 1);
   await expect.poll(async () => (await state()).output.join('\n')).toContain('debug-result 17');
+  const afterContinueLoss = await state();
+  assert.equal(afterContinueLoss.run_id, result.runId);
+  assert.equal(afterContinueLoss.pid, result.pid);
+  assert.equal(afterContinueLoss.status, 'running');
+  assert.equal(afterContinueLoss.actions.filter(item => item.action === 'continue' && item.actor === 'human').length, 1);
+  result.phase = 'stop-after-unknown-continue';
   await action('stop');
   await expect.poll(async () => (await state()).status, { timeout: 15_000 }).toBe('exited');
   assert.equal(lostEvaluationRequests, 1, '连接断开及后续操作不得重放有副作用的求值');
+  assert.equal(lostContinueRequests, 1, '继续回执丢失后只读原运行事实，不重放控制操作');
   result.finalState = await state(); result.actualExit = true;
   result.phase = 'unbind-and-uninstall';
   await bindDebugger(owner, null, 'debug-ui-unbind-after-actual-exit');
@@ -575,6 +633,48 @@ try {
   await expect(page.locator('.debug-toolbar')).not.toBeVisible();
   result.naturalExit = { runId: siblingPaused.run_id, output: siblingExited.output };
   result.siblingAfterUnbind = { pid: siblingPaused.pid, pluginPid: siblingReady.instance.process_id, originalInstanceKept: true };
+  result.phase = 'lost-launch-response';
+  let launchRequests = 0;
+  const lostLaunchPattern = url => url.pathname === '/api/v1/debug/node/start';
+  const dropLaunchResponse = async route => {
+    const sent = route.request().postDataJSON();
+    assert.equal(sent.session_id, otherOwner.sessionId);
+    assert.equal(sent.thread_id, otherOwner.threadId);
+    launchRequests++;
+    const response = await route.fetch();
+    const body = await response.json();
+    assert.equal(response.status(), 200);
+    assert.equal(body.request_id, response.headers()['x-request-id']);
+    assert(body.data.run_id && body.data.pid);
+    result.launchResponseLoss = { requestCount: launchRequests, requestId: body.request_id,
+      runId: body.data.run_id, pid: body.data.pid };
+    await route.abort('failed');
+  };
+  await page.route(lostLaunchPattern, dropLaunchResponse);
+  try {
+    await otherPane.getByTestId('composer-input').click();
+    const unknownLaunching = command('boxteam.debug.start');
+    await expect(quick.getByText('Other Thread Node', { exact: true })).toBeVisible();
+    await quick.getByText('Other Thread Node', { exact: true }).click();
+    const launchError = page.locator('.monaco-dialog-box');
+    await expect(launchError).toBeVisible();
+    await expect(launchError).toContainText(/fetch|network|网络|请求/i);
+    await launchError.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await unknownLaunching;
+    const retained = await otherState();
+    assert.equal(retained.run_id, result.launchResponseLoss.runId);
+    assert.equal(retained.pid, result.launchResponseLoss.pid);
+    assert.equal(retained.debugger_binding.instance_id, siblingReady.instance.instance_id);
+    assert.notEqual(retained.run_id, siblingPaused.run_id);
+    assert(!result.dap.some(item => item.channel === `/api/v1/debug/node/runs/${retained.run_id}/dap`),
+      '启动回执未知时不能自动重放启动或创建DAP会话');
+    await api('/api/v1/debug/node/action', { method: 'POST', body: {
+      session_id: otherOwner.sessionId, thread_id: otherOwner.threadId, action: 'stop',
+    } }, otherOwner);
+    await expect.poll(async () => (await otherState()).status).toBe('exited');
+    assert.equal(launchRequests, 1);
+    result.launchResponseLoss.stopped = true;
+  } finally { await page.unroute(lostLaunchPattern, dropLaunchResponse); }
   await bindDebugger(otherOwner, null, 'debug-ui-unbind-sibling');
   result.uninstalled = [];
   for (const version of ['0.1.0', '0.2.0']) {

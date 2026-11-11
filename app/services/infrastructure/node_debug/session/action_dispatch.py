@@ -36,6 +36,8 @@ class NodeDebugActionDispatchMixin:
 
     _workspace_root: Path
     _file_paths: WorkspaceFilePaths
+    _runtimes: dict[tuple[str, str], NodeDebugRuntime]
+    _resolve_owner: Callable[[str, str | None], tuple[str, str]]
     _get_state_admitted: Callable[[str, str], Awaitable[NodeDebugStateDTO]]
 
     async def apply_action(
@@ -46,13 +48,30 @@ class NodeDebugActionDispatchMixin:
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
+        # Session 准入本身也可能等待；请求不能在此期间改投新 run／暂停。
+        owner = (
+            (command.session_id, command.thread_id) if command.thread_id is not None
+            else self._resolve_owner(command.session_id, command.thread_id)
+        )
+        runtime = self._runtimes.get(owner)
+        pause_generation = (
+            runtime.pause_generation
+            if runtime is not None and (
+                isinstance(command, NodeDebugEvaluateActionRequest)
+                or isinstance(command, NodeDebugControlActionRequest)
+                and command.action in {"continue", "step_over", "step_into", "step_out"}
+            ) else None
+        )
         async with (
             self._admit_mutation(command.session_id, command.thread_id) as owner,
             self._owner_lock(owner),
         ):
+            if self._runtimes.get(owner) is not runtime:
+                raise RuntimeError("Node Debug run 已更换")
             return await self._apply_action_admitted(
                 owner, command=command, actor=actor,
                 tool_name=tool_name, tool_call_id=tool_call_id,
+                _expected_pause_generation=pause_generation,
             )
 
     async def _apply_action_admitted(

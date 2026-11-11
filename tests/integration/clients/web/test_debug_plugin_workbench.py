@@ -65,7 +65,9 @@ def _model_interactions() -> list[dict[str, object]]:
         ("skill_load", {"name": "debugging"}),
         ("search_tools", {"tool_ids": ["get_variables_values", "evaluate_expression"], "limit": 10}),
         ("invoke_extension_tool", {"tool_name": "get_variables_values", "arguments": {"variableNames": ["state"], "scope": "local"}}),
-        ("invoke_extension_tool", {"tool_name": "evaluate_expression", "arguments": {"expression": "state.counter += 10"}}),
+        ("invoke_extension_tool", {"tool_name": "evaluate_expression", "arguments": {"expression":
+            "(() => { console.log('debug-race-entered'); const end = Date.now() + 1200; "
+            "while (Date.now() < end) {} console.log('debug-race-leaving'); return state.counter += 10; })()"}}),
     ]
     interactions = []
     for index in range(len(calls) + 1):
@@ -162,6 +164,11 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         receipt = json.loads((context.artifacts_dir / "debug-ui.json").read_text(encoding="utf-8"))
         assert receipt["phase"] == "complete" and receipt["pageErrors"] == []
         assert receipt["initialBreakpoint"] and receipt["stepOver"] and receipt["agentSharedRun"] and receipt["actualExit"]
+        assert receipt["continueResponseLoss"]["response"]["success"]
+        assert receipt["continueResponseLoss"]["requestCount"] == 1
+        assert receipt["agentRace"]["uiRequestDuringEvaluation"]
+        assert receipt["launchResponseLoss"]["requestCount"] == 1 and receipt["launchResponseLoss"]["stopped"]
+        assert not psutil.pid_exists(receipt["launchResponseLoss"]["pid"])
         assert receipt["staleLaunch"]["status"] == 400 and receipt["staleLaunch"]["ownerIdle"]
         assert receipt["staleLaunch"]["newVersion"] == "0.2.0"
         assert not psutil.pid_exists(receipt["staleLaunch"]["oldPluginPid"])

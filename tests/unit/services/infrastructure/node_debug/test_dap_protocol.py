@@ -12,8 +12,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugControlActionRequest,
+    NodeDebugEvaluateActionRequest,
+    NodeDebugEvaluateParams,
+)
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.node_debug.session.action_dispatch import (
+    NodeDebugActionDispatchMixin,
+)
 from app.services.infrastructure.node_debug.session.dap_protocol import (
     NodeDebugDAPSession,
 )
@@ -104,6 +112,65 @@ async def test_dap_rejects_old_pause_handles_and_replaced_run_without_mutation(d
     response = await dap.dispatch({"type": "request", "seq": 2, "command": "terminate"})
     assert response["success"] is False and "run 已更换" in response["message"]
     service._apply_action_admitted.assert_not_awaited()
+
+
+@pytest.mark.parametrize("entry", ["dap", "agent"])
+@pytest.mark.parametrize("command", ["next", "evaluate"])
+@pytest.mark.parametrize("change", ["pause", "run"])
+@pytest.mark.parametrize("boundary", ["admission", "owner_lock"])
+async def test_queued_action_keeps_original_run_and_pause(dap_owner, entry, command, change, boundary):
+    dap, service, runtime, _phases = dap_owner
+    owner = (runtime.session_id, runtime.thread_id)
+    lock = service._owner_lock(owner)
+    admitted = asyncio.Event()
+    release_admission = asyncio.Event()
+
+    @asynccontextmanager
+    async def admission(*_key: str):
+        admitted.set()
+        if boundary == "admission":
+            await release_admission.wait()
+        yield owner
+
+    async def apply(key, **kwargs):
+        return await NodeDebugActionDispatchMixin._apply_action_admitted(service, key, **kwargs)
+
+    service._admit_mutation = admission
+    service._resolve_owner = lambda *_: owner
+    service._apply_action_admitted = apply
+    service._session_state = SimpleNamespace(ensure_loaded=lambda *_: None)
+    service._reconcile_session_sources = AsyncMock()
+    service._inspector = SimpleNamespace(debugger_command=AsyncMock())
+    service._evaluation = SimpleNamespace(evaluate=AsyncMock())
+    args = {"expression": "state.counter++"} if command == "evaluate" else {"threadId": 1}
+    request = (
+        NodeDebugEvaluateActionRequest(action="evaluate", session_id=owner[0], thread_id=owner[1],
+            params=NodeDebugEvaluateParams(expression="state.counter++"))
+        if command == "evaluate" else
+        NodeDebugControlActionRequest(action="step_over", session_id=owner[0], thread_id=owner[1])
+    )
+    async with lock:
+        pending = asyncio.create_task(
+            dap.dispatch({"type": "request", "seq": 1, "command": command, "arguments": args})
+            if entry == "dap" else
+            NodeDebugActionDispatchMixin.apply_action(service, command=request, actor="ai")
+        )
+        await admitted.wait()
+        if change == "pause":
+            runtime.pause_generation += 1
+        else:
+            service._runtimes[owner] = object()
+        release_admission.set()
+    expected = "暂停代际已失效" if change == "pause" else "run 已更换"
+    if entry == "dap":
+        response = await pending
+        assert isinstance(response, dict)
+        assert response["success"] is False and expected in response["message"]
+    else:
+        with pytest.raises((ValueError, RuntimeError), match=expected):
+            await pending
+    service._inspector.debugger_command.assert_not_awaited()
+    service._evaluation.evaluate.assert_not_awaited()
 
 
 @pytest.mark.parametrize("breakpoints", [
