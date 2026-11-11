@@ -424,6 +424,158 @@ try {
   assert.equal((await gatewaySource()).jsonc, beforeInstall.jsonc);
   assert.deepEqual(await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } }), beforeInstallRuntime);
   result.installKeptBindings = true;
+  result.batchVersionPreservation = { confirmations: [], gateway: {}, workspace: {}, cleanup: false };
+  const batchDialog = page.locator('.monaco-dialog-box');
+  const runVersionBatch = async ({ scope, enabled, expectedBindings, excluded, sourceKey }) => {
+    const operationLabel = enabled ? '全部启用此范围' : '全部停用此范围';
+    await packageRowFor('1.1.0').getByRole('button', { name: operationLabel, exact: true }).click();
+    await expect(batchDialog).toBeVisible();
+    const confirmation = await batchDialog.innerText();
+    assert(confirmation.includes(`纳入：${expectedBindings.map(item => item.pluginId).join('、')}`), confirmation);
+    assert(confirmation.includes(`绑定版本：${expectedBindings.map(item => `${item.pluginId}@${item.version}`).join('、')}`), confirmation);
+    assert(confirmation.includes(`排除（固定范围不匹配）：${excluded}`), confirmation);
+    result.batchVersionPreservation.confirmations.push({ scope, enabled,
+      bindings: expectedBindings.map(item => `${item.pluginId}@${item.version}`), text: confirmation });
+    await batchDialog.getByRole('button', { name: operationLabel, exact: true }).click();
+    await pick(sourceKey);
+    await expect(batchDialog).toContainText('插件批量操作结果', { timeout: 30_000 });
+    const summary = await batchDialog.innerText();
+    for (const item of expectedBindings) assert(summary.includes(`ui.preference-probe/${item.pluginId}@${item.version}`), summary);
+    await batchDialog.locator('.dialog-buttons .monaco-button').first().click();
+    await expect(batchDialog).toBeHidden();
+  };
+  const refreshPluginView = async () => {
+    await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+    await expect(packageRowFor('1.1.0')).toBeVisible();
+  };
+
+  result.phase = 'gateway-batch-version-preservation';
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  const gatewayBatchBindings = [{ pluginId: 'gateway-preference', version: '1.0.0' }];
+  const gatewayExcluded = 'workspace-preference（workspace）、workspace-guide（workspace）';
+  await runVersionBatch({ scope: 'gateway', enabled: false, expectedBindings: gatewayBatchBindings,
+    excluded: gatewayExcluded, sourceKey: 'gateway_mutable_override' });
+  const gatewayAfterBatchDisable = configuredGateway(await gatewaySource());
+  assert.deepEqual(gatewayAfterBatchDisable, { package_id: 'ui.preference-probe',
+    plugin_id: 'gateway-preference', package_version: '1.0.0', enabled: false });
+  const gatewayStoppedByBatch = await runtimeSlot('gateway-preference');
+  assert.equal(gatewayStoppedByBatch.binding.package_version, '1.0.0');
+  assert.equal(gatewayStoppedByBatch.binding.enabled, false);
+  assert.equal(gatewayStoppedByBatch.state, 'stopped');
+  assert.equal(gatewayStoppedByBatch.instance, null);
+  result.batchVersionPreservation.gateway.disabled = { bindingVersion: gatewayStoppedByBatch.binding.package_version,
+    enabled: gatewayStoppedByBatch.binding.enabled, state: gatewayStoppedByBatch.state };
+  await refreshPluginView();
+  await runVersionBatch({ scope: 'gateway', enabled: true, expectedBindings: gatewayBatchBindings,
+    excluded: gatewayExcluded, sourceKey: 'gateway_mutable_override' });
+  await expect.poll(async () => (await runtimeSlot('gateway-preference'))?.state).toBe('ready');
+  const gatewayEnabledByBatch = await runtimeSlot('gateway-preference');
+  assert.equal(gatewayEnabledByBatch.binding.package_version, '1.0.0');
+  assert.equal(gatewayEnabledByBatch.binding.enabled, true);
+  assert.deepEqual(configuredGateway(await gatewaySource()), { package_id: 'ui.preference-probe',
+    plugin_id: 'gateway-preference', package_version: '1.0.0', enabled: true });
+  const gatewayBatchEcho = await callRuntime(gatewayEnabledByBatch);
+  result.batchVersionPreservation.gateway.enabled = { bindingVersion: gatewayEnabledByBatch.binding.package_version,
+    enabled: gatewayEnabledByBatch.binding.enabled, state: gatewayEnabledByBatch.state, echoVersion: gatewayBatchEcho.version };
+
+  result.phase = 'workspace-batch-version-preservation';
+  await view.getByLabel('插件管理范围').selectOption('workspace'); await pickWorkspace(workspaceName);
+  await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
+  const workspaceBatchEchoBefore = await callRuntime(await runtimeSlot('workspace-preference', active.workspace_id));
+  assert.equal(workspaceBatchEchoBefore.version, '1.0.0');
+  await refreshPluginView();
+  const workspaceBatchBindings = [
+    { pluginId: 'workspace-preference', version: '1.0.0' },
+    { pluginId: 'workspace-guide', version: '1.1.0' },
+  ];
+  const workspaceExcluded = 'gateway-preference（gateway）';
+  const workspaceSourceForBatch = () => api('/api/v1/config/sources/workspace_root_mutable_override', { headers: {
+    'X-BoxTeam-Target-Gateway-Id': active.gateway_id, 'X-BoxTeam-Workspace-Id': active.workspace_id,
+  } });
+  const workspaceSourceBindings = async () => (await workspaceSourceForBatch()).source_effective.plugins.runtime.entries
+    .filter(item => item.package_id === 'ui.preference-probe');
+  await runVersionBatch({ scope: 'workspace', enabled: false, expectedBindings: workspaceBatchBindings,
+    excluded: workspaceExcluded, sourceKey: 'workspace_root_mutable_override' });
+  await expect.poll(async () => (await runtimeSlot('workspace-preference', active.workspace_id))?.state).toBe('stopped');
+  const workspaceStoppedByBatch = await runtimeSlot('workspace-preference', active.workspace_id);
+  const guideStoppedByBatch = await runtimeSlot('workspace-guide', active.workspace_id);
+  assert.equal(workspaceStoppedByBatch.binding.package_version, '1.0.0');
+  assert.equal(workspaceStoppedByBatch.binding.enabled, false);
+  assert.equal(workspaceStoppedByBatch.instance, null);
+  const workspaceDisabledBindings = await workspaceSourceBindings();
+  const workspaceGuideDisabled = workspaceDisabledBindings.find(item => item.plugin_id === 'workspace-guide');
+  assert(workspaceGuideDisabled);
+  if (guideStoppedByBatch) {
+    assert.equal(guideStoppedByBatch.binding.package_version, '1.1.0');
+    assert.equal(guideStoppedByBatch.binding.enabled, false);
+    assert.equal(guideStoppedByBatch.state, 'stopped');
+    assert.equal(guideStoppedByBatch.declarative, true);
+    assert.equal(guideStoppedByBatch.instance, null);
+  }
+  assert.deepEqual(workspaceDisabledBindings.map(item => [item.plugin_id, item.package_version, item.enabled]), [
+    ['workspace-preference', '1.0.0', false], ['workspace-guide', '1.1.0', false],
+  ]);
+  await expect.poll(guideEntries).toEqual([]);
+  result.batchVersionPreservation.workspace.disabled = { preferenceVersion: workspaceStoppedByBatch.binding.package_version,
+    preferenceEnabled: workspaceStoppedByBatch.binding.enabled, preferenceState: workspaceStoppedByBatch.state,
+    guideVersion: workspaceGuideDisabled.package_version, guideEnabled: workspaceGuideDisabled.enabled,
+    guideStatusPresent: Boolean(guideStoppedByBatch), guideState: guideStoppedByBatch?.state ?? null,
+    guideDeclarative: guideStoppedByBatch?.declarative ?? null, guideInstance: guideStoppedByBatch?.instance ?? null };
+  await refreshPluginView();
+  await runVersionBatch({ scope: 'workspace', enabled: true, expectedBindings: workspaceBatchBindings,
+    excluded: workspaceExcluded, sourceKey: 'workspace_root_mutable_override' });
+  await expect.poll(async () => (await workspaceSourceBindings()).map(item => [item.plugin_id, item.package_version, item.enabled]),
+    { timeout: 15_000 }).toEqual([
+    ['workspace-preference', '1.0.0', true], ['workspace-guide', '1.1.0', true],
+  ]);
+  let workspaceEnabledSlots;
+  await expect.poll(async () => {
+    const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } });
+    const slotFor = pluginId => snapshot.plugins.find(item => item.binding.package_id === 'ui.preference-probe'
+      && item.binding.plugin_id === pluginId && item.binding.workspace_id === active.workspace_id);
+    const preference = slotFor('workspace-preference'), guide = slotFor('workspace-guide');
+    workspaceEnabledSlots = { preference, guide };
+    return {
+      preference: preference && [preference.binding.package_version, preference.binding.enabled, preference.state,
+        preference.instance?.package_version ?? null],
+      guide: guide && [guide.binding.package_version, guide.binding.enabled, guide.state, guide.declarative, guide.instance],
+    };
+  }, { timeout: 30_000 }).toEqual({
+    preference: ['1.0.0', true, 'ready', '1.0.0'], guide: ['1.1.0', true, 'stopped', true, null],
+  });
+  const workspaceEnabledByBatch = workspaceEnabledSlots.preference;
+  const guideEnabledByBatch = workspaceEnabledSlots.guide;
+  assert.equal(workspaceEnabledByBatch.binding.package_version, '1.0.0');
+  assert.equal(workspaceEnabledByBatch.binding.enabled, true);
+  assert.equal(guideEnabledByBatch.binding.package_version, '1.1.0');
+  assert.equal(guideEnabledByBatch.binding.enabled, true);
+  assert.equal(guideEnabledByBatch.declarative, true);
+  assert.equal(guideEnabledByBatch.instance, null);
+  assert.deepEqual((await workspaceSourceBindings()).map(item => [item.plugin_id, item.package_version, item.enabled]), [
+    ['workspace-preference', '1.0.0', true], ['workspace-guide', '1.1.0', true],
+  ]);
+  const workspaceBatchEcho = await callRuntime(workspaceEnabledByBatch);
+  assert.equal(workspaceBatchEcho.version, '1.0.0');
+  await expect.poll(async () => (await guideEntries()).map(entry => entry.plugin.package_version)).toEqual(['1.1.0']);
+  result.batchVersionPreservation.workspace.enabled = { preferenceVersion: workspaceEnabledByBatch.binding.package_version,
+    preferenceEnabled: workspaceEnabledByBatch.binding.enabled, preferenceState: workspaceEnabledByBatch.state,
+    preferenceEchoVersion: workspaceBatchEcho.version, guideVersion: guideEnabledByBatch.binding.package_version,
+    guideEnabled: guideEnabledByBatch.binding.enabled, guideDeclarative: guideEnabledByBatch.declarative,
+    guideState: guideEnabledByBatch.state, guideInstance: guideEnabledByBatch.instance };
+
+  await packageRowFor('1.1.0').getByRole('button', { name: '工作区指南 · workspace-guide', exact: true }).click();
+  await view.getByRole('button', { name: '解除此范围绑定', exact: true }).click();
+  await pick('workspace_root_mutable_override'); await pick('确认保存工作区插件绑定');
+  await expect.poll(() => runtimeSlot('workspace-guide', active.workspace_id)).toBeUndefined();
+  await expect.poll(guideEntries).toEqual([]);
+  await refreshPluginView();
+  await unbind('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
+  await expect.poll(() => runtimeSlot('workspace-preference', active.workspace_id)).toBeUndefined();
+  assert.deepEqual(await workspaceSourceBindings(), []);
+  result.batchVersionPreservation.cleanup = true;
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  await refreshPluginView();
+
   const openVersion = async version => {
     await packageRowFor(version).getByRole('button', { name: 'Gateway 偏好 · gateway-preference', exact: true }).click();
     await expect(view.locator('.service-plugin-details')).toBeVisible();

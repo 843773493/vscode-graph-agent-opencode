@@ -280,8 +280,42 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert subscription["terminalEvent"] == "requestfailed"
             assert subscription["failure"] == "net::ERR_ABORTED"
             assert version_start_count.read_text(encoding="utf-8") == "3", "仅首次失败、显式重启及显式配置重新启用创建"
-            assert len(result["activationTimings"]) == 3
+            assert len(result["activationTimings"]) == 4
             assert all(item["milliseconds"] > 0 and item["state"] == "ready" for item in result["activationTimings"])
+            batch_versions = result["batchVersionPreservation"]
+            assert batch_versions["cleanup"]
+            assert [(item["scope"], item["enabled"], item["bindings"])
+                for item in batch_versions["confirmations"]] == [
+                    ("gateway", False, ["gateway-preference@1.0.0"]),
+                    ("gateway", True, ["gateway-preference@1.0.0"]),
+                    ("workspace", False, ["workspace-preference@1.0.0", "workspace-guide@1.1.0"]),
+                    ("workspace", True, ["workspace-preference@1.0.0", "workspace-guide@1.1.0"]),
+                ]
+            assert batch_versions["gateway"]["disabled"] == {
+                "bindingVersion": "1.0.0", "enabled": False, "state": "stopped",
+            }
+            assert batch_versions["gateway"]["enabled"] == {
+                "bindingVersion": "1.0.0", "enabled": True, "state": "ready", "echoVersion": "1.0.0",
+            }
+            workspace_disabled = batch_versions["workspace"]["disabled"]
+            assert workspace_disabled["preferenceVersion"] == "1.0.0"
+            assert workspace_disabled["preferenceEnabled"] is False
+            assert workspace_disabled["preferenceState"] == "stopped"
+            assert workspace_disabled["guideVersion"] == "1.1.0"
+            assert workspace_disabled["guideEnabled"] is False
+            if workspace_disabled["guideStatusPresent"]:
+                assert workspace_disabled["guideState"] == "stopped"
+                assert workspace_disabled["guideDeclarative"] is True
+                assert workspace_disabled["guideInstance"] is None
+            else:
+                assert workspace_disabled["guideState"] is None
+                assert workspace_disabled["guideDeclarative"] is None
+                assert workspace_disabled["guideInstance"] is None
+            assert batch_versions["workspace"]["enabled"] == {
+                "preferenceVersion": "1.0.0", "preferenceEnabled": True, "preferenceState": "ready",
+                "preferenceEchoVersion": "1.0.0", "guideVersion": "1.1.0", "guideEnabled": True,
+                "guideDeclarative": True, "guideState": "stopped", "guideInstance": None,
+            }
             assert result["closedBindingBlockedUninstall"]
             assert result["defaultsCreatedIndependentInstance"] and result["clearedDefaultsOnlyAffectFuture"]
             assert result["createdWorkspaceBlockedUninstall"]
