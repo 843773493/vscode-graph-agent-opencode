@@ -119,6 +119,19 @@ test('显式切版只修改所选来源，保留本层开关及兄弟，不物�
     .toThrow('所选来源没有此插件绑定');
 });
 
+test('单插件开关和解绑不能覆盖选择来源期间已经切换的版本', () => {
+  for (const path of [['plugins', 'runtime', 'entries'], ['plugins', 'workspace_defaults', 'entries']]) {
+    const changed = { ...binding, package_version: '3.0.0', enabled: true };
+    const payload = { plugins: { [path[1]]: { entries: [changed] } } };
+    const doc = { jsonc: JSON.stringify(payload), source_effective: payload };
+    for (const enabled of [true, false, null]) {
+      expect(() => bindingJsonc(doc, path, binding, enabled)).toThrow('插件绑定版本已变化');
+    }
+    const value = parse(bindingJsonc(doc, path, { ...binding, package_version: '2.0.0' }, 'preserve'));
+    expect(value.plugins[path[1]].entries).toEqual([{ ...binding, package_version: '2.0.0', enabled: true }]);
+  }
+});
+
 
 test('三类管理范围只读取原正式来源的完整合并期望，不先列目录或混入 active 绑定', async () => {
   const node = parsed.statements.find(item => item.name?.text === 'readPluginBindings');
@@ -142,4 +155,32 @@ test('三类管理范围只读取原正式来源的完整合并期望，不先�
   expect(await readBindings('defaults', gateway)).toEqual([defaults]);
   expect(calls).toEqual([{ target: gateway, source: 'inline:0' }, { target: workspace, source: 'inline' },
     { target: gateway, source: 'inline:0' }]);
+});
+
+test('批量开关读取来源后拒绝已换版项，继续提交未变化的兄弟且不隐式切版', async () => {
+  const node = parsed.statements.find(item => item.name?.text === 'setPluginBindings');
+  const batchCode = ts.transpile(ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, ''),
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  for (const scope of ['gateway', 'workspace', 'defaults']) {
+    const path = ['plugins', scope === 'defaults' ? 'workspace_defaults' : 'runtime', 'entries'];
+    const changed = { ...binding, package_version: '3.0.0', enabled: true };
+    const sibling = { ...binding, plugin_id: 'sibling', package_version: '2.0.0', enabled: true };
+    const payload = { plugins: { [path[1]]: { entries: [changed, sibling] } } };
+    const document = { writable: true, jsonc: JSON.stringify(payload), source_effective: payload };
+    const submitted = [], preflights = [];
+    const owner = { async list() { return { sources: [] }; }, async read() { return document; },
+      intent(_key, jsonc) { return { jsonc }; }, async preflight(intent) { preflights.push(intent); } };
+    const batch = new Function('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'bindingJsonc', 'sourceBaseline', 'saveSourceEdit', 'sourceStatus',
+      `${batchCode}\nreturn setPluginBindings;`)(class { constructor() { return owner; } }, async () => ({ source_key: 'source' }),
+      (value, keys) => keys.reduce((current, key) => current[key], value),
+      (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, bindingJsonc, () => ({}),
+      async (_owner, intent) => { submitted.push(parse(intent.jsonc)); return { document }; }, () => 'active');
+    const target = { gateway_id: 'gateway-a' }, workspace = scope === 'workspace' ? { ...target, workspace_id: 'workspace-a' } : undefined;
+    const results = await batch(scope, target, workspace, {}, [binding, sibling], false, () => {}, {}, new AbortController().signal);
+    expect(results[0].configuration).toContain('未提交');
+    expect(results[0].configuration).toContain('版本已变化');
+    expect(results[1].configuration).toBe('active');
+    expect(preflights).toHaveLength(1); expect(submitted).toHaveLength(1);
+    expect(submitted[0].plugins[path[1]].entries).toEqual([changed, { ...sibling, enabled: false }]);
+  }
 });

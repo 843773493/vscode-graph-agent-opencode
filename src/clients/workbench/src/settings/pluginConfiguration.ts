@@ -41,6 +41,11 @@ function bindingJsonc(document: ConfigDocument, path: string[], binding: Configu
     const current = updated.find(item => sameBinding(item, binding));
     if (!current) throw new Error('所选来源没有此插件绑定，请选择持有绑定的原来源；不会复制其它层的绑定');
     enabled = current.enabled;
+  } else {
+    const current = bindingsAt(document.source_effective, path).find(item => sameBinding(item, binding));
+    if (current && current.package_version !== binding.package_version) {
+      throw new Error(`插件绑定版本已变化：${binding.package_id}/${binding.plugin_id} 当前为 ${current.package_version}，确认时为 ${binding.package_version}；请刷新，切版须单独操作`);
+    }
   }
   const index = updated.findIndex(item => sameBinding(item, binding));
   if (enabled === null) { if (index >= 0) updated.splice(index, 1); }

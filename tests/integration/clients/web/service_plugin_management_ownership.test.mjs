@@ -90,8 +90,9 @@ function classCallback(className, methodName, sourceFragment, bindings = {}) {
   const functionNode = ts.factory.createFunctionExpression(undefined, undefined, undefined, undefined,
     callback.parameters, callback.type, body);
   const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, functionNode, parsed);
+  const javascript = ts.transpile(`const callback = ${printed};`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
   const names = ['errorsText', ...Object.keys(bindings)];
-  return new Function(...names, `return function(...args) { return (${printed}).call(this, ...args); };`)(
+  return new Function(...names, `${javascript}\nreturn function(...args) { return callback.call(this, ...args); };`)(
     error => error instanceof Error ? error.message : String(error), ...Object.values(bindings));
 }
 
@@ -466,6 +467,41 @@ test('不同 Gateway 或不同本地制品的安装操作可并发进入原 owne
   expect(ids).toEqual(['operation-1', 'operation-2', 'operation-3']);
   release.resolve();
   await Promise.all([first, second, third]);
+});
+
+test('批量开关保留各插件绑定版本，未绑定项采用所选版本并在确认中列明', async () => {
+  for (const scope of ['gateway', 'workspace', 'defaults']) {
+    const target = { gateway_id: 'gateway-original' };
+    const workspace = scope === 'workspace' ? { ...target, workspace_id: 'workspace-a' } : undefined;
+    const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
+    const matching = [{ id: 'bound', instance_scope: pluginScope }, { id: 'new', instance_scope: pluginScope }];
+    const manifest = { package_id: 'sample', version: '2.0.0', plugins: [...matching,
+      { id: 'excluded', instance_scope: pluginScope === 'gateway' ? 'workspace' : 'gateway' }] };
+    for (const enabled of [true, false]) {
+      const batches = [], confirmations = [], batchButtons = [{ disabled: false }, { disabled: false }];
+      const click = classCallback('ServicePluginPackagesView', 'renderPackages', 'setPluginBindings', {
+        target, workspace, scope, pluginScope, matching, manifest, enabled, batchButtons,
+        pluginTarget: target, entryGatewayId: target.gateway_id,
+        async setPluginBindings(...args) { batches.push(args[4]); return undefined; },
+      });
+      let completed;
+      click.call({
+        configuredBinding(packageId, pluginId, workspaceId) {
+          expect(packageId).toBe('sample'); expect(workspaceId).toBe(workspace?.workspace_id);
+          return pluginId === 'bound' ? { package_id: packageId, plugin_id: pluginId,
+            package_version: '1.0.0', enabled: !enabled } : undefined;
+        },
+        runTargetOperation(operation) { completed = operation({ check() {} }); return completed; },
+        dialogs: { async confirm(options) { confirmations.push(options.detail); return { confirmed: true }; } },
+      });
+      await completed;
+      expect(batches).toEqual([[{ package_id: 'sample', plugin_id: 'bound', package_version: '1.0.0', enabled },
+        { package_id: 'sample', plugin_id: 'new', package_version: '2.0.0', enabled }]]);
+      expect(confirmations[0]).toContain('bound@1.0.0'); expect(confirmations[0]).toContain('new@2.0.0');
+      expect(confirmations[0]).toContain('保留已有绑定版本');
+      expect(batchButtons.every(button => !button.disabled)).toBe(true);
+    }
+  }
 });
 
 test('卸载按钮在发起确认与请求流程前立即禁用，阻止同一按钮重复提交', () => {

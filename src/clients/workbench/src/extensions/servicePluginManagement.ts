@@ -366,16 +366,19 @@ export class ServicePluginPackagesView extends ViewPane {
         button.addEventListener('click', () => void this.runTargetOperation(async lifecycle => {
           batchButtons.forEach(item => { item.disabled = true; });
           try {
+            const batchBindings = matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id,
+              package_version: this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id)?.package_version
+                ?? manifest.version, enabled }));
             const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
             const owner = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
-            const confirmation = await this.dialogs.confirm({ message: `${enabled ? '启用' : '停用'} ${manifest.package_id}@${manifest.version} 的当前范围插件？`,
-              detail: `${owner}\n纳入：${matching.map(plugin => plugin.id).join('、')}\n排除（固定范围不匹配）：${excluded.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、') || '无'}\n`
+            const confirmation = await this.dialogs.confirm({ message: `${enabled ? '启用' : '停用'} ${manifest.package_id} 的当前范围插件？`,
+              detail: `${owner}\n纳入：${matching.map(plugin => plugin.id).join('、')}\n绑定版本：${batchBindings.map(binding => `${binding.plugin_id}@${binding.package_version}`).join('、')}\n保留已有绑定版本；未绑定项采用所选版本，切版请单独操作。\n排除（固定范围不匹配）：${excluded.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、') || '无'}\n`
                 + (scope === 'defaults' ? '仅修改以后新建工作区的默认值，不操作当前实例。' : '每个插件独立提交，失败不回滚已完成的操作。'),
               primaryButton: enabled ? '全部启用此范围' : '全部停用此范围' });
             if (!confirmation.confirmed) return;
             lifecycle.check();
             const results = await setPluginBindings(scope, target, workspace, this.quickInput,
-              matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled })),
+              batchBindings,
               enabled, lifecycle.check, lifecycle.token, lifecycle.signal);
             if (!results) return;
             let current: PluginRuntimeStatusDTO | undefined, readError: string | undefined;
