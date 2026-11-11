@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -128,9 +130,34 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
         receipt = json.loads((context.artifacts_dir / "command-ui.json").read_text())
         assert receipt["phase"] == "complete" and receipt["pageErrors"] == [], receipt
         executions = [json.loads(line) for line in output.read_text().splitlines()]
-        assert [item["version"] for item in executions] == ["1.0.0"] * 5 + ["2.0.0"] * 3, receipt
-        assert len({item["call_id"] for item in executions}) == 8
+        sample_count = receipt["workload"]["commandSamples"]
+        assert sample_count == 20
+        assert [item["version"] for item in executions] == ["1.0.0"] * (4 + sample_count) + ["2.0.0"] * 3, receipt
+        assert len({item["call_id"] for item in executions}) == 7 + sample_count
         assert all(item["request_id"] for item in executions)
+        trace = (context.artifacts_dir / "gateway/gateway.stderr.log").read_text(encoding="utf-8")
+        durations = {request_id: float(seconds) * 1000 for seconds, request_id in re.findall(
+            r"\[TRACE\] method=\S+ path=\S+ status=200 duration=([\d.]+)s request_id=(\S+)", trace)}
+        operations = {"command": receipt["warmCommands"]}
+        for operation in ("status", "settings"):
+            operations[operation] = [sample for sample in receipt["warmReads"] if sample["operation"] == operation]
+        summaries = {}
+        for operation, samples in operations.items():
+            assert len(samples) == sample_count
+            for sample in samples:
+                assert sample["requestId"] in durations, (operation, sample, "缺少原 Gateway Trace")
+                sample["gatewayMilliseconds"] = durations[sample["requestId"]]
+                # 沿客户端既有15秒完整请求预算，不另设每层独立等待期限。
+                assert 0 < sample["milliseconds"] < 15_000, sample
+            elapsed = sorted(sample["milliseconds"] for sample in samples)
+            internal = sorted(sample["gatewayMilliseconds"] for sample in samples)
+            summaries[operation] = {"samples": sample_count, "p95Ms": elapsed[math.ceil(sample_count * .95) - 1],
+                "maxMs": elapsed[-1], "gatewayP95Ms": internal[math.ceil(sample_count * .95) - 1],
+                "gatewayMaxMs": internal[-1]}
+        (context.artifacts_dir / "warm-request-measurements.json").write_text(json.dumps({
+            "workload": receipt["workload"], "summaries": summaries, "samples": operations,
+            "boundary": "command包含Workbench命令入口至完整结果；reads为浏览器fetch至完整JSON；Gateway为原Trace中间件总耗时，含插件HTTP及日志，不称内部handler耗时",
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         assert receipt["windowReopenedSameInstance"] and receipt["installedVersionKeptBinding"]
         assert receipt["uninstalledVersions"] == ["1.0.0", "2.0.0"]
         assert all(not psutil.pid_exists(pid) for pid in receipt["exitedPids"])
