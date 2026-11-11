@@ -420,11 +420,14 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
     bindings = [{"package_id": "cold.tools" if shared_package else f"cold.{runtime}", "package_version": "1.0.0",
         "plugin_id": runtime, "enabled": True} for runtime in ("node", "python")]
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
+    disabled_version_rejections: list[dict[str, object]] = []
 
-    def save(client: httpx.Client, document: dict, enabled: bool | None, *, preflight: bool = False) -> httpx.Response:
+    def save(client: httpx.Client, document: dict, enabled: bool | None, *, preflight: bool = False,
+             node_version: str = "1.0.0") -> httpx.Response:
         config = commentjson.loads(document["jsonc"])
         config.setdefault("plugins", {})["runtime"] = {"entries": [] if enabled is None else [
-            {**binding, "enabled": enabled if binding["plugin_id"] == "node" else True}
+            {**binding, "enabled": enabled if binding["plugin_id"] == "node" else True,
+             "package_version": node_version if binding["plugin_id"] == "node" else binding["package_version"]}
             for binding in bindings]}
         return client.request("POST" if preflight else "PUT", source_path + ("/preflight" if preflight else ""),
             json={"gateway_id": gateway_id,
@@ -432,7 +435,7 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
             "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
             "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
             "expected_active_digest": document["active_digest"],
-            "idempotency_key": f"cold-binding-{document['file_digest']}-{enabled}"})
+            "idempotency_key": f"cold-binding-{document['file_digest']}-{enabled}-{node_version}"})
 
     def states(client: httpx.Client) -> dict:
         response = client.post("/api/gateway/service-plugins/status", json={"gateway_id": gateway_id})
@@ -466,6 +469,19 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
                     gateway_id=gateway_id, path=str(archive_path),
                     expected_digest=hashlib.sha256(archive_path.read_bytes()).hexdigest())
+            # 两个版本均通过原安装入口发布；环境改变后，关闭态切版也须拒绝。
+            package_id = bindings[0]["package_id"]
+            candidate_zip = context.artifacts_dir / f"{package_id}-2.0.0.zip"
+            with zipfile.ZipFile(context.artifacts_dir / f"{package_id}.zip") as original_archive, zipfile.ZipFile(candidate_zip, "w") as archive:
+                for entry in original_archive.infolist():
+                    data = original_archive.read(entry)
+                    if entry.filename == "plugin.jsonc":
+                        candidate_manifest = json.loads(data)
+                        candidate_manifest["version"] = "2.0.0"
+                        data = json.dumps(candidate_manifest).encode("utf-8")
+                    archive.writestr(entry, data)
+            install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
+                gateway_id=gateway_id, path=str(candidate_zip))
             document = client.get(source_path).raise_for_status().json()["data"]
             assert save(client, document, True).raise_for_status().json()["data"]["edit"]["state"] == "active"
             initial = states(client)
@@ -503,6 +519,18 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 "plugin_id": "node", "revision": current["node"]["revision"]})
             assert failed_restart.status_code == 409 and expected_error in failed_restart.text
             assert states(client) == current, "被拒的显式重启不能改变原绑定、revision或实际实例"
+            unchanged = states(client)
+            for preflight in (True, False):
+                rejected = save(client, document, False, preflight=preflight, node_version="2.0.0")
+                assert rejected.status_code == 422 and expected_error in rejected.text
+                request_id = rejected.headers["X-Request-ID"]
+                assert request_id and rejected.json()["request_id"] == request_id
+                disabled_version_rejections.append({"preflight": preflight, "status": rejected.status_code,
+                    "request_id": request_id, "body": rejected.json()})
+                after = client.get(source_path).raise_for_status().json()["data"]
+                for field in ("jsonc", "file_digest", "active_revision", "active_digest"):
+                    assert after[field] == document[field], field
+                assert states(client) == unchanged, "关闭态切版拒绝不能改变原绑定或兄弟实例"
             disabled = save(client, document, False).raise_for_status().json()["data"]
             assert disabled["edit"]["state"] == "active"
             assert states(client)["node"]["state"] == "stopped"
@@ -526,13 +554,18 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 client.post("/api/gateway/service-plugins/uninstall", json={
                     "gateway_id": gateway_id, "package_id": package_id, "package_version": "1.0.0"}).raise_for_status()
                 assert not (home / "plugins/packages" / package_id / "1.0.0").exists()
+            client.post("/api/gateway/service-plugins/uninstall", json={
+                "gateway_id": gateway_id, "package_id": bindings[0]["package_id"],
+                "package_version": "2.0.0"}).raise_for_status()
+            assert not (home / "plugins/packages" / bindings[0]["package_id"] / "2.0.0").exists()
             inventory = client.post("/api/gateway/service-plugins/inventory", json={"gateway_id": gateway_id})
             assert inventory.raise_for_status().json()["data"]["packages"] == []
             client.get("/api/gateway/workspaces", timeout=90).raise_for_status()
             (context.artifacts_dir / "cold-runtime.json").write_text(json.dumps({
                 "initial": initial, "unavailable": current, "final": final,
                 "runtime_change": runtime_change, "replacement_node": replacement_node,
-                "replacement_identity": replacement_identity, "uninstalled": True}, ensure_ascii=False, indent=2))
+                "replacement_identity": replacement_identity, "disabled_version_rejections": disabled_version_rejections,
+                "uninstalled": True}, ensure_ascii=False, indent=2))
     finally:
         if gateway is not None:
             close_gateway_process(gateway)

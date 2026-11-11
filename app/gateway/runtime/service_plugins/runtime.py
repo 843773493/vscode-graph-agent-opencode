@@ -269,7 +269,10 @@ class GatewayPluginRuntime:
                           delivered: PluginParameters | None = None) -> None:
         for binding in bindings:
             declaration = self.declaration(binding)
-            if binding.enabled and declaration.runtime is not None:
+            previous = self.slots.get(self.key(binding))
+            # 关闭旧绑定仍可脱困；新绑定或切版必须在保存前核实制品兼容。
+            if declaration.runtime is not None and (binding.enabled or previous is None
+                    or previous.binding.package_version != binding.package_version):
                 self.validate_target(binding)
             values = (parameters or {}).get(binding.package_id, {}).get(binding.plugin_id, {})
             resolved = (self.private_inputs.resolve(values, package_id=binding.package_id, plugin_id=binding.plugin_id,

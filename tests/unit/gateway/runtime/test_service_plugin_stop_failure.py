@@ -89,6 +89,43 @@ async def blocked_plugin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         await skills.close()
 
 
+@pytest.mark.parametrize("workspace_id", [None, "workspace-owner"])
+@pytest.mark.parametrize("operation", ["disable", "new-disabled", "switch-disabled"])
+async def test_disabled_candidate_checks_compatibility_except_when_closing_original_binding(
+    blocked_plugin: tuple[GatewayPluginRuntime, list[Mock], PluginBinding],
+    monkeypatch: pytest.MonkeyPatch, workspace_id: str | None, operation: str,
+) -> None:
+    owner, processes, original = blocked_plugin
+    previous = owner.slots.pop(owner.key(original))
+    previous.binding = original.model_copy(update={"workspace_id": workspace_id})
+    assert previous.declaration is not None
+    previous.declaration = previous.declaration.model_copy(update={
+        "instance_scope": "workspace" if workspace_id else "gateway"})
+    owner.slots[owner.key(previous.binding)] = previous
+    desired = previous.binding.model_copy(update={"enabled": False,
+        "package_version": "2.0.0" if operation == "switch-disabled" else "1.0.0"})
+    if operation == "new-disabled":
+        owner.slots.clear()
+    monkeypatch.setattr(owner, "declaration", lambda _binding: previous.declaration)
+    validate = Mock(side_effect=ValueError("插件目标 Node ABI 不匹配"))
+    monkeypatch.setattr(owner, "validate_target", validate)
+    try:
+        if operation == "disable":
+            owner.validate_bindings([desired], workspace_id=workspace_id)
+            validate.assert_not_called()
+        else:
+            with pytest.raises(ValueError, match="Node ABI 不匹配"):
+                owner.validate_bindings([desired], workspace_id=workspace_id)
+            validate.assert_called_once_with(desired)
+        processes[0].close.assert_not_called()
+        assert previous.binding.enabled and previous.binding.package_version == "1.0.0"
+    finally:
+        # fixture 仍负责释放其实际句柄；候选校验没有触碰已持有进程。
+        owner.slots.clear()
+        previous.binding = original
+        owner.slots[owner.key(original)] = previous
+
+
 @pytest.mark.parametrize("operation", ["disable", "switch"])
 @pytest.mark.parametrize("ready_receipt", [False, True], ids=["before-ready", "after-ready"])
 async def test_failed_stop_keeps_actual_version_and_does_not_retry_unchanged_desired_binding(
