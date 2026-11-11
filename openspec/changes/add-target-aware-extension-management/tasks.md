@@ -204,6 +204,8 @@
 - [x] 10.8 删除首次工具／命令／调试访问触发的按需激活，只有插件开启、显式重启及所属运行时恢复启动代码；未开启／启动中／失败直接报实际状态，零 automatic／on_demand／manual 多策略或请求等待自启。
   - 2026-11-11 全链启动准入复审完成：service读取只取ready精确实例，未开启／启动中／失败直接拒绝；安装与库存读零进程、配置开启启动、显式重启及完整恢复证据已齐。真实候选关闭后离线参数写入亦证明零client／进程。未新增按需激活或请求等待自启。
 - [ ] 10.9 按插件启用绑定迁齐关闭、实例退出、断连／重连、版本切换、工作区解除、窗口关闭与撤权；窗口关闭不改enabled，旧事件不污染兄弟／新实例，无新增轮询。
+  - 2026-11-11 命令贡献版本与窗口闭环：复用原真实Gateway／Backend／正式Workbench场景，经安装v1、来源CAS开启、命令面板／程序／键盘／菜单四种真实调用；安装v2保持原绑定与实例，新窗口在声明已发布后取得完整快照，关闭原窗口后仍调用同一实例。显式切版替换标题和键位、旧键位零调用，停用后旧pick拒绝且不自启，关闭未解绑卸载409，解绑后两版物理删除，来源参数保留。最终1 passed／67.46秒、零pageErrors，精确8次实际调用及唯一call ID／request_id、两个PID均退出；原Registry定向5项／119断言、Ruff和新增测试Pyright零诊断，正式构建复用同批装具。首次失败为驱动重复show保留启动未就绪时的冻结浮层，改为每次观察显式关闭再开，未改变产品目标合同。最小复审无新产品机制；真实Windows键盘、Electron及命令特有Relay撤权／断流仍未验，10.9宽项保留。准确命令、源码指纹、构建与失败原件见 `out/tests/temp/2026/11/11/plugin_command_lifecycle/artifacts/verification.json`。
+
 - [x] 10.10 整包卸载按D7仅核原四类引用并复用删除互斥；关闭但未解除绑定仍阻塞，自身可释放投影先结清，完整封存正文／未绑定参数不占引用；未知来源拒绝且不启动Backend或后台扫描，解除后只删对应包版本，用户配置／快捷键／历史保留。
   - 2026-11-11 原四类卸载引用收口：active／pending、关闭未解绑、模板／未结创建、真实读取lease及未核退出均沿原owner与删除互斥；未知工作区owner明确拒绝且不启动Backend。实际解除后只删对应版本，用户配置、Skill封存和业务回执保留。复用 `plugin_distribution_loop/artifacts/pending-uninstall-verification.json`、`read-lease-verification.json`、`unbind-stop-proof-verification.json`、`workspace-update-uninstall-verification.json` 及 `legacy_host_boundary_luna_max/artifacts/workspace-uninstall-pth-followup-receipt.txt`（均在 `out/tests/temp/2026/11/10/`）。本项完成，无扫描器或引用账本。
 - [ ] 10.11 最小真实 Gateway／Workbench 场景覆盖纯声明插件、同包 Python／Node 插件、多目标同ID、独立启停／部分失败／旧回执、窗口释放及整包卸载；不把旧宿主证据当新合同验收。

@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import commentjson
+import psutil
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
@@ -29,7 +30,7 @@ from tests.support.workspaces import (
 )
 
 ENTRY = '''
-import sys, os, asyncio
+import sys, os, asyncio, json
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI
 import uvicorn
@@ -41,8 +42,8 @@ async def execute(arguments, context):
     await context.progress(1, 2, '真实插件进度')
     if arguments.get('wait'): await asyncio.Event().wait()
     with open(context.parameters['output'], 'a', encoding='utf-8') as log:
-        log.write(context.call.call_id + '\\n')
-    return {'value': arguments.get('value', 'ui-default'), 'pid': os.getpid()}
+        log.write(json.dumps({'call_id': context.call.call_id, 'version': 'VERSION', 'request_id': context.request_id}) + '\\n')
+    return {'value': arguments.get('value', 'ui-default'), 'pid': os.getpid(), 'version': 'VERSION'}
 async def shutdown(): server.should_exit = True
 app = FastAPI()
 app.add_middleware(TraceMiddleware)
@@ -80,12 +81,11 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
         if "api_key" in provider:
             provider["api_key"] = "command-ui-unused-key"
     configuration.write_text(json.dumps(config), encoding="utf-8")
-    archive_path = context.artifacts_dir / "command-ui.zip"
     command = {"id": "execute", "handler": "execute", "title": "命令验收：执行", "category": "插件验收",
         "arguments_schema": {"type": "object", "additionalProperties": False,
             "properties": {"value": {"type": "string"}, "wait": {"type": "boolean"}}},
-        "result_schema": {"type": "object", "required": ["value", "pid"],
-            "properties": {"value": {"type": "string"}, "pid": {"type": "integer"}}},
+        "result_schema": {"type": "object", "required": ["value", "pid", "version"],
+            "properties": {"value": {"type": "string"}, "pid": {"type": "integer"}, "version": {"type": "string"}}},
         "required_capabilities": ["read"]}
     manifest = {"package_id": "proof.command-ui", "version": "1.0.0", "name": "Command UI proof",
         "target": native_plugin_target("python"), "plugins": [{"id": "commands", "name": "Commands", "instance_scope": "gateway",
@@ -96,9 +96,17 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
                 "keybindings": [{"id": "execute-key", "command_id": "execute", "key": "ctrl+alt+shift+9", "mac": "cmd+alt+shift+9"}],
                 "configuration": {"type": "object", "required": ["output"], "additionalProperties": False,
                     "properties": {"output": {"type": "string"}}}}}]}
-    with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("plugin.jsonc", json.dumps(manifest))
-        archive.writestr("entry.py", ENTRY)
+    packages = {}
+    for version, title, key in (("1.0.0", "命令验收：执行", "9"), ("2.0.0", "命令验收：新版执行", "8")):
+        manifest["version"] = version
+        contributions = manifest["plugins"][0]["contributes"]
+        contributions["commands"][0]["title"] = title
+        contributions["keybindings"][0].update(key=f"ctrl+alt+shift+{key}", mac=f"cmd+alt+shift+{key}")
+        archive_path = context.artifacts_dir / f"command-ui-{version}.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("plugin.jsonc", json.dumps(manifest))
+            archive.writestr("entry.py", ENTRY.replace("VERSION", version))
+        packages[version] = str(archive_path.resolve())
     (workspace / "command-ui.txt").write_text("命令菜单验收\n", encoding="utf-8")
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=plugin_commands_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
@@ -112,13 +120,20 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
             result = subprocess.run(command_line, cwd=context.project_root, timeout=165, check=False, capture_output=True, text=True,
                 env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                     "BOXTEAM_COMMAND_UI_INPUT": json.dumps({"baseUrl": f"http://127.0.0.1:{plugin_commands_port}",
-                        "artifacts": str(context.artifacts_dir), "packagePath": str(archive_path.resolve()), "output": str(output.resolve())})})
+                        "artifacts": str(context.artifacts_dir), "packagePaths": packages, "output": str(output.resolve())})})
         (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
         (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command_line, "exit_code": result.returncode}), encoding="utf-8")
         assert result.returncode == 0, result.stdout + result.stderr
         receipt = json.loads((context.artifacts_dir / "command-ui.json").read_text())
         assert receipt["phase"] == "complete" and receipt["pageErrors"] == [], receipt
-        assert len(output.read_text().splitlines()) == 4, receipt
+        executions = [json.loads(line) for line in output.read_text().splitlines()]
+        assert [item["version"] for item in executions] == ["1.0.0"] * 5 + ["2.0.0"] * 3, receipt
+        assert len({item["call_id"] for item in executions}) == 8
+        assert all(item["request_id"] for item in executions)
+        assert receipt["windowReopenedSameInstance"] and receipt["installedVersionKeptBinding"]
+        assert receipt["uninstalledVersions"] == ["1.0.0", "2.0.0"]
+        assert all(not psutil.pid_exists(pid) for pid in receipt["exitedPids"])
+        assert not (context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/proof.command-ui").exists()
     finally:
         close_gateway_process(gateway)
