@@ -18,6 +18,7 @@ import commentjson
 import httpx
 import psutil
 
+from app.core.resource_uri import parse_resource_uri
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.schemas.gateway.config import GatewayConfigSourceDocumentDTO
@@ -59,6 +60,7 @@ def _plugin_archive(version: str, *, target: dict[str, object] | None = None) ->
             "requires": [
                 {"extension_point": "services", "version": 1},
                 {"extension_point": "configuration", "version": 1},
+                {"extension_point": "skills", "version": 1},
             ],
             "contributes": {
                 "services": [
@@ -68,6 +70,7 @@ def _plugin_archive(version: str, *, target: dict[str, object] | None = None) ->
                     "type": "object",
                     "properties": {"marker": {"type": "string"}},
                 },
+                "skills": [{"id": "guide", "path": "instructions/relay-guide"}],
             },
         }],
     }
@@ -75,6 +78,9 @@ def _plugin_archive(version: str, *, target: dict[str, object] | None = None) ->
     with zipfile.ZipFile(content, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
         archive.writestr("server.py", PLUGIN)
+        archive.writestr("instructions/relay-guide/SKILL.md",
+            f"---\nname: relay-management-guide\ndescription: Relay source proof\n---\nTARGET_B_SKILL_{version} Ω\n")
+        archive.writestr("instructions/relay-guide/reference.txt", f"TARGET_B_REFERENCE_{version}\n")
     return content.getvalue()
 
 
@@ -107,6 +113,37 @@ def test_plugin_management_and_call_relay_to_original_gateway(
     source_thread = threading.Thread(target=source_server.serve_forever, daemon=True)
     source_thread.start()
     evidence: list[dict[str, object]] = []
+    skill_timings: list[dict[str, object]] = []
+
+    def skill_request(*, relay: bool, uri: str | None = None,
+                      operation: str = "read", expected_status: int = 200) -> dict:
+        client = client_a if relay else client_b
+        prefix = "skill-source-connections" if relay else "skill-sources"
+        path = f"/api/gateway/{prefix}/{gateway_b}/workspaces/{network.workspace_id}"
+        request_id = f"plugin-skill-{'relay' if relay else 'native'}-{len(evidence)}"
+        started = time.monotonic()
+        if uri is None:
+            response = client.get(path, headers={"X-Request-ID": request_id})
+        else:
+            response = client.post(path + "/navigation", headers={"X-Request-ID": request_id}, json={
+                "uri": uri, "operation": operation,
+                **({"query": "TARGET_B_REFERENCE", "search_mode": "content"} if operation == "search" else {}),
+            })
+        skill_timings.append({"relay": relay, "operation": "snapshot" if uri is None else operation,
+                              "elapsed_ms": (time.monotonic() - started) * 1000, "request_id": request_id})
+        payload = response.json()
+        evidence.append({"path": path, "request_id": request_id, "status": response.status_code, "body": payload})
+        assert response.status_code == expected_status, response.text
+        assert response.headers["X-Request-ID"] == payload["request_id"] == request_id
+        return payload["data"] if expected_status == 200 else payload
+
+    def skill_snapshot(version: str | None) -> dict:
+        native = skill_request(relay=False)
+        assert skill_request(relay=True) == native
+        assert native["gateway_id"] == gateway_b and native["workspace_id"] == network.workspace_id
+        entries = [entry for entry in native["entries"] if entry.get("plugin")]
+        assert [entry["plugin"]["package_version"] for entry in entries] == ([] if version is None else [version])
+        return native
 
     def exchange(client: httpx.Client, path: str, body: Mapping[str, object], request_id: str,
                  *, remote: bool = True, expected_status: int = 200) -> dict[str, object]:
@@ -232,6 +269,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         inventory_b = PluginInventoryResultDTO.model_validate(exchange(client_a, "/api/gateway/service-plugins/inventory", target,
                                "relay-inventory-b"))
         assert all(package.manifest.package_id != "relay.management.probe" for package in inventory_a.packages)
+        skill_snapshot(None)
         assert all(package.manifest.package_id != "relay.management.probe" for package in inventory_b.packages)
 
         artifacts = {item.package_version: item for item in source.items}
@@ -242,6 +280,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
                                {"gateway_id": gateway_a}, "relay-inventory-a-still-empty", remote=False))
         assert len([package for package in inventory_b.packages if package.manifest.package_id == "relay.management.probe"]) == 1
         assert all(package.manifest.package_id != "relay.management.probe" for package in inventory_a.packages)
+        skill_snapshot(None)
 
         schemas = PluginConfigurationSchemasDTO.model_validate(exchange(client_a, "/api/gateway/service-plugins/configuration-schemas",
                            target, "relay-configuration-schema"))
@@ -266,6 +305,32 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         slot, = [plugin for plugin in status.plugins if plugin.binding.package_id == "relay.management.probe"]
         assert slot.state == "ready" and slot.instance is not None
         instance_id, original_pid = slot.instance.instance_id, slot.instance.process_id
+        first_skills = skill_snapshot("1.0.0")
+        first_entry, = [entry for entry in first_skills["entries"] if entry.get("plugin")]
+        original_uri = first_entry["display_uri"]
+        assert parse_resource_uri(original_uri).scope_id == gateway_b
+        assert first_entry["plugin"]["package_id"] == "relay.management.probe"
+        assert first_entry["plugin"]["workspace_id"] is None
+        root_uri = original_uri.removesuffix("/SKILL.md")
+        for operation, uri in (("read", original_uri), ("list", root_uri), ("search", root_uri)):
+            native_result = skill_request(relay=False, uri=uri, operation=operation)
+            assert skill_request(relay=True, uri=uri, operation=operation) == native_result
+            if operation == "read":
+                assert native_result["content"] == first_entry["content"]
+            elif operation == "list":
+                assert {item["uri"].rsplit("/", 1)[1] for item in native_result["entries"]} == {"SKILL.md", "reference.txt"}
+            else:
+                assert native_result["matches"][0]["text"] == "TARGET_B_REFERENCE_1.0.0"
+        local_sources = client_a.get(
+            f"/api/gateway/skill-sources/{gateway_a}/workspaces/{network.workspace_id}",
+        ).raise_for_status().json()["data"]
+        assert not [entry for entry in local_sources["entries"] if entry.get("plugin")]
+        wrong_owner = client_a.post(
+            f"/api/gateway/skill-sources/{gateway_a}/workspaces/{network.workspace_id}/navigation",
+            json={"uri": original_uri, "operation": "read"},
+        )
+        assert wrong_owner.status_code == 404, wrong_owner.text
+        assert wrong_owner.json()["detail"]["code"] == "unknown_resource"
 
         service = f"/api/gateway/service-plugins/relay.management.probe/streams/instances/{instance_id}/services/events/compressed?package_version=1.0.0"
         payload = "relay call reaches Gateway B native instance 🙂".encode()
@@ -312,6 +377,10 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert revoked.status_code == 403, revoked.text
         assert revoked.headers["X-Request-ID"] == revoked.json()["request_id"] == "relay-plugin-call-revoked"
         assert "send" in revoked.text
+        denied_skill = skill_request(relay=True, uri=original_uri, expected_status=409)
+        assert denied_skill["detail"]["code"] == "authorization-revoked", denied_skill
+        assert denied_skill["detail"]["detail"]["capability"] == "read"
+        assert skill_request(relay=False, uri=original_uri)["content"] == first_entry["content"]
         native_status = PluginRuntimeStatusDTO.model_validate(client_b.post(
             "/api/gateway/service-plugins/status", json=target).raise_for_status().json()["data"])
         retained, = [plugin for plugin in native_status.plugins if plugin.binding.package_id == "relay.management.probe"]
@@ -328,6 +397,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         current, = [item for item in after_install.plugins if item.binding.package_id == "relay.management.probe"]
         assert current.binding.package_version == "1.0.0" and current.instance is not None
         assert current.instance.instance_id == instance_id
+        assert skill_snapshot("1.0.0") == first_skills, "安装新版不能改换正在使用的 Skill 来源"
 
         edit_gateway_b(lambda document: bind(document, "1.1.0"), remote=True)
         switched = PluginRuntimeStatusDTO.model_validate(exchange(client_a, "/api/gateway/service-plugins/status", target, "relay-explicit-version-switch"))
@@ -335,6 +405,13 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert replacement.state == "ready" and replacement.binding.package_version == "1.1.0" and replacement.instance is not None
         replacement_id, replacement_pid = replacement.instance.instance_id, replacement.instance.process_id
         assert replacement_id != instance_id and not psutil.pid_exists(original_pid)
+        second_skills = skill_snapshot("1.1.0")
+        second_entry, = [entry for entry in second_skills["entries"] if entry.get("plugin")]
+        assert second_skills["revision"] != first_skills["revision"]
+        assert second_entry["entry_identity"] != first_entry["entry_identity"]
+        assert second_entry["display_uri"] != original_uri
+        assert "TARGET_B_SKILL_1.1.0" in skill_request(relay=True, uri=second_entry["display_uri"])["content"]
+        skill_request(relay=True, uri=original_uri, expected_status=404)
         old = client_a.post(service, headers={**headers, "X-Request-ID": "relay-old-instance-rejected"},
                             content=gzip.compress(payload))
         assert old.status_code == 409, old.text
@@ -353,6 +430,8 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         closed, = [item for item in stopped.plugins if item.binding.package_id == "relay.management.probe"]
         assert closed.state == "stopped" and closed.instance is None and not closed.binding.enabled
         assert not psutil.pid_exists(replacement_pid)
+        skill_snapshot(None)
+        skill_request(relay=True, uri=second_entry["display_uri"], expected_status=404)
         exchange(client_a, "/api/gateway/service-plugins/uninstall", {
             **target, "package_id": "relay.management.probe", "package_version": "1.1.0",
         }, "relay-disabled-still-referenced", expected_status=409)
@@ -375,7 +454,8 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         (network.context.artifacts_dir / "plugin-management-relay.json").write_text(
             json.dumps({"gateway_ids": [gateway_a, gateway_b], "instance_id": instance_id,
                         "replacement_id": replacement_id, "exited_pids": [original_pid, replacement_pid],
-                        "revoked_status": revoked.status_code, "evidence": evidence},
+                        "revoked_status": revoked.status_code, "skill_timings": skill_timings,
+                        "skill_versions": [first_entry, second_entry], "evidence": evidence},
                        ensure_ascii=False, indent=2), encoding="utf-8",
         )
     finally:
