@@ -1,5 +1,7 @@
 import { join } from 'node:path';
+import ts from 'typescript';
 import { mcpWorkbenchViewSourcePaths, transformMcpWorkbenchView } from './mcpWorkbenchViewTransform.mjs';
+import { pruneUnusedImportsAndConstants } from './extensions/extensionManagementTransform.mjs';
 
 export const mcpSourcePaths = [
   'src/vs/workbench/api/common/extHost.api.impl.ts',
@@ -8,7 +10,17 @@ export const mcpSourcePaths = [
   'src/vs/workbench/contrib/mcp/browser/mcpServerActions.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpServerEditor.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpWorkbenchService.ts',
+  'src/vs/workbench/contrib/mcp/common/mcpTypes.ts',
   'src/vs/workbench/contrib/extensions/browser/extensionsViewlet.ts',
+  'src/vs/workbench/contrib/chat/browser/aiCustomization/mcpListWidget.ts',
+  'src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMarketplaceWorkbenchService.ts',
+  'src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMarketplaceInstallService.ts',
+  'src/vs/workbench/contrib/chat/browser/aiCustomization/aiCustomizationManagementEditor.ts',
+  'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
+  'src/vs/workbench/contrib/chat/common/customizationMarketplaceInstallTelemetry.ts',
+  'src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostCustomizationMarketplaceInstallProvider.ts',
+  'src/vs/platform/customizationMarketplace/common/customizationMarketplaceSources.ts',
+  'src/vs/platform/customizationMarketplace/electron-browser/customizationMarketplaceService.ts',
   ...mcpWorkbenchViewSourcePaths,
 ];
 
@@ -16,6 +28,349 @@ function replaceSection(source, from, to, replacement, replaceOnce) {
   const begin = source.indexOf(from), end = source.indexOf(to, begin + from.length);
   if (begin < 0 || end < 0) throw new Error(`上游 MCP 转换边界缺失：${from} / ${to}`);
   return replaceOnce(source, source.slice(begin, end), replacement);
+}
+
+function removeNodes(path, source, predicate) {
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const edits = [];
+  const visit = node => {
+    if (predicate(node, file)) {
+      edits.push({ start: node.getFullStart(), end: ts.isEnumMember(node) && source[node.end] === ',' ? node.end + 1 : node.end });
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  for (const edit of edits.sort((left, right) => right.start - left.start)) {
+    source = source.slice(0, edit.start) + source.slice(edit.end);
+  }
+  return source;
+}
+
+function removeClassMembers(path, source, className, memberNames) {
+  return removeNodes(path, source, (node, file) => ts.isMethodDeclaration(node)
+    && ts.isClassDeclaration(node.parent)
+    && node.parent.name?.text === className
+    && memberNames.includes(node.name.getText(file)));
+}
+
+function transformRetiredMcpGallery(relative, source, replaceOnce) {
+  let contents = source;
+  if (relative.endsWith('/common/mcpTypes.ts')) {
+    contents = removeNodes(relative, contents, (node, file) =>
+      ts.isMethodSignature(node)
+        && ts.isInterfaceDeclaration(node.parent)
+        && node.parent.name.text === 'IMcpWorkbenchService'
+        && ['queryGallery', 'getMcpServerFromGallery', 'openSearch'].includes(node.name.getText(file))
+      || ts.isEnumMember(node)
+        && ts.isEnumDeclaration(node.parent)
+        && node.parent.name.text === 'McpServerEditorTab'
+        && node.name.getText(file) === 'Manifest'
+      || ts.isVariableStatement(node)
+        && node.declarationList.declarations.some(declaration =>
+          ts.isIdentifier(declaration.name) && declaration.name.text === 'McpServersGalleryStatusContext'));
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+  if (relative.endsWith('/mcpWorkbenchService.ts')) {
+    const classStart = contents.indexOf('export class MCPContextsInitialisation');
+    if (classStart < 0) throw new Error('上游 MCP 初始上下文贡献缺失');
+    const header = contents.slice(0, contents.indexOf('import '));
+    contents = header + `import { Disposable } from '../../../../base/common/lifecycle.js';
+import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+import { IWorkbenchContribution } from '../../../common/contributions.js';
+import { HasInstalledMcpServersContext, IMcpWorkbenchService } from '../common/mcpTypes.js';
+
+export class MCPContextsInitialisation extends Disposable implements IWorkbenchContribution {
+	static ID = 'workbench.mcp.contexts.initialisation';
+
+	constructor(
+		@IMcpWorkbenchService mcpWorkbenchService: IMcpWorkbenchService,
+		@IContextKeyService contextKeyService: IContextKeyService,
+	) {
+		super();
+		const hasInstalledMcpServersContextKey = HasInstalledMcpServersContext.bindTo(contextKeyService);
+		mcpWorkbenchService.whenInitialLocalMcpServersLoaded.then(() => {
+			hasInstalledMcpServersContextKey.set(mcpWorkbenchService.local.length > 0);
+			this._register(mcpWorkbenchService.onChange(() => hasInstalledMcpServersContextKey.set(mcpWorkbenchService.local.length > 0)));
+		});
+	}
+}
+`;
+    return contents;
+  }
+  if (relative.endsWith('/aiCustomization/mcpListWidget.ts')) {
+    contents = removeNodes(relative, contents, (node, file) =>
+      ts.isExpressionStatement(node)
+        && ts.isCallExpression(node.expression)
+        && node.expression.expression.getText(file) === 'this._register'
+        && node.expression.arguments[0]?.getText(file).startsWith('mcpGalleryManifestService.onDidChangeMcpGalleryManifest(')
+      || ts.isIfStatement(node)
+        && node.expression.getText(file) === '!this.isGalleryDiscoveryEnabled()'
+        && node.thenStatement.getText(file).includes('mcpGalleryManifestService.getMcpGalleryManifest()')
+      || ts.isFunctionDeclaration(node)
+        && ['shouldLoadMcpGallerySnapshot', 'shouldShowLegacyMcpGallery'].includes(node.name?.text));
+    contents = replaceOnce(contents, "import { IMcpGalleryManifestService } from '../../../../../platform/mcp/common/mcpGalleryManifest.js';\n", '');
+    contents = replaceOnce(contents, '\t\t@IMcpGalleryManifestService private readonly mcpGalleryManifestService: IMcpGalleryManifestService,\n', '');
+    contents = contents.replaceAll('this.delayedGallerySearch.cancel();\n', '');
+    contents = contents.replaceAll('\t\t\tthis.galleryCts?.dispose(true);\n\t\t\tthis.galleryCts = undefined;\n', '');
+    contents = contents.replaceAll('\t\t\tthis.galleryCts?.dispose(true);\n', '');
+    contents = contents.replaceAll('\t\t\tthis.galleryCts = undefined;\n', '');
+    contents = contents.replaceAll('\t\t\tthis.gallerySnapshotLoading = false;\n', '');
+    contents = contents.replaceAll('\t\t\tthis.gallerySearchLoading = false;\n', '');
+    contents = replaceSection(contents,
+      '\t\tthis._register(this.searchInput.onDidChange(() => {',
+      '\n\n\t\t// Empty state',
+      `\t\tthis._register(this.searchInput.onDidChange(() => {
+			this.searchQuery = this.searchInput.value;
+			this.searchInput.hideMessage();
+			this.delayedFilter.trigger(() => this.filterServers());
+		}));`, replaceOnce);
+    contents = replaceSection(contents,
+      '\tprivate async refresh(): Promise<void> {',
+      '\n\tprivate updateDiscoveryMessage(): void {',
+      `\tprivate async refresh(): Promise<void> {
+		this.updateDiscoveryMessage();
+		this.filterServers();
+	}
+`, replaceOnce);
+    contents = replaceOnce(contents, '\t\t\tif (this.searchQuery.trim() && !this.isGalleryDiscoveryEnabled()) {\n\t\t\t\tvoid this.queryMcpSearch();\n\t\t\t} else {\n\t\t\t\tvoid this.refresh();\n\t\t\t}', '\t\t\tvoid this.refresh();');
+    contents = replaceSection(contents,
+      '\tprivate isGalleryDiscoveryEnabled(): boolean {',
+      '\n\tsetVisible(visible: boolean): void {', '', replaceOnce);
+    contents = replaceSection(contents,
+      '\tpublic showBrowseMarketplace(): void {',
+      '\n\tprivate addSurfaceActivation(', '', replaceOnce);
+    contents = replaceSection(contents,
+      '\tprivate getAvailableGalleryServers(): IWorkbenchMcpServer[] {',
+      '\n\tprivate renderMcpTree(): void {', '', replaceOnce);
+    contents = contents.replace(/^\s*this\.(?:gallerySnapshotServers|galleryServers|gallerySnapshotFailed|gallerySnapshotLoading|gallerySearchLoading)\s*=.*\n/gm, '');
+    contents = replaceOnce(contents, '\t\tconst showGallery = !this.isGalleryDiscoveryEnabled();\n', '');
+    contents = replaceOnce(contents, "\t\t\t['available', showGallery ? this.getAvailableGalleryServers().map(server => ({ type: 'marketplace-item', server })) : []],\n", '');
+    contents = replaceOnce(contents,
+      "\t\t\t{ id: 'available', label: localize('availableMcpServersSection', \"Available\"), description: localize('availableMcpServersSectionDescription', \"Browse and install MCP servers from the marketplace.\"), icon: Codicon.globe },\n", '');
+    contents = replaceOnce(contents,
+      `\t\t].filter(group => group.id === 'available'
+			? showGallery
+			: group.id === 'user' || group.id === 'workspace' || isAICustomizationWorkspaceGroupKey(group.id) || grouped.get(group.id)!.length > 0);`,
+      `\t\t].filter(group => group.id === 'user' || group.id === 'workspace' || isAICustomizationWorkspaceGroupKey(group.id) || grouped.get(group.id)!.length > 0);`);
+    contents = replaceOnce(contents,
+      `\t\t\tthis.emptyText.textContent = this.gallerySearchLoading
+				? localize('searchingMcpMarketplace', "Searching the MCP marketplace...")
+				: this.searchQuery.trim()
+					? localize('noMatchingServers', "No servers match '{0}'", this.searchQuery)
+					: localize('noMcpServersInGroup', "No MCP servers in this group");
+			this.emptySubtext.textContent = this.gallerySearchLoading || !this.searchQuery.trim() ? '' : localize('tryDifferentSearch', "Try a different search term");`,
+      `\t\t\tthis.emptyText.textContent = this.searchQuery.trim()
+				? localize('noMatchingServers', "No servers match '{0}'", this.searchQuery)
+				: localize('noMcpServersInGroup', "No MCP servers in this group");
+			this.emptySubtext.textContent = this.searchQuery.trim() ? localize('tryDifferentSearch', "Try a different search term") : '';`);
+    contents = replaceOnce(contents,
+      "\t\treturn entry.type === 'marketplace-item' ? `marketplace:${entry.server.id}` : getMcpRowKey(entry);",
+      '\t\treturn getMcpRowKey(entry);');
+    contents = replaceSection(contents,
+      '\tprotected appendMarketplaceServerRow(parent: HTMLElement, server: IWorkbenchMcpServer): void {',
+      '\n\tprivate getInstalledEntryDescription(entry: IMcpInstalledEntry): string {', '', replaceOnce);
+    contents = contents.replaceAll("\t\t\t\t\tcase 'marketplace-item':\n", '');
+    contents = contents.replaceAll("\t\t\t\tcase 'marketplace-item':\n", '');
+    contents = replaceOnce(contents, '\t\tconst marketplaceRenderer = new McpMarketplaceItemRenderer((server, button) => this.installMarketplaceServer(server, button));\n', '');
+    contents = replaceOnce(contents, '\t\t\t\tasTreeRenderer(marketplaceRenderer),\n', '');
+    contents = replaceOnce(contents, "\t\t\t\t\t\t\t: entry.type === 'marketplace-item'\n\t\t\t\t\t\t\t\t? localize('marketplaceMcpServerRowAriaLabel', \"{0}. Available to install from the MCP marketplace.\", entry.server.label)\n\t\t\t\t\t\t\t\t: this.getMcpEntryAriaLabel(entry);", '\t\t\t\t\t\t\t: this.getMcpEntryAriaLabel(entry);');
+    contents = replaceOnce(contents, "\t\t\tif (entry.type !== 'marketplace-item' && isConnectorMcpEntry(entry)) {", '\t\t\tif (isConnectorMcpEntry(entry)) {');
+    contents = replaceOnce(contents,
+      "\t\t\tthis._onDidSelectServer.fire(entry.type === 'marketplace-item'\n\t\t\t\t? createWorkbenchMcpServerDetailInput(entry.server)\n\t\t\t\t: this.createInstalledMcpServerDetailInput(entry));",
+      '\t\t\tthis._onDidSelectServer.fire(this.createInstalledMcpServerDetailInput(entry));');
+    contents = replaceOnce(contents,
+      '\t\t// Marketplace (gallery) entries are always clickable so users can install/inspect them,\n\t\t// even when no description is returned by the gallery. Installed rows only opt-in to the\n\t\t// detail view when there is something extra to show.\n\t\tconst isGallery = !element.server.local;\n\t\tconst hasDetail = !!description || isGallery;',
+      '\t\tconst hasDetail = !!description;');
+    contents = replaceOnce(contents, "\t\t\tif (event.element && event.element.type !== 'group-header' && event.element.type !== 'marketplace-item') {", "\t\t\tif (event.element && event.element.type !== 'group-header') {");
+    contents = replaceOnce(contents, "\t\t\titemRenderer.setFocusedRowKey(entry && entry.type !== 'group-header' && entry.type !== 'marketplace-item' ? getMcpRowKey(entry) : undefined);\n\t\t\tmarketplaceRenderer.setFocusedServerId(entry?.type === 'marketplace-item' ? entry.server.id : undefined);", "\t\t\titemRenderer.setFocusedRowKey(entry && entry.type !== 'group-header' ? getMcpRowKey(entry) : undefined);");
+    contents = replaceSection(contents,
+      'interface IMcpMarketplaceItemTemplateData {',
+      '\nfunction createMcpStartButton(', '', replaceOnce);
+    contents = replaceOnce(contents,
+      "interface IMcpMarketplaceEntry {\n\treadonly type: 'marketplace-item';\n\treadonly server: IWorkbenchMcpServer;\n}\n\n", '');
+    contents = replaceOnce(contents, 'type IMcpSectionEntry = IMcpGroupHeaderEntry | IMcpInstalledEntry | IMcpMarketplaceEntry;', 'type IMcpSectionEntry = IMcpGroupHeaderEntry | IMcpInstalledEntry;');
+    contents = replaceOnce(contents, "\t\treturn element.type === 'marketplace-item' ? MCP_MARKETPLACE_ITEM_HEIGHT : this.getInstalledHeight(element);", '\t\treturn this.getInstalledHeight(element);');
+    contents = replaceOnce(contents, "\t\treturn element.type === 'marketplace-item' ? 'mcpMarketplaceItem' : 'mcpServerItem';", "\t\treturn 'mcpServerItem';");
+    contents = replaceOnce(contents, 'const MCP_MARKETPLACE_ITEM_HEIGHT = 58;\n', '');
+    contents = replaceSection(contents,
+      '\t/**\n\t * Whether this entry originates from a marketplace browse result.',
+      '\treadonly marketplaceRecord?: IRecordedCustomizationMarketplaceResource;', '', replaceOnce);
+    contents = replaceOnce(contents,
+      '\t\t\treturn `server:${entry.server.id}:${entry.marketplace ? 1 : 0}`;',
+      '\t\t\treturn `server:${entry.server.id}`;');
+    contents = replaceOnce(contents,
+      '\t\t@ITelemetryService private readonly telemetryService: ITelemetryService,\n', '');
+    contents = contents.replaceAll('\tprivate gallerySnapshotServers: IWorkbenchMcpServer[] = [];\n', '');
+    contents = contents.replaceAll('\tprivate galleryServers: IWorkbenchMcpServer[] = [];\n', '');
+    contents = contents.replaceAll('\tprivate gallerySnapshotFailed = false;\n', '');
+    contents = contents.replaceAll('\tprivate gallerySnapshotLoading = false;\n', '');
+    contents = contents.replaceAll('\tprivate gallerySearchLoading = false;\n', '');
+    contents = contents.replaceAll('\tprivate galleryCts: CancellationTokenSource | undefined;\n', '');
+    contents = contents.replaceAll('\tprivate readonly delayedGallerySearch = new Delayer<void>(400);\n', '');
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/customizationMarketplaceSources.ts')) {
+    contents = replaceOnce(contents, "import { mcpGalleryServiceUrlConfig } from '../../mcp/common/mcpManagement.js';\n", '');
+    contents = replaceSection(contents,
+      '\tMcpGallery: {',
+      '\tAgentFinderPublicFeed: {', '', replaceOnce);
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/customizationMarketplaceWorkbenchService.ts')) {
+    contents = replaceOnce(contents, "type CustomizationMarketplaceBrowseSourceCategory = 'mcpGallery' | ", "type CustomizationMarketplaceBrowseSourceCategory = ");
+    contents = replaceSection(contents,
+      "\tif (sourceId === CustomizationMarketplaceSources.McpGallery.id) {",
+      "\tif (sourceId === CustomizationMarketplaceSources.CopilotConnectors.id) {", '', replaceOnce);
+    contents = replaceSection(contents,
+      'export class PlatformCustomizationMarketplaceWorkbenchService implements ICustomizationMarketplaceService {',
+      '\nexport class CustomizationMarketplaceWorkbenchService',
+      `export class PlatformCustomizationMarketplaceWorkbenchService implements ICustomizationMarketplaceService {
+	declare readonly _serviceBrand: undefined;
+	readonly allSources: readonly ICustomizationMarketplaceSourceInfo[] = [];
+	readonly sources = this.allSources;
+	private readonly service: Lazy<CustomizationMarketplaceService>;
+
+	constructor(@IConfigurationService private readonly configurationService: IConfigurationService) {
+		this.service = new Lazy(() => new CustomizationMarketplaceService([]));
+	}
+
+	query(options: ICustomizationMarketplaceQuery, token: CancellationToken, onProgress?: CustomizationMarketplaceQueryProgressCallback): Promise<ICustomizationMarketplacePage> {
+		return queryEnabledCustomizationMarketplaceSources(
+			this.configurationService, this.sources, options, token,
+			(request, token, onProgress) => this.service.value.query(request, token, onProgress),
+			onProgress,
+		);
+  }
+}
+`, replaceOnce);
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/electron-browser/customizationMarketplaceService.ts')) {
+    contents = replaceSection(contents,
+      'export class NativeCustomizationMarketplaceService implements ICustomizationMarketplaceService {',
+      '\nregisterSingleton(IPlatformCustomizationMarketplaceService',
+      `export class NativeCustomizationMarketplaceService implements ICustomizationMarketplaceService {
+	declare readonly _serviceBrand: undefined;
+	readonly allSources: readonly ICustomizationMarketplaceSourceInfo[] = [];
+	readonly sources = this.allSources;
+	private readonly service: Lazy<CustomizationMarketplaceService>;
+
+	constructor(@IConfigurationService private readonly configurationService: IConfigurationService) {
+		this.service = new Lazy(() => new CustomizationMarketplaceService([]));
+	}
+
+	query(options: ICustomizationMarketplaceQuery, token: CancellationToken, onProgress?: CustomizationMarketplaceQueryProgressCallback): Promise<ICustomizationMarketplacePage> {
+		return queryEnabledCustomizationMarketplaceSources(
+			this.configurationService, this.sources, options, token,
+			(request, token, onProgress) => this.service.value.query(request, token, onProgress),
+			onProgress,
+		);
+	}
+}
+`, replaceOnce);
+    contents = replaceOnce(contents,
+      'CustomizationMarketplaceQueryProgressCallback, CustomizationMarketplaceService, ICustomizationMarketplacePage, ICustomizationMarketplaceQuery, ICustomizationMarketplaceService',
+      'CustomizationMarketplaceQueryProgressCallback, CustomizationMarketplaceService, ICustomizationMarketplacePage, ICustomizationMarketplaceQuery, ICustomizationMarketplaceService, ICustomizationMarketplaceSourceInfo');
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/customizationMarketplaceInstallService.ts')) {
+    contents = replaceOnce(contents,
+      "import { IMcpGalleryManifest, IMcpGalleryManifestService } from '../../../../../platform/mcp/common/mcpGalleryManifest.js';\n", '');
+    contents = replaceOnce(contents,
+      '\t\t@IMcpGalleryManifestService private readonly mcpGalleryManifestService: IMcpGalleryManifestService,\n', '');
+    for (const snippet of [
+      "\t\tif (!installedSource && resourceSource?.kind === 'mcpGallery' && installed.mediaType === CustomizationMarketplaceMediaType.McpServer) {\n\t\t\treturn installed.identifier === resourceSource.name;\n\t\t}\n",
+      "\t\tif (source?.kind === 'mcpGallery') {\n\t\t\treturn source.cardUrl;\n\t\t}\n",
+    ]) {
+      if (contents.includes(snippet)) contents = replaceOnce(contents, snippet, '');
+    }
+    contents = replaceOnce(contents,
+      "\t\tconst itemUrl = installation?.kind === 'providerCatalog'\n\t\t\t? installation.itemUrl\n\t\t\t: installation?.kind === 'mcpGallery' ? installation.cardUrl : undefined;",
+      "\t\tconst itemUrl = installation?.kind === 'providerCatalog' ? installation.itemUrl : undefined;");
+    contents = replaceOnce(contents,
+      "\t\t\t\tconst installed = this.mcpWorkbenchService.local.find(server => server.id === target.id && server.installState === McpServerInstallState.Installed)\n\t\t\t\t\t?? (record.installation.kind === 'mcpGallery' ? this.getInstalledGalleryMcpServer(record.installation) : undefined);",
+      "\t\t\t\tconst installed = this.mcpWorkbenchService.local.find(server => server.id === target.id && server.installState === McpServerInstallState.Installed);");
+    contents = replaceOnce(contents,
+      "\t\tif (association.target.kind === 'mcp') {\n\t\t\treturn source?.kind === 'mcpGallery' && !!this.getInstalledGalleryMcpServer(source);\n\t\t}\n",
+      "\t\tif (association.target.kind === 'mcp') {\n\t\t\treturn false;\n\t\t}\n");
+    contents = replaceOnce(contents, "kind === 'skill' || kind === 'mcp' || kind === 'mcpGallery' ||", "kind === 'skill' || kind === 'mcp' ||");
+    contents = replaceOnce(contents, "installation.kind === 'skill' || installation.kind === 'mcp' || installation.kind === 'mcpGallery' ||", "installation.kind === 'skill' || installation.kind === 'mcp' ||");
+    contents = replaceSection(contents,
+      '\t\tconst ownerAssociation = this.findRecord(resource);',
+      '\t\tconst recorded = providerBinding ? undefined : this.installations.get().findByResource(resource);', '', replaceOnce);
+    contents = replaceSection(contents,
+      '\t\tconst record = this.findRecord(resource);\n\t\tif (!record) {',
+      '\n\t}\n\n\tprivate async doUninstall',
+      `\t\tthrow new Error(localize('customizationMarketplace.uninstallUnavailable', "This customization has no supported uninstall owner."));\n`, replaceOnce);
+    contents = removeClassMembers(relative, contents, 'CustomizationMarketplaceInstallService', [
+      'doUninstall', 'getInstalledGalleryMcpServer', 'isMcpGallerySourceCurrent', 'getMcpGalleryManifest',
+      'isOwnerAssociationCurrent', 'associateInstalledResource',
+    ]);
+    contents = removeNodes(relative, contents, (node, file) =>
+      ts.isIfStatement(node) && node.expression.getText(file) === "source.kind === 'mcpGallery'"
+      || ts.isTypeAliasDeclaration(node) && node.name.text === 'McpGalleryInstallation');
+    contents = replaceSection(contents,
+      '\t\toperationDisposables.add(this.configurationService.onDidChangeConfiguration(event => {',
+      '\n\t\tconst operation = runCustomizationMarketplaceInstallWithTelemetry(',
+      `\t\toperationDisposables.add(this.configurationService.onDidChangeConfiguration(event => {
+\t\t\tif (!this.isSourceEnabled(resource.sourceId)) {
+\t\t\t\toperationDisposables.dispose();
+\t\t\t}
+\t\t}));
+`, replaceOnce);
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/aiCustomizationManagementEditor.ts')) {
+    contents = replaceOnce(contents,
+      "import { normalizeMcpGalleryUrl } from '../../../../../platform/customizationMarketplace/common/mcpGalleryMarketplaceProvider.js';\n", '');
+    contents = replaceOnce(contents,
+      "\t\tconst sourceIds = (githubRegistry\n\t\t\t? [CustomizationMarketplaceSources.AgentFinderPublicFeed.id, CustomizationMarketplaceSources.McpGallery.id]\n\t\t\t: [CustomizationMarketplaceSources.McpGallery.id])\n\t\t\t.filter(id => sources.some(source => source.id === id));",
+      "\t\tconst sourceIds = githubRegistry && sources.some(source => source.id === CustomizationMarketplaceSources.AgentFinderPublicFeed.id)\n\t\t\t? [CustomizationMarketplaceSources.AgentFinderPublicFeed.id]\n\t\t\t: [];");
+    contents = replaceSection(contents,
+      "\t\t\t\t\tif (sourceId === CustomizationMarketplaceSources.McpGallery.id) {",
+      '\n\t\t\t\t});',
+      `\t\t\t\t\treturn (getGitHubMcpRegistryResourceIdentity(item.identifier)
+						?? getGitHubMcpRegistryIdentity(installation?.kind === 'providerCatalog' ? installation.itemUrl : undefined)) === name;`, replaceOnce);
+    contents = replaceOnce(contents,
+      '\t\t\t\tcursor = sourceId === CustomizationMarketplaceSources.McpGallery.id ? page.nextCursor : undefined;',
+      '\t\t\t\tcursor = undefined;');
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/chat.shared.contribution.ts')) {
+    contents = replaceSection(contents,
+      '\t\t[mcpGalleryServiceEnablementConfig]: {',
+      '\t\t[PromptsConfig.INSTRUCTIONS_LOCATION_KEY]: {', '', replaceOnce);
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/customizationMarketplaceInstallTelemetry.ts')) {
+    contents = replaceOnce(contents, "export type AvailableCustomizationMarketplaceInstallType = 'mcpServer' | 'plugin';", "export type AvailableCustomizationMarketplaceInstallType = 'plugin';");
+    contents = replaceOnce(contents,
+      "\treturn customizationType === 'mcpServer'\n\t\t? { surface: 'available', customizationType, installKind: 'mcpGallery', origin: 'search' }\n\t\t: { surface: 'available', customizationType, installKind: 'configuredPlugin', origin: 'search' };",
+      "\treturn { surface: 'available', customizationType, installKind: 'configuredPlugin', origin: 'search' };");
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  if (relative.endsWith('/agentHostCustomizationMarketplaceInstallProvider.ts')) {
+    contents = replaceOnce(contents,
+      "\t\tif (installation?.kind === 'mcpGallery' && !installation.cardUrl) {\n\t\t\treturn localize('agentHost.customizationInstall.mcpGalleryIdentityUnavailable', \"This MCP Gallery entry does not provide the server card URL required for Copilot installation.\");\n\t\t}\n", '');
+    contents = replaceSection(contents,
+      "\t\tif (installation?.kind === 'mcpGallery') {",
+      "\t\tif (installation?.kind !== 'skill' && installation?.kind !== 'mcp') {", '', replaceOnce);
+    contents = replaceOnce(contents,
+      "\t\t\tif (installation?.kind !== 'providerCatalog' && installation?.kind !== 'mcpGallery') {",
+      "\t\t\tif (installation?.kind !== 'providerCatalog') {");
+    return pruneUnusedImportsAndConstants(relative, contents);
+  }
+
+  return contents;
 }
 
 /** 固定上游保留原 UI／命令；从注册点移除其项目 MCP 的第二 client／配置发现链。 */
@@ -126,20 +481,21 @@ export function transformMcp(root, path, source, replaceOnce) {
       if (begin < 0 || end < 0 || run < 0) throw new Error(`上游 MCP 生命周期命令 seam 缺失：${name}`);
       contents = replaceOnce(contents, original, original.slice(0, run) + `\n\toverride run(accessor: ServicesAccessor, serverId: unknown, options?: { waitForLiveTools?: boolean }): Promise<void> { return runWorkspaceMcpCommand(accessor, serverId, '${action}', options); }\n}\n\n`);
     }
-    contents = replaceOnce(contents, "\t\tconst extensionsWorkbenchService = accessor.get(IExtensionsWorkbenchService);\n\t\tconst viewsService = accessor.get(IViewsService);\n\t\tawait extensionsWorkbenchService.openSearch('');\n\t\tawait viewsService.openView(InstalledMcpServersViewId, true);", "\t\tawait accessor.get(IMcpWorkbenchService).openSearch('');");
+    contents = replaceOnce(contents, "\t\tconst extensionsWorkbenchService = accessor.get(IExtensionsWorkbenchService);\n\t\tconst viewsService = accessor.get(IViewsService);\n\t\tawait extensionsWorkbenchService.openSearch('');\n\t\tawait viewsService.openView(InstalledMcpServersViewId, true);", "\t\tawait accessor.get(IExtensionsWorkbenchService).openSearch('@mcp');");
     contents = replaceOnce(contents, '\t\tawait accessor.get(ICommandService).executeCommand(\n\t\t\tAICustomizationManagementCommands.OpenMarketplace,\n\t\t\tAICustomizationManagementSection.McpServers,\n\t\t);', "\t\tawait accessor.get(IMcpWorkbenchService).openSearch('');");
+    contents = contents.replaceAll("await accessor.get(IMcpWorkbenchService).openSearch('');", "await accessor.get(IExtensionsWorkbenchService).openSearch('@mcp');");
     contents = replaceOnce(contents, "McpConnectionState.toString(server.connectionState.read(reader)),", "server instanceof WorkspaceMcpServer ? server.statusLabel : McpConnectionState.toString(server.connectionState.read(reader)),");
     // 下线的写链与第二 client 依赖不进入本运行面；保留原列表和仍开放命令需要的导入。
     const commandImports = new Set([
       'Codicon', 'ThemeIcon', 'URI', 'groupBy', 'DisposableStore', 'autorun', 'ILocalizedString', 'localize', 'localize2',
-      'Action2', 'MenuId', 'MenuRegistry', 'ICommandService', 'ContextKeyExpr', 'IInstantiationService',
+      'Action2', 'MenuId', 'MenuRegistry', 'ICommandService', 'IExtensionsWorkbenchService', 'ContextKeyExpr', 'IInstantiationService',
       'ServicesAccessor', 'ILogService', 'mcpAutoStartConfig', 'McpAutoStartValue', 'INotificationService',
       'IQuickInputService', 'IQuickPickItem', 'IQuickPickSeparator', 'RemoteNameContext',
       'WorkbenchStateContext', 'WorkspaceFolderCountContext',
       'ChatContextKeys', 'ChatModeKind',
       'isContributionDisabled', 'extensionsFilterSubMenu', 'McpCommandIds',
       'McpContextKeys', 'HasInstalledMcpServersContext', 'IMcpServer', 'IMcpService',
-      'IMcpWorkbenchService', 'InstalledMcpServersViewId', 'McpConnectionState', 'McpResourceQuickAccess', 'McpResourceQuickPick',
+      'InstalledMcpServersViewId', 'McpConnectionState', 'McpResourceQuickAccess', 'McpResourceQuickPick',
     ]);
     contents = contents.replace(/^import \{ ([^}]+) \} from ([^\n]+);$/gm, (_line, imports, module) => {
       const retained = imports.split(', ').filter(name => commandImports.has(name));
@@ -205,7 +561,7 @@ export function transformMcp(root, path, source, replaceOnce) {
       this.instantiationService.createInstance(AuthServerAction),
     ];
 `, replaceOnce);
-    contents = replaceOnce(contents, 'if (extension.readmeUrl || extension.gallery?.readme) {', 'if (extension instanceof WorkspaceMcpServer || extension.readmeUrl || extension.gallery?.readme) {');
+    contents = replaceOnce(contents, 'if (extension.readmeUrl || extension.gallery?.readme) {', 'if (extension instanceof WorkspaceMcpServer || extension.readmeUrl) {');
     contents = replaceOnce(contents, 'private mcpServerManifest: Cache<IGalleryMcpServerConfiguration> | null;', `private mcpServerManifest: Cache<IGalleryMcpServerConfiguration> | null;
 private readonly workspaceMcpObservation = this._register(new MutableDisposable());
 protected override setEditorVisible(visible: boolean): void {
@@ -225,6 +581,37 @@ if (extension instanceof WorkspaceMcpServer) {
   if (template.navbar.currentId === McpServerEditorTab.Readme) this.onNavbarChange(extension, { id: McpServerEditorTab.Readme, focus: false }, template);
 }`);
     contents = serverImport + contents;
+    contents = removeClassMembers(relative, contents, 'McpServerEditor', [
+      'openManifestWithAdditionalDetails', 'openManifest', 'renderManifestDetails', 'renderAdditionalDetails',
+    ]);
+    contents = removeNodes(relative, contents, (node, file) =>
+      ts.isClassDeclaration(node) && node.name?.text === 'AdditionalDetailsWidget'
+      || ts.isPropertyDeclaration(node)
+        && ts.isClassDeclaration(node.parent)
+        && node.parent.name?.text === 'McpServerEditor'
+        && node.name.getText(file) === 'mcpServerManifest'
+      || ts.isExpressionStatement(node)
+        && node.expression.getText(file) === 'this.mcpServerManifest = new Cache(() => mcpServer.getManifest(token))'
+      || ts.isExpressionStatement(node)
+        && node.expression.getText(file) === 'this.mcpServerManifest = null'
+      || ts.isExpressionStatement(node)
+        && node.expression.getText(file) === "template.name.classList.toggle('clickable', !!mcpServer.gallery?.webUrl)"
+      || ts.isIfStatement(node)
+        && node.expression.getText(file) === 'mcpServer.gallery?.webUrl'
+      || ts.isIfStatement(node)
+        && node.expression.getText(file) === 'extension.gallery || extension.local?.manifest'
+      || ts.isCaseClause(node)
+        && node.expression.getText(file) === 'McpServerEditorTab.Manifest'
+      || ts.isExpressionStatement(node)
+        && node.expression.getText(file) === 'this.renderAdditionalDetails(additionalDetailsContainer, extension)'
+      || ts.isVariableStatement(node)
+        && node.declarationList.declarations.some(declaration =>
+          ts.isIdentifier(declaration.name) && declaration.name.text === 'additionalDetailsContainer')
+      || ts.isEnumMember(node)
+        && ts.isEnumDeclaration(node.parent)
+        && node.parent.name.text === 'McpServerEditorTab'
+        && node.name.getText(file) === 'Manifest');
+    return pruneUnusedImportsAndConstants(relative, contents);
   }
   if (relative.endsWith('/mcpServersView.ts')) {
     // 原列表的 hidden 规则归 Extensions 容器；项目面板在可移动视图自身接回原样式作用域。
@@ -257,9 +644,6 @@ this._register(this.mcpWorkbenchService.onReset(() => {
     contents = replaceOnce(contents, 'disposables.add(this.mcpWorkbenchService.onReset(() => onDidChangeModel.fire(new PagedModel([...this.mcpWorkbenchService.local]))));', 'disposables.add(this.mcpWorkbenchService.onReset(() => { servers = [...this.mcpWorkbenchService.local]; onDidChangeModel.fire(new PagedModel(servers)); }));');
     contents = `import { observeWorkspaceMcpView, WorkspaceMcpWorkbenchService } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};\n` + contents;
   }
-  if (relative.endsWith('/mcpWorkbenchService.ts')) {
-    // Context key 复用唯一 owner 已处理真实错误的初次读取，避免另起查询留下未处理拒绝。
-    contents = replaceOnce(contents, 'mcpWorkbenchService.queryLocal().finally(() => {', 'mcpWorkbenchService.whenInitialLocalMcpServersLoaded.then(() => {');
-  }
+  contents = transformRetiredMcpGallery(relative, contents, replaceOnce);
   return transformMcpWorkbenchView(relative, contents, replaceOnce, replaceSection);
 }
