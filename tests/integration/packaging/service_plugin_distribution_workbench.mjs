@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 // 驱动也只用发行物的 Node、Playwright 和 Chromium，不借开发依赖。
 const input = JSON.parse(process.env.BOXTEAM_DISTRIBUTION_WORKBENCH);
+const localOrigins = new Set([new URL(input.baseUrl).origin]);
 const { chromium, _electron, expect } = await import(pathToFileURL(path.join(input.application, 'node_modules/playwright/test.mjs')).href);
 const result = { phase: 'initialize', pageErrors: [], externalRequests: [], exitedPids: [], calls: [],
   native: { launches: [], exits: [], storageErrors: [] } };
@@ -23,7 +24,8 @@ const observePage = next => {
   page.on('request', request => {
     const url = new URL(request.url());
     const document = new URL(next.url());
-    if (['http:', 'https:'].includes(url.protocol) && document.protocol === 'http:' && url.origin !== document.origin) {
+    if (['http:', 'https:'].includes(url.protocol) && document.protocol === 'http:'
+      && url.origin !== document.origin && !localOrigins.has(url.origin)) {
       result.externalRequests.push(request.url());
     }
   });
@@ -44,6 +46,8 @@ const openNative = async () => {
   observePage(await nativeApp.firstWindow());
   await page.waitForURL(url => url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.pathname === '/',
     { waitUntil: 'domcontentloaded' });
+  location.rendererUrl = page.url();
+  localOrigins.add(new URL(location.rendererUrl).origin);
   assert.deepEqual(await page.evaluate(() => [typeof globalThis.require, typeof globalThis.process]), ['undefined', 'undefined']);
 };
 const closeNative = async () => {
@@ -64,6 +68,7 @@ try {
     await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   }
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  const workbenchUrl = page.url();
   const api = (url, body, raw = false) => page.evaluate(async ({ url, body, raw }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(url, { method: body ? 'POST' : 'GET',
@@ -132,7 +137,7 @@ try {
   assert.equal(browserSockets.length, 2);
   assert.ok(browserSockets.every(({ path }) => path.includes(`/instances/${attachment.instanceId}/`)));
   result.browserAttachment = { ...attachment, pixel: await pixel(), reconnected: true, connections: browserSockets.length };
-  await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+  await page.goto(workbenchUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   const target = { gateway_id: active.gateway_id };
   const slots = async () => Object.fromEntries((await api('/api/gateway/service-plugins/status', target)).plugins
@@ -189,8 +194,64 @@ try {
   }
   const original = await slots();
   assert.notEqual(original.python.instance.process_id, original.node.instance.process_id);
+  result.phase = 'session-and-settings';
+  const session = await api('/api/v1/sessions', { title: '发行客户端恢复', agent_id: 'default' });
+  const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`);
+  const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
+    await globalThis.workbench.commands.executeCommand(id, ...args);
+  }, { id, args });
+  await command('_workbench.open', `boxteam-thread://${active.gateway_id}/${active.workspace_id}/${session.session_id}/${main.thread_id}`,
+    [undefined, { pinned: true }]);
+  const thread = () => page.locator(`section.boxteam-thread[data-workspace-id="${active.workspace_id}"]`
+    + `[data-session-id="${session.session_id}"][data-thread-id="${main.thread_id}"]`);
+  const prompt = '验证发行客户端会话与设置恢复。';
+  await thread().getByTestId('composer-input').fill(prompt);
+  const acceptedResponse = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === `/api/v1/sessions/${session.session_id}/threads/${main.thread_id}/messages`);
+  await thread().getByTestId('composer-send').click();
+  const acceptedReply = await acceptedResponse;
+  assert.equal(acceptedReply.status(), 200);
+  const acceptance = await acceptedReply.json();
+  assert.equal(acceptance.request_id, acceptedReply.headers()['x-request-id']);
+  const accepted = acceptance.data;
+  assert.equal(accepted.thread_id, main.thread_id);
+  await expect.poll(async () => {
+    const job = await api(`/api/v1/jobs/${accepted.job_id}`);
+    assert.ok(!['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status), JSON.stringify(job));
+    return job.status;
+  }, { timeout: 30_000 }).toBe('completed');
+  await expect(thread()).toContainText('发行会话恢复成功。');
+  const history = () => api(`/api/v1/sessions/${session.session_id}/threads/${main.thread_id}/history`,
+    { turn_ids: [accepted.turn_id], include: ['user', 'assistant_text', 'final_response'] });
+  const beforeHistory = await history();
+  assert.equal(beforeHistory.items.length, 1);
+  assert.equal(beforeHistory.items[0].turn_id, accepted.turn_id);
+  assert.ok(beforeHistory.items[0].source_message_ids.includes(accepted.message_id));
+  await command('workbench.action.openWorkspaceSettingsFile');
+  const settings = page.getByRole('dialog', { name: /settings\.json$/ });
+  const editor = settings.locator('.monaco-editor [role="textbox"]');
+  await editor.focus(); await editor.press('ControlOrMeta+A');
+  await page.keyboard.insertText('{"editor.fontSize":19}\n');
+  await expect(settings.locator('.view-lines')).toContainText('"editor.fontSize":19');
+  await command('workbench.action.files.save');
+  await command('workbench.action.closeActiveEditor');
+  await expect(thread().getByTestId('composer-input')).toBeVisible();
   if (input.electron) { await closeNative(); await openNative(); }
   else await page.reload({ waitUntil: 'domcontentloaded' });
+  assert.equal(page.url(), workbenchUrl);
+  await expect(thread().getByTestId('composer-input')).toBeVisible();
+  await expect(thread()).toContainText(prompt);
+  await expect(thread()).toContainText('发行会话恢复成功。');
+  assert.deepEqual(await history(), beforeHistory);
+  await command('workbench.action.openWorkspaceSettingsFile');
+  const restoredSettings = page.getByRole('dialog', { name: /settings\.json$/ });
+  await expect(restoredSettings.locator('.view-lines')).toContainText('"editor.fontSize":19');
+  await expect.poll(() => restoredSettings.locator('.view-line').first()
+    .evaluate(element => getComputedStyle(element).fontSize)).toBe('19px');
+  await command('workbench.action.closeActiveEditor');
+  result.sessionRecovery = { sessionId: session.session_id, threadId: main.thread_id,
+    turnId: accepted.turn_id, messageId: accepted.message_id, requestId: acceptance.request_id,
+    sourceMessageIds: beforeHistory.items[0].source_message_ids, restoredFontSize: 19 };
   await openManagement();
   view = page.locator('.service-plugin-packages-view');
   quick = page.locator('.quick-input-widget');

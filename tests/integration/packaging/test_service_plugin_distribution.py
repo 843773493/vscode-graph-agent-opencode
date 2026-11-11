@@ -22,6 +22,7 @@ import psutil
 import pytest
 from websockets.sync.client import connect
 
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugin_dependency_preparation import (
     _dependency_wheel,
@@ -32,6 +33,7 @@ from tests.integration.gateway.test_terminal_plugin_lifecycle import (
     _receive_output,
     _wait_for_plugin,
 )
+from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import install_plugin
 from tests.support.ports import integration_port_block_for_file
@@ -45,7 +47,35 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="本用例验证
 
 
 @pytest.fixture
-def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx.Client, TestRunContext, Path, Path]]:
+def distribution_model_stream(request: pytest.FixtureRequest) -> Path:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    runtime = context.runtime_root_for_node(request.node.nodeid)
+    assets = runtime / "model-stream-assets"
+    (assets / "scenarios").mkdir(parents=True)
+    cassette = build_cassette(asset_id="distribution-session", model="distribution-session",
+        url="http://distribution-model.invalid/v1/chat/completions",
+        frames=chat_completion_frames(response_id="chatcmpl-distribution-session", model="distribution-session",
+            deltas=[{"role": "assistant", "content": "发行会话恢复成功。"}], finish_reason="stop"))
+    (assets / "session.json").write_text(json.dumps(cassette.raw, ensure_ascii=False), encoding="utf-8")
+    (assets / "scenarios/basic-chat-tool-loop.jsonc").write_text(json.dumps({
+        "scenario_id": "basic-chat-tool-loop", "asset": "session.json",
+        "business_assertion": "relocated-distribution-session-reopen",
+    }), encoding="utf-8")
+    config_path = prepare_e2e_model_stream_config(
+        Path.cwd() / "configs/tests/model_stream/model_stream_web_basic_chat_tool_loop.jsonc",
+        runtime_root=runtime, artifacts_dir=context.artifacts_dir,
+        mode="replay",
+    ).resolve()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["model_stream"]["transport"]["fixture_root"] = str(assets)
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    return config_path
+
+
+@pytest.fixture
+def distribution_gateway(request: pytest.FixtureRequest,
+    distribution_model_stream: Path,
+) -> Iterator[tuple[httpx.Client, TestRunContext, Path, Path]]:
     asset_input = os.environ.get("BOXTEAM_TEST_RUNTIME_ASSET")
     if not asset_input:
         pytest.skip("需要 BOXTEAM_TEST_RUNTIME_ASSET 指向已构建的 Linux runtime tgz")
@@ -78,9 +108,14 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=application / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        if "api_key" in provider:
-            provider["api_key"] = "distribution-plugin-unused-key"
+    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
+    provider.update(endpoint="http://distribution-model.invalid/v1", model="distribution-session",
+        api_key="distribution-plugin-unused-key", custom_llm_provider="openai")
+    for item in config["llm"]["providers"]:
+        if "api_key" in item:
+            item["api_key"] = "distribution-plugin-unused-key"
+    for agent in config["agents"].values():
+        agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config), encoding="utf-8")
     (workspace / "distribution-debug.mjs").write_text(
@@ -102,6 +137,7 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace), "WORKSPACE_ROOT": str(workspace),
         "BOXTEAM_GATEWAY_URL": gateway_url, "BOXTEAM_DEFAULT_BACKEND_PORT": str(backend_port),
         "PATH": str(empty_path), "XDG_CACHE_HOME": str(runtime / "empty-cache"),
+        "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(distribution_model_stream),
         "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"})
     command = [str(python), "-m", "configs.boxteam", "initialize", "--project-root", str(application)]
     initialized = subprocess.run(command, cwd=application, env=environment,
