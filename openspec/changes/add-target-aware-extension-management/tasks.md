@@ -16,7 +16,8 @@
   - 2026-11-09 管理能力准入收口：启动与接管共用 ready 校验，缺 status／shutdown／observation 任一管理能力不发布实例；诊断请求删除重复能力检查。通用 Python／Node、依赖包及流式测试迁到正式公共管理实现，保留错误 ready、缺能力、关闭失败与业务流故障。精确候选真实 Gateway 双插件安装／私有参数／重启／换版／拒绝缺能力及无 uv 依赖包两项通过（59.35秒）；原流式与诊断两项通过，Terminal 真实停止短测通过。首轮两失败确认为测试配置缺失模型环境凭据，fixture 改用不调用模型的占位密钥后补验；不改产品或放宽断言。原件见 `out/tests/temp/2026/11/09/plugin_readiness/artifacts/`。1.4 含未完成的完整扩展注册范围，继续保持未勾选。
   - 2026-11-11 本切片证据：具名 `PluginShutdownDTO` 经 proto、Pydantic 与各语言生成物同步；Gateway 校验 accepted、process_id、instance_id 与原实例一致，错误回执仍在确认实际进程退出后报关闭失败。具名命令 NDJSON OpenAPI 逐行引用 `PluginCommandEventDTO`，与 proto descriptor 对齐。错误 shutdown 回执真实 Gateway 场景 1 passed／128.01 秒；命令进度／取消 1 passed／54.67 秒；诊断 apply/status/统计及重启继承 1 passed／64.72 秒；双 Gateway Relay 事件序列化 1 passed／55.04 秒。协议生成一致性、OpenAPI descriptor、Workbench typecheck、相关 Pyright 9 文件零诊断及合同测试通过；129 个协议／准入单测通过。证据和命令见 `out/tests/temp/2026/11/11/plugin_protocol_admission/artifacts/verification.json`。此记录只关闭本合同切片，不代表七类扩展点完整产品验收。
 - [x] 1.5 登记独立 service_plugin_installation_manage／service_plugin_runtime_manage，迁齐默认拒绝、原生目标／Relay 判权与 schema；配置和业务访问仍使用原 owner 权限，旧三项安装／宿主能力消费者全部清理。
-- [ ] 1.6 核对两个已验收 release 基线和实际持久合同，给出受支持来源的显式迁移／不支持输入诊断；没有基线时记录缺口并使用隔离数据，不删除用户包／身份／凭据／会话，也不为开发残留新增兼容。
+- [x] 1.6 核对两个已验收 release 基线和实际持久合同，给出受支持来源的显式迁移／不支持输入诊断；没有基线时记录缺口并使用隔离数据，不删除用户包／身份／凭据／会话，也不为开发残留新增兼容。
+  - 2026-11-11 支持基线核对：原release policy list为空，compare HEAD明确返回missing-release-baseline，当前仓库无refs/boxteam/releases或标签证据，release目录的固定提交不等于用户验收发布。按本项缺基线分支登记缺口；所有新插件／发行验收使用独立新Home与工作区，未转换或删除用户包、身份、凭据、会话，未为开发残留新增兼容或删除既有显式迁移。准确命令及原输出见 `out/tests/temp/2026/11/11/plugin_browser_distribution/artifacts/release-baseline-verification.json`；真实发布数据升级须取得可核验R_current／R_previous后另评估，8.4继续保持未完成。
 
 ## 2. Gateway 统一托管与流式代理
 
