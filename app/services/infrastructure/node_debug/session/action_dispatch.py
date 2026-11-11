@@ -49,10 +49,15 @@ class NodeDebugActionDispatchMixin:
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
         # Session 准入本身也可能等待；请求不能在此期间改投新 run／暂停。
-        owner = (
-            (command.session_id, command.thread_id) if command.thread_id is not None
-            else self._resolve_owner(command.session_id, command.thread_id)
-        )
+        try:
+            owner = (
+                (command.session_id, command.thread_id) if command.thread_id is not None
+                else self._resolve_owner(command.session_id, command.thread_id)
+            )
+        except KeyError as error:
+            raise FileNotFoundError(
+                f"调试目标会话不存在或已删除: session_id={command.session_id}"
+            ) from error
         runtime = self._runtimes.get(owner)
         pause_generation = (
             runtime.pause_generation

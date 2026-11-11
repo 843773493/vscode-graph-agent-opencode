@@ -32,6 +32,7 @@ from app.core.session_lifecycle_gate import (
 )
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
+    NodeDebugControlActionRequest,
     NodeDebugSetBreakpointActionRequest,
     NodeDebugSetBreakpointParams,
 )
@@ -557,6 +558,11 @@ async def test_mutation_admission_rejects_missing_and_deleted_session(
         )
     )
     assert admitted.active_configuration_name == "准入方案"
+
+    with pytest.raises(FileNotFoundError, match="不存在或已删除"):
+        await service.apply_action(command=NodeDebugControlActionRequest(
+            session_id=_MISSING_SESSION_ID, action="stop",
+        ))
 
     with pytest.raises(FileNotFoundError, match="不存在或已删除"):
         await service.create_configuration(
