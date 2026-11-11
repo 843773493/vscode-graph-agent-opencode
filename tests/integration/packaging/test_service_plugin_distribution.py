@@ -330,6 +330,16 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         if os.environ.get("BOXTEAM_TEST_DISTRIBUTION_WORKBENCH") == "1":
             result_path = context.artifacts_dir / "workbench.json"
             temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
+            electron_asset = os.environ.get("BOXTEAM_TEST_ELECTRON_ASSET")
+            native: dict[str, str] = {}
+            if electron_asset:
+                destination = context.runtime_root_for_node(request.node.nodeid) / "electron"
+                with tarfile.open(electron_asset) as archive:
+                    archive.extractall(destination, filter="data")
+                executable, = destination.glob("*/boxteam")
+                native = {"electron": str(executable), "cwd": str(temporary),
+                    "profile": str(temporary / "electron-home"), "emptyPath": str(temporary / "empty-path")}
+                Path(native["emptyPath"]).mkdir(parents=True)
             environment = {**os.environ, "HOME": str(temporary),
                 "XDG_CACHE_HOME": str(temporary / "cache"),
                 "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
@@ -337,8 +347,10 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                     "chromium": str(distribution / manifest["chromium_executable"]),
                     "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
                         for version in ("1.0.0", "2.0.0")],
-                    "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png")})}
+                    "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
             command = [str(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
+            if electron_asset:
+                command = ["/usr/bin/xvfb-run", "-a", *command]
             with chromium_temporary_environment(temporary) as browser_environment:
                 browser = subprocess.run(command, env=environment | browser_environment,
                     capture_output=True, text=True, timeout=180, check=False)
@@ -349,6 +361,9 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             assert result["phase"] == "complete" and not result["pageErrors"] and not result["externalRequests"]
             assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])
             assert not (home / "plugins/packages/distribution.probe").exists()
+            if electron_asset:
+                assert len(result["native"]["launches"]) == len(result["native"]["exits"]) == 2
+                assert not result["native"]["storageErrors"]
         context.write_result("passed", {"target": target, "exchanges": len(evidence)})
     finally:
         (context.artifacts_dir / "lifecycle.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -60,6 +60,10 @@ def test_offline_launcher_completes_service_plugin_lifecycle(offline_distributio
         (context.artifacts_dir, "/isolation", True),
     ):
         command.extend(["--mount", f"type=bind,source={source},target={target}" + ("" if writable else ",readonly")])
+    electron_asset = os.environ.get("BOXTEAM_TEST_ELECTRON_ASSET")
+    if electron_asset:
+        command.extend(["--mount", f"type=bind,source={Path(electron_asset).resolve(strict=True)},target=/inputs/electron.tgz,readonly",
+            "--env", "BOXTEAM_TEST_ELECTRON_ASSET=/inputs/electron.tgz"])
     for name, value in {
         "PYTHONPATH": "/verification:/bootstrap/application",
         "PYTHONDONTWRITEBYTECODE": "1",

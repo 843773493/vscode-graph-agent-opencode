@@ -1,25 +1,68 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // 驱动也只用发行物的 Node、Playwright 和 Chromium，不借开发依赖。
 const input = JSON.parse(process.env.BOXTEAM_DISTRIBUTION_WORKBENCH);
-const { chromium, expect } = await import(pathToFileURL(path.join(input.application, 'node_modules/playwright/test.mjs')).href);
-const result = { phase: 'initialize', pageErrors: [], externalRequests: [], exitedPids: [], calls: [] };
-let browser;
-try {
-  browser = await chromium.launch({ executablePath: input.chromium, headless: true });
-  const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+const { chromium, _electron, expect } = await import(pathToFileURL(path.join(input.application, 'node_modules/playwright/test.mjs')).href);
+const result = { phase: 'initialize', pageErrors: [], externalRequests: [], exitedPids: [], calls: [],
+  native: { launches: [], exits: [], storageErrors: [] } };
+let browser, nativeApp, page;
+const observePage = next => {
+  page = next;
   page.setDefaultTimeout(20_000);
   page.on('pageerror', error => result.pageErrors.push(error.message));
+  page.on('console', message => {
+    if (message.type() === 'error' && /IndexedDB|database.*closed/i.test(message.text())) {
+      result.native.storageErrors.push(message.text());
+    }
+  });
+  page.on('dialog', dialog => dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss());
   page.on('request', request => {
     const url = new URL(request.url());
-    if (['http:', 'https:'].includes(url.protocol) && url.origin !== new URL(input.baseUrl).origin) {
+    const document = new URL(next.url());
+    if (['http:', 'https:'].includes(url.protocol) && document.protocol === 'http:' && url.origin !== document.origin) {
       result.externalRequests.push(request.url());
     }
   });
-  await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+};
+const openNative = async () => {
+  nativeApp = await _electron.launch({ executablePath: input.electron,
+    args: ['--no-sandbox', `--gateway=${input.baseUrl}`], cwd: input.cwd,
+    env: { ...process.env, BOXTEAM_HOME: input.profile, PATH: input.emptyPath }, timeout: 60_000 });
+  nativeApp.process().stdout.on('data', chunk => process.stdout.write(chunk));
+  nativeApp.process().stderr.on('data', chunk => process.stderr.write(chunk));
+  const location = await nativeApp.evaluate(({ app }) => ({ packaged: app.isPackaged,
+    appPath: app.getAppPath(), cwd: process.cwd(), path: process.env.PATH, userData: app.getPath('userData') }));
+  assert.equal(location.packaged, true);
+  assert.ok(location.appPath.endsWith('/resources/app.asar'));
+  assert.equal(location.cwd, input.cwd); assert.equal(location.path, input.emptyPath);
+  assert.equal(location.userData, path.join(input.profile, 'clients/electron'));
+  result.native.launches.push(location);
+  observePage(await nativeApp.firstWindow());
+  await page.waitForURL(url => url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.pathname === '/',
+    { waitUntil: 'domcontentloaded' });
+  assert.deepEqual(await page.evaluate(() => [typeof globalThis.require, typeof globalThis.process]), ['undefined', 'undefined']);
+};
+const closeNative = async () => {
+  if (!nativeApp) return;
+  const exited = once(nativeApp.process(), 'exit', { signal: AbortSignal.timeout(30_000) });
+  await nativeApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+  const [code, signal] = await exited;
+  result.native.exits.push({ code, signal });
+  nativeApp = undefined;
+  assert.equal(code, 0); assert.equal(signal, null);
+  assert.deepEqual(result.native.storageErrors, []);
+};
+try {
+  if (input.electron) await openNative();
+  else {
+    browser = await chromium.launch({ executablePath: input.chromium, headless: true });
+    observePage(await browser.newPage({ viewport: { width: 1500, height: 950 } }));
+    await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+  }
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   const api = (url, body, raw = false) => page.evaluate(async ({ url, body, raw }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
@@ -52,12 +95,13 @@ try {
     result.calls.push(value);
   };
   const openManagement = async () => {
+    await page.waitForFunction(() => typeof globalThis.workbench?.commands?.executeCommand === 'function');
     await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
     await expect(page.locator('.service-plugin-packages-view')).toBeVisible();
   };
   await openManagement();
-  const view = page.locator('.service-plugin-packages-view');
-  const quick = page.locator('.quick-input-widget');
+  let view = page.locator('.service-plugin-packages-view');
+  let quick = page.locator('.quick-input-widget');
   const pick = async label => {
     await expect(quick).toBeVisible();
     await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click();
@@ -93,8 +137,11 @@ try {
   }
   const original = await slots();
   assert.notEqual(original.python.instance.process_id, original.node.instance.process_id);
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  if (input.electron) { await closeNative(); await openNative(); }
+  else await page.reload({ waitUntil: 'domcontentloaded' });
   await openManagement();
+  view = page.locator('.service-plugin-packages-view');
+  quick = page.locator('.quick-input-widget');
   assert.deepEqual(await slots(), original);
   result.phase = 'update-and-switch';
   await install('2.0.0', input.packages[1]);
@@ -143,12 +190,13 @@ try {
   }
   assert.deepEqual(result.pageErrors, []);
   assert.deepEqual(result.externalRequests, []);
+  assert.deepEqual(result.native.storageErrors, []);
   result.phase = 'complete';
   await page.screenshot({ path: input.screenshot, fullPage: true });
 } catch (error) {
   result.error = String(error?.stack ?? error);
   throw error;
 } finally {
-  await writeFile(input.resultPath, JSON.stringify(result, null, 2) + '\n');
-  await browser?.close();
+  try { await closeNative(); await browser?.close(); }
+  finally { await writeFile(input.resultPath, JSON.stringify(result, null, 2) + '\n'); }
 }
