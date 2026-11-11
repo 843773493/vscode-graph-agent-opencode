@@ -634,3 +634,10 @@
 > - 真实 HTTP 共享／取消／双 Gateway 批6项通过；PyPI／npm 制品及原 Thread 批中4项通过；正式 Workbench 安装2项、私有env重启／中断恢复／页面卸载／取消4项、最终配置确认／响应丢失查询及双 Gateway路由3项分别通过。批次有重叠，不相加。页面经真实Gateway初始化，保留原request_id、来源CAS、实际制品／进程及工具配对断言；没有修改断言掩盖失败。前轮失败原件保留：缺原生组件、根fixture覆盖manifest及模块插件复用遗漏fixture；分别显式配置测试组件、局部传入manifest及直接导入fixture后通过。
 > - 精确提交快照248项单元／合同、共享树227项协议合同、203项前端定向测试、138份实际转换源码类型及正式79扩展构建通过；协议生成一致性、OpenAPI导出和OpenSpec strict通过。核心Python类型零诊断；14份外围文件按完整HEAD对照，Pyright120→118、Ruff14→14，无新增。末尾空行清理保留AST等价证明。完整命令、源码／原始输出指纹、失败归属及提交切片见 `out/tests/temp/2026/11/07/mcp_target_installation/artifacts/verification-v1.json`，前端原件见同日 `mcp_management_target/artifacts/`。
 > - 本片闭合目标管理与配置路由，不以局部证据勾完跨模块1.7／3.1／3.2／8.3／第9组。package必填输入的交互收集、manual／HTTP新增界面、动态定义Provider、真实SSH／Windows／Electron及其它未支持生态继续待办；不将原生路径、浏览器位置或活动工作区当作安装身份。
+
+### 2026-11-11 A/B Gateway 标题栏插件目标验收（7.1／7.2／14.4 局部证据）
+
+- 7.1／7.2 局部证据：正式 Workbench 通过标题栏在 A／B 间切换；A 库存仅有 `2.0.0`，B 库存为 `1.0.0`／`2.0.0`，详情分别显示所属 Gateway。B 的配置 CAS 在真实 Gateway 提交后只延迟原浏览器响应；页面切回 A 后，迟到响应仍归 B，B marker 已更新而 A marker 保持原值，页面 owner 为 A，pageErrors 与外部请求均为空。这仅证明列表／详情目标归属、标题目标切换和该项在途写入冻结，不覆盖其它视图独立选择、迟到查询、焦点或来源路径的完整边界。
+- 14.4 局部证据：B 的明确 `1.0.0→2.0.0` 切版在 UI 历史中记录 `ready(v1)→stopping(v1)→starting(v2)→ready(v2)`；新实例真实业务调用的 version、instance_id、PID 与 B 最终运行槽相符。旧 v1 instance 请求被 B 返回 409“插件绑定不可用或版本已切换”；旧 PID 已退出，A 的 v2 实例身份未变。该场景只覆盖 Gateway 管理范围的这条换版链。
+- 验证收据 `out/tests/temp/2026/11/11/config_uri_opener/artifacts/target-gateway-ui-verification.json` 记录命令、源码 SHA、退出码、正式构建收据与失败归因；正式浏览器／Gateway／运行实例原件在 `out/tests/integration/clients/web/test_service_plugin_target_gateway_ui/runs/run-669acac4ff5d/nodes/node-367707c79a4c/artifacts/`。本轮 1 passed／104.24 秒，Workbench 由正式 fixture 在 4 GiB／180 秒进程保护下构建，79 扩展、构建退出码 0。
+- 本证据不覆盖安装／整体更新／卸载全链、工作区与模板范围、批量／逐项失败、关闭／纯声明插件矩阵或 Windows／SSH／Electron；7.1、7.2、14.4 的宽项复选框保持未勾选。
