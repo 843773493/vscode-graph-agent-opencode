@@ -62,10 +62,16 @@ class McpPluginCase:
 
 
 @pytest.fixture
+def mcp_plugin_tool_restrictions() -> dict[str, list[str]]:
+    return {}
+
+
+@pytest.fixture
 async def mcp_plugin_case(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    mcp_plugin_tool_restrictions: dict[str, list[str]],
 ) -> AsyncIterator[McpPluginCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     # 此装具每项使用独立 Home，业务库也必须一并重建，不能继承上一参数化场景的 active 快照。
@@ -91,6 +97,8 @@ async def mcp_plugin_case(
     for agent in config["agents"].values():
         agent["model"] = {"primary_provider": "mcp-plugin-replay", "fallback_providers": []}
         agent.setdefault("tools", {})["custom"] = []
+    if mcp_plugin_tool_restrictions:
+        config["agents"]["default"]["tools"].setdefault("policy", {})["restrictions"] = mcp_plugin_tool_restrictions
     config["mcp"] = {"servers": {}}
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
