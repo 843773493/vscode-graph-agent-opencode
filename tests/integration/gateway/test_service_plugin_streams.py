@@ -6,6 +6,7 @@ import concurrent.futures
 import gzip
 import hashlib
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -33,12 +34,16 @@ from app.runtime.plugin_commands import plugin_command_router
 configure_application_logging(service='stream-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
 app = FastAPI()
+stream_state = {'active': False, 'sent': 0, 'cancelled': 0}
 @app.middleware('http')
 async def token(request, call_next):
     if request.headers.get('X-Local-Token') != os.environ['BOXTEAM_RUNTIME_CONTROL_TOKEN']:
         from fastapi.responses import Response
         return Response(status_code=403)
     return await call_next(request)
+@app.get('/services/events/stream/state')
+async def stream_status():
+    return dict(stream_state)
 async def shutdown(): server.should_exit = True
 app.include_router(plugin_command_router({}, shutdown=shutdown))
 @app.get('/services/events/stream')
@@ -67,7 +72,28 @@ async def socket(websocket: WebSocket):
     while True:
         message=await websocket.receive()
         if message['type']=='websocket.disconnect': return
-        if message.get('text') is not None: await websocket.send_text(message['text'])
+        if message.get('text') == '__slow_receiver__':
+            await websocket.send_text('__paused__')
+            await asyncio.sleep(0.6)
+            await websocket.send_text('__resumed__')
+        elif message.get('text') == '__stream_forever__':
+            stream_state['active'] = True
+            async def produce():
+                payload = b'bounded-cancel-stream:' + b'x' * (256 * 1024 - 22)
+                while True:
+                    await websocket.send_bytes(payload)
+                    stream_state['sent'] += 1
+            producer = asyncio.create_task(produce())
+            try:
+                disconnected = await websocket.receive()
+                assert disconnected['type'] == 'websocket.disconnect'
+            finally:
+                producer.cancel()
+                await asyncio.gather(producer, return_exceptions=True)
+                stream_state['active'] = False
+                stream_state['cancelled'] += 1
+            return
+        elif message.get('text') is not None: await websocket.send_text(message['text'])
         else: await websocket.send_bytes(message['bytes'])
 server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=int(os.environ['BOXTEAM_PLUGIN_PORT']),
     log_config=None,timeout_graceful_shutdown=1))
@@ -141,6 +167,61 @@ def test_service_streams_remain_bound_and_retire_with_original_instance(
         for message in ("第一帧🙂", b"\x00\xff\x03", "第三帧"):
             socket.send(message)
             assert socket.recv(timeout=5) == message
+        # 让插件端暂停读取，再经 Gateway 发送有限的大帧；send 返回不代表远端已消费，
+        # 只有随后逐帧收回完整正文才算协议验收。读取端刻意限速，检查顺序和背压下的数据完整性。
+        socket.send("__slow_receiver__")
+        assert socket.recv(timeout=5) == "__paused__"
+        frame_size = 512 * 1024
+        frames = [bytes([index]) * 4 + bytes([index + 32]) * (frame_size - 4)
+                  for index in range(16)]
+        for frame in frames:
+            socket.send(frame)
+        assert socket.recv(timeout=10) == "__resumed__"
+        frame_hashes = []
+        for expected in frames:
+            time.sleep(0.04)
+            actual = socket.recv(timeout=15)
+            assert isinstance(actual, bytes)
+            assert actual == expected
+            frame_hashes.append(hashlib.sha256(actual).hexdigest())
+        evidence["slow_consumer"] = {
+            "frame_count": len(frames), "frame_bytes": frame_size,
+            "total_bytes": len(frames) * frame_size, "server_read_pause_ms": 600,
+            "client_frame_read_delay_ms": 40,
+            "ordered_sha256": frame_hashes,
+        }
+
+        # 取消一个持续上游发送的连接；等插件确认发送协程因断开退出，再验证同实例兄弟连接。
+        cancel_url = socket_url.replace("marker=original", "marker=cancel")
+        with connect(cancel_url, additional_headers={**socket_headers, "X-Request-ID": "plugin-socket-cancel"},
+            open_timeout=10, close_timeout=3, max_size=1024 * 1024) as cancelling:
+            cancel_receipt = json.loads(cancelling.recv(timeout=5))
+            assert cancel_receipt["instance_id"] == instance_id
+            cancelling.send("__stream_forever__")
+            first_cancel_frame = cancelling.recv(timeout=10)
+            assert isinstance(first_cancel_frame, bytes) and len(first_cancel_frame) == 256 * 1024
+            cancelling.close(code=1000, reason="slow consumer cancellation")
+        stream_status: dict[str, object] = {"active": True, "sent": 0, "cancelled": 0}
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            stream_status = client.get(base + "/events/stream/state?package_version=1.0.0").raise_for_status().json()
+            if stream_status["cancelled"] == 1 and not stream_status["active"]:
+                break
+            time.sleep(0.05)
+        assert stream_status["cancelled"] == 1 and not stream_status["active"], stream_status
+        sibling_url = socket_url.replace("marker=original", "marker=sibling")
+        with connect(sibling_url, additional_headers={**socket_headers, "X-Request-ID": "plugin-socket-sibling"},
+            open_timeout=10, close_timeout=3) as sibling:
+            sibling_receipt = json.loads(sibling.recv(timeout=5))
+            assert sibling_receipt["instance_id"] == instance_id
+            sibling.send("取消后兄弟连接仍可用")
+            assert sibling.recv(timeout=5) == "取消后兄弟连接仍可用"
+        evidence["cancelled_stream"] = {
+            "plugin_cancel_count": stream_status["cancelled"],
+            "producer_frames_sent": stream_status["sent"],
+            "sibling_instance_id": sibling_receipt["instance_id"],
+            "sibling_echo": "取消后兄弟连接仍可用",
+        }
         # HTTP 不得借同名 WebSocket 服务访问未声明传输。
         assert client.get(base + "/socket/echo?package_version=1.0.0").status_code == 409
         with client.stream("GET", base + "/events/stream?package_version=1.0.0",
