@@ -28,7 +28,7 @@ describe('Thread 编辑器稳定身份', () => {
 
   test('序列化仅保存稳定目标并保留每组展示态，分屏复制互不覆盖', () => {
     const input = new ThreadInput({ ...owner, workspaceKey });
-    input.resourcesVisible = true; input.resourceTab = 'debug'; input.fileTreeExpandedPaths = ['src'];
+    input.resourcesVisible = true; input.resourceTab = 'changes'; input.selectedChangesetId = 'turn:chosen'; input.fileTreeExpandedPaths = ['src'];
     const stored = serializer.serialize(input)!;
     expect(JSON.parse(stored)).toEqual({ version: 2,
       target: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId, sessionId: owner.sessionId, threadId: owner.threadId },
@@ -39,7 +39,8 @@ describe('Thread 编辑器稳定身份', () => {
     if (!(restored instanceof ThreadInput)) throw new Error('恢复类型错误');
     expect(restored.owner.workspaceKey).toBe('');
     expect(restored.getViewState()).toEqual(input.getViewState());
-    const copy = restored.copy(); copy.fileTreeExpandedPaths.push('test');
+    const copy = restored.copy(); copy.fileTreeExpandedPaths.push('test'); copy.selectedChangesetId = 'all';
+    expect(restored.selectedChangesetId).toBe('turn:chosen');
     expect(restored.fileTreeExpandedPaths).toEqual(['src']);
     expect(copy.matches(restored)).toBe(true);
     input.restorable = false;

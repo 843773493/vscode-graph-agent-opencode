@@ -17,3 +17,5 @@
 终端／Browser 候选只读取原工作区资源清单，保持独立种类、稳定 owner 和所选 revision。管理复用同一 Action／Command 与原 Hook 临时句柄，原组件成功完整替换、失败回读；picker 的独立动作使用同一结算函数，不重放未知写入。stop、detach、delete 使用各自原端点，关联保持明确 SessionThread 与原来源／保留范围。浏览和二级取消不写入，关闭 picker 不撤销已受理动作；精确聚焦与 MCP 接入尚待完成，不以管理命令冒充完成。
 
 配置来源沿原 ConfigurationSourceOwner 只读目录；每个选定工作区独立发现，同一已登记 Gateway 只发现一次。来源文件 URI 只消费 owner 回执；没有文件 URI 的正式逻辑来源用既有来源身份打开，不造公开地址。接受时固定目标、source_key、发起编辑器组及打开选项，统一交原设置 JSONC 命令读取、建模和保存，取消或逐键筛选不读正文、不预检或写入。
+
+会话变更只发现本次发起 Thread 所属 Session 的 changeset 摘要，且其工作区须在明确范围内；没有明确 Session 不扫描其它会话。接受把原 changeset 身份交同一个 Thread 更改面板，Diff／完整补丁继续由原更改 owner 读取，浏览不读取预览正文、不标记审阅或改写文件。

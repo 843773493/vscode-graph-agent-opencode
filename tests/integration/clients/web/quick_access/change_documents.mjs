@@ -9,7 +9,7 @@ const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!base || !output || !screenshot) throw new Error('只读模型验收缺少隔离目标或产物目录');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_change_documents.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], reads: [], sources: [], mcpReads: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], reads: [], sources: [], mcpReads: [], changesetLists: [], reviews: [],
   boundary: '真实Gateway／后端／正式Workbench；模型协议采用model_stream；产品执行创建文件和更改，无预写历史、缓存或HTTP响应替身' };
 let page, failure;
 try {
@@ -22,6 +22,9 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (path.endsWith('/changesets')) result.changesetLists.push({ phase: result.phase, path,
+      gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
+    if (path.endsWith('/review')) result.reviews.push({ phase: result.phase, method: request.method(), path });
     if (path === '/api/v1/mcp/servers') result.mcpReads.push({ path,
       gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     if (/\/changesets\/.+$/.test(path)) result.reads.push({ phase: result.phase, path,
@@ -86,9 +89,28 @@ try {
   await page.getByTestId(`catalog-node-${workspaceKey}-${owner.sessionId}`).locator(`button[data-session-id="${owner.sessionId}"]`).dblclick();
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`);
   await expect(thread).toBeVisible();
-  await thread.getByRole('button', { name: '切换会话资源', exact: true }).click();
-  await thread.getByRole('tab', { name: '更改', exact: true }).click();
-  await thread.locator(`.session-changeset-row[title="显示任务 ${turns[1]} 中产生的文件变更"]`).click();
+  const quick = page.locator('.quick-input-widget');
+  const chosen = quick.locator('.monaco-list-row').filter({ hasText: '会话变更 ·' }).filter({ hasText: changesetId });
+  result.phase = 'browse-changesets';
+  await command('boxteam.quickAccess.resources');
+  await quick.locator('input').first().fill('resource ' + changesetId);
+  await expect(chosen).toBeVisible();
+  await quick.locator('input').first().fill('resource all');
+  await expect(quick.locator('.monaco-list-row').filter({ hasText: '会话变更 ·' }).filter({ hasText: ' · all' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  const listings = result.changesetLists.filter(read => read.phase === result.phase);
+  expect(listings).toEqual([{ phase: result.phase, path: `/api/v1/sessions/${owner.sessionId}/changesets`,
+    gatewayId: owner.gatewayId, workspaceId: owner.workspaceId }]);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.reviews).toEqual([]);
+  result.changesetBrowseOnly = true;
+  result.phase = 'accept-changeset';
+  await command('boxteam.quickAccess.resources');
+  await quick.locator('input').first().fill('resource ' + changesetId);
+  await expect(chosen).toBeVisible(); await chosen.click();
+  await expect(thread.getByRole('tab', { name: '更改', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(thread.locator(`.session-changeset-row[title="显示任务 ${turns[1]} 中产生的文件变更"]`)).toHaveClass(/active/);
+  result.changesetOpened = true;
   await expect(thread.locator('.session-change-file-main')).toHaveCount(1);
   await expect(thread.locator('.session-change-file-main')).toContainText('修改');
   result.phase = 'open-real-diff';

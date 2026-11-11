@@ -1019,3 +1019,9 @@
 - `resource ` 消费同一 ConfigurationSourceOwner 的只读目录，工作区分别发现，同 Gateway 只列一次；已有 URI 仅展示，无文件 URI 的正式逻辑来源保留原 source_key，不另造公开地址。接受复用原来源 JSONC 命令及 writer，冻结目标、发起组、预览／固定、侧开／后台；浏览、筛选及取消不读正文、不预检、不保存。
 - 资源浏览器合同94项／613断言通过。正式 Workbench、真实 Gateway／Backend 与 Chromium 1 passed／97.44秒，验证两类来源原 JSONC 保存、侧开、只读及既有 CAS 冲突、草稿恢复和未知保存只查原键；pageErrors为空。原正式79扩展构建27.61秒成功，复用同批产物，不重复构建。
 - 本片171份转换源码类型检查通过；最后联合检查因并行 MCP Gallery 清理的两处旧引用失败，已交其 owner 处理，未称整树类型全绿。Ruff、ESM语法及差异检查通过；当前环境无 pyright 可执行文件，未更改环境。最小复审保留唯一来源 owner／命令／writer，无新缓存、schema或持久化。失败原件、源码指纹及适用范围见 `out/tests/temp/2026/11/11/config_resource_quick_access/artifacts/verification.json`；未验Windows／Relay／Electron，附件／变更等仍未接入，11.2不整勾。
+
+### 2026-11-11：会话变更资源快速访问（11.2 部分）
+
+- `resource ` 仅发现发起 Thread 所属 Session 的 changeset 摘要，且工作区须入选；逐键筛选和取消不读 Diff／补丁、不写审阅。接受复用原 Thread 更改面板及 loader，冻结精确 child、changeset、发起组和打开选项；选定范围随原 ThreadInput 展示态复制／恢复，无新 URI、正文缓存或 writer。
+- 原 Provider／更改模型合同49项、ThreadInput序列化12项通过；172份实际转换源码类型检查、Ruff、ESM语法及差异检查通过。正式 Gateway／Backend／Workbench／Chromium 1 passed／104.11秒，核真实执行生成更改、取消零读取／写入、指定范围打开、Diff／补丁、共享模型及刷新恢复，pageErrors为空；同批正式79扩展构建27.49秒通过。
+- 用例准备迁齐新版插件配置交接、隔离Home及运行令牌，关闭顺序为Backend→Gateway→model_stream；此前旧fixture、缺令牌、错误prepared路径及关闭顺序失败原件均保留。最小复审只保留原领域链与展示态；未验Windows／Relay／Electron，不勾完11.2。命令、指纹和准确适用范围见 `out/tests/temp/2026/11/11/changeset_resource_quick_access/artifacts/verification.json`。

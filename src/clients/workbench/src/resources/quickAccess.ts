@@ -14,11 +14,11 @@ import { PickerQuickAccessProvider, type IPickerQuickAccessItem } from '../../up
 import { Extensions, type IQuickAccessRegistry } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
-import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
-import type { ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { ResourceNavigationResultDTO, SessionChangesetListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
 import type { GatewaySkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/skill_sources.js';
 import { listWorkspaceResources, type ResourceAction, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
@@ -68,7 +68,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal };
     this.run = run;
     const input = this.editors.activeEditor;
-    run.thread = options.resourceThread;
+    run.thread = options.resourceThread && { ...options.resourceThread, owner: { ...options.resourceThread.owner } };
     if (!run.thread && input instanceof ThreadInput) run.thread = { owner: { ...input.owner }, session_id: input.owner.sessionId, thread_id: input.owner.threadId };
     const invalidate = () => {
       run.invalidated = true;
@@ -175,6 +175,37 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           const key = gatewayWorkspaceKey(target);
           const configuration = limiter.queue(() => configurationPicks({ gateway_id: target.gateway_id, workspace_id: target.workspace_id }, target.name))
             .catch(cause => failed(owner, '配置 ', cause));
+          const changes = run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
+            ? limiter.queue(async () => {
+              const thread = run.thread!;
+              run.signal.throwIfAborted();
+              const result = await gateway.request<SessionChangesetListDTO>(`/api/v1/sessions/${encodeURIComponent(thread.session_id)}/changesets`,
+                { signal: run.signal }, key);
+              if (result.session_id !== thread.session_id) throw new Error('变更目录响应不属于发起会话');
+              return result.items.map(changeset => ({
+                id: JSON.stringify([owner.gatewayId, owner.workspaceId, thread.session_id, 'changeset', changeset.changeset_id]),
+                label: changeset.label, filterLabel: changeset.label, resourceId: changeset.changeset_id,
+                description: `会话变更 · ${target.name} · ${changeset.summary?.files ?? 0} 个文件`,
+                detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${changeset.changeset_id}`,
+                accept: (mods, event) => {
+                  this.report((async () => {
+                    this.assertAccess(run);
+                    const group = this.groups.getGroup(run.group);
+                    if (!group) throw new Error('发起打开的编辑器组已关闭');
+                    const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
+                      || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
+                    const direction = preferredSideBySideGroupDirection(this.configuration);
+                    const destination = mods.alt || pinned && mods.ctrlCmd
+                      ? this.groups.findGroup({ direction }, group) ?? this.groups.addGroup(group, direction) : group;
+                    await this.editors.openEditor(new ThreadInput({ ...owner, workspaceKey: key, sessionId: thread.session_id,
+                      threadId: thread.thread_id, title: thread.thread_id }), {
+                      pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground,
+                      viewState: { resourcesVisible: true, resourceTab: 'changes', selectedChangesetId: changeset.changeset_id },
+                    }, destination.id);
+                  })());
+                },
+              } satisfies SourcePick));
+            }).catch(cause => failed(owner, '变更 ', cause)) : Promise.resolve([]);
           const agents = limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/agent-spec', { signal: run.signal }, key);
@@ -226,7 +257,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
-          return (await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, ...runtime])).flat();
+          return (await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, changes, ...runtime])).flat();
         } catch (cause) { return failed(owner, '', cause); }
       }));
       const gatewayResults = await Promise.all(gatewayConfigurations);

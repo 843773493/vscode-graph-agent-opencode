@@ -21,3 +21,5 @@ Provider 合同区分单次 provide 的本地筛选与重新打开的当前发�
 运行资源合同实际调用 Provider、Command 及原 HTTP 客户端，显式宿主／回执装具不能冒充真实 Gateway。正式运行资源页面通过产品 API 创建 Session、终端与 Browser，核独立 stop／detach／delete、所选 revision 冲突、原底部面板按钮和明确工作区；不预写账本或触发模型执行。
 
 配置合同运行真实 ResourceQuickAccess 与配置 API，命令宿主只捕获冻结的来源和编辑器选项；验证同 Gateway 去重、工作区隔离、取消、分支权限及零提前正文读取。完整打开、侧开、原 JSONC writer 保存、只读、冲突和草稿恢复由 `test_settings_source_editor.py` 的正式 Workbench 页面覆盖，不把合同装具当产品验收。
+
+变更合同运行原 Provider，HTTP 与编辑器宿主为具名装具；核明确 Session、入选工作区、摘要零正文、冻结 child／组／changeset 与取消。正式 `test_change_documents.py` 通过产品执行生成更改，经 resource 目录选择后进入原面板／Diff／补丁；不预写 changeset 或浏览器展示态。

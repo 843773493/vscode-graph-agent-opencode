@@ -73,8 +73,8 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
   }, [reportRequest, owner.workspaceKey, owner.sessionId, selectThreadForOwner]);
   useEffect(() => {
     if (!visible) return;
-    if (tab === 'changes') void content.refreshSessionChanges(owner.sessionId);
-  }, [tab, visible, owner.sessionId, content.refreshSessionChanges]);
+    if (tab === 'changes') void content.refreshSessionChanges(owner.sessionId, input.selectedChangesetId);
+  }, [tab, visible, owner.sessionId, input.selectedChangesetId, content.refreshSessionChanges]);
   useSessionResourcePolling({ active: visible && tab === 'resources', workspaceId: owner.workspaceKey,
     sessionId: owner.sessionId, refresh: content.refreshSessionResources, onStatusChange: reportResourceStatus });
   const openRuntime = (kind: 'terminal' | 'browser', id: string) => {
@@ -116,7 +116,10 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
       searchOpen={search} collapseVersion={collapse} settingsVersion={fileTreeSettingsVersion}
       expandedFileTreePaths={expanded} onExpandedFileTreePathsChange={persistExpanded}
       onToggleSearch={() => setSearch(value => !value)} onCollapseAll={() => setCollapse(value => value + 1)}
-      onSelectSessionChangeset={id => void content.refreshSessionChanges(owner.sessionId, id)}
+      onSelectSessionChangeset={id => {
+        if (input.selectedChangesetId === id) void content.refreshSessionChanges(owner.sessionId, id);
+        else { input.selectedChangesetId = id; onUpdate(); }
+      }}
       onRefreshSessionChanges={() => void content.refreshSessionChanges(owner.sessionId, state.selectedChangesetId, { refreshList: true })}
       onReviewSessionChangeFile={content.reviewSessionChangeFile}
       onOpenSessionChangeFile={file => {

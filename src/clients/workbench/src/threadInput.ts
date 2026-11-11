@@ -10,6 +10,7 @@ export type ThreadResourceTab = 'files' | 'changes' | 'tasks' | 'connections' | 
 interface ThreadViewState {
   resourcesVisible: boolean;
   resourceTab: ThreadResourceTab;
+  selectedChangesetId?: string;
   resourceRatio: number;
   filePreviewLayout: WebUiLayoutSettings;
   fileTreeExpandedPaths: string[];
@@ -38,6 +39,7 @@ export class ThreadInput extends EditorInput {
   restorable = true;
   resourcesVisible = false;
   resourceTab: ThreadResourceTab = 'files';
+  selectedChangesetId?: string;
   resourceRatio = 0.42;
   filePreviewLayout: WebUiLayoutSettings = {};
   fileTreeExpandedPaths: string[] = [];
@@ -77,13 +79,14 @@ export class ThreadInput extends EditorInput {
     return input;
   }
   getViewState(): ThreadViewState {
-    return { resourcesVisible: this.resourcesVisible, resourceTab: this.resourceTab, resourceRatio: this.resourceRatio,
+    return { resourcesVisible: this.resourcesVisible, resourceTab: this.resourceTab, selectedChangesetId: this.selectedChangesetId, resourceRatio: this.resourceRatio,
       filePreviewLayout: this.filePreviewLayout, fileTreeExpandedPaths: this.fileTreeExpandedPaths };
   }
   restoreViewState(viewState: object | undefined): void {
     const state = viewState as Partial<ThreadViewState> | undefined;
     this.resourcesVisible = state?.resourcesVisible ?? false;
     this.resourceTab = state?.resourceTab ?? 'files';
+    this.selectedChangesetId = state?.selectedChangesetId;
     this.resourceRatio = state?.resourceRatio ?? 0.42;
     this.filePreviewLayout = state?.filePreviewLayout ?? {};
     this.fileTreeExpandedPaths = state?.fileTreeExpandedPaths ?? [];
