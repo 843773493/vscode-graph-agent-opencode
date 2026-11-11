@@ -76,6 +76,7 @@ markers = [
     "integration: 多模块集成测试，包含受控服务替身",
     "e2e: 端到端测试",
     "live_model: 需要真实外部模型的测试",
+    "windows_gateway_server: Windows 远端 Gateway 生命周期验收的专用服务进程",
 ]
 # TODO: Windows 未启用符号链接权限时，pytest 的 current 临时目录链接无法清理。
 tmp_path_retention_policy = "none"

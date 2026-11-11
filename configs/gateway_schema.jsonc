@@ -467,8 +467,11 @@
       "required": [
         "kind",
         "host",
-        "username",
-        "private_key_path"
+        "username"
+      ],
+      "anyOf": [
+        { "required": ["private_key_path"] },
+        { "required": ["ssh_config_host"] }
       ],
       "properties": {
         "connection_id": {

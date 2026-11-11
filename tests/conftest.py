@@ -240,7 +240,17 @@ def setup_test_config(
     """每个测试通过独立 BOXTEAM_HOME 使用标准 Workspace 配置路径。"""
     del test_process_lifetime
     run_context = TestRunContext.from_test_file(Path(request.node.path))
-    boxteam_home = run_context.boxteam_home_for_node(request.node.nodeid)
+    configured_home = os.environ.get("BOXTEAM_HOME")
+    remote_gateway_server = (
+        request.node.get_closest_marker("windows_gateway_server") is not None
+        and configured_home is not None
+        and (Path(configured_home).parent / ".remote-plugin-server-mode").is_file()
+    )
+    boxteam_home = (
+        Path(configured_home)
+        if remote_gateway_server
+        else run_context.boxteam_home_for_node(request.node.nodeid)
+    )
     if boxteam_home.exists():
         shutil.rmtree(boxteam_home)
     config_root = boxteam_home / "config"

@@ -41,7 +41,7 @@ _GATEWAY_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
 class ConfiguredRemoteGateway:
     host: str
     username: str
-    private_key_path: str
+    private_key_path: str | None = None
     kind: Literal["remote_gateway"] = "remote_gateway"
     connection_id: str = ""
     name: str | None = None
@@ -104,7 +104,7 @@ def _workspace_from_validated_config(raw: dict[str, object]) -> ConfiguredRemote
         ssh_config_host=cast(str | None, raw.get("ssh_config_host")),
         remote_pair_command=cast(str | None, raw.get("remote_pair_command")),
         username=cast(str, raw["username"]),
-        private_key_path=cast(str, raw["private_key_path"]),
+        private_key_path=cast(str | None, raw.get("private_key_path")),
         connection_id=cast(str, raw["connection_id"]),
         remote_gateway_port=cast(int, raw.get("remote_gateway_port", 8014)),
         activate=cast(bool, raw.get("activate", False)),

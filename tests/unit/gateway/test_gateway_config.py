@@ -286,6 +286,25 @@ def test_load_gateway_config_accepts_remote_gateway(tmp_path: Path) -> None:
     )
 
 
+def test_load_gateway_config_accepts_ssh_config_host_without_private_key_path(tmp_path: Path) -> None:
+    config_path, schema_path = _write_gateway_config(
+        tmp_path,
+        [{
+            "kind": "remote_gateway",
+            "host": "remote.example.com",
+            "username": "developer",
+            "ssh_config_host": "developer-server",
+        }],
+    )
+
+    result = load_gateway_config(config_path=config_path, schema_path=schema_path)
+
+    assert len(result.workspaces) == 1
+    workspace = result.workspaces[0]
+    assert workspace.private_key_path is None
+    assert workspace.ssh_config_host == "developer-server"
+
+
 def test_gateway_shutdown_preserves_old_generation_for_pending_handoff(
     tmp_path: Path,
 ) -> None:
