@@ -118,3 +118,28 @@ test('显式切版只修改所选来源，保留本层开关及兄弟，不物�
   expect(() => bindingJsonc({ jsonc: '{}', source_effective: {} }, ['plugins', 'runtime', 'entries'], binding, 'preserve'))
     .toThrow('所选来源没有此插件绑定');
 });
+
+
+test('三类管理范围只读取原正式来源的完整合并期望，不先列目录或混入 active 绑定', async () => {
+  const node = parsed.statements.find(item => item.name?.text === 'readPluginBindings');
+  const readCode = ts.transpile(ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, ''),
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  const calls = [];
+  const desired = { ...binding, package_version: '2.0.0', enabled: false };
+  const defaults = { ...binding, package_version: '3.0.0', enabled: true };
+  const readBindings = new Function('ConfigurationSourceOwner', 'bindingsAt', `${readCode}\nreturn readPluginBindings;`)(class {
+    constructor(target) { this.target = target; }
+    async read(source) {
+      calls.push({ target: this.target, source });
+      return { effective: { plugins: { runtime: { entries: [{ ...binding, enabled: true }] } } },
+        source_effective: { plugins: { runtime: { entries: [desired] }, workspace_defaults: { entries: [defaults] } } } };
+    }
+  }, (value, keys) => keys.reduce((current, key) => current[key], value));
+  const gateway = { gateway_id: 'gateway-a', gateway_connection_id: 'relay-b' };
+  const workspace = { ...gateway, workspace_id: 'workspace-a' };
+  expect(await readBindings('gateway', gateway)).toEqual([desired]);
+  expect(await readBindings('workspace', workspace)).toEqual([{ ...desired, workspace_id: 'workspace-a' }]);
+  expect(await readBindings('defaults', gateway)).toEqual([defaults]);
+  expect(calls).toEqual([{ target: gateway, source: 'inline:0' }, { target: workspace, source: 'inline' },
+    { target: gateway, source: 'inline:0' }]);
+});

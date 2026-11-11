@@ -25,7 +25,7 @@ import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
 
-import { manageConfig, setPluginBindings, readWorkspaceDefaults, readWorkspaceBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
+import { manageConfig, setPluginBindings, readPluginBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
 
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -51,7 +51,7 @@ export class ServicePluginPackagesView extends ViewPane {
   private controls: HTMLElement | undefined;
   private runtimeStatusController: AbortController | undefined;
   private runtimeStatus: PluginRuntimeStatusDTO | undefined;
-  private workspaceBindings: readonly PluginBinding[] | undefined;
+  private configuredBindings: readonly PluginBinding[] | undefined;
   private updateDetailsStatus: (() => void) | undefined;
 
   constructor(options: IViewPaneOptions, @IKeybindingService keybindings: IKeybindingService,
@@ -147,7 +147,7 @@ export class ServicePluginPackagesView extends ViewPane {
     this.stopRuntimeStatus();
     this.refreshRevision++;
     this.content = undefined;
-    this.workspaceBindings = undefined;
+    this.configuredBindings = undefined;
     this.updateDetailsStatus = undefined;
     super.dispose();
   }
@@ -158,7 +158,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const revision = ++this.refreshRevision;
     const scope = this.scope;
     const container = this.content;
-    this.workspaceBindings = undefined;
+    this.configuredBindings = undefined;
     this.updateDetailsStatus = undefined;
     clearNode(container);
     append(container, $('p')).textContent = '正在读取目标插件…';
@@ -208,8 +208,19 @@ export class ServicePluginPackagesView extends ViewPane {
     void watchPluginRuntimeStatus(target, controller.signal, snapshot => {
       if (this.runtimeStatusController !== controller || controller.signal.aborted
         || snapshot.plugins.some(slot => slot.gateway_id !== target.gateway_id)) return;
+      const previous = this.runtimeStatus;
       this.runtimeStatus = snapshot;
       void first.complete(snapshot);
+      if (previous) {
+        const workspaceId = this.scope === 'workspace' ? this.workspaceTarget?.workspace_id : undefined;
+        const bindings = (state: PluginRuntimeStatusDTO) => state.configured_bindings
+          .filter(binding => (binding.workspace_id ?? undefined) === workspaceId);
+        // 外部配置提交后重读原来源；实例进度和兄弟工作区事件不触发额外请求。
+        if (JSON.stringify(bindings(previous)) !== JSON.stringify(bindings(snapshot))) {
+          void this.refresh();
+          return;
+        }
+      }
       this.updateRuntimeStatusPresentation();
     }).catch(error => {
       if (controller.signal.aborted || this.runtimeStatusController !== controller) return;
@@ -287,9 +298,8 @@ export class ServicePluginPackagesView extends ViewPane {
   }
 
   private configuredBinding(packageId: string, pluginId: string, workspaceId: string | undefined): PluginBinding | undefined {
-    // 工作区来源期望与 Gateway 的 active 交接分别展示；旧交接不能覆盖 pending 期望。
-    const bindings = workspaceId ? this.workspaceBindings : this.runtimeStatus?.configured_bindings;
-    return bindings?.find(item => item.package_id === packageId
+    // 配置期望统一来自原来源 owner；运行状态流的 active 绑定不能覆盖 pending。
+    return this.configuredBindings?.find(item => item.package_id === packageId
       && item.plugin_id === pluginId && (item.workspace_id ?? undefined) === workspaceId);
   }
 
@@ -323,10 +333,10 @@ export class ServicePluginPackagesView extends ViewPane {
     const [inventory, runtime, scopeBindings] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
       scope === 'defaults' ? undefined : this.observeRuntimeStatus(pluginTarget),
-      scope === 'defaults' ? readWorkspaceDefaults(target) : workspace ? readWorkspaceBindings(workspace) : undefined,
+      readPluginBindings(scope, workspace ?? target),
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
-    this.workspaceBindings = workspace ? scopeBindings : undefined;
+    this.configuredBindings = scopeBindings;
     clearNode(container);
     append(container, $('p')).textContent = inventory.sources?.message ?? '插件源尚未配置';
     if (workspace) {
@@ -338,7 +348,7 @@ export class ServicePluginPackagesView extends ViewPane {
       summary.textContent = `工作区 ${workspace.workspace_id} 配置交接：${handoff?.state ?? '尚未收到'}${handoff?.error ? ` · ${handoff.error}` : ''}`;
     }
     const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
-    const bindings = (scopeBindings ?? runtime!.configured_bindings).filter(item => scope === 'workspace'
+    const bindings = scopeBindings.filter(item => scope === 'workspace'
       ? item.workspace_id === workspace?.workspace_id : item.workspace_id == null);
     for (const pkg of inventory.packages) {
       const manifest = pkg.manifest;

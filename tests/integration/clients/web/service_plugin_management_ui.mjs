@@ -178,7 +178,8 @@ try {
   await expect(view.locator('.service-plugin-package')).toBeVisible();
   await expect(search).toHaveValue('ui.preference-probe');
   await search.clear();
-  await verifyScopeReads('gateway', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status/events']);
+  await verifyScopeReads('gateway', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status/events',
+    '/api/gateway/config/sources/inline%3A0']);
   result.installed = true;
   result.phase = 'gateway-binding';
 
@@ -621,7 +622,7 @@ try {
   await expect(view).toContainText('工作区偏好 · workspace-preference');
   await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
   await verifyScopeReads('workspace', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status/events',
-    '/api/v1/config/sources', '/api/v1/config/sources/workspace_root_mutable_override']);
+    '/api/v1/config/sources/inline']);
 
   await expect.poll(async () => (await runtimeSlot('workspace-preference', active.workspace_id))?.state).toBe('ready');
   const workspaceReady = await runtimeSlot('workspace-preference', active.workspace_id); await callRuntime(workspaceReady);
@@ -672,6 +673,70 @@ try {
   await openPlugin('工作区偏好 · workspace-preference');
   await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：启用 @1.0.0');
   assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, workspaceReady.instance.instance_id);
+  result.phase = 'gateway-pending-expectation';
+  const gatewayPendingReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayPendingReady);
+  const originalGatewaySource = await gatewaySource();
+  const pendingGateway = parseJsonc(originalGatewaySource.jsonc);
+  const pendingGatewayBinding = pendingGateway.plugins.runtime.entries.find(binding =>
+    binding.package_id === 'ui.preference-probe' && binding.plugin_id === 'gateway-preference');
+  assert(pendingGatewayBinding?.enabled);
+  pendingGatewayBinding.enabled = false;
+  const healthTimeoutBefore = originalGatewaySource.effective.runtime.gateway.process.health.request_timeout_seconds;
+  assert.equal(typeof healthTimeoutBefore, 'number');
+  // Gateway schema 将此健康策略路径声明为 restart_gateway；候选仍由原 source writer 接纳。
+  pendingGateway.runtime ??= {};
+  pendingGateway.runtime.gateway ??= {};
+  pendingGateway.runtime.gateway.process ??= {};
+  pendingGateway.runtime.gateway.process.health ??= {};
+  pendingGateway.runtime.gateway.process.health.request_timeout_seconds = healthTimeoutBefore + 1;
+  const saveGatewaySource = (document, jsonc, suffix) => api('/api/gateway/config/sources/gateway_mutable_override', {
+    method: 'PUT', body: { gateway_id: active.gateway_id, source_key: 'gateway_mutable_override', jsonc,
+      base_file_digest: document.file_digest, base_layer_revision: document.layer_revision,
+      base_layer_digest: document.layer_digest, expected_active_revision: document.active_revision,
+      expected_active_digest: document.active_digest, idempotency_key: `plugin-ui-gateway-pending-${suffix}-${Date.now()}` },
+  });
+  const pendingGatewaySource = await saveGatewaySource(originalGatewaySource, JSON.stringify(pendingGateway), 'save');
+  assert.equal(pendingGatewaySource.edit.state, 'pending_restart');
+  assert.equal(pendingGatewaySource.source_effective.plugins.runtime.entries.find(binding =>
+    binding.package_id === 'ui.preference-probe' && binding.plugin_id === 'gateway-preference').enabled, false);
+  assert.equal(pendingGatewaySource.effective.plugins.runtime.entries.find(binding =>
+    binding.package_id === 'ui.preference-probe' && binding.plugin_id === 'gateway-preference').enabled, true);
+  assert.equal(pendingGatewaySource.source_effective.runtime.gateway.process.health.request_timeout_seconds,
+    healthTimeoutBefore + 1);
+  assert.equal(pendingGatewaySource.effective.runtime.gateway.process.health.request_timeout_seconds, healthTimeoutBefore);
+  await view.getByLabel('插件管理范围').selectOption('gateway');
+  await expect(view.locator('.service-plugin-package')).toBeVisible();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  await openPlugin('Gateway 偏好 · gateway-preference');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：停用 @1.0.0');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @1.0.0');
+  await expect(view.getByRole('button', { name: '启用此范围', exact: true })).toBeVisible();
+  await expect(view.getByRole('button', { name: '重启实例', exact: true })).toHaveCount(0);
+  const gatewayPendingSlot = await runtimeSlot('gateway-preference');
+  assert.equal(gatewayPendingSlot.binding.enabled, true);
+  assert.equal(gatewayPendingSlot.state, 'ready');
+  assert.equal(gatewayPendingSlot.instance.instance_id, gatewayPendingReady.instance.instance_id);
+  await callRuntime(gatewayPendingReady);
+  result.gatewayPendingExpectation = { candidateRef: pendingGatewaySource.status.candidate_ref,
+    policyPath: 'runtime.gateway.process.health.request_timeout_seconds',
+    policyBefore: healthTimeoutBefore, policyCandidate: healthTimeoutBefore + 1,
+    sourceEnabled: false, activeEnabled: true, instanceId: gatewayPendingReady.instance.instance_id };
+  const discardedGatewayStatus = await api(`/api/gateway/config/discard-restart?${new URLSearchParams({ candidate_ref: pendingGatewaySource.status.candidate_ref })}`, {
+    method: 'POST', body: { expected_active_revision: pendingGatewaySource.active_revision,
+      expected_active_digest: pendingGatewaySource.active_digest },
+  });
+  assert.equal(discardedGatewayStatus.restart_required, false);
+  const discardedGatewaySource = await gatewaySource();
+  const restoredGatewaySource = await saveGatewaySource(discardedGatewaySource, originalGatewaySource.jsonc, 'restore');
+  assert.equal(restoredGatewaySource.edit.state, 'active');
+  assert.equal(restoredGatewaySource.jsonc, originalGatewaySource.jsonc);
+  assert.equal((await runtimeSlot('gateway-preference')).instance.instance_id, gatewayPendingReady.instance.instance_id);
+  await callRuntime(gatewayPendingReady);
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  await openPlugin('Gateway 偏好 · gateway-preference');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：启用 @1.0.0');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @1.0.0');
+  await expect(view.getByRole('button', { name: '重启实例', exact: true })).toBeVisible();
   result.phase = 'runtime-reload-and-independent-restart';
   let gatewayReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayReady);
   assert.notEqual(gatewayReady.instance.process_id, workspaceReady.instance.process_id);
@@ -724,8 +789,7 @@ try {
 
   await view.getByLabel('插件管理范围').selectOption('defaults');
   await expect(view).toContainText('工作区偏好 · workspace-preference');
-  await verifyScopeReads('defaults', ['/api/gateway/service-plugins/inventory', '/api/gateway/config/sources',
-    '/api/gateway/config/sources/gateway_mutable_override']);
+  await verifyScopeReads('defaults', ['/api/gateway/service-plugins/inventory', '/api/gateway/config/sources/inline%3A0']);
   const existingBeforeDefaults = await runtimeSlot('workspace-preference', active.workspace_id);
   const gatewayBeforeDefaults = await runtimeSlot('gateway-preference');
   await enable('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 新建工作区默认模板', 'defaults');

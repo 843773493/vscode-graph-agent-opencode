@@ -553,6 +553,7 @@ test('打开的详情跟随绑定与实例变化，兄弟状态不重建当前�
   const view = new View();
   const initial = { package_id: 'sample', plugin_id: 'command', package_version: '1.0.0', enabled: true };
   let status = { binding: initial, revision: 'r1', instance: { instance_id: 'instance-first' }, log_id: 'log-first' };
+  view.configuredBindings = [initial];
   view.runtimeStatus = { configured_bindings: [initial], plugins: [status], workspace_configurations: [] };
   view.runtimeLabel = () => 'ready'; view.runtimeActualLabel = () => 'ready';
   view.renderInstanceLog = (_container, _target, logId) => logIds.push(logId);
@@ -579,6 +580,7 @@ test('打开的详情跟随绑定与实例变化，兄弟状态不重建当前�
   expect(logIds).toEqual(['log-first', 'log-second']);
   const disabled = { ...initial, enabled: false };
   status = { binding: disabled, revision: 'r2' };
+  view.configuredBindings = [disabled];
   view.runtimeStatus = { configured_bindings: [disabled], plugins: [status], workspace_configurations: [] };
   view.updateDetailsStatus();
   expect(identity.textContent).not.toContain('instance-second');
@@ -588,19 +590,35 @@ test('打开的详情跟随绑定与实例变化，兄弟状态不重建当前�
   expect(requests).toHaveLength(1); expect(requests[0][5]).toMatchObject({ package_version: '1.0.0' });
   expect(requests[0][6]).toBe(true);
   const newer = { ...initial, package_version: '2.0.0' };
+  view.configuredBindings = [newer];
   view.runtimeStatus = { configured_bindings: [newer], plugins: [{ binding: newer, revision: 'r3' }], workspace_configurations: [] };
   view.updateDetailsStatus();
   expect(buttons()).toContain('切换到此版本（保留开关）'); expect(buttons()).not.toContain('重启实例');
   expect(buttons()).not.toContain('编辑参数 JSON'); expect(buttons()).not.toContain('停用此范围');
+  view.configuredBindings = [];
   view.runtimeStatus = { configured_bindings: [], plugins: [], workspace_configurations: [] };
   view.updateDetailsStatus();
   expect(buttons()).toContain('启用此范围'); expect(buttons()).not.toContain('解除此范围绑定');
+
+  // Gateway 来源与工作区来源遵守同一规则；pending 停用不借 active 的开关生成反向操作。
+  const gatewayDesired = { ...initial, enabled: false };
+  view.configuredBindings = [gatewayDesired];
+  view.runtimeStatus = { configured_bindings: [initial], plugins: [{ binding: initial, revision: 'active-gateway' }], workspace_configurations: [] };
+  view.showDetails(element('container'), 'gateway', { gateway_id: 'gateway-original' }, undefined,
+    { package_id: 'sample', version: '1.0.0' }, { id: 'command', runtime: 'python' }, gatewayDesired,
+    view.runtimeStatus.plugins[0], 'entry');
+  const gatewayActions = elements.filter(item => item.tag === '.service-plugin-detail-actions').at(-1);
+  const gatewayButtons = gatewayActions.children.filter(item => item.tag === 'button').map(item => item.textContent);
+  expect(view.runtimeConfigurationLabel('sample', 'command', undefined)).toBe('停用 @1.0.0');
+  expect(gatewayButtons).toContain('启用此范围'); expect(gatewayButtons).not.toContain('重启实例');
+  gatewayActions.children.find(item => item.textContent === '启用此范围').listeners.click();
+  expect(requests.at(-1)[6]).toBe(true);
 
   // 来源已有 v2 停用期望，Gateway 仍交接 v1 启用态；详情不能改回旧版本或反向开关。
   const workspace = { gateway_id: 'gateway-original', workspace_id: 'workspace-a' };
   const desired = { ...initial, workspace_id: workspace.workspace_id, package_version: '2.0.0', enabled: false };
   const active = { ...initial, workspace_id: workspace.workspace_id };
-  view.workspaceBindings = [desired];
+  view.configuredBindings = [desired];
   view.runtimeStatus = { configured_bindings: [active], plugins: [{ binding: active, revision: 'active-r1' }],
     workspace_configurations: [] };
   view.showDetails(element('container'), 'workspace', workspace, workspace,
@@ -659,6 +677,29 @@ test('管理初始化等待同一状态流首快照，后续快照更新原投�
   streams[0].next(first);
   expect(rendered).toEqual([first, next]);
   expect(errors).toEqual([]);
+});
+
+test('状态流仅在本范围 active 绑定变化时重读来源，兄弟与实例变化保持原投影', async () => {
+  for (const workspaceId of [undefined, 'workspace-a']) {
+    const { view, streams, errors } = runtimeStatusView();
+    view.scope = workspaceId ? 'workspace' : 'gateway';
+    view.workspaceTarget = workspaceId ? { workspace_id: workspaceId } : undefined;
+    let refreshes = 0;
+    view.refresh = async () => { refreshes++; view.stopRuntimeStatus(); };
+    const binding = { package_id: 'sample', plugin_id: 'command', package_version: '1.0.0', enabled: true,
+      ...(workspaceId ? { workspace_id: workspaceId } : {}) };
+    const first = { plugins: [], configured_bindings: [binding], workspace_configurations: [] };
+    const initial = view.observeRuntimeStatus({ gateway_id: 'gateway-original' });
+    streams[0].next(first); await initial;
+    expect(refreshes).toBe(0);
+    const sibling = { ...binding, workspace_id: 'workspace-b', enabled: false };
+    streams[0].next({ ...first, configured_bindings: [binding, sibling], plugins: [{ gateway_id: 'gateway-original', revision: 'instance-next' }] });
+    expect(refreshes).toBe(0);
+    streams[0].next({ ...first, configured_bindings: [{ ...binding, enabled: false }, sibling] });
+    expect(refreshes).toBe(1);
+    expect(streams[0].signal.aborted).toBe(true);
+    expect(errors).toEqual([]);
+  }
 });
 
 test('首快照前换目标取消旧等待，迟到旧快照不能覆盖新目标；流错误保留原原因', async () => {

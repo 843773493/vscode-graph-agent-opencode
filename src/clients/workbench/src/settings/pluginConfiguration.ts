@@ -11,7 +11,7 @@ import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspa
 import { gateway } from '../agentApi.js';
 import { createManagementTargetLifecycle, managementGateway } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument, type SourceTarget } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
 type ConfigDocument = SourceDocument;
@@ -126,24 +126,12 @@ async function saveSourceEdit(owner: ConfigurationSourceOwner,
   }
 }
 
-export async function readWorkspaceDefaults(target: ReturnType<typeof managementGateway>): Promise<PluginBinding[]> {
+export async function readPluginBindings(scope: Scope, target: SourceTarget): Promise<PluginBinding[]> {
   const owner = new ConfigurationSourceOwner(target);
-  const sources = await owner.list();
-  const source = [...sources.sources].filter(item => item.loaded && item.source_key).sort((a, b) => b.precedence - a.precedence)[0];
-  if (!source?.source_key) throw new Error('Gateway 没有可读取 workspace_defaults 的配置来源');
-  const document = await owner.read(source.source_key);
-  return bindingsAt(document.source_effective, ['plugins', 'workspace_defaults', 'entries']);
-}
-
-export async function readWorkspaceBindings(target: GatewayWorkspaceRequestTarget): Promise<PluginBinding[]> {
-  const owner = new ConfigurationSourceOwner(target);
-  const listed = await owner.list();
-  const source = listed.sources.filter(item => item.loaded && item.source_key).sort((a, b) => b.precedence - a.precedence)[0];
-  if (!source?.source_key) throw new Error('工作区没有可读取插件绑定的配置来源');
-  const document = await owner.read(source.source_key);
-  // 期望由原配置 owner 返回；Gateway 的异步交接回执只用于显示实际状态。
-  return bindingsAt(document.source_effective, ['plugins', 'runtime', 'entries'])
-    .map(binding => ({ ...binding, workspace_id: target.workspace_id }));
+  // 任一正式来源文档都返回完整的来源合并值；无需先列目录再猜选最高层。
+  const document = await owner.read(target.workspace_id ? 'inline' : 'inline:0');
+  return bindingsAt(document.source_effective, ['plugins', scope === 'defaults' ? 'workspace_defaults' : 'runtime', 'entries'])
+    .map(binding => target.workspace_id ? { ...binding, workspace_id: target.workspace_id } : binding);
 }
 
 export async function setPluginBindings(scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,

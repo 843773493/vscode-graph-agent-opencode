@@ -244,6 +244,12 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["externalBindingActionsUpdated"]
             assert result["workspacePendingExpectation"]["sourceEnabled"] is False
             assert result["workspacePendingExpectation"]["activeEnabled"] is True
+            assert result["gatewayPendingExpectation"]["sourceEnabled"] is False
+            assert result["gatewayPendingExpectation"]["activeEnabled"] is True
+            assert result["gatewayPendingExpectation"]["candidateRef"]
+            assert result["gatewayPendingExpectation"]["policyPath"] == "runtime.gateway.process.health.request_timeout_seconds"
+            assert result["gatewayPendingExpectation"]["policyCandidate"] == result["gatewayPendingExpectation"]["policyBefore"] + 1
+            assert result["gatewayPendingExpectation"]["instanceId"]
             assert result["gatewayRestartedIndependently"]
             assert result["declarativeSkillLoop"]
             assert result["declarativeSkillVersions"] == ["1.0.0", "1.1.0"]
@@ -288,7 +294,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["referencedUninstall"]["status"] == 409
             assert result["workspaceHandoff"]["workspace_id"] == result["owner"]["workspaceId"]
             assert {scope: len(reads) for scope, reads in result["scopeReads"].items()} == {
-                "gateway": 2, "workspace": 4, "defaults": 3,
+                "gateway": 3, "workspace": 3, "defaults": 2,
             }
     finally:
         close_gateway_process(gateway)
