@@ -6,7 +6,8 @@
 
 ## 1. 边界、合同与旧调用清点
 
-- [ ] 1.1 全仓清点格式／市场／安装／配置／运行／UI／协议生成／打包的直接和间接消费者，按D17核 default／agent-collaboration／debugging 及动态 MCP／custom 工具与进程调用；建立每条迁移链的旧入口、权威 owner、新入口和物理删除清单，保护共享工作树改动与历史原件。
+- [x] 1.1 全仓清点格式／市场／安装／配置／运行／UI／协议生成／打包的直接和间接消费者，按D17核 default／agent-collaboration／debugging 及动态 MCP／custom 工具与进程调用；建立每条迁移链的旧入口、权威 owner、新入口和物理删除清单，保护共享工作树改动与历史原件。
+  - 2026-11-11 收口映射：VSIX／Gallery／项目旧用户 Web／Node Extension Host 及其安装、API、URI、协议和 UI 消费者按8.1／8.2的已验收链路删除；候选完整 tree `ffcaa9bc2dec2148e9e025165035d94440872562` 不含旧 `app/api/extension_*`、Gateway Extension Host、旧 extension schema/service/proto；该结论不指 Workbench 保留的 Code OSS 内置扩展宿主。新包唯一解析与发布归 `app/gateway/plugins/`，原子安装由 `PluginPackageStore`／`PluginInstallations` 完成，Gateway runtime 托管具体实例；管理合同在 `service_plugin.proto` 及其生成物，Workbench 消费新服务插件 DTO。Backend 不再启动 stdio MCP 或 Debug 目标进程；stdio 唯一归 `resources/plugins/mcp-stdio/bridge.py`，Browser／Terminal 业务适配器经 Gateway 的精确服务路由，Debug launch 由 Gateway Debug 插件执行，配置／会话／审计仍归 Backend NodeDebugService。Skill 正文唯一布局为 `resources/plugins/developer-tools/skills/{browser-control,debugging}` 与独立 `resources/skills/{gateway-context,web-search-fetch}`；bundled group 只选后两项，来源和冻结正文分别沿 Gateway Skill owner 与原 CSM。进程边界见12.3及第4／5／11组 owner 与产品证据；`process-callsites.txt` 记录 `app/` Python 进程调用，不把它作为 JS／TS 或全仓 spawn 清单。余下动态工具关联和未验平台范围仍由13.5、9.4等明确保留，不据清点提前勾选。
 - [x] 1.2 冻结多插件包 plugin.jsonc／标准 .zip／已准备的显式开发目录：根包含package_id／包版本、合同及目标制品兼容信息，plugins 每项含作为外部plugin_id的稳定 id、固定 scope、requires／contributes 和条件必需运行入口；无根级运行入口兼容、components／component_id／modules／features 或贡献第二开关，纯声明插件无 runtime。
   - 2026-11-10 当前合同独立收口：多插件包由 `app/schemas/gateway/service_plugin.py` 与 proto 唯一声明，根与插件均拒绝未知字段；ZIP和显式准备目录使用同一解析，代码字段条件必需，纯Skill无runtime。包合同及依赖59项、真实双语言管理、纯声明正式页面均已有原件；当前格式完成不代表第8组所有旧消费者已清空。
 - [x] 1.3 冻结 package_id／plugin_id、唯一 gateway／workspace 生命周期槽位、当前包版本属性、service_id、instance_id 与业务资源身份；不按版本双起；插件管理回执服务清单可空，服务ID只作业务路由；同包插件独立进程，同插件跨工作区独立实例，不按端口／显示名合并。
@@ -162,7 +163,8 @@
   - 2026-11-10 Notebook／格式化残留清理：移除旧市场的 kernel、renderer、未知语言及 formatter 推荐／安装入口，保留原 kernel／source actions、缺 kernel 上下文、未知语言警告、大文件警告与一个／多个 formatter 动作。复用同一 Luna max 持续审查并自主小修；43项转换检查／206断言、118份实际转换源码类型及同源码正式79扩展构建通过。未修改固定上游，未增加兼容宿主；原命令与指纹见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/mcpTransform-20261110T120222Z.receipt.txt`，跨平台和宽项仍未验。
 
   - 2026-11-10 旧 Agent Plugin 启动扫描收口：项目 sourceTransform 移除 Configured／Marketplace／Extension／Copilot CLI 四类 discovery 注册及其实现，保留原 ChatAgentService／PromptsService／AgentPluginService 消费者；不再启动时读取未注册原生路径配置，不以异常吞噬或 fallback 掩盖。Sol 实施、Luna max持续审查修正生成源码的运行时decorator及类型导入，并补断言。专用转换1项通过、140份实际转换源码类型通过，79个内置扩展的正式Workbench构建通过；原上游／reference未修改。准确命令、指纹和原始输出见 `out/tests/temp/2026/11/10/legacy_agent_plugin_discovery/artifacts/verification.json`。本片不将余下旧市场UI／推荐等清理认定为全部完成。
-- [ ] 8.3 按第11／12组迁齐后删除 Backend 的 stdio／安装／Node 调试目标子进程创建、终端／浏览器直连分支及旧端口／启动配置；全仓查间接调用、脚本、锁依赖、协议和运行文档，不加兼容包装层，保留 python_exec／条件脚本／ffmpeg、存储快照内部原语及宿主动作的原实现。
+- [x] 8.3 按第11／12组迁齐后删除 Backend 的 stdio／安装／Node 调试目标子进程创建、终端／浏览器直连分支及旧端口／启动配置；全仓查间接调用、脚本、锁依赖、协议和运行文档，不加兼容包装层，保留 python_exec／条件脚本／ffmpeg、存储快照内部原语及宿主动作的原实现。
+  - 2026-11-11 物理删除闭包：Backend MCP 配置只接受 Gateway plugin 或 Streamable HTTP，`app/services/infrastructure/mcp/` 无 stdio client／spawn；stdio 桥仅在 MCP 插件。NodeDebug `launch_orchestrator` 通过 `NodeDebugPluginRuntime.launch()` 把目标启动、Inspector 和实际子进程退出交给 Gateway Debug 实例，Backend 保留 DAP／配置／断点／动作记录；Browser／Terminal owner 只经 `GatewayTransportConnection` 访问插件实例。`process-callsites.txt` 是 `app/` Python 进程调用清单；Gateway 插件的 Node/MCP 子进程由第4／5／11组 owner 与产品证据核对，旧脚本、协议和宿主消费者按8.1／8.2的迁移记录核对。12.2／12.3列出保留的业务进程例外。没有新包装层或双轨。未把真实 SSH／Windows／Electron等平台矩阵扩大为本项必要条件，其范围仍按对应任务保留。
 - [ ] 8.4 按真实 release 基线提供确有必要的显式数据升级或清晰不支持诊断；不自动转换 VSIX，不保留旧配置运行时双读，不无依据删既有历史迁移。
 - [ ] 8.5 将自有插件及所需 Python／Node 插件纳入发行，安装／启动不依赖开发服务器、源码、外网临时下载或 Electron Node；清除无人消费的旧宿主打包产物。
 
@@ -228,13 +230,17 @@
 
 ## 12. 工具覆盖与明确保留边界
 
-- [ ] 12.1 将依赖准备／编译从用户安装链移至发布构建；动态 custom 工具的真实外部进程消费者核到既定托管边界，显式注册 MCP 或 typed 服务，保留原工具发现／schema hash／封存资格／call ID／结果，不误删扩展工具或改公开分组，不把明确保留的三条链当作 custom 执行旁路迁走。
-- [ ] 12.2 交付差异复审时确认 python_exec、持续任务条件脚本及 ffmpeg 的原调用方式、Backend 执行和进程管理保持，不新增非 PTY 服务、适配分支或迁移测试，不删除其原实现和测试。
-- [ ] 12.3 按D17复核纯业务工具未被迁成无必要服务，SQLite 快照内部原语、系统文件管理器宿主动作及原控制面生命周期边界明确；全仓查直接／间接 spawn、协议、脚本和测试，逐项解释保留项后关闭盘点，不以字符串零命中或 Backend 绝无进程作为验收。
+- [x] 12.1 将依赖准备／编译从用户安装链移至发布构建；动态 custom 工具的真实外部进程消费者核到既定托管边界，显式注册 MCP 或 typed 服务，保留原工具发现／schema hash／封存资格／call ID／结果，不误删扩展工具或改公开分组，不把明确保留的三条链当作 custom 执行旁路迁走。
+  - 2026-11-11 工具调用闭包：自有包依赖由发布脚本准备、Gateway 安装仅校验预构建文件；`custom_invocation` 沿封存的工具目录执行注册 tool，不自行创建 OS 子进程。外部 stdio MCP、Browser／Terminal、Debug 进程分别由 Gateway 插件实例管理，经原 MCP／typed service 调用；原 ToolCatalog／definition facet 保持 schema hash、来源资格、call ID 和结果归属。对应真实安装／Thread 工具循环、Browser／Terminal隔离及 Debug UI／Agent 共用 run 的记录见4／5／11／13.5与15.3／15.4；python_exec／条件脚本／ffmpeg 在12.2明确排除，不误删或改分组。
+- [x] 12.2 交付差异复审时确认 python_exec、持续任务条件脚本及 ffmpeg 的原调用方式、Backend 执行和进程管理保持，不新增非 PTY 服务、适配分支或迁移测试，不删除其原实现和测试。
+  - 2026-11-11 保留执行链复审：`python_exec` 仍在 `app/agents/tools/python_execution.py` 用目标解释器创建子进程、工作区 cwd／PYTHONPATH、双流收集及临时脚本清理；解释器选择恢复为显式覆盖→`UV_PROJECT_ENVIRONMENT`→工作区 `.venv`→项目 `.venv`→Backend 当前解释器。持续任务 script 仍经 `app/runtime/native_command.py` 的 POSIX／Windows 监督器，输入／限制及 `TaskDecisionDTO` 由原 owner 保持；视频附件仍由 `app/services/infrastructure/attachment_content_service.py` 调用 ffmpeg 并沿原临时目录和错误处理。`tests/unit/agents/tools/test_python_execution_tool.py` 复核五级优先级及显式无效覆盖，进程外保护下6 passed／0.29秒；Ruff通过。完整进程调用清点见 `out/tests/temp/2026/11/11/legacy_execution_audit/artifacts/process-callsites.txt`。未改变三条产品实现或增加适配／迁移服务。
+- [x] 12.3 按D17复核纯业务工具未被迁成无必要服务，SQLite 快照内部原语、系统文件管理器宿主动作及原控制面生命周期边界明确；全仓查直接／间接 spawn、协议、脚本和测试，逐项解释保留项后关闭盘点，不以字符串零命中或 Backend 绝无进程作为验收。
+  - 2026-11-11 工具和外围进程闭包清点：`app/agents/tools/custom_invocation.py` 仅通过既有工具封存目录执行已注册工具，无外部进程旁路；`app/agents/custom_tools.py` 的 factory 仅构造原工具，不创建 OS 子进程。MCP stdio 由 Gateway 插件运行，不是 Backend custom spawn。Browser／Terminal 业务工具经原资源 owner 和插件路由，Node Debug launch 经冻结 Debug 插件，Backend 保留配置、会话和审计 owner。其余 OS 进程按调用闭包归类为明确保留项：python_exec、条件脚本监督器、ffmpeg、SQLite fork 快照内部一致性 worker、系统文件管理器宿主动作、Workspace/Gateway 生命周期及 SSH／联邦控制面；异步协程 `spawn` 不计 OS 子进程。Workbench `extension_host/` 四项测试验证通用 Code OSS code actions、language features、notebook 与 workspace edits，目录说明明确不验旧 VSIX 宿主，保留。全仓调用清单见 `out/tests/temp/2026/11/11/legacy_execution_audit/artifacts/process-callsites.txt`；未以命中数为零作为验收，也未发现需要删除或迁移的额外 Backend spawn 链。
 
 ## 13. 插件 Skill 交付与原技能链路接入
 
-- [ ] 13.1 全仓清点 resources/skills、bundled_skill_groups、Gateway Skill 来源、tools.custom[].skills、Skill URI、模型提示／schema／示例、skill_names 展示、上下文封存、测试及发行消费者；冻结原 skill_load 三模式与 search_tools／invoke_extension_tool 合同，明确 Browser／Debug 迁移而其他两组保留。
+- [x] 13.1 全仓清点 resources/skills、bundled_skill_groups、Gateway Skill 来源、tools.custom[].skills、Skill URI、模型提示／schema／示例、skill_names 展示、上下文封存、测试及发行消费者；冻结原 skill_load 三模式与 search_tools／invoke_extension_tool 合同，明确 Browser／Debug 迁移而其他两组保留。
+  - 2026-11-11 消费者映射：根 `resources/skills/` 仅保留 gateway-context、web-search-fetch，由 `runtime.workspace.default_skill_groups` 选择；Browser／Debug正文和 tool_bindings 由 developer-tools 包声明、发布到 Gateway Skill 来源，Workspace catalog／CSM按来源 URI 与revision冻结。工具关联来自 `tools.custom[].skills` 或包声明，在 definition facet 记录 `skill_names`，不授权工具；固定 `skill_load` name-only入口维持 snapshot/tracked/untrack，`search_tools` 及 `invoke_extension_tool` 外层合同保持现状。唯一正文、协议序列化、model prompt、Skill URI、冷读与真实调用消费者见本节13.2—13.7、15.3／15.4和现有 `plugin_skills`／`plugin_skill_version_loop`／`plugin_skill_relay_loop` 收据；未据此关闭服务工具完整来源关联13.5或跨平台验收。
 - [x] 13.2 实现 plugins[].contributes.skills 的 id／相对目录／tool_bindings 及原 parser；Skill 名称说明不重复维护，纯 Skill 插件仅开关声明，无 runtime，allowed-tools 不授权。
 - [ ] 13.3 插件 Skill 与工具关联同包校验发布，安装不启用；插件开启后接认证 Gateway 来源／SkillCatalog，固定scope及精确绑定隔离、原四层优先级，同层冲突明确拒绝，无副本／新目录。
 - [x] 13.4 在原技能资源 owner 登记合法 URI、相对配套文件及目录读／列举／搜索；保持包版本／内容 revision 与实例代际分离，原生目标最终判权，不暴露物理安装路径或恢复旧 VSIX 包根，普通读取不激活／追踪／运行。
@@ -246,13 +252,15 @@
 - [x] 13.7 明确整包发布新版本与插件绑定切换分别处理；原 owner 发布对应 Skill revision，v1 冻结不改读v2，snapshot／tracked／untrack 沿原语义，说明不宣称旧运行的新能力，不增独立Skill开关。
   - 2026-11-11 真实 Gateway／Thread 更新闭环：v2 安装保持 v1 绑定与追踪，显式切版撤销原来源后在模型调用前明确拒绝，不按同名重定向；受信 untrack 原 revision 后可显式加载 v2，模型 untrack 保留正文，两个版本物理卸载后整组重启仍可继续会话并冷读各版本封存。新增场景1 passed／89.94秒，原 snapshot 冻结／双工作区／工具归因场景本轮亦通过；初轮回执可选字段预期及同文件共享工作区问题已按原合同／隔离修正，未改产品行为。命令、指纹及原始输出见 `out/tests/temp/2026/11/11/plugin_skill_version_loop/artifacts/`，未据此覆盖真实 Relay 或其它平台。
 - [ ] 13.8 接通停用／撤权／解除绑定／卸载的新准入撤销与观察释放；卸载只沿D7原四类引用和原删除互斥，未知拒绝不巡检；已封存正文／来源／历史和用户配置保留，完整冻结正文不永久占包引用，不新增持久参与者账本。
-- [ ] 13.9 随第4／11组纵向迁齐 browser-control／debugging 正文、文件、工具定义／示例及发布／打包／测试引用后删除原 inline 同义来源和 fallback，保持 name／工具信封；web-search-fetch、gateway-context 及明确保留的三条执行链和原关联不改。
+- [x] 13.9 随第4／11组纵向迁齐 browser-control／debugging 正文、文件、工具定义／示例及发布／打包／测试引用后删除原 inline 同义来源和 fallback，保持 name／工具信封；web-search-fetch、gateway-context 及明确保留的三条执行链和原关联不改。
+  - 2026-11-11 唯一正文闭环：实盘根 `resources/skills/` 只有 gateway-context／web-search-fetch；Browser／Debug Skill 的唯一产品文件位于 `resources/plugins/developer-tools/skills/`，manifest 明确声明相对目录和 tool_bindings，pack 脚本将两份正文收入插件 ZIP。Workbench／Backend 测试直接从已安装包读取并用 name-only `skill_load`、固定 `invoke_extension_tool` 信封验收；没有 inline 同名来源或 fallback。Browser／Debug 的工具 factory仍是原业务 owner 的typed适配器（Browser／Terminal走Gateway精确服务，Debug目标进程由Gateway Debug插件托管），不是可删除的旧宿主双轨；两项其余执行链保留。相关真实产品证据与唯一来源/历史冷读合同见4／11／13.6—13.7及15.3／15.4。
 - [ ] 13.10 用最小真实 Gateway／Workbench／Thread 场景验证 纯 Skill 插件零进程、Browser／Debug 先加载说明再经原信封真实操作、更新冻结／追踪、双工作区及 Relay 来源隔离、同名覆盖／不兼容关联和有引用卸载；复用原技能／资源／工具测试装具，合同反例定向验证，不另造审计框架或默认全套串行。
 - [ ] 13.11 记录普通 Skill 目录／资源读取完整暖请求耗时并沿原预算验收，确认模型准备／skill_load 无新增发现和完整性检查；类型／协议／前端构建及进程外测试保护沿第9组统一执行，同源码证据可复用，未验平台如实记录。
 
 ## 14. 插件 UI 开关与新建默认值闭环
 
-- [ ] 14.1 按D0／D2／D3全链统一 Plugin Package／Plugin／Contribution／Runtime Instance 和 plugins 字段，迁齐协议／生成物／manifest／注册身份／UI／测试；无 root contributes、module／feature 或包级enabled双轨，历史引用区不改。
+- [x] 14.1 按D0／D2／D3全链统一 Plugin Package／Plugin／Contribution／Runtime Instance 和 plugins 字段，迁齐协议／生成物／manifest／注册身份／UI／测试；无 root contributes、module／feature 或包级enabled双轨，历史引用区不改。
+  - 2026-11-11 合同映射：`PluginPackageManifest`／`ServicePluginManifest`、`PluginBinding` 与 runtime DTO 由 `app/schemas/gateway/service_plugin.py` 和 `proto/boxteam/gateway/v2/service_plugin.proto` 定义并生成；包解析器拒绝未知字段，根唯一 `plugins[]` 承载 plugin、contributes、instance_scope 与 runtime，绑定的 enabled 位于原 Gateway／Workspace 配置owner。源码中无 component_id／module／features 兼容读写，Workbench显示同一 package/plugin/contribution/runtime身份。manifest/配置合同及正式Workbench默认值、纯Skill、包内双语言启停／更新／显式切版／卸载验收见1.2、14.2、14.6、9.2及既有产品收据；完整生命周期窗口重开补验由本轮父任务继续完成，不以此映射替代范围更广的验收。
 - [x] 14.2 原配置族增加精确插件 enabled 与 plugins.workspace_defaults.entries，冻结默认空／数组整体替换／键唯一／只允许已安装workspace插件、无秘密及现有覆盖层；当前workspace不走用户层fan-out，schema与真实序列化迁齐，不修改用户环境。
   - 2026-11-10 当前合同独立收口：原Gateway／Workspace schema与writer使用精确enabled及默认空workspace_defaults数组，按原层级整体替换并拒绝重复键／未安装或非workspace插件／秘密字段。真实默认值创建、已有workspace不继承、模板不启进程、清空仅影响后建及正式页面保存已验；原件见 `plugin_creation_retry/artifacts/verification.json` 和 `plugin_distribution_loop/artifacts/ui-defaults-verification.json`。创建取消等14.3生命周期仍单独保留。
 - [x] 14.3 原创建intent冻结模板revision／条目，在原安装互斥内建立版本引用，经原writer初始化配置并认证交付；完成交接由workspace绑定接替intent引用，取消／失败明确结清，无引用空隙或循环等待；重试保持原输入，挂接已有workspace不套模板，无新账本／引用图／定期修复。
@@ -276,7 +284,8 @@
 
 - [x] 15.1 按D21落实根 plugin.jsonc 唯一清单及插件内聚布局，入口／贡献显式相对解析，纯声明无入口；自带／下载／开发目录同合同，内部目录名不参与发现；复用第3组校验，定向覆盖改目录后仍可加载、缺文件、归档绝对／穿越路径及根外链接拒绝，越界写出前失败，不只比字符串前缀或另建扫描器。
   - 2026-11-11 原安装入口目录反例收口：任意内部目录下的显式入口／Skill、缺文件与无递归发现沿原测试；Luna max新增ZIP绝对／普通../／ZIP根外symlink／开发目录根外symlink四项，核越界写出前拒绝、零发布及零暂存残留。原包测试与反例集中46 passed／1.29秒，测试Ruff及Pyright零诊断。仅新增有判别力反例、无生产新校验器；收据 `out/tests/temp/2026/11/10/legacy_plugin_cleanup/artifacts/path-admission-verification.json`，合并原件 `out/tests/temp/2026/11/10/plugin_candidate_close/artifacts/package-layout-final.log`。
-- [ ] 15.2 将包解析／扩展点支持目录／安装发布／绑定协调落在 app/gateway/plugins/，管理协议沿 proto/boxteam 原生成链；进程调用现有 runtime，贡献实际注册仍归原业务及 Workbench 服务。随第1／8／10组迁齐旧消费者、删旧并补新增源码子目录 AGENTS.md，不预建空框架或第二 registry。
+- [x] 15.2 将包解析／扩展点支持目录／安装发布／绑定协调落在 app/gateway/plugins/，管理协议沿 proto/boxteam 原生成链；进程调用现有 runtime，贡献实际注册仍归原业务及 Workbench 服务。随第1／8／10组迁齐旧消费者、删旧并补新增源码子目录 AGENTS.md，不预建空框架或第二 registry。
+  - 2026-11-11 结构闭包映射：`app/gateway/plugins/` 持有 package parsing、extension point 校验、来源、安装发布和workspace绑定协调；`app/gateway/runtime/service_plugins/` 仍是进程启动/关闭owner，`proto/.../service_plugin.proto` 是管理合同来源。命令／设置／Skill／DAP贡献仍注册到对应Gateway或Workspace业务owner；不另建registry。目录已有各层 `AGENTS.md`，包路径、安装原子发布、真实运行与Skill加载／重启／卸载分别见8.1—8.3、9.2、10、11、13及15.1／15.3／15.4已有收据；未因任务收口删除有效业务适配器。
 - [x] 15.3 将依赖准备前移到发布构建生成 ZIP 前，安装只校验／解包／原子发布完整目标制品；已准备的 node_modules／可重定位 Python 依赖按原包根只读解析，不带构建凭据、根外依赖或绝对路径 .venv。实例工作目录／可写输出／控制数据／诊断日志／工作区业务产物分别沿原 owner 目录，Skill 直接注册只读资源，无工作区或客户端安装副本，不新增沙箱、用户配置文件、持久账本或业务URI。
   - 2026-11-11 安装内容与运行目录闭环：复用完整预构建MCP包，经真实Gateway／Backend／Thread加载包内Skill，原CSM正文进入下一模型请求，原信封实际调用工具；同Home冷启动、Backend安全重启和插件显式重启／显式重连后继续调用，最后停用引用409、解绑物理卸载且业务回执保留。1158份已安装文件前后完全一致，3个实例cwd及原日志归Gateway，canonical索引与业务回执归workspace .boxteam，无工作区包副本。1 passed／140.29秒，保留两条上游弃用告警；3份测试Pyright零诊断、Ruff通过。关闭15.3；第15.4的同流程核心已通过，目录解析反例另沿15.1收口。前两轮为主动取消错误断言准备及Skill回执正文预期错误，按原CSM合同修正，无产品新恢复／扫描框架。准确命令、指纹、原件及最小复审见 `out/tests/temp/2026/11/10/plugin_distribution_loop/artifacts/skill-runtime-directory-verification.json`。
 - [x] 15.4 复用第7／9／13组真实产品装具验证安装→开启→Skill加载／工具调用→实例重启，核包内容未被运行写入及日志／业务数据归属；同批定向核目录解析反例，不为目录约定另跑全套或增加生产逐请求hash／扫描。
