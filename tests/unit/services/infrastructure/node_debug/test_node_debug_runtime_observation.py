@@ -101,7 +101,8 @@ async def test_plugin_output_is_bounded_and_exit_settles_run(
     assert plugin.closed == 0
     assert recorder.phases == [("settled", "Debug 插件已确认目标进程退出")]
     published = [events.get_nowait() for _ in range(events.qsize())]
-    assert [event for event in published if event["event"] == "terminated"] == [
+    assert [event for event in published if event["event"] in {"exited", "terminated"}] == [
+        {"event": "exited", "body": {"exitCode": 0}},
         {"event": "terminated", "body": {}},
     ]
 

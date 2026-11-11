@@ -122,7 +122,10 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         config_path=context.project_root / "configs/tests/workspace/default.jsonc",
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     (sibling_workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(source), encoding="utf-8")
-    shutil.copyfile(workspace / "debug-ui.mjs", sibling_workspace / "debug-ui.mjs")
+    (sibling_workspace / "debug-ui.mjs").write_text(
+        (workspace / "debug-ui.mjs").read_text(encoding="utf-8").replace("setInterval(() => {}, 1000);\n", ""),
+        encoding="utf-8",
+    )
     gateway_home = context.boxteam_home_for_node(request.node.nodeid)
     copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     # 复用已准备原件构造确切新版，不重新下载／编译；安装与换绑仍走产品入口。

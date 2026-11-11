@@ -103,6 +103,8 @@ def confirm_target_exit(runtime: NodeDebugRuntime, exit_code: int | None) -> Non
     runtime.target_exit_code = exit_code
     if not runtime.target_exited:
         runtime.target_exited = True
+        if exit_code is not None:
+            publish_dap_event(runtime, "exited", {"exitCode": exit_code})
         publish_dap_event(runtime, "terminated", {})
 
 

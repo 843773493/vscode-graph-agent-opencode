@@ -73,6 +73,7 @@ class NodeDebugDAPSession:
             return {
                 "supportsConfigurationDoneRequest": True,
                 "supportsConditionalBreakpoints": True,
+                "supportsHitConditionalBreakpoints": True,
                 "supportsLogPoints": True,
                 "supportsEvaluateForHovers": True,
                 "supportsTerminateRequest": True,

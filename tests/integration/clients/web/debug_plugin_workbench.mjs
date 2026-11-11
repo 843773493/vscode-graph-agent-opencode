@@ -264,31 +264,35 @@ try {
   assert(stack[0].source.path.startsWith('boxteam://'));
   // 第二个真实 DAP 消费者保留旧引用，用后续新暂停验证代际失效。
   result.referenceProbe = await page.evaluate(async ({ owner, runId }) => {
-    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
-    const url = new URL(`/api/v1/debug/node/runs/${runId}/dap`, location.href);
-    url.protocol = 'ws:';
-    for (const [key, value] of Object.entries({ token: credential.data.token, gateway_id: owner.gatewayId,
-      workspace_id: owner.workspaceId, session_id: owner.sessionId, thread_id: owner.threadId })) url.searchParams.set(key, value);
-    const socket = new WebSocket(url), pending = new Map();
-    let sequence = 0;
-    socket.addEventListener('message', event => {
-      const message = JSON.parse(event.data);
-      if (message.type !== 'response') return;
-      const entry = pending.get(message.request_seq);
-      if (entry) { pending.delete(message.request_seq); clearTimeout(entry.timer); entry.resolve(message); }
-    });
-    globalThis.debugDapProbe = {
-      socket,
-      request(command, args = {}) {
-        const seq = ++sequence;
-        return new Promise((resolve, reject) => {
-          const timer = setTimeout(() => { pending.delete(seq); reject(new Error(`DAP probe timeout: ${command}`)); }, 10_000);
-          pending.set(seq, { resolve, timer });
-          socket.send(JSON.stringify({ seq, type: 'request', command, arguments: args }));
-        });
-      },
+    globalThis.openDebugDapProbe = async ({ owner, runId }) => {
+      const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+      const url = new URL(`/api/v1/debug/node/runs/${runId}/dap`, location.href);
+      url.protocol = 'ws:';
+      for (const [key, value] of Object.entries({ token: credential.data.token, gateway_id: owner.gatewayId,
+        workspace_id: owner.workspaceId, session_id: owner.sessionId, thread_id: owner.threadId })) url.searchParams.set(key, value);
+      const socket = new WebSocket(url), pending = new Map();
+      let sequence = 0;
+      socket.addEventListener('message', event => {
+        const message = JSON.parse(event.data);
+        if (message.type !== 'response') return;
+        const entry = pending.get(message.request_seq);
+        if (entry) { pending.delete(message.request_seq); clearTimeout(entry.timer); entry.resolve(message); }
+      });
+      const probe = {
+        socket,
+        request(command, args = {}) {
+          const seq = ++sequence;
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => { pending.delete(seq); reject(new Error(`DAP probe timeout: ${command}`)); }, 10_000);
+            pending.set(seq, { resolve, timer });
+            socket.send(JSON.stringify({ seq, type: 'request', command, arguments: args }));
+          });
+        },
+      };
+      await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(new Error('DAP probe connection failed')); });
+      return probe;
     };
-    await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(new Error('DAP probe connection failed')); });
+    globalThis.debugDapProbe = await globalThis.openDebugDapProbe({ owner, runId });
     const initialized = await globalThis.debugDapProbe.request('initialize', { adapterID: 'boxteam-debug-probe' });
     if (!initialized.success) throw new Error(initialized.message);
     const stack = await globalThis.debugDapProbe.request('stackTrace', { threadId: 1 });
@@ -487,8 +491,37 @@ try {
   await expect.poll(async () => (await otherState()).call_stack[0]?.line).toBe(3);
   assert.equal(result.dap.findLast(item => item.direction === 'out' && item.value.command === 'next').channel,
     `/api/v1/debug/node/runs/${siblingPaused.run_id}/dap`);
-  await command('workbench.action.debug.stop');
+  result.phase = 'sibling-logpoint-and-natural-exit';
+  result.logpoint = await page.evaluate(async ({ owner, runId, source }) => {
+    const probe = await globalThis.openDebugDapProbe({ owner, runId });
+    try {
+      const initialized = await probe.request('initialize', { adapterID: 'boxteam-logpoint-probe' });
+      if (!initialized.success || !initialized.body.supportsLogPoints || !initialized.body.supportsHitConditionalBreakpoints) {
+        throw new Error('实际断点能力未在initialize中声明');
+      }
+      const cleared = await probe.request('setBreakpoints', { source: { path: source }, breakpoints: [] });
+      if (!cleared.success || cleared.body.breakpoints.length !== 0) throw new Error('按源清除断点未返回空集合');
+      const replaced = await probe.request('setBreakpoints', { source: { path: source }, breakpoints: [
+        { line: 4, condition: 'state.counter === 6', hitCondition: '1', logMessage: 'sibling-log={state.counter}' },
+      ] });
+      if (!replaced.success) throw new Error(replaced.message);
+      return { initialized, cleared, replaced };
+    } finally { probe.socket.close(); }
+  }, { owner: otherOwner, runId: siblingPaused.run_id, source: siblingRoots.workspace_uri + '/debug-ui.mjs' });
+  const logpointState = await otherState();
+  assert.equal(logpointState.breakpoints.length, 1);
+  assert.equal(logpointState.breakpoints[0].line, 4);
+  assert.equal(logpointState.breakpoints[0].log_message, 'sibling-log={state.counter}');
+  await command('workbench.action.debug.continue');
   await expect.poll(async () => (await otherState()).status).toBe('exited');
+  const siblingExited = await otherState();
+  assert(siblingExited.output.includes('[日志点] sibling-log=6'));
+  assert(siblingExited.output.includes('debug-result 6'));
+  await expect.poll(() => result.dap.filter(item => item.channel === `/api/v1/debug/node/runs/${siblingPaused.run_id}/dap`
+    && ['exited', 'terminated'].includes(item.value.event)).map(item => ({ event: item.value.event, body: item.value.body })))
+    .toEqual([{ event: 'exited', body: { exitCode: 0 } }, { event: 'terminated', body: {} }]);
+  await expect(page.locator('.debug-toolbar')).not.toBeVisible();
+  result.naturalExit = { runId: siblingPaused.run_id, output: siblingExited.output };
   result.siblingAfterUnbind = { pid: siblingPaused.pid, pluginPid: siblingReady.instance.process_id, originalInstanceKept: true };
   await bindDebugger(otherOwner, null, 'debug-ui-unbind-sibling');
   result.uninstalled = [];

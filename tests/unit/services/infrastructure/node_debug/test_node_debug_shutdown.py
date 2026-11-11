@@ -101,6 +101,8 @@ async def test_close_reuses_confirmed_exit_without_persistent_claim(
 
     plugin.stop.assert_awaited_once()
     plugin.close.assert_awaited_once()
+    if exit_code is not None:
+        assert events.get_nowait() == {"event": "exited", "body": {"exitCode": exit_code}}
     assert events.get_nowait() == {"event": "terminated", "body": {}}
     assert events.empty(), "重复关闭不能再次发布终态"
 
