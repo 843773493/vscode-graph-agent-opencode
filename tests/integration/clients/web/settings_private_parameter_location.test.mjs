@@ -27,7 +27,7 @@ afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), JSON
 
 const binding = { package_id: 'probe.package', plugin_id: 'probe', package_version: '1.0.0' };
 const wrap = value => ({ plugins: { configuration: { values: { [binding.package_id]: { [binding.plugin_id]: value } } } } });
-const document = value => ({ jsonc: JSON.stringify(wrap(value)), effective: wrap(value) });
+const document = value => ({ jsonc: JSON.stringify(wrap(value)), source_effective: wrap(value) });
 
 test('数组秘密引用按原 JSONC 数字索引保存和清除，保留兄弟及转义字段名', () => {
   const doc = document({ entries: [{ 'a/b~c': 'old-reference', label: 'first' }, { label: 'sibling' }] });
@@ -56,8 +56,42 @@ test('对象的数字键仍是字符串，数组只接受已有的规范索引',
 });
 
 test('下层数组必须由用户明确整体覆盖，不能误建对象并丢失兄弟项', () => {
-  const doc = { jsonc: JSON.stringify(wrap({})), effective: wrap({ entries: [{ label: 'lower' }] }) };
+  const doc = { jsonc: JSON.stringify(wrap({})), source_effective: wrap({ entries: [{ label: 'lower' }] }) };
   expect(() => privateParameterLocation(doc, binding, '/entries/0/token')).toThrow('完整数组');
+});
+
+test('pending 数组结构沿来源合并解析，不借 active 的旧类型决定编辑路径', () => {
+  const doc = { jsonc: JSON.stringify(wrap({})),
+    source_effective: wrap({ entries: [{}] }), effective: wrap({ entries: {} }) };
+  expect(() => privateParameterLocation(doc, binding, '/entries/0/token')).toThrow('完整数组');
+  const objectSource = { ...doc, source_effective: wrap({ entries: {} }), effective: wrap({ entries: [{}] }) };
+  expect(privateParameterLocation(objectSource, binding, '/entries/0/token').path.slice(-3)).toEqual(['entries', '0', 'token']);
+});
+
+test('参数入口按来源期望版本校验，pending 换版与解绑不受旧 active 绑定阻挡', async () => {
+  const node = parsed.statements.find(item => item.name?.text === 'manageConfig');
+  const manageCode = ts.transpile(ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, ''),
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  const payload = entries => ({ plugins: { runtime: { entries } } });
+  const current = { ...binding, package_version: '2.0.0', enabled: false };
+  const doc = { writable: true, source_effective: payload([current]),
+    effective: payload([{ ...binding, enabled: true }]), jsonc: '{}' };
+  let parameterPrompts = 0;
+  const owner = { async list() { return { sources: [] }; }, async read() { return doc; } };
+  const manage = new Function('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'parse',
+    `${manageCode}\nreturn manageConfig;`)(class { constructor() { return owner; } }, async () => ({ source_key: 'workspace' }),
+    (value, keys) => keys.reduce((current, key) => current[key], value),
+    (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, parse);
+  const edit = version => manage('workspace', { gateway_id: 'gateway-a' }, { gateway_id: 'gateway-a', workspace_id: 'workspace-a' },
+    { async pick() { parameterPrompts++; return undefined; } }, {}, { ...binding, package_version: version },
+    null, true, undefined, () => {}, {}, new AbortController().signal);
+  await edit('2.0.0');
+  expect(parameterPrompts).toBe(1);
+  await expect(edit('1.0.0')).rejects.toThrow('当前绑定使用 2.0.0');
+  expect(parameterPrompts).toBe(1);
+  doc.source_effective = payload([]);
+  await edit('2.0.0');
+  expect(parameterPrompts).toBe(2);
 });
 
 test('复杂 schema 只给具名位置入口，前端不解析分支或建立第二份 schema', () => {

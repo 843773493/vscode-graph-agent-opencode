@@ -14,15 +14,14 @@ import { INotificationService } from '../../upstream/src/vs/platform/notificatio
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
-import { timeout } from '../../upstream/src/vs/base/common/async.js';
-import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import { DeferredPromise, raceTimeout, timeout } from '../../upstream/src/vs/base/common/async.js';
 import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
 import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget, PluginUninstallResultDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gateway, GatewayRequestError } from '../agentApi.js';
-import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import { onGatewayTokenInvalidated, DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
+import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
 
@@ -51,8 +50,9 @@ export class ServicePluginPackagesView extends ViewPane {
   private query = '';
   private controls: HTMLElement | undefined;
   private runtimeStatusController: AbortController | undefined;
-  private runtimeStatusTarget: string | undefined;
   private runtimeStatus: PluginRuntimeStatusDTO | undefined;
+  private workspaceBindings: readonly PluginBinding[] | undefined;
+  private updateDetailsStatus: (() => void) | undefined;
 
   constructor(options: IViewPaneOptions, @IKeybindingService keybindings: IKeybindingService,
     @IContextMenuService contextMenu: IContextMenuService, @IConfigurationService configuration: IConfigurationService,
@@ -74,7 +74,7 @@ export class ServicePluginPackagesView extends ViewPane {
     }));
     this._register(this.onDidChangeBodyVisibility(visible => {
       if (visible) void this.refresh();
-      else this.stopRuntimeStatus();
+      else { this.refreshRevision++; this.stopRuntimeStatus(); }
     }));
   }
 
@@ -136,7 +136,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const wasVisible = this.content !== undefined && !this.content.hidden;
     if (this.controls) this.controls.hidden = otherView;
     if (this.content) this.content.hidden = otherView;
-    if (otherView) this.stopRuntimeStatus();
+    if (otherView) { this.refreshRevision++; this.stopRuntimeStatus(); }
     else if (!otherView && !wasVisible && this.isBodyVisible()) void this.refresh();
     for (const section of this.content?.querySelectorAll<HTMLElement>('.service-plugin-package') ?? []) {
       section.hidden = !section.dataset.search?.includes(query.trim().toLocaleLowerCase());
@@ -147,21 +147,27 @@ export class ServicePluginPackagesView extends ViewPane {
     this.stopRuntimeStatus();
     this.refreshRevision++;
     this.content = undefined;
+    this.workspaceBindings = undefined;
+    this.updateDetailsStatus = undefined;
     super.dispose();
   }
 
   async refresh(): Promise<void> {
-    if (!this.content) return;
+    if (!this.content || !this.isBodyVisible() || this.content.hidden) return;
     this.stopRuntimeStatus();
     const revision = ++this.refreshRevision;
     const scope = this.scope;
     const container = this.content;
+    this.workspaceBindings = undefined;
+    this.updateDetailsStatus = undefined;
     clearNode(container);
     append(container, $('p')).textContent = '正在读取目标插件…';
     try {
       await this.renderPackages(container, revision, scope);
     } catch (error) {
       if (revision !== this.refreshRevision || this.content !== container) return;
+      this.stopRuntimeStatus();
+      if (!this.isBodyVisible() || container.hidden) return;
       clearNode(container);
       append(container, $('p')).textContent = errorsText(error);
       const retry = append(container, $('button'));
@@ -172,36 +178,52 @@ export class ServicePluginPackagesView extends ViewPane {
   }
 
   private async runOperation(operation: () => Promise<void>): Promise<void> {
+    const revision = this.refreshRevision;
     try { await operation(); }
     catch (error) { this.notifications.error(errorsText(error)); }
-    finally { await this.refresh(); }
+    finally { if (revision === this.refreshRevision) await this.refresh(); }
+  }
+
+  private async runTargetOperation(operation: (lifecycle: ReturnType<typeof createManagementTargetLifecycle>) => Promise<void>,
+    expectedEntryGatewayId?: string): Promise<void> {
+    await this.runOperation(async () => {
+      const lifecycle = createManagementTargetLifecycle('原 Gateway 或访问凭据已改变，未开始新的插件管理操作', expectedEntryGatewayId);
+      try { lifecycle.check(); await operation(lifecycle); }
+      finally { lifecycle.dispose(); }
+    });
   }
 
   private stopRuntimeStatus(): void {
     this.runtimeStatusController?.abort();
     this.runtimeStatusController = undefined;
-    this.runtimeStatusTarget = undefined;
     this.runtimeStatus = undefined;
   }
 
-  private observeRuntimeStatus(target: PluginTarget): void {
-    if (!this.isBodyVisible() || !this.content || this.content.hidden || this.scope === 'defaults') return;
-    const key = JSON.stringify(target);
-    if (this.runtimeStatusTarget === key && this.runtimeStatusController && !this.runtimeStatusController.signal.aborted) return;
+  private async observeRuntimeStatus(target: PluginTarget): Promise<PluginRuntimeStatusDTO> {
     this.stopRuntimeStatus();
     const controller = new AbortController();
+    const first = new DeferredPromise<PluginRuntimeStatusDTO>();
+    controller.signal.addEventListener('abort', () => void first.cancel(), { once: true });
     this.runtimeStatusController = controller;
-    this.runtimeStatusTarget = key;
     void watchPluginRuntimeStatus(target, controller.signal, snapshot => {
       if (this.runtimeStatusController !== controller || controller.signal.aborted
-        || this.runtimeStatusTarget !== key || snapshot.plugins.some(slot => slot.gateway_id !== target.gateway_id)) return;
+        || snapshot.plugins.some(slot => slot.gateway_id !== target.gateway_id)) return;
       this.runtimeStatus = snapshot;
+      void first.complete(snapshot);
       this.updateRuntimeStatusPresentation();
     }).catch(error => {
       if (controller.signal.aborted || this.runtimeStatusController !== controller) return;
+      if (!first.isSettled) { void first.error(error); return; }
       this.stopRuntimeStatus();
       this.notifications.error(errorsText(error));
     });
+    // 首个完整快照同时用于初始化和后续观察，不再并行读取另一份 /status。
+    const snapshot = await raceTimeout(first.p, DEFAULT_API_REQUEST_TIMEOUT_MS);
+    if (!snapshot) {
+      controller.abort();
+      throw new Error('等待插件运行状态首个快照超时，请重新打开管理视图');
+    }
+    return snapshot;
   }
 
   private runtimeSlot(packageId: string, pluginId: string, workspaceId: string | undefined): PluginRuntimeStatusDTO['plugins'][number] | undefined {
@@ -261,11 +283,18 @@ export class ServicePluginPackagesView extends ViewPane {
         failure.textContent = status?.error ?? '';
       }
     }
+    this.updateDetailsStatus?.();
+  }
+
+  private configuredBinding(packageId: string, pluginId: string, workspaceId: string | undefined): PluginBinding | undefined {
+    // 工作区来源期望与 Gateway 的 active 交接分别展示；旧交接不能覆盖 pending 期望。
+    const bindings = workspaceId ? this.workspaceBindings : this.runtimeStatus?.configured_bindings;
+    return bindings?.find(item => item.package_id === packageId
+      && item.plugin_id === pluginId && (item.workspace_id ?? undefined) === workspaceId);
   }
 
   private runtimeConfigurationLabel(packageId: string, pluginId: string, workspaceId: string | undefined): string {
-    const binding = this.runtimeStatus?.configured_bindings.find(item => item.package_id === packageId
-      && item.plugin_id === pluginId && (item.workspace_id ?? undefined) === workspaceId);
+    const binding = this.configuredBinding(packageId, pluginId, workspaceId);
     return binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定';
   }
 
@@ -282,6 +311,9 @@ export class ServicePluginPackagesView extends ViewPane {
 
   private async renderPackages(container: HTMLElement, revision: number, scope: Scope): Promise<void> {
     await workspaceContext.ensureReady();
+    if (revision !== this.refreshRevision) return;
+    const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
+    if (!entryGatewayId) throw new Error('Gateway 身份尚未完成初始化，无法读取插件管理目标');
     const target = managementGateway('extensions');
     const workspace = scope === 'workspace' ? (this.workspaceTarget ?? await choosePluginWorkspace(target, this.quickInput)) : undefined;
     if (revision !== this.refreshRevision) return;
@@ -290,13 +322,11 @@ export class ServicePluginPackagesView extends ViewPane {
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
     const [inventory, runtime, scopeBindings] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
-      scope === 'defaults' ? undefined
-        : gateway.request<PluginRuntimeStatusDTO>('/api/gateway/service-plugins/status', { method: 'POST', body: JSON.stringify(pluginTarget) }),
+      scope === 'defaults' ? undefined : this.observeRuntimeStatus(pluginTarget),
       scope === 'defaults' ? readWorkspaceDefaults(target) : workspace ? readWorkspaceBindings(workspace) : undefined,
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
-    this.observeRuntimeStatus(pluginTarget);
-    if (runtime) this.runtimeStatus = runtime;
+    this.workspaceBindings = workspace ? scopeBindings : undefined;
     clearNode(container);
     append(container, $('p')).textContent = inventory.sources?.message ?? '插件源尚未配置';
     if (workspace) {
@@ -323,7 +353,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const batchButtons = [true, false].map(enabled => {
         const button = append(packageActions, $('button')) as HTMLButtonElement;
         button.textContent = enabled ? '全部启用此范围' : '全部停用此范围';
-        button.addEventListener('click', () => void this.runOperation(async () => {
+        button.addEventListener('click', () => void this.runTargetOperation(async lifecycle => {
           batchButtons.forEach(item => { item.disabled = true; });
           try {
             const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
@@ -333,12 +363,19 @@ export class ServicePluginPackagesView extends ViewPane {
                 + (scope === 'defaults' ? '仅修改以后新建工作区的默认值，不操作当前实例。' : '每个插件独立提交，失败不回滚已完成的操作。'),
               primaryButton: enabled ? '全部启用此范围' : '全部停用此范围' });
             if (!confirmation.confirmed) return;
+            lifecycle.check();
             const results = await setPluginBindings(scope, target, workspace, this.quickInput,
-              matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled })), enabled);
+              matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled })),
+              enabled, lifecycle.check, lifecycle.token, lifecycle.signal);
             if (!results) return;
             let current: PluginRuntimeStatusDTO | undefined, readError: string | undefined;
             if (scope !== 'defaults') {
-              try { current = await gateway.request<PluginRuntimeStatusDTO>('/api/gateway/service-plugins/status', { method: 'POST', body: JSON.stringify(pluginTarget) }); }
+              try {
+                lifecycle.check();
+                current = await gateway.request<PluginRuntimeStatusDTO>('/api/gateway/service-plugins/status',
+                  { method: 'POST', body: JSON.stringify(pluginTarget) });
+                lifecycle.check();
+              }
               catch (error) { readError = errorsText(error); }
             }
             const lines = results.map(({ binding: item, configuration }) => {
@@ -351,18 +388,20 @@ export class ServicePluginPackagesView extends ViewPane {
             });
             await this.dialogs.info('插件批量操作结果', lines.join('\n\n'));
           } finally { batchButtons.forEach(item => { item.disabled = false; }); }
-        }));
+        }, entryGatewayId));
         return button;
       });
       const installInput = append(packageActions, $('button'));
       installInput.textContent = '重新安装/更新';
-      installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, this.progress, pluginTarget)));
+      installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
+        this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId)));
       const uninstall = append(packageActions, $('button')) as HTMLButtonElement;
       uninstall.textContent = '卸载整个包';
       uninstall.title = '由目标 Gateway 检查在用引用；有引用时显示具体原因';
       uninstall.addEventListener('click', () => {
         uninstall.disabled = true;
-        void this.runOperation(() => uninstallPackageFromView(this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version));
+        void this.runTargetOperation(lifecycle => uninstallPackageFromView(this.quickInput, this.notifications,
+          pluginTarget, manifest.package_id, manifest.version, lifecycle), entryGatewayId);
       });
       for (const plugin of matching) {
         const binding = bindings.find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id);
@@ -384,12 +423,12 @@ export class ServicePluginPackagesView extends ViewPane {
         const open = append(row, $('button'));
         open.textContent = `${plugin.name} · ${plugin.id}`;
         open.addEventListener('click', () => { this.selected = { packageId: manifest.package_id, pluginId: plugin.id, version: manifest.version };
-          this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status); });
+          this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status, entryGatewayId); });
         const runtimeValue = append(row, $('span'));
         runtimeValue.dataset.pluginRuntimeValue = 'true';
         runtimeValue.textContent = initialRuntimeValue;
         if (revision === this.refreshRevision && this.selected?.packageId === manifest.package_id && this.selected.pluginId === plugin.id && this.selected.version === manifest.version) {
-          this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status);
+          this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status, entryGatewayId);
         }
       }
     }
@@ -425,12 +464,14 @@ export class ServicePluginPackagesView extends ViewPane {
       this.renderInstanceLog(row, target, status?.log_id);
       const install = append(section, $('button'));
       install.textContent = '补装插件包';
-      install.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, this.progress, pluginTarget)));
+      install.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
+        this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId)));
       const unbind = append(section, $('button')) as HTMLButtonElement;
       unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
       unbind.addEventListener('click', () => {
         unbind.disabled = true;
-        void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, binding, null));
+        void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace, this.quickInput, this.notifications,
+          binding, null, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId);
       });
     }
     this.search(this.query);
@@ -454,7 +495,11 @@ export class ServicePluginPackagesView extends ViewPane {
 
   private showDetails(container: HTMLElement, scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,
     manifest: NonNullable<PluginInventoryResultDTO['packages'][number]['manifest']>, plugin: NonNullable<typeof manifest.plugins[number]>,
-    binding: PluginBinding | undefined, status: PluginRuntimeStatusDTO['plugins'][number] | undefined): void {
+    binding: PluginBinding | undefined, status: PluginRuntimeStatusDTO['plugins'][number] | undefined, entryGatewayId: string): void {
+    if (scope !== 'defaults' && this.runtimeStatus) {
+      binding = this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id);
+      status = this.runtimeSlot(manifest.package_id, plugin.id, workspace?.workspace_id);
+    }
     const old = container.querySelector('.service-plugin-details');
     old?.remove();
     const details = append(container, $('section.service-plugin-details'));
@@ -471,7 +516,9 @@ export class ServicePluginPackagesView extends ViewPane {
     const detailsState = append(details, $('p'));
     detailsState.dataset.pluginRuntimeValue = 'true';
     detailsState.textContent = details.dataset.initialRuntimeValue;
-    append(details, $('p')).textContent = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
+    const identity = append(details, $('p'));
+    const ownerLabel = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}`;
+    identity.textContent = `${ownerLabel}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
     if (workspace) {
       const handoff = append(details, $('p'));
       handoff.setAttribute('aria-label', '工作区插件配置交接');
@@ -491,66 +538,91 @@ export class ServicePluginPackagesView extends ViewPane {
     failure.dataset.pluginRuntimeError = 'true';
     failure.hidden = !status?.error;
     failure.textContent = status?.error ?? '';
-    this.renderInstanceLog(details, target, status?.log_id);
-    const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
-    const otherVersion = binding && binding.package_version !== manifest.version;
-    if (otherVersion) {
-      const switchVersion = append(details, $('button')) as HTMLButtonElement;
-      switchVersion.textContent = '切换到此版本（保留开关）';
-      switchVersion.addEventListener('click', () => {
-        switchVersion.disabled = true;
-        void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, 'preserve'));
-      });
-    } else {
-      const toggle = append(details, $('button'));
-      toggle.textContent = scope === 'defaults'
-        ? binding?.enabled ? '设为新建时停用' : '设为新建时启用'
-        : binding?.enabled ? '停用此范围' : '启用此范围';
-      toggle.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, !binding?.enabled)));
-    }
-    if (binding && !otherVersion) {
-      const unbind = append(details, $('button'));
-      unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
-      unbind.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, null)));
-    }
-    if (scope !== 'defaults') {
-      append(details, $('p')).textContent = binding
-        ? `当前绑定 ${manifest.package_id}/${plugin.id}@${binding.package_version}；保存与实际运行分别报告。`
-        : '插件未绑定，参数仅留在原来源且未生效；绑定时按确切版本完整校验。';
-      if (otherVersion) append(details, $('p')).textContent = '切换绑定后才能按此版本编辑参数；安装新版本不会自动切换。';
-      else {
-        const parameters = append(details, $('button'));
-        parameters.textContent = '编辑参数 JSON';
-        parameters.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace,
-          this.quickInput, this.notifications, bindingValue, null, true)));
+    const instanceLog = append(details, $('div'));
+    this.renderInstanceLog(instanceLog, target, status?.log_id);
+    const actions = append(details, $('.service-plugin-detail-actions'));
+    const renderActions = (binding: PluginBinding | undefined, status: PluginRuntimeStatusDTO['plugins'][number] | undefined) => {
+      clearNode(actions);
+      const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
+      const otherVersion = binding && binding.package_version !== manifest.version;
+      if (otherVersion) {
+        const switchVersion = append(actions, $('button')) as HTMLButtonElement;
+        switchVersion.textContent = '切换到此版本（保留开关）';
+        switchVersion.addEventListener('click', () => {
+          switchVersion.disabled = true;
+          void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace, this.quickInput, this.notifications,
+            bindingValue, 'preserve', false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId);
+        });
+      } else {
+        const toggle = append(actions, $('button'));
+        toggle.textContent = scope === 'defaults'
+          ? binding?.enabled ? '设为新建时停用' : '设为新建时启用'
+          : binding?.enabled ? '停用此范围' : '启用此范围';
+        toggle.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
+          this.quickInput, this.notifications, bindingValue, !binding?.enabled, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
       }
-      const privateFields = otherVersion ? [] : writeOnlyFields(plugin.contributes?.configuration);
-      for (const field of privateFields) {
-        const secret = append(details, $('button')) as HTMLButtonElement;
-        secret.textContent = field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数';
-        secret.addEventListener('click', () => {
-          secret.disabled = true;
-          void this.runOperation(() => manageConfig(scope, target, workspace,
-            this.quickInput, this.notifications, bindingValue, null, false, field));
+      if (binding && !otherVersion) {
+        const unbind = append(actions, $('button'));
+        unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
+        unbind.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
+          this.quickInput, this.notifications, bindingValue, null, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
+      }
+      if (scope !== 'defaults') {
+        append(actions, $('p')).textContent = binding
+          ? `当前绑定 ${manifest.package_id}/${plugin.id}@${binding.package_version}；保存与实际运行分别报告。`
+          : '插件未绑定，参数仅留在原来源且未生效；绑定时按确切版本完整校验。';
+        if (otherVersion) append(actions, $('p')).textContent = '切换绑定后才能按此版本编辑参数；安装新版本不会自动切换。';
+        else {
+          const parameters = append(actions, $('button'));
+          parameters.textContent = '编辑参数 JSON';
+          parameters.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
+            this.quickInput, this.notifications, bindingValue, null, true, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
+        }
+        const privateFields = otherVersion ? [] : writeOnlyFields(plugin.contributes?.configuration);
+        for (const field of privateFields) {
+          const secret = append(actions, $('button')) as HTMLButtonElement;
+          secret.textContent = field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数';
+          secret.addEventListener('click', () => {
+            secret.disabled = true;
+            void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
+              this.quickInput, this.notifications, bindingValue, null, false, field, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId);
+          });
+        }
+      }
+      if (status?.revision && plugin.runtime && binding?.enabled && !otherVersion && status.binding?.package_version === manifest.version) {
+        const restart = append(actions, $('button')) as HTMLButtonElement;
+        restart.textContent = '重启实例';
+        restart.addEventListener('click', () => {
+          restart.disabled = true;
+          void this.runTargetOperation(async lifecycle => {
+            lifecycle.check();
+            await gateway.request('/api/gateway/service-plugins/restart', { method: 'POST', body: JSON.stringify({ gateway_id: target.gateway_id,
+              gateway_connection_id: target.gateway_connection_id, package_id: manifest.package_id, package_version: manifest.version,
+              plugin_id: plugin.id, revision: status.revision, ...(workspace ? { workspace_id: workspace.workspace_id } : {}) }) });
+          }, entryGatewayId);
         });
       }
-      if (plugin.contributes?.configuration) {
-        const schema = append(details, $('pre'));
-        schema.setAttribute('aria-label', '此安装版本的参数 schema');
-        schema.textContent = JSON.stringify(plugin.contributes.configuration, null, 2);
+    };
+    this.updateDetailsStatus = () => {
+      if (scope === 'defaults') return;
+      const nextBinding = this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id);
+      const nextStatus = this.runtimeSlot(manifest.package_id, plugin.id, workspace?.workspace_id);
+      identity.textContent = `${ownerLabel}${nextStatus?.instance ? ` · 实例 ${nextStatus.instance.instance_id}` : ''}`;
+      if (status?.log_id !== nextStatus?.log_id) {
+        clearNode(instanceLog);
+        this.renderInstanceLog(instanceLog, target, nextStatus?.log_id);
       }
-    }
-    if (status?.revision && plugin.runtime && binding?.enabled && !otherVersion && status.binding?.package_version === manifest.version) {
-      const restart = append(details, $('button')) as HTMLButtonElement;
-      restart.textContent = '重启实例';
-      restart.addEventListener('click', () => {
-        restart.disabled = true;
-        void this.runOperation(async () => {
-          await gateway.request('/api/gateway/service-plugins/restart', { method: 'POST', body: JSON.stringify({ gateway_id: target.gateway_id,
-            gateway_connection_id: target.gateway_connection_id, package_id: manifest.package_id, package_version: manifest.version,
-            plugin_id: plugin.id, revision: status.revision, ...(workspace ? { workspace_id: workspace.workspace_id } : {}) }) });
-        });
-      });
+      // 只在动作依据变化时重建；兄弟实例或进度更新不打断已开始的输入和按钮状态。
+      const actionsChanged = binding?.enabled !== nextBinding?.enabled || binding?.package_version !== nextBinding?.package_version
+        || status?.revision !== nextStatus?.revision;
+      binding = nextBinding; status = nextStatus;
+      if (actionsChanged) renderActions(binding, status);
+    };
+    renderActions(binding, status);
+    if (scope !== 'defaults' && plugin.contributes?.configuration) {
+      const schema = append(details, $('pre'));
+      schema.setAttribute('aria-label', '此安装版本的参数 schema');
+      schema.textContent = JSON.stringify(plugin.contributes.configuration, null, 2);
     }
   }
 }
@@ -570,26 +642,18 @@ async function readPluginInstanceLog(target: PluginTarget, logId: string): Promi
 }
 
 async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService,
-  progress: IProgressService, target: PluginTarget): Promise<void> {
+  progress: IProgressService, target: PluginTarget, expectedEntryGatewayId?: string): Promise<void> {
   target = { ...target };
-  const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
-  const cancellation = new CancellationTokenSource(), controller = new AbortController();
-  const invalidate = () => { cancellation.cancel(); controller.abort(); };
-  const releaseAuth = onGatewayTokenInvalidated(0, invalidate);
-  const releaseContext = workspaceContext.subscribe(() => {
-    if (workspaceContext.getSnapshot().gatewayId !== entryGatewayId) invalidate();
-  });
-  const check = () => {
-    if (cancellation.token.isCancellationRequested) throw new Error('原 Gateway 或访问凭据已改变，请重新打开插件安装');
-  };
+  const lifecycle = createManagementTargetLifecycle('原 Gateway 或访问凭据已改变，请重新打开插件安装', expectedEntryGatewayId);
+  const { check, signal, token } = lifecycle;
   try {
     const type = await quickInput.pick([{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' },
       { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
-      { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false }, cancellation.token);
+      { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false }, token);
     check();
     if (!type) return;
     if (type.kind === 'query') {
-      const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id }, cancellation.token);
+      const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id }, token);
       check();
       if (operationId) await observeInstallation(progress, notifications, target, operationId);
       return;
@@ -597,21 +661,21 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
     let acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>;
     if (type.kind === 'source') {
       const inventory = await gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory',
-        { method: 'POST', body: JSON.stringify(target), signal: controller.signal });
+        { method: 'POST', body: JSON.stringify(target), signal });
       check();
       const sources = inventory.sources?.entries.filter(source => source.enabled) ?? [];
       if (!sources.length) { notifications.info(inventory.sources?.message ?? '插件源尚未配置'); return; }
       const source = await quickInput.pick(sources.map(source => ({ label: source.source_id, source })),
-        { title: '选择自有来源', canPickMany: false }, cancellation.token);
+        { title: '选择自有来源', canPickMany: false }, token);
       check();
       if (!source) return;
-      const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id }, cancellation.token);
+      const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id }, token);
       check();
       if (query === undefined) return;
       let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision: string | undefined;
       while (!selected) {
         const page = await gateway.request<PluginSourceCatalogDTO>('/api/gateway/service-plugins/source-catalog',
-          { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }), signal: controller.signal });
+          { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }), signal });
         check();
         if (page.gateway_id !== target.gateway_id || page.source_id !== source.source.source_id) {
           throw new Error('插件来源目录回执不属于原 Gateway 或 source_id');
@@ -623,7 +687,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
         const items = page.items.map(artifact => ({ label: `${artifact.package_id}@${artifact.package_version}`,
           description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : '纯声明插件包', artifact }));
         const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: '下一页', description: '', artifact: undefined }] : [])],
-          { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false }, cancellation.token);
+          { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false }, token);
         check();
         if (!choice) return;
         if (choice.artifact) selected = choice.artifact;
@@ -635,7 +699,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
     } else {
       const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: pluginGatewayLabel(target),
         placeHolder: type.kind === 'directory' ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
-          value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null }, cancellation.token);
+          value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null }, token);
       check();
       if (!path) return;
       acquisition = { path, development_directory: type.kind === 'directory', artifact: undefined };
@@ -661,7 +725,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
       await observeInstallation(progress, notifications, target, operationId, operation);
     });
   } finally {
-    releaseAuth(); releaseContext(); cancellation.dispose(); controller.abort();
+    lifecycle.dispose();
   }
 }
 
@@ -758,10 +822,14 @@ export async function installServicePluginPackage(accessor: ServicesAccessor, ex
     { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id });
 }
 
-async function uninstallPackageFromView(quickInput: IQuickInputService, notifications: INotificationService, target: PluginTarget, packageId: string, version: string): Promise<void> {
+async function uninstallPackageFromView(quickInput: IQuickInputService, notifications: INotificationService, target: PluginTarget,
+  packageId: string, version: string, lifecycle: ReturnType<typeof createManagementTargetLifecycle>): Promise<void> {
+  target = { ...target };
+  lifecycle.check();
   const confirm = await quickInput.pick([{ label: '取消', accept: false }, { label: '卸载整包', accept: true,
     description: `${packageId}@${version} · ${pluginGatewayLabel(target)} · 有原 owner 引用时会拒绝并显示引用` }],
-  { title: `卸载插件包 · ${pluginGatewayLabel(target)}`, canPickMany: false });
+  { title: `卸载插件包 · ${pluginGatewayLabel(target)}`, canPickMany: false }, lifecycle.token);
+  lifecycle.check();
   if (!confirm?.accept) return;
   const result = await gateway.request<PluginUninstallResultDTO>('/api/gateway/service-plugins/uninstall', {
     method: 'POST', body: JSON.stringify({ ...target, package_id: packageId, package_version: version }),

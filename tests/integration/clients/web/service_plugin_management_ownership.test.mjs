@@ -5,12 +5,17 @@ import { join } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { HttpRequestError as GatewayRequestError } from '../../../../src/clients/web/src/api/http.js';
 import { CancellationTokenSource } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { DeferredPromise, raceTimeout } from '../../../../src/clients/workbench/upstream/src/vs/base/common/async.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/service_plugin_management_ownership.test.mjs').prepare();
 const sourcePath = 'src/clients/workbench/src/extensions/servicePluginManagement.ts';
 const source = await readFile(sourcePath, 'utf8');
 const sourceFingerprint = createHash('sha256').update(source).digest('hex');
+const managementTargetPath = 'src/clients/workbench/src/managementTarget.ts';
+const managementTargetSource = await readFile(managementTargetPath, 'utf8');
+const configurationPath = 'src/clients/workbench/src/settings/pluginConfiguration.ts';
+const configurationSource = await readFile(configurationPath, 'utf8');
 
 function declaration(name) {
   const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
@@ -20,6 +25,51 @@ function declaration(name) {
   if (!node) throw new Error(`实际源码缺少 ${sourcePath}#${name}`);
   const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
   return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+}
+
+function managementDeclaration(name) {
+  const parsed = ts.createSourceFile(managementTargetPath, managementTargetSource, ts.ScriptTarget.Latest, true);
+  const node = parsed.statements.find(statement => statement.name?.text === name);
+  if (!node) throw new Error(`实际源码缺少 ${managementTargetPath}#${name}`);
+  const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
+  return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+}
+
+function configurationDeclaration(name) {
+  const parsed = ts.createSourceFile(configurationPath, configurationSource, ts.ScriptTarget.Latest, true);
+  const node = parsed.statements.find(statement => statement.name?.text === name);
+  if (!node) throw new Error(`实际源码缺少 ${configurationPath}#${name}`);
+  const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
+  return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+}
+
+function managementLifecycleHarness(state) {
+  const workspaceContext = {
+    getSnapshot: () => ({ gatewayId: state.gatewayId }),
+    subscribe(listener) { state.context.add(listener); return () => state.context.delete(listener); },
+  };
+  const onGatewayTokenInvalidated = (_port, listener) => {
+    state.auth.add(listener);
+    return () => state.auth.delete(listener);
+  };
+  const create = new Function('CancellationTokenSource', 'workspaceContext', 'onGatewayTokenInvalidated',
+    `${managementDeclaration('createManagementTargetLifecycle')}\nreturn createManagementTargetLifecycle;`)(
+    CancellationTokenSource, workspaceContext, onGatewayTokenInvalidated);
+  return {
+    create,
+    invalidateGateway(gatewayId) {
+      state.gatewayId = gatewayId;
+      for (const listener of state.context) listener();
+    },
+    invalidateCredentials() { for (const listener of state.auth) listener(); },
+  };
+}
+
+function createUninstaller(request, notifications = { info() {} }) {
+  const gateway = { request };
+  return new Function('gateway', 'pluginGatewayLabel',
+    `${declaration('uninstallPackageFromView')}\nreturn uninstallPackageFromView;`)(
+    gateway, target => `原生 Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`);
 }
 
 function classCallback(className, methodName, sourceFragment, bindings = {}) {
@@ -68,11 +118,16 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
   const lifecycle = options.lifecycle ?? { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
   const context = { getSnapshot: () => ({ gatewayId: lifecycle.gatewayId }),
     subscribe(listener) { lifecycle.context.add(listener); return () => lifecycle.context.delete(listener); } };
-  const install = new Function('GatewayRequestError', 'CancellationTokenSource', 'onGatewayTokenInvalidated', 'workspaceContext', 'gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
+  const createManagementTargetLifecycle = new Function('CancellationTokenSource', 'workspaceContext', 'onGatewayTokenInvalidated',
+    `${managementDeclaration('createManagementTargetLifecycle')}\nreturn createManagementTargetLifecycle;`)(
+    CancellationTokenSource, context, (_port, listener) => {
+      lifecycle.auth.add(listener);
+      return () => lifecycle.auth.delete(listener);
+    });
+  const install = new Function('GatewayRequestError', 'createManagementTargetLifecycle', 'gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
     'readInstallation', 'installationKey', 'runPluginInstallation', 'installationFailureText', 'pluginGatewayLabel',
     `${declaration('installPackageFromView')}\nreturn installPackageFromView;`)(
-    GatewayRequestError, CancellationTokenSource, (_port, listener) => { lifecycle.auth.add(listener); return () => lifecycle.auth.delete(listener); }, context,
-    gateway, options.generateUuid ?? (() => 'operation-original'), observeInstallation,
+    GatewayRequestError, createManagementTargetLifecycle, gateway, options.generateUuid ?? (() => 'operation-original'), observeInstallation,
     error => error instanceof Error ? error.message : String(error), requireOwner, read, installationKey, runPluginInstallation,
     installationFailureText, pluginGatewayLabel);
   const quickInputToken = {}, notificationToken = {}, progressToken = {};
@@ -418,12 +473,13 @@ test('卸载按钮在发起确认与请求流程前立即禁用，阻止同一�
   let operationStarted = false;
   const onUninstallClick = classCallback('ServicePluginPackagesView', 'renderPackages', 'uninstallPackageFromView', {
     uninstall,
+    entryGatewayId: 'entry-gateway',
     pluginTarget: { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' },
     manifest: { package_id: 'sample', version: '1.0.0' },
     uninstallPackageFromView: async () => {},
   });
 
-  onUninstallClick.call({ runOperation() { operationStarted = uninstall.disabled; return Promise.resolve(); } });
+  onUninstallClick.call({ runTargetOperation() { operationStarted = uninstall.disabled; return Promise.resolve(); } });
 
   expect(uninstall.disabled).toBe(true);
   expect(operationStarted).toBe(true);
@@ -432,9 +488,11 @@ test('卸载按钮在发起确认与请求流程前立即禁用，阻止同一�
 test('重启按钮在请求运行时立即禁用，阻止同一 revision 重复重启', () => {
   const restart = { disabled: false };
   let operationStarted = false;
-  const onRestartClick = classCallback('ServicePluginPackagesView', 'showDetails', '/api/gateway/service-plugins/restart', { restart });
+  const onRestartClick = classCallback('ServicePluginPackagesView', 'showDetails', '/api/gateway/service-plugins/restart', {
+    restart, entryGatewayId: 'entry-gateway',
+  });
 
-  onRestartClick.call({ runOperation() { operationStarted = restart.disabled; return Promise.resolve(); } });
+  onRestartClick.call({ runTargetOperation() { operationStarted = restart.disabled; return Promise.resolve(); } });
 
   expect(restart.disabled).toBe(true);
   expect(operationStarted).toBe(true);
@@ -443,12 +501,342 @@ test('重启按钮在请求运行时立即禁用，阻止同一 revision 重复�
 test('秘密参数按钮在向导启动前立即禁用，避免重复创建不可变秘密版本', () => {
   const secret = { disabled: false };
   let operationStarted = false;
-  const onSecretClick = classCallback('ServicePluginPackagesView', 'showDetails', 'false, field', { secret });
+  const onSecretClick = classCallback('ServicePluginPackagesView', 'showDetails', 'false, field', {
+    secret, entryGatewayId: 'entry-gateway',
+  });
 
-  onSecretClick.call({ runOperation() { operationStarted = secret.disabled; return Promise.resolve(); } });
+  onSecretClick.call({ runTargetOperation() { operationStarted = secret.disabled; return Promise.resolve(); } });
 
   expect(secret.disabled).toBe(true);
   expect(operationStarted).toBe(true);
+});
+
+test('旧操作结算不刷新用户已切换的范围，当前视图操作完成仍读取权威状态', async () => {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
+  const member = owner.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === 'runOperation');
+  const compiled = ts.transpile(`class View { ${ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)} }`,
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  const View = new Function('errorsText', `${compiled}\nreturn View;`)(error => error.message);
+  const view = new View(), submitted = Promise.withResolvers(), errors = [];
+  let refreshes = 0;
+  view.refreshRevision = 1;
+  view.notifications = { error: message => errors.push(message) };
+  view.refresh = async () => { refreshes++; };
+  const settled = view.runOperation(() => submitted.promise);
+  view.refreshRevision++;
+  submitted.resolve();
+  await settled;
+  expect(refreshes).toBe(0);
+  await view.runOperation(async () => {});
+  expect(refreshes).toBe(1);
+  await view.runOperation(async () => { throw new Error('原操作失败'); });
+  expect(errors).toEqual(['原操作失败']);
+  expect(refreshes).toBe(2);
+});
+
+test('打开的详情跟随绑定与实例变化，兄弟状态不重建当前按钮', () => {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
+  const members = owner.members.filter(member => ts.isMethodDeclaration(member)
+    && ['showDetails', 'runtimeSlot', 'configuredBinding', 'runtimeConfigurationLabel'].includes(member.name?.getText(parsed)));
+  const printed = members.map(member => ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)).join('\n');
+  const compiled = ts.transpile(`class DetailView { ${printed} }`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  const elements = [], requests = [], logIds = [];
+  const element = tag => ({ tag, dataset: {}, children: [], textContent: '', listeners: {},
+    setAttribute() {}, remove() {}, querySelector() { return undefined; },
+    addEventListener(event, listener) { this.listeners[event] = listener; } });
+  const View = new Function('append', '$', 'clearNode', 'writeOnlyFields', 'manageConfig', 'gateway',
+    `${compiled}\nreturn DetailView;`)((parent, child) => {
+      parent.children.push(child); elements.push(child); return child;
+    }, element, parent => { parent.children = []; }, () => [], async (...args) => requests.push(args), { request() {} });
+  const view = new View();
+  const initial = { package_id: 'sample', plugin_id: 'command', package_version: '1.0.0', enabled: true };
+  let status = { binding: initial, revision: 'r1', instance: { instance_id: 'instance-first' }, log_id: 'log-first' };
+  view.runtimeStatus = { configured_bindings: [initial], plugins: [status], workspace_configurations: [] };
+  view.runtimeLabel = () => 'ready'; view.runtimeActualLabel = () => 'ready';
+  view.renderInstanceLog = (_container, _target, logId) => logIds.push(logId);
+  view.runTargetOperation = operation => operation({ check() {}, token: {}, signal: new AbortController().signal });
+  view.showDetails(element('container'), 'gateway', { gateway_id: 'gateway-original' }, undefined,
+    { package_id: 'sample', version: '1.0.0' }, { id: 'command', runtime: 'python' }, initial, status, 'entry');
+  const actions = elements.find(item => item.tag === '.service-plugin-detail-actions');
+  const buttons = () => actions.children.filter(item => item.tag === 'button').map(item => item.textContent);
+  expect(buttons()).toContain('停用此范围'); expect(buttons()).toContain('重启实例');
+  const originalButton = actions.children[0];
+  view.runtimeStatus.plugins = [status, { revision: 'sibling' }];
+  view.updateDetailsStatus();
+  expect(actions.children[0]).toBe(originalButton);
+  expect(logIds).toEqual(['log-first']);
+  const identity = elements.find(item => item.textContent.includes('instance-first'));
+  status = { ...status, instance: { instance_id: 'instance-second' }, log_id: 'log-second' };
+  view.runtimeStatus.plugins = [status];
+  view.updateDetailsStatus();
+  expect(identity.textContent).toContain('instance-second');
+  expect(identity.textContent).not.toContain('instance-first');
+  expect(logIds).toEqual(['log-first', 'log-second']);
+  expect(actions.children[0]).toBe(originalButton);
+  view.updateDetailsStatus();
+  expect(logIds).toEqual(['log-first', 'log-second']);
+  const disabled = { ...initial, enabled: false };
+  status = { binding: disabled, revision: 'r2' };
+  view.runtimeStatus = { configured_bindings: [disabled], plugins: [status], workspace_configurations: [] };
+  view.updateDetailsStatus();
+  expect(identity.textContent).not.toContain('instance-second');
+  expect(logIds.at(-1)).toBeUndefined();
+  expect(buttons()).toContain('启用此范围'); expect(buttons()).not.toContain('停用此范围'); expect(buttons()).not.toContain('重启实例');
+  actions.children.find(item => item.textContent === '启用此范围').listeners.click();
+  expect(requests).toHaveLength(1); expect(requests[0][5]).toMatchObject({ package_version: '1.0.0' });
+  expect(requests[0][6]).toBe(true);
+  const newer = { ...initial, package_version: '2.0.0' };
+  view.runtimeStatus = { configured_bindings: [newer], plugins: [{ binding: newer, revision: 'r3' }], workspace_configurations: [] };
+  view.updateDetailsStatus();
+  expect(buttons()).toContain('切换到此版本（保留开关）'); expect(buttons()).not.toContain('重启实例');
+  expect(buttons()).not.toContain('编辑参数 JSON'); expect(buttons()).not.toContain('停用此范围');
+  view.runtimeStatus = { configured_bindings: [], plugins: [], workspace_configurations: [] };
+  view.updateDetailsStatus();
+  expect(buttons()).toContain('启用此范围'); expect(buttons()).not.toContain('解除此范围绑定');
+
+  // 来源已有 v2 停用期望，Gateway 仍交接 v1 启用态；详情不能改回旧版本或反向开关。
+  const workspace = { gateway_id: 'gateway-original', workspace_id: 'workspace-a' };
+  const desired = { ...initial, workspace_id: workspace.workspace_id, package_version: '2.0.0', enabled: false };
+  const active = { ...initial, workspace_id: workspace.workspace_id };
+  view.workspaceBindings = [desired];
+  view.runtimeStatus = { configured_bindings: [active], plugins: [{ binding: active, revision: 'active-r1' }],
+    workspace_configurations: [] };
+  view.showDetails(element('container'), 'workspace', workspace, workspace,
+    { package_id: 'sample', version: '2.0.0' }, { id: 'command', runtime: 'python' }, desired,
+    view.runtimeStatus.plugins[0], 'entry');
+  const workspaceActions = elements.filter(item => item.tag === '.service-plugin-detail-actions').at(-1);
+  const workspaceButtons = () => workspaceActions.children.filter(item => item.tag === 'button').map(item => item.textContent);
+  expect(view.runtimeConfigurationLabel('sample', 'command', workspace.workspace_id)).toBe('停用 @2.0.0');
+  expect(workspaceButtons()).toContain('启用此范围');
+  expect(workspaceButtons()).not.toContain('切换到此版本（保留开关）');
+  expect(workspaceButtons()).not.toContain('重启实例');
+  view.runtimeStatus = { configured_bindings: [], plugins: [], workspace_configurations: [] };
+  view.updateDetailsStatus();
+  expect(view.runtimeConfigurationLabel('sample', 'command', workspace.workspace_id)).toBe('停用 @2.0.0');
+  expect(workspaceButtons()).toContain('解除此范围绑定');
+  workspaceActions.children.find(item => item.textContent === '启用此范围').listeners.click();
+  expect(requests.at(-1)[5]).toMatchObject({ package_version: '2.0.0' });
+  expect(requests.at(-1)[6]).toBe(true);
+});
+
+function runtimeStatusView() {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
+  const members = owner.members.filter(member => ts.isMethodDeclaration(member)
+    && ['observeRuntimeStatus', 'stopRuntimeStatus'].includes(member.name?.getText(parsed)));
+  const printed = members.map(member => ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)).join('\n');
+  const compiled = ts.transpile(`class StatusView { ${printed} }`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  const streams = [], errors = [], rendered = [];
+  const View = new Function('DeferredPromise', 'raceTimeout', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'watchPluginRuntimeStatus', 'errorsText',
+    `${compiled}\nreturn StatusView;`)(DeferredPromise, raceTimeout, 100,
+    (target, signal, next) => new Promise((resolve, reject) => {
+      streams.push({ target, signal, next, reject });
+      signal.addEventListener('abort', resolve, { once: true });
+    }), error => error instanceof Error ? error.message : String(error));
+  const view = new View();
+  view.notifications = { error: error => errors.push(error) };
+  view.updateRuntimeStatusPresentation = () => rendered.push(view.runtimeStatus);
+  return { view, streams, errors, rendered };
+}
+
+test('管理初始化等待同一状态流首快照，后续快照更新原投影，停止即释放订阅', async () => {
+  const { view, streams, errors, rendered } = runtimeStatusView();
+  const initial = view.observeRuntimeStatus({ gateway_id: 'gateway-original' });
+  const first = { plugins: [], configured_bindings: [], workspace_configurations: [] };
+  expect(view.runtimeStatus).toBeUndefined();
+  expect(streams).toHaveLength(1);
+  streams[0].next(first);
+  expect(await initial).toBe(first);
+  const next = { ...first, workspace_configurations: [{ workspace_id: 'workspace-a', state: 'waiting' }] };
+  streams[0].next(next);
+  expect(view.runtimeStatus).toBe(next);
+  expect(rendered).toEqual([first, next]);
+  view.stopRuntimeStatus();
+  expect(streams[0].signal.aborted).toBe(true);
+  expect(view.runtimeStatus).toBeUndefined();
+  streams[0].next(first);
+  expect(rendered).toEqual([first, next]);
+  expect(errors).toEqual([]);
+});
+
+test('首快照前换目标取消旧等待，迟到旧快照不能覆盖新目标；流错误保留原原因', async () => {
+  const { view, streams, errors } = runtimeStatusView();
+  const old = view.observeRuntimeStatus({ gateway_id: 'gateway-old' });
+  const cancelled = old.catch(error => error);
+  const current = view.observeRuntimeStatus({ gateway_id: 'gateway-new' });
+  expect((await cancelled).message).toBe('Canceled');
+  expect(streams[0].signal.aborted).toBe(true);
+  streams[0].next({ plugins: [], configured_bindings: [{ package_id: 'old' }], workspace_configurations: [] });
+  expect(view.runtimeStatus).toBeUndefined();
+  const snapshot = { plugins: [], configured_bindings: [], workspace_configurations: [] };
+  streams[1].next(snapshot);
+  expect(await current).toBe(snapshot);
+  streams[1].reject(new Error('原目标连接中断'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(errors).toEqual(['原目标连接中断']);
+  expect(streams[1].signal.aborted).toBe(true);
+
+  const rejected = view.observeRuntimeStatus({ gateway_id: 'gateway-failed' });
+  const failure = rejected.catch(error => error);
+  streams[2].reject(new Error('原目标拒绝订阅'));
+  expect((await failure).message).toBe('原目标拒绝订阅');
+  view.stopRuntimeStatus();
+  expect(streams[2].signal.aborted).toBe(true);
+  expect(errors).toEqual(['原目标连接中断']);
+});
+
+test('插件管理生命周期仅由入口 Gateway 或凭据失效，管理目标选择保持原 owner', () => {
+  const state = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set(), selectedTarget: 'gateway-original' };
+  const harness = managementLifecycleHarness(state);
+
+  const ordinary = harness.create('原 Gateway 已改变', 'entry-gateway');
+  state.selectedTarget = 'gateway-other';
+  expect(() => ordinary.check()).not.toThrow();
+  expect(ordinary.signal.aborted).toBe(false);
+  ordinary.dispose();
+
+  const entry = harness.create('原 Gateway 已改变', 'entry-gateway');
+  harness.invalidateGateway('entry-other');
+  expect(() => entry.check()).toThrow('原 Gateway 已改变');
+  expect(entry.signal.aborted).toBe(true);
+  entry.dispose();
+  expect(state.context.size + state.auth.size).toBe(0);
+
+  state.gatewayId = 'entry-gateway';
+  const credential = harness.create('凭据已改变', 'entry-gateway');
+  harness.invalidateCredentials();
+  expect(() => credential.check()).toThrow('凭据已改变');
+  credential.dispose();
+  expect(state.context.size + state.auth.size).toBe(0);
+  expect(() => harness.create('入口目标已改变', 'stale-entry')).toThrow('入口目标已改变');
+});
+
+test('卸载确认前失效不提交，已发送卸载请求在入口变化后结算原目标', async () => {
+  const state = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+  const harness = managementLifecycleHarness(state);
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const notifications = { info() { notifications.infos++; }, infos: 0 };
+  const calls = [];
+  const uninstall = createUninstaller(async (path, options) => {
+    calls.push({ path, options });
+    harness.invalidateGateway('entry-other');
+    return { uninstalled: true, package_id: 'sample', package_version: '1.0.0' };
+  }, notifications);
+
+  const stale = harness.create('原 Gateway 已改变', 'entry-gateway');
+  await expect(uninstall({ pick: async (_items, _options, token) => {
+    harness.invalidateGateway('entry-other');
+    expect(token.isCancellationRequested).toBe(true);
+    return { accept: true };
+  } }, notifications, target, 'sample', '1.0.0', stale)).rejects.toThrow('原 Gateway 已改变');
+  stale.dispose();
+  expect(calls).toEqual([]);
+
+  harness.invalidateGateway('entry-gateway');
+  const accepted = harness.create('原 Gateway 已改变', 'entry-gateway');
+  await uninstall({ pick: async () => ({ accept: true }) }, notifications, target, 'sample', '1.0.0', accepted);
+  accepted.dispose();
+  expect(calls).toHaveLength(1);
+  expect(calls[0].path).toBe('/api/gateway/service-plugins/uninstall');
+  expect(calls[0].options.signal).toBeUndefined();
+  expect(JSON.parse(calls[0].options.body)).toMatchObject({ gateway_id: 'gateway-original',
+    gateway_connection_id: 'connection-original', package_id: 'sample', package_version: '1.0.0' });
+  expect(notifications.infos).toBe(1);
+});
+
+test('重启提交前核入口，已经提交后不因入口变化改投目标', async () => {
+  const state = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+  const harness = managementLifecycleHarness(state);
+  const restart = { disabled: false }, target = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const calls = [];
+  let pending;
+  const gateway = { async request(path, options) {
+    calls.push({ path, options });
+    harness.invalidateGateway('entry-other');
+  } };
+  const onRestartClick = classCallback('ServicePluginPackagesView', 'showDetails', '/api/gateway/service-plugins/restart', {
+    restart, entryGatewayId: 'entry-gateway', target, gateway,
+    manifest: { package_id: 'sample', version: '1.0.0' }, plugin: { id: 'sample.plugin' },
+    status: { revision: 'revision-original' }, workspace: undefined,
+  });
+
+  onRestartClick.call({ runTargetOperation(operation, expectedEntryGatewayId) {
+    const lifecycle = harness.create('原 Gateway 已改变', expectedEntryGatewayId);
+    pending = (async () => {
+      try { lifecycle.check(); await operation(lifecycle); }
+      finally { lifecycle.dispose(); }
+    })();
+    return pending;
+  } });
+  await pending;
+  expect(restart.disabled).toBe(true);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].path).toBe('/api/gateway/service-plugins/restart');
+  expect(calls[0].options.signal).toBeUndefined();
+  expect(JSON.parse(calls[0].options.body)).toMatchObject({ gateway_id: 'gateway-original',
+    gateway_connection_id: 'connection-original', package_id: 'sample', package_version: '1.0.0', revision: 'revision-original' });
+});
+
+test('秘密写入已返回原 owner 回执后，入口失效仍提交该回执而不产生无主引用', async () => {
+  const state = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+  const harness = managementLifecycleHarness(state);
+  const lifecycle = harness.create('原 Gateway 已改变', 'entry-gateway');
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const reference = { kind: 'plugin_private_file', gateway_id: target.gateway_id, package_id: 'sample', plugin_id: 'sample.plugin',
+    parameter_pointer: '/credential', version: 'private-version-original' };
+  const calls = [], notifications = [];
+  const document = { writable: true, source_key: 'gateway-source-original', jsonc: '{}', effective: {},
+    file_digest: 'file-original', layer_revision: 1, layer_digest: 'layer-original', active_revision: 1, active_digest: 'active-original',
+    origins: [], status: {} };
+  const owner = {
+    async list(signal) { calls.push({ kind: 'list', signal }); return { sources: [] }; },
+    async read(sourceKey, key, signal) { calls.push({ kind: 'read', sourceKey, key, signal }); return document; },
+    intent(sourceKey, jsonc, baseline) { return { source_key: sourceKey, jsonc, baseline, idempotency_key: 'edit-original' }; },
+    async preflight(intent, signal) { calls.push({ kind: 'preflight', intent, signal }); return { changed_paths: ['/credential'] }; },
+    async save(intent, signal) { calls.push({ kind: 'save', intent, signal }); return { ...document, edit: {
+      source_saved: true, state: 'candidate_validated', idempotency_key: intent.idempotency_key,
+    } }; },
+  };
+  const saveSourceEdit = new Function(`${configurationDeclaration('saveSourceEdit')}\nreturn saveSourceEdit;`)();
+  const manage = new Function('ConfigurationSourceOwner', 'chooseSource', 'sameBinding', 'bindingsAt', 'sourceBaseline',
+    'saveSourceEdit', 'privateParameterLocation', 'privateParameterStatus', 'updateJsonc', 'gateway',
+    'gatewayWorkspaceRequestHeaders', 'targetHeader', 'notification',
+    `${configurationDeclaration('manageConfig')}\nreturn manageConfig;`)(
+    class { constructor() { return owner; } }, async () => ({ source_key: 'gateway-source-original' }),
+    (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, () => [], () => ({}), saveSourceEdit,
+    () => ({ path: ['credential'], current: undefined }), () => '秘密值已隐藏', () => '{"credential":{"kind":"plugin_private_file"}}',
+    { async request(path, options) {
+      calls.push({ kind: 'private-input', path, options });
+      harness.invalidateGateway('entry-other');
+      return reference;
+    } }, () => ({}), () => ({ 'X-BoxTeam-Target-Gateway-Id': target.gateway_id }),
+    { info: message => notifications.push(message), error: message => notifications.push(message) });
+  let picks = 0;
+  const quickInput = {
+    async pick(_items, _options, token) { picks++; return picks === 1 ? { clear: false } : { save: true }; },
+    async input() { return 'secret-sentinel'; },
+  };
+
+  try {
+    await manage('gateway', target, undefined, quickInput, { info: message => notifications.push(message),
+      error: message => notifications.push(message) }, { package_id: 'sample', plugin_id: 'sample.plugin', package_version: '1.0.0' },
+    null, false, { pointer: '/credential', schema: { type: 'string' } }, lifecycle.check, lifecycle.token, lifecycle.signal);
+  } finally { lifecycle.dispose(); }
+
+  const secretWrite = calls.find(call => call.kind === 'private-input');
+  const preflight = calls.find(call => call.kind === 'preflight');
+  const save = calls.find(call => call.kind === 'save');
+  expect(secretWrite.path).toBe('/api/gateway/service-plugins/private-inputs');
+  expect(secretWrite.options.signal).toBeUndefined();
+  expect(JSON.parse(secretWrite.options.body)).toMatchObject({ gateway_id: 'gateway-original', source_key: 'gateway-source-original' });
+  expect(preflight.signal).toBeUndefined();
+  expect(save.signal).toBeUndefined();
+  expect(save.intent.jsonc).toBe('{"credential":{"kind":"plugin_private_file"}}');
+  expect(save.intent.idempotency_key).toBe('edit-original');
+  expect(picks).toBe(2);
+  expect(notifications.some(message => message.includes('来源已保存'))).toBe(true);
 });
 
 test('实例日志只读取原 Gateway 回执的精确日志，保留限长及不可用错误', async () => {

@@ -27,7 +27,7 @@ try {
       result.servicePluginRequests.push({ phase: result.phase, method: request.method(), path: url.pathname,
         resourceType: request.resourceType() });
     }
-    if ((request.method() === 'POST' && /\/service-plugins\/(inventory|status)$/.test(url.pathname))
+    if ((request.method() === 'POST' && /\/service-plugins\/(inventory|status(?:\/events)?)$/.test(url.pathname))
       || (request.method() === 'GET' && /^\/api\/(gateway|v1)\/config\/sources(?:\/[^/]+)?$/.test(url.pathname))) {
       managementReads.push({ method: request.method(), path: url.pathname });
     }
@@ -93,17 +93,15 @@ try {
   await expect(view).toBeVisible();
   const verifyScopeReads = async (scope, expected) => {
     const start = managementReads.length;
-    const statusResponse = scope === 'workspace' ? page.waitForResponse(response => response.request().method() === 'POST'
-      && new URL(response.url()).pathname === '/api/gateway/service-plugins/status') : undefined;
     await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
     await expect(view.locator('.service-plugin-package')).toBeVisible();
     const reads = managementReads.slice(start);
     assert.deepEqual(reads.map(item => item.path).sort(), expected.sort());
     (result.scopeReads ??= {})[scope] = reads;
     const summary = view.locator('.service-plugin-packages-content > [data-plugin-workspace-handoff]');
-    if (statusResponse) {
-      const status = await (await statusResponse).json();
-      const handoff = status.data.workspace_configurations.find(item => item.workspace_id === active.workspace_id);
+    if (scope === 'workspace') {
+      const status = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } });
+      const handoff = status.workspace_configurations.find(item => item.workspace_id === active.workspace_id);
       assert(handoff, '工作区启用后必须收到所属 owner 的配置交接状态');
       await expect(summary).toContainText(`工作区 ${active.workspace_id} 配置交接：${handoff.state}`);
       result.workspaceHandoff = handoff;
@@ -116,6 +114,13 @@ try {
   const pick = async label => {
     await expect(quick).toBeVisible();
     await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click();
+  };
+  const pickWorkspace = async name => {
+    await expect(quick).toBeVisible();
+    const field = quick.locator('input').first();
+    await field.fill(name);
+    await field.press('Enter');
+    await expect(quick).not.toBeVisible();
   };
   const inputQuick = async value => {
     await expect(quick).toBeVisible();
@@ -173,7 +178,7 @@ try {
   await expect(view.locator('.service-plugin-package')).toBeVisible();
   await expect(search).toHaveValue('ui.preference-probe');
   await search.clear();
-  await verifyScopeReads('gateway', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status']);
+  await verifyScopeReads('gateway', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status/events']);
   result.installed = true;
   result.phase = 'gateway-binding';
 
@@ -530,9 +535,20 @@ try {
   await expect(view.getByLabel('插件配置与运行版本'),
     '页面运行状态必须来自已到达的 SSE 快照，而不是本次 /status 旧快照').toContainText('实际：stopped');
   await page.unroute(runtimeStatusSnapshotUrl);
-  const reenabledByConfig = await setGatewayPluginEnabled(true);
-  assert.equal(reenabledByConfig.edit.state, 'active');
+  // 外部停用后，已打开详情的动作也必须更新；旧“停用”闭包不能覆盖这次权威变更。
+  await expect(view.getByRole('button', { name: '停用此范围', exact: true })).toHaveCount(0);
+  await expect(view.getByRole('button', { name: '重启实例', exact: true })).toHaveCount(0);
+  const enableAfterExternalChange = view.getByRole('button', { name: '启用此范围', exact: true });
+  await expect(enableAfterExternalChange).toBeVisible();
+  const sourceReadsBeforeEnable = sourceWriteRequestCount;
+  await enableAfterExternalChange.click();
+  await pick('gateway_mutable_override');
+  await pick('确认保存 Gateway 插件绑定');
+  await expect(quick).not.toBeVisible();
+  assert.equal(sourceWriteRequestCount, sourceReadsBeforeEnable + 1);
   await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @3.0.0');
+  await expect(view.getByRole('button', { name: '停用此范围', exact: true })).toBeVisible();
+  result.externalBindingActionsUpdated = true;
   result.runtimeStatusSseUi = { path: '/api/gateway/service-plugins/status/events', eventContentType:
     retryStreamResponse.headers()['content-type'], staleStatus: staleStatusSlot.state,
     stalePollState: staleStatusRead.state, renderedState: 'stopped', staleResponses: staleStatusResponses,
@@ -554,7 +570,7 @@ try {
   result.disabledVersionStayedDisabled = true;
 
   result.phase = 'declarative-skill-lifecycle';
-  await view.getByLabel('插件管理范围').selectOption('workspace'); await pick(workspaceName);
+  await view.getByLabel('插件管理范围').selectOption('workspace'); await pickWorkspace(workspaceName);
   await enable('工作区指南 · workspace-guide', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
   await expect(view.getByRole('button', { name: '重启实例', exact: true })).toHaveCount(0);
   await expect(view.getByLabel('插件配置与运行版本')).toContainText('声明式，无运行实例');
@@ -601,14 +617,62 @@ try {
   result.explicitVersionSwitch = true;
 
   await view.getByLabel('插件管理范围').selectOption('workspace');
-  await pick(workspaceName);
+  await pickWorkspace(workspaceName);
   await expect(view).toContainText('工作区偏好 · workspace-preference');
   await enable('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
-  await verifyScopeReads('workspace', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status',
+  await verifyScopeReads('workspace', ['/api/gateway/service-plugins/inventory', '/api/gateway/service-plugins/status/events',
     '/api/v1/config/sources', '/api/v1/config/sources/workspace_root_mutable_override']);
 
   await expect.poll(async () => (await runtimeSlot('workspace-preference', active.workspace_id))?.state).toBe('ready');
   const workspaceReady = await runtimeSlot('workspace-preference', active.workspace_id); await callRuntime(workspaceReady);
+  result.phase = 'workspace-pending-expectation';
+  const workspaceSourcePath = '/api/v1/config/sources/workspace_root_mutable_override';
+  const workspaceHeaders = { 'X-BoxTeam-Target-Gateway-Id': active.gateway_id,
+    'X-BoxTeam-Workspace-Id': active.workspace_id };
+  const originalWorkspaceSource = await api(workspaceSourcePath, { headers: workspaceHeaders });
+  const pendingSource = parseJsonc(originalWorkspaceSource.jsonc);
+  pendingSource.plugins.runtime.entries.find(binding => binding.package_id === 'ui.preference-probe'
+    && binding.plugin_id === 'workspace-preference').enabled = false;
+  pendingSource.mcp ??= {};
+  pendingSource.mcp.supervision = { ...(pendingSource.mcp.supervision ?? {}),
+    sealed_call_timeout_seconds: originalWorkspaceSource.effective.mcp.supervision.sealed_call_timeout_seconds + 1 };
+  const saveWorkspaceSource = async (document, jsonc, suffix) => api(workspaceSourcePath, {
+    method: 'PUT', headers: workspaceHeaders, body: {
+      gateway_id: active.gateway_id, workspace_id: active.workspace_id, source_key: 'workspace_root_mutable_override',
+      jsonc, base_file_digest: document.file_digest, base_layer_revision: document.layer_revision,
+      base_layer_digest: document.layer_digest, expected_active_revision: document.active_revision,
+      expected_active_digest: document.active_digest, idempotency_key: `plugin-ui-workspace-pending-${suffix}-${Date.now()}`,
+    },
+  });
+  const pendingWorkspaceSource = await saveWorkspaceSource(originalWorkspaceSource, JSON.stringify(pendingSource), 'save');
+  assert.equal(pendingWorkspaceSource.edit.state, 'pending_restart');
+  assert.equal(pendingWorkspaceSource.effective.plugins.runtime.entries.find(binding =>
+    binding.package_id === 'ui.preference-probe' && binding.plugin_id === 'workspace-preference').enabled, true);
+  assert.equal(pendingWorkspaceSource.source_effective.plugins.runtime.entries.find(binding =>
+    binding.package_id === 'ui.preference-probe' && binding.plugin_id === 'workspace-preference').enabled, false);
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  await openPlugin('工作区偏好 · workspace-preference');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：停用 @1.0.0');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @1.0.0');
+  await expect(view.getByRole('button', { name: '启用此范围', exact: true })).toBeVisible();
+  await expect(view.getByRole('button', { name: '重启实例', exact: true })).toHaveCount(0);
+  assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id,
+    workspaceReady.instance.instance_id, 'pending 停用不能被伪报为 active 或关闭原实例');
+  await callRuntime(workspaceReady);
+  result.workspacePendingExpectation = { candidateRef: pendingWorkspaceSource.status.candidate_ref,
+    sourceEnabled: false, activeEnabled: true, instanceId: workspaceReady.instance.instance_id };
+  await api(`/api/v1/config/pending/discard?${new URLSearchParams({ candidate_ref: pendingWorkspaceSource.status.candidate_ref })}`, {
+    method: 'POST', headers: workspaceHeaders, body: { expected_active_revision: pendingWorkspaceSource.active_revision,
+      expected_active_digest: pendingWorkspaceSource.active_digest },
+  });
+  const discardedWorkspaceSource = await api(workspaceSourcePath, { headers: workspaceHeaders });
+  const restoredWorkspaceSource = await saveWorkspaceSource(discardedWorkspaceSource, originalWorkspaceSource.jsonc, 'restore');
+  assert.equal(restoredWorkspaceSource.edit.state, 'active');
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  await openPlugin('工作区偏好 · workspace-preference');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：启用 @1.0.0');
+  assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, workspaceReady.instance.instance_id);
+  result.phase = 'runtime-reload-and-independent-restart';
   let gatewayReady = await runtimeSlot('gateway-preference'); await callRuntime(gatewayReady);
   assert.notEqual(gatewayReady.instance.process_id, workspaceReady.instance.process_id);
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -630,7 +694,7 @@ try {
   result.exitedPids.push(gatewayReady.instance.process_id);
   result.gatewayRestartedIndependently = true;
   gatewayReady = gatewayRestart;
-  await view.getByLabel('插件管理范围').selectOption('workspace'); await pick(workspaceName);
+  await view.getByLabel('插件管理范围').selectOption('workspace'); await pickWorkspace(workspaceName);
   await openPlugin('工作区偏好 · workspace-preference');
   const restarted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
   await view.getByRole('button', { name: '重启实例', exact: true }).click(); assert.equal((await restarted).status(), 200);
@@ -707,7 +771,7 @@ try {
   await expect(view).toContainText('Gateway 偏好 · gateway-preference');
   await unbind('Gateway 偏好 · gateway-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
   await view.getByLabel('插件管理范围').selectOption('workspace');
-  await pick(workspaceName);
+  await pickWorkspace(workspaceName);
   await unbind('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定');
   const createdReference = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
@@ -722,7 +786,7 @@ try {
   result.createdWorkspaceBlockedUninstall = true;
   await view.getByLabel('插件管理范围').selectOption('gateway');
   await view.getByLabel('插件管理范围').selectOption('workspace');
-  await pick(created.name);
+  await pickWorkspace(created.name);
   await unbind('工作区偏好 · workspace-preference', 'workspace_root_mutable_override', '确认保存工作区插件绑定', created.workspace_id);
   await expect.poll(() => runtimeSlot('workspace-preference', created.workspace_id)).toBeUndefined();
   await view.getByLabel('插件管理范围').selectOption('gateway');

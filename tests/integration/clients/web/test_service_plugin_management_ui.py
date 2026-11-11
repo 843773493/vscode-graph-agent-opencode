@@ -241,6 +241,9 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["installed"] and result["uninstalled"]
             assert result["pluginQuickAccess"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
+            assert result["externalBindingActionsUpdated"]
+            assert result["workspacePendingExpectation"]["sourceEnabled"] is False
+            assert result["workspacePendingExpectation"]["activeEnabled"] is True
             assert result["gatewayRestartedIndependently"]
             assert result["declarativeSkillLoop"]
             assert result["declarativeSkillVersions"] == ["1.0.0", "1.1.0"]

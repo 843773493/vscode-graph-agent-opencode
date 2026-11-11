@@ -1,15 +1,15 @@
 import { applyEdits, setProperty } from '../../upstream/src/vs/base/common/jsonEdit.js';
 import { parse, parseTree, type ParseError } from '../../upstream/src/vs/base/common/json.js';
-import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import type { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import { gatewayWorkspaceRequestHeaders, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
-import { managementGateway } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument } from './sourceOwner.js';
 
@@ -62,7 +62,7 @@ function privateParameterLocation(document: ConfigDocument, binding: Configurati
   const parts = ['plugins', 'configuration', 'values', binding.package_id, binding.plugin_id,
     ...pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))];
   const path: (string | number)[] = [];
-  let current: unknown = parse(document.jsonc), effective: unknown = document.effective;
+  let current: unknown = parse(document.jsonc), effective: unknown = document.source_effective;
   for (const part of parts) {
     if (Array.isArray(current) || Array.isArray(effective)) {
       if (!Array.isArray(current)) throw new Error('数组由下层来源提供；请先在此来源的参数 JSON 中明确保存完整数组，再管理其中的秘密');
@@ -98,11 +98,12 @@ function privateParameterStatus(document: ConfigDocument, binding: Configuration
     + `；active=${document.active_revision ?? '无'} / pending=${document.status?.pending_revision ?? '无'}。运行实例可能仍持有已取得的值。`;
 }
 
-async function chooseSource(quickInput: IQuickInputService, sources: Source[], title: string): Promise<Source | undefined> {
+async function chooseSource(quickInput: IQuickInputService, sources: Source[], title: string,
+  token?: CancellationToken): Promise<Source | undefined> {
   const selected = await quickInput.pick(sources.filter(item => item.source_key).map(source => ({
     label: source.source_key!, description: `${source.layer} · ${source.presence}${source.writable === false ? ' · 只读' : ''}`,
     detail: source.uri ?? undefined, source,
-  })), { title, placeHolder: '选择原配置来源；写入仍由来源 owner 的 CAS 决定', canPickMany: false });
+  })), { title, placeHolder: '选择原配置来源；写入仍由来源 owner 的 CAS 决定', canPickMany: false }, token);
   return selected?.source;
 }
 
@@ -146,24 +147,37 @@ export async function readWorkspaceBindings(target: GatewayWorkspaceRequestTarge
 }
 
 export async function setPluginBindings(scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,
-  quickInput: IQuickInputService, bindings: ConfigurationBinding[], enabled: boolean): Promise<{ binding: ConfigurationBinding; configuration: string }[] | undefined> {
+  quickInput: IQuickInputService, bindings: ConfigurationBinding[], enabled: boolean, check: () => void,
+  token: CancellationToken, signal: AbortSignal): Promise<{ binding: ConfigurationBinding; configuration: string }[] | undefined> {
   if (scope === 'workspace' && !workspace) throw new Error('当前没有已选择的工作区');
+  check();
   const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspace! : target);
   let selected: Source | undefined;
   try {
-    selected = await chooseSource(quickInput, (await owner.list()).sources,
-      scope === 'workspace' ? '选择工作区插件配置来源' : '选择 Gateway 插件配置来源');
+    const listed = await owner.list(signal);
+    check();
+    selected = await chooseSource(quickInput, listed.sources,
+      scope === 'workspace' ? '选择工作区插件配置来源' : '选择 Gateway 插件配置来源', token);
+    check();
   } catch (error) {
     return bindings.map(binding => ({ binding, configuration: `未提交 · ${error instanceof Error ? error.message : String(error)}` }));
   }
   if (!selected?.source_key) return;
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
   const results: { binding: ConfigurationBinding; configuration: string }[] = [];
-  for (const binding of bindings) {
+  for (let index = 0; index < bindings.length; index++) {
+    const binding = bindings[index];
+    try { check(); }
+    catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      results.push(...bindings.slice(index).map(item => ({ binding: item, configuration: `未提交 · ${reason}` })));
+      break;
+    }
     let intent: ReturnType<ConfigurationSourceOwner['intent']>;
     try {
       // 每项重新取得来源基线；独立提交保留部分成功，不重试冲突或回滚兄弟插件。
-      const document = await owner.read(selected.source_key);
+      const document = await owner.read(selected.source_key, undefined, signal);
+      check();
       if (!document.writable) throw new Error(`配置来源 ${selected.source_key} 只读`);
       const jsonc = bindingJsonc(document, path, binding, enabled);
       if (jsonc === document.jsonc) {
@@ -171,7 +185,8 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
         continue;
       }
       intent = owner.intent(selected.source_key, jsonc, sourceBaseline(document));
-      await owner.preflight(intent);
+      await owner.preflight(intent, signal);
+      check();
     } catch (error) {
       results.push({ binding, configuration: `未提交 · ${error instanceof Error ? error.message : String(error)}` });
       continue;
@@ -184,18 +199,21 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
 
 export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
   quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null | 'preserve',
-  editParameters = false, privateParameter?: PrivateParameter, check = () => {}): Promise<void> {
+  editParameters: boolean, privateParameter: PrivateParameter | undefined, check: () => void, token: CancellationToken, signal: AbortSignal): Promise<void> {
   check();
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
   if (scope === 'workspace' && !workspaceTarget) throw new Error('当前没有已选择的工作区');
   const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspaceTarget! : gatewayTarget);
-  const selected = await chooseSource(quickInput, (await owner.list()).sources, scope === 'workspace' ? '选择工作区插件配置来源' : '选择 Gateway 插件配置来源');
+  const listed = await owner.list(signal);
+  check();
+  const selected = await chooseSource(quickInput, listed.sources, scope === 'workspace' ? '选择工作区插件配置来源' : '选择 Gateway 插件配置来源', token);
+  check();
   if (!selected) return;
   const source = selected;
-  const document = await owner.read(source.source_key!);
+  const document = await owner.read(source.source_key!, undefined, signal);
   check();
   if (privateParameter || editParameters) {
-    const bound = bindingsAt(document.effective, ['plugins', 'runtime', 'entries']).find(item => sameBinding(item, binding));
+    const bound = bindingsAt(document.source_effective, ['plugins', 'runtime', 'entries']).find(item => sameBinding(item, binding));
     if (bound && bound.package_version !== binding.package_version) {
       throw new Error(`当前绑定使用 ${bound.package_version}，所选 schema 为 ${binding.package_version}；请按绑定版本重新打开参数`);
     }
@@ -210,10 +228,10 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
         validateInput: async value => {
           try { privateParameterLocation(document, binding, value); return null; }
           catch (error) { return error instanceof Error ? error.message : String(error); }
-        } });
+        } }, token);
+      check();
       if (pointer === undefined) return;
       privateParameter = { pointer, schema: {} };
-      check();
     }
     const { path: parameterPath, current } = privateParameterLocation(document, binding, privateParameter.pointer);
     const configured = current !== undefined;
@@ -222,7 +240,8 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
       ...(current !== undefined
         ? [{ label: '清除此来源的秘密覆盖', detail: '只删除当前来源覆盖；下层配置与在用私有版本保留。', clear: true }] : [])],
     { title: `${binding.package_id}/${binding.plugin_id}${privateParameter.pointer}`,
-      placeHolder: '原值不会回读；更换会创建新的不可变秘密版本' });
+      placeHolder: '原值不会回读；更换会创建新的不可变秘密版本' }, token);
+    check();
     if (!action) return;
     if (action.clear && typeof parameterPath.at(-1) === 'number') throw new Error('不能单独清除整个秘密数组项，以免移动其它项的引用；请显式编辑此来源的完整数组');
     let storedValue: unknown;
@@ -232,15 +251,15 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
         password: true, validateInput: async value => {
           if (stringInput) return null;
           try { JSON.parse(value); return null; } catch { return '此秘密字段需要有效 JSON；字符串请加双引号'; }
-        } });
+        } }, token);
+      check();
       if (text === undefined) return;
       storedValue = stringInput ? text : JSON.parse(text);
       const accepted = await quickInput.pick([{ label: '取消' }, { label: '确认保存秘密', save: true,
         description: `${gatewayTarget.gateway_id}${workspaceTarget ? ` · ${workspaceTarget.workspace_id}` : ''} · ${source.source_key} · ${binding.package_id}@${binding.package_version}/${binding.plugin_id}${privateParameter.pointer}` }],
-      { title: '确认目标、来源与秘密参数' });
-      if (!accepted?.save) return;
+      { title: '确认目标、来源与秘密参数' }, token);
       check();
-      privateInputConfirmed = true;
+      if (!accepted?.save) return;
       const writeTarget: PluginPrivateInputWriteRequest = { gateway_id: gatewayTarget.gateway_id, ...(gatewayTarget.gateway_connection_id
         ? { gateway_connection_id: gatewayTarget.gateway_connection_id } : {}),
         ...(workspaceTarget ? { workspace_id: workspaceTarget.workspace_id } : {}), package_id: binding.package_id,
@@ -258,6 +277,8 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
         || (reference.workspace_id ?? null) !== (workspaceTarget?.workspace_id ?? null) || reference.package_id !== binding.package_id
         || reference.plugin_id !== binding.plugin_id || reference.parameter_pointer !== privateParameter.pointer
         || !reference.version) throw new Error('插件秘密输入写入回执归属或引用版本无效');
+      // 写入已受理；只向冻结的原来源提交其回执，避免留下无主秘密文件。
+      privateInputConfirmed = true;
       storedValue = reference;
     }
     jsonc = updateJsonc(document.jsonc, parameterPath, action.clear ? undefined : storedValue);
@@ -267,7 +288,8 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
     let current: unknown = parse(document.jsonc);
     for (const key of parameterPath) current = current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined;
     const operation = await quickInput.pick([{ label: '编辑此来源的参数', remove: false }, { label: '删除此来源的参数覆盖', remove: true }],
-      { title: `${binding.package_id}/${binding.plugin_id} · ${binding.package_version}`, placeHolder: '删除只影响当前来源；原 owner 计算下层有效值' });
+      { title: `${binding.package_id}/${binding.plugin_id} · ${binding.package_version}`, placeHolder: '删除只影响当前来源；原 owner 计算下层有效值' }, token);
+    check();
     if (!operation) return;
     let values: unknown;
     if (!operation.remove) {
@@ -275,7 +297,8 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
         value: JSON.stringify(current ?? {}), validateInput: async value => {
           try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? null : '参数必须是 JSON 对象'; }
           catch { return '请输入有效 JSON；确切版本 schema 由原配置 owner 预检'; }
-        } });
+        } }, token);
+      check();
       if (text === undefined) return;
       values = JSON.parse(text);
     }
@@ -284,7 +307,7 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
     jsonc = bindingJsonc(document, path, binding, enabled);
   }
   if (jsonc === document.jsonc) return;
-  check();
+  if (!privateInputConfirmed) check();
   const intent = owner.intent(source.source_key!, jsonc, sourceBaseline(document));
   const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : scope === 'defaults'
     ? enabled === 'preserve' ? `新建工作区默认切换至 ${binding.package_version}，保留原开关`
@@ -294,17 +317,18 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数'
     : scope === 'defaults' ? '新建工作区默认模板' : '插件绑定';
   let preflight: Awaited<ReturnType<typeof owner.preflight>>;
-  try { preflight = await owner.preflight(intent); }
+  try { preflight = await owner.preflight(intent, privateInputConfirmed ? undefined : signal); }
   catch (error) {
+    if (!privateInputConfirmed) check();
     notification.error(`未提交 · ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
-  check();
+  if (!privateInputConfirmed) check();
   const accepted = privateInputConfirmed ? { save: true } : await quickInput.pick([{ label: '取消' }, { label: `确认保存${scope === 'workspace' ? '工作区' : ' Gateway '}${confirmation}`, save: true,
     description: `${binding.package_id}/${binding.plugin_id} · ${change}`, detail: preflight.changed_paths.join(' · ') }],
-  { title: '确认配置提交' });
+  { title: '确认配置提交' }, token);
+  if (!privateInputConfirmed) check();
   if (!accepted?.save) return;
-  check();
   const result = await saveSourceEdit(owner, intent);
   if ('error' in result) { notification.error(result.error); return; }
   const saved = result.document;
@@ -343,41 +367,36 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
   const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
   const dialogs = accessor.get(IDialogService);
   const initial = await workspaceContext.ensureReady();
+  const lifecycle = createManagementTargetLifecycle('原 Gateway 或访问凭据已改变，请重新打开插件设置', initial.gatewayId ?? undefined);
   const target = managementGateway('settings');
-  const initialGateway = initial.gatewayId;
-  const cancellation = new CancellationTokenSource();
-  const invalidate = () => cancellation.cancel();
-  const releaseAuth = onGatewayTokenInvalidated(0, invalidate);
-  const releaseContext = workspaceContext.subscribe(() => {
-    if (workspaceContext.getSnapshot().gatewayId !== initialGateway) invalidate();
-  });
-  const check = () => {
-    if (cancellation.token.isCancellationRequested) throw new Error('原 Gateway 或访问凭据已改变，请重新打开插件设置');
-  };
+  const { check, token, signal } = lifecycle;
   try {
     const scope = await quickInput.pick([{ label: 'Gateway 插件参数', scope: 'gateway' as const },
       { label: '工作区插件参数', scope: 'workspace' as const }],
-    { title: `插件设置 · ${target.name} · ${target.gateway_id}`, canPickMany: false }, cancellation.token);
+    { title: `插件设置 · ${target.name} · ${target.gateway_id}`, canPickMany: false }, token);
+    check();
     if (!scope) return;
-    const workspace = scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput) : undefined;
+    const workspace = scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput, token) : undefined;
+    check();
     if (scope.scope === 'workspace' && !workspace) return;
     check();
-    const schemas = await new ConfigurationSourceOwner({ ...target, workspace_id: workspace?.workspace_id }).configurationSchemas();
+    const schemas = await new ConfigurationSourceOwner({ ...target, workspace_id: workspace?.workspace_id }).configurationSchemas(signal);
     check();
     if (!schemas.plugins.length) { notifications.info('目标范围没有已安装的插件配置声明。'); return; }
     const selected = await quickInput.pick(schemas.plugins.map(plugin => ({ label: plugin.name,
       description: `${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,
       detail: `${schemas.gateway_id}${workspace ? ` · ${workspace.workspace_id}` : ''} · ${plugin.instance_scope}`, plugin })),
-    { title: '选择已安装插件的确切配置版本', canPickMany: false }, cancellation.token);
+    { title: '选择已安装插件的确切配置版本', canPickMany: false }, token);
+    check();
     if (!selected) return;
     const plugin = selected.plugin;
     const selectedAction = await quickInput.pick([{ label: '查看参数 schema', action: 'schema' },
       { label: '编辑参数 JSON', action: 'json' },
       ...writeOnlyFields(plugin.configuration_schema).map(field => ({ label: field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数', action: 'secret', field }))],
     { title: `${schemas.gateway_id}${workspace ? ` · ${workspace.workspace_id}` : ''} · ${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,
-      canPickMany: false }, cancellation.token);
-    if (!selectedAction) return;
+      canPickMany: false }, token);
     check();
+    if (!selectedAction) return;
     if (selectedAction.action === 'schema') {
       await dialogs.info(`${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,
         `${schemas.gateway_id}${workspace ? ` · ${workspace.workspace_id}` : ''}\n${JSON.stringify(plugin.configuration_schema, null, 2)}`);
@@ -385,13 +404,15 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
     }
     await manageConfig(scope.scope, target, workspace, quickInput, notifications, { package_id: plugin.package_id,
       package_version: plugin.package_version, plugin_id: plugin.plugin_id, enabled: false }, null,
-    selectedAction.action === 'json', 'field' in selectedAction ? selectedAction.field : undefined, check);
-  } finally { releaseAuth(); releaseContext(); cancellation.dispose(); }
+    selectedAction.action === 'json', 'field' in selectedAction ? selectedAction.field : undefined,
+    check, token, signal);
+  } finally { lifecycle.dispose(); }
 }
 
-export async function choosePluginWorkspace(target: ReturnType<typeof managementGateway>, quickInput: IQuickInputService): Promise<GatewayWorkspaceRequestTarget | undefined> {
+export async function choosePluginWorkspace(target: ReturnType<typeof managementGateway>, quickInput: IQuickInputService,
+  token?: CancellationToken): Promise<GatewayWorkspaceRequestTarget | undefined> {
   const workspaces = (await gateway.workspaces(false)).items.filter(item => item.gateway_id === target.gateway_id);
   const selected = await quickInput.pick(workspaces.map(workspace => ({ label: workspace.name, description: workspace.status,
-    detail: workspace.workspace_id, workspace })), { title: '插件管理工作区', placeHolder: '本次只修改所选工作区配置 owner', canPickMany: false });
+    detail: workspace.workspace_id, workspace })), { title: '插件管理工作区', placeHolder: '本次只修改所选工作区配置 owner', canPickMany: false }, token);
   return selected ? { gateway_id: target.gateway_id, workspace_id: selected.workspace.workspace_id, gateway_connection_id: target.gateway_connection_id } : undefined;
 }

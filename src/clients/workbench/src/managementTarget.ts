@@ -6,7 +6,7 @@ import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/co
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
-import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import type { GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -26,6 +26,32 @@ export const onDidChangeExtensionManagementTarget = extensionManagementChanged.e
 const mcpManagementChanged = new Emitter<void>();
 export const onDidChangeMcpManagementTarget = mcpManagementChanged.event;
 
+/** 管理操作绑定页面 Gateway 和凭据；管理选择改变不会改变操作 owner。 */
+export function createManagementTargetLifecycle(message: string, expectedEntryGatewayId?: string) {
+  const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
+  if (!entryGatewayId) throw new Error('Gateway 身份尚未完成初始化，无法开始管理操作');
+  if (expectedEntryGatewayId && entryGatewayId !== expectedEntryGatewayId) throw new Error(message);
+  const cancellation = new CancellationTokenSource();
+  const controller = new AbortController();
+  const invalidate = () => { cancellation.cancel(); controller.abort(new Error(message)); };
+  const releaseAuth = onGatewayTokenInvalidated(0, invalidate);
+  const releaseContext = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== entryGatewayId) invalidate();
+  });
+  const check = () => {
+    if (cancellation.token.isCancellationRequested || workspaceContext.getSnapshot().gatewayId !== entryGatewayId) {
+      invalidate();
+      throw new Error(message);
+    }
+  };
+  return {
+    token: cancellation.token,
+    signal: controller.signal,
+    check,
+    dispose() { releaseAuth(); releaseContext(); cancellation.dispose(); controller.abort(); },
+  };
+}
+
 function updateExtensionTitle(): void {
   const target = selections.get('extensions')?.target;
   extensionTitle.value = MenuRegistry.appendMenuItem(MenuId.ViewContainerTitle, {
@@ -44,9 +70,6 @@ function updateMcpTitle(): void {
 }
 updateExtensionTitle();
 updateMcpTitle();
-onGatewayUserSessionInvalidated(0, () => {
-  selections.clear(); updateExtensionTitle(); updateMcpTitle(); extensionManagementChanged.fire(); mcpManagementChanged.fire();
-});
 workspaceContext.subscribe(() => {
   let extensionChanged = false, mcpChanged = false;
   for (const [scope, selection] of selections) {
@@ -84,8 +107,8 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
     selecting.get(scope)?.abort(new Error('同一管理视图已重新选择目标'));
     selecting.set(scope, controller);
     controller.signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
-    const invalidate = () => { controller.abort(new Error('页面 Gateway 或用户身份已改变，请重新选择管理目标')); cancellation.cancel(); };
-    const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
+    const invalidate = () => { controller.abort(new Error('页面 Gateway 或访问凭据已改变，请重新选择管理目标')); cancellation.cancel(); };
+    const releaseUser = onGatewayTokenInvalidated(0, invalidate);
     const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); });
     try {
       const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal: controller.signal });
