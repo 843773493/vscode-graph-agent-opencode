@@ -14,6 +14,7 @@ from typing import Literal
 import httpx
 import psutil
 
+from app.core.async_channel import run_channel
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.plugins.packages import PluginInstallCancelled, PluginPackageStore
 from app.gateway.plugins.sources import enabled_source
@@ -25,7 +26,7 @@ from app.schemas.gateway.plugin_installation import (
 from app.services.infrastructure.config.state import ConfigConflictError
 
 _MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
-_CANCEL_CHECK_BYTES = 1024 * 1024
+_CANCEL_CHECK_INTERVAL_SECONDS = 0.25
 
 
 class PluginInstallations:
@@ -180,7 +181,11 @@ class PluginInstallations:
                     status="unknown", error="包安装结束但终态未能在发布事务中确认；不会自动重放",
                 )
         except PluginInstallCancelled:
-            pass
+            self.state_store.finish_plugin_install_operation(
+                gateway_id=self.gateway_id, operation_id=operation_id,
+                owner_pid=os.getpid(), owner_created_at=self._owner_created_at,
+                status="cancelled", error=None,
+            )
         except Exception as error:  # noqa: BLE001 - 必须把任何执行失败结清为可查询终态
             record = self.state_store.get_plugin_install_operation(gateway_id=self.gateway_id, operation_id=operation_id)
             if record is not None and record["status"] == "running":
@@ -213,20 +218,25 @@ class PluginInstallations:
             raise ValueError("来源安装冻结制品缺少下载地址或文件名")
         descriptor, name = tempfile.mkstemp(prefix=".source-download-", suffix=".zip", dir=self.packages.root)
         path = Path(name)
-        total = 0
-        next_cancel_check = _CANCEL_CHECK_BYTES
         try:
             with os.fdopen(descriptor, "wb") as output:
-                async with self.client.stream("GET", url) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        total += len(chunk)
-                        if total >= next_cancel_check:
-                            self._require_not_cancelled(operation_id)
-                            next_cancel_check = total + _CANCEL_CHECK_BYTES
-                        if total > _MAX_DOWNLOAD_BYTES:
-                            raise ValueError("插件来源 ZIP 下载超过 256 MiB")
-                        output.write(chunk)
+                async def transfer() -> None:
+                    total = 0
+                    async with self.client.stream("GET", url) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            total += len(chunk)
+                            if total > _MAX_DOWNLOAD_BYTES:
+                                raise ValueError("插件来源 ZIP 下载超过 256 MiB")
+                            output.write(chunk)
+
+                async def observe_cancel() -> None:
+                    # 取消沿原SQLite意图，也覆盖等待响应头和停滞响应体；不取消兄弟操作。
+                    while True:
+                        self._require_not_cancelled(operation_id)
+                        await asyncio.sleep(_CANCEL_CHECK_INTERVAL_SECONDS)
+
+                await run_channel(transfer(), observe_cancel())
                 output.flush()
                 os.fsync(output.fileno())
             return path
@@ -237,12 +247,7 @@ class PluginInstallations:
     def _require_not_cancelled(self, operation_id: str) -> None:
         record = self.state_store.get_plugin_install_operation(gateway_id=self.gateway_id, operation_id=operation_id)
         if record is not None and record["cancel_requested"]:
-            self.state_store.finish_plugin_install_operation(
-                gateway_id=self.gateway_id, operation_id=operation_id,
-                owner_pid=os.getpid(), owner_created_at=self._owner_created_at,
-                status="cancelled", error=None,
-            )
-            raise RuntimeError("插件安装已取消")
+            raise PluginInstallCancelled("插件安装已取消")
 
     def _dto(self, record: dict[str, object]) -> PluginInstallOperationDTO:
         return PluginInstallOperationDTO.model_validate({

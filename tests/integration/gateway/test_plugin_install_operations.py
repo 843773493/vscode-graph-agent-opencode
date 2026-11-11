@@ -212,8 +212,8 @@ def test_source_install_is_queryable_cancellable_and_never_replayed(source_gatew
         assert response.headers["X-Request-ID"] == value["request_id"] == request_id
         return value.get("data")
 
-    def settle(operation_id: str):
-        deadline = time.monotonic() + 20
+    def settle(operation_id: str, *, timeout_seconds: float = 20):
+        deadline = time.monotonic() + timeout_seconds
         while True:
             operation = exchange("/api/gateway/service-plugins/install-operation", {**target, "operation_id": operation_id})
             if operation["status"] not in {"pending", "running"}:
@@ -251,12 +251,14 @@ def test_source_install_is_queryable_cancellable_and_never_replayed(source_gatew
         acquisition = {**target, "source_id": "proof", "catalog_revision": catalog["catalog_revision"],
             "artifact": catalog["items"][0]}
 
+        plugin_source["download_wait_seconds"] = 120
         cancelled = exchange("/api/gateway/service-plugins/install", {**acquisition, "operation_id": "cancelled-download"})
         assert cancelled["status"] in {"pending", "running"}
         assert plugin_source["download_started"].wait(5)
         exchange("/api/gateway/service-plugins/cancel-install", {**target, "operation_id": "cancelled-download"})
+        assert settle("cancelled-download", timeout_seconds=3)["status"] == "cancelled"
+        assert not plugin_source["release_download"].is_set(), "取消须结束等待HTTP来源，不能依靠来源恢复发送"
         plugin_source["release_download"].set()
-        assert settle("cancelled-download")["status"] == "cancelled"
         assert exchange("/api/gateway/service-plugins/inventory", target)["packages"] == []
 
         # 丢弃首个受理响应后，只用原操作查询取得最终发布事实。

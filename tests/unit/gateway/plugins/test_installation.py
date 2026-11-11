@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import shutil
@@ -131,6 +132,75 @@ async def test_cancel_committed_before_execution_prevents_publication(
         await owner.close()
         await observer.close()
         observer_database.close()
+    database.close()
+
+
+@pytest.mark.parametrize("stall", ["headers", "body"])
+async def test_source_cancel_settles_idle_download_without_affecting_sibling(
+    tmp_path: Path, stall: str,
+) -> None:
+    database_path = tmp_path / "gateway.sqlite"
+    database = GatewayStateStore(path=database_path)
+    observer_database = GatewayStateStore(path=database_path, allow_shared_processes=True)
+    packages = PluginPackageStore(tmp_path / "packages")
+    archives = {name: _declaration_archive(tmp_path / f"{name}.zip", package_id=f"install.{name}")
+        for name in ("blocked", "healthy")}
+    entered, released, settled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class IdleBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield archives["blocked"].read_bytes()[:1]
+            entered.set()
+            await released.wait()
+            yield archives["blocked"].read_bytes()[1:]
+
+        async def aclose(self) -> None:
+            settled.set()
+
+    async def serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/blocked.zip":
+            if stall == "headers":
+                entered.set()
+                try:
+                    await released.wait()
+                finally:
+                    settled.set()
+            return httpx.Response(200, stream=IdleBody())
+        return httpx.Response(200, content=archives["healthy"].read_bytes())
+
+    def configuration() -> dict[str, object]:
+        return {"plugins": {"sources": {"entries": [{"source_id": "official", "protocol_version": 1,
+            "base_url": "https://plugins.test", "enabled": True}]}}}
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        owner = PluginInstallations("gateway-source-cancel", packages, database, client, configuration)
+        observer = PluginInstallations(owner.gateway_id, packages, observer_database, client, configuration)
+        try:
+            for name, archive in archives.items():
+                await owner.start(InstallPluginRequest(gateway_id=owner.gateway_id, operation_id=name,
+                    source_id="official", catalog_revision="catalog-1", artifact=PluginSourceArtifact(
+                        package_id=f"install.{name}", package_version="1.0.0", target=None,
+                        digest="sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+                        filename=f"{name}.zip", url=f"https://plugins.test/{name}.zip")))
+            blocked = owner._tasks["blocked"]
+            healthy = owner._tasks["healthy"]
+            await entered.wait()
+            assert observer.cancel("blocked").cancel_requested
+            # 由另一状态owner提交取消，下载没有继续回字节也须自行结清。
+            await asyncio.wait_for(asyncio.shield(blocked), timeout=2)
+            assert settled.is_set(), "不能在原下载尚未释放时宣称取消完成"
+            assert owner.get("blocked").status == "cancelled"
+            await asyncio.wait_for(asyncio.shield(healthy), timeout=2)
+            assert owner.get("healthy").status == "succeeded"
+            assert packages.get("install.healthy", "1.0.0").manifest.package_id == "install.healthy"
+            with pytest.raises(FileNotFoundError):
+                packages.get("install.blocked", "1.0.0")
+            assert list(packages.root.glob(".source-download-*.zip")) == []
+        finally:
+            released.set()
+            await owner.close()
+            await observer.close()
+    observer_database.close()
     database.close()
 
 
