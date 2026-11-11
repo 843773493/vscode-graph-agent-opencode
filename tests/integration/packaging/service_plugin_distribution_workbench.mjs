@@ -39,7 +39,7 @@ const openNative = async () => {
   const location = await nativeApp.evaluate(({ app }) => ({ packaged: app.isPackaged,
     appPath: app.getAppPath(), cwd: process.cwd(), path: process.env.PATH, userData: app.getPath('userData') }));
   assert.equal(location.packaged, true);
-  assert.ok(location.appPath.endsWith('/resources/app.asar'));
+  assert.ok(location.appPath.endsWith(path.join('resources', 'app.asar')));
   assert.equal(location.cwd, input.cwd); assert.equal(location.path, input.emptyPath);
   assert.equal(location.userData, path.join(input.profile, 'clients/electron'));
   result.native.launches.push(location);

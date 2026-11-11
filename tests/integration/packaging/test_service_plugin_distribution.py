@@ -1,4 +1,4 @@
-"""源码外 Linux 发行物的插件安装、运行、切版与卸载闭环。"""
+"""源码外 Linux／Windows 发行物的插件安装、运行、切版与卸载闭环。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,11 @@ from tests.integration.gateway.test_terminal_plugin_lifecycle import (
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import chromium_temporary_environment
-from tests.support.plugin_package import expect_plugin_install_failure, install_plugin
+from tests.support.plugin_package import (
+    expect_plugin_install_failure,
+    install_plugin,
+    native_plugin_target,
+)
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import terminate_process, wait_for_http_ok
 from tests.support.workspaces import (
@@ -43,7 +47,7 @@ from tests.support.workspaces import (
     prepare_test_workspace,
 )
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="本用例验证 Linux 发行物")
+pytestmark = pytest.mark.skipif(sys.platform not in {"linux", "win32"}, reason="本用例验证 Linux／Windows 发行物")
 
 
 @pytest.fixture
@@ -78,7 +82,7 @@ def distribution_gateway(request: pytest.FixtureRequest,
 ) -> Iterator[tuple[httpx.Client, TestRunContext, Path, Path]]:
     asset_input = os.environ.get("BOXTEAM_TEST_RUNTIME_ASSET")
     if not asset_input:
-        pytest.skip("需要 BOXTEAM_TEST_RUNTIME_ASSET 指向已构建的 Linux runtime tgz")
+        pytest.skip("需要 BOXTEAM_TEST_RUNTIME_ASSET 指向当前平台已构建的 runtime tgz")
     asset = Path(asset_input).resolve(strict=True)
     launcher_input = os.environ.get("BOXTEAM_TEST_PREPARED_LAUNCHER")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -102,6 +106,7 @@ def distribution_gateway(request: pytest.FixtureRequest,
     gateway_port = 8014 if launcher_input else ports.port(21)
     backend_port = 8010 if launcher_input else ports.port(20)
     gateway_url = f"http://127.0.0.1:{gateway_port}"
+    readiness_seconds = 180 if sys.platform == "win32" else 60
     workspace = prepare_test_workspace(workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
     config_path = install_test_workspace_config(workspace_root=workspace,
@@ -141,7 +146,7 @@ def distribution_gateway(request: pytest.FixtureRequest,
         "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"})
     command = [str(python), "-m", "configs.boxteam", "initialize", "--project-root", str(application)]
     initialized = subprocess.run(command, cwd=application, env=environment,
-        text=True, capture_output=True, check=False, timeout=60)
+        text=True, capture_output=True, check=False, timeout=readiness_seconds)
     (context.artifacts_dir / "initialize.stdout.raw").write_text(initialized.stdout, encoding="utf-8")
     (context.artifacts_dir / "initialize.stderr.raw").write_text(initialized.stderr, encoding="utf-8")
     assert initialized.returncode == 0, initialized.stderr
@@ -164,7 +169,7 @@ def distribution_gateway(request: pytest.FixtureRequest,
         try:
             if launcher_input:
                 # Launcher由子进程监听；直接Gateway装具的根PID监听检查不适用于它。
-                deadline = time.monotonic() + 60
+                deadline = time.monotonic() + readiness_seconds
                 with httpx.Client(timeout=1, trust_env=False) as readiness:
                     while True:
                         assert process.poll() is None, "Launcher在就绪前退出"
@@ -177,7 +182,7 @@ def distribution_gateway(request: pytest.FixtureRequest,
                         response.raise_for_status()
                         break
             else:
-                wait_for_http_ok(gateway_url + "/api/gateway/health", process)
+                wait_for_http_ok(gateway_url + "/api/gateway/health", process, timeout_seconds=readiness_seconds)
             with httpx.Client(base_url=gateway_url, timeout=90, trust_env=False) as client:
                 credential = client.get("/api/gateway/auth/local-credential",
                     headers={"Sec-Fetch-Site": "same-origin"}).raise_for_status().json()["data"]["token"]
@@ -212,11 +217,9 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         "import json,platform,sys;print(json.dumps({'version':platform.python_version(),'abi':f'cp{sys.version_info.major}{sys.version_info.minor}'}))"],
         text=True, capture_output=True, check=True, timeout=10)
     node_target = subprocess.run([str(node), "--print",
-        "JSON.stringify({version:process.versions.node,abi:process.versions.modules,glibc:process.report.getReport().header.glibcVersionRuntime})"],
+        "JSON.stringify({version:process.versions.node,abi:process.versions.modules})"],
         text=True, capture_output=True, check=True, timeout=10)
-    node_identity = json.loads(node_target.stdout)
-    target = {"os": "linux", "architecture": "x64", "system_baseline": f"glibc-{node_identity.pop('glibc')}",
-        "python": json.loads(python_target.stdout), "node": node_identity}
+    target = {**native_plugin_target(), "python": json.loads(python_target.stdout), "node": json.loads(node_target.stdout)}
 
     def exchange(method: str, path: str, body: dict[str, object] | None = None) -> httpx.Response:
         request_id = f"distribution-plugin-{len(evidence)}"
@@ -328,8 +331,10 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                 incompatible = json.loads(json.dumps(target))
                 incompatible[runtime][field] = value
                 incompatible_targets[f"{runtime}-{field}"] = incompatible
-        incompatible_targets["os"] = {**target, "os": "windows", "system_baseline": "windows-10.0.19041"}
-        incompatible_targets["architecture"] = {**target, "architecture": "arm64"}
+        opposite_os = "windows" if target["os"] != "windows" else "linux"
+        incompatible_targets["os"] = {**target, "os": opposite_os,
+            "system_baseline": "windows-10.0.19041" if opposite_os == "windows" else "glibc-2.39"}
+        incompatible_targets["architecture"] = {**target, "architecture": "arm64" if target["architecture"] == "x64" else "x64"}
         for index, (label, incompatible) in enumerate(incompatible_targets.items()):
             rejected = expect_plugin_install_failure(lambda endpoint, payload: exchange("POST", endpoint, payload),
                 gateway_id=gateway_id, path=str(package(f"0.1.{index}", package_target=incompatible)))
@@ -412,7 +417,9 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                 "grantToken": grant["grant_token"], "cols": 100, "rows": 30}))
             assert json.loads(socket.recv(timeout=10))["type"] == "attached"
             # 让 shell 执行后再拼成标记，避免把输入回显误认为命令输出。
-            socket.send(json.dumps({"type": "input", "data": "printf 'distribution-%s\\n' 'native-ready'\n"}))
+            terminal_command = ("set distribution_part=native-ready\r\necho distribution-%distribution_part%\r\n"
+                if sys.platform == "win32" else "printf 'distribution-%s\\n' 'native-ready'\n")
+            socket.send(json.dumps({"type": "input", "data": terminal_command}))
             output = _receive_output(socket, "distribution-native-ready")
             evidence.append({"terminal_output": output})
         latest = exchange("GET", f"/api/v1/resources/{resource['resource_id']}").raise_for_status().json()["data"]
@@ -495,7 +502,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                 destination = context.runtime_root_for_node(request.node.nodeid) / "electron"
                 with tarfile.open(electron_asset) as archive:
                     archive.extractall(destination, filter="data")
-                executable, = destination.glob("*/boxteam")
+                executable, = destination.glob("*/boxteam.exe" if sys.platform == "win32" else "*/boxteam")
                 native = {"electron": str(executable), "cwd": str(temporary),
                     "profile": str(temporary / "electron-home"), "emptyPath": str(temporary / "empty-path")}
                 Path(native["emptyPath"]).mkdir(parents=True)
@@ -510,7 +517,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                         for version in ("1.0.0", "2.0.0")],
                     "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
             command = [str(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
-            if electron_asset:
+            if electron_asset and sys.platform == "linux":
                 command = ["/usr/bin/xvfb-run", "-a", *command]
             with chromium_temporary_environment(temporary) as browser_environment:
                 browser = subprocess.run(command, env=environment | browser_environment,
