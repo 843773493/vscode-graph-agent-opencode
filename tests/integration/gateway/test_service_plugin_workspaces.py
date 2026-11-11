@@ -156,7 +156,8 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         return {"package_id": package_id, "package_version": version, "plugin_id": "probe", "enabled": enabled}
 
     def write_binding(workspace_id: str, entries: list[dict[str, object]], key: str,
-                      parameters: dict[str, object] | None = None, expected_status: int = 200) -> None:
+                      parameters: dict[str, object] | None = None, expected_status: int = 200,
+                      preflight: bool = False, expected_detail: str | None = None) -> None:
         path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
         headers = {"X-BoxTeam-Workspace-Id": workspace_id}
         document = exchange("GET", path, headers=headers).raise_for_status().json()["data"]
@@ -164,7 +165,7 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         source.setdefault("plugins", {})["runtime"] = {"entries": entries}
         if parameters is not None:
             source["plugins"]["configuration"] = {"values": {"probe.tools": {"probe": parameters}}}
-        response = exchange("PUT", path, {
+        response = exchange("POST" if preflight else "PUT", path + ("/preflight" if preflight else ""), {
             "gateway_id": gateway_id(),
             "workspace_id": workspace_id,
             "source_key": "workspace_root_mutable_override",
@@ -177,10 +178,12 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
             "idempotency_key": key,
         }, headers=headers)
         assert response.status_code == expected_status, response.text
+        if expected_detail is not None:
+            assert expected_detail in response.json()["detail"], response.text
         if expected_status != 200:
             after = exchange("GET", path, headers=headers).raise_for_status().json()["data"]
-            assert after["jsonc"] == document["jsonc"]
-            assert after["effective"] == document["effective"]
+            for field in ("jsonc", "file_digest", "layer_revision", "layer_digest", "active_revision", "active_digest", "effective"):
+                assert after[field] == document[field], field
             return
         assert response.json()["data"]["edit"]["state"] == "active"
 
@@ -253,6 +256,13 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
                 expected_digest=hashlib.sha256(archive.read_bytes()).hexdigest(),
             )
 
+        # 参数容器尚为空：预检与直接保存都必须在原文件/CAS写入前拒绝不存在的确切版本。
+        for preflight in (True, False):
+            write_binding(workspace_a_id, [binding_for("probe.tools", version="9.0.0", enabled=False)],
+                f"workspace-empty-parameters-rejected-{preflight}", expected_status=409,
+                preflight=preflight, expected_detail="插件包版本不存在或不是普通目录: probe.tools@9.0.0")
+        assert status_for(exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": target_gateway})
+            .raise_for_status().json()["data"], workspace_a_id) is None
         write_binding(workspace_a_id, [binding_for("probe.tools")], "workspace-a-plugin-enable", {"label": "A"})
         write_binding(workspace_b_id, [binding_for("probe.tools")], "workspace-b-plugin-enable", {"label": "B"})
         ready_a, ready_b = wait_binding(workspace_a_id, "ready"), wait_binding(workspace_b_id, "ready")

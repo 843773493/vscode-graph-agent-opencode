@@ -544,7 +544,7 @@ class ConfigReloadMixin:
             )
             if response.status_code == 409:
                 raise ConfigConflictError(
-                    "Gateway 拒绝 Workspace 插件绑定 candidate (HTTP 409)"
+                    f"Gateway 拒绝 Workspace 插件绑定 candidate (HTTP 409): {response.json()['detail']}"
                 )
             response.raise_for_status()
         result = APIResponse[bool].model_validate_json(response.content)

@@ -3167,9 +3167,9 @@ async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version_change", [False, True])
+@pytest.mark.parametrize(("version_change", "with_parameters"), [(False, True), (True, True), (True, False)])
 async def test_workspace_bound_parameters_are_checked_before_source_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version_change: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version_change: bool, with_parameters: bool,
 ) -> None:
     config_path = _write_workspace_config(tmp_path, _base_config())
     root = tmp_path / "workspace"
@@ -3182,6 +3182,8 @@ async def test_workspace_bound_parameters_are_checked_before_source_write(
         binding = {"package_id": "proof", "plugin_id": "probe", "package_version": "1.0.0", "enabled": False}
         payload = {"plugins": {"runtime": {"entries": [binding]},
             "configuration": {"values": {"proof": {"probe": {"label": "before"}}}}}}
+        if not with_parameters:
+            del payload["plugins"]["configuration"]
         source.write_text(json.dumps(payload))
         service.validate_workspace_config()
         document = service.get_source_document(source_key="workspace_root_mutable_override", gateway_id="gateway-proof")

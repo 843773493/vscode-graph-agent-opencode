@@ -267,17 +267,12 @@ class ConfigSourceEditMixin:
                 raise PermissionError("当前 Gateway 未授权修改 Workspace 插件运行绑定")
 
         require_plugin_permission()
-        # 来源文件先于 applying 阶段写入；先拒绝非法/秘密参数，发布前仍核包引用并发。
+        # 原校验入口按绑定／参数变化判断；空参数也不能绕过写文件前的版本准入。
         previous = service._require_snapshot()
-        current, desired = previous.to_dict(), candidate.to_dict()
-        parameters = plugin_parameters(desired)
-        if plugin_parameters(current) != parameters or (parameters and
-            workspace_plugin_bindings_for_root(current, workspace_root=service._workspace_root)
-            != workspace_plugin_bindings_for_root(desired, workspace_root=service._workspace_root)):
-            await service._validate_gateway_workspace_plugin_bindings(
-                previous=previous, candidate=candidate, candidate_id=request.idempotency_key,
-                gateway_id=gateway_id,
-            )
+        await service._validate_gateway_workspace_plugin_bindings(
+            previous=previous, candidate=candidate, candidate_id=request.idempotency_key,
+            gateway_id=gateway_id,
+        )
         intent: dict[str, object] = {"gateway_id": gateway_id, "workspace_id": request.workspace_id,
                   "source_key": source_key, "request_digest": request_digest, "file_digest": sha256(text.encode("utf-8")).hexdigest(),
                   "stage": "accepted", "base_file_digest": request.base_file_digest,
