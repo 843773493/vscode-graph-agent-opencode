@@ -98,6 +98,14 @@ def publish_dap_event(runtime: NodeDebugRuntime, event: str, body: dict[str, obj
         subscriber.put_nowait(message)
 
 
+def confirm_target_exit(runtime: NodeDebugRuntime, exit_code: int | None) -> None:
+    """退出事件与停止回执共用确认点，关闭观察任务前只发布一次终态。"""
+    runtime.target_exit_code = exit_code
+    if not runtime.target_exited:
+        runtime.target_exited = True
+        publish_dap_event(runtime, "terminated", {})
+
+
 class NodeDebugCommandSender(Protocol):
     async def __call__(
         self,

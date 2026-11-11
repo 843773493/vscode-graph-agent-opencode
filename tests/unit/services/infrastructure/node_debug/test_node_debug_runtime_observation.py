@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -14,6 +15,7 @@ from app.services.infrastructure.node_debug.process.observation import (
 from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugPluginRuntimeProtocol,
     NodeDebugRuntime,
+    confirm_target_exit,
 )
 from tests.support.node_debug_dependencies import (
     TEST_THREAD_ID,
@@ -74,13 +76,20 @@ def observer(recorder: Recorder) -> NodeDebugRuntimeObserver:
 
 
 @pytest.mark.asyncio
-async def test_plugin_output_is_bounded_and_exit_settles_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stop_already_confirmed", [False, True])
+async def test_plugin_output_is_bounded_and_exit_settles_run(
+    tmp_path: Path, stop_already_confirmed: bool,
+) -> None:
     recorder = Recorder()
     plugin = PluginEvents([
         {"event": "stdout", "payload": {"text": "one\ntwo\nthree\n"}},
         {"event": "process.exited", "payload": {"exit_code": 0}},
     ])
     target = runtime(tmp_path, plugin)
+    events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    target.dap_subscribers.add(events)
+    if stop_already_confirmed:
+        confirm_target_exit(target, 0)
 
     await observer(recorder).monitor_process(target)
 
@@ -91,6 +100,10 @@ async def test_plugin_output_is_bounded_and_exit_settles_run(tmp_path: Path) -> 
     assert target.plugin_runtime is plugin
     assert plugin.closed == 0
     assert recorder.phases == [("settled", "Debug 插件已确认目标进程退出")]
+    published = [events.get_nowait() for _ in range(events.qsize())]
+    assert [event for event in published if event["event"] == "terminated"] == [
+        {"event": "terminated", "body": {}},
+    ]
 
 
 @pytest.mark.asyncio

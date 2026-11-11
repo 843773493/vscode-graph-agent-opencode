@@ -13,6 +13,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugClaimPhaseMarker,
     NodeDebugRuntime,
     NodeDebugStopSnapshotClearer,
+    confirm_target_exit,
     publish_dap_event,
 )
 
@@ -51,8 +52,7 @@ class NodeDebugRuntimeObserver:
             if event != "process.exited":
                 continue
             exit_code = payload.get("exit_code")
-            runtime.target_exit_code = exit_code if type(exit_code) is int else None
-            runtime.target_exited = True
+            confirm_target_exit(runtime, exit_code if type(exit_code) is int else None)
             plugin.exit_code = runtime.target_exit_code
             await self._mark_claim_phase(runtime, "settled", "Debug 插件已确认目标进程退出")
             async with runtime.state_lock:
@@ -61,7 +61,6 @@ class NodeDebugRuntimeObserver:
                     runtime, runtime.target_exit_code if runtime.target_exit_code is not None else -1,
                 )
                 self._clear_stop_snapshot(runtime)
-            publish_dap_event(runtime, "terminated", {})
             return
         if not runtime.closing and runtime.status not in {"exited", "failed"}:
             async with runtime.state_lock:

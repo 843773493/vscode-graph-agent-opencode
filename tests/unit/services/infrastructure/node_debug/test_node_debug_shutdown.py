@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -19,7 +20,10 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from app.services.infrastructure.node_debug.runtime_state import (
+    NodeDebugPluginRuntimeProtocol,
+    NodeDebugRuntime,
+)
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session import lifecycle_entry
 from app.services.infrastructure.node_debug.session.thread_owner import (
@@ -85,8 +89,10 @@ async def test_close_reuses_confirmed_exit_without_persistent_claim(
         }),
         close=AsyncMock(),
     )
-    runtime.plugin_runtime = plugin
+    runtime.plugin_runtime = cast(NodeDebugPluginRuntimeProtocol, plugin)
     service._runtimes[_OWNER] = runtime
+    events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    runtime.dap_subscribers.add(events)
 
     assert await service._lifecycle.stop_runtime(runtime) == "stopped"
     assert runtime.target_exited and runtime.target_exit_code == exit_code
@@ -95,6 +101,8 @@ async def test_close_reuses_confirmed_exit_without_persistent_claim(
 
     plugin.stop.assert_awaited_once()
     plugin.close.assert_awaited_once()
+    assert events.get_nowait() == {"event": "terminated", "body": {}}
+    assert events.empty(), "重复关闭不能再次发布终态"
 
 
 async def test_close_without_exit_observation_still_rejects_unknown_target(
@@ -102,12 +110,15 @@ async def test_close_without_exit_observation_still_rejects_unknown_target(
 ) -> None:
     runtime = runtimes[0]
     service._runtimes[_OWNER] = runtime
+    events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    runtime.dap_subscribers.add(events)
 
     with pytest.raises(RuntimeError, match="未能核实进程终态"):
         await service.close()
 
     assert not runtime.target_exited
     assert runtime.status == "reconcile_required"
+    assert events.empty(), "停止结果未知不能伪造终态"
 
 
 async def test_close_captures_start_before_runtime_exists_and_drains_other_owner(

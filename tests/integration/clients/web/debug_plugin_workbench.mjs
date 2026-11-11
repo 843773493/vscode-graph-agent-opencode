@@ -63,18 +63,20 @@ try {
   const active = result.initialization[1].data.active_workspace;
   const owner = { gatewayId: active.gateway_id, workspaceId: active.workspace_id };
   result.owner = owner;
-  const sourcePath = `/api/v1/workspaces/${owner.workspaceId}/config/sources/workspace_root_mutable_override`;
-  const source = await api(sourcePath, {}, owner);
-  // 装具配置由 Python 生成规范 JSON；修改仍经原来源 CAS 提交。
-  const document = JSON.parse(source.jsonc);
-  document.plugins = { ...document.plugins, runtime: { entries: [{ package_id: 'boxteam.developer-tools',
-    package_version: '0.1.0', plugin_id: 'debugging', enabled: true }] } };
-  const edited = await api(sourcePath, { method: 'PUT', body: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
-    source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(document), base_file_digest: source.file_digest,
-    base_layer_revision: source.layer_revision, base_layer_digest: source.layer_digest,
-    expected_active_revision: source.active_revision, expected_active_digest: source.active_digest,
-    idempotency_key: 'debug-ui-enable' } }, owner);
-  assert.equal(edited.edit.state, 'active');
+  const bindDebugger = async (target, version, idempotencyKey) => {
+    const path = `/api/v1/workspaces/${target.workspaceId}/config/sources/workspace_root_mutable_override`;
+    const source = await api(path, {}, target), document = JSON.parse(source.jsonc);
+    document.plugins = { ...document.plugins, runtime: { entries: version === null ? [] : [{
+      package_id: 'boxteam.developer-tools', package_version: version, plugin_id: 'debugging', enabled: true,
+    }] } };
+    const saved = await api(path, { method: 'PUT', body: { gateway_id: target.gatewayId, workspace_id: target.workspaceId,
+      source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(document), base_file_digest: source.file_digest,
+      base_layer_revision: source.layer_revision, base_layer_digest: source.layer_digest,
+      expected_active_revision: source.active_revision, expected_active_digest: source.active_digest,
+      idempotency_key: idempotencyKey } }, target);
+    assert.equal(saved.edit.state, 'active');
+  };
+  await bindDebugger(owner, '0.1.0', 'debug-ui-enable');
   let ready;
   await expect.poll(async () => {
     const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
@@ -86,9 +88,24 @@ try {
   const session = await api('/api/v1/sessions', { method: 'POST', body: { title: 'Debug UI shared run' } }, owner);
   const thread = await api(`/api/v1/sessions/${session.session_id}/main-thread`, {}, owner);
   Object.assign(owner, { sessionId: session.session_id, threadId: thread.thread_id });
-  const otherSession = await api('/api/v1/sessions', { method: 'POST', body: { title: 'Debug focus destination' } }, owner);
-  const otherThread = await api(`/api/v1/sessions/${otherSession.session_id}/main-thread`, {}, owner);
-  const otherOwner = { ...owner, sessionId: otherSession.session_id, threadId: otherThread.thread_id };
+  const registered = await api('/api/gateway/managed-workspaces', { method: 'POST', body: {
+    root_path: input.siblingWorkspace, name: 'Debug sibling workspace', create_directory: false,
+  } });
+  const sibling = registered.items.find(item => item.gateway_id === owner.gatewayId && item.name === 'Debug sibling workspace');
+  assert(sibling); assert.notEqual(sibling.workspace_id, owner.workspaceId);
+  const otherOwner = { gatewayId: owner.gatewayId, workspaceId: sibling.workspace_id };
+  await bindDebugger(otherOwner, '0.1.0', 'debug-ui-enable-sibling');
+  let siblingReady;
+  await expect.poll(async () => {
+    const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
+    siblingReady = snapshot.plugins.find(item => item.binding.plugin_id === 'debugging' && item.binding.workspace_id === otherOwner.workspaceId);
+    if (siblingReady?.state === 'failed') throw new Error(`兄弟工作区Debug启动失败: ${JSON.stringify(siblingReady)}`);
+    return siblingReady?.state;
+  }, { timeout: 45_000 }).toBe('ready');
+  assert.notEqual(siblingReady.instance.instance_id, ready.instance.instance_id);
+  const otherSession = await api('/api/v1/sessions', { method: 'POST', body: { title: 'Debug focus destination' } }, otherOwner);
+  const otherThread = await api(`/api/v1/sessions/${otherSession.session_id}/main-thread`, {}, otherOwner);
+  Object.assign(otherOwner, { sessionId: otherSession.session_id, threadId: otherThread.thread_id });
   await api('/api/v1/debug/node/configurations', { method: 'POST', body: { session_id: owner.sessionId, thread_id: owner.threadId,
     name: 'UI shared Node', script_path: 'debug-ui.mjs', working_directory: '.', args: [], breakpoints: [] } }, owner);
   await api('/api/v1/debug/node/configurations', { method: 'POST', body: { session_id: otherOwner.sessionId, thread_id: otherOwner.threadId,
@@ -115,7 +132,7 @@ try {
   await expect(groups).toHaveCount(2);
   await command('workbench.action.focusSecondEditorGroup');
   await expect(groups.nth(1)).toHaveClass(/\bactive\b/);
-  await sessionRow(otherOwner).dblclick();
+  await command('_workbench.open', `boxteam-thread://${otherOwner.gatewayId}/${otherOwner.workspaceId}/${otherOwner.sessionId}/${otherOwner.threadId}`, [undefined, { pinned: true }]);
   const otherPane = groups.nth(1).locator(`section.boxteam-thread[data-session-id="${otherOwner.sessionId}"][data-thread-id="${otherOwner.threadId}"]`);
   await expect(threadPane.getByTestId('composer-input')).toBeVisible();
   await expect(otherPane.getByTestId('composer-input')).toBeVisible();
@@ -124,6 +141,16 @@ try {
   const roots = await api('/api/v1/workspace/files/roots', {}, owner);
   const quick = page.locator('.quick-input-widget');
   await command('workbench.action.quickOpen', roots.workspace_uri + '/debug-ui.mjs');
+  await quick.getByText('打开链接', { exact: true }).click();
+  await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('const state = { counter: 1 }');
+  await command('workbench.action.gotoLine');
+  await quick.locator('input').first().fill(':2'); await quick.locator('input').first().press('Enter');
+  await expect(quick).not.toBeVisible();
+  await expect(page.getByRole('button', { name: /^Ln 2, Col/ })).toBeVisible();
+  await command('editor.debug.action.toggleBreakpoint');
+  await expect(page.locator('.glyph-margin-widgets [class*="codicon-debug-breakpoint"]')).toHaveCount(1);
+  const siblingRoots = await api('/api/v1/workspace/files/roots', {}, otherOwner);
+  await command('workbench.action.quickOpen', siblingRoots.workspace_uri + '/debug-ui.mjs');
   await quick.getByText('打开链接', { exact: true }).click();
   await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('const state = { counter: 1 }');
   await command('workbench.action.gotoLine');
@@ -151,14 +178,7 @@ try {
   const staleLaunching = command('boxteam.debug.start').then(value => ({ value }), error => ({ error: String(error) }));
   try {
     await Promise.race([staleEntered, staleLaunching.then(() => { throw new Error('旧启动没有进入冻结声明后的配置读取'); })]);
-    const current = await api(sourcePath, {}, owner), changed = JSON.parse(current.jsonc);
-    changed.plugins.runtime.entries[0].package_version = '0.2.0';
-    const saved = await api(sourcePath, { method: 'PUT', body: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
-      source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(changed), base_file_digest: current.file_digest,
-      base_layer_revision: current.layer_revision, base_layer_digest: current.layer_digest,
-      expected_active_revision: current.active_revision, expected_active_digest: current.active_digest,
-      idempotency_key: 'debug-ui-switch-while-resolving' } }, owner);
-    assert.equal(saved.edit.state, 'active');
+    await bindDebugger(owner, '0.2.0', 'debug-ui-switch-while-resolving');
     await expect.poll(async () => {
       const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
       ready = snapshot.plugins.find(item => item.binding.plugin_id === 'debugging' && item.binding.workspace_id === owner.workspaceId);
@@ -166,6 +186,16 @@ try {
       return [ready?.state, ready?.binding.package_version];
     }, { timeout: 45_000 }).toEqual(['ready', '0.2.0']);
     assert.notEqual(ready.instance.instance_id, originalPlugin.instance.instance_id);
+    const siblingState = (await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } }))
+      .plugins.find(item => item.binding.workspace_id === otherOwner.workspaceId && item.binding.plugin_id === 'debugging');
+    assert.equal(siblingState.instance.instance_id, siblingReady.instance.instance_id);
+    const declaration = async target => (await api(`/api/v1/debug/node/debugger-contributions?workspace_id=${target.workspaceId}`, {}, target)).debuggers[0];
+    const currentDeclaration = await declaration(owner), siblingDeclaration = await declaration(otherOwner);
+    assert.equal(currentDeclaration.package_version, '0.2.0'); assert.equal(currentDeclaration.label, 'Node.js v2');
+    assert.deepEqual(currentDeclaration.configuration_schema.properties.v2Only, { type: 'string' });
+    assert.equal(siblingDeclaration.package_version, '0.1.0'); assert.equal(siblingDeclaration.label, 'Node.js');
+    assert.equal(siblingDeclaration.configuration_schema.properties.v2Only, undefined);
+    result.targetDeclarations = { current: currentDeclaration, sibling: siblingDeclaration };
     const rejected = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/debug/node/start');
     releaseStaleConfiguration();
     await expect(quick.getByText('UI shared Node', { exact: true })).toBeVisible();
@@ -213,6 +243,7 @@ try {
     await otherPane.getByTestId('composer-input').click();
     releaseConfiguration();
     await expect(quick.getByText('UI shared Node', { exact: true })).toBeVisible();
+    await expect(quick).toContainText('Node.js v2');
     await quick.getByText('UI shared Node', { exact: true }).click();
     await launching;
   } finally {
@@ -322,7 +353,7 @@ try {
     { timeout: 20_000 }).toEqual(['paused', 2]);
   assert.notEqual(otherPaused.run_id, result.runId);
   assert.notEqual(otherPaused.pid, result.pid);
-  assert.equal(otherPaused.debugger_binding.instance_id, ready.instance.instance_id);
+  assert.equal(otherPaused.debugger_binding.instance_id, siblingReady.instance.instance_id);
   assert.equal((await state()).call_stack[0].line, 3);
   const debugSessionName = name => page.locator('.debug-call-stack .session .name').getByText(name, { exact: true });
   const selectedDebugSessionName = () => page.locator('.debug-toolbar .select-container .monaco-select-box')
@@ -334,6 +365,9 @@ try {
   await expect(page.locator('.debug-variables')).toContainText('state');
   await command('workbench.action.debug.stop');
   await expect.poll(async () => (await otherState()).status, { timeout: 15_000 }).toBe('exited');
+  await expect(otherDebugSession).not.toBeVisible();
+  assert.equal(result.dap.filter(item => item.channel === `/api/v1/debug/node/runs/${otherPaused.run_id}/dap`
+    && item.value.event === 'terminated').length, 1);
   assert.equal((await state()).run_id, result.runId);
   assert.equal((await state()).status, 'paused');
   result.parallelThread = { runId: otherPaused.run_id, pid: otherPaused.pid, stopped: true, originalStillPaused: true };
@@ -423,19 +457,40 @@ try {
   assert.equal(lostEvaluationRequests, 1, '连接断开及后续操作不得重放有副作用的求值');
   result.finalState = await state(); result.actualExit = true;
   result.phase = 'unbind-and-uninstall';
-  const finalSource = await api(sourcePath, {}, owner), finalDocument = JSON.parse(finalSource.jsonc);
-  finalDocument.plugins.runtime.entries = [];
-  const unbound = await api(sourcePath, { method: 'PUT', body: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
-    source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(finalDocument), base_file_digest: finalSource.file_digest,
-    base_layer_revision: finalSource.layer_revision, base_layer_digest: finalSource.layer_digest,
-    expected_active_revision: finalSource.active_revision, expected_active_digest: finalSource.active_digest,
-    idempotency_key: 'debug-ui-unbind-after-actual-exit' } }, owner);
-  assert.equal(unbound.edit.state, 'active');
+  await bindDebugger(owner, null, 'debug-ui-unbind-after-actual-exit');
   await expect.poll(async () => {
     const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
     return snapshot.plugins.some(item => item.binding.package_id === 'boxteam.developer-tools'
       && item.binding.plugin_id === 'debugging' && item.binding.workspace_id === owner.workspaceId);
   }, { timeout: 15_000 }).toBe(false);
+  result.phase = 'sibling-after-origin-unbind';
+  const remaining = (await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } }))
+    .plugins.find(item => item.binding.workspace_id === otherOwner.workspaceId && item.binding.plugin_id === 'debugging');
+  assert.equal(remaining.state, 'ready');
+  assert.equal(remaining.instance.instance_id, siblingReady.instance.instance_id);
+  await otherPane.getByTestId('composer-input').click();
+  const siblingLaunching = command('boxteam.debug.start');
+  await expect(quick.getByText('Other Thread Node', { exact: true })).toBeVisible();
+  await expect(quick).toContainText('Node.js');
+  await expect(quick).not.toContainText('Node.js v2');
+  await quick.getByText('Other Thread Node', { exact: true }).click();
+  await siblingLaunching;
+  let siblingPaused;
+  await expect.poll(async () => { siblingPaused = await otherState(); return [siblingPaused.status, siblingPaused.call_stack[0]?.line]; }).toEqual(['paused', 2]);
+  assert.equal(siblingPaused.debugger_binding.instance_id, siblingReady.instance.instance_id);
+  assert.notEqual(siblingPaused.run_id, otherPaused.run_id);
+  // 仅剩一个真实会话时，原版调用栈会省略 session 行；由新 run 的变量回执确认已聚焦。
+  await expect(page.locator('.debug-variables')).toContainText('state');
+  await expect.poll(() => result.dap.some(item => item.channel === `/api/v1/debug/node/runs/${siblingPaused.run_id}/dap`
+    && item.direction === 'in' && item.value.command === 'variables' && item.value.success)).toBe(true);
+  await command('workbench.action.debug.stepOver');
+  await expect.poll(async () => (await otherState()).call_stack[0]?.line).toBe(3);
+  assert.equal(result.dap.findLast(item => item.direction === 'out' && item.value.command === 'next').channel,
+    `/api/v1/debug/node/runs/${siblingPaused.run_id}/dap`);
+  await command('workbench.action.debug.stop');
+  await expect.poll(async () => (await otherState()).status).toBe('exited');
+  result.siblingAfterUnbind = { pid: siblingPaused.pid, pluginPid: siblingReady.instance.process_id, originalInstanceKept: true };
+  await bindDebugger(otherOwner, null, 'debug-ui-unbind-sibling');
   result.uninstalled = [];
   for (const version of ['0.1.0', '0.2.0']) {
     const removed = await api('/api/gateway/service-plugins/uninstall', { method: 'POST', body: {

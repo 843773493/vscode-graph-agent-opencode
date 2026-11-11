@@ -20,6 +20,7 @@ from app.services.infrastructure.node_debug.runtime_state import (
     NodeDebugRuntime,
     NodeDebugSessionManifestWriter,
     NodeDebugStopSnapshotClearer,
+    confirm_target_exit,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import NodeDebugOwner
 
@@ -197,6 +198,5 @@ class NodeDebugProcessLifecycle:
         if result.get("status") != "exited":
             return f"Debug插件未确认目标进程退出: status={result.get('status')!r}"
         code = result.get("exit_code")
-        runtime.target_exit_code = code if type(code) is int else None
-        runtime.target_exited = True
+        confirm_target_exit(runtime, code if type(code) is int else None)
         return None

@@ -116,11 +116,21 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         "const state = { counter: 1 };\nstate.counter += 2;\nstate.counter += 3;\nconsole.log('debug-result', state.counter);\nsetInterval(() => {}, 1000);\n",
         encoding="utf-8",
     )
+    sibling_workspace = prepare_test_workspace(workspace_root=workspace / "sibling",
+        template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace", template_items=())
+    install_test_workspace_config(workspace_root=sibling_workspace,
+        config_path=context.project_root / "configs/tests/workspace/default.jsonc",
+        schema_path=context.project_root / "configs/workspace_schema.jsonc")
+    (sibling_workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(source), encoding="utf-8")
+    shutil.copyfile(workspace / "debug-ui.mjs", sibling_workspace / "debug-ui.mjs")
     gateway_home = context.boxteam_home_for_node(request.node.nodeid)
     copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     # 复用已准备原件构造确切新版，不重新下载／编译；安装与换绑仍走产品入口。
     upgraded_manifest = commentjson.loads((prepared_developer_tools_package / "plugin.jsonc").read_text(encoding="utf-8"))
     upgraded_manifest["version"] = "0.2.0"
+    debugger = next(plugin for plugin in upgraded_manifest["plugins"] if plugin["id"] == "debugging")["contributes"]["debuggers"][0]
+    debugger["label"] = "Node.js v2"
+    debugger["configuration_schema"]["properties"]["v2Only"] = {"type": "string"}
     upgraded_archive = context.artifacts_dir / "developer-tools-0.2.0.zip"
     with ZipFile(upgraded_archive, "w", compression=ZIP_STORED) as archive:
         archive.writestr("plugin.jsonc", json.dumps(upgraded_manifest))
@@ -140,7 +150,8 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
             result = subprocess.run(command, cwd=context.project_root, timeout=195, check=False, capture_output=True, text=True,
                 env={**os.environ, **debug_model.environment, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                     "BOXTEAM_DEBUG_UI_INPUT": json.dumps({"baseUrl": base_url, "artifacts": str(context.artifacts_dir),
-                        "modelInteractions": _model_interactions(), "upgradedPackage": str(upgraded_archive)})})
+                        "modelInteractions": _model_interactions(), "upgradedPackage": str(upgraded_archive),
+                        "siblingWorkspace": str(sibling_workspace)})})
         (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
         (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}), encoding="utf-8")
@@ -157,5 +168,8 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
             assert not (gateway_home / "plugins/packages/boxteam.developer-tools" / version).exists()
         assert isinstance(receipt["pid"], int) and not psutil.pid_exists(receipt["pid"]), receipt
         assert not psutil.pid_exists(receipt["parallelThread"]["pid"]), receipt
+        assert not psutil.pid_exists(receipt["siblingAfterUnbind"]["pid"]), receipt
+        assert not psutil.pid_exists(receipt["siblingAfterUnbind"]["pluginPid"]), receipt
+        assert receipt["siblingAfterUnbind"]["originalInstanceKept"]
     finally:
         close_gateway_process(gateway)
