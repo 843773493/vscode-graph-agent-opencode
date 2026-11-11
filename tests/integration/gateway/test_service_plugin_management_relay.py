@@ -22,6 +22,7 @@ from app.core.resource_uri import parse_resource_uri
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.schemas.gateway.config import GatewayConfigSourceDocumentDTO
+from app.schemas.gateway.plugin_commands import PluginCommandSnapshotDTO
 from app.schemas.gateway.plugin_installation import (
     PluginInstallOperationDTO,
     PluginInventoryResultDTO,
@@ -61,6 +62,7 @@ def _plugin_archive(version: str, *, target: dict[str, object] | None = None) ->
                 {"extension_point": "services", "version": 1},
                 {"extension_point": "configuration", "version": 1},
                 {"extension_point": "skills", "version": 1},
+                {"extension_point": "commands", "version": 1},
             ],
             "contributes": {
                 "services": [
@@ -71,13 +73,31 @@ def _plugin_archive(version: str, *, target: dict[str, object] | None = None) ->
                     "properties": {"marker": {"type": "string"}},
                 },
                 "skills": [{"id": "guide", "path": "instructions/relay-guide"}],
+                "commands": [{"id": "probe", "handler": "probe", "title": f"Relay command {version}",
+                    "arguments_schema": {"type": "object", "additionalProperties": False,
+                        "properties": {"wait": {"type": "boolean"}}},
+                    "result_schema": {"type": "object", "required": ["version", "pid", "count"],
+                        "properties": {"version": {"type": "string"}, "pid": {"type": "integer"}, "count": {"type": "integer"}}},
+                    "required_capabilities": ["read"]}],
             },
         }],
     }
     content = io.BytesIO()
     with zipfile.ZipFile(content, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
-        archive.writestr("server.py", PLUGIN)
+        archive.writestr("server.py", PLUGIN.replace(
+            "app.include_router(plugin_command_router({}, shutdown=shutdown))",
+            """from app.core.trace_middleware import TraceMiddleware
+app.add_middleware(TraceMiddleware)
+command_calls = 0
+async def probe(arguments, context):
+    global command_calls
+    command_calls += 1
+    await context.progress(1, 2, 'relay-command-started')
+    if arguments.get('wait'): await asyncio.Event().wait()
+    return {'version': identity['package_version'], 'pid': os.getpid(), 'count': command_calls}
+app.include_router(plugin_command_router({'probe': probe}, shutdown=shutdown))""",
+        ))
         archive.writestr("instructions/relay-guide/SKILL.md",
             f"---\nname: relay-management-guide\ndescription: Relay source proof\n---\nTARGET_B_SKILL_{version} Ω\n")
         archive.writestr("instructions/relay-guide/reference.txt", f"TARGET_B_REFERENCE_{version}\n")
@@ -230,6 +250,38 @@ def test_plugin_management_and_call_relay_to_original_gateway(
             time.sleep(0.1)
         raise AssertionError("Gateway B watcher 未发布 federation policy")
 
+    def command_publication(*, relay: bool) -> dict:
+        snapshot = PluginCommandSnapshotDTO.model_validate(exchange(client_a if relay else client_b,
+            "/api/gateway/service-plugins/commands/publications", {"gateway_id": gateway_b},
+            f"command-publication-{len(evidence)}", remote=relay))
+        assert snapshot.gateway_id == gateway_b and snapshot.workspace_id is None
+        publication, = snapshot.publications
+        assert publication.binding.package_id == "relay.management.probe"
+        return publication.model_dump(mode="json")
+
+    def command_payload(publication: dict, call_id: str) -> dict:
+        registration, = publication["registrations"]
+        return {"gateway_id": gateway_b, **{key: publication["binding"][key]
+            for key in ("package_id", "plugin_id", "package_version")},
+            "instance_id": publication["instance_id"], "registration_id": registration["registration_id"],
+            "command_id": "probe", "call_id": call_id, "arguments": {}, "remaining_ms": 10_000}
+
+    def call_command(publication: dict, call_id: str, *, relay: bool = True) -> dict:
+        client = client_a if relay else client_b
+        response = client.post("/api/gateway/service-plugins/commands/call", json=command_payload(publication, call_id),
+            headers={**(headers if relay else {}), "X-Request-ID": call_id})
+        response.raise_for_status()
+        assert response.headers["X-Request-ID"] == call_id
+        events = [json.loads(line) for line in response.iter_lines()]
+        assert [event["kind"] for event in events] == ["started", "progress", "result"], events
+        assert [event["sequence"] for event in events] == [1, 2, 3]
+        for event in events:
+            assert event["request_id"] == event["call_id"] == call_id
+            assert event["instance_id"] == publication["instance_id"]
+            assert event["registration_id"] == publication["registrations"][0]["registration_id"]
+        evidence.append({"command": call_id, "relay": relay, "events": events})
+        return events[-1]["result"]
+
     try:
         target = {"gateway_id": gateway_b}
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
@@ -305,6 +357,10 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         slot, = [plugin for plugin in status.plugins if plugin.binding.package_id == "relay.management.probe"]
         assert slot.state == "ready" and slot.instance is not None
         instance_id, original_pid = slot.instance.instance_id, slot.instance.process_id
+        original_command = command_publication(relay=True)
+        assert command_publication(relay=False) == original_command
+        assert call_command(original_command, "relay-command-v1") == {"version": "1.0.0", "pid": original_pid, "count": 1}
+        assert call_command(original_command, "native-command-v1", relay=False) == {"version": "1.0.0", "pid": original_pid, "count": 2}
         first_skills = skill_snapshot("1.0.0")
         first_entry, = [entry for entry in first_skills["entries"] if entry.get("plugin")]
         original_uri = first_entry["display_uri"]
@@ -369,8 +425,50 @@ def test_plugin_management_and_call_relay_to_original_gateway(
             assert called.status_code == 200 and called.content == payload
             assert called.headers["X-Request-ID"] == f"incompatible-{version}-old-call"
 
-        publish_policy(["service_plugin_installation_manage", "configuration_read",
-                        "service_plugin_runtime_manage", "configuration_write"])
+        # 业务调用不需要安装／启停权限；同一条贡献流在业务撤权时结束。
+        publish_policy(["read", "send"])
+        business_command = command_publication(relay=True)
+        # revision 跟随当前配置；权限变更不改变绑定、实例或实际 handler 资格。
+        assert business_command == {**original_command, "revision": business_command["revision"]}
+        assert business_command["revision"] != original_command["revision"]
+        assert call_command(original_command, "relay-command-business-only")["count"] == 3
+        exchange(client_a, "/api/gateway/service-plugins/inventory", target,
+                 "command-business-no-install", expected_status=403)
+        with client_a.stream("POST", "/api/gateway/service-plugins/commands/events", json=target,
+                            headers={**headers, "X-Request-ID": "relay-command-events"}, timeout=15) as stream:
+            stream.raise_for_status()
+            assert stream.headers["X-Request-ID"] == "relay-command-events"
+            lines = stream.iter_lines()
+            assert next(lines) == "event: snapshot"
+            assert json.loads(next(lines).removeprefix("data: "))["publications"] == [business_command]
+            assert next(lines) == ""
+            active_call = {**command_payload(original_command, "relay-command-in-flight"), "arguments": {"wait": True}}
+            with client_a.stream("POST", "/api/gateway/service-plugins/commands/call", json=active_call,
+                                 headers={**headers, "X-Request-ID": "relay-command-in-flight"}, timeout=15) as executing:
+                executing.raise_for_status()
+                assert executing.headers["X-Request-ID"] == "relay-command-in-flight"
+                command_lines = executing.iter_lines()
+                partial = [json.loads(next(command_lines)) for _ in range(2)]
+                assert [event["kind"] for event in partial] == ["started", "progress"]
+                assert all(event["call_id"] == event["request_id"] == "relay-command-in-flight" for event in partial)
+                publish_policy(["service_plugin_installation_manage", "configuration_read",
+                                "service_plugin_runtime_manage", "configuration_write"])
+                received, transport_error = [], None
+                try:
+                    received = list(command_lines)
+                except httpx.RemoteProtocolError as error:
+                    # 已发响应头的业务通道可中断分块传输；消费者按缺终态报告结果未知。
+                    transport_error = str(error)
+                assert received == [], "执行通道撤权后不能伪造成功或重放"
+                evidence.append({"command": "relay-command-in-flight", "events": partial,
+                                 "transport_error": transport_error, "result_unknown": True})
+            assert list(lines) == [], "撤权后原命令贡献订阅必须结清"
+        denied_command = client_a.post("/api/gateway/service-plugins/commands/call",
+            json=command_payload(original_command, "relay-command-revoked"),
+            headers={**headers, "X-Request-ID": "relay-command-revoked"})
+        assert denied_command.status_code == 403, denied_command.text
+        assert denied_command.headers["X-Request-ID"] == denied_command.json()["request_id"] == "relay-command-revoked"
+        assert call_command(original_command, "native-command-after-revoke", relay=False)["count"] == 5
         revoked = client_a.post(service, headers={
             **headers, "X-Request-ID": "relay-plugin-call-revoked",
         }, content=gzip.compress(payload))
@@ -397,6 +495,7 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         current, = [item for item in after_install.plugins if item.binding.package_id == "relay.management.probe"]
         assert current.binding.package_version == "1.0.0" and current.instance is not None
         assert current.instance.instance_id == instance_id
+        assert command_publication(relay=True) == {**original_command, "revision": current.revision}
         assert skill_snapshot("1.0.0") == first_skills, "安装新版不能改换正在使用的 Skill 来源"
 
         edit_gateway_b(lambda document: bind(document, "1.1.0"), remote=True)
@@ -405,6 +504,13 @@ def test_plugin_management_and_call_relay_to_original_gateway(
         assert replacement.state == "ready" and replacement.binding.package_version == "1.1.0" and replacement.instance is not None
         replacement_id, replacement_pid = replacement.instance.instance_id, replacement.instance.process_id
         assert replacement_id != instance_id and not psutil.pid_exists(original_pid)
+        replacement_command = command_publication(relay=True)
+        assert replacement_command["instance_id"] == replacement_id
+        assert replacement_command["commands"][0]["title"] == "Relay command 1.1.0"
+        assert call_command(replacement_command, "relay-command-v2") == {"version": "1.1.0", "pid": replacement_pid, "count": 1}
+        stale = client_a.post("/api/gateway/service-plugins/commands/call",
+            json=command_payload(original_command, "relay-command-stale"), headers=headers)
+        assert stale.status_code == 409, stale.text
         second_skills = skill_snapshot("1.1.0")
         second_entry, = [entry for entry in second_skills["entries"] if entry.get("plugin")]
         assert second_skills["revision"] != first_skills["revision"]
