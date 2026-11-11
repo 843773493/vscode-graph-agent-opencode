@@ -4,9 +4,27 @@ import pytest
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from pydantic.json_schema import JsonSchemaValue
 
-from app.protocol.generated.boxteam.gateway.v2 import service_plugin_pb2
+from app.protocol.generated.boxteam.gateway.v2 import (
+    plugin_commands_pb2,
+    service_plugin_pb2,
+)
 from app.protocol.openapi import assert_gateway_http_schemas
 from app.protocol.schema import descriptor_pool_from_set
+
+
+def test_plugin_command_ndjson_response_references_the_proto_event(
+    gateway_openapi: JsonSchemaValue,
+) -> None:
+    operation = gateway_openapi["paths"]["/api/gateway/service-plugins/commands/call"]["post"]
+    response = operation["responses"]["200"]
+    assert set(response["content"]) == {"application/x-ndjson"}
+    ndjson = response["content"]["application/x-ndjson"]
+    event_schema = ndjson["x-ndjson-item"]
+
+    assert ndjson["schema"] == {"type": "string"}
+    assert event_schema["$ref"] == "#/components/schemas/PluginCommandEventDTO"
+    event = gateway_openapi["components"]["schemas"]["PluginCommandEventDTO"]
+    assert event["x-protobuf-message"] == plugin_commands_pb2.PluginCommandEventDTO.DESCRIPTOR.full_name
 
 
 def test_plugin_manifest_structure_is_checked_against_candidate_descriptor(

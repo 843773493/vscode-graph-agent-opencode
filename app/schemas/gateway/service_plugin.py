@@ -336,6 +336,12 @@ class PluginInstanceStatus(PluginInstanceView):
     log_sink: dict[str, JsonValue] | None = None
 
 
+class PluginShutdownDTO(_PluginValue):
+    instance_id: str = Field(min_length=1)
+    process_id: int = Field(gt=0)
+    accepted: Literal[True]
+
+
 class InstalledPluginPackageDTO(_PluginValue):
     manifest: PluginPackageManifest
     digest: str
@@ -395,6 +401,7 @@ __all__ = [
     "PluginScope",
     "PluginServiceContribution",
     "PluginServiceReference",
+    "PluginShutdownDTO",
     "PluginSkillContribution",
     "PluginSlotStatusDTO",
     "PluginState",

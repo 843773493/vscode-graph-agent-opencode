@@ -620,6 +620,32 @@ export declare type PluginInstanceStatus = Message<"boxteam.gateway.v2.PluginIns
 export declare const PluginInstanceStatusSchema: GenMessage<PluginInstanceStatus>;
 
 /**
+ * @generated from message boxteam.gateway.v2.PluginShutdownDTO
+ */
+export declare type PluginShutdownDTO = Message<"boxteam.gateway.v2.PluginShutdownDTO"> & {
+  /**
+   * @generated from field: string instance_id = 1;
+   */
+  instanceId: string;
+
+  /**
+   * @generated from field: int32 process_id = 2;
+   */
+  processId: number;
+
+  /**
+   * @generated from field: bool accepted = 3;
+   */
+  accepted: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.PluginShutdownDTO.
+ * Use `create(PluginShutdownDTOSchema)` to create a new message.
+ */
+export declare const PluginShutdownDTOSchema: GenMessage<PluginShutdownDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.PluginInstanceView
  */
 export declare type PluginInstanceView = Message<"boxteam.gateway.v2.PluginInstanceView"> & {

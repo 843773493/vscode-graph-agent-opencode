@@ -95,14 +95,17 @@ def test_workspace_admin_requires_explicit_authenticated_peer_principal(rules, e
     assert snapshot.evaluate(capability="managed_workspace_admin", origin_gateway_id="peer", principal_ref="peer-principal") is expected
 
 
-@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write"])
+@pytest.mark.parametrize("capability", [
+    "configuration_read", "configuration_write",
+    "service_plugin_installation_manage", "service_plugin_runtime_manage",
+])
 @pytest.mark.parametrize("binding,expected", [
     ({}, False),
     ({"origin_gateway_id": "peer"}, False),
     ({"principal_ref": "other"}, False),
     ({"principal_ref": "peer-principal"}, True),
 ])
-def test_configuration_management_requires_exact_authenticated_principal(
+def test_administrative_management_requires_exact_authenticated_principal(
     capability: Capability, binding: dict[str, str], expected: bool,
 ) -> None:
     rules = [{"capability": capability, "effect": "allow", **binding}]
@@ -111,6 +114,8 @@ def test_configuration_management_requires_exact_authenticated_principal(
     other = cast(Capability, {
         "configuration_read": "configuration_write",
         "configuration_write": "configuration_read",
+        "service_plugin_installation_manage": "service_plugin_runtime_manage",
+        "service_plugin_runtime_manage": "service_plugin_installation_manage",
     }[capability])
     assert not snapshot.evaluate(capability=other, origin_gateway_id="peer", principal_ref="peer-principal")
     revoked = normalize_policy({"rules": [*rules, {"capability": capability, "effect": "deny"}]})

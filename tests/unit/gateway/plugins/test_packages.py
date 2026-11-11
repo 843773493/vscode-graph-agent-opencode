@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.gateway.plugins.extension_points import EXTENSION_POINTS
 from app.gateway.plugins.packages import PluginPackageStore
 from tests.support.plugin_package import native_plugin_target
 
@@ -50,6 +51,28 @@ def configured_node_bin(monkeypatch: pytest.MonkeyPatch) -> str:
     executable = str(Path(node).resolve(strict=True))
     monkeypatch.setenv("BOXTEAM_NODE_BIN", executable)
     return executable
+
+
+def test_plugin_extension_catalog_freezes_seven_open_points_and_four_statuses() -> None:
+    expected_business = {
+        "commands": "connected",
+        "menus": "connected",
+        "keybindings": "connected",
+        "configuration": "partial",
+        "services": "partial",
+        "debuggers": "partial",
+        "skills": "connected",
+    }
+    assert set(EXTENSION_POINTS) == set(expected_business)
+    for point, business in expected_business.items():
+        support = EXTENSION_POINTS[point]
+        assert support.id == point
+        assert support.version == 1
+        assert support.infrastructure == "present"
+        assert support.business == business
+        assert support.plugin == "open"
+        assert support.acceptance == "pending"
+        assert support.owner_seam
 
 
 def _write_zip(path: Path, files: dict[str, bytes]) -> None:
@@ -374,6 +397,15 @@ def test_install_accepts_typed_plugin_contributions(
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
+        (lambda manifest: manifest["plugins"][0]["requires"].append(
+            manifest["plugins"][0]["requires"][0].copy()), "requires 中扩展点不得重复"),
+        (lambda manifest: manifest["plugins"][0]["requires"].append(
+            {"extension_point": "commands", "version": 1}) or manifest["plugins"][0]["contributes"].update({
+                "commands": [
+                    {"id": "browser.open", "title": "Open", "handler": "open", "arguments_schema": {}, "result_schema": {}},
+                    {"id": "browser.open", "title": "Open again", "handler": "open", "arguments_schema": {}, "result_schema": {}},
+                ],
+            }), "commands 中贡献标识不得重复"),
         (lambda manifest: manifest["plugins"][0]["requires"].append(
             {"extension_point": "not_supported", "version": 1}), "未知或未开放"),
         (lambda manifest: manifest["plugins"][0]["requires"][0].update(version=2), "版本不兼容"),

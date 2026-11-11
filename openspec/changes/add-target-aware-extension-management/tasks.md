@@ -12,9 +12,10 @@
   - 2026-11-10 当前合同独立收口：多插件包由 `app/schemas/gateway/service_plugin.py` 与 proto 唯一声明，根与插件均拒绝未知字段；ZIP和显式准备目录使用同一解析，代码字段条件必需，纯Skill无runtime。包合同及依赖59项、真实双语言管理、纯声明正式页面均已有原件；当前格式完成不代表第8组所有旧消费者已清空。
 - [x] 1.3 冻结 package_id／plugin_id、唯一 gateway／workspace 生命周期槽位、当前包版本属性、service_id、instance_id 与业务资源身份；不按版本双起；插件管理回执服务清单可空，服务ID只作业务路由；同包插件独立进程，同插件跨工作区独立实例，不按端口／显示名合并。
   - 2026-11-10 当前合同独立收口：runtime唯一key为(package_id, plugin_id, workspace_id)，Gateway归实例owner，版本是binding属性；ready按完整身份核验，服务清单允许空。真实双语言、双工作区与Launcher换代证明独立PID、换版先退出旧PID及原实例接管；纯声明正式页面无instance。原件见 `plugin_distribution_loop/artifacts/launcher-ui-verification.json`、`windows-stop-query-verification.json` 和 `ui-declarative-verification.json`。
-- [ ] 1.4 在现有协议 owner 完成 ready／status／shutdown／诊断 apply／status／统计能力，按第10组补扩展点版本、注册及具名命令输入／结果／进度／取消的真实序列化；迁齐 proto／OpenAPI／客户端生成与真实类型，不添加通用 method 或脚本接口。
+- [x] 1.4 在现有协议 owner 完成 ready／status／shutdown／诊断 apply／status／统计能力，按第10组补扩展点版本、注册及具名命令输入／结果／进度／取消的真实序列化；迁齐 proto／OpenAPI／客户端生成与真实类型，不添加通用 method 或脚本接口。
   - 2026-11-09 管理能力准入收口：启动与接管共用 ready 校验，缺 status／shutdown／observation 任一管理能力不发布实例；诊断请求删除重复能力检查。通用 Python／Node、依赖包及流式测试迁到正式公共管理实现，保留错误 ready、缺能力、关闭失败与业务流故障。精确候选真实 Gateway 双插件安装／私有参数／重启／换版／拒绝缺能力及无 uv 依赖包两项通过（59.35秒）；原流式与诊断两项通过，Terminal 真实停止短测通过。首轮两失败确认为测试配置缺失模型环境凭据，fixture 改用不调用模型的占位密钥后补验；不改产品或放宽断言。原件见 `out/tests/temp/2026/11/09/plugin_readiness/artifacts/`。1.4 含未完成的完整扩展注册范围，继续保持未勾选。
-- [ ] 1.5 登记独立 service_plugin_installation_manage／service_plugin_runtime_manage，迁齐默认拒绝、原生目标／Relay 判权与 schema；配置和业务访问仍使用原 owner 权限，旧三项安装／宿主能力消费者全部清理。
+  - 2026-11-11 本切片证据：具名 `PluginShutdownDTO` 经 proto、Pydantic 与各语言生成物同步；Gateway 校验 accepted、process_id、instance_id 与原实例一致，错误回执仍在确认实际进程退出后报关闭失败。具名命令 NDJSON OpenAPI 逐行引用 `PluginCommandEventDTO`，与 proto descriptor 对齐。错误 shutdown 回执真实 Gateway 场景 1 passed／128.01 秒；命令进度／取消 1 passed／54.67 秒；诊断 apply/status/统计及重启继承 1 passed／64.72 秒；双 Gateway Relay 事件序列化 1 passed／55.04 秒。协议生成一致性、OpenAPI descriptor、Workbench typecheck、相关 Pyright 9 文件零诊断及合同测试通过；129 个协议／准入单测通过。证据和命令见 `out/tests/temp/2026/11/11/plugin_protocol_admission/artifacts/verification.json`。此记录只关闭本合同切片，不代表七类扩展点完整产品验收。
+- [x] 1.5 登记独立 service_plugin_installation_manage／service_plugin_runtime_manage，迁齐默认拒绝、原生目标／Relay 判权与 schema；配置和业务访问仍使用原 owner 权限，旧三项安装／宿主能力消费者全部清理。
 - [ ] 1.6 核对两个已验收 release 基线和实际持久合同，给出受支持来源的显式迁移／不支持输入诊断；没有基线时记录缺口并使用隔离数据，不删除用户包／身份／凭据／会话，也不为开发残留新增兼容。
 
 ## 2. Gateway 统一托管与流式代理
@@ -192,8 +193,10 @@
 
 ## 10. 自有贡献注册与首批能力
 
-- [ ] 10.1 按设计D15复核原注册机制、项目业务、自有开放与验收四层状态，冻结扩展点目录及首批七类贡献，含第11组的自有 debuggers 和第13组 skills；未开放点只记录边界，不预写空 Provider、完整 SDK 或兼容宿主。
-- [ ] 10.2 实现 contributes／requires 与扩展点合同版本校验；未知／未开放声明、重复 ID、越界命令引用和不兼容版本在贡献发布前拒绝，纯声明包无运行依赖，局部失败释放本次新增项。
+- [x] 10.1 按设计D15复核原注册机制、项目业务、自有开放与验收四层状态，冻结扩展点目录及首批七类贡献，含第11组的自有 debuggers 和第13组 skills；未开放点只记录边界，不预写空 Provider、完整 SDK 或兼容宿主。
+  - 2026-11-11 目录核验：七类扩展点均版本1、infrastructure=present、plugin=open、acceptance=pending；业务连接状态及 owner seam 按原注册机制逐项固定，已完成项仍保留在准确目录状态中。以目录逐项反例防止扩展点被移除、改版或错误标成已验收；单测结果与证据位置见 `out/tests/temp/2026/11/11/plugin_protocol_admission/artifacts/verification.json`。
+- [x] 10.2 实现 contributes／requires 与扩展点合同版本校验；未知／未开放声明、重复 ID、越界命令引用和不兼容版本在贡献发布前拒绝，纯声明包无运行依赖，局部失败释放本次新增项。
+  - 2026-11-11 准入反例：补齐重复 requires 扩展点与重复命令贡献 ID 的拒绝测试；其余未知／不兼容版本、越界引用、纯声明等合同已有覆盖。完整包与权限单测 129 passed；不改变既有目录和贡献校验实现。详见 `out/tests/temp/2026/11/11/plugin_protocol_admission/artifacts/verification.json`。
 - [ ] 10.3 原Disposable生命周期容器管理贡献，复用Commands／Menu／Keybinding／Configuration；原目标／版本／注册代际完整快照，相同不重装、变化只替换本绑定句柄，元数据派生而非多份可变镜像；首次完整快照供晚装处理者，先命令后引用菜单／键位，配置先于目标设置发现，无拓扑器／代理体系／逐字段同步。
   - 2026-11-09 命令贡献快照边界：原 Gateway runtime 按精确绑定发布完整声明及实际 handler 注册，普通 read 读取不要求运行管理权限；按命令声明业务权限过滤，开启／关闭／重启及系统进程退出通知推进同一 SSE，无新增定时探活。晚订阅即取完整当前快照，撤权正常结束原流，Relay 持有原连接引用直至关闭。精确隔离候选的真实 Gateway／Python／Node 命令流程 1 passed／48.34秒，新增开启／关闭快照、晚订阅与 Python 崩溃后失效且 Node 兄弟保持实例身份；32项定向与合同、6文件类型、协议生成一致性、生成TS真实类型及正式79扩展Workbench构建通过。Luna max复审落实关闭异常释放路由及SSE撤权竞态修复。准确命令、指纹及原件见 `out/tests/temp/2026/11/09/plugin_contributions/artifacts/verification-final.json`。Workbench贡献消费／命令面板／菜单／快捷键、多目标Relay及Windows／macOS实机尚未由本片验收，10.3／10.4等宽项保持未勾选。
 - [x] 10.4 迁齐命令面板／菜单／键位；同逻辑命令一个dispatcher，标题／条件／键位由冻结scoped context和目标版本解释，隐式面板项同样受约束，接受核原绑定及具名参数／结果合同；同ID变更先完整预校验再释放旧句柄顺序登记，预校验失败保留原发布，登记失败只清本次新增且停止后续发布，不重建旧句柄；重复快照不叠加、移除A保留B，无第二目录或注册回滚框架。

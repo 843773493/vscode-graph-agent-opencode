@@ -243,6 +243,16 @@ class PluginInstanceStatus(_message.Message):
     gateway_id: str
     def __init__(self, package_id: _Optional[str] = ..., package_version: _Optional[str] = ..., plugin_id: _Optional[str] = ..., instance_scope: _Optional[str] = ..., workspace_id: _Optional[str] = ..., instance_id: _Optional[str] = ..., management_protocol_version: _Optional[int] = ..., extension_contract_version: _Optional[int] = ..., status: _Optional[str] = ..., process_id: _Optional[int] = ..., log_sink: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., capabilities: _Optional[_Iterable[str]] = ..., services: _Optional[_Iterable[_Union[PluginServiceContribution, _Mapping]]] = ..., gateway_id: _Optional[str] = ...) -> None: ...
 
+class PluginShutdownDTO(_message.Message):
+    __slots__ = ("instance_id", "process_id", "accepted")
+    INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
+    PROCESS_ID_FIELD_NUMBER: _ClassVar[int]
+    ACCEPTED_FIELD_NUMBER: _ClassVar[int]
+    instance_id: str
+    process_id: int
+    accepted: bool
+    def __init__(self, instance_id: _Optional[str] = ..., process_id: _Optional[int] = ..., accepted: _Optional[bool] = ...) -> None: ...
+
 class PluginInstanceView(_message.Message):
     __slots__ = ("gateway_id", "package_id", "package_version", "plugin_id", "instance_scope", "workspace_id", "instance_id", "management_protocol_version", "extension_contract_version", "status", "process_id", "capabilities", "services")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]

@@ -71,6 +71,7 @@ from app.schemas.gateway.service_plugin import (
     PluginPackageManifest,
     PluginRuntimeStatusDTO,
     PluginServiceContribution,
+    PluginShutdownDTO,
     PluginSkillContribution,
     PluginSlotStatusDTO,
     PluginTarget,
@@ -211,7 +212,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     name: f"{plugin_commands_pb2.DESCRIPTOR.package}.{name}"
     for name in ("PluginCommandCallRequest", "PluginCommandCancelRequest", "PluginCommandCancelDTO",
                  "PluginCommandInstanceRequest", "PluginCommandRegistrationsDTO",
-                 "PluginContributionTarget", "PluginCommandSnapshotDTO")
+                 "PluginContributionTarget", "PluginCommandSnapshotDTO", "PluginCommandEventDTO")
 }
 
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
@@ -238,6 +239,7 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
+    "PluginCommandEventDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandEventDTO"],
     # 此 DTO 展平 header 并改变 payload 外形，由 SSE 导出入口的具名投影核对。
     "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
 }
@@ -279,7 +281,7 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
         PluginSourceConfig, PluginSourceArtifact, PluginSourceCatalogRequest, PluginSourceCatalogDTO,
         FrozenPluginInstallArtifact, PluginInstallOperationRequest, PluginInstallOperationDTO,
-        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
+        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginShutdownDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
         PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,
         PluginCommandInstanceRequest, PluginCommandRegistration, PluginCommandRegistrationsDTO,
         PluginCommandEventDTO,

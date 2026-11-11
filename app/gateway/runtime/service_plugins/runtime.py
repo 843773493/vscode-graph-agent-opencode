@@ -53,6 +53,7 @@ from app.schemas.gateway.service_plugin import (
     PluginBinding,
     PluginInstanceStatus,
     PluginInstanceView,
+    PluginShutdownDTO,
     ServicePluginManifest,
 )
 from app.schemas.runtime_observation import RuntimeObservationStatus
@@ -664,7 +665,7 @@ class GatewayPluginRuntime:
         self._publish()
         if slot.process is not None:
             deadline = time.monotonic() + 8
-            shutdown_error: httpx.HTTPError | TimeoutError | None = None
+            shutdown_error: httpx.HTTPError | TimeoutError | ValueError | None = None
             if slot.process.is_alive() and slot.receipt is not None:
                 try:
                     # 确认响应占剩余预算的一半，持续发送正文也不能挤掉实际进程回收。
@@ -672,7 +673,12 @@ class GatewayPluginRuntime:
                         response = await self.client.post(str(slot.base_url) + "/internal/plugin/shutdown",
                             headers={"X-Local-Token": str(slot.token)}, timeout=None)
                         response.raise_for_status()
-                except (httpx.HTTPError, TimeoutError) as error:
+                        receipt = PluginShutdownDTO.model_validate(response.json())
+                        if (receipt.accepted, receipt.process_id, receipt.instance_id) != (
+                            True, slot.receipt.process_id, slot.receipt.instance_id,
+                        ):
+                            raise ValueError("插件 shutdown 回执与原实例不符")
+                except (httpx.HTTPError, TimeoutError, ValueError) as error:
                     shutdown_error = error
             # 原 close 在优雅退出失败后还会核强制回收；两段共享剩余期限。
             await run_sync_shielded(slot.process.close, timeout_seconds=max(0, (deadline - time.monotonic()) / 2))

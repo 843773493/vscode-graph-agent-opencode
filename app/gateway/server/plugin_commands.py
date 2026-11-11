@@ -318,7 +318,11 @@ async def cancel(payload: PluginCommandCancelRequest, request: Request,
         raise HTTPException(error.response.status_code, error.response.json().get("detail")) from error
 
 
-@router.post("/api/gateway/service-plugins/commands/call", response_model=None)
+@router.post("/api/gateway/service-plugins/commands/call", response_model=None,
+    response_class=StreamingResponse,
+    responses={200: {"description": "具名插件命令的有序 JSON Lines 执行事件",
+        "content": {"application/x-ndjson": {"schema": {"type": "string"},
+            "x-ndjson-item": {"$ref": "#/components/schemas/PluginCommandEventDTO"}}}}})
 async def call(payload: PluginCommandCallRequest, request: Request, auth: Auth) -> _ServiceResponse:
     deadline = asyncio.get_running_loop().time() + payload.remaining_ms / 1000
     routes = command_route(request, payload, auth, "/call")

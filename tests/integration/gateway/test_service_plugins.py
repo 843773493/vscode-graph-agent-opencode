@@ -54,7 +54,7 @@ async def controlled_fault(request, call_next):
             'plugin_id': 'wrong-plugin' if mode == 'bad-ready' else identity['plugin_id'],
             'capabilities': ['status', 'shutdown'], 'log_sink': json.loads(os.environ['BOXTEAM_RUNTIME_LOG_SINK'])})
     if request.url.path == '/internal/plugin/shutdown' and mode == 'bad-shutdown':
-        return JSONResponse({'detail': 'probe refuses shutdown'}, status_code=500)
+        return JSONResponse({'accepted': True, 'process_id': os.getpid(), 'instance_id': 'wrong-instance'})
     return await call_next(request)
 app.include_router(plugin_command_router({}, shutdown=shutdown))
 @app.get('/services/echo/{resource:path}')

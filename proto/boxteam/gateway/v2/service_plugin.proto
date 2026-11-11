@@ -139,6 +139,12 @@ message PluginInstanceStatus {
   string gateway_id = 14;
 }
 
+message PluginShutdownDTO {
+  string instance_id = 1;
+  int32 process_id = 2;
+  bool accepted = 3;
+}
+
 message PluginInstanceView {
   string gateway_id = 1;
   string package_id = 2;

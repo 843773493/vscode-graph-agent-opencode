@@ -145,6 +145,12 @@ export interface PluginInstanceStatus {
   gateway_id: string;
 }
 
+export interface PluginShutdownDTO {
+  instance_id: string;
+  process_id: number;
+  accepted: boolean;
+}
+
 export interface PluginInstanceView {
   gateway_id: string;
   package_id: string;
@@ -1248,6 +1254,45 @@ export const PluginInstanceStatus: MessageFns<PluginInstanceStatus> = {
     message.capabilities = object.capabilities?.map((e) => e) || [];
     message.services = object.services?.map((e) => PluginServiceContribution.fromPartial(e)) || [];
     message.gateway_id = object.gateway_id ?? "";
+    return message;
+  },
+};
+
+function createBasePluginShutdownDTO(): PluginShutdownDTO {
+  return { instance_id: "", process_id: 0, accepted: false };
+}
+
+export const PluginShutdownDTO: MessageFns<PluginShutdownDTO> = {
+  fromJSON(object: any): PluginShutdownDTO {
+    return {
+      instance_id: isSet(object.instance_id) ? globalThis.String(object.instance_id) : "",
+      process_id: isSet(object.process_id) ? globalThis.Number(object.process_id) : 0,
+      accepted: isSet(object.accepted) ? globalThis.Boolean(object.accepted) : false,
+    };
+  },
+
+  toJSON(message: PluginShutdownDTO): unknown {
+    const obj: any = {};
+    if (message.instance_id !== "") {
+      obj.instance_id = message.instance_id;
+    }
+    if (message.process_id !== 0) {
+      obj.process_id = Math.round(message.process_id);
+    }
+    if (message.accepted !== false) {
+      obj.accepted = message.accepted;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PluginShutdownDTO>, I>>(base?: I): PluginShutdownDTO {
+    return PluginShutdownDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PluginShutdownDTO>, I>>(object: I): PluginShutdownDTO {
+    const message = createBasePluginShutdownDTO();
+    message.instance_id = object.instance_id ?? "";
+    message.process_id = object.process_id ?? 0;
+    message.accepted = object.accepted ?? false;
     return message;
   },
 };
