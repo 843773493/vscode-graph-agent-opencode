@@ -234,7 +234,6 @@ async def write_gateway_private_input(payload: PluginPrivateInputWriteRequest, r
             plugin_id=payload.plugin_id, parameter_pointer=payload.parameter_pointer, value=payload.value))
     except (ValueError, LookupError, FileNotFoundError) as error:
         raise HTTPException(409, str(error)) from error
-    require_federation_capability(request, auth, "configuration_write")
     response.headers["Cache-Control"] = "no-store"
     return APIResponse(data=reference, request_id=get_request_id(request))
 
@@ -404,7 +403,6 @@ async def install(payload: InstallPluginRequest, request: Request,
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:
         raise HTTPException(409, str(error)) from error
-    require_federation_capability(request, auth, "service_plugin_installation_manage")
     return APIResponse(data=operation, request_id=get_request_id(request))
 
 

@@ -6,12 +6,15 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from httpx import ASGITransport
+from pydantic import Secret
 
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
@@ -22,11 +25,19 @@ from app.gateway.proxy_upstream import UpstreamResponseBody
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import GatewayPluginRuntime
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.gateway.server import service_plugins as management_plugins
 from app.gateway.server.service_plugin_proxy import (
     _ServiceResponse,
     _ServiceRoute,
     router,
 )
+from app.schemas.gateway.plugin_installation import (
+    FrozenPluginInstallArtifact,
+    InstallPluginRequest,
+    PluginInstallOperationDTO,
+)
+from app.schemas.gateway.plugin_private_inputs import PluginPrivateInputWriteRequest
+from configs.plugin_parameters import PluginPrivateInputReference
 
 
 @pytest.fixture
@@ -100,6 +111,92 @@ async def test_service_unexpected_group_is_not_hidden_as_connection_failure(
     assert response.status_code == 500
     assert "业务错误不能归为断网" in caplog.text
     assert len(calls) == 1
+
+
+async def test_install_authorization_is_decided_before_operation_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted: list[str] = []
+
+    class Installations:
+        async def start(self, payload: InstallPluginRequest) -> PluginInstallOperationDTO:
+            accepted.append(payload.operation_id)
+            return PluginInstallOperationDTO(gateway_id=payload.gateway_id, operation_id=payload.operation_id,
+                status="pending", artifact=FrozenPluginInstallArtifact(source_kind="local_zip",
+                    package_id="demo.plugin", package_version="1.0.0", digest="sha256:" + "a" * 64,
+                    path=payload.path))
+
+    request = cast(Request, SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(plugin_installations=Installations())),
+        state=SimpleNamespace(request_id="install-request"),
+    ))
+    monkeypatch.setattr(management_plugins, "relay", AsyncMock(return_value=None))
+    checks = 0
+
+    def authorize(*_args: object) -> None:
+        nonlocal checks
+        checks += 1
+        if checks > 1:
+            raise HTTPException(403, "授权已撤销")
+
+    monkeypatch.setattr(management_plugins, "require_federation_capability", authorize)
+    payload = InstallPluginRequest(gateway_id="gateway_" + "a" * 32, operation_id="install-1",
+        path="/tmp/plugin.zip")
+    result = await management_plugins.install(payload, request, GatewayAuthContext(kind="local"), Mock())
+
+    assert result.data is not None
+    assert result.data.operation_id == "install-1"
+    assert accepted == ["install-1"]
+    assert checks == 1
+
+
+async def test_private_input_authorization_is_decided_before_secret_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway_id = "gateway_" + "a" * 32
+    written: list[str] = []
+    reference = PluginPrivateInputReference(gateway_id=gateway_id, package_id="demo.plugin",
+        plugin_id="demo", parameter_pointer="/token", version="a" * 32)
+
+    class PrivateInputs:
+        def write(self, **_: object) -> PluginPrivateInputReference:
+            written.append("secret")
+            return reference
+
+    declaration = SimpleNamespace(contributes=SimpleNamespace(configuration={}))
+    owner = SimpleNamespace(gateway_id=gateway_id, private_inputs=PrivateInputs(), declaration=lambda _: declaration)
+    document = SimpleNamespace(writable=True, source_effective={})
+    request = cast(Request, SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(gateway_config_reload=SimpleNamespace(
+            get_source_document=lambda **_: document))),
+        state=SimpleNamespace(request_id="private-input-request"),
+    ))
+    payload = PluginPrivateInputWriteRequest(gateway_id=gateway_id, package_id="demo.plugin", plugin_id="demo",
+        package_version="1.0.0", source_key="gateway_user_override", parameter_pointer="/token",
+        value=Secret("secret"))
+    monkeypatch.setattr(management_plugins, "relay", AsyncMock(return_value=None))
+    monkeypatch.setattr(management_plugins, "plugin_parameters", lambda _: {})
+    monkeypatch.setattr(management_plugins, "validate_private_input", lambda *args: None)
+
+    async def run_sync(callback, **_kwargs):
+        return callback()
+
+    monkeypatch.setattr(management_plugins, "run_sync_shielded", run_sync)
+    checks = 0
+
+    def authorize(*_args: object) -> None:
+        nonlocal checks
+        checks += 1
+        if checks > 1:
+            raise HTTPException(403, "授权已撤销")
+
+    monkeypatch.setattr(management_plugins, "require_federation_capability", authorize)
+    result = await management_plugins.write_gateway_private_input(payload, request, Response(),
+        GatewayAuthContext(kind="local"), cast(GatewayPluginRuntime, owner))
+
+    assert result.data == reference
+    assert written == ["secret"]
+    assert checks == 1
 
 
 async def test_service_path_cannot_escape_declared_service(plugin_proxy: tuple[FastAPI, list[httpx.Request]]) -> None:
