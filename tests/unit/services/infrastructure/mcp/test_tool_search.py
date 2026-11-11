@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -44,6 +45,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 当前测试路径的正式 SQLite fixture
 )
@@ -120,8 +122,10 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
 
 
 @pytest.fixture
-def discovery_store(catalog_workspace):
-    return ToolOutputStore(workspace_root=catalog_workspace)
+def discovery_store(request: pytest.FixtureRequest):
+    # 与 registry_db 的真实会话使用同一测试工作区，避免大结果物化访问另一份 catalog。
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    return ToolOutputStore(workspace_root=context.workspace_root)
 
 
 @pytest.fixture

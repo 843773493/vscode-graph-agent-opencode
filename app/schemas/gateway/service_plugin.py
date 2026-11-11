@@ -103,6 +103,13 @@ class PluginSkillContribution(_PluginValue):
             raise ValueError("Skill path 必须是包根内的显式相对 POSIX 路径")
         return self
 
+    @model_validator(mode="after")
+    def tool_bindings_are_unique(self) -> PluginSkillContribution:
+        tool_ids = [binding.tool_id for binding in self.tool_bindings]
+        if len(tool_ids) != len(set(tool_ids)):
+            raise ValueError("同一 Skill 的 tool_bindings 不得重复 tool_id")
+        return self
+
 
 class PluginCommandContribution(_PluginValue):
     id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")

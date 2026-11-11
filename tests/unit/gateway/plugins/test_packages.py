@@ -379,6 +379,12 @@ def test_install_accepts_typed_plugin_contributions(
         (lambda manifest: manifest["plugins"][0]["requires"][0].update(version=2), "版本不兼容"),
         (lambda manifest: manifest["plugins"][0]["contributes"]["skills"].append(
             {"id": "browser-control", "path": "custom/docs/browser-guide"}), "不得重复"),
+        (lambda manifest: manifest["plugins"][0]["contributes"]["skills"][0].update({
+            "tool_bindings": [
+                {"tool_id": "openBrowserPage", "contract_version": 1},
+                {"tool_id": "openBrowserPage", "contract_version": 1},
+            ],
+        }), "tool_bindings 不得重复"),
         (lambda manifest: manifest["plugins"][0]["contributes"].update({
             "skills": [{"id": "browser-control", "path": "custom/docs/browser-guide", "tool_bindings": [
                 {"tool_id": "browser.inspect", "contract_version": 1, "service_id": "foreign-service"},
