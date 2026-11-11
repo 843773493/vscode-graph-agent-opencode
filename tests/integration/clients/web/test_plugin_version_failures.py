@@ -79,8 +79,10 @@ def version_failure_port(request: pytest.FixtureRequest) -> Iterator[int]:
         lease.release()
 
 
+@pytest.mark.parametrize("scenario", ["version-failures", "missing-binding"])
 def test_workbench_version_failure_keeps_desired_and_requires_explicit_restart(
     request: pytest.FixtureRequest, web_workbench_assets: Path, version_failure_port: int,
+    scenario: str,
 ) -> None:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
@@ -110,30 +112,52 @@ def test_workbench_version_failure_keeps_desired_and_requires_explicit_restart(
             archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
             archive.writestr("entry.py", _ENTRY)
         packages.append(str(path))
-    gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=version_failure_port,
-        boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
-    result_path = context.artifacts_dir / "version-failures.json"
-    try:
+    home = context.boxteam_home_for_node(request.node.nodeid)
+
+    def start(phase: str):
+        return start_gateway_process(workspace_root=workspace, default_backend_url=None, port=version_failure_port,
+            boxteam_home=home, artifacts_dir=context.artifacts_dir / phase / "gateway",
+            extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
+
+    def run_browser(phase: str, expected_starts: int = 0) -> dict:
+        result_path = context.artifacts_dir / f"{phase}.json"
         environment = os.environ | {"PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
-            "BOXTEAM_PLUGIN_VERSION_FAILURE_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
-                "packages": packages, "attempts": str(attempts), "resultPath": str(result_path)})}
+            "BOXTEAM_PLUGIN_VERSION_FAILURE_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{version_failure_port}",
+                "packages": packages, "attempts": str(attempts), "resultPath": str(result_path),
+                "phase": phase, "expectedStarts": expected_starts})}
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
         command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
             "bun", "tests/integration/clients/web/plugin_version_failures.mjs"]
-        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / phase / "chromium-tmp") as temporary:
             run = subprocess.run(command, cwd=context.project_root, env=environment | temporary,
                 capture_output=True, text=True, timeout=195, check=False)
-        (context.artifacts_dir / "browser.stdout.raw").write_text(run.stdout, encoding="utf-8")
-        (context.artifacts_dir / "browser.stderr.raw").write_text(run.stderr, encoding="utf-8")
-        (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command,
+        (context.artifacts_dir / f"{phase}.stdout.raw").write_text(run.stdout, encoding="utf-8")
+        (context.artifacts_dir / f"{phase}.stderr.raw").write_text(run.stderr, encoding="utf-8")
+        (context.artifacts_dir / f"{phase}.process.json").write_text(json.dumps({"command": command,
             "exit_code": run.returncode}), encoding="utf-8")
         assert run.returncode == 0, f"换版失败页面验收失败：{run.stdout}\n{run.stderr}\n{result_path}"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["phase"] == "complete" and not result["pageErrors"] and not result["externalRequests"]
+        return result
+
+    gateway = start(scenario)
+    try:
+        if scenario == "missing-binding":
+            assert run_browser("missing-prepare")["missingPrepared"]
+            # 关键状态由安装、启用入口产生；停机后仅模拟原确切包丢失，不预写绑定或运行记录。
+            for phase, expected_starts, outcome in (("missing-repair", 1, "missingRepaired"),
+                                                    ("missing-remove", 2, "missingRemoved")):
+                previous, gateway = gateway, None
+                close_gateway_process(previous)
+                (home / "plugins/packages/proof.version-failures/1.0.0").rename(context.artifacts_dir / f"{phase}-lost-package")
+                gateway = start(phase)
+                assert run_browser(phase, expected_starts)[outcome]
+            return
+        result = run_browser(scenario)
         assert result["startFailure"] and result["stopFailure"] and result["explicitRecovery"]
         # 实际退出核验在管理回执之后、fixture强制回收之前；不把回收当产品验收。
         for process_id in result["exitedPids"]:
             assert not psutil.pid_exists(process_id), f"产品回执后原插件进程仍存活: {process_id}"
     finally:
-        close_gateway_process(gateway)
+        if gateway is not None:
+            close_gateway_process(gateway)

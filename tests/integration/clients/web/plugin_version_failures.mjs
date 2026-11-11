@@ -6,7 +6,7 @@ import { expect } from 'playwright/test';
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_VERSION_FAILURE_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], externalRequests: [], receipts: [], exitedPids: [] };
 let browser, page;
-try {
+async function scenario() {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
   page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
   page.setDefaultTimeout(15_000);
@@ -40,10 +40,40 @@ try {
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
   const view = page.locator('.service-plugin-packages-view'), quick = page.locator('.quick-input-widget');
   const pick = async label => { await expect(quick).toBeVisible(); await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click(); };
-  for (let i = 0; i < input.packages.length; i++) {
-    await view.getByRole('button', { name: '安装插件包', exact: true }).click(); await pick('ZIP 文件');
-    const field = quick.locator('input').first(); await field.fill(input.packages[i]); await field.press('Enter');
-    await expect(view.locator('.service-plugin-package')).toHaveCount(i + 1);
+  if (input.phase === 'missing-repair' || input.phase === 'missing-remove') {
+    result.phase = input.phase;
+    const binding = view.locator('section[aria-label="安装声明不可用的插件绑定"]');
+    await expect(binding).toHaveCount(1);
+    await expect(binding.getByRole('heading')).toHaveText('proof.version-failures/probe@1.0.0');
+    await expect(binding.locator('[data-plugin-runtime-value]')).toContainText('启用 @1.0.0 · 实际：failed');
+    await expect(binding.locator('[data-plugin-runtime-error]')).toContainText('插件包版本不存在');
+    await expect(binding.getByRole('button', { name: '编辑参数 JSON', exact: true })).toHaveCount(0);
+    assert.equal((await starts()).length, input.expectedStarts);
+    if (input.phase === 'missing-remove') {
+      const saved = page.waitForResponse(response => response.request().method() === 'PUT'
+        && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
+      await binding.getByRole('button', { name: '解除此范围绑定', exact: true }).click();
+      await pick('gateway_mutable_override'); await pick('确认保存 Gateway 插件绑定');
+      const response = await saved; assert.equal(response.status(), 200);
+      const receipt = await response.json(); assert.equal(receipt.request_id, response.headers()['x-request-id']);
+      result.receipts.push({ action: 'remove-missing-binding', ...receipt });
+      await expect(binding).toHaveCount(0);
+      assert.equal(await status(), undefined);
+      assert.equal((await source()).source_effective.plugins.runtime.entries.length, 0);
+      assert.equal((await starts()).length, input.expectedStarts);
+      result.missingRemoved = true; result.phase = 'complete'; return;
+    }
+    await binding.getByRole('button', { name: '补装插件包', exact: true }).click(); await pick('ZIP 文件');
+    const field = quick.locator('input').first(); await field.fill(input.packages[0]); await field.press('Enter');
+    await expect(binding).toHaveCount(0);
+    assert.equal((await starts()).length, input.expectedStarts, '补装不自动重启失败绑定');
+  } else {
+    const packages = input.phase === 'missing-prepare' ? input.packages.slice(0, 1) : input.packages;
+    for (let i = 0; i < packages.length; i++) {
+      await view.getByRole('button', { name: '安装插件包', exact: true }).click(); await pick('ZIP 文件');
+      const field = quick.locator('input').first(); await field.fill(packages[i]); await field.press('Enter');
+      await expect(view.locator('.service-plugin-package')).toHaveCount(i + 1);
+    }
   }
   const row = version => view.locator('.service-plugin-package').filter({
     has: page.getByRole('heading', { name: `换版失败探针包 · proof.version-failures@${version}`, exact: true }),
@@ -74,10 +104,17 @@ try {
     await expect(view.getByLabel('插件配置与运行版本')).toContainText(`实际：ready @${version}`);
     return status();
   };
+  if (input.phase === 'missing-repair') {
+    const repaired = await restart('1.0.0');
+    assert.equal((await call(repaired)).version, '1.0.0');
+    assert.equal((await starts()).length, input.expectedStarts + 1);
+    result.missingRepaired = true; result.phase = 'complete'; return;
+  }
   await apply('1.0.0', '启用此范围');
   const original = await status(); assert.equal(original.state, 'ready');
   assert.equal((await call(original)).version, '1.0.0');
   const installed = await starts(); assert.equal(installed.length, 1);
+  if (input.phase === 'missing-prepare') { result.missingPrepared = true; result.phase = 'complete'; return; }
 
   result.phase = 'start-failure';
   await apply('2.0.0', '切换到此版本（保留开关）');
@@ -116,6 +153,9 @@ try {
   assert.equal((await starts()).length, 5); result.explicitRecovery = true;
   result.phase = 'complete';
   assert.deepEqual(result.pageErrors, []); assert.deepEqual(result.externalRequests, []);
+}
+try {
+  await scenario();
 } catch (error) {
   result.error = String(error); result.stack = error.stack;
   if (page) await page.screenshot({ path: input.resultPath.replace(/\.json$/, '.png'), fullPage: true }).catch(screenshotError => { result.screenshotError = String(screenshotError); });

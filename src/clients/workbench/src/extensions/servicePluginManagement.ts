@@ -16,19 +16,21 @@ import { ICommandService } from '../../upstream/src/vs/platform/commands/common/
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { timeout } from '../../upstream/src/vs/base/common/async.js';
 import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
-import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget, PluginUninstallResultDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gateway } from '../agentApi.js';
 import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
 
 import { manageConfig, setPluginBindings, readWorkspaceDefaults, readWorkspaceBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
 
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const activePluginInstallations = new Map<string, Promise<void>>();
+const pluginGatewayLabel = (target: PluginTarget) => `原生 Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`;
 
 function requireInstallationOwner(target: PluginTarget, operationId: string, operation: PluginInstallOperationDTO): PluginInstallOperationDTO {
   if (operation.gateway_id !== target.gateway_id || operation.operation_id !== operationId) {
@@ -47,6 +49,9 @@ export class ServicePluginPackagesView extends ViewPane {
   private searchInput: HTMLInputElement | undefined;
   private query = '';
   private controls: HTMLElement | undefined;
+  private runtimeStatusController: AbortController | undefined;
+  private runtimeStatusTarget: string | undefined;
+  private runtimeStatus: PluginRuntimeStatusDTO | undefined;
 
   constructor(options: IViewPaneOptions, @IKeybindingService keybindings: IKeybindingService,
     @IContextMenuService contextMenu: IContextMenuService, @IConfigurationService configuration: IConfigurationService,
@@ -60,10 +65,15 @@ export class ServicePluginPackagesView extends ViewPane {
     @IDialogService private readonly dialogs: IDialogService) {
     super(options, keybindings, contextMenu, configuration, contextKeys, descriptors, instantiation, opener, theme, hover);
     this._register(onDidChangeExtensionManagementTarget(() => {
+      this.stopRuntimeStatus();
       this.refreshRevision++;
       this.workspaceTarget = undefined;
       this.selected = undefined;
       void this.refresh();
+    }));
+    this._register(this.onDidChangeBodyVisibility(visible => {
+      if (visible) void this.refresh();
+      else this.stopRuntimeStatus();
     }));
   }
 
@@ -103,14 +113,18 @@ export class ServicePluginPackagesView extends ViewPane {
     this.query = query;
     if (this.searchInput) this.searchInput.value = query;
     const otherView = /(?:^|\s)@(mcp|agentPlugins)(?:\s|$)/i.test(query);
+    const wasVisible = this.content !== undefined && !this.content.hidden;
     if (this.controls) this.controls.hidden = otherView;
     if (this.content) this.content.hidden = otherView;
+    if (otherView) this.stopRuntimeStatus();
+    else if (!otherView && !wasVisible && this.isBodyVisible()) void this.refresh();
     for (const section of this.content?.querySelectorAll<HTMLElement>('.service-plugin-package') ?? []) {
       section.hidden = !section.dataset.search?.includes(query.trim().toLocaleLowerCase());
     }
   }
 
   override dispose(): void {
+    this.stopRuntimeStatus();
     this.refreshRevision++;
     this.content = undefined;
     super.dispose();
@@ -118,6 +132,7 @@ export class ServicePluginPackagesView extends ViewPane {
 
   async refresh(): Promise<void> {
     if (!this.content) return;
+    this.stopRuntimeStatus();
     const revision = ++this.refreshRevision;
     const scope = this.scope;
     const container = this.content;
@@ -142,6 +157,109 @@ export class ServicePluginPackagesView extends ViewPane {
     finally { await this.refresh(); }
   }
 
+  private stopRuntimeStatus(): void {
+    this.runtimeStatusController?.abort();
+    this.runtimeStatusController = undefined;
+    this.runtimeStatusTarget = undefined;
+    this.runtimeStatus = undefined;
+  }
+
+  private observeRuntimeStatus(target: PluginTarget): void {
+    if (!this.isBodyVisible() || !this.content || this.content.hidden || this.scope === 'defaults') return;
+    const key = JSON.stringify(target);
+    if (this.runtimeStatusTarget === key && this.runtimeStatusController && !this.runtimeStatusController.signal.aborted) return;
+    this.stopRuntimeStatus();
+    const controller = new AbortController();
+    this.runtimeStatusController = controller;
+    this.runtimeStatusTarget = key;
+    void watchPluginRuntimeStatus(target, controller.signal, snapshot => {
+      if (this.runtimeStatusController !== controller || controller.signal.aborted
+        || this.runtimeStatusTarget !== key || snapshot.plugins.some(slot => slot.gateway_id !== target.gateway_id)) return;
+      this.runtimeStatus = snapshot;
+      this.updateRuntimeStatusPresentation();
+    }).catch(error => {
+      if (controller.signal.aborted || this.runtimeStatusController !== controller) return;
+      this.stopRuntimeStatus();
+      this.notifications.error(errorsText(error));
+    });
+  }
+
+  private runtimeSlot(packageId: string, pluginId: string, workspaceId: string | undefined): PluginRuntimeStatusDTO['plugins'][number] | undefined {
+    return this.runtimeStatus?.plugins.find(slot => slot.binding?.package_id === packageId
+      && slot.binding.plugin_id === pluginId
+      && (slot.binding.workspace_id ?? undefined) === workspaceId);
+  }
+
+  private updateRuntimeStatusPresentation(): void {
+    const container = this.content;
+    if (!container || !this.runtimeStatus) return;
+    for (const row of container.querySelectorAll<HTMLElement>('[data-plugin-runtime-row]')) {
+      const packageId = row.dataset.packageId;
+      const pluginId = row.dataset.pluginId;
+      if (!packageId || !pluginId) continue;
+      const workspaceId = row.dataset.workspaceId || undefined;
+      const status = this.runtimeSlot(packageId, pluginId, workspaceId);
+      const output = row.querySelector<HTMLElement>('[data-plugin-runtime-value]');
+      if (output) output.textContent = row.dataset.scope === 'defaults'
+        ? row.dataset.initialRuntimeValue ?? ''
+        : this.runtimeLabel(packageId, pluginId, workspaceId, status, row.dataset.runtime === 'true');
+      const failure = row.querySelector<HTMLElement>('[data-plugin-runtime-error]');
+      if (failure) {
+        failure.hidden = !status?.error;
+        failure.textContent = status?.error ?? '';
+      }
+    }
+    const workspace = container.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
+    if (workspace) {
+      const state = this.runtimeStatus.workspace_configurations.find(item => item.workspace_id === workspace.dataset.workspaceId);
+      workspace.textContent = `工作区 ${workspace.dataset.workspaceId} 配置交接：${state?.state ?? '尚未收到'}${state?.error ? ` · ${state.error}` : ''}`;
+    }
+    const details = container.querySelector<HTMLElement>('.service-plugin-details');
+    const packageId = details?.dataset.packageId;
+    const pluginId = details?.dataset.pluginId;
+    if (details && packageId && pluginId) {
+      const status = this.runtimeSlot(packageId, pluginId, details.dataset.workspaceId || undefined);
+      const state = details.querySelector<HTMLElement>('[data-plugin-runtime-value]');
+      if (state) state.textContent = details.dataset.scope === 'defaults'
+        ? details.dataset.initialRuntimeValue ?? ''
+        : this.runtimeLabel(packageId, pluginId, details.dataset.workspaceId || undefined, status,
+          details.dataset.runtime === 'true');
+      const versions = details.querySelector<HTMLElement>('[data-plugin-runtime-version]');
+      if (versions && details.dataset.scope !== 'defaults') {
+        versions.textContent = `配置：${this.runtimeConfigurationLabel(packageId, pluginId,
+          details.dataset.workspaceId || undefined)} · `
+          + this.runtimeActualLabel(status, details.dataset.runtime === 'true');
+      }
+      const handoff = details.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
+      if (handoff) {
+        const state = this.runtimeStatus.workspace_configurations.find(item => item.workspace_id === handoff.dataset.workspaceId);
+        handoff.textContent = `工作区 ${handoff.dataset.workspaceId} 配置交接：${state?.state ?? '尚未收到'}${state?.error ? ` · ${state.error}` : ''}`;
+      }
+      const failure = details.querySelector<HTMLElement>('[data-plugin-runtime-error]');
+      if (failure) {
+        failure.hidden = !status?.error;
+        failure.textContent = status?.error ?? '';
+      }
+    }
+  }
+
+  private runtimeConfigurationLabel(packageId: string, pluginId: string, workspaceId: string | undefined): string {
+    const binding = this.runtimeStatus?.configured_bindings.find(item => item.package_id === packageId
+      && item.plugin_id === pluginId && (item.workspace_id ?? undefined) === workspaceId);
+    return binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定';
+  }
+
+  private runtimeLabel(packageId: string, pluginId: string, workspaceId: string | undefined,
+    status: PluginRuntimeStatusDTO['plugins'][number] | undefined, runtime: boolean): string {
+    return `${this.runtimeConfigurationLabel(packageId, pluginId, workspaceId)} · ${this.runtimeActualLabel(status, runtime)}`;
+  }
+
+  private runtimeActualLabel(status: PluginRuntimeStatusDTO['plugins'][number] | undefined, runtime: boolean): string {
+    return status?.instance
+      ? `实际：${status.state} @${status.instance.package_version}`
+      : runtime ? `实际：${status?.state ?? '未运行'} · 尚无 ready 实例回执` : '声明式，无运行实例';
+  }
+
   private async renderPackages(container: HTMLElement, revision: number, scope: Scope): Promise<void> {
     await workspaceContext.ensureReady();
     const target = managementGateway('extensions');
@@ -157,18 +275,24 @@ export class ServicePluginPackagesView extends ViewPane {
       scope === 'defaults' ? readWorkspaceDefaults(target) : workspace ? readWorkspaceBindings(workspace) : undefined,
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
+    this.observeRuntimeStatus(pluginTarget);
+    if (runtime) this.runtimeStatus = runtime;
     clearNode(container);
     append(container, $('p')).textContent = inventory.sources?.message ?? '插件源尚未配置';
     if (workspace) {
       const handoff = runtime!.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
       const summary = append(container, $('p'));
       summary.setAttribute('aria-label', '工作区插件配置交接');
+      summary.dataset.pluginWorkspaceHandoff = 'true';
+      summary.dataset.workspaceId = workspace.workspace_id;
       summary.textContent = `工作区 ${workspace.workspace_id} 配置交接：${handoff?.state ?? '尚未收到'}${handoff?.error ? ` · ${handoff.error}` : ''}`;
     }
+    const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
+    const bindings = (scopeBindings ?? runtime!.configured_bindings).filter(item => scope === 'workspace'
+      ? item.workspace_id === workspace?.workspace_id : item.workspace_id == null);
     for (const pkg of inventory.packages) {
       const manifest = pkg.manifest;
       if (!manifest) continue;
-      const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
       const matching = manifest.plugins.filter(plugin => plugin.instance_scope === pluginScope);
       if (!matching.length) continue;
       const packageSection = append(container, $('section.service-plugin-package'));
@@ -183,7 +307,7 @@ export class ServicePluginPackagesView extends ViewPane {
           batchButtons.forEach(item => { item.disabled = true; });
           try {
             const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
-            const owner = `Gateway ${target.gateway_id} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
+            const owner = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
             const confirmation = await this.dialogs.confirm({ message: `${enabled ? '启用' : '停用'} ${manifest.package_id}@${manifest.version} 的当前范围插件？`,
               detail: `${owner}\n纳入：${matching.map(plugin => plugin.id).join('、')}\n排除（固定范围不匹配）：${excluded.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、') || '无'}\n`
                 + (scope === 'defaults' ? '仅修改以后新建工作区的默认值，不操作当前实例。' : '每个插件独立提交，失败不回滚已完成的操作。'),
@@ -221,27 +345,91 @@ export class ServicePluginPackagesView extends ViewPane {
         void this.runOperation(() => uninstallPackageFromView(this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version));
       });
       for (const plugin of matching) {
-        const binding = (scopeBindings ?? runtime!.configured_bindings).find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id
-          && (scope !== 'workspace' ? item.workspace_id == null : item.workspace_id === workspace?.workspace_id));
+        const binding = bindings.find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id);
         const status = runtime?.plugins.find(item => item.gateway_id === target.gateway_id
           && item.binding?.package_id === manifest.package_id && item.binding.plugin_id === plugin.id
           && (scope === 'workspace' ? item.binding.workspace_id === workspace?.workspace_id : item.binding.workspace_id == null));
         const row = append(packageSection, $('article'));
+        row.dataset.pluginRuntimeRow = 'true';
+        row.dataset.packageId = manifest.package_id;
+        row.dataset.pluginId = plugin.id;
+        row.dataset.workspaceId = scope === 'workspace' ? workspace?.workspace_id ?? '' : '';
+        row.dataset.scope = scope;
+        row.dataset.runtime = String(Boolean(plugin.runtime));
+        const initialRuntimeValue = scope === 'defaults'
+          ? `${binding?.enabled ? '新建时启用' : binding ? '新建时停用' : '未加入默认值'}${binding ? ` @${binding.package_version}` : ''} · 不代表已运行`
+          : this.runtimeLabel(manifest.package_id, plugin.id, scope === 'workspace' ? workspace?.workspace_id : undefined,
+            status, Boolean(plugin.runtime));
+        row.dataset.initialRuntimeValue = initialRuntimeValue;
         const open = append(row, $('button'));
         open.textContent = `${plugin.name} · ${plugin.id}`;
         open.addEventListener('click', () => { this.selected = { packageId: manifest.package_id, pluginId: plugin.id, version: manifest.version };
           this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status); });
-        append(row, $('span')).textContent = scope === 'defaults'
-          ? `${binding?.enabled ? '新建时启用' : binding ? '新建时停用' : '未加入默认值'}${binding ? ` @${binding.package_version}` : ''} · 不代表已运行`
-          : `${binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定'} · ${status?.instance
-            ? `${status.state} @${status.instance.package_version}` : plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}`;
+        const runtimeValue = append(row, $('span'));
+        runtimeValue.dataset.pluginRuntimeValue = 'true';
+        runtimeValue.textContent = initialRuntimeValue;
         if (revision === this.refreshRevision && this.selected?.packageId === manifest.package_id && this.selected.pluginId === plugin.id && this.selected.version === manifest.version) {
           this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status);
         }
       }
     }
+    for (const binding of bindings) {
+      const installed = inventory.packages.some(pkg => pkg.manifest?.package_id === binding.package_id
+        && pkg.manifest.version === binding.package_version
+        && pkg.manifest.plugins.some(plugin => plugin.id === binding.plugin_id && plugin.instance_scope === pluginScope));
+      if (installed) continue;
+      const section = append(container, $('section.service-plugin-package'));
+      section.dataset.search = `${binding.package_id} ${binding.plugin_id} ${binding.package_version}`.toLocaleLowerCase();
+      section.setAttribute('aria-label', '安装声明不可用的插件绑定');
+      append(section, $('h3')).textContent = `${binding.package_id}/${binding.plugin_id}@${binding.package_version}`;
+      append(section, $('p')).textContent = `${pluginGatewayLabel(target)} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
+      append(section, $('p')).textContent = '绑定的确切包版本或插件声明不可用。请补装原版本，或解除绑定；缺少原声明时不能编辑参数表单。';
+      const row = append(section, $('article'));
+      row.dataset.pluginRuntimeRow = 'true';
+      row.dataset.packageId = binding.package_id;
+      row.dataset.pluginId = binding.plugin_id;
+      row.dataset.workspaceId = workspace?.workspace_id ?? '';
+      row.dataset.scope = scope;
+      // 未取得原声明时不能将插件误报为纯声明插件。
+      row.dataset.runtime = 'true';
+      row.dataset.initialRuntimeValue = `${binding.enabled ? '新建时启用' : '新建时停用'} @${binding.package_version} · 不代表已运行`;
+      const status = this.runtimeSlot(binding.package_id, binding.plugin_id, workspace?.workspace_id);
+      const state = append(row, $('p'));
+      state.dataset.pluginRuntimeValue = 'true';
+      state.textContent = scope === 'defaults' ? row.dataset.initialRuntimeValue
+        : this.runtimeLabel(binding.package_id, binding.plugin_id, workspace?.workspace_id, status, true);
+      const failure = append(row, $('p'));
+      failure.dataset.pluginRuntimeError = 'true';
+      failure.hidden = !status?.error;
+      failure.textContent = status?.error ?? '';
+      this.renderInstanceLog(row, target, status?.log_id);
+      const install = append(section, $('button'));
+      install.textContent = '补装插件包';
+      install.addEventListener('click', () => void this.runOperation(() => installPackageFromView(this.quickInput, this.notifications, this.progress, pluginTarget)));
+      const unbind = append(section, $('button')) as HTMLButtonElement;
+      unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
+      unbind.addEventListener('click', () => {
+        unbind.disabled = true;
+        void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, binding, null));
+      });
+    }
     this.search(this.query);
-    if (!inventory.packages.length) append(container, $('p')).textContent = `尚无插件包。${inventory.sources?.message ?? ''}`;
+    this.updateRuntimeStatusPresentation();
+    if (!inventory.packages.length && !bindings.length) append(container, $('p')).textContent = `尚无插件包。${inventory.sources?.message ?? ''}`;
+  }
+
+  private renderInstanceLog(container: HTMLElement, target: PluginTarget, logId: string | undefined): void {
+    if (!logId) return;
+    const logs = append(container, $('button')) as HTMLButtonElement;
+    logs.textContent = '查看实例日志';
+    const output = append(container, $('pre'));
+    output.setAttribute('aria-label', '插件实例日志');
+    logs.addEventListener('click', () => {
+      logs.disabled = true;
+      void readPluginInstanceLog(target, logId).then(text => { output.textContent = text; })
+        .catch(error => { output.textContent = errorsText(error); this.notifications.error(errorsText(error)); })
+        .finally(() => { logs.disabled = false; });
+    });
   }
 
   private showDetails(container: HTMLElement, scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,
@@ -250,34 +438,40 @@ export class ServicePluginPackagesView extends ViewPane {
     const old = container.querySelector('.service-plugin-details');
     old?.remove();
     const details = append(container, $('section.service-plugin-details'));
+    details.dataset.packageId = manifest.package_id;
+    details.dataset.pluginId = plugin.id;
+    details.dataset.workspaceId = scope === 'workspace' ? workspace?.workspace_id ?? '' : '';
+    details.dataset.scope = scope;
+    details.dataset.runtime = String(Boolean(plugin.runtime));
+    details.dataset.initialRuntimeValue = scope === 'defaults'
+      ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
+      : this.runtimeLabel(manifest.package_id, plugin.id, scope === 'workspace' ? workspace?.workspace_id : undefined,
+          status, Boolean(plugin.runtime));
     append(details, $('h3')).textContent = `${manifest.package_id}/${plugin.id}`;
-    append(details, $('p')).textContent = scope === 'defaults' ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
-      : `${plugin.instance_scope} · ${plugin.runtime ? status?.state ?? '未运行' : '声明式，无运行实例'}`;
-    append(details, $('p')).textContent = `Gateway ${target.gateway_id}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
+    const detailsState = append(details, $('p'));
+    detailsState.dataset.pluginRuntimeValue = 'true';
+    detailsState.textContent = details.dataset.initialRuntimeValue;
+    append(details, $('p')).textContent = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
+    if (workspace) {
+      const handoff = append(details, $('p'));
+      handoff.setAttribute('aria-label', '工作区插件配置交接');
+      handoff.dataset.pluginWorkspaceHandoff = 'true';
+      handoff.dataset.workspaceId = workspace.workspace_id;
+      const state = this.runtimeStatus?.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
+      handoff.textContent = `工作区 ${workspace.workspace_id} 配置交接：${state?.state ?? '尚未收到'}${state?.error ? ` · ${state.error}` : ''}`;
+    }
     const versions = append(details, $('p'));
     versions.setAttribute('aria-label', '插件配置与运行版本');
+    versions.dataset.pluginRuntimeVersion = 'true';
     versions.textContent = `配置：${binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定'} · `
-      + (scope === 'defaults' ? '仅新建默认值，未操作当前实例' : status?.instance
-        ? `实际：${status.state} @${status.instance.package_version}`
-        : plugin.runtime ? `实际：${status?.state ?? '未运行'} · 尚无 ready 实例回执` : '声明式，无运行实例');
-    if (status?.error) {
-      const failure = append(details, $('p'));
-      failure.setAttribute('aria-label', '插件运行失败原因');
-      failure.textContent = status.error;
-    }
-    const logId = status?.log_id;
-    if (logId) {
-      const logs = append(details, $('button')) as HTMLButtonElement;
-      logs.textContent = '查看实例日志';
-      const output = append(details, $('pre'));
-      output.setAttribute('aria-label', '插件实例日志');
-      logs.addEventListener('click', () => {
-        logs.disabled = true;
-        void readPluginInstanceLog(target, logId).then(text => { output.textContent = text; })
-          .catch(error => { output.textContent = errorsText(error); this.notifications.error(errorsText(error)); })
-          .finally(() => { logs.disabled = false; });
-      });
-    }
+      + (scope === 'defaults' ? '仅新建默认值，未操作当前实例'
+        : this.runtimeActualLabel(status, Boolean(plugin.runtime)));
+    const failure = append(details, $('p'));
+    failure.setAttribute('aria-label', '插件运行失败原因');
+    failure.dataset.pluginRuntimeError = 'true';
+    failure.hidden = !status?.error;
+    failure.textContent = status?.error ?? '';
+    this.renderInstanceLog(details, target, status?.log_id);
     const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
     const otherVersion = binding && binding.package_version !== manifest.version;
     if (otherVersion) {
@@ -289,12 +483,14 @@ export class ServicePluginPackagesView extends ViewPane {
       });
     } else {
       const toggle = append(details, $('button'));
-      toggle.textContent = binding?.enabled ? '停用此范围' : '启用此范围';
+      toggle.textContent = scope === 'defaults'
+        ? binding?.enabled ? '设为新建时停用' : '设为新建时启用'
+        : binding?.enabled ? '停用此范围' : '启用此范围';
       toggle.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, !binding?.enabled)));
     }
     if (binding && !otherVersion) {
       const unbind = append(details, $('button'));
-      unbind.textContent = '解除此范围绑定';
+      unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
       unbind.addEventListener('click', () => void this.runOperation(() => manageConfig(scope, target, workspace, this.quickInput, this.notifications, bindingValue, null)));
     }
     if (scope !== 'defaults') {
@@ -357,7 +553,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
   progress: IProgressService, target: PluginTarget): Promise<void> {
   const type = await quickInput.pick([{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' },
     { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
-    { title: `插件安装 · ${target.gateway_id}`, canPickMany: false });
+    { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false });
   if (!type) return;
   if (type.kind === 'query') {
     const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id });
@@ -398,7 +594,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
     acquisition = { source_id: source.source.source_id, catalog_revision: revision, artifact: selected,
       development_directory: false, path: '' };
   } else {
-    const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: target.gateway_id,
+    const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: pluginGatewayLabel(target),
       placeHolder: type.kind === 'directory' ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
         value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null });
     if (!path) return;
@@ -486,7 +682,7 @@ function installationFailureText(target: PluginTarget, operation: PluginInstallO
 async function observeInstallation(progress: IProgressService, notifications: INotificationService,
   target: PluginTarget, operationId: string, initial?: PluginInstallOperationDTO): Promise<void> {
   await progress.withProgress({ location: ProgressLocation.Notification,
-    title: `安装插件包 · ${target.gateway_id} · ${operationId}`, cancellable: true }, async reporter => {
+    title: `安装插件包 · ${pluginGatewayLabel(target)} · ${operationId}`, cancellable: true }, async reporter => {
     const deadline = performance.now() + DEFAULT_API_REQUEST_TIMEOUT_MS;
     let operation = initial ?? await readInstallation(target, operationId);
     while (operation.status === 'pending' || operation.status === 'running') {
@@ -496,7 +692,10 @@ async function observeInstallation(progress: IProgressService, notifications: IN
       operation = await readInstallation(target, operationId);
     }
     if (operation.status !== 'succeeded') throw new Error(installationFailureText(target, operation));
-    notifications.info(`已安装 ${operation.artifact?.package_id}@${operation.artifact?.package_version}`);
+    if (!operation.artifact?.package_id || !operation.artifact.package_version) {
+      throw new Error(`安装成功回执缺少制品身份，无法确认目标包版本：${pluginGatewayLabel(target)} · ${operationId}`);
+    }
+    notifications.info(`已在 ${pluginGatewayLabel(target)} 安装 ${operation.artifact.package_id}@${operation.artifact.package_version}`);
   }, () => { void gateway.request('/api/gateway/service-plugins/cancel-install',
     { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) })
     .catch(error => notifications.error(`取消未确认，请查询原操作 ${operationId}：${errorsText(error)}`)); });
@@ -513,8 +712,14 @@ export async function installServicePluginPackage(accessor: ServicesAccessor): P
 
 async function uninstallPackageFromView(quickInput: IQuickInputService, notifications: INotificationService, target: PluginTarget, packageId: string, version: string): Promise<void> {
   const confirm = await quickInput.pick([{ label: '取消', accept: false }, { label: '卸载整包', accept: true,
-    description: `${packageId}@${version}` }], { title: '卸载插件包', canPickMany: false });
+    description: `${packageId}@${version} · ${pluginGatewayLabel(target)} · 有原 owner 引用时会拒绝并显示引用` }],
+  { title: `卸载插件包 · ${pluginGatewayLabel(target)}`, canPickMany: false });
   if (!confirm?.accept) return;
-  await gateway.request('/api/gateway/service-plugins/uninstall', { method: 'POST', body: JSON.stringify({ ...target, package_id: packageId, package_version: version }) });
-  notifications.info(`已卸载 ${packageId}@${version}`);
+  const result = await gateway.request<PluginUninstallResultDTO>('/api/gateway/service-plugins/uninstall', {
+    method: 'POST', body: JSON.stringify({ ...target, package_id: packageId, package_version: version }),
+  });
+  if (!result.uninstalled || result.package_id !== packageId || result.package_version !== version) {
+    throw new Error(`卸载回执未确认所选包版本：${pluginGatewayLabel(target)} · ${packageId}@${version}`);
+  }
+  notifications.info(`已从 ${pluginGatewayLabel(target)} 卸载 ${packageId}@${version}`);
 }

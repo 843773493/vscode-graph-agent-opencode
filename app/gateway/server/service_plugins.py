@@ -205,6 +205,23 @@ async def relay(request: Request, target: PluginTarget, auth: GatewayAuthContext
         return response
 
 
+def relay_http_error(response: httpx.Response, *, gateway_id: str, request_id: str) -> HTTPException:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if detail is None:
+        raw_body = response.text.strip()
+        detail = (f"远端 Gateway {gateway_id} 返回 HTTP {response.status_code}，原始错误响应：{raw_body}"
+            if raw_body else f"远端 Gateway {gateway_id} 返回 HTTP {response.status_code}，错误响应为空")
+    upstream_request_id = response.headers.get("X-Request-ID")
+    if upstream_request_id != request_id:
+        detail = (f"远端 Gateway {gateway_id} 的错误响应 request_id 不匹配（本地 {request_id}，"
+            f"远端 {upstream_request_id or '未提供'}）；原错误：{detail}")
+    return HTTPException(status_code=response.status_code, detail=detail)
+
+
 @router.post("/api/gateway/service-plugins/private-inputs", response_model=APIResponse[PluginPrivateInputReference])
 async def write_gateway_private_input(payload: PluginPrivateInputWriteRequest, request: Request, response: Response,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
@@ -514,6 +531,78 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
     return APIResponse[PluginUninstallResultDTO](data=data, request_id=get_request_id(request))
 
 
+def _plugin_runtime_status_snapshot(request: Request, owner: GatewayPluginRuntime) -> PluginRuntimeStatusDTO:
+    return PluginRuntimeStatusDTO.model_validate({"plugins": [slot.describe() for slot in owner.slots.values()],
+        "configured_bindings": [binding.model_dump(mode="json") for binding in gateway_plugin_bindings(
+            request.app.state.gateway_config_reload.config.payload)]
+            + [binding.model_dump(mode="json") for binding in request.app.state.workspace_plugin_bindings.configured_bindings()],
+        "workspace_configurations": [state.model_dump(mode="json")
+            for state in request.app.state.workspace_plugin_bindings.states.values()]})
+
+
+@router.post("/api/gateway/service-plugins/status/events", response_class=StreamingResponse,
+    responses=sse_responses("目标 Gateway 的完整插件运行状态快照", {"snapshot": PluginRuntimeStatusDTO}))
+async def runtime_status_events(payload: PluginTarget, request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    owner: Annotated[GatewayPluginRuntime, Depends(plugin_owner)],
+) -> StreamingResponse:
+    references = ExitStack()
+    body: UpstreamResponseBody | None = None
+    handed_off = False
+    try:
+        remote = references.enter_context(plugin_gateway_route(request, payload, auth))
+        require_federation_capability(request, auth, "service_plugin_runtime_manage")
+        if remote is None:
+            stopped = asyncio.Event()
+
+            async def wait_for_change(event: asyncio.Event) -> None:
+                await event.wait()
+
+            async def frames() -> AsyncIterator[str]:
+                while not stopped.is_set():
+                    changed = owner.changed
+                    policy_changed = request.app.state.federation_policy_store.changed
+                    if not federation_capability_allowed(request, auth, "service_plugin_runtime_manage"):
+                        return
+                    snapshot = _plugin_runtime_status_snapshot(request, owner)
+                    yield f"event: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+                    await run_channel(wait_for_change(changed), wait_for_change(policy_changed))
+
+            source = stream_sse_with_heartbeat(frames(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+                close_source_on_exit=True)
+        else:
+            client = request.app.state.http_client
+            upstream = client.build_request("POST", remote.url, headers=remote.headers,
+                json=payload.model_dump(mode="json", exclude={"gateway_connection_id"}), timeout=None)
+            response = await send_upstream_request(client, upstream,
+                response_headers_timeout_seconds=UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS)
+            body = UpstreamResponseBody(response)
+            if response.is_error:
+                await response.aread()
+                raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
+            if (response.headers.get("X-Request-ID") != get_request_id(request)
+                or response.headers.get("content-type", "").split(";", 1)[0] != "text/event-stream"):
+                raise ValueError("插件运行状态流的请求身份或协议不符")
+            source, stopped = body, remote.stopped
+        result = _PluginSnapshotResponse(source, request=request, auth=auth, stopped=stopped,
+            close=references.close, body=body, capabilities=("service_plugin_runtime_manage",))
+        handed_off = True
+        return result
+    except LookupError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
+    finally:
+        if not handed_off:
+            try:
+                if body is not None:
+                    await body.aclose()
+            finally:
+                references.close()
+
+
 @router.post("/api/gateway/service-plugins/status")
 async def status(payload: PluginTarget, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
@@ -525,12 +614,7 @@ async def status(payload: PluginTarget, request: Request,
             raise HTTPException(response.status_code, response.json().get("detail"))
         return APIResponse[PluginRuntimeStatusDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_runtime_manage")
-    data = PluginRuntimeStatusDTO.model_validate({"plugins": [slot.describe() for slot in owner.slots.values()],
-        "configured_bindings": [binding.model_dump(mode="json") for binding in gateway_plugin_bindings(
-            request.app.state.gateway_config_reload.config.payload)]
-            + [binding.model_dump(mode="json") for binding in request.app.state.workspace_plugin_bindings.configured_bindings()],
-        "workspace_configurations": [state.model_dump(mode="json")
-            for state in request.app.state.workspace_plugin_bindings.states.values()]})
+    data = _plugin_runtime_status_snapshot(request, owner)
     return APIResponse[PluginRuntimeStatusDTO](data=data, request_id=get_request_id(request))
 
 

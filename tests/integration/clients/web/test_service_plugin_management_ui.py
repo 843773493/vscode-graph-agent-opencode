@@ -257,7 +257,19 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
             assert result["failedVersion"]["state"] == "failed"
             assert result["failedVersion"]["instance"] is None
             assert result["explicitRetry"]["instance"]["package_version"] == "3.0.0"
-            assert version_start_count.read_text(encoding="utf-8") == "2", "只允许首次失败及用户显式重启两次创建"
+            status_sse = result["runtimeStatusSseUi"]
+            assert status_sse["path"] == "/api/gateway/service-plugins/status/events"
+            assert status_sse["eventContentType"].startswith("text/event-stream")
+            assert status_sse["staleStatus"] == status_sse["stalePollState"] == "ready"
+            assert status_sse["renderedState"] == "stopped" and status_sse["staleResponses"] == 1
+            subscription = result["runtimeStatusSubscription"]
+            assert subscription["path"] == status_sse["path"] and subscription["method"] == "POST"
+            assert subscription["responseStatus"] == 200
+            assert subscription["contentType"].startswith("text/event-stream")
+            assert subscription["releasedOnScope"] == "defaults" and subscription["closedOnScopeChange"]
+            assert subscription["terminalEvent"] == "requestfailed"
+            assert subscription["failure"] == "net::ERR_ABORTED"
+            assert version_start_count.read_text(encoding="utf-8") == "3", "仅首次失败、显式重启及显式配置重新启用创建"
             assert len(result["activationTimings"]) == 3
             assert all(item["milliseconds"] > 0 and item["state"] == "ready" for item in result["activationTimings"])
             assert result["closedBindingBlockedUninstall"]

@@ -54,6 +54,14 @@ try {
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
+  const pluginStatusStreamTerminations = [];
+  for (const event of ['requestfailed', 'requestfinished']) {
+    page.on(event, request => {
+      if (new URL(request.url()).pathname === '/api/gateway/service-plugins/status/events') {
+        pluginStatusStreamTerminations.push({ event, request });
+      }
+    });
+  }
   const api = (path, options = {}, raw = false, expectedStatus = 200) => page.evaluate(async ({ path, options, raw, expectedStatus }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
@@ -88,7 +96,7 @@ try {
     const reads = managementReads.slice(start);
     assert.deepEqual(reads.map(item => item.path).sort(), expected.sort());
     (result.scopeReads ??= {})[scope] = reads;
-    const summary = view.getByLabel('工作区插件配置交接');
+    const summary = view.locator('.service-plugin-packages-content > [data-plugin-workspace-handoff]');
     if (statusResponse) {
       const status = await (await statusResponse).json();
       const handoff = status.data.workspace_configurations.find(item => item.workspace_id === active.workspace_id);
@@ -436,13 +444,62 @@ try {
   assert.deepEqual(afterFailedReads, result.failedVersion, '刷新与状态读取不能回滚旧版或自动重试');
   const explicitlyRetried = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
+  const statusStreamAfterRetry = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/gateway/service-plugins/status/events');
   await view.getByRole('button', { name: '重启实例', exact: true }).click();
   assert.equal((await explicitlyRetried).status(), 200);
+  const retryStreamResponse = await statusStreamAfterRetry;
+  assert.equal(retryStreamResponse.status(), 200);
+  assert.match(retryStreamResponse.headers()['content-type'] ?? '', /^text\/event-stream/);
   result.explicitRetry = await runtimeSlot('gateway-preference');
   assert.equal(result.explicitRetry.binding.package_version, '3.0.0');
   await callRuntime(result.explicitRetry);
   await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @3.0.0');
-  await expect(view.getByLabel('插件运行失败原因')).toHaveCount(0);
+  await expect(view.getByLabel('插件运行失败原因')).toBeHidden();
+  // 旧 `/status` 快照保持 ready；真实配置停用后，打开的视图必须由 SSE 显示 stopped。
+  const staleStatusEnvelope = await api('/api/gateway/service-plugins/status',
+    { method: 'POST', body: { gateway_id: active.gateway_id } }, true);
+  const staleStatusSlot = staleStatusEnvelope.data.plugins.find(item => item.binding?.plugin_id === 'gateway-preference');
+  assert.equal(staleStatusSlot?.state, 'ready');
+  assert.equal(staleStatusSlot?.binding?.package_version, '3.0.0');
+  let staleStatusResponses = 0;
+  const runtimeStatusSnapshotUrl = url => url.pathname === '/api/gateway/service-plugins/status';
+  await page.route(runtimeStatusSnapshotUrl, async route => {
+    const requestId = `plugin-ui-stale-status-${++staleStatusResponses}`;
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'X-Request-ID': requestId },
+      body: JSON.stringify({ ...staleStatusEnvelope, request_id: requestId }) });
+  });
+  const setGatewayPluginEnabled = async enabled => {
+    const document = await gatewaySource();
+    const source = parseJsonc(document.jsonc);
+    const binding = source.plugins.runtime.entries.find(item =>
+      item.package_id === 'ui.preference-probe' && item.plugin_id === 'gateway-preference');
+    assert(binding);
+    binding.enabled = enabled;
+    return api('/api/gateway/config/sources/gateway_mutable_override', { method: 'PUT', body: {
+      gateway_id: active.gateway_id, source_key: 'gateway_mutable_override', jsonc: JSON.stringify(source),
+      base_file_digest: document.file_digest, base_layer_revision: document.layer_revision,
+      base_layer_digest: document.layer_digest, expected_active_revision: document.active_revision,
+      expected_active_digest: document.active_digest,
+      idempotency_key: `plugin-ui-status-sse-${enabled ? 'enable' : 'disable'}-${Date.now()}`,
+    } });
+  };
+  const disabledByConfig = await setGatewayPluginEnabled(false);
+  assert.equal(disabledByConfig.edit.state, 'active');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：stopped');
+  const staleStatusRead = await runtimeSlot('gateway-preference');
+  assert.equal(staleStatusRead.state, 'ready', '固定的 /status 旧快照仍应是 ready');
+  assert.equal(staleStatusResponses, 1);
+  await expect(view.getByLabel('插件配置与运行版本'),
+    '页面运行状态必须来自已到达的 SSE 快照，而不是本次 /status 旧快照').toContainText('实际：stopped');
+  await page.unroute(runtimeStatusSnapshotUrl);
+  const reenabledByConfig = await setGatewayPluginEnabled(true);
+  assert.equal(reenabledByConfig.edit.state, 'active');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @3.0.0');
+  result.runtimeStatusSseUi = { path: '/api/gateway/service-plugins/status/events', eventContentType:
+    retryStreamResponse.headers()['content-type'], staleStatus: staleStatusSlot.state,
+    stalePollState: staleStatusRead.state, renderedState: 'stopped', staleResponses: staleStatusResponses,
+    configurationOwner: 'gateway_mutable_override' };
   await switchVersion('1.0.0', true);
   await openVersion('1.0.0');
   await view.getByRole('button', { name: '停用此范围', exact: true }).click();
@@ -696,6 +753,26 @@ try {
   await expect(view.getByLabel('插件管理范围')).toBeHidden();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.installedExtensions'));
   await expect(view.getByLabel('插件管理范围')).toBeVisible();
+  const reopenedStatusStream = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/gateway/service-plugins/status/events');
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  const reopenedStatusResponse = await reopenedStatusStream;
+  assert.equal(reopenedStatusResponse.status(), 200);
+  assert.match(reopenedStatusResponse.headers()['content-type'] ?? '', /^text\/event-stream/);
+  const releasedStreamRequest = reopenedStatusResponse.request();
+  const terminalCount = pluginStatusStreamTerminations.length;
+  await view.getByLabel('插件管理范围').selectOption('defaults');
+  await expect(view.getByLabel('插件管理范围')).toHaveValue('defaults');
+  await expect.poll(() => pluginStatusStreamTerminations.length, { timeout: 15_000 }).toBeGreaterThan(terminalCount);
+  const termination = pluginStatusStreamTerminations.at(-1);
+  assert(termination);
+  assert.equal(termination.request, releasedStreamRequest);
+  const releaseError = termination.request.failure()?.errorText ?? '';
+  result.runtimeStatusSubscription = { path: new URL(termination.request.url()).pathname,
+    method: termination.request.method(), responseStatus: reopenedStatusResponse.status(),
+    contentType: reopenedStatusResponse.headers()['content-type'], releasedOnScope: 'defaults',
+    terminalEvent: termination.event, closedOnScopeChange: true, failure: releaseError };
+  if (termination.event === 'requestfailed') assert.match(releaseError, /ERR_ABORTED/);
   result.mcpSearchAvailable = true;
   result.phase = 'complete';
   assert(result.configWrites.some(item => item.path === '/api/gateway/config/sources/gateway_mutable_override'
