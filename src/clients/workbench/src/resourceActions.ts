@@ -35,7 +35,9 @@ export async function resourceReference(resource: URI): Promise<string> {
         local_gateway_id: gatewayId, resource_gateway_id: source.gatewayId }),
     });
     if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或用户身份已改变，请重新复制资源引用');
-    if (address.gateway_id !== source.gatewayId || address.scope !== 'workspace' || address.scope_id !== source.workspaceId) {
+    const sameScope = address.scope === 'workspace' ? address.scope_id === source.workspaceId
+      : resource.scheme === 'boxteam-source' && address.scope === 'gateway' && address.kind === 'skills' && address.scope_id === source.gatewayId;
+    if (address.gateway_id !== source.gatewayId || !sameScope) {
       throw new Error('资源引用的 Gateway／工作区归属不匹配');
     }
     return address.reference_uri;

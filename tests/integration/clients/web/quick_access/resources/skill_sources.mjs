@@ -16,7 +16,9 @@ try {
   const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Skill 来源 Chromium', () => browser.close());
-  page = await browser.newPage({ viewport: { width: 1700, height: 1100 } }); page.setDefaultTimeout(15_000);
+  const browserContext = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'], viewport: { width: 1700, height: 1100 } });
+  run.addCleanup('Skill 来源 BrowserContext', () => browserContext.close());
+  page = await browserContext.newPage(); page.setDefaultTimeout(15_000);
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname, method = request.method(), headers = request.headers();
@@ -111,6 +113,13 @@ try {
   expect(currentReads()).toHaveLength(1); expect(currentReads()[0].workspaceId).toBe(b.workspace_id);
   expect(currentReads()[0].body).toMatchObject({ operation: 'read', uri: expect.stringContaining('/resources/skills/') });
   result.pluginOpen = true;
+  await phase('plugin-copy-reference');
+  await command('boxteam.resource.copyUri');
+  const reference = await page.evaluate(() => navigator.clipboard.readText());
+  const copied = result.parses.find(item => item.phase === result.phase);
+  expect(copied.body.resource_gateway_id).toBe(b.gateway_id);
+  expect(reference).toBe(copied.body.uri.replace('boxteam://', `boxteam://${b.gateway_id}/`));
+  expect(currentReads()).toEqual([]); result.pluginReferenceCopied = true;
   await phase('local-open'); await command('workbench.action.closeAllEditors'); await show(b);
   await expect(local(b)).toHaveCount(1); await expect(local(b)).toContainText('network-demo');
   await expect(quick.locator('.monaco-list-row').filter({ hasText: 'network-demo' })).toHaveCount(3);

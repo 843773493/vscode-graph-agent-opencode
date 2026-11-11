@@ -2,7 +2,8 @@ import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { ResourceOpener } from '../../../../../../src/clients/workbench/src/resourceOpener.js';
-import { SourceDocuments, sourceDocumentSource } from '../../../../../../src/clients/workbench/src/sourceDocuments.js';
+import { SourceDocuments, sourceDocumentSource, sourceDocumentUri } from '../../../../../../src/clients/workbench/src/sourceDocuments.js';
+import { resourceReference } from '../../../../../../src/clients/workbench/src/resourceActions.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
 import { invalidateGatewayUserSession } from '../../../../../../src/clients/web/src/api/http.js';
@@ -31,7 +32,8 @@ export async function skillSourcesContract(mode) {
       const owner = mode === 'gateway-skill-owner-mismatch' ? owners[0] : owners.find(item => item.gatewayId === body.resource_gateway_id) ?? owners[1];
       const gatewayScope = body.uri.startsWith('boxteam://gateway/');
       const result = () => ok({ gateway_id: owner.gatewayId, scope: gatewayScope ? 'gateway' : 'workspace', scope_id: gatewayScope ? owner.gatewayId : owner.workspaceId,
-        kind: 'skills', uri: body.uri, reference_uri: body.uri.replace('boxteam://', `boxteam://${owner.gatewayId}/`) });
+        kind: mode === 'gateway-skill-copy-wrong-kind' ? 'config' : 'skills', uri: body.uri, reference_uri: body.uri.replace('boxteam://', `boxteam://${owner.gatewayId}/`) });
+      if (mode === 'gateway-skill-copy-wrong-owner') return ok({ gateway_id: owners[0].gatewayId, scope: 'gateway', scope_id: owners[0].gatewayId, kind: 'skills' });
       if (mode === 'freeze') return new Promise(resolve => { releaseParse = () => resolve(result()); });
       return result();
     }
@@ -133,6 +135,11 @@ export async function skillSourcesContract(mode) {
     if (mode === 'gateway-skill-no-owner' || mode === 'gateway-skill-owner-mismatch') {
       const uri = `boxteam://gateway/${owners[1].gatewayId}/resources/skills/plugin/SKILL.md`;
       try { await opener.open(uri, mode.endsWith('no-owner') ? {} : { boxteamResourceOwner: owners[1] }); }
+    if (mode.startsWith('gateway-skill-copy')) {
+      const uri = `boxteam://gateway/${owners[1].gatewayId}/resources/skills/plugin/SKILL.md`;
+      try { documents.push({ reference: await resourceReference(sourceDocumentUri(owners[1], uri)) }); }
+      catch (cause) { errors.push(String(cause)); }
+    }
       catch (cause) { errors.push(String(cause)); }
     }
     if (['open', 'side', 'pinned', 'background', 'freeze', 'local-open', 'gateway-skill-open', 'gateway-skill-relay-open'].includes(mode)) {

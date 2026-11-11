@@ -188,3 +188,17 @@ test('远端插件 Skill 沿唯一解析器的限定 URI 打开原只读内容 P
   expect(result.documents).toEqual([{ content: 'Relay plugin body', source: result.opened[0].source }]);
   expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
 });
+
+test('Gateway Skill复制引用复用唯一解析器，不读取正文或打开资源', async () => {
+  const result = await exercise('gateway-skill-copy');
+  expect(result.errors).toEqual([]);
+  expect(result.documents).toEqual([{ reference: `boxteam://gateway_${'b'.repeat(32)}/gateway/gateway_${'b'.repeat(32)}/resources/skills/plugin/SKILL.md` }]);
+  expect(result.requests.filter(item => item.path.endsWith('/parse'))).toHaveLength(1);
+  expect(result.requests.filter(item => item.path === '/api/v1/resources/navigation')).toHaveLength(0);
+  expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+for (const mode of ['gateway-skill-copy-wrong-owner', 'gateway-skill-copy-wrong-kind']) test(`${mode}拒绝错误来源`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('归属不匹配');
+  expect(result.documents).toEqual([]); expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});

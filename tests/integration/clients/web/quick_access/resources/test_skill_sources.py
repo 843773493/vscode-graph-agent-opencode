@@ -153,7 +153,7 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in ("metadataOnly", "filterReuse", "scopeCancel", "sameNameSources", "originalOpen",
                                       "readOnly", "sideAndOwner", "explicitOwner", "originalFailure", "unavailable",
-                                      "localDiscovery", "localOpen", "localReadOnly", "localStale", "localFresh", "pluginDiscovery", "pluginOpen"))
+                                      "localDiscovery", "localOpen", "localReadOnly", "localStale", "localFresh", "pluginDiscovery", "pluginOpen", "pluginReferenceCopied"))
     assert result["forbiddenWrites"] == []
     assert len(source.requests) == initial_count + 2, "只允许显式 refresh 获取两项；发现／错误展示不自动重试"
     with provider.control._condition:

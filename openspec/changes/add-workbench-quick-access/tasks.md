@@ -144,6 +144,7 @@
 - [x] 12.3 将支持的原资源引用交给精确 Composer 草稿，附件仍经原上传 owner，来源预览不激活，加入草稿不发消息、不启动 turn。
   - 文件／来源文档的 URI 引用与实际选定正文分别由原 Action／Command 加入原 Composer writer；文件菜单复用同一命令，恢复后才发布写入句柄，接受时追加最新输入，作用域切换／卸载使旧句柄永久失效。引用只保存规范 URI，正文保留当时的选择，不伪装上传附件或新建存储链路。远端后端简称另携明确来源 Gateway 交同一 grammar 解析，与显式 URI 冲突拒绝。
   - 真实 Gateway、双工作区、正式 Workbench／Chromium 验证两个可见 Thread 的明确接收、取消不变、无额外正文读取、来源修改及刷新恢复、零执行／模型调用；具名浏览器 HTTP 边界只延迟真实地址回执，期间把焦点切到另一 Thread，仍仅写发起草稿。草稿8项与Composer回归12项通过，Python合同133项（2条既有重复operation ID警告）、Workbench真实类型、正式构建、Ruff／Pyright、协议生成一致性及breaking检查通过。证据 `out/tests/temp/2026/11/05/composer_resource_actions/artifacts/verification-001.json`；首轮错误使用上游命令选项而绕过Opener及清理方法误名的原件保留。本片未覆盖从Thread选择未打开来源、显式固定版本、多选／二级返回或Electron，12.1／12.4／12.5继续未勾选。
+  - 2026-11-11 Gateway／插件 Skill 复制引用：原 resourceReference 同时接受确切 Gateway Skill 和工作区来源，仍核 Gateway／scope／kind，复制与 Composer 共用唯一解析器，无正文重读或新打开链。41项来源合同／276断言、167份转换源码真实类型、79扩展正式构建及真实双Workspace产品页面通过；页面经安装绑定打开Skill后执行原复制命令并核实际剪贴板、冻结owner及零正文重读。错误owner和非Skill的Gateway来源明确拒绝；未代替Windows／真实远端页面／Electron或完整Composer选择验收，12.1仍保留。精确命令、指纹和复审见 `out/tests/temp/2026/11/11/plugin_skill_reference/artifacts/verification.json`。
 - [ ] 12.4 粘贴保留选定正文，显式可复现引用由原 owner 核验版本；无法取得版本明确失败，不新增统一快照／冻结体系。
 - [ ] 12.5 验证多 Thread 同时可见、跨工作区来源、二级返回、多选取消、不支持能力和来源变化，只有指定草稿变化且无隐式模型调用。
 
