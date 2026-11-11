@@ -1,11 +1,17 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { packagingSource } from "./source-policy.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
-const scriptRuntime = process.platform === "win32" ? "node" : process.execPath;
+const scriptRuntime = process.execPath;
+const packagingArguments = process.argv.slice(2);
+const forwardedArguments = packagingSource(projectRoot, packagingArguments);
+const sourceModeArguments = packagingArguments.includes("--development")
+  ? ["--development"]
+  : [];
 const packagingOutputRoot = path.join(
   projectRoot,
   "out",
@@ -28,7 +34,11 @@ for (const [index, script] of scripts.entries()) {
   }
   const result = spawnSync(
     scriptRuntime,
-    [path.join(projectRoot, "packaging", "runtime", script)],
+    [
+      path.join(projectRoot, "packaging", "runtime", script),
+      ...sourceModeArguments,
+      ...forwardedArguments,
+    ],
     {
       cwd: projectRoot,
       env: process.env,
