@@ -174,5 +174,7 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         assert not psutil.pid_exists(receipt["siblingAfterUnbind"]["pid"]), receipt
         assert not psutil.pid_exists(receipt["siblingAfterUnbind"]["pluginPid"]), receipt
         assert receipt["siblingAfterUnbind"]["originalInstanceKept"]
+        assert not psutil.pid_exists(receipt["siblingRestart"]["oldPid"]), receipt
+        assert receipt["siblingRestart"]["newRun"] == receipt["naturalExit"]["runId"]
     finally:
         close_gateway_process(gateway)

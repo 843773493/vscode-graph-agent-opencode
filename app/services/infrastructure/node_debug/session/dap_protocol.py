@@ -210,9 +210,11 @@ class NodeDebugDAPSession:
         if command in {"disconnect", "terminate"}:
             terminate = command == "terminate" or args.get("terminateDebuggee") is True
             if terminate:
-                await self._service._apply_action_admitted(self._owner, command=NodeDebugControlActionRequest(
+                state = await self._service._apply_action_admitted(self._owner, command=NodeDebugControlActionRequest(
                     session_id=self._owner[0], thread_id=self._owner[1], action="stop",
                 ), _expected_runtime=self._runtime)
+                if state.status != "exited":
+                    raise RuntimeError(state.error_message or "尚未核实调试目标退出，不能报告终止成功")
             return {}
         raise ValueError(f"当前 Node Debug DAP 不支持请求: {command}")
 

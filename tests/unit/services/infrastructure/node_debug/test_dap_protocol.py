@@ -44,7 +44,7 @@ def dap_owner(tmp_path: Path):
 
     async def action(key: tuple[str, str], **_kwargs: object):
         assert key == owner and lock.locked() and phases[-1] == "admitted"
-        return SimpleNamespace(breakpoints=[])
+        return SimpleNamespace(breakpoints=[], status="exited")
 
     service = SimpleNamespace(
         _admit_mutation=admission, _owner_lock=lambda key: lock,
@@ -65,6 +65,28 @@ async def test_dap_uses_one_admission_before_owner_lock_and_same_action_chain(da
     assert phases == ["admitted", "released"]
     service._apply_action_admitted.assert_awaited_once()
     assert service._apply_action_admitted.await_args.kwargs["command"].action == "stop"
+
+
+@pytest.mark.parametrize("command,arguments", [
+    ("terminate", {}), ("disconnect", {"terminateDebuggee": True}),
+])
+async def test_dap_does_not_acknowledge_unconfirmed_stop_as_success(dap_owner, command, arguments):
+    dap, service, _runtime, _phases = dap_owner
+    service._apply_action_admitted.side_effect = None
+    service._apply_action_admitted.return_value = SimpleNamespace(
+        status="reconcile_required", error_message="原目标停止结果未知",
+    )
+    response = await dap.dispatch({"type": "request", "seq": 1, "command": command, "arguments": arguments})
+    assert response["success"] is False and response["message"] == "原目标停止结果未知"
+    service._apply_action_admitted.assert_awaited_once()
+
+
+@pytest.mark.parametrize("arguments", [{}, {"terminateDebuggee": False}])
+async def test_dap_disconnect_without_termination_keeps_shared_target(dap_owner, arguments):
+    dap, service, runtime, _phases = dap_owner
+    response = await dap.dispatch({"type": "request", "seq": 1, "command": "disconnect", "arguments": arguments})
+    assert response["success"] is True and runtime.status == "paused"
+    service._apply_action_admitted.assert_not_awaited()
 
 
 async def test_dap_rejects_old_pause_handles_and_replaced_run_without_mutation(dap_owner):

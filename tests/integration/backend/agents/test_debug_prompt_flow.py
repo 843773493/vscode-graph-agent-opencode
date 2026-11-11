@@ -255,9 +255,9 @@ def scripted_gateway_process(
     model["primary_provider"] = "debug-e2e"
     model["fallback_providers"] = []
     workspace_root = Path(integration_workspace_root_path)
-    runtime = _json_object(config["runtime"])
-    debug = _json_object(runtime["debug"])
-    launch_profiles = _json_object(debug["launch_profiles"])
+    runtime = _json_object(config.setdefault("runtime", {}))
+    debug = _json_object(runtime.setdefault("debug", {}))
+    launch_profiles = _json_object(debug.setdefault("launch_profiles", {}))
     launch_profiles["capability-entry"] = {
         "adapter": "node_inspector", "runtime": "node",
         "program": str(workspace_root / "debug-prompt-fixture.mjs"),
@@ -265,8 +265,8 @@ def scripted_gateway_process(
     }
     gateway_port = scripted_debug_gateway_port
     gateway_url = f"http://127.0.0.1:{gateway_port}"
-    gateway = _json_object(runtime["gateway"])
-    connection = _json_object(gateway["connection"])
+    gateway = _json_object(runtime.setdefault("gateway", {}))
+    connection = _json_object(gateway.setdefault("connection", {}))
     connection.update(
         {"url": gateway_url, "timeout_seconds": 5}
     )

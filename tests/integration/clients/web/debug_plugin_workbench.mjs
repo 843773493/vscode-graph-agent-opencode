@@ -140,9 +140,11 @@ try {
   result.phase = 'editor-breakpoint';
   const roots = await api('/api/v1/workspace/files/roots', {}, owner);
   const quick = page.locator('.quick-input-widget');
+  await command('workbench.action.focusFirstEditorGroup');
   await command('workbench.action.quickOpen', roots.workspace_uri + '/debug-ui.mjs');
   await quick.getByText('打开链接', { exact: true }).click();
   await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('const state = { counter: 1 }');
+  await page.locator('.editor-instance .monaco-editor').filter({ visible: true }).click();
   await command('workbench.action.gotoLine');
   await quick.locator('input').first().fill(':2'); await quick.locator('input').first().press('Enter');
   await expect(quick).not.toBeVisible();
@@ -153,6 +155,7 @@ try {
   await command('workbench.action.quickOpen', siblingRoots.workspace_uri + '/debug-ui.mjs');
   await quick.getByText('打开链接', { exact: true }).click();
   await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('const state = { counter: 1 }');
+  await page.locator('.editor-instance .monaco-editor').filter({ visible: true }).click();
   await command('workbench.action.gotoLine');
   await quick.locator('input').first().fill(':2'); await quick.locator('input').first().press('Enter');
   await expect(quick).not.toBeVisible();
@@ -483,6 +486,55 @@ try {
   await expect.poll(async () => { siblingPaused = await otherState(); return [siblingPaused.status, siblingPaused.call_stack[0]?.line]; }).toEqual(['paused', 2]);
   assert.equal(siblingPaused.debugger_binding.instance_id, siblingReady.instance.instance_id);
   assert.notEqual(siblingPaused.run_id, otherPaused.run_id);
+  result.phase = 'sibling-disconnect-and-restart';
+  const beforeRestart = siblingPaused;
+  result.disconnect = await page.evaluate(async ({ owner, runId }) => {
+    const probe = await globalThis.openDebugDapProbe({ owner, runId });
+    try {
+      const initialized = await probe.request('initialize');
+      if (!initialized.success) throw new Error(initialized.message);
+      const disconnected = await probe.request('disconnect', { terminateDebuggee: false });
+      if (!disconnected.success) throw new Error(disconnected.message);
+      return disconnected;
+    } finally {
+      await new Promise(resolve => { probe.socket.addEventListener('close', resolve, { once: true }); probe.socket.close(); });
+    }
+  }, { owner: otherOwner, runId: beforeRestart.run_id });
+  const afterDisconnect = await otherState();
+  assert.equal(afterDisconnect.run_id, beforeRestart.run_id);
+  assert.equal(afterDisconnect.pid, beforeRestart.pid);
+  assert.equal(afterDisconnect.status, 'paused');
+  result.beforeRestartReferences = await page.evaluate(async ({ owner, runId }) => {
+    globalThis.debugLifecycleProbe = await globalThis.openDebugDapProbe({ owner, runId });
+    const stack = await globalThis.debugLifecycleProbe.request('stackTrace', { threadId: 1 });
+    if (!stack.success) throw new Error(stack.message);
+    const frameId = stack.body.stackFrames[0].id;
+    const scopes = await globalThis.debugLifecycleProbe.request('scopes', { frameId });
+    if (!scopes.success) throw new Error(scopes.message);
+    return { frameId, variablesReference: scopes.body.scopes.find(scope => scope.presentationHint !== 'global').variablesReference };
+  }, { owner: otherOwner, runId: beforeRestart.run_id });
+  await command('workbench.action.debug.restart');
+  await expect.poll(async () => {
+    siblingPaused = await otherState();
+    return [siblingPaused.run_id !== beforeRestart.run_id, siblingPaused.status, siblingPaused.call_stack[0]?.line];
+  }, { timeout: 20_000 }).toEqual([true, 'paused', 2]);
+  assert.notEqual(siblingPaused.pid, beforeRestart.pid);
+  assert.equal(siblingPaused.debugger_binding.instance_id, siblingReady.instance.instance_id);
+  result.staleRun = await page.evaluate(async references => {
+    const replies = [];
+    for (const [command, args] of [
+      ['variables', { variablesReference: references.variablesReference }],
+      ['evaluate', { frameId: references.frameId, expression: 'state.counter += 100' }],
+      ['next', { threadId: 1 }], ['terminate', {}],
+    ]) replies.push(await globalThis.debugLifecycleProbe.request(command, args));
+    globalThis.debugLifecycleProbe.socket.close();
+    return replies;
+  }, result.beforeRestartReferences);
+  for (const reply of result.staleRun) assert(!reply.success && reply.message.includes('run 已更换'));
+  assert.equal((await otherState()).run_id, siblingPaused.run_id);
+  assert.equal((await otherState()).call_stack[0].line, 2);
+  result.siblingRestart = { oldRun: beforeRestart.run_id, oldPid: beforeRestart.pid, newRun: siblingPaused.run_id,
+    newPid: siblingPaused.pid, samePluginInstance: siblingReady.instance.instance_id };
   // 仅剩一个真实会话时，原版调用栈会省略 session 行；由新 run 的变量回执确认已聚焦。
   await expect(page.locator('.debug-variables')).toContainText('state');
   await expect.poll(() => result.dap.some(item => item.channel === `/api/v1/debug/node/runs/${siblingPaused.run_id}/dap`
@@ -540,7 +592,9 @@ try {
 } finally {
   // 诊断失败不能跳过实际 Chromium 清理，原断言与清理错误一并保留。
   for (const cleanup of [
-    async () => { if (page) await page.evaluate(() => globalThis.debugDapProbe?.socket.close()); },
+    async () => { if (page) await page.evaluate(() => {
+      globalThis.debugDapProbe?.socket.close(); globalThis.debugLifecycleProbe?.socket.close();
+    }); },
     async () => { if (page) await page.screenshot({ path: join(input.artifacts, 'debug-ui.png'), fullPage: true }); },
     () => writeFile(join(input.artifacts, 'debug-ui.json'), JSON.stringify(result, null, 2)),
     async () => { if (browser) await browser.close(); },
