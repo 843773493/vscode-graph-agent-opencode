@@ -23,7 +23,7 @@ from typing import ClassVar, Literal, Never, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter
 
-from app.core.child_process import ChildProcessState
+from app.core.child_process_state import ChildProcessState
 from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.infrastructure.events.channel_events import (

@@ -1,6 +1,6 @@
 ## Context
 
-用户已确认插件体系自有化，具体动机见 proposal.md。当前主链包括 `app/gateway/runtime` 的进程／日志管理、`app/core/child_process` 的跨平台原语、独立 Terminal／Browser 服务、Backend 中的 MCP owner 和 stdio transport，以及尚未完成的 VSIX／Extension Host 接入。以上是待迁移的事实，不是两套长期支持的模式。
+用户已确认插件体系自有化，具体动机见 proposal.md。当前主链包括 `app/gateway/runtime` 的进程／日志管理、Gateway 插件内的 MCP stdio bridge、独立 Terminal／Browser 服务和 Backend 中的 MCP 连接与目录 owner。Backend 旧 stdio transport 已随插件迁移删除；剩余迁移按下文目标边界推进，不保留两套长期支持的模式。
 
 本 change 保留原目录及三个新增 capability 标识以维持引用，重新定义其规范内容。tasks.md 的旧验收记录是历史证据；当前任务均按新边界验收，不把原 Node Extension Host、VSIX 或第三方目录的通过记录作为新合同通过。
 
@@ -263,7 +263,7 @@ Web／Electron 共用同一 renderer，插件运行在目标 Gateway 所在环�
 
 ### D16. 源码调试迁移与原版 Debug UI
 
-当前 `app/agents/policy/tool_groups.py` 的 `debugging` 组已有20个源码调试工具，注册在 `app/agents/tools/debugging/registration.py`；`app/services/infrastructure/node_debug/` 已实现 Node Inspector JavaScript 调试，Backend 在 `process/launch_orchestrator.py` 直接创建目标进程。本切片迁移这条真实链，不把已有调试误记为只有上游占位。首批自带 workspace 范围 debug 服务插件，持有 adapter／Inspector 连接及调试目标进程；服务实例可管理多个有独立身份的调试 run，不按每个 Thread 创建管理器。Python 是插件可用实现语言，不代表首批支持 Python 源码调试。
+当前 `app/agents/policy/tool_groups.py` 的 `debugging` 组已有20个源码调试工具，注册在 `app/agents/tools/debugging/registration.py`；`app/services/infrastructure/node_debug/` 保留 Node Inspector JavaScript 调试的 Backend 业务 owner，`process/launch_orchestrator.py` 通过冻结的 Debug 插件实例发起目标进程并复用原准入、审计和 DAP 逻辑，目标进程由插件持有。本切片保留这条真实调试能力，不把已有调试误记为只有上游占位，也不再由 Backend 直接创建目标进程。首批自带 workspace 范围 debug 服务插件，持有 adapter／Inspector 连接及调试目标进程；服务实例可管理多个有独立身份的调试 run，不按每个 Thread 创建管理器。Python 是插件可用实现语言，不代表首批支持 Python 源码调试。
 
 Backend 原调试 owner 保留配置、活动方案、断点、动作时间线、精确 `(session_id, thread_id)` 归属、准入、脱敏和 canonical 工具审计。Session-only 入口仍从 catalog 解析真实 main_thread_id，不能用 `main` 别名。原 `/debug/node` API 及20个工具的公开输入输出／call ID 保持；不另建 launch.json 配置权威或复制调试业务状态。Agent 执行本身的暂停、断点、停止快照继续在原 Backend owner，不混为源码调试。
 

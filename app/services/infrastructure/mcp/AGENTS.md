@@ -10,7 +10,7 @@
 - MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。插件 MCP 通过 Gateway 已登记的插件服务连接，不直接创建 stdio 子进程。
 - `connection_service.py` 协调持久连接意图、短观察、deadline、取消与私有 OAuth 回调；实际网络及目录仍由原 Owner 发布。`operation_store.py` 只使用唯一 WorkspaceStateStore，持久幂等 alias 与安全状态，不保存授权 URL、code、state 或 token。运行时断开不改 JSONC，重启仍按已启用配置创建新连接；遗留操作只对账，不重放交换。
 - `session_runtime.py` 在每个 Server 的原 task 中创建、初始化并关闭 SDK session；现有 LifetimeScope 持有关闭与排空回调，外层启动／关闭 task 不拥有 SDK CancelScope。插件 MCP 经 Gateway 精确路由到插件实例，插件进程由 Gateway 插件运行时持有；MCP owner 不登记插件 PID。目录发布和通知 fencing 仍只由 `McpCatalogOwner` 决定。
-- 自有 MCP stdio bridge 的唯一源码归 `resources/plugins/mcp-stdio/bridge.py`；Backend 只沿 Gateway Streamable HTTP 接入，不维护第二份 bridge。`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease；取消通知投递成功不代表远端停止。
+- 自有 MCP stdio bridge 的唯一源码归 `resources/plugins/mcp-stdio/bridge.py`；Backend 只沿 Gateway Streamable HTTP 接入，不维护进程或传输副本。`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease；取消通知投递成功不代表远端停止。
 - 管理视图在原 runtime 失败／关闭期间保留唯一已知 descriptors，执行准入与 connection_ref 仍只来自真实 running；主动断开依唯一 publication.definitions 的 disconnected readiness 保持工具列表为空，不建立第二目录或状态源。
 - `mcp.catalog/*` 目录事件合同的发布接线。
 - MCP Tool 名称映射和 LangChain 适配。
