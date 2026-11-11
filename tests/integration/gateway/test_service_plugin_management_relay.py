@@ -531,6 +531,29 @@ def test_plugin_management_and_call_relay_to_original_gateway(
             **target, "package_id": "relay.management.probe", "package_version": "1.0.0",
         }, "relay-uninstall-retired-version")
 
+        # 显式重连退役旧路由订阅；新流只重读原声明，不重启实例或重放命令。
+        with client_a.stream("POST", "/api/gateway/service-plugins/commands/events", json=target,
+                            headers={**headers, "X-Request-ID": "relay-command-before-reconnect"}, timeout=15) as stream:
+            stream.raise_for_status()
+            lines = stream.iter_lines()
+            assert next(lines) == "event: snapshot"
+            assert json.loads(next(lines).removeprefix("data: "))["publications"] == [replacement_command]
+            assert next(lines) == ""
+            reconnected = client_a.post(f"/api/gateway/remote-gateways/{connection_id}/reconnect",
+                headers={"X-Request-ID": "plugin-command-reconnect"}).raise_for_status()
+            assert reconnected.headers["X-Request-ID"] == reconnected.json()["request_id"] == "plugin-command-reconnect"
+            assert list(lines) == [], "连接换代后旧贡献订阅必须释放"
+        with client_a.stream("POST", "/api/gateway/service-plugins/commands/events", json=target,
+                            headers={**headers, "X-Request-ID": "relay-command-after-reconnect"}, timeout=15) as stream:
+            stream.raise_for_status()
+            lines = stream.iter_lines()
+            assert next(lines) == "event: snapshot"
+            assert json.loads(next(lines).removeprefix("data: "))["publications"] == [replacement_command]
+        assert command_publication(relay=True) == command_publication(relay=False) == replacement_command
+        assert call_command(replacement_command, "relay-command-after-reconnect") == {
+            "version": "1.1.0", "pid": replacement_pid, "count": 2}
+        assert call_command(replacement_command, "native-command-after-reconnect", relay=False)["count"] == 3
+
         edit_gateway_b(lambda document: bind(document, "1.1.0", enabled=False), remote=True)
         stopped = PluginRuntimeStatusDTO.model_validate(exchange(client_a, "/api/gateway/service-plugins/status", target, "relay-disabled-binding"))
         closed, = [item for item in stopped.plugins if item.binding.package_id == "relay.management.probe"]
