@@ -35,7 +35,7 @@ from tests.integration.gateway.test_terminal_plugin_lifecycle import (
 )
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import chromium_temporary_environment
-from tests.support.plugin_package import install_plugin
+from tests.support.plugin_package import expect_plugin_install_failure, install_plugin
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import terminate_process, wait_for_http_ok
 from tests.support.workspaces import (
@@ -278,10 +278,11 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "package_id": package_id, "package_version": version}).raise_for_status()
         assert not (home / "plugins/packages" / package_id / version).exists()
 
-    def package(version: str) -> Path:
+    def package(version: str, *, package_target: dict | None = None, missing_dependency: str | None = None) -> Path:
         archive_path = context.artifacts_dir / f"distribution-probe-{version}.zip"
         probe = {"manifest_version": 1, "package_id": "distribution.probe", "version": version,
-            "name": "发行闭环探针", "extension_contract_version": 1, "target": target,
+            "name": "发行闭环探针", "extension_contract_version": 1,
+            "target": target if package_target is None else package_target,
             "plugins": [{"id": runtime, "name": runtime, "instance_scope": "gateway",
                 "runtime": runtime, "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"],
                 "management_protocol_version": 1,
@@ -296,9 +297,16 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             archive.writestr("entry.py", PYTHON_PLUGIN)
             archive.writestr("entry.mjs", NODE_PLUGIN)
             archive.writestr("local_module.py", "from plugin_dependency import VALUE\nassert VALUE == 'locked-dependency-ready'\n")
-            with ZipFile(BytesIO(_dependency_wheel())) as dependency:
-                for entry in dependency.infolist():
-                    archive.writestr(f"python/site-packages/{entry.filename}", dependency.read(entry.filename))
+            if missing_dependency != "python":
+                with ZipFile(BytesIO(_dependency_wheel())) as dependency:
+                    for entry in dependency.infolist():
+                        archive.writestr(f"python/site-packages/{entry.filename}", dependency.read(entry.filename))
+            if missing_dependency == "node":
+                dependencies = {"distribution-dependency": "1.0.0"}
+                archive.writestr("package.json", json.dumps({"name": "distribution-probe", "dependencies": dependencies}))
+                archive.writestr("bun.lock", json.dumps({"lockfileVersion": 1,
+                    "workspaces": {"": {"name": "distribution-probe", "dependencies": dependencies}},
+                    "packages": {"distribution-dependency": ["distribution-dependency@1.0.0", "", {}, "sha512-fixture"]}}))
         return archive_path
 
     try:
@@ -312,6 +320,51 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             assert Path(process.exe()).resolve() == executable.resolve()
             assert process.environ()["PATH"].endswith("empty-path")
             assert Path(process.environ()["BOXTEAM_PROJECT_ROOT"]) == distribution / "application"
+        source_path = "/api/gateway/config/sources/gateway_mutable_override"
+        source = exchange("GET", source_path).raise_for_status().json()["data"]
+        incompatible_targets = {}
+        for runtime in ("node", "python"):
+            for field, value in (("version", "0.0.0"), ("abi", "000" if runtime == "node" else "cp000")):
+                incompatible = json.loads(json.dumps(target))
+                incompatible[runtime][field] = value
+                incompatible_targets[f"{runtime}-{field}"] = incompatible
+        incompatible_targets["os"] = {**target, "os": "windows", "system_baseline": "windows-10.0.19041"}
+        incompatible_targets["architecture"] = {**target, "architecture": "arm64"}
+        for index, (label, incompatible) in enumerate(incompatible_targets.items()):
+            rejected = expect_plugin_install_failure(lambda endpoint, payload: exchange("POST", endpoint, payload),
+                gateway_id=gateway_id, path=str(package(f"0.1.{index}", package_target=incompatible)))
+            assert rejected.error and "package=" in rejected.error and "gateway=" in rejected.error, (label, rejected)
+            assert "完整插件 ZIP" in rejected.error
+            assert states() == original
+            for item in original.values():
+                echo(item)
+        for index, runtime in enumerate(("python", "node")):
+            rejected = expect_plugin_install_failure(lambda endpoint, payload: exchange("POST", endpoint, payload),
+                gateway_id=gateway_id, path=str(package(f"0.2.{index}", missing_dependency=runtime)))
+            expected = "python/site-packages" if runtime == "python" else "node_modules"
+            assert rejected.error and f"缺少已准备的 {expected}" in rejected.error
+            assert states() == original
+            for item in original.values():
+                echo(item)
+        candidate = commentjson.loads(source["jsonc"])
+        candidate["plugins"]["runtime"]["entries"] = entries("99.0.0")
+        rejected = exchange("PUT", source_path, {"gateway_id": gateway_id, "source_key": "gateway_mutable_override",
+            "jsonc": json.dumps(candidate), "base_file_digest": source["file_digest"],
+            "base_layer_revision": source["layer_revision"], "base_layer_digest": source["layer_digest"],
+            "expected_active_revision": source["active_revision"], "expected_active_digest": source["active_digest"],
+            "idempotency_key": "distribution-missing-version"})
+        assert rejected.status_code == 422
+        assert "distribution.probe@99.0.0" in rejected.text and "此确切版本" in rejected.text
+        retained = exchange("GET", source_path).raise_for_status().json()["data"]
+        for field in ("jsonc", "file_digest", "layer_revision", "layer_digest", "active_revision", "active_digest"):
+            assert retained[field] == source[field]
+        assert states() == original
+        for item in original.values():
+            echo(item)
+        inventory = exchange("POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id})
+        assert {item["manifest"]["version"] for item in inventory.raise_for_status().json()["data"]["packages"]
+            if item["manifest"]["package_id"] == "distribution.probe"} == {"1.0.0"}
+        assert {path.name for path in (home / "plugins/packages/distribution.probe").iterdir()} == {"1.0.0"}
         install(package("2.0.0"))
         assert states() == original, "安装新版不能暗中换绑或更换实例"
         current = bind(entries("2.0.0"))
