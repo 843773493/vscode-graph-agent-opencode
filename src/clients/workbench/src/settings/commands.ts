@@ -16,7 +16,7 @@ import { captureSettingsLocation } from './editor.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import type { IUntypedFileEditorInput } from '../../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { ConfigurationSourceOwner, sourceStatus } from './sourceOwner.js';
+import { sourceStatus } from './sourceOwner.js';
 import { configSourceFiles, configSourceScheme } from './sourceEditor.js';
 
 export const defaultAgentSourceCommand = 'boxteam.settings.defaultAgentSource';
@@ -71,36 +71,17 @@ registerAction2(class extends Action2 {
       category: { value: 'BoxTeam 设置', original: 'BoxTeam Settings' }, f1: true });
   }
   async run(accessor: ServicesAccessor): Promise<void> {
-    const quickInput = accessor.get(IQuickInputService), editors = accessor.get(IEditorService), files = accessor.get(IFileService);
-    const initial = workspaceContext.getSnapshot(), target = managementGateway('settings');
-    const controller = new AbortController(), cancellation = new CancellationTokenSource();
-    const invalidate = () => { controller.abort(new Error('Gateway 或访问凭据已改变，请重新打开设置来源')); cancellation.cancel(); };
-    const release = onGatewayUserSessionInvalidated(0, invalidate);
-    const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
+    const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService), files = accessor.get(IFileService);
+    const cancellation = new CancellationTokenSource();
     try {
-      const picked = await quickInput.pick([
-        { label: 'Gateway 配置', description: target.name, detail: target.gateway_id, workspaceId: undefined as string | undefined },
-        ...initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({ label: workspace.name,
-          description: `工作区 · ${workspace.status}`, detail: workspace.workspace_id, workspaceId: workspace.workspace_id })),
-      ], { title: '选择设置来源的所属目标', prompt: `Gateway ${target.gateway_id}`, placeHolder: '读取来源不启动 Backend 或插件；离线来源由原 owner 明确报错' }, cancellation.token);
-      controller.signal.throwIfAborted();
-      if (!picked) return;
-      const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id,
-        ...(picked.workspaceId ? { workspace_id: picked.workspaceId } : {}) });
-      const sources = await owner.list(controller.signal);
-      controller.signal.throwIfAborted();
-      const source = await quickInput.pick(sources.sources.filter(item => item.source_key).map(item => ({ label: item.source_key!,
-        description: `${item.layer} · ${item.presence} · 优先级 ${item.precedence}`, detail: item.uri ?? undefined, source: item })),
-      { title: '选择正式配置来源', prompt: `${target.gateway_id} · ${picked.label}`, placeHolder: '内置与只读来源仍可查看；保存仅经原预检与 CAS', canPickMany: false }, cancellation.token);
-      controller.signal.throwIfAborted();
-      if (!source) return;
-      const document = await owner.read(source.source.source_key!, undefined, controller.signal);
-      controller.signal.throwIfAborted();
-      const resource = configSourceFiles(files).prepareEditor(owner.target, source.source.source_key!, document);
-      const input = { resource, label: source.label + '.jsonc', description: `${target.gateway_id} · ${picked.label}`,
+      const captured = await captureSettingsLocation(parent, cancellation.token);
+      if (!captured) return;
+      const { location, document } = captured;
+      const resource = configSourceFiles(files).prepareEditor(location, location.source_key, document);
+      const input = { resource, label: location.source_key + '.jsonc', description: `${location.gateway_id} · ${location.name}`,
         options: { pinned: true }, languageId: 'jsonc', forceFile: true } satisfies IUntypedFileEditorInput;
       await editors.openEditor(input);
-    } finally { release(); releaseContext(); cancellation.dispose(); controller.abort(); }
+    } finally { cancellation.dispose(); }
   }
 });
 

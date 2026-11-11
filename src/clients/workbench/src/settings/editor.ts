@@ -1,4 +1,4 @@
-import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { Emitter } from '../../upstream/src/vs/base/common/event.js';
 import { parse, type ParseError } from '../../upstream/src/vs/base/common/json.js';
@@ -16,9 +16,8 @@ import { ITextModelService } from '../../upstream/src/vs/editor/common/services/
 import { DefaultSettings, Settings2EditorModel, nullRange } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesModels.js';
 import type { ISetting, ISettingsGroup } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ITextFileService, type ITextFileEditorModel, type ITextFileEditorModelManager } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayUserSessionInvalidated, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import { gateway } from '../agentApi.js';
 import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { configSourceFiles, configSourceEditorUri } from './sourceEditor.js';
@@ -53,26 +52,32 @@ export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
 export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')):
 Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefined> {
   const quick = parent.invokeFunction(accessor => accessor.get(IQuickInputService));
-  const controller = new AbortController(), cancelled = token.onCancellationRequested(() => controller.abort(new CancellationError()));
+  const initial = workspaceContext.getSnapshot(), frozen = { ...target };
+  const controller = new AbortController(), cancellation = new CancellationTokenSource(token);
+  const cancelled = cancellation.token.onCancellationRequested(() => controller.abort(new CancellationError()));
+  const invalidate = () => { controller.abort(new Error('Gateway 或访问凭据已改变，请重新打开设置来源')); cancellation.cancel(); };
+  const release = onGatewayTokenInvalidated(0, invalidate);
+  const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
   try {
     if (token.isCancellationRequested) throw new CancellationError();
-    const workspaces = await gateway.workspaces(false);
+    const scope = await quick.pick([{ label: 'Gateway 配置', description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
+      ...initial.workspaces.filter(workspace => workspace.gateway_id === frozen.gateway_id).map(workspace => ({ label: workspace.name,
+        description: '工作区 · ' + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))],
+    { title: '选择设置来源的所属目标', prompt: `Gateway ${frozen.gateway_id}`, placeHolder: '读取来源不启动 Backend 或插件；离线来源由原 owner 明确报错' }, cancellation.token);
     controller.signal.throwIfAborted();
-    const scope = await quick.pick([{ label: 'Gateway 配置', description: target.name, workspaceId: undefined as string | undefined },
-      ...workspaces.items.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({ label: workspace.name,
-        description: '工作区 · ' + workspace.status, workspaceId: workspace.workspace_id }))], { title: '选择设置来源的所属目标', prompt: target.gateway_id }, token);
     if (!scope) return;
-    const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id, workspace_id: scope.workspaceId });
+    const owner = new ConfigurationSourceOwner({ gateway_id: frozen.gateway_id, gateway_connection_id: frozen.gateway_connection_id, workspace_id: scope.workspaceId });
     const listed = await owner.list(controller.signal);
     controller.signal.throwIfAborted();
     const selected = await quick.pick(listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
       description: `${source.layer} · ${source.presence} · 优先级 ${source.precedence}`, detail: source.uri ?? undefined })),
-    { title: '选择正式配置来源', prompt: `${target.gateway_id} · ${scope.label}` }, token);
+    { title: '选择正式配置来源', prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: '内置与只读来源仍可查看；保存仅经原预检与 CAS' }, cancellation.token);
+    controller.signal.throwIfAborted();
     if (!selected) return;
     const document = await owner.read(selected.label, undefined, controller.signal);
     controller.signal.throwIfAborted();
     return { location: { ...owner.target, version: 2, source_key: selected.label, name: scope.label }, document };
-  } finally { cancelled.dispose(); controller.abort(); }
+  } finally { release(); releaseContext(); cancelled.dispose(); cancellation.dispose(); controller.abort(); }
 }
 
 /** 原 Settings2EditorModel 的目标局部 schema 投影；不注册全局业务配置。 */

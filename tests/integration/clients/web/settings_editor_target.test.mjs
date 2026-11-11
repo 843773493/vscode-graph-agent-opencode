@@ -157,6 +157,80 @@ function scenario(name, callback) {
   test(name, async () => { executed.push(name); await callback(); passed.push(name); });
 }
 
+function sourceSelectionFixture() {
+  const auth = new Emitter(), context = new Emitter(), requests = [], picks = [];
+  let snapshot = { gatewayId: 'entry-A', workspaces: [
+    { gateway_id: 'gateway-B', workspace_id: 'workspace-B', name: 'B', status: 'ready' },
+    { gateway_id: 'gateway-C', workspace_id: 'workspace-C', name: 'C', status: 'ready' },
+  ] };
+  const target = { gateway_id: 'gateway-B', gateway_connection_id: 'route-B', name: '远端 B' };
+  const quick = { pick: async (items, options, token) => {
+    picks.push({ items, options, token });
+    return options.title === '选择设置来源的所属目标' ? items.find(item => item.workspaceId === 'workspace-B') : items[0];
+  } };
+  const document = { jsonc: '{}', source_key: 'workspace_user' };
+  class SourceOwnerBoundary {
+    constructor(target) { this.target = { ...target }; }
+    async list(signal) {
+      requests.push({ operation: 'list', owner: this.target, signal });
+      return { sources: [{ source_key: 'workspace_user', layer: 'user', presence: 'present', precedence: 1 }] };
+    }
+    async read(source, _key, signal) { requests.push({ operation: 'read', owner: this.target, source, signal }); return document; }
+  }
+  const capture = evaluate(sources.get('local:src/settings/editor.ts'), ['captureSettingsLocation'], {
+    CancellationTokenSource, CancellationError, IQuickInputService: {}, ConfigurationSourceOwner: SourceOwnerBoundary,
+    managementGateway: () => target,
+    workspaceContext: { getSnapshot: () => snapshot, subscribe: listener => {
+      const subscription = context.event(listener); return () => subscription.dispose();
+    } },
+    onGatewayTokenInvalidated: (_port, listener) => { const subscription = auth.event(listener); return () => subscription.dispose(); },
+  }).captureSettingsLocation;
+  return { target, quick, requests, picks, document, auth, context,
+    capture: token => capture({ invokeFunction: callback => callback({ get: () => quick }) }, token ?? CancellationToken.None),
+    changeEntry() { snapshot = { ...snapshot, gatewayId: 'entry-C' }; context.fire(); },
+    dispose() { auth.dispose(); context.dispose(); },
+  };
+}
+
+scenario('两种设置入口共用来源选择，目标冻结且不重复读取工作区目录', async () => {
+  // 原 owner 的来源 HTTP 边界可控；选择与取消运行实际生产函数。
+  const f = sourceSelectionFixture();
+  const pick = f.quick.pick;
+  f.quick.pick = async (...args) => {
+    const selected = await pick(...args);
+    f.target.gateway_id = 'gateway-C'; f.target.gateway_connection_id = 'route-C';
+    return selected;
+  };
+  try {
+    const captured = await f.capture();
+    expect(captured.location).toEqual({ version: 2, gateway_id: 'gateway-B', gateway_connection_id: 'route-B',
+      workspace_id: 'workspace-B', source_key: 'workspace_user', name: 'B' });
+    expect(captured.document).toBe(f.document);
+    expect(f.requests.map(item => item.operation)).toEqual(['list', 'read']);
+    expect(f.requests.map(item => item.owner)).toEqual(Array(2).fill({ gateway_id: 'gateway-B', gateway_connection_id: 'route-B', workspace_id: 'workspace-B' }));
+    expect(f.picks[0].items.map(item => item.label)).toEqual(['Gateway 配置', 'B']);
+    expect(f.requests.every(item => item.signal.aborted)).toBe(true);
+  } finally { f.dispose(); }
+});
+
+for (const invalidation of ['credential', 'entry', 'cancel']) scenario(`设置来源选择在 ${invalidation} 失效时取消 Picker 并拒绝迟到回执`, async () => {
+  const f = sourceSelectionFixture(), cancellation = new CancellationTokenSource(), entered = Promise.withResolvers();
+  f.quick.pick = async (_items, _options, token) => {
+    entered.resolve(token);
+    return new Promise(resolve => token.onCancellationRequested(() => resolve({ workspaceId: 'workspace-B', label: 'B' })));
+  };
+  try {
+    const pending = f.capture(cancellation.token), pickerToken = await entered.promise;
+    const rejected = pending.then(() => { throw new Error('失效的设置选择不应成功'); }, error => error);
+    if (invalidation === 'credential') f.auth.fire();
+    else if (invalidation === 'entry') f.changeEntry();
+    else cancellation.cancel();
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(pickerToken.isCancellationRequested).toBe(true);
+    expect(f.requests).toEqual([]);
+  } finally { cancellation.dispose(); f.dispose(); }
+});
+
 async function searchFixture() {
   const pane = new SettingsEditor2(), requests = [], countEvents = [], traces = [], refreshes = [];
   const ai = new AiSettingsSearchService();
