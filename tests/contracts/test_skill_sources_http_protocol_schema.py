@@ -11,6 +11,9 @@ import pytest
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from pydantic.json_schema import JsonSchemaValue
 
+from app.protocol.generated.boxteam.gateway.v2 import (
+    skill_sources_pb2 as gateway_skill_sources_pb2,
+)
 from app.protocol.generated.boxteam.workspace.v2 import skill_sources_pb2
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
 from tests.contracts.api.openapi_snapshots import (
@@ -40,6 +43,12 @@ def test_skill_metadata_roots_follow_actual_routes(http_openapi: JsonSchemaValue
     assert local_envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/LocalSkillsMetadataDTO")
     assert {"LocalSkillsMetadataDTO", "LocalSkillMetadataDTO"} <= HTTP_JSON_DESCRIPTORS.keys()
     assert skill_sources_pb2.SkillSourceMetadataDTO.DESCRIPTOR.fields_by_name["priority"].type == FieldDescriptorProto.TYPE_INT64
+    gateway = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/resources/gateway-skills"]["get"]
+    gateway_schema = gateway["responses"]["200"]["content"]["application/json"]["schema"]
+    gateway_envelope = http_openapi["components"]["schemas"][gateway_schema["$ref"].rsplit("/", 1)[1]]
+    assert gateway_envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/GatewaySkillSourcesMetadataDTO")
+    assert {"GatewaySkillSourcesMetadataDTO", "GatewaySkillSourceMetadataDTO"} <= HTTP_JSON_DESCRIPTORS.keys()
+    assert gateway_skill_sources_pb2.GatewaySkillSourceMetadataDTO.DESCRIPTOR.fields_by_name["priority"].type == FieldDescriptorProto.TYPE_INT64
     assert_public_http_schemas(http_openapi)
     assert http_openapi == original
 
@@ -48,12 +57,15 @@ def test_skill_metadata_roots_follow_actual_routes(http_openapi: JsonSchemaValue
 def test_offline_snapshots_include_exact_metadata_and_route(http_openapi: JsonSchemaValue, snapshot: str) -> None:
     offline = cast(JsonSchemaValue, load_openapi_snapshot(snapshot))
     for model in ("SkillSourcesMetadataDTO", "SkillSourceMetadataDTO", "APIResponse_SkillSourcesMetadataDTO_",
-                  "LocalSkillsMetadataDTO", "LocalSkillMetadataDTO", "APIResponse_LocalSkillsMetadataDTO_"):
+                  "LocalSkillsMetadataDTO", "LocalSkillMetadataDTO", "APIResponse_LocalSkillsMetadataDTO_",
+                  "GatewaySkillSourcesMetadataDTO", "GatewaySkillSourceMetadataDTO", "APIResponse_GatewaySkillSourcesMetadataDTO_"):
         assert offline["components"]["schemas"][model] == http_openapi["components"]["schemas"][model]
     path = "/api/v1/workspaces/{workspace_id}/resources/skill-sources"
     assert offline["paths"][path] == http_openapi["paths"][path]
     local_path = "/api/v1/workspaces/{workspace_id}/resources/local-skills"
     assert offline["paths"][local_path] == http_openapi["paths"][local_path]
+    gateway_path = "/api/v1/workspaces/{workspace_id}/resources/gateway-skills"
+    assert offline["paths"][gateway_path] == http_openapi["paths"][gateway_path]
     assert set(offline["components"]["schemas"]["SkillSourceMetadataDTO"]["properties"]) == {
         "name", "display_uri", "available", "error_code", "priority",
     }
@@ -68,6 +80,8 @@ def test_offline_snapshots_include_exact_metadata_and_route(http_openapi: JsonSc
     ("LocalSkillsMetadataDTO", "workspace_id", {"type": "integer"}),
     ("LocalSkillsMetadataDTO", "entries", {"type": "array", "items": {"type": "string"}}),
     ("LocalSkillMetadataDTO", "node", {"type": "string"}),
+    ("GatewaySkillSourcesMetadataDTO", "entries", {"type": "array", "items": {"type": "string"}}),
+    ("GatewaySkillSourceMetadataDTO", "plugin", {"type": "string"}),
 ])
 def test_skill_metadata_rejects_recursive_structure_drift(
     http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -78,7 +92,8 @@ def test_skill_metadata_rejects_recursive_structure_drift(
     assert "/" + field in str(caught.value)
 
 
-@pytest.mark.parametrize("model", ["SkillSourcesMetadataDTO", "SkillSourceMetadataDTO", "LocalSkillsMetadataDTO", "LocalSkillMetadataDTO"])
+@pytest.mark.parametrize("model", ["SkillSourcesMetadataDTO", "SkillSourceMetadataDTO", "LocalSkillsMetadataDTO", "LocalSkillMetadataDTO",
+                                 "GatewaySkillSourcesMetadataDTO", "GatewaySkillSourceMetadataDTO"])
 def test_candidate_metadata_drift_stops_snapshot_publication(
     skill_descriptor_bundle: FileDescriptorSet, tmp_path: Path, model: str,
     openapi_output: Path, openapi_export: Callable[[Path, Path], None],

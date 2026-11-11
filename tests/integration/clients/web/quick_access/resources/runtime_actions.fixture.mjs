@@ -44,6 +44,7 @@ export async function runtimeActionContract(mode) {
       if (mode === 'freeze' && releaseRoutes === undefined && requests.some(item => item.phase === 'command')) return new Promise(resolve => { releaseRoutes = () => resolve(ok({ items: targets })); });
       return ok({ items: targets });
     }
+    if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: owners[index].gatewayId, workspace_id: owners[index].workspaceId, revision: 'fixed', available: true, entries: [] });
     if (path === '/api/v1/resources/agent-spec') return ok({ node: { uri: 'boxteam://workspace/x/resources/agent-spec/root/AGENTS.md', resource_shape: 'file', operations: ['read'] } });
     if (path.endsWith('skill-sources') || path.endsWith('local-skills')) return ok({ workspace_id: owners[index].workspaceId, entries: [] });
     if (path === '/api/v1/resources') {

@@ -161,6 +161,15 @@ async def _published(client: httpx.AsyncClient, gateway_id: str, workspace_id: s
             source = await _data(await client.get(path))
             entries = [entry for entry in source["entries"] if entry.get("plugin")]
             if (version is None and not entries) or (len(entries) == 1 and entries[0]["plugin"]["package_version"] == version):
+                metadata = await _data(await client.get("/api/v1/resources/gateway-skills", headers={
+                    "X-BoxTeam-Target-Gateway-Id": gateway_id, "X-BoxTeam-Workspace-Id": workspace_id,
+                }))
+                assert (metadata["gateway_id"], metadata["workspace_id"], metadata["revision"]) == (
+                    gateway_id, workspace_id, source["revision"],
+                )
+                assert metadata["entries"] == [{key: entry[key] for key in (
+                    "name", "display_uri", "available", "error_code", "layer", "priority", "plugin",
+                )} for entry in source["entries"]]
                 return source
             await asyncio.sleep(0.05)
 

@@ -68,3 +68,37 @@ class GatewaySkillSourcesDTO(_message.Message):
     available: bool
     error_code: str
     def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., revision: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[GatewaySkillSourceEntryDTO, _Mapping]]] = ..., available: _Optional[bool] = ..., error_code: _Optional[str] = ...) -> None: ...
+
+class GatewaySkillSourceMetadataDTO(_message.Message):
+    __slots__ = ("name", "display_uri", "available", "error_code", "layer", "priority", "plugin")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_URI_FIELD_NUMBER: _ClassVar[int]
+    AVAILABLE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_CODE_FIELD_NUMBER: _ClassVar[int]
+    LAYER_FIELD_NUMBER: _ClassVar[int]
+    PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    display_uri: str
+    available: bool
+    error_code: str
+    layer: str
+    priority: int
+    plugin: PluginSkillSourceDTO
+    def __init__(self, name: _Optional[str] = ..., display_uri: _Optional[str] = ..., available: _Optional[bool] = ..., error_code: _Optional[str] = ..., layer: _Optional[str] = ..., priority: _Optional[int] = ..., plugin: _Optional[_Union[PluginSkillSourceDTO, _Mapping]] = ...) -> None: ...
+
+class GatewaySkillSourcesMetadataDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "revision", "entries", "available", "error_code")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    AVAILABLE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_CODE_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    revision: str
+    entries: _containers.RepeatedCompositeFieldContainer[GatewaySkillSourceMetadataDTO]
+    available: bool
+    error_code: str
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., revision: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[GatewaySkillSourceMetadataDTO, _Mapping]]] = ..., available: _Optional[bool] = ..., error_code: _Optional[str] = ...) -> None: ...

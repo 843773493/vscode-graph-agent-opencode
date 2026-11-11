@@ -24,6 +24,14 @@ from tests.integration.backend.agents.test_gateway_http_skill_flow import (
 from tests.integration.backend.agents.test_gateway_http_skill_flow import (
     http_skill_server as http_skill_server,  # noqa: PLC0414
 )
+from tests.integration.backend.agents.test_plugin_skill_source_flow import (
+    NAME as PLUGIN_SKILL_NAME,
+)
+from tests.integration.backend.agents.test_plugin_skill_source_flow import (
+    _archive,
+    _bind,
+    _published,
+)
 from tests.integration.backend.agents.test_workspace_http_skill_flow import _reload
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
@@ -33,6 +41,7 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
+from tests.support.plugin_package import install_plugin_async
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -70,6 +79,9 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
 
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text())
+    config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
+        "url": str(client.base_url).rstrip("/"), "timeout_seconds": 5,
+    }
     config.setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = sources("a")
     await _reload(client, config_path, config)
     assert len(source.requests) == 2
@@ -90,6 +102,15 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
     registered = await client.post("/api/gateway/managed-workspaces", json={"root_path": str(other), "name": "Skill B"})
     assert registered.status_code == 200, registered.text
     assert len(source.requests) == 4
+    health = (await client.get("/api/gateway/health")).json()["data"]
+    inventory = (await client.get("/api/gateway/workspaces?check_health=false")).json()["data"]
+    target = next(item for item in inventory["items"] if item["workspace_id"] != inventory["active_workspace"]["workspace_id"])
+    archive = context.artifacts_dir / "skill-plugin.zip"
+    _archive(archive, "1.0.0")
+    await install_plugin_async(lambda path, payload: client.post(path, json=payload),
+                               gateway_id=health["gateway_id"], path=str(archive.resolve()))
+    await _bind(client, health["gateway_id"], target["workspace_id"], "1.0.0")
+    await _published(client, health["gateway_id"], target["workspace_id"], "1.0.0")
     result_path, fault_ready = context.artifacts_dir / "skill-sources.json", context.artifacts_dir / "fault-ready.json"
     local_fault_ready = context.artifacts_dir / "local-delete-ready.json"
     initial_count = len(source.requests)
@@ -100,7 +121,7 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
         task = asyncio.create_task(asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
                  "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_SKILL_FAULT_READY": str(fault_ready),
-                 "BOXTEAM_LOCAL_SKILL_FAULT_READY": str(local_fault_ready),
+                 "BOXTEAM_LOCAL_SKILL_FAULT_READY": str(local_fault_ready), "BOXTEAM_PLUGIN_SKILL_NAME": PLUGIN_SKILL_NAME,
                  "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "skill-sources.png"),
                  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
             capture_output=True, text=True, timeout=195, check=False))
@@ -132,7 +153,7 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in ("metadataOnly", "filterReuse", "scopeCancel", "sameNameSources", "originalOpen",
                                       "readOnly", "sideAndOwner", "explicitOwner", "originalFailure", "unavailable",
-                                      "localDiscovery", "localOpen", "localReadOnly", "localStale", "localFresh"))
+                                      "localDiscovery", "localOpen", "localReadOnly", "localStale", "localFresh", "pluginDiscovery", "pluginOpen"))
     assert result["forbiddenWrites"] == []
     assert len(source.requests) == initial_count + 2, "只允许显式 refresh 获取两项；发现／错误展示不自动重试"
     with provider.control._condition:

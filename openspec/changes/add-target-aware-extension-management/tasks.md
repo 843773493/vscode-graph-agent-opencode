@@ -290,6 +290,8 @@
 - [x] 13.11 记录普通 Skill 目录／资源读取完整暖请求耗时并沿原预算验收，确认模型准备／skill_load 无新增发现和完整性检查；类型／协议／前端构建及进程外测试保护沿第9组统一执行，同源码证据可复用，未验平台如实记录。
   - 2026-11-11 暖请求与路径复审：复用既有真实 Gateway／Relay 生命周期产品收据，按客户端发出请求至完整响应读取测得 23 次 Skill 请求 p95 15.71ms、max 22.16ms；其中原生 Gateway 10 次 p95/max 15.27ms，Relay 13 次 p95/max 22.16ms；read／list／search 共11次 p95/max 22.16ms，符合原 p95 500ms、单次 1500ms 预算。样本少且 Relay 为 loopback Integration，不代表长期或真实远端分布。静态追踪确认模型准备消费已接受快照，`skill_load` 消费冻结 catalog／CSM；无逐次发现、整包 hash 或新增检查，来源校验仍在原绑定／ETag 变化边界。未改生产性能链。Luna Max 复审发现并修复单 Skill 重复 `tool_id` 的顺序歧义，parser 与包校验反例已补；四模块单测152 passed、Ruff及diff检查通过。定向 Pyright 未通过，报告18项 mixin 属性诊断；未验 Windows、真实 Relay 网络、SSH、Workbench／Electron。完整样本、边界、限制及复审记录见 `out/tests/temp/2026/11/11/plugin_skill_association/artifacts/skill-warm-timings.json` 与同目录 `verification.json`。
 
+2026-11-11 插件 Skill 快速入口沿原发布metadata和原只读资源owner接入，不新建安装／Skill目录；浏览不启用插件、读取正文或绑定观察，正文沿明确Workspace audience。真实Gateway双Workspace产品安装绑定、发现并打开正文通过；远端原Opener消费原parser的reference_uri，不在前端重写grammar。169项后端、来源Chromium合同、递归OpenAPI、167份实际转换类型及79扩展构建通过，Python按改前基线无新增诊断；原始成功／失败和适用边界见 `out/tests/temp/2026/11/11/plugin_skill_quick_access/artifacts/verification.json`。不以本片关闭跨平台发行或7.4全部验收。
+
 ## 14. 插件 UI 开关与新建默认值闭环
 
 - [x] 14.1 按D0／D2／D3全链统一 Plugin Package／Plugin／Contribution／Runtime Instance 和 plugins 字段，迁齐协议／生成物／manifest／注册身份／UI／测试；无 root contributes、module／feature 或包级enabled双轨，历史引用区不改。

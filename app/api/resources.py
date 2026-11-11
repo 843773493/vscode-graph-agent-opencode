@@ -16,6 +16,7 @@ from app.abstractions.browser_resources import BrowserRequestError
 from app.api.deps import (
     get_browser_resource_owner,
     get_configured_skill_sources,
+    get_gateway_skill_sources,
     get_request_id,
     get_resource_navigation,
     get_terminal_resource_owner,
@@ -31,6 +32,7 @@ from app.core.resource_uri import (
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import FederationError
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
+from app.schemas.gateway.skill_sources import GatewaySkillSourcesMetadataDTO
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationBudget,
@@ -70,6 +72,9 @@ from app.services.infrastructure.resource_platform.sources.configured_skill_sour
 )
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     navigation_http_error,
+)
+from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
+    GatewaySkillSources,
 )
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     NAVIGATION_DEADLINE_HEADER,
@@ -133,6 +138,21 @@ async def list_skill_sources(
                                error_code=entry.error_code, priority=entry.priority)
         for entry in owner.entries()
     )), request_id=request_id)
+
+
+@router.get("/gateway-skills", response_model=APIResponse[GatewaySkillSourcesMetadataDTO], summary="发现所属 Gateway 发布的 Skill 来源")
+async def list_gateway_skills(
+    _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
+    *, owner: Annotated[GatewaySkillSources, Depends(get_gateway_skill_sources)],
+) -> APIResponse[GatewaySkillSourcesMetadataDTO]:
+    with _navigation_errors():
+        try:
+            result = await owner.metadata(gateway_id=require_current_gateway_id("Gateway Skill 发现"))
+        except httpx.HTTPStatusError as error:
+            raise HTTPException(error.response.status_code, detail=error.response.json()["detail"]) from error
+        except httpx.RequestError as error:
+            raise HTTPException(502, detail={"owner": "gateway_transport", "type": type(error).__name__}) from error
+        return APIResponse(data=result, request_id=request_id)
 
 
 @router.post("/skill-sources/refresh", response_model=APIResponse[SkillSourcesRefreshDTO])

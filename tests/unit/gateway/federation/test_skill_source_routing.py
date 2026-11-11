@@ -46,6 +46,7 @@ from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillSourcesDTO,
+    GatewaySkillSourcesMetadataDTO,
 )
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -180,6 +181,26 @@ async def test_registered_direct_owner_returns_its_bytes_and_conditional_revisio
     second = await relay_gateway_skill_sources(case.hub, case.request(if_none_match=first["etag"]))
     assert second["status"] == 304 and second["etag"] == first["etag"]
     assert case.outbound.requests[0]["nonce"] != case.outbound.requests[1]["nonce"]
+
+
+@pytest.mark.parametrize("relay", [False, True])
+async def test_metadata_projects_published_owner_without_body_or_source_mutation(skill_route_case, relay):
+    case = skill_route_case
+    owner = case.spoke.gateway_skill_sources.owner
+    original = owner.snapshot(workspace_id=WORKSPACE_ID)
+    result = await (relay_gateway_skill_sources(case.hub, case.request(kind="metadata")) if relay
+                    else case.spoke.gateway_skill_sources.execute(case.request(kind="metadata")))
+    assert result["status"] == 200
+    metadata = GatewaySkillSourcesMetadataDTO.model_validate(result["data"])
+    data = metadata.model_dump(mode="json")
+    assert data == {**original.model_dump(mode="json"), "entries": [{
+        key: value for key, value in entry.model_dump(mode="json").items()
+        if key in {"name", "display_uri", "available", "error_code", "layer", "priority", "plugin"}
+    } for entry in original.entries]}
+    assert owner.snapshot(workspace_id=WORKSPACE_ID) == original
+    assert all("正文" not in str(entry) and "content" not in entry for entry in data["entries"])
+    rejected = await case.spoke.gateway_skill_sources.execute(case.request(kind="metadata", workspace_id="outside"))
+    assert rejected["status"] == 403 and "data" not in rejected
 
 
 @pytest.mark.parametrize("uri", [

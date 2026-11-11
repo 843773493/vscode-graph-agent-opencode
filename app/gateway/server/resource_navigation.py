@@ -93,6 +93,10 @@ async def _navigate_target(
         resource = parse_resource_uri(payload.uri, local_gateway_id=gateway_id)
         uri_gateway_id = parse_target_gateway_id(resource.gateway_authority)
         payload = payload.model_copy(update={"uri": resource.display_uri})
+        skill_workspace_id = None
+        if resource.scope == "gateway" and resource.kind == "skills":
+            skill_workspace_id = workspace_id or request.headers.get("X-BoxTeam-Workspace-Id")
+            workspace_id = skill_workspace_id
         if workspace_id is not None:
             registry = _registry(request)
             header_workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
@@ -157,12 +161,13 @@ async def _navigate_target(
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
                 )
-            result = await request.app.state.skill_source_owner.navigate(payload, deadline=deadline)
+            result = await request.app.state.skill_source_owner.navigate(payload, deadline=deadline, workspace_id=skill_workspace_id)
         else:
             if resource.scope not in {"workspace", "gateway"}:
                 raise ResourceUriResolveError("scope_mismatch", "远端导航 scope 需要明确的目标 owner")
             target = ResourceNavigationGrantTarget(gateway_id=resource.gateway_authority, uri=resource.display_uri)
-            envelope = ResourceNavigationRelayRequest(source_gateway_id=gateway_id, navigation_target=target, navigation=payload)
+            envelope = ResourceNavigationRelayRequest(source_gateway_id=gateway_id, navigation_target=target,
+                                                     navigation=payload, workspace_id=skill_workspace_id)
             data = await request.app.state.federation_rpc_service.relay_operation(
                 target=target, operation="read", body=envelope.model_dump(mode="json"),
                 deadline_at=min(time.time() + FEDERATION_DEADLINE_SECONDS, navigation_deadline_at(deadline)),

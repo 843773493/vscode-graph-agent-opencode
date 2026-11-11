@@ -445,7 +445,10 @@ class WorkspaceSessionMainPort:
                         else:
                             if self._skill_source_owner is None:
                                 raise RuntimeError("Gateway Skill navigation owner 尚未装配")
-                            result = await self._skill_source_owner.navigate(navigation, deadline=execution_deadline)
+                            if query.workspace_id is not None and query.workspace_id not in self._backend_urls:
+                                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "Skill 读取 workspace 未共享或不存在")
+                            result = await self._skill_source_owner.navigate(navigation, deadline=execution_deadline,
+                                                                           workspace_id=query.workspace_id)
                     else:
                         raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "导航 scope 未共享或不存在")
             except ResourceUriResolveError as error:

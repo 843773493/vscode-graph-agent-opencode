@@ -20,6 +20,7 @@ import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
+import type { GatewaySkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/skill_sources.js';
 import { listWorkspaceResources, type ResourceAction, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
 import { resourceActionLabels, workspaceResourceName } from '../../../web/src/hooks/workspace/resourceActions.js';
 import { gateway } from '../agentApi.js';
@@ -157,6 +158,19 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             return result.entries.map(entry => pick(owner, entry.display_uri, entry.name, `配置 Skill · ${target.name} · 优先级 ${entry.priority}`,
               entry.available, entry.error_code));
           }).catch(cause => failed(owner, 'Skill ', cause));
+          const gatewaySkills = limiter.queue(async () => {
+            run.signal.throwIfAborted();
+            const result = await gateway.request<GatewaySkillSourcesMetadataDTO>(
+              '/api/v1/resources/gateway-skills',
+              { signal: run.signal }, key);
+            if (result.gateway_id !== owner.gatewayId || result.workspace_id !== owner.workspaceId) {
+              throw new Error('Gateway Skill 来源响应与原生 Gateway／工作区归属不匹配');
+            }
+            const entries = result.entries.map(entry => pick(owner, entry.display_uri, entry.name,
+              `${entry.plugin ? `插件 Skill · ${entry.plugin.package_id}/${entry.plugin.plugin_id}@${entry.plugin.package_version}` : 'Gateway Skill'} · ${target.name} · 优先级 ${entry.priority}`,
+              entry.available, entry.error_code));
+            return result.available ? entries : [...entries, ...failed(owner, 'Gateway Skill ', new Error(result.error_code ?? 'source-unavailable'))];
+          }).catch(cause => failed(owner, 'Gateway Skill ', cause));
           const localSkills = limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await gateway.request<LocalSkillsMetadataDTO>('/api/v1/resources/local-skills?limit=1000', { signal: run.signal }, key);
@@ -181,7 +195,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
-          return (await Promise.all([agents, skills, localSkills, ...runtime])).flat();
+          return (await Promise.all([agents, skills, gatewaySkills, localSkills, ...runtime])).flat();
         } catch (cause) { return failed(owner, '', cause); }
       }));
       if (run.signal.aborted || run.invalidated) return [];

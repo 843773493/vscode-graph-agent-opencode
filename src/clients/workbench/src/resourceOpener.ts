@@ -45,9 +45,17 @@ export class ResourceOpener extends Disposable implements IOpener {
       method: 'POST', body: JSON.stringify({ uri, local_gateway_id: gatewayId, resource_gateway_id: resourceOwner?.gatewayId }),
     });
     if (workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('发起打开的 Gateway 身份已改变，请重新打开资源');
-    if (address.scope !== 'workspace') throw new Error(`此资源尚未接入编辑器：${address.scope}/${address.kind}`);
-    const owner = { gatewayId: address.gateway_id, workspaceId: address.scope_id };
-    if (resourceOwner && (owner.gatewayId !== resourceOwner.gatewayId || owner.workspaceId !== resourceOwner.workspaceId)) {
+    let owner: WorkspaceOwner;
+    if (address.scope === 'workspace') {
+      owner = { gatewayId: address.gateway_id, workspaceId: address.scope_id };
+    } else if (address.scope === 'gateway' && address.kind === 'skills') {
+      // Gateway 来源仍有 Workspace audience；沿发现入口固定的工作区读取，不能猜当前激活工作区。
+      if (!resourceOwner || address.scope_id !== address.gateway_id) throw new Error('Gateway Skill 打开需要明确的所属 Gateway 和读取工作区');
+      owner = resourceOwner;
+    } else {
+      throw new Error(`此资源尚未接入编辑器：${address.scope}/${address.kind}`);
+    }
+    if (resourceOwner && (address.gateway_id !== resourceOwner.gatewayId || owner.workspaceId !== resourceOwner.workspaceId)) {
       throw new Error('资源解析响应与明确的 Gateway／工作区归属不匹配');
     }
     let input: ThreadInput | IResourceEditorInput;
@@ -62,7 +70,8 @@ export class ResourceOpener extends Disposable implements IOpener {
         : { resource: workspaceFileUri(owner, address.uri, address.file_root_uri!) };
     } else {
       // 单文件来源（包括 Session 产物）交原导航 owner 核验读取能力，不在客户端重复 URI 模板。
-      input = { resource: sourceDocumentUri(owner, address.uri), description: `${owner.workspaceId} · ${address.kind}` };
+      const sourceUri = address.gateway_id === gatewayId ? address.uri : address.reference_uri;
+      input = { resource: sourceDocumentUri(owner, sourceUri), description: `${owner.workspaceId} · ${address.kind}` };
       // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
       reference = await this.models.createModelReference(input.resource);
     }

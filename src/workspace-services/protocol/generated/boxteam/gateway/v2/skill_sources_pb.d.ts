@@ -171,3 +171,92 @@ export declare type GatewaySkillSourcesDTO = Message<"boxteam.gateway.v2.Gateway
  */
 export declare const GatewaySkillSourcesDTOSchema: GenMessage<GatewaySkillSourcesDTO>;
 
+/**
+ * 发现只使用已发布的身份与可用性，不传输 Skill 正文或原生获取地址。
+ *
+ * @generated from message boxteam.gateway.v2.GatewaySkillSourceMetadataDTO
+ */
+export declare type GatewaySkillSourceMetadataDTO = Message<"boxteam.gateway.v2.GatewaySkillSourceMetadataDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string display_uri = 2;
+   */
+  displayUri: string;
+
+  /**
+   * @generated from field: bool available = 3;
+   */
+  available: boolean;
+
+  /**
+   * @generated from field: optional string error_code = 4;
+   */
+  errorCode?: string | undefined;
+
+  /**
+   * @generated from field: string layer = 5;
+   */
+  layer: string;
+
+  /**
+   * @generated from field: int64 priority = 6;
+   */
+  priority: bigint;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.PluginSkillSourceDTO plugin = 7;
+   */
+  plugin?: PluginSkillSourceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewaySkillSourceMetadataDTO.
+ * Use `create(GatewaySkillSourceMetadataDTOSchema)` to create a new message.
+ */
+export declare const GatewaySkillSourceMetadataDTOSchema: GenMessage<GatewaySkillSourceMetadataDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewaySkillSourcesMetadataDTO
+ */
+export declare type GatewaySkillSourcesMetadataDTO = Message<"boxteam.gateway.v2.GatewaySkillSourcesMetadataDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string revision = 3;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewaySkillSourceMetadataDTO entries = 4;
+   */
+  entries: GatewaySkillSourceMetadataDTO[];
+
+  /**
+   * @generated from field: bool available = 5;
+   */
+  available: boolean;
+
+  /**
+   * @generated from field: optional string error_code = 6;
+   */
+  errorCode?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewaySkillSourcesMetadataDTO.
+ * Use `create(GatewaySkillSourcesMetadataDTOSchema)` to create a new message.
+ */
+export declare const GatewaySkillSourcesMetadataDTOSchema: GenMessage<GatewaySkillSourcesMetadataDTO>;
+

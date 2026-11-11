@@ -23,6 +23,7 @@ from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationRequest,
     GatewaySkillRefreshDTO,
     GatewaySkillSourcesDTO,
+    GatewaySkillSourcesMetadataDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
@@ -172,6 +173,25 @@ async def skill_sources(
         workspace_id=workspace_id, request_id=request_id, kind="snapshot", if_none_match=if_none_match,
     )
     return _snapshot_response(result, response, request_id)
+
+
+@router.get(
+    "/api/gateway/skill-source-connections/{gateway_id}/workspaces/{workspace_id}/metadata",
+    response_model=APIResponse[GatewaySkillSourcesMetadataDTO],
+    dependencies=[Depends(verify_gateway_token)],
+)
+async def connected_skill_metadata(
+    gateway_id: str, workspace_id: str,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    owner: Annotated[GatewaySkillSourceOwner, Depends(_get_skill_source_owner)],
+    request: Request,
+    request_id: str = Depends(get_request_id),
+) -> APIResponse[GatewaySkillSourcesMetadataDTO]:
+    result = await _source_request(
+        request=request, registry=registry, owner=owner, gateway_id=gateway_id,
+        workspace_id=workspace_id, request_id=request_id, kind="metadata", resolve_owner=True,
+    )
+    return APIResponse(data=GatewaySkillSourcesMetadataDTO.model_validate(result["data"]), request_id=request_id)
 
 
 @router.post(

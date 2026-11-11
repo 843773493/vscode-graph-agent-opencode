@@ -22,7 +22,7 @@ try {
     const path = new URL(request.url()).pathname, method = request.method(), headers = request.headers();
     const observed = { phase: result.phase, path, method, gatewayId: headers['x-boxteam-target-gateway-id'], workspaceId: headers['x-boxteam-workspace-id'],
       body: method === 'GET' ? undefined : request.postDataJSON() };
-    if (['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills'].includes(path)) result.discoveries.push(observed);
+    if (['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/gateway-skills'].includes(path)) result.discoveries.push(observed);
     if (path === '/api/gateway/workspaces') result.routes.push(observed);
     if (path === '/api/gateway/resource-addresses/parse') result.parses.push(observed);
     if (path === '/api/v1/resources/navigation') result.reads.push(observed);
@@ -31,7 +31,7 @@ try {
   });
   page.on('requestfinished', request => {
     const path = new URL(request.url()).pathname;
-    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/navigation', '/api/gateway/resource-addresses/parse'].includes(path)) return;
+    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/gateway-skills', '/api/v1/resources/navigation', '/api/gateway/resource-addresses/parse'].includes(path)) return;
     const observedPhase = result.phase;
     pending.push((async () => {
       const response = await request.response(), body = await response.json();
@@ -100,6 +100,17 @@ try {
   await phase('explicit-A'); await show(a); await select(a, 0); await page.keyboard.press('Enter');
   await expect(text(1)).toContainText('HTTP-SKILL-A-FIRST'); expect(currentReads()).toHaveLength(1);
   expect(currentReads()[0].workspaceId).toBe(a.workspace_id); result.explicitOwner = true;
+  await phase('plugin-discover'); await command('workbench.action.closeAllEditors'); await show(b);
+  const plugin = quick.locator('.monaco-list-row').filter({ hasText: '插件 Skill' }).filter({ hasText: b.workspace_id });
+  await expect(plugin).toHaveCount(1); await expect(plugin).toContainText('proof.skill-package/instructions@1.0.0');
+  await expect(plugin).toContainText(required('BOXTEAM_PLUGIN_SKILL_NAME'));
+  expect(currentReads()).toEqual([]); result.pluginDiscovery = true;
+  await input.fill(`resource ${required('BOXTEAM_PLUGIN_SKILL_NAME')}`); await input.focus();
+  await expect(plugin).toHaveCount(1); await expect(plugin).toHaveClass(/focused/); await page.keyboard.press('Enter');
+  await expect(text(0)).toContainText('PLUGIN_SKILL_FROZEN_V1');
+  expect(currentReads()).toHaveLength(1); expect(currentReads()[0].workspaceId).toBe(b.workspace_id);
+  expect(currentReads()[0].body).toMatchObject({ operation: 'read', uri: expect.stringContaining('/resources/skills/') });
+  result.pluginOpen = true;
   await phase('local-open'); await command('workbench.action.closeAllEditors'); await show(b);
   await expect(local(b)).toHaveCount(1); await expect(local(b)).toContainText('network-demo');
   await expect(quick.locator('.monaco-list-row').filter({ hasText: 'network-demo' })).toHaveCount(3);
@@ -148,6 +159,10 @@ try {
   const metadata = result.receipts.filter(item => item.path === '/api/v1/resources/skill-sources');
   expect(metadata.length).toBeGreaterThan(0);
   expect(metadata.every(item => item.data.entries.every(entry => !('content' in entry) && !('fetch' in entry) && !('url' in entry)))).toBe(true);
+  const gatewayMetadata = result.receipts.filter(item => item.path === '/api/v1/resources/gateway-skills');
+  expect(gatewayMetadata.length).toBeGreaterThan(0);
+  expect(gatewayMetadata.every(item => item.data.gateway_id === health.gateway_id && item.data.entries.every(entry => !('content' in entry)
+    && !('fetch' in entry) && !('url' in entry)))).toBe(true);
   const localMetadata = result.receipts.filter(item => item.path === '/api/v1/resources/local-skills');
   expect(localMetadata.length).toBeGreaterThan(0);
   expect(localMetadata.every(item => item.data.entries.every(entry => entry.node.resource_shape === 'file' && entry.node.operations.includes('read')

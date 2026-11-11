@@ -217,7 +217,13 @@ GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
 
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
     name: f"{gateway_skill_sources_pb2.DESCRIPTOR.package}.{name}"
-    for name in ("PluginSkillSourceDTO", "GatewaySkillSourceEntryDTO", "GatewaySkillSourcesDTO")
+    for name in ("PluginSkillSourceDTO", "GatewaySkillSourceEntryDTO", "GatewaySkillSourcesDTO",
+                 "GatewaySkillSourceMetadataDTO", "GatewaySkillSourcesMetadataDTO")
+}
+
+HTTP_JSON_DESCRIPTORS = dict(HTTP_JSON_DESCRIPTORS) | {
+    name: f"{gateway_skill_sources_pb2.DESCRIPTOR.package}.{name}"
+    for name in ("GatewaySkillSourceMetadataDTO", "GatewaySkillSourcesMetadataDTO")
 }
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {

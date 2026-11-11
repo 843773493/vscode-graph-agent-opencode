@@ -38,3 +38,23 @@ message GatewaySkillSourcesDTO {
   bool available = 5;
   optional string error_code = 6;
 }
+
+// 发现只使用已发布的身份与可用性，不传输 Skill 正文或原生获取地址。
+message GatewaySkillSourceMetadataDTO {
+  string name = 1;
+  string display_uri = 2;
+  bool available = 3;
+  optional string error_code = 4;
+  string layer = 5;
+  int64 priority = 6;
+  optional PluginSkillSourceDTO plugin = 7;
+}
+
+message GatewaySkillSourcesMetadataDTO {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string revision = 3;
+  repeated GatewaySkillSourceMetadataDTO entries = 4;
+  bool available = 5;
+  optional string error_code = 6;
+}

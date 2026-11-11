@@ -44,6 +44,26 @@ export interface GatewaySkillSourcesDTO {
   error_code?: string | undefined;
 }
 
+/** 发现只使用已发布的身份与可用性，不传输 Skill 正文或原生获取地址。 */
+export interface GatewaySkillSourceMetadataDTO {
+  name: string;
+  display_uri: string;
+  available: boolean;
+  error_code?: string | undefined;
+  layer: string;
+  priority: number;
+  plugin?: PluginSkillSourceDTO | undefined;
+}
+
+export interface GatewaySkillSourcesMetadataDTO {
+  gateway_id: string;
+  workspace_id: string;
+  revision: string;
+  entries: GatewaySkillSourceMetadataDTO[];
+  available: boolean;
+  error_code?: string | undefined;
+}
+
 function createBasePluginSkillSourceDTO(): PluginSkillSourceDTO {
   return {
     package_id: "",
@@ -262,6 +282,135 @@ export const GatewaySkillSourcesDTO: MessageFns<GatewaySkillSourcesDTO> = {
     message.workspace_id = object.workspace_id ?? "";
     message.revision = object.revision ?? "";
     message.entries = object.entries?.map((e) => GatewaySkillSourceEntryDTO.fromPartial(e)) || [];
+    message.available = object.available ?? false;
+    message.error_code = object.error_code ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewaySkillSourceMetadataDTO(): GatewaySkillSourceMetadataDTO {
+  return {
+    name: "",
+    display_uri: "",
+    available: false,
+    error_code: undefined,
+    layer: "",
+    priority: 0,
+    plugin: undefined,
+  };
+}
+
+export const GatewaySkillSourceMetadataDTO: MessageFns<GatewaySkillSourceMetadataDTO> = {
+  fromJSON(object: any): GatewaySkillSourceMetadataDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      display_uri: isSet(object.display_uri) ? globalThis.String(object.display_uri) : "",
+      available: isSet(object.available) ? globalThis.Boolean(object.available) : false,
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+      layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
+      priority: isSet(object.priority) ? globalThis.Number(object.priority) : 0,
+      plugin: isSet(object.plugin) ? PluginSkillSourceDTO.fromJSON(object.plugin) : undefined,
+    };
+  },
+
+  toJSON(message: GatewaySkillSourceMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.display_uri !== "") {
+      obj.display_uri = message.display_uri;
+    }
+    if (message.available !== false) {
+      obj.available = message.available;
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    if (message.layer !== "") {
+      obj.layer = message.layer;
+    }
+    if (message.priority !== 0) {
+      obj.priority = Math.round(message.priority);
+    }
+    if (message.plugin !== undefined) {
+      obj.plugin = PluginSkillSourceDTO.toJSON(message.plugin);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySkillSourceMetadataDTO>, I>>(base?: I): GatewaySkillSourceMetadataDTO {
+    return GatewaySkillSourceMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySkillSourceMetadataDTO>, I>>(
+    object: I,
+  ): GatewaySkillSourceMetadataDTO {
+    const message = createBaseGatewaySkillSourceMetadataDTO();
+    message.name = object.name ?? "";
+    message.display_uri = object.display_uri ?? "";
+    message.available = object.available ?? false;
+    message.error_code = object.error_code ?? undefined;
+    message.layer = object.layer ?? "";
+    message.priority = object.priority ?? 0;
+    message.plugin = (object.plugin !== undefined && object.plugin !== null)
+      ? PluginSkillSourceDTO.fromPartial(object.plugin)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewaySkillSourcesMetadataDTO(): GatewaySkillSourcesMetadataDTO {
+  return { gateway_id: "", workspace_id: "", revision: "", entries: [], available: false, error_code: undefined };
+}
+
+export const GatewaySkillSourcesMetadataDTO: MessageFns<GatewaySkillSourcesMetadataDTO> = {
+  fromJSON(object: any): GatewaySkillSourcesMetadataDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => GatewaySkillSourceMetadataDTO.fromJSON(e))
+        : [],
+      available: isSet(object.available) ? globalThis.Boolean(object.available) : false,
+      error_code: isSet(object.error_code) ? globalThis.String(object.error_code) : undefined,
+    };
+  },
+
+  toJSON(message: GatewaySkillSourcesMetadataDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => GatewaySkillSourceMetadataDTO.toJSON(e));
+    }
+    if (message.available !== false) {
+      obj.available = message.available;
+    }
+    if (message.error_code !== undefined) {
+      obj.error_code = message.error_code;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySkillSourcesMetadataDTO>, I>>(base?: I): GatewaySkillSourcesMetadataDTO {
+    return GatewaySkillSourcesMetadataDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySkillSourcesMetadataDTO>, I>>(
+    object: I,
+  ): GatewaySkillSourcesMetadataDTO {
+    const message = createBaseGatewaySkillSourcesMetadataDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.revision = object.revision ?? "";
+    message.entries = object.entries?.map((e) => GatewaySkillSourceMetadataDTO.fromPartial(e)) || [];
     message.available = object.available ?? false;
     message.error_code = object.error_code ?? undefined;
     return message;

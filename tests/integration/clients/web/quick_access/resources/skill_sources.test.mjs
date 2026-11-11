@@ -29,7 +29,7 @@ async function exercise(mode) {
     expect(errors).toEqual([]); return result;
   } finally { await page.close(); }
 }
-const metadata = result => result.requests.filter(item => ['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills'].includes(item.path));
+const metadata = result => result.requests.filter(item => ['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/gateway-skills'].includes(item.path));
 const workspaceReads = result => result.requests.filter(item => item.path === '/api/gateway/workspaces');
 const skillRows = result => result.rows.filter(item => item.description?.startsWith('配置 Skill'));
 
@@ -40,22 +40,22 @@ test('同名 Skill 按完整 owner 和原来源 URI 分别保留，浏览只读 
   expect(result.requests.every(item => item.method === 'GET')).toBe(true);
   expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
 });
-test('同次 provide 的连续筛选只发现一次，三种 metadata 均不按字符重拉', async () => {
+test('同次 provide 的连续筛选只发现一次，四种 metadata 均不按字符重拉', async () => {
   const result = await exercise('reuse');
-  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(6);
+  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(8);
   expect(result.snapshots.map(rows => rows.length)).toEqual([4, 4, 1, 2, 6]);
   expect(result.snapshots[2][0].id).toBe('no-sources');
   expect(result.snapshots[0].every(item => item.highlights.label.length)).toBe(true);
 });
 test('发现未完成时修改筛选不取消共享读取，只有最新过滤结果发布', async () => {
   const result = await exercise('filter-pending');
-  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(6);
+  expect(workspaceReads(result)).toHaveLength(1); expect(metadata(result)).toHaveLength(8);
   expect(result.aborted).toBe(0); expect(result.rows).toHaveLength(4);
   expect(result.rows.every(item => item.label.startsWith('同名'))).toBe(true);
 });
 test('重新打开重新发现 owner 当前接受的 metadata', async () => {
   const result = await exercise('reopen');
-  expect(workspaceReads(result)).toHaveLength(2); expect(metadata(result)).toHaveLength(12);
+  expect(workspaceReads(result)).toHaveLength(2); expect(metadata(result)).toHaveLength(16);
   expect(result.snapshots[0].filter(item => item.label.startsWith('同名')).every(item => item.label.endsWith('1'))).toBe(true);
   expect(result.snapshots[1].filter(item => item.label.startsWith('同名')).every(item => item.label.endsWith('2'))).toBe(true);
 });
@@ -64,10 +64,10 @@ for (const mode of ['close', 'identity', 'gateway']) test(`${mode}取消在途 m
   expect(result.aborted).toBeGreaterThan(0); expect(result.references).toEqual([]); expect(result.opened).toEqual([]);
   expect(result.rows.map(item => item.id)).toEqual(mode === 'close' ? [] : ['source-access-invalidated']);
 });
-test('四个 owner 的三种 metadata 共用真实三并发，第四个请求等待空位', async () => {
+test('四个 owner 的四种 metadata 共用真实三并发，第四个请求等待空位', async () => {
   const result = await exercise('parallel');
   expect(result.maximum).toBe(3); expect(result.barrierRequests).toBe(3);
-  expect(metadata(result)).toHaveLength(12); expect(result.rows).toHaveLength(12);
+  expect(metadata(result)).toHaveLength(16); expect(result.rows).toHaveLength(12);
 });
 test('本地与配置同名来源按完整 owner 和原URI分别保留，筛选不再发现', async () => {
   const result = await exercise('local-reuse');
@@ -75,7 +75,7 @@ test('本地与配置同名来源按完整 owner 和原URI分别保留，筛选�
   expect(skillRows(result)).toHaveLength(4);
   expect(new Set(result.rows.map(item => item.id)).size).toBe(8);
   expect(result.snapshots.map(rows => rows.length)).toEqual([6, 6, 1, 2, 8]);
-  expect(metadata(result)).toHaveLength(6); expect(workspaceReads(result)).toHaveLength(1);
+  expect(metadata(result)).toHaveLength(8); expect(workspaceReads(result)).toHaveLength(1);
   expect(result.requests.every(item => item.method === 'GET')).toBe(true);
   expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
 });
@@ -102,7 +102,7 @@ test('本地接受沿原Opener和SourceDocuments投影传递精确owner', async 
   expect(result.opened[0].source).toMatchObject({ gatewayId: `gateway_${'b'.repeat(32)}`, uri: expect.stringContaining('/local-package/SKILL.md') });
   expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
   expect(result.requests.filter(item => item.path.endsWith('/parse'))).toHaveLength(1);
-  expect(metadata(result)).toHaveLength(6);
+  expect(metadata(result)).toHaveLength(8);
 });
 for (const mode of ['fail-skill', 'fail-agent']) test(`${mode}只报告独立分支失败并保留其他来源`, async () => {
   const result = await exercise(mode), failure = result.rows.filter(item => !item.selectable);
@@ -136,8 +136,55 @@ for (const mode of ['open', 'side', 'pinned', 'background', 'freeze']) test(`${m
   expect(result.errors).toEqual([]); expect(parses).toHaveLength(1); expect(result.opened).toHaveLength(1);
   expect(parses[0].body.resource_gateway_id).toBe(`gateway_${'b'.repeat(32)}`);
   expect(result.opened[0].source.gatewayId).toBe(`gateway_${'b'.repeat(32)}`);
-  expect(result.opened[0].source.uri).toBe(parses[0].body.uri);
+  expect(result.opened[0].source.uri).toBe(parses[0].body.uri.replace('boxteam://', `boxteam://gateway_${'b'.repeat(32)}/`));
   expect(result.opened[0].group).toBe(mode === 'side' ? 8 : 7);
   expect(result.opened[0].options).toMatchObject({ preserveFocus: mode === 'background', pinned: ['pinned', 'background'].includes(mode) });
+  expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
+});
+
+for (const mode of ['gateway-skill', 'gateway-skill-reuse', 'gateway-skill-reopen']) test(`${mode}发现原Gateway与插件版本且不重复取正文`, async () => {
+  const result = await exercise(mode), gateway = result.rows.filter(item => item.description?.startsWith('Gateway Skill')),
+    plugins = result.rows.filter(item => item.description?.startsWith('插件 Skill'));
+  expect(gateway).toHaveLength(2); expect(plugins).toHaveLength(2);
+  expect(new Set([...gateway, ...plugins].map(item => item.id)).size).toBe(4);
+  expect(plugins.every(item => item.description.includes(`proof.skill-package/instructions@${mode.endsWith('reopen') ? 2 : 1}.0.0`))).toBe(true);
+  expect(result.requests.filter(item => item.path === '/api/v1/resources/gateway-skills')).toHaveLength(mode.endsWith('reopen') ? 4 : 2);
+  expect(result.requests.every(item => item.method === 'GET')).toBe(true);
+  expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+for (const mode of ['fail-gateway-skill', 'gateway-skill-mismatch', 'gateway-skill-unavailable', 'gateway-skill-publication-unavailable']) test(`${mode}保留独立失败与原归属`, async () => {
+  const result = await exercise(mode), failure = result.rows.filter(item => !item.selectable);
+  expect(failure).toHaveLength(1);
+  if (mode === 'fail-gateway-skill') expect(failure[0].detail).toBe('request_id: source-failure-id');
+  if (mode === 'gateway-skill-mismatch') expect(failure[0].label).toContain('归属不匹配');
+  if (mode === 'gateway-skill-publication-unavailable') expect(failure[0].label).toContain('source-unavailable');
+  if (mode === 'gateway-skill-unavailable') {
+    expect(failure[0].detail).toContain('source-unavailable'); expect(failure[0].description).toContain('instructions@1.0.0');
+  }
+  expect(result.opened).toEqual([]);
+});
+test('插件Skill接受复用原Opener且传精确Gateway与工作区', async () => {
+  const result = await exercise('gateway-skill-open');
+  expect(result.errors).toEqual([]); expect(result.opened).toHaveLength(1);
+  expect(result.opened[0].source).toMatchObject({ gatewayId: `gateway_${'b'.repeat(32)}`, uri: expect.stringContaining('/skills/plugin/SKILL.md') });
+  expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
+  expect(result.requests.filter(item => item.path.endsWith('/parse'))).toHaveLength(1);
+});
+
+for (const mode of ['gateway-skill-no-owner', 'gateway-skill-owner-mismatch']) test(`${mode}拒绝猜测或改投读取工作区`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain(mode.endsWith('no-owner') ? '需要明确的所属 Gateway 和读取工作区' : '归属不匹配');
+  expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+
+test('远端插件 Skill 沿唯一解析器的限定 URI 打开原只读内容 Provider', async () => {
+  const result = await exercise('gateway-skill-relay-open');
+  expect(result.errors).toEqual([]); expect(result.opened).toHaveLength(1);
+  const read = result.requests.filter(item => item.path === '/api/v1/resources/navigation');
+  expect(read).toHaveLength(1);
+  expect(read[0].gateway).toBe(`gateway_${'b'.repeat(32)}`);
+  expect(read[0].body.uri).toBe(`boxteam://gateway_${'b'.repeat(32)}/gateway/gateway_${'b'.repeat(32)}/resources/skills/plugin/SKILL.md`);
+  expect(result.documents).toEqual([{ content: 'Relay plugin body', source: result.opened[0].source }]);
   expect(result.references).toHaveLength(1); expect(result.released).toBe(1);
 });

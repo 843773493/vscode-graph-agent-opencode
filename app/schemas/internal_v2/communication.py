@@ -14,6 +14,7 @@ from app.gateway.federation.grants import (
     ResourceNavigationGrantTarget,
     TextMutationGrantTarget,
 )
+from app.schemas.canonical_params import CanonicalWorkspaceId
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
@@ -129,6 +130,7 @@ class ResourceNavigationRelayRequest(BaseModel):
     source_gateway_id: str = Field(min_length=1)
     navigation_target: ResourceNavigationGrantTarget
     navigation: ResourceNavigationRequest
+    workspace_id: CanonicalWorkspaceId | None = None
 
     @model_validator(mode="after")
     def require_fixed_uri(self) -> ResourceNavigationRelayRequest:

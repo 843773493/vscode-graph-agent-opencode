@@ -73,6 +73,31 @@ class GatewaySkillSourcesDTO(BaseModel):
     error_code: Literal["source-unavailable"] | None = None
 
 
+class GatewaySkillSourceMetadataDTO(BaseModel):
+    """资源发现沿原已发布来源投影，不包含正文或私有获取配置。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    display_uri: _SkillDocumentURI
+    available: bool
+    error_code: Literal["source-unavailable"] | None = None
+    layer: Literal["gateway", "network"]
+    priority: int
+    plugin: PluginSkillSourceDTO | None = None
+
+
+class GatewaySkillSourcesMetadataDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gateway_id: str
+    workspace_id: str
+    revision: str
+    entries: tuple[GatewaySkillSourceMetadataDTO, ...]
+    available: bool
+    error_code: Literal["source-unavailable"] | None = None
+
+
 class GatewaySkillPublicationRequest(BaseModel):
     """游标仅标识观察位置；重启或缺口都回到同一个快照接口对账。"""
 

@@ -59,6 +59,9 @@ from app.services.infrastructure.resource_platform.bootstrap import ResourcePlat
 from app.services.infrastructure.resource_platform.sources.configured_skill_sources import (
     ConfiguredSkillSources,
 )
+from app.services.infrastructure.resource_platform.sources.gateway_skill_sources import (
+    GatewaySkillSources,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
 )
@@ -393,6 +396,13 @@ def get_configured_skill_sources(request: Request) -> ConfiguredSkillSources:
     if platform.configured_skill_sources is None:
         raise RuntimeError("Workspace 配置 Skill source owner 尚未初始化")
     return platform.configured_skill_sources
+
+
+def get_gateway_skill_sources(request: Request) -> GatewaySkillSources:
+    platform = _require_service(request, "resource_platform", ResourcePlatform, "ResourcePlatform 尚未在应用启动阶段初始化")
+    if platform.gateway_skill_sources is None:
+        raise RuntimeError("Gateway Skill source owner 尚未初始化")
+    return platform.gateway_skill_sources
 
 
 def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchService:

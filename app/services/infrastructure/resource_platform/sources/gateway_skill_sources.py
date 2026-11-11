@@ -24,6 +24,7 @@ from app.core.trace_middleware import require_current_request_id
 from app.schemas.gateway.skill_sources import (
     GatewaySkillPublicationDTO,
     GatewaySkillSourcesDTO,
+    GatewaySkillSourcesMetadataDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.resource_navigation import (
@@ -184,6 +185,24 @@ class GatewaySkillSources:
         if state is None or state.error is not None or state.snapshot is None:
             raise RuntimeError(f"Gateway Skill source unavailable: gateway_id={gateway_id}, error={state.error if state is not None else 'not-ready'}")
         return state.snapshot
+
+    async def metadata(self, *, gateway_id: str) -> GatewaySkillSourcesMetadataDTO:
+        """发现只读取原 Gateway 发布的投影，不绑定来源或启动观察。"""
+        request_id = require_current_request_id("Gateway Skill metadata")
+        timeout = self._connection.resolve_timeout_seconds()
+        outgoing = httpx.Request("GET", self._connection.resolve_gateway_url()
+            + f"/api/gateway/skill-source-connections/{gateway_id}/workspaces/{self._workspace_id}/metadata",
+            headers={"X-Local-Token": self._local_token_supplier(), "X-Request-ID": request_id},
+            extensions={"timeout": httpx.Timeout(timeout).as_dict()})
+        response = await send_navigation_request(outgoing, deadline=time.monotonic() + timeout)
+        response.raise_for_status()
+        envelope = APIResponse[GatewaySkillSourcesMetadataDTO].model_validate_json(response.content)
+        result = envelope.data
+        if response.headers.get("X-Request-ID") != request_id or envelope.request_id != request_id:
+            raise ValueError("Gateway Skill metadata 响应 request_id 与原请求不一致")
+        if envelope.code != 0 or result is None or (result.gateway_id, result.workspace_id) != (gateway_id, self._workspace_id):
+            raise ValueError("Gateway Skill metadata 响应与原 Gateway／工作区归属不匹配")
+        return result
 
     def _navigation_request(
         self, request: ResourceNavigationRequest, *, gateway_id: str, deadline: float,

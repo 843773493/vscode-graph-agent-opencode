@@ -28,7 +28,11 @@ from app.core.trace_middleware import (
 )
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
-from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
+from app.schemas.gateway.skill_sources import (
+    GatewaySkillPublicationRequest,
+    GatewaySkillSourceMetadataDTO,
+    GatewaySkillSourcesMetadataDTO,
+)
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
@@ -103,6 +107,45 @@ def navigation_transport(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: async_client(transport=transport, **kwargs))
 
     return install
+
+
+@pytest.mark.parametrize("failure", [None, "gateway", "workspace", "header", "body", "denied"])
+async def test_metadata_uses_original_connection_without_binding_or_observation(
+    source_case, navigation_transport, request_identity: str, failure: str | None,
+):
+    owner, source, _, channel = source_case
+    snapshot = owner.snapshot(workspace_id=source._workspace_id)
+    metadata = GatewaySkillSourcesMetadataDTO(
+        gateway_id=snapshot.gateway_id, workspace_id=snapshot.workspace_id, revision=snapshot.revision,
+        available=snapshot.available, entries=tuple(
+            GatewaySkillSourceMetadataDTO.model_validate(entry, from_attributes=True) for entry in snapshot.entries),
+    ).model_dump(mode="json")
+    if failure in {"gateway", "workspace"}:
+        metadata[f"{failure}_id"] = "other-owner"
+    calls = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        assert request.method == "GET"
+        assert request.url == f"http://gateway.test/api/gateway/skill-source-connections/{GATEWAY_ID}/workspaces/{source._workspace_id}/metadata"
+        assert request.headers["X-Local-Token"] == "test-local-token"
+        assert request.headers["X-Request-ID"] == request_identity
+        if failure == "denied":
+            return httpx.Response(403, json={"detail": "outside audience"})
+        return httpx.Response(200, json={"data": metadata, "request_id": "other" if failure == "body" else request_identity},
+                              headers={"X-Request-ID": "other" if failure == "header" else request_identity})
+
+    navigation_transport(reply)
+    if failure:
+        with pytest.raises(httpx.HTTPStatusError if failure == "denied" else ValueError):
+            await source.metadata(gateway_id=GATEWAY_ID)
+    else:
+        result = await source.metadata(gateway_id=GATEWAY_ID)
+        assert result.model_dump(mode="json") == metadata
+        assert "content" not in result.entries[0].model_dump()
+    assert len(calls) == 1
+    assert source._owners == {} and source._generation.tasks == {}
+    assert channel.subscriber_ids == ()
 
 
 async def test_authentication_failure_blocks_retained_revision_until_authenticated_recovery(

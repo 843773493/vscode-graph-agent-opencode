@@ -21,7 +21,11 @@ from app.gateway.federation.ports import new_origin_nonce
 from app.gateway.federation.protocol import METHOD_SKILL_SOURCES, require_str
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
-from app.schemas.gateway.skill_sources import GatewaySkillPublicationRequest
+from app.schemas.gateway.skill_sources import (
+    GatewaySkillPublicationRequest,
+    GatewaySkillSourceMetadataDTO,
+    GatewaySkillSourcesMetadataDTO,
+)
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
@@ -73,6 +77,15 @@ class GatewaySkillSourcePort:
             if request.get("if_none_match") == etag:
                 return {**identity, "status": 304, "etag": etag}
             return {**identity, "status": 200, "etag": etag, "data": snapshot.model_dump(mode="json")}
+        if kind == "metadata":
+            snapshot = self.owner.snapshot(workspace_id=workspace_id)
+            metadata = GatewaySkillSourcesMetadataDTO(
+                gateway_id=snapshot.gateway_id, workspace_id=snapshot.workspace_id,
+                revision=snapshot.revision, available=snapshot.available, error_code=snapshot.error_code,
+                entries=tuple(GatewaySkillSourceMetadataDTO.model_validate(entry, from_attributes=True)
+                              for entry in snapshot.entries),
+            )
+            return {**identity, "status": 200, "data": metadata.model_dump(mode="json")}
         if kind != "navigation":
             raise FederationError(FEDERATION_MALFORMED_FRAME, "Gateway Skill source 请求类型无效")
         navigation = ResourceNavigationRequest.model_validate(request.get("navigation"))

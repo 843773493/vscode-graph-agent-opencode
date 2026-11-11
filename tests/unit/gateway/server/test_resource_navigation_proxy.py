@@ -379,6 +379,40 @@ async def test_native_directory_navigation_selects_same_machine_independent_of_a
     assert forwarded[0].headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
     assert registry.active_workspace == (registry.gateway_id, OTHER_WORKSPACE_ID)
     assert registry._capture_registry_state() == before
+
+
+@pytest.mark.parametrize("remote", [False, True])
+async def test_gateway_skill_navigation_keeps_explicit_workspace_audience(
+    navigation_proxy, navigation_relay, publish_remote_workspace, monkeypatch, remote: bool,
+) -> None:
+    client, registry, forwarded = navigation_proxy
+    gateway_id = REMOTE_GATEWAY_ID if remote else registry.gateway_id
+    if remote:
+        publish_remote_workspace()
+    uri = f"boxteam://gateway/{gateway_id}/resources/skills/plugin_test/SKILL.md"
+    node = {"uri": uri, "resource_shape": "file", "operations": ["read"]}
+    seen = []
+
+    class SkillOwner:
+        async def navigate(self, payload, *, deadline, workspace_id):
+            seen.append(workspace_id)
+            return ResourceNavigationResultDTO.model_validate({"node": node, "content": "正文"})
+
+    monkeypatch.setattr(client._transport.app.state, "skill_source_owner", SkillOwner(), raising=False)
+    navigation_relay.response = {"node": node, "content": "正文"}
+    response = await client.post("/api/v1/resources/navigation", json={"uri": uri, "operation": "read"}, headers={
+        TARGET_GATEWAY_ID_HEADER: gateway_id, "X-BoxTeam-Workspace-Id": WORKSPACE_ID,
+    })
+    assert response.status_code == 200, response.text
+    if remote:
+        assert response.json()["data"]["content"] == "正文"
+        assert forwarded == []
+        assert navigation_relay.calls[0]["body"]["workspace_id"] == WORKSPACE_ID
+        assert seen == []
+    else:
+        assert len(forwarded) == 1 and forwarded[0].headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+        assert forwarded[0].url.path == f"/api/v1/workspaces/{WORKSPACE_ID}/resources/navigation"
+        assert seen == [] and navigation_relay.calls == []
     assert all(registry.route_reference_counts(target.key) == (0, 0) for target in registry.targets())
 
 
