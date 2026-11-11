@@ -6,6 +6,7 @@ import json
 import time
 import zipfile
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from pathlib import Path
 
 import commentjson
@@ -20,7 +21,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.workspaces import install_test_workspace_config
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_test_workspace,
+)
 
 SnapshotReader = Callable[[Callable[[dict], bool]], dict]
 
@@ -130,16 +134,17 @@ def command_snapshots(plugin_gateway: tuple[httpx.Client, TestRunContext]) -> It
             (context.artifacts_dir / "command-publications.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
 
 
-def _archive(destination: Path, prepared_package_root: Path, *, python_source: str = PYTHON) -> None:
+def _archive(destination: Path, prepared_package_root: Path, *, python_source: str = PYTHON,
+             version: str = "1.0.0", scope: str = "gateway") -> None:
     command = {"id": "execute", "title": "Execute", "handler": "execute", "required_capabilities": ["read"],
         "arguments_schema": {"type": "object", "additionalProperties": False, "required": ["mode", "value"],
             "properties": {"mode": {"enum": ["return", "wait", "error", "bad-result", "null", "configured"]}, "value": {"type": "string"}}},
         "result_schema": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": False, "required": ["runtime", "pid", "value"],
             "properties": {"runtime": {"enum": ["python", "node"]}, "pid": {"type": "integer"}, "value": {"type": "string"}}}
         ]}}
-    manifest = {"package_id": "proof.commands", "version": "1.0.0", "name": "Command proof",
+    manifest = {"package_id": "proof.commands", "version": version, "name": "Command proof",
         "target": native_plugin_target("python", "node"), "plugins": [
-        {"id": runtime, "name": runtime, "instance_scope": "gateway", "runtime": runtime,
+        {"id": runtime, "name": runtime, "instance_scope": scope, "runtime": runtime,
          "entrypoint": ["entry.py" if runtime == "python" else "entry.mjs"], "management_protocol_version": 1,
          "requires": [{"extension_point": "commands", "version": 1}, {"extension_point": "configuration", "version": 1}],
          "contributes": {"commands": [command], "configuration": {"type": "object", "additionalProperties": False,
@@ -163,6 +168,170 @@ def _archive(destination: Path, prepared_package_root: Path, *, python_source: s
         for file in ("plugin_commands_pb.js", "service_plugin_pb.js", "public_pb.js"):
             source = Path("src/workspace-services/protocol/generated/boxteam/gateway/v2") / file
             archive.write(source, source.as_posix())
+
+
+def test_workspace_commands_release_removed_target_without_changing_sibling(
+    plugin_gateway: tuple[httpx.Client, TestRunContext],
+    prepared_developer_tools_package: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    client, context = plugin_gateway
+    gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
+    evidence: list[dict] = []
+    targets: list[dict[str, str]] = []
+
+    def exchange(method: str, path: str, body: dict | None = None) -> httpx.Response:
+        request_id = f"workspace-command-{len(evidence)}"
+        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id}, timeout=75)
+        payload = response.json()
+        assert response.headers["X-Request-ID"] == payload["request_id"] == request_id
+        evidence.append({"path": path, "status": response.status_code, "body": payload})
+        return response
+
+    def bind(target: dict[str, str], version: str | None) -> None:
+        path = f"/api/v1/workspaces/{target['workspace_id']}/config/sources/workspace_root_mutable_override"
+        document = exchange("GET", path).raise_for_status().json()["data"]
+        source = commentjson.loads(document["jsonc"])
+        source["plugins"] = {
+            "runtime": {"entries": [] if version is None else [
+                {"package_id": "proof.commands", "plugin_id": runtime, "package_version": version, "enabled": True}
+                for runtime in ("python", "node")
+            ]},
+            "configuration": {"values": {"proof.commands": {
+                runtime: {"prefix": target["workspace_id"] + ":"} for runtime in ("python", "node")
+            }}},
+        }
+        saved = exchange("PUT", path, {**target, "source_key": "workspace_root_mutable_override",
+            "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
+            "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+            "idempotency_key": f"workspace-command-bind-{len(evidence)}"}).raise_for_status().json()["data"]
+        assert saved["edit"]["state"] == "active", saved
+
+    def publications(target: dict[str, str]) -> dict:
+        return exchange("POST", "/api/gateway/service-plugins/commands/publications", target).raise_for_status().json()["data"]
+
+    def invoke(target: dict[str, str], publication: dict, *, expected_status: int = 200) -> None:
+        registration, = publication["registrations"]
+        call = {**target, **{key: publication["binding"][key] for key in ("package_id", "plugin_id", "package_version")},
+            "instance_id": publication["instance_id"], "registration_id": registration["registration_id"],
+            "command_id": "execute", "call_id": f"workspace-call-{len(evidence)}", "remaining_ms": 5000,
+            "arguments": {"mode": "configured", "value": "owner-proof"}}
+        request_id = f"workspace-command-{len(evidence)}"
+        response = client.post("/api/gateway/service-plugins/commands/call", json=call, headers={"X-Request-ID": request_id})
+        assert response.status_code == expected_status, response.text
+        assert response.headers["X-Request-ID"] == request_id
+        if expected_status != 200:
+            assert response.json()["request_id"] == request_id
+            evidence.append({"call": call, "status": response.status_code, "body": response.json()})
+            return
+        events = [json.loads(line) for line in response.iter_lines()]
+        assert [event["kind"] for event in events] == ["started", "progress", "result"], events
+        assert [event["sequence"] for event in events] == [1, 2, 3]
+        for event in events:
+            assert event["request_id"] == request_id
+            for key in ("instance_id", "registration_id", "command_id", "call_id"):
+                assert event[key] == call[key]
+        assert events[-1]["result"]["runtime"] == publication["binding"]["plugin_id"]
+        assert events[-1]["result"]["value"] == target["workspace_id"] + ":owner-proof"
+        evidence.append({"call": call, "events": events})
+
+    def next_snapshot(lines: Iterator[str]) -> dict:
+        return json.loads(next(line[6:] for line in lines if line.startswith("data: ")))
+
+    try:
+        for name in ("command-a", "command-b"):
+            workspace = prepare_test_workspace(workspace_root=context.workspace_root / name,
+                template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
+            path = install_test_workspace_config(workspace_root=workspace,
+                config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
+            configuration = commentjson.loads(path.read_text())
+            for provider in configuration["llm"]["providers"]:
+                if "api_key" in provider:
+                    provider["api_key"] = "workspace-command-unused-key"
+            configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = str(client.base_url).rstrip("/")
+            path.write_text(json.dumps(configuration), encoding="utf-8")
+            registered = exchange("POST", "/api/gateway/managed-workspaces", {
+                "root_path": str(workspace), "name": name, "create_directory": False,
+            }).raise_for_status().json()["data"]
+            item, = [item for item in registered["items"] if item["gateway_id"] == gateway_id and item["name"] == name]
+            targets.append({"gateway_id": gateway_id, "workspace_id": item["workspace_id"]})
+
+        target_a, target_b = targets
+        for version, target in zip(("1.0.0", "2.0.0"), targets, strict=True):
+            archive = context.artifacts_dir / f"workspace-commands-{version}.zip"
+            _archive(archive, prepared_developer_tools_package, version=version, scope="workspace")
+            install_plugin(lambda path, body: exchange("POST", path, body), gateway_id=gateway_id, path=str(archive))
+            bind(target, version)
+        snapshots = []
+        for target in targets:
+            # 配置 active 不等于进程 ready；沿正式贡献流等交接和完整注册。
+            with client.stream("POST", "/api/gateway/service-plugins/commands/events", json=target, timeout=20) as response:
+                response.raise_for_status()
+                iterator, deadline = response.iter_lines(), time.monotonic() + 20
+                while True:
+                    snapshot = next_snapshot(iterator)
+                    assert all(item["state"] != "failed" for item in snapshot["publications"]), snapshot
+                    if len(snapshot["publications"]) == 2 and all(item["state"] == "ready" for item in snapshot["publications"]):
+                        snapshots.append(snapshot)
+                        break
+                    assert time.monotonic() < deadline, snapshot
+        before_a, before_b = snapshots
+        for target, snapshot, version in zip(targets, (before_a, before_b), ("1.0.0", "2.0.0"), strict=True):
+            assert (snapshot["gateway_id"], snapshot["workspace_id"]) == (gateway_id, target["workspace_id"])
+            assert {item["binding"]["plugin_id"] for item in snapshot["publications"]} == {"python", "node"}
+            for item in snapshot["publications"]:
+                assert item["binding"]["workspace_id"] == target["workspace_id"] and item["binding"]["package_version"] == version
+                assert item["state"] == "ready" and item["instance_id"]
+                invoke(target, item)
+        assert {item["instance_id"] for item in before_a["publications"]}.isdisjoint(
+            {item["instance_id"] for item in before_b["publications"]})
+        blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {
+            "gateway_id": gateway_id, "package_id": "proof.commands", "package_version": "1.0.0"})
+        assert blocked.status_code == 409 and target_a["workspace_id"] in blocked.text
+
+        with ExitStack() as streams:
+            lines = []
+            for target, expected in zip(targets, (before_a, before_b), strict=True):
+                response = streams.enter_context(client.stream("POST", "/api/gateway/service-plugins/commands/events",
+                    json=target, timeout=15))
+                response.raise_for_status()
+                iterator = response.iter_lines()
+                assert next_snapshot(iterator) == expected
+                lines.append(iterator)
+            processes = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status().json()["data"]["plugins"]
+            removed_pids = [item["instance"]["process_id"] for item in processes if item["binding"]["workspace_id"] == target_a["workspace_id"]]
+            assert len(removed_pids) == 2
+            removed = exchange("DELETE", f"/api/gateway/workspaces/{target_a['workspace_id']}").raise_for_status().json()["data"]
+            assert all(item["workspace_id"] != target_a["workspace_id"] for item in removed["items"])
+            # 停止过程可逐项发布；登记移除后原订阅必须结束，不能留下旧注册。
+            residual = [json.loads(line[6:]) for line in lines[0] if line.startswith("data: ")]
+            assert all(snapshot["workspace_id"] == target_a["workspace_id"] for snapshot in residual)
+            evidence.append({"removed_target": target_a, "closed_stream": residual, "removed_pids": removed_pids})
+            assert all(not psutil.pid_exists(pid) for pid in removed_pids)
+            assert exchange("POST", "/api/gateway/service-plugins/commands/publications", target_a).status_code == 409
+            for item in before_a["publications"]:
+                invoke(target_a, item, expected_status=409)
+            assert publications(target_b) == before_b
+            for item in before_b["publications"]:
+                invoke(target_b, item)
+            exchange("POST", "/api/gateway/service-plugins/uninstall", {
+                "gateway_id": gateway_id, "package_id": "proof.commands", "package_version": "1.0.0"}).raise_for_status()
+            # 新订阅只取得 B 原快照，不重建实例、注册或执行命令。
+            reconnected = streams.enter_context(client.stream("POST", "/api/gateway/service-plugins/commands/events", json=target_b, timeout=15))
+            reconnected.raise_for_status()
+            assert next_snapshot(reconnected.iter_lines()) == before_b
+            bind(target_b, None)
+            deadline = time.monotonic() + 15
+            while next_snapshot(lines[1])["publications"]:
+                assert time.monotonic() < deadline, "B 解绑后原贡献未释放"
+        exchange("POST", "/api/gateway/service-plugins/uninstall", {
+            "gateway_id": gateway_id, "package_id": "proof.commands", "package_version": "2.0.0"}).raise_for_status()
+        assert not (context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/proof.commands").exists()
+        retained = exchange("GET", f"/api/v1/workspaces/{target_b['workspace_id']}/config/sources/workspace_root_mutable_override").raise_for_status().json()["data"]
+        assert commentjson.loads(retained["jsonc"])["plugins"]["configuration"]["values"]["proof.commands"]["python"]["prefix"] == target_b["workspace_id"] + ":"
+    finally:
+        (context.artifacts_dir / "workspace-command-release.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def test_registered_commands_progress_cancel_restart_and_disabled_admission(

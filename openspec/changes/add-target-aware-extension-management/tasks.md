@@ -210,6 +210,8 @@
 
   - 2026-11-11 命令Relay完整生命周期：同一双Gateway安装／绑定／服务／Skill流程增加真实具名命令，原生B与A中继完整声明、instance／registration及事件request_id一致；仅read／send仍可调用且安装被拒。撤权时原贡献订阅结束，执行中命令仅保留started／progress而结果未知；原生B后续实际计数精确为5，拒绝调用和中继断流均未重放。安装新版保原绑定，显式切版发布新标题／实例，旧资格409，解绑后两版物理删除，A零副本。最终1 passed／54.19秒、3项权限／订阅合同及最终Pyright／Ruff通过；前轮revision预期与已发头分块断流的驱动错误均已按原合同核正，无产品恢复机制。原件、源码指纹及最小复审见 `out/tests/temp/2026/11/11/plugin_command_relay/artifacts/verification.json`；SSH配对／隧道仍为原loopback替身，不称真实远端／原生客户端验收。
 
+  - 2026-11-11 工作区命令移除闭环：复用原公共命令包与一次准备的不可变依赖，在真实Gateway创建两个工作区，经各自来源CAS分别绑定v1／v2的同ID Python／Node插件；正式贡献流等待配置交接及完整ready。移除A后两PID退出、原订阅结束、两个旧资格409，B原实例／注册／版本不变且实际命令保持本工作区参数；重订阅只读原快照，解绑后两版物理删除，B来源参数保留。最终1 passed／61.67秒、精确6次成功调用／2次拒绝，Pyright零诊断、Ruff通过。首轮测试错误地把active当ready，已改用原事件流而未改产品时序；无新产品机制。原件、源码指纹及最小复审见 `out/tests/temp/2026/11/11/plugin_workspace_command_loop/artifacts/verification.json`。本片未经过浏览器，不作为其他贡献类别和原生平台的完整验收。
+
 - [x] 10.10 整包卸载按D7仅核原四类引用并复用删除互斥；关闭但未解除绑定仍阻塞，自身可释放投影先结清，完整封存正文／未绑定参数不占引用；未知来源拒绝且不启动Backend或后台扫描，解除后只删对应包版本，用户配置／快捷键／历史保留。
   - 2026-11-11 原四类卸载引用收口：active／pending、关闭未解绑、模板／未结创建、真实读取lease及未核退出均沿原owner与删除互斥；未知工作区owner明确拒绝且不启动Backend。实际解除后只删对应版本，用户配置、Skill封存和业务回执保留。复用 `plugin_distribution_loop/artifacts/pending-uninstall-verification.json`、`read-lease-verification.json`、`unbind-stop-proof-verification.json`、`workspace-update-uninstall-verification.json` 及 `legacy_host_boundary_luna_max/artifacts/workspace-uninstall-pth-followup-receipt.txt`（均在 `out/tests/temp/2026/11/10/`）。本项完成，无扫描器或引用账本。
 - [ ] 10.11 最小真实 Gateway／Workbench 场景覆盖纯声明插件、同包 Python／Node 插件、多目标同ID、独立启停／部分失败／旧回执、窗口释放及整包卸载；不把旧宿主证据当新合同验收。
