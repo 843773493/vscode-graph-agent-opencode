@@ -162,14 +162,65 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
         })
         response.raise_for_status()
     await wait_for_job_done(case.client, new_job, max_attempts=60)
+    plugin_crash: dict[str, object] | None = None
+    resumed_calls: list[str] = []
+    resumed_job: str | None = None
+    if boundary == "inflight":
+        process = psutil.Process(original_plugin["instance"]["process_id"])
+        children = process.children(recursive=True)
+        assert children, "真实 stdio Server 必须由插件持有"
+        process.kill()
+        failed = await _plugin(case, state="failed")
+        assert failed["binding"]["enabled"] is True
+        assert failed["instance"] == original_plugin["instance"]
+        old_route = (f"/api/gateway/service-plugins/boxteam.mcp-stdio/stdio/instances/"
+            f"{original_plugin['instance']['instance_id']}/services/mcp/?package_version=0.1.0"
+            f"&workspace_id={case.workspace_id}")
+        rejected = await case.client.post(old_route, json={"jsonrpc": "2.0", "id": "old-instance", "method": "tools/list"})
+        assert rejected.status_code == 409, rejected.text
+        assert (await _plugin(case, state="failed"))["instance"] == original_plugin["instance"], "状态或业务访问不能重启插件"
+        restarted_plugin = await case.client.post("/api/gateway/service-plugins/restart", json={
+            "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
+            "package_id": "boxteam.mcp-stdio", "package_version": "0.1.0", "plugin_id": "stdio",
+            "revision": failed["revision"],
+        })
+        restarted_plugin.raise_for_status()
+        replacement = restarted_plugin.json()["data"]
+        assert replacement["state"] == "ready" and replacement["instance"]["instance_id"] != original_plugin["instance"]["instance_id"]
+        async with asyncio.timeout(10):
+            while any(_same_process(owned) for owned in [process, *children]):
+                await asyncio.sleep(0.05)
+        assert (await case.client.post(old_route, json={"jsonrpc": "2.0", "id": "old-instance", "method": "tools/list"})).status_code == 409
+        reconnect = await case.client.post("/api/v1/mcp/connection-operations", json={
+            "operation_id": "loss-explicit-plugin-reconnect", "server_id": "probe", "action": "connect",
+        })
+        reconnect.raise_for_status()
+        async with asyncio.timeout(15):
+            while True:
+                operation_response = await case.client.get("/api/v1/mcp/connection-operations/loss-explicit-plugin-reconnect",
+                    params={"wait_timeout_ms": 1000})
+                operation_response.raise_for_status()
+                operation = operation_response.json()["data"]
+                if operation["status"] == "succeeded":
+                    break
+                assert operation["status"] in {"pending", "verifying"}, operation
+        replacement_catalog = await _catalog(case)
+        assert replacement_catalog["connection_ref"] != after_catalog["connection_ref"]
+        assert replacement_catalog["tools"] == after_catalog["tools"]
+        resumed_calls, _ = plan("after-plugin-crash", complete=True)
+        resumed_job = await send("after-plugin-crash")
+        await wait_for_job_done(case.client, resumed_job, max_attempts=60)
+        plugin_crash = {"failed": failed, "replacement": replacement, "catalog": replacement_catalog,
+            "old_route_status": rejected.status_code, "old_children": [owned.pid for owned in children],
+            "new_job": resumed_job}
     actual = [json.loads(line) for line in receipts.read_text().splitlines()]
     assert [row["arguments"] for row in actual if not row.get("cancelled")] == ([
         {"proof": "lost", "call_mode": "wait"},
-    ] if boundary == "inflight" else []) + [{"proof": "new"}]
+    ] if boundary == "inflight" else []) + [{"proof": "new"}] + ([{"proof": "after-plugin-crash"}] if resumed_job else [])
     with RolloutCheckpointSaver(case.workspace_root / ".boxteam/sessions") as cold:
         with cold._storage.storage.read_connection(session, thread) as connection:
             executions = connection.execute("SELECT job_id,outcome FROM executions ORDER BY created_at").fetchall()
-        assert executions == [(lost_job, "execution_lost"), (new_job, "completed")]
+        assert executions == [(lost_job, "execution_lost"), (new_job, "completed")] + ([(resumed_job, "completed")] if resumed_job else [])
         unknown, = [item for item in cold._storage.storage.read_items(session, thread)
             if item.semantic_kind == "tool_result" and item.tool_call_id is not None
             and item.projection_identity is not None
@@ -179,7 +230,7 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
         assert unknown.projection_identity.model_call_id == lost_calls[-1]
         assert isinstance(unknown.payload, dict) and unknown.payload["tool_outcome"] == "unknown"
         assert unknown.payload["execution_confirmed"] is False
-        for call_id in [*lost_calls, *new_calls]:
+        for call_id in [*lost_calls, *new_calls, *resumed_calls]:
             record = json.loads((case.replay.artifacts / f"{call_id}.json").read_text())
             with cold._storage.storage.read_connection(session, thread) as connection:
                 assembly_id, = connection.execute("SELECT assembly_id FROM context_assemblies WHERE model_call_id=?",
@@ -196,5 +247,5 @@ async def test_backend_loss_keeps_plugin_and_never_replays_original_call(
     (artifacts / "execution-loss.json").write_text(json.dumps({"boundary": boundary,
         "plugin": original_plugin, "catalog_before": before_catalog, "catalog_after": after_catalog,
         "backend_pid": backend.pid, "lost_job": lost_job, "new_job": new_job,
-        "loss": loss, "receipts": actual, "uninstall": response.json(),
+        "loss": loss, "receipts": actual, "plugin_crash": plugin_crash, "uninstall": response.json(),
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
