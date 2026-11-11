@@ -7,7 +7,7 @@ import { expect } from 'playwright/test';
 import { parse, modify, applyEdits } from 'jsonc-parser';
 
 const input = JSON.parse(process.env.BOXTEAM_SETTINGS_SOURCE_FIXTURE);
-const result = { phase: 'initialization', pageErrors: [], writes: [], preflights: [], sourceReads: [], responses: [] };
+const result = { phase: 'initialization', pageErrors: [], writes: [], preflights: [], sourceReads: [], responses: [], sourceDiscoveries: [] };
 let browser, page;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
@@ -19,6 +19,8 @@ try {
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
   page.on('request', request => {
     const url = new URL(request.url());
+    if (url.pathname.endsWith('/config/sources')) result.sourceDiscoveries.push({ phase: result.phase, path: url.pathname,
+      method: request.method(), gateway: request.headers()['x-boxteam-target-gateway-id'], workspace: request.headers()['x-boxteam-workspace-id'] });
     if (!url.pathname.includes('/config/sources/')) return;
     const body = request.postData() ? JSON.parse(request.postData()) : undefined;
     const record = { path: url.pathname, query: url.search, gateway_id: body?.gateway_id, workspace_id: body?.workspace_id,
@@ -79,8 +81,29 @@ try {
   const gatewayPath = '/api/gateway/config/sources/gateway_mutable_override';
   const workspacePath = '/api/v1/config/sources/workspace_root_mutable_override';
   const update = (jsonc, path, value) => applyEdits(jsonc, modify(jsonc, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
+  const resourceSource = (source, gatewayScope) => quick.locator('.monaco-list-row').filter({ hasText: source + '.jsonc' })
+    .filter({ hasText: gatewayScope ? '配置来源 · Gateway ·' : `配置来源 · ${workspace.name} ·` });
+  const showSources = async (source = 'workspace_root_mutable_override', gatewayScope = false) => {
+    await command('boxteam.quickAccess.resources', result.owner);
+    await expect(quick.locator('input').first()).toHaveValue('resource ');
+    await quick.locator('input').first().fill('resource ' + source);
+    await expect(resourceSource(source, gatewayScope)).toBeVisible();
+  };
+  result.phase = 'resource-discovery';
+  const readsBeforeDiscovery = result.sourceReads.length;
+  await showSources();
+  assert.equal(result.sourceDiscoveries.filter(item => item.phase === result.phase).length, 2);
+  assert.equal(result.sourceReads.length, readsBeforeDiscovery, '浏览配置来源不能提前读正文');
+  assert.equal(result.writes.length, 0);
+  await quick.locator('input').first().fill('resource gateway_mutable_override');
+  await expect(resourceSource('gateway_mutable_override', true)).toBeVisible();
+  assert.equal(result.sourceDiscoveries.filter(item => item.phase === result.phase).length, 2, '逐键筛选不能重读目录');
+  await page.keyboard.press('Escape');
+  assert.equal(result.sourceReads.length, readsBeforeDiscovery);
+  result.resource_browse_only = true;
   result.phase = 'gateway-save';
-  await open('Gateway 配置', 'gateway_mutable_override');
+  await showSources('gateway_mutable_override', true); await resourceSource('gateway_mutable_override', true).click();
+  await expect(tab).toContainText('gateway_mutable_override.jsonc');
   let gatewayDocument = await api(gatewayPath, { headers: gatewayHeaders });
   const gatewayDraft = '// Gateway 来源注释\n' + update(gatewayDocument.jsonc, ['logging', 'runtime', 'level'], 'debug');
   await replace(gatewayDraft);
@@ -95,7 +118,10 @@ try {
   result.gateway_saved = true;
 
   result.phase = 'workspace-save-with-frozen-owner';
-  await open(workspace.name, 'workspace_root_mutable_override');
+  await showSources(); await resourceSource('workspace_root_mutable_override', false).click({ modifiers: ['Alt'] });
+  await expect(page.locator('.editor-group-container')).toHaveCount(2);
+  await expect(tab).toContainText('workspace_root_mutable_override.jsonc');
+  result.resource_open_and_save = true;
   let workspaceDocument = await api(workspacePath, { headers: workspaceHeaders });
   const workspaceDraft = '// Workspace 来源注释\n' + update(workspaceDocument.jsonc, ['default_agent'], 'default');
   await replace(workspaceDraft);
@@ -248,12 +274,14 @@ try {
   await expect(tab).not.toHaveClass(/\bdirty\b/);
   assert.equal(result.writes.length, readonlyBefore);
   await expect(text).not.toContainText('不得写入');
-  await open(workspace.name, 'inline');
+  await showSources('inline'); await resourceSource('inline', false).click();
+  await expect(tab).toContainText('inline.jsonc');
   await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// 工作区内置来源不得写入\n');
   await expect(tab).not.toHaveClass(/\bdirty\b/);
   await expect(text).not.toContainText('工作区内置来源不得写入');
   assert.equal(result.writes.length, readonlyBefore);
   result.readonly = true;
+  result.resource_readonly = true;
   const status = command('boxteam.settings.sourceStatus');
   await expect(quick).toBeVisible(); await expect(quick).toContainText('来源层');
   await page.keyboard.press('Escape'); await status;

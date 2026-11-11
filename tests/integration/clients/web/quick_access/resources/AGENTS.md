@@ -19,3 +19,5 @@ HTTP Skill 页面通过原配置与真实来源建立 accepted 快照，记录�
 Provider 合同区分单次 provide 的本地筛选与重新打开的当前发现；取消要观察实际 AbortSignal，所有 owner 的 AGENTS／Skill metadata 共用三并发，不用跨生命周期缓存或第二套索引。
 
 运行资源合同实际调用 Provider、Command 及原 HTTP 客户端，显式宿主／回执装具不能冒充真实 Gateway。正式运行资源页面通过产品 API 创建 Session、终端与 Browser，核独立 stop／detach／delete、所选 revision 冲突、原底部面板按钮和明确工作区；不预写账本或触发模型执行。
+
+配置合同运行真实 ResourceQuickAccess 与配置 API，命令宿主只捕获冻结的来源和编辑器选项；验证同 Gateway 去重、工作区隔离、取消、分支权限及零提前正文读取。完整打开、侧开、原 JSONC writer 保存、只读、冲突和草稿恢复由 `test_settings_source_editor.py` 的正式 Workbench 页面覆盖，不把合同装具当产品验收。

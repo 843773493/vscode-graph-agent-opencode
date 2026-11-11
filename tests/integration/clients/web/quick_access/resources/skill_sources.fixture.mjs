@@ -41,10 +41,13 @@ export async function skillSourcesContract(mode) {
       return ok({ node: { uri: body.uri, resource_shape: 'file' }, content: 'Relay plugin body', content_encoding: 'utf-8', media_type: 'text', truncated: false });
     }
     if (path === '/api/v1/resources') return ok({ workspace_id: owners[0].workspaceId, items: [] });
-    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/gateway-skills'].includes(path)) throw new Error(`非预期 Skill 请求: ${method} ${path}`);
+    if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/gateway-skills',
+      '/api/gateway/config/sources', '/api/v1/config/sources'].includes(path)) throw new Error(`非预期 Skill 请求: ${method} ${path}`);
+    const configuration = path.endsWith('/config/sources');
     const gatewaySkill = path.endsWith('/gateway-skills');
     const first = gateway === owners[0].gatewayId, skill = path.endsWith('skill-sources'), local = path.includes('local-skills'), currentRound = round;
     const result = () => {
+      if (configuration) return ok({ sources: [] });
       if (first && (mode === 'fail-skill' && skill || mode === 'fail-agent' && !skill && !local && !gatewaySkill || mode === 'fail-local' && local)) return Response.json({ detail: '具名来源边界失败', request_id: 'source-failure-id' },
         { status: 503, headers: { 'X-Request-ID': 'source-failure-id' } });
       if (gatewaySkill) {
@@ -110,7 +113,7 @@ export async function skillSourcesContract(mode) {
   let barrierRequests;
   try {
     if (mode === 'parallel') {
-      await until(() => parallel.length === 3); barrierRequests = requests.filter(item => item.path.startsWith('/api/v1')).length;
+      await until(() => parallel.length === 3); barrierRequests = requests.filter(item => item.path !== '/api/gateway/workspaces').length;
       parallelReleased = true; parallel.forEach(release => release());
     }
     if (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {

@@ -6,20 +6,31 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { managementGateway } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
 import { configureServicePlugin } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesEditorInput.js';
-import { captureSettingsLocation } from './editor.js';
+import { captureSettingsLocation, parseSettingsLocation } from './editor.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import type { IUntypedFileEditorInput } from '../../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { sourceStatus } from './sourceOwner.js';
+import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import type { ITextEditorOptions } from '../../upstream/src/vs/platform/editor/common/editor.js';
+import type { TargetSettingsLocation } from './scope.js';
+import { ConfigurationSourceOwner, sourceStatus } from './sourceOwner.js';
 import { configSourceFiles, configSourceScheme } from './sourceEditor.js';
 
 export const defaultAgentSourceCommand = 'boxteam.settings.defaultAgentSource';
+export const openConfigurationSourceCommand = 'boxteam.settings.openSource';
+export interface ConfigurationSourceOpenRequest {
+  location: TargetSettingsLocation;
+  groupId?: number;
+  openToSide?: boolean;
+  editorOptions?: ITextEditorOptions;
+}
 
 registerAction2(class extends Action2 {
   constructor() {
@@ -67,21 +78,32 @@ registerAction2(class extends Action2 {
 
 registerAction2(class extends Action2 {
   constructor() {
-    super({ id: 'boxteam.settings.openSource', title: { value: '打开目标设置来源 JSONC', original: 'Open Target Settings Source JSONC' },
+    super({ id: openConfigurationSourceCommand, title: { value: '打开目标设置来源 JSONC', original: 'Open Target Settings Source JSONC' },
       category: { value: 'BoxTeam 设置', original: 'BoxTeam Settings' }, f1: true });
   }
-  async run(accessor: ServicesAccessor): Promise<void> {
+  async run(accessor: ServicesAccessor, request?: ConfigurationSourceOpenRequest): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService), files = accessor.get(IFileService);
-    const cancellation = new CancellationTokenSource();
+    const groups = accessor.get(IEditorGroupsService), configuration = accessor.get(IConfigurationService);
+    const groupId = request?.groupId ?? groups.activeGroup.id;
+    const explicitLocation = request && parseSettingsLocation(request.location);
+    const openToSide = request?.openToSide, editorOptions = { ...(request?.editorOptions ?? { pinned: true }) };
+    const lifecycle = createManagementTargetLifecycle('Gateway 或访问凭据已改变，请重新打开设置来源');
     try {
-      const captured = await captureSettingsLocation(parent, cancellation.token);
+      const captured = explicitLocation ? { location: explicitLocation,
+        document: await new ConfigurationSourceOwner(explicitLocation).read(explicitLocation.source_key, undefined, lifecycle.signal) }
+        : await captureSettingsLocation(parent, lifecycle.token);
+      lifecycle.check();
       if (!captured) return;
       const { location, document } = captured;
+      const source = groups.getGroup(groupId);
+      if (!source) throw new Error('发起打开的编辑器组已关闭');
+      const direction = preferredSideBySideGroupDirection(configuration);
+      const group = openToSide ? groups.findGroup({ direction }, source) ?? groups.addGroup(source, direction) : source;
       const resource = configSourceFiles(files).prepareEditor(location, location.source_key, document);
       const input = { resource, label: location.source_key + '.jsonc', description: `${location.gateway_id} · ${location.name}`,
-        options: { pinned: true }, languageId: 'jsonc', forceFile: true } satisfies IUntypedFileEditorInput;
-      await editors.openEditor(input);
-    } finally { cancellation.dispose(); }
+        options: editorOptions, languageId: 'jsonc', forceFile: true } satisfies IUntypedFileEditorInput;
+      await editors.openEditor(input, group.id);
+    } finally { lifecycle.dispose(); }
   }
 });
 

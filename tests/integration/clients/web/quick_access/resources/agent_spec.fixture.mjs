@@ -25,6 +25,7 @@ export async function agentSpecContract(mode) {
     const headers = new Headers(init?.headers), body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, body, gateway: headers.get('X-BoxTeam-Target-Gateway-Id') });
     if (path === '/api/gateway/workspaces') return ok({ items: targets, active_workspace: targets[0] });
+    if (path === '/api/gateway/config/sources' || path === '/api/v1/config/sources') return ok({ sources: [] });
     if (path === '/api/v1/resources/skill-sources') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
     if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: headers.get('X-BoxTeam-Target-Gateway-Id'), workspace_id: owners[0].workspaceId, revision: 'fixed', available: true, entries: [] });
     if (path === '/api/v1/resources/local-skills') return ok({ workspace_id: owners[0].workspaceId, entries: [] });

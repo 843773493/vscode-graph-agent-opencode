@@ -1013,3 +1013,9 @@
 - 406项定向与112项相关单测通过，覆盖三个HTTP入口、布尔／负数／小数／字符偏移、原请求身份漂移、relay detail与工具错误。Ruff、OpenSpec strict及差异检查通过；16份Python文件的96条类型诊断与完整HEAD归档基线逐项相同，无新增，不称全仓类型零诊断。
 - 当前共享树的真实集成在装具阶段被637个测试文件超过636个端口块容量拦住，未修改他人负责的测试基础设施。以完整HEAD＋本切片全部生产／测试改动生成隔离Git tree `2c5e84488ed8389959f094602c3a197e7fae1a13`，归档SHA256 `2613164deba1b5984baf9b30b27db7a4afee965aa7e0e3771605d2057d00d252`；持有原仓库独占锁、外层超时与内存保护，真实Gateway／Backend／统一model_stream产品验收1 passed／79.96秒（外层85.48秒）。核七类拒绝的直接HTTP、联邦SSE和inventory JSON、精确读取／搜索异常、七次真实模型请求及重启续页；此证据不代替当前全部共享改动的联合验收。
 - 首轮隔离测试将联邦完整URI游标错投原精确代理的本机简称入口，导致归属先于查询拒绝；根据原始请求修正为各入口先取得自己的真实游标，保留明确原因和完整诊断断言。准确命令、前后源码指纹、失败／通过输出、退出码与私有补丁位于 `out/tests/temp/2026/11/08/context_cursor_diagnostics/artifacts/`；16.18整项保持未勾选，插件／扩展与MCP暂停边界保持。
+
+### 2026-11-11：配置来源 Quick Access（11.2 部分）
+
+- `resource ` 消费同一 ConfigurationSourceOwner 的只读目录，工作区分别发现，同 Gateway 只列一次；已有 URI 仅展示，无文件 URI 的正式逻辑来源保留原 source_key，不另造公开地址。接受复用原来源 JSONC 命令及 writer，冻结目标、发起组、预览／固定、侧开／后台；浏览、筛选及取消不读正文、不预检、不保存。
+- 资源浏览器合同94项／613断言通过。正式 Workbench、真实 Gateway／Backend 与 Chromium 1 passed／97.44秒，验证两类来源原 JSONC 保存、侧开、只读及既有 CAS 冲突、草稿恢复和未知保存只查原键；pageErrors为空。原正式79扩展构建27.61秒成功，复用同批产物，不重复构建。
+- 本片171份转换源码类型检查通过；最后联合检查因并行 MCP Gallery 清理的两处旧引用失败，已交其 owner 处理，未称整树类型全绿。Ruff、ESM语法及差异检查通过；当前环境无 pyright 可执行文件，未更改环境。最小复审保留唯一来源 owner／命令／writer，无新缓存、schema或持久化。失败原件、源码指纹及适用范围见 `out/tests/temp/2026/11/11/config_resource_quick_access/artifacts/verification.json`；未验Windows／Relay／Electron，附件／变更等仍未接入，11.2不整勾。

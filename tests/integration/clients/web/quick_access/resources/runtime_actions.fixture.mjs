@@ -40,6 +40,7 @@ export async function runtimeActionContract(mode) {
     const headers = new Headers(init?.headers), index = headers.get('X-BoxTeam-Target-Gateway-Id') === owners[1].gatewayId ? 1 : 0;
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, body, gateway: headers.get('X-BoxTeam-Target-Gateway-Id'), query: new URL(url, location.href).search });
+    if (path === '/api/gateway/config/sources' || path === '/api/v1/config/sources') return ok({ sources: [] });
     if (path === '/api/gateway/workspaces') {
       if (mode === 'freeze' && releaseRoutes === undefined && requests.some(item => item.phase === 'command')) return new Promise(resolve => { releaseRoutes = () => resolve(ok({ items: targets })); });
       return ok({ items: targets });

@@ -30,6 +30,8 @@ import type { SearchInvocationOptions } from '../search/target.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
 import { resourceActionCommand } from './runtimeActions.js';
+import { ConfigurationSourceOwner, type SourceTarget } from '../settings/sourceOwner.js';
+import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from '../settings/commands.js';
 
 interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string }
 interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread'] }
@@ -135,15 +137,44 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       };
       return item;
     };
+    const configurationPicks = async (target: SourceTarget, name: string): Promise<SourcePick[]> => {
+      run.signal.throwIfAborted();
+      const owner = new ConfigurationSourceOwner(target), result = await owner.list(run.signal);
+      return result.sources.flatMap(source => {
+        if (!source.source_key) return [];
+        const label = source.source_key + '.jsonc';
+        return [{ id: JSON.stringify([target.gateway_id, target.workspace_id, 'configuration', source.source_key]),
+          label, filterLabel: label, description: `配置来源 · ${name} · ${source.layer} · ${source.presence}`,
+          detail: `${target.gateway_id}${target.workspace_id ? ` · ${target.workspace_id}` : ' · Gateway'}${source.uri ? ` · ${source.uri}` : ''}`,
+          accept: (mods, event) => {
+            this.assertAccess(run);
+            const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
+              || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
+            const request: ConfigurationSourceOpenRequest = {
+              location: { ...owner.target, version: 2, source_key: source.source_key!, name },
+              groupId: run.group, openToSide: mods.alt || pinned && mods.ctrlCmd,
+              editorOptions: { pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground },
+            };
+            this.report(this.commands.executeCommand(openConfigurationSourceCommand, request));
+          },
+        } satisfies SourcePick];
+      });
+    };
     try {
       this.assertAccess(run);
       const routes = await gateway.workspaces(false, run.signal);
+      const registeredOwners = run.owners.filter(owner => routes.items.some(target => target.gateway_id === owner.gatewayId && target.workspace_id === owner.workspaceId));
+      const gatewayConfigurations = [...new Map(registeredOwners.map(owner => [owner.gatewayId, owner])).values()].map(owner =>
+        limiter.queue(() => configurationPicks({ gateway_id: owner.gatewayId }, 'Gateway'))
+          .catch(cause => failed(owner, 'Gateway 配置 ', cause)));
       const results = await Promise.all(run.owners.map(async owner => {
         try {
           run.signal.throwIfAborted();
           const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
           if (target.status !== 'ready') throw new Error(`${target.name} 当前不可用（${target.status}），请明确启动或连接`);
           const key = gatewayWorkspaceKey(target);
+          const configuration = limiter.queue(() => configurationPicks({ gateway_id: target.gateway_id, workspace_id: target.workspace_id }, target.name))
+            .catch(cause => failed(owner, '配置 ', cause));
           const agents = limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/agent-spec', { signal: run.signal }, key);
@@ -195,12 +226,13 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
-          return (await Promise.all([agents, skills, gatewaySkills, localSkills, ...runtime])).flat();
+          return (await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, ...runtime])).flat();
         } catch (cause) { return failed(owner, '', cause); }
       }));
+      const gatewayResults = await Promise.all(gatewayConfigurations);
       if (run.signal.aborted || run.invalidated) return [];
       this.assertAccess(run);
-      return results.flat();
+      return [...results.flat(), ...gatewayResults.flat()];
     } catch (cause) {
       if (run.signal.aborted || run.invalidated) return [];
       return [{ id: 'source-read-failed', label: `来源读取失败：${cause instanceof Error ? cause.message : String(cause)}` }];
