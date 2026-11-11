@@ -25,7 +25,38 @@ Function .onInit
 FunctionEnd
 
 Function un.onInit
+  SetShellVarContext all
   SetRegView 64
+  ReadRegStr $INSTDIR HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\BoxTeam" "InstallLocation"
+  StrCmp $INSTDIR "" 0 +2
+    Abort
+FunctionEnd
+
+Function un.RemoveRuntimeTree
+  Exch $0
+  Push $1
+  Push $2
+  FindFirst $1 $2 "$0\*"
+  loop:
+    StrCmp $2 "" done
+    StrCmp $2 "." next
+    StrCmp $2 ".." next
+    IfFileExists "$0\$2\*" 0 file
+      Push "$0\$2"
+      Call un.RemoveRuntimeTree
+      RMDir "$0\$2"
+      Goto next
+    file:
+      SetFileAttributes "$0\$2" NORMAL
+      Delete "$0\$2"
+    next:
+      FindNext $1 $2
+      Goto loop
+  done:
+  FindClose $1
+  Pop $2
+  Pop $1
+  Pop $0
 FunctionEnd
 
 VIProductVersion "${VERSION}.0"
@@ -45,7 +76,7 @@ VIAddVersionKey "LegalCopyright" "BoxTeam"
 Section "BoxTeam" MainSection
   SetShellVarContext all
   SetOutPath "$INSTDIR"
-  File /r "${INPUTDIR}/*"
+  File /r "${INPUTDIR}\*"
 
   CreateDirectory "$SMPROGRAMS\BoxTeam"
   CreateShortCut "$SMPROGRAMS\BoxTeam\BoxTeam.lnk" "$INSTDIR\BoxTeam.exe"
@@ -68,5 +99,17 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\BoxTeam\BoxTeam Doctor.lnk"
   RMDir "$SMPROGRAMS\BoxTeam"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\BoxTeam"
-  RMDir /r "$INSTDIR"
+  Push "$INSTDIR\launcher"
+  Call un.RemoveRuntimeTree
+  RMDir "$INSTDIR\launcher"
+  Push "$INSTDIR\runtime"
+  Call un.RemoveRuntimeTree
+  RMDir "$INSTDIR\runtime"
+  Delete "$INSTDIR\boxteam-doctor.cmd"
+  Delete "$INSTDIR\boxteam.cmd"
+  Delete "$INSTDIR\BoxTeam.exe"
+  Delete "$INSTDIR\BoxTeamDoctor.exe"
+  Delete "$INSTDIR\README.txt"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir "$INSTDIR"
 SectionEnd
