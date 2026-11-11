@@ -9,7 +9,7 @@ import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import commentjson
 import httpx
@@ -50,7 +50,9 @@ class ModelCase:
     artifacts: Path
     calls: list[str] = field(default_factory=list)
 
-    def plan(self, session_id: str, thread_id: str, *, load: bool, tool_id: str | None = None) -> list[str]:
+    def plan(self, session_id: str, thread_id: str, *, load: bool, tool_id: str | None = None,
+             mode: Literal["snapshot", "tracked", "untrack"] = "snapshot",
+             skill_call_id: str = "call_plugin_skill") -> list[str]:
         replies: list[tuple[dict[str, object], str]] = [({"role": "assistant", "content": "PLUGIN_SKILL_OK"}, "stop")]
         if tool_id is not None:
             replies.insert(0, ({"role": "assistant", "tool_calls": [{
@@ -61,8 +63,10 @@ class ModelCase:
             }]}, "tool_calls"))
         if load:
             replies.insert(0, ({"role": "assistant", "tool_calls": [{
-                "index": 0, "id": "call_plugin_skill", "type": "function",
-                "function": {"name": "skill_load", "arguments": json.dumps({"name": NAME})},
+                "index": 0, "id": skill_call_id, "type": "function",
+                "function": {"name": "skill_load", "arguments": json.dumps({
+                    "name": NAME, **({"mode": mode} if mode != "snapshot" else {}),
+                })},
             }]}, "tool_calls"))
         interactions = [cast(list[dict[str, object]], build_cassette(
             asset_id="plugin-skill-response", model=MODEL, url=f"{ENDPOINT}/chat/completions",
@@ -75,6 +79,12 @@ class ModelCase:
 
     def request_text(self, call_id: str) -> str:
         return json.dumps(json.loads((self.artifacts / f"{call_id}.json").read_text())["request"], ensure_ascii=False)
+
+    def skill_receipt(self, call_id: str, tool_call_id: str = "call_plugin_skill") -> dict:
+        messages = json.loads((self.artifacts / f"{call_id}.json").read_text())["request"]["messages"]
+        result, = [message for message in messages if message.get("role") == "tool"
+                   and message.get("tool_call_id") == tool_call_id]
+        return json.loads(result["content"])
 
 
 @pytest.fixture
@@ -171,13 +181,14 @@ async def _send(client: httpx.AsyncClient, workspace_id: str, session_id: str) -
     return accepted["job_id"]
 
 
-async def _completed(client: httpx.AsyncClient, workspace_id: str, job_id: str) -> None:
+async def _completed(client: httpx.AsyncClient, workspace_id: str, job_id: str,
+                     *, failed: bool = False) -> dict:
     async with asyncio.timeout(40):
         while True:
             job = await _data(await client.get(f"/api/v1/jobs/{job_id}", headers={"X-BoxTeam-Workspace-Id": workspace_id}))
             if job["status"] in {"completed", "succeeded", "failed", "cancelled", "timed_out"}:
-                assert job["status"] in {"completed", "succeeded"}, job
-                return
+                assert job["status"] in ({"failed"} if failed else {"completed", "succeeded"}), job
+                return job
             await asyncio.sleep(0.05)
 
 
@@ -315,5 +326,123 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
             assert frozen.plugin.package_id == PACKAGE and frozen.plugin.contribution_id == "guide"
             assert frozen.plugin.workspace_id == workspace_id
             (artifacts / "skill-navigation-timings.json").write_text(json.dumps(timings, indent=2) + "\n")
+    finally:
+        close_gateway_process(gateway)
+
+
+async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_history(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+    plugin_model: ModelCase,
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    artifacts = context.artifacts_dir
+    workspace = prepare_default_test_workspace(
+        workspace_root=Path(integration_workspace_root_path) / "tracked-project",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True,
+    )
+    configuration = install_test_workspace_config(
+        workspace_root=workspace, config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+    )
+    port = integration_port_block_for_file(Path(request.node.path)).port(15)
+    base_url = f"http://127.0.0.1:{port}"
+    _configure_model(configuration, base_url)
+    home = context.boxteam_home_for_node(request.node.nodeid)
+
+    def start(label: str):
+        return start_gateway_process(
+            workspace_root=workspace, default_backend_url=None, port=port, boxteam_home=home,
+            artifacts_dir=artifacts / label, asgi_app="tests.support.e2e_control.gateway_app:app",
+            extra_env=plugin_model.environment,
+        )
+
+    gateway = start("gateway-first")
+    try:
+        async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=75, trust_env=False) as client:
+            gateway_id = (await _data(await client.get("/api/gateway/health")))["gateway_id"]
+            workspace_id = (await _data(await client.get("/api/v1/workspace")))["workspace_id"]
+            archive = artifacts / "tracked-v1.zip"
+            _archive(archive, "1.0.0")
+            await install_plugin_async(lambda path, payload: client.post(path, json=payload),
+                                       gateway_id=gateway_id, path=str(archive.resolve()))
+            await _bind(client, gateway_id, workspace_id, "1.0.0")
+            first = await _published(client, gateway_id, workspace_id, "1.0.0")
+            old_entry, = [entry for entry in first["entries"] if entry.get("plugin")]
+            session_id, thread_id = await _session(client, workspace_id)
+            old_calls = plugin_model.plan(session_id, thread_id, load=True, mode="tracked")
+            await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
+            old_receipt = plugin_model.skill_receipt(old_calls[1])
+            assert old_receipt["tracked"] is True and old_receipt["display_uri"] == old_entry["display_uri"]
+            assert BODIES["1.0.0"].strip() in plugin_model.request_text(old_calls[1])
+
+            # 安装新包仅增加库存，不改变原绑定及追踪来源。
+            archive = artifacts / "tracked-v2.zip"
+            _archive(archive, "2.0.0")
+            await install_plugin_async(lambda path, payload: client.post(path, json=payload),
+                                       gateway_id=gateway_id, path=str(archive.resolve()))
+            assert await _published(client, gateway_id, workspace_id, "1.0.0") == first
+            retained = plugin_model.plan(session_id, thread_id, load=False)
+            await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
+            assert BODIES["1.0.0"].strip() in plugin_model.request_text(retained[0])
+            assert BODIES["2.0.0"].strip() not in plugin_model.request_text(retained[0])
+
+            await _bind(client, gateway_id, workspace_id, "2.0.0")
+            second = await _published(client, gateway_id, workspace_id, "2.0.0")
+            new_entry, = [entry for entry in second["entries"] if entry.get("plugin")]
+            assert new_entry["entry_identity"] != old_entry["entry_identity"]
+            # 原来源已撤销时，必须在模型调用前失败，不能猜测同名 v2。
+            before_dispatch = set(plugin_model.artifacts.glob("*.json"))
+            rejected = await _completed(client, workspace_id, await _send(client, workspace_id, session_id), failed=True)
+            assert "tracked-source-unavailable" in rejected["error_message"]
+            assert set(plugin_model.artifacts.glob("*.json")) == before_dispatch
+            untrack = await _data(await client.post(
+                f"/api/v1/sessions/{session_id}/threads/{thread_id}/skills/untrack",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id}, json={"name": NAME},
+            ))
+            assert untrack["status"] == "loaded" and untrack["tracked"] is False and untrack["error"] is None
+            assert untrack["revision"] == old_receipt["revision"]
+
+            new_calls = plugin_model.plan(session_id, thread_id, load=True, mode="tracked",
+                                          skill_call_id="call_plugin_skill_v2")
+            await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
+            new_receipt = plugin_model.skill_receipt(new_calls[1], "call_plugin_skill_v2")
+            assert new_receipt["tracked"] is True and new_receipt["display_uri"] == new_entry["display_uri"]
+            assert BODIES["2.0.0"].strip() in plugin_model.request_text(new_calls[1])
+            untrack_calls = plugin_model.plan(session_id, thread_id, load=True, mode="untrack",
+                                              skill_call_id="call_plugin_skill_untrack")
+            await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
+            frozen_receipt = plugin_model.skill_receipt(untrack_calls[1], "call_plugin_skill_untrack")
+            assert frozen_receipt["tracked"] is False and frozen_receipt["append_status"] == "none"
+            assert frozen_receipt["revision"] == new_receipt["revision"]
+            assert BODIES["2.0.0"].strip() in plugin_model.request_text(untrack_calls[1])
+            await _bind(client, gateway_id, workspace_id, None)
+            await _published(client, gateway_id, workspace_id, None)
+            for version in BODIES:
+                await _data(await client.post("/api/gateway/service-plugins/uninstall", json={
+                    "gateway_id": gateway_id, "package_id": PACKAGE, "package_version": version,
+                }))
+                assert not (home / "plugins/packages" / PACKAGE / version).exists()
+
+        close_gateway_process(gateway)
+        gateway = start("gateway-restarted")
+        async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=75, trust_env=False) as client:
+            retained = plugin_model.plan(session_id, thread_id, load=False)
+            await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
+            assert BODIES["2.0.0"].strip() in plugin_model.request_text(retained[0])
+            cold = RolloutCheckpointSaver(workspace / ".boxteam/sessions")
+            for version, calls, tool_call_id in (("1.0.0", old_calls, "call_plugin_skill"),
+                                                ("2.0.0", new_calls, "call_plugin_skill_v2")):
+                frozen = cold.load_tool_call_skill_catalog(
+                    session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+                    model_call_id=calls[0], skill_name=NAME,
+                ).entries[NAME]
+                assert frozen.body == BODIES[version]
+                assert frozen.plugin is not None and frozen.plugin.package_version == version
+            (artifacts / "tracked-version-lifecycle.json").write_text(json.dumps({
+                "gateway_id": gateway_id, "workspace_id": workspace_id, "session_id": session_id,
+                "thread_id": thread_id, "original": old_receipt, "replacement": new_receipt,
+                "withdrawn_source_error": rejected["error_message"], "untrack": frozen_receipt,
+                "cold_model_call_id": retained[0], "uninstalled_versions": list(BODIES),
+            }, ensure_ascii=False, indent=2) + "\n")
     finally:
         close_gateway_process(gateway)
