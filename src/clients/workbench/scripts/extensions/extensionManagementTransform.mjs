@@ -55,12 +55,8 @@ export function transformExtensionManagement(root, path, source, replaceOnce) {
     return pruneUnusedImportsAndConstants(path, contents);
   }
   if (path === join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/extensionsQuickAccess.ts')) {
-    const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-    const install = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'InstallExtensionQuickAccessProvider');
-    if (!install) throw new Error('原安装 Quick Access 类缺失');
-    const contents = source.slice(0, install.getFullStart()) + source.slice(install.end);
-    return pruneUnusedImportsAndConstants(path, replaceOnce(contents,
-      'Press Enter to manage your extensions.', '按 Enter 管理插件包。'));
+    return `export { ManagePluginQuickAccessProvider as ManageExtensionsQuickAccessProvider,
+      InstallPluginQuickAccessProvider as InstallExtensionQuickAccessProvider } from ${JSON.stringify(join(root, 'src/extensions/quickAccess.js'))};\n`;
   }
   if (path === join(root, 'upstream/src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts')) return pluginGettingStarted(path, source);
   if (path === join(root, 'upstream/src/vs/workbench/contrib/welcomeWalkthrough/browser/editor/vs_code_editor_walkthrough.ts')) {
@@ -74,7 +70,7 @@ export function transformExtensionManagement(root, path, source, replaceOnce) {
       '>**Tip:** The [extension gallery](command:workbench.extensions.action.showPopularExtensions) includes snippets for almost every framework and language imaginable.  You can also create your own [user-defined snippets](command:workbench.action.openSnippets).',
       '>**Tip:** Create your own [user-defined snippets](command:workbench.action.openSnippets) for the languages you use.');
   }
-  if (path === join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts')) return pluginManagementContribution(root, path, source);
+  if (path === join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts')) return pluginManagementContribution(root, path, source, replaceOnce);
   const extensionsViewlet = join(root, 'upstream/src/vs/workbench/contrib/extensions/browser/extensionsViewlet.ts');
   if (path === extensionsViewlet) {
     let contents = `import { ServicePluginPackagesView } from ${JSON.stringify(join(root, 'src/extensions/servicePluginManagement.js'))};\n` + source;
@@ -290,7 +286,7 @@ function rewriteNotebookMethod(path, source, ownerName, methodName, createEdits)
 }
 
 /** 保留原容器与被内置服务消费的单例，删除旧用户扩展 UI 的整套注册。 */
-function pluginManagementContribution(root, path, source) {
+function pluginManagementContribution(root, path, source, replaceOnce) {
   const parsed = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const kept = parsed.statements.filter(statement => {
     if (ts.isImportDeclaration(statement)) return true;
@@ -300,7 +296,14 @@ function pluginManagementContribution(root, path, source) {
     return call.expression.getText(parsed) === 'registerSingleton'
       || call.expression.getText(parsed) === 'Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider';
   });
-  const contents = kept.map(statement => statement.getText(parsed)).join('\n') + `
+  let contents = kept.map(statement => statement.getText(parsed)).join('\n');
+  contents = replaceOnce(contents, 'Press Enter to manage extensions.', '查找目标 Gateway 的已安装插件包。');
+  contents = replaceOnce(contents, 'Manage Extensions', '管理目标插件包');
+  contents += `
+Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider({
+  ctor: InstallExtensionQuickAccessProvider, prefix: InstallExtensionQuickAccessProvider.PREFIX,
+  placeholder: '安装自有插件包 · ZIP、开发目录或已配置的自有来源', helpEntries: [{ description: '安装目标插件包' }]
+});
 Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench)
   .registerWorkbenchContribution(ExtensionsViewletViewsContribution, LifecyclePhase.Restored);
 
@@ -328,11 +331,11 @@ registerAction2(class extends Action2 {
 
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.plugins.installPackage', title: localize2('installPluginPackage', '安装插件包'), f1: true }); }
-  async run(accessor: ServicesAccessor): Promise<void> {
+  async run(accessor: ServicesAccessor, target?: PluginTarget): Promise<void> {
     const viewsService = accessor.get(IViewsService);
     const container = viewsService.getActiveViewPaneContainerWithId(VIEWLET_ID) as IExtensionsViewPaneContainer | undefined;
     let installError: unknown, installFailed = false;
-    try { await installServicePluginPackage(accessor); }
+    try { await installServicePluginPackage(accessor, target); }
     catch (error) { installError = error; installFailed = true; }
     try { await container?.refresh(); }
     catch (refreshError) {
@@ -346,7 +349,8 @@ registerAction2(class extends Action2 {
 });
 `;
   return pruneUnusedImportsAndConstants(path,
-    `import { installServicePluginPackage } from ${JSON.stringify(join(root, 'src/extensions/servicePluginManagement.js'))};\n` + contents);
+    `import { installServicePluginPackage } from ${JSON.stringify(join(root, 'src/extensions/servicePluginManagement.js'))};\n`
+      + `import type { PluginTarget } from ${JSON.stringify(join(root, '../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js'))};\n` + contents);
 }
 
 function transformNotebookLegacyConsumers(root, path, source, replaceOnce) {

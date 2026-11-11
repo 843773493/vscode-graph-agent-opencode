@@ -16,4 +16,6 @@
 
 自有包管理由 `servicePluginManagement.ts` 直接消费目标 Gateway 库存及原配置来源；Gateway、明确工作区与新建默认值各改原 owner 的 CAS 来源，不伪造 VSIX 或把 enabled 当 ready。工作区期望从原配置 owner 读取，异步交接状态另显；后台刷新以当前目标及代际结算。用户 VSIX、Gallery 与目标 Node／Web Extension Host 已退役，不恢复旧安装命令或配置桥。
 
+`quickAccess.ts` 接原 `ext ` 与 `ext install `；每次打开冻结管理目标，过滤复用同次库存，接受后打开原详情或安装命令。发现不启动插件或读取包正文，关闭释放读取，凭据或入口 Gateway 改变时旧候选失效；不另建安装模型或资源 URI。
+
 自有命令由 `pluginCommandRegistry.ts` 持有原 Command／Menu／Keybinding 句柄，同逻辑 ID 只注册一个 dispatcher；完整快照先预校验再替换对应绑定，旧资格不得改投。`pluginCommands.ts` 负责窗口订阅与交互，传输归 Web `api/pluginCommands.ts`。命令面板在原 Quick Access 聚焦前冻结目标和已公布上下文，菜单保留自身冻结参数；程序化调用在首次 await 前捕获业务 owner。普通调用不经过旧宿主激活或重新发现；断连释放本目标投影，窗口关闭不修改 enabled。

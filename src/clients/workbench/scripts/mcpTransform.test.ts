@@ -173,9 +173,12 @@ test('语言选择器保留语言和配置选项，既不查询市场也不提�
   expect(picks.some(pick => /marketplace|extension/i.test(pick.label))).toBe(false);
 });
 
-test('ext快速访问仅保留原管理入口，不再包含旧市场安装实现或注册', () => {
+test('ext两个前缀统一自有插件入口，不再包含旧市场安装实现或注册', () => {
   const parsed = source('extensionsQuickAccess.ts');
-  expect(parsed.statements.filter(ts.isClassDeclaration).map(node => node.name?.text)).toEqual(['ManageExtensionsQuickAccessProvider']);
+  expect(parsed.statements.filter(ts.isClassDeclaration)).toHaveLength(0);
+  expect(parsed.text).toContain('ManagePluginQuickAccessProvider as ManageExtensionsQuickAccessProvider');
+  expect(parsed.text).toContain('InstallPluginQuickAccessProvider as InstallExtensionQuickAccessProvider');
+  expect(parsed.text).not.toContain('Gallery');
   const contribution = source('extensions.contribution.ts');
   const quickAccess: string[] = [];
   const visit = (node: ts.Node) => {
@@ -185,9 +188,9 @@ test('ext快速访问仅保留原管理入口，不再包含旧市场安装实�
     ts.forEachChild(node, visit);
   };
   visit(contribution);
-  expect(quickAccess).toHaveLength(1);
+  expect(quickAccess).toHaveLength(2);
   expect(quickAccess[0]).toContain('ManageExtensionsQuickAccessProvider');
-  expect(contribution.text).not.toContain('InstallExtensionQuickAccessProvider');
+  expect(quickAccess[1]).toContain('InstallExtensionQuickAccessProvider');
 });
 
 test('无 formatter 时只显示通知，已有 formatter 时继续执行原格式化命令', async () => {

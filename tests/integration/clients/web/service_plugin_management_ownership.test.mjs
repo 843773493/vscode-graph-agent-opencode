@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
+import { HttpRequestError as GatewayRequestError } from '../../../../src/clients/web/src/api/http.js';
+import { CancellationTokenSource } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/service_plugin_management_ownership.test.mjs').prepare();
@@ -12,7 +14,9 @@ const sourceFingerprint = createHash('sha256').update(source).digest('hex');
 
 function declaration(name) {
   const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
-  const node = parsed.statements.find(statement => statement.name?.text === name);
+  const node = parsed.statements.find(statement => statement.name?.text === name
+    || (ts.isVariableStatement(statement)
+      && statement.declarationList.declarations.some(declaration => declaration.name.getText(parsed) === name)));
   if (!node) throw new Error(`实际源码缺少 ${sourcePath}#${name}`);
   const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
   return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
@@ -42,7 +46,7 @@ function classCallback(className, methodName, sourceFragment, bindings = {}) {
 }
 
 function createInstallCommand(request, picks, inputs, observed, options = {}) {
-  const gateway = { async request(path, requestOptions = {}) { return request(path, JSON.parse(requestOptions.body ?? '{}')); } };
+  const gateway = { async request(path, requestOptions = {}) { return request(path, JSON.parse(requestOptions.body ?? '{}'), requestOptions); } };
   const requireOwner = new Function(`${declaration('requireInstallationOwner')}\nreturn requireInstallationOwner;`)();
   const read = new Function('gateway', 'requireInstallationOwner',
     `${declaration('readInstallation')}\nreturn readInstallation;`)(gateway, requireOwner);
@@ -51,20 +55,26 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
   const installationFailureText = new Function(`${declaration('installationFailureText')}\nreturn installationFailureText;`)();
   const runPluginInstallation = new Function('activePluginInstallations', 'installationKey',
     `${declaration('runPluginInstallation')}\nreturn runPluginInstallation;`)(activePluginInstallations, installationKey);
+  const pluginGatewayLabel = new Function(`${declaration('pluginGatewayLabel')}\nreturn pluginGatewayLabel;`)();
   const notifications = options.notifications ?? { info() {}, error() {} };
-  const observe = new Function('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText', 'installationFailureText',
+  const observe = new Function('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText', 'installationFailureText', 'pluginGatewayLabel',
     `${declaration('observeInstallation')}\nreturn observeInstallation;`)(gateway, async () => {}, { Notification: 1 }, 120_000, read,
-    error => error instanceof Error ? error.message : String(error), installationFailureText);
+    error => error instanceof Error ? error.message : String(error), installationFailureText, pluginGatewayLabel);
   const observeInstallation = options.observeInstallation
     ?? (async (progress, notificationService, target, operationId, result) => {
       observed.push({ operationId, operation: result });
       return observe(progress, notificationService, target, operationId, result);
     });
-  const install = new Function('gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
-    'readInstallation', 'installationKey', 'runPluginInstallation',
+  const lifecycle = options.lifecycle ?? { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+  const context = { getSnapshot: () => ({ gatewayId: lifecycle.gatewayId }),
+    subscribe(listener) { lifecycle.context.add(listener); return () => lifecycle.context.delete(listener); } };
+  const install = new Function('GatewayRequestError', 'CancellationTokenSource', 'onGatewayTokenInvalidated', 'workspaceContext', 'gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
+    'readInstallation', 'installationKey', 'runPluginInstallation', 'installationFailureText', 'pluginGatewayLabel',
     `${declaration('installPackageFromView')}\nreturn installPackageFromView;`)(
+    GatewayRequestError, CancellationTokenSource, (_port, listener) => { lifecycle.auth.add(listener); return () => lifecycle.auth.delete(listener); }, context,
     gateway, options.generateUuid ?? (() => 'operation-original'), observeInstallation,
-    error => error instanceof Error ? error.message : String(error), requireOwner, read, installationKey, runPluginInstallation);
+    error => error instanceof Error ? error.message : String(error), requireOwner, read, installationKey, runPluginInstallation,
+    installationFailureText, pluginGatewayLabel);
   const quickInputToken = {}, notificationToken = {}, progressToken = {};
   const run = new Function('managementGateway', 'IQuickInputService', 'INotificationService', 'IProgressService', 'installPackageFromView', 'workspaceContext',
     `${declaration('installServicePluginPackage')}\nreturn installServicePluginPackage;`)(
@@ -74,14 +84,17 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
   let accessorActive = false;
   const accessor = { get(token) {
     if (!accessorActive) throw new Error('服务 accessor 仅在同步命令调用期间有效');
-    if (token === quickInputToken) return { pick: async () => picks.shift(), input: async () => inputs.shift() };
+    if (token === quickInputToken) return {
+      pick: async (_items, dialog, cancellation) => { await options.beforeInput?.(dialog, cancellation); return picks.shift(); },
+      input: async (dialog, cancellation) => { await options.beforeInput?.(dialog, cancellation); return inputs.shift(); },
+    };
     if (token === notificationToken) return notifications;
     if (token === progressToken) return { withProgress: (_options, operation) => operation({ report() {} }) };
     throw new Error('测试收到未知 Workbench 服务');
   } };
   return () => {
     accessorActive = true;
-    try { return run(accessor); }
+    try { return run(accessor, options.explicitTarget); }
     finally { accessorActive = false; }
   };
 }
@@ -91,8 +104,10 @@ function createInstaller(request, picks, inputs, observed) {
 }
 
 function operation(gatewayId = 'gateway-original', operationId = 'operation-original') {
-  return { gateway_id: gatewayId, operation_id: operationId, status: 'succeeded', artifact: undefined,
-    cancel_requested: false };
+  return { gateway_id: gatewayId, operation_id: operationId, status: 'succeeded', artifact: {
+    package_id: 'sample.plugin', package_version: '2.4.1', target: undefined,
+    source_kind: 'local_zip', digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+  }, cancel_requested: false };
 }
 
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), `${JSON.stringify({
@@ -116,6 +131,85 @@ test('Gateway 就绪前不打开安装向导，就绪后使用同步取得的原
   expect(observed).toHaveLength(1);
 });
 
+test('快速访问冻结的安装目标不随初始化等待或后续管理选择改变', async () => {
+  const explicitTarget = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const ready = Promise.withResolvers(), entered = Promise.withResolvers(), calls = [], observed = [];
+  const command = createInstallCommand(async (path, body) => { calls.push({ path, body }); return operation(); },
+    [{ kind: 'zip' }], ['/tmp/plugin.zip'], observed, { explicitTarget,
+      target: { gateway_id: 'gateway-other', gateway_connection_id: 'connection-other' },
+      ensureReady: async () => { entered.resolve(); await ready.promise; } });
+  const pending = command(); await entered.promise;
+  explicitTarget.gateway_id = 'gateway-mutated'; ready.resolve(); await pending;
+  expect(calls[0].body.gateway_id).toBe('gateway-original');
+  expect(calls[0].body.gateway_connection_id).toBe('connection-original');
+  expect(observed).toHaveLength(1);
+});
+
+test('安装受理前入口或凭据失效会取消现有输入，迟到确认不写入', async () => {
+  for (const reason of ['gateway', 'credential']) {
+    const lifecycle = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+    const calls = [], observed = [];
+    const command = createInstallCommand(async (path, body) => { calls.push({ path, body }); return operation(); },
+      [{ kind: 'zip' }], ['/tmp/plugin.zip'], observed, { lifecycle,
+        beforeInput: async (dialog, cancellation) => {
+          if (!dialog.title.includes('原生绝对路径')) return;
+          if (reason === 'gateway') {
+            lifecycle.gatewayId = 'entry-other';
+            for (const listener of lifecycle.context) listener();
+          } else for (const listener of lifecycle.auth) listener();
+          expect(cancellation.isCancellationRequested).toBe(true);
+        } });
+    await expect(command()).rejects.toThrow('原 Gateway 或访问凭据已改变');
+    expect(calls).toEqual([]); expect(observed).toEqual([]);
+    expect(lifecycle.context.size).toBe(0); expect(lifecycle.auth.size).toBe(0);
+  }
+});
+
+test('来源目录迟到响应不恢复安装资格，普通管理选择改变仍使用冻结目标', async () => {
+  const lifecycle = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+  const waiting = Promise.withResolvers(), release = Promise.withResolvers();
+  const calls = [], observed = [], target = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const command = createInstallCommand(async (path, body, options) => {
+    calls.push({ path, body });
+    if (path.endsWith('/inventory')) return { sources: { entries: [{ source_id: 'source-original', enabled: true }] } };
+    if (path.endsWith('/source-catalog')) {
+      waiting.resolve(options.signal);
+      await release.promise;
+      return { gateway_id: 'gateway-original', source_id: 'source-original', catalog_revision: 'revision-1',
+        items: [{ package_id: 'sample.plugin', package_version: '2.4.1' }] };
+    }
+    throw new Error('过期目录不能继续安装');
+  }, [{ kind: 'source' }, { source: { source_id: 'source-original' } }], ['sample'], observed, { lifecycle, target });
+  const pending = command(), signal = await waiting.promise;
+  target.gateway_id = 'changed-management-selection';
+  expect(calls.every(call => call.body.gateway_id === 'gateway-original')).toBe(true);
+  for (const listener of lifecycle.auth) listener();
+  expect(signal.aborted).toBe(true);
+  release.resolve();
+  await expect(pending).rejects.toThrow('原 Gateway 或访问凭据已改变');
+  expect(calls.map(call => call.path.split('/').at(-1))).toEqual(['inventory', 'source-catalog']);
+  expect(observed).toEqual([]); expect(lifecycle.context.size + lifecycle.auth.size).toBe(0);
+});
+
+test('已受理安装在入口变化后只结算原 operation，不改投、取消或重放', async () => {
+  const lifecycle = { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
+  const calls = [], observed = [], target = { gateway_id: 'gateway-original', gateway_connection_id: 'connection-original' };
+  const command = createInstallCommand(async (path, body) => {
+    calls.push({ path, body });
+    if (path.endsWith('/install')) {
+      target.gateway_id = 'gateway-other'; lifecycle.gatewayId = 'entry-other';
+      for (const listener of lifecycle.context) listener();
+      return { ...operation(), status: 'running' };
+    }
+    if (path.endsWith('/install-operation')) return operation();
+    throw new Error('不应取消或重放已受理操作');
+  }, [{ kind: 'zip' }], ['/tmp/plugin.zip'], observed, { lifecycle, target });
+  await command();
+  expect(calls.map(call => call.path.split('/').at(-1))).toEqual(['install', 'install-operation']);
+  expect(calls.every(call => call.body.gateway_id === 'gateway-original' && call.body.operation_id === 'operation-original')).toBe(true);
+  expect(lifecycle.context.size + lifecycle.auth.size).toBe(0);
+});
+
 test('安装回执 owner 不匹配时只读取目标 Gateway 的原 operation_id', async () => {
   for (const invalid of [operation('gateway-other'), operation('gateway-original', 'operation-other')]) {
     const calls = [], observed = [];
@@ -130,6 +224,18 @@ test('安装回执 owner 不匹配时只读取目标 Gateway 的原 operation_id
     expect(calls[0].body.operation_id).toBe('operation-original');
     expect(calls[1].body.operation_id).toBe('operation-original');
     expect(observed).toEqual([{ operationId: 'operation-original', operation: operation() }]);
+  }
+});
+
+test('安装明确拒绝直接保留原状态、原因和 request_id，不发冗余结果查询', async () => {
+  for (const status of [401, 403, 409, 422]) {
+    const calls = [], observed = [];
+    const failure = new GatewayRequestError(status, 'Rejected', '目标插件运行环境不匹配',
+      '/api/gateway/service-plugins/install', 'original-rejection');
+    await expect(createInstaller(async (path, body) => { calls.push({ path, body }); throw failure; },
+      [{ kind: 'zip' }], ['/tmp/plugin.zip'], observed)).rejects.toBe(failure);
+    expect(calls.map(call => call.path.split('/').at(-1))).toEqual(['install']);
+    expect(failure.requestId).toBe('original-rejection'); expect(observed).toEqual([]);
   }
 });
 

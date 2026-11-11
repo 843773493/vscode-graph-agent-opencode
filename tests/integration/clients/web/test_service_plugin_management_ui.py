@@ -239,6 +239,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         else:
             assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
             assert result["installed"] and result["uninstalled"]
+            assert result["pluginQuickAccess"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
             assert result["gatewayRestartedIndependently"]
             assert result["declarativeSkillLoop"]

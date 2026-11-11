@@ -6,7 +6,7 @@ import { parse as parseJsonc } from 'jsonc-parser';
 
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [],
-  privateInputWrites: [], installed: false, uninstalled: false, exitedPids: [], runtimeVersions: [] };
+  privateInputWrites: [], servicePluginRequests: [], installed: false, uninstalled: false, exitedPids: [], runtimeVersions: [] };
 result.activationTimings = [];
 const pluginRequests = [];
 const managementReads = [];
@@ -22,7 +22,11 @@ try {
   page.on('request', request => {
     const url = new URL(request.url());
     if (['http:', 'https:'].includes(url.protocol) && url.origin !== new URL(input.baseUrl).origin) result.externalRequests.push(request.url());
-    if (url.pathname.startsWith('/api/gateway/service-plugins/')) pluginRequests.push(url.pathname);
+    if (url.pathname.startsWith('/api/gateway/service-plugins/')) {
+      pluginRequests.push(url.pathname);
+      result.servicePluginRequests.push({ phase: result.phase, method: request.method(), path: url.pathname,
+        resourceType: request.resourceType() });
+    }
     if ((request.method() === 'POST' && /\/service-plugins\/(inventory|status)$/.test(url.pathname))
       || (request.method() === 'GET' && /^\/api\/(gateway|v1)\/config\/sources(?:\/[^/]+)?$/.test(url.pathname))) {
       managementReads.push({ method: request.method(), path: url.pathname });
@@ -120,13 +124,46 @@ try {
     await field.press('Enter');
   };
   const installButton = view.getByRole('button', { name: '安装插件包', exact: true });
-  await installButton.click();
+  result.phase = 'cancel-install-picker';
+  const beforeInstallPicker = result.servicePluginRequests.length;
+  const beforePrivateInputWrites = privateInputRequestCount;
+  const beforeSourceWrites = sourceWriteRequestCount;
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', 'ext install '));
+  await expect(quick).toContainText('安装自有插件包');
+  await quick.locator('input').first().press('Escape');
+  await expect(quick).not.toBeVisible();
+  const installCancellationRequests = result.servicePluginRequests.slice(beforeInstallPicker);
+  result.installCancellationRequests = installCancellationRequests;
+  assert.equal(installCancellationRequests.filter(item => item.method === 'POST'
+    && item.path === '/api/gateway/service-plugins/inventory').length, 0, '取消安装快速入口不能读取库存');
+  assert.equal(installCancellationRequests.filter(item => item.method === 'POST'
+    && item.path === '/api/gateway/service-plugins/install').length, 0, '取消安装快速入口不能发起安装');
+  assert.equal(privateInputRequestCount, beforePrivateInputWrites, '取消安装不能写入插件秘密参数');
+  assert.equal(sourceWriteRequestCount, beforeSourceWrites, '取消安装不能写入插件配置');
+  result.phase = 'after-install-picker-cancel';
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', 'ext install '));
+  await pick('安装自有插件包…');
   await expect(quick).toContainText(`插件安装 · 原生 Gateway ${active.gateway_id}`);
   await pick('ZIP 文件');
   await inputQuick(input.packagePath);
   await expect(view).toContainText('ui.preference-probe@1.0.0', { timeout: 30_000 });
   await expect(page.locator('.notifications-toasts')).toContainText(
     `已在 原生 Gateway ${active.gateway_id} 安装 ui.preference-probe@1.0.0`);
+  const beforePluginLookup = pluginRequests.filter(path => path.endsWith('/inventory')).length;
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', 'ext ui.preference-probe'));
+  await quick.locator('input').first().fill('ext gateway-preference@1.0.0');
+  const gatewayPick = quick.locator('.monaco-list-row').filter({ hasText: 'gateway-preference@1.0.0' });
+  await expect(gatewayPick).toHaveCount(1);
+  await expect(gatewayPick).toContainText(active.gateway_id);
+  assert.equal(pluginRequests.filter(path => path.endsWith('/inventory')).length, beforePluginLookup + 1,
+    '逐键过滤只消费本次快速访问库存');
+  await gatewayPick.click();
+  const quickDetails = view.locator('.service-plugin-details');
+  await expect(quickDetails).toHaveAttribute('data-package-id', 'ui.preference-probe');
+  await expect(quickDetails).toHaveAttribute('data-plugin-id', 'gateway-preference');
+  await expect(quickDetails.getByLabel('插件配置与运行版本')).toContainText('配置：未绑定');
+  assert.equal(result.configWrites.length, 0); assert.equal(result.privateInputWrites.length, 0);
+  result.pluginQuickAccess = true;
   const search = view.getByRole('searchbox', { name: '搜索已安装插件包' });
   await search.fill('不存在的插件包');
   await expect(view.locator('.service-plugin-package')).toBeHidden();

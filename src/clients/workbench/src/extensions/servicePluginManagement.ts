@@ -15,13 +15,14 @@ import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/di
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { timeout } from '../../upstream/src/vs/base/common/async.js';
+import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
 import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget, PluginUninstallResultDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import { gateway } from '../agentApi.js';
+import { gateway, GatewayRequestError } from '../agentApi.js';
 import { managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated, DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
 
@@ -108,6 +109,25 @@ export class ServicePluginPackagesView extends ViewPane {
   }
 
   get searchValue(): string { return this.query; }
+
+  async openPlugin(target: PluginTarget, packageId: string, version: string, pluginId: string, scope: 'gateway' | 'workspace'): Promise<void> {
+    const checkTarget = () => {
+      const current = managementGateway('extensions');
+      if (current.gateway_id !== target.gateway_id || current.gateway_connection_id !== target.gateway_connection_id) {
+        throw new Error('插件管理目标已改变，请从原目标重新查找插件');
+      }
+    };
+    checkTarget();
+    this.scope = scope;
+    const selector = this.controls?.querySelector('select');
+    if (selector) selector.value = scope;
+    this.selected = { packageId, pluginId, version };
+    this.search('');
+    await this.refresh();
+    checkTarget();
+    if (scope === 'workspace' && !this.workspaceTarget) return;
+    if (!this.content?.querySelector('.service-plugin-details')) throw new Error(`所选插件版本已不可用：${packageId}/${pluginId}@${version}`);
+  }
 
   search(query: string): void {
     this.query = query;
@@ -551,71 +571,98 @@ async function readPluginInstanceLog(target: PluginTarget, logId: string): Promi
 
 async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService,
   progress: IProgressService, target: PluginTarget): Promise<void> {
-  const type = await quickInput.pick([{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' },
-    { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
-    { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false });
-  if (!type) return;
-  if (type.kind === 'query') {
-    const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id });
-    if (operationId) await observeInstallation(progress, notifications, target, operationId);
-    return;
-  }
-  let acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>;
-  if (type.kind === 'source') {
-    const inventory = await gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory',
-      { method: 'POST', body: JSON.stringify(target) });
-    const sources = inventory.sources?.entries.filter(source => source.enabled) ?? [];
-    if (!sources.length) { notifications.info(inventory.sources?.message ?? '插件源尚未配置'); return; }
-    const source = await quickInput.pick(sources.map(source => ({ label: source.source_id, source })),
-      { title: '选择自有来源', canPickMany: false });
-    if (!source) return;
-    const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id });
-    if (query === undefined) return;
-    let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision: string | undefined;
-    while (!selected) {
-      const page = await gateway.request<PluginSourceCatalogDTO>('/api/gateway/service-plugins/source-catalog',
-        { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }) });
-      if (page.gateway_id !== target.gateway_id || page.source_id !== source.source.source_id) {
-        throw new Error('插件来源目录回执不属于原 Gateway 或 source_id');
-      }
-      if (revision !== undefined && page.catalog_revision !== revision) {
-        throw new Error(`插件目录分页期间版本已变化：${revision} → ${page.catalog_revision}；请重新查询`);
-      }
-      revision = page.catalog_revision;
-      const items = page.items.map(artifact => ({ label: `${artifact.package_id}@${artifact.package_version}`,
-        description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : '纯声明插件包', artifact }));
-      const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: '下一页', description: '', artifact: undefined }] : [])],
-        { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false });
-      if (!choice) return;
-      if (choice.artifact) selected = choice.artifact;
-      else cursor = page.next_cursor;
-    }
-    if (!revision) throw new Error('插件来源目录缺少 catalog_revision');
-    acquisition = { source_id: source.source.source_id, catalog_revision: revision, artifact: selected,
-      development_directory: false, path: '' };
-  } else {
-    const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: pluginGatewayLabel(target),
-      placeHolder: type.kind === 'directory' ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
-        value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null });
-    if (!path) return;
-    acquisition = { path, development_directory: type.kind === 'directory', artifact: undefined };
-  }
-  await runPluginInstallation(target, acquisition, notifications, async () => {
-    const operationId = generateUuid();
-    let operation: PluginInstallOperationDTO;
-    try {
-      operation = requireInstallationOwner(target, operationId, await gateway.request<PluginInstallOperationDTO>(
-        '/api/gateway/service-plugins/install',
-        { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) }));
-    } catch (error) {
-      // 仅查询原操作；响应丢失不能变成第二次安装。
-      try { operation = await readInstallation(target, operationId); }
-      catch (queryError) {
-        throw new Error(`安装响应未确认：${errorsText(error)}。原操作查询失败：${errorsText(queryError)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`);
-      }
-    }
-    await observeInstallation(progress, notifications, target, operationId, operation);
+  target = { ...target };
+  const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
+  const cancellation = new CancellationTokenSource(), controller = new AbortController();
+  const invalidate = () => { cancellation.cancel(); controller.abort(); };
+  const releaseAuth = onGatewayTokenInvalidated(0, invalidate);
+  const releaseContext = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== entryGatewayId) invalidate();
   });
+  const check = () => {
+    if (cancellation.token.isCancellationRequested) throw new Error('原 Gateway 或访问凭据已改变，请重新打开插件安装');
+  };
+  try {
+    const type = await quickInput.pick([{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' },
+      { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
+      { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false }, cancellation.token);
+    check();
+    if (!type) return;
+    if (type.kind === 'query') {
+      const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id }, cancellation.token);
+      check();
+      if (operationId) await observeInstallation(progress, notifications, target, operationId);
+      return;
+    }
+    let acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>;
+    if (type.kind === 'source') {
+      const inventory = await gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory',
+        { method: 'POST', body: JSON.stringify(target), signal: controller.signal });
+      check();
+      const sources = inventory.sources?.entries.filter(source => source.enabled) ?? [];
+      if (!sources.length) { notifications.info(inventory.sources?.message ?? '插件源尚未配置'); return; }
+      const source = await quickInput.pick(sources.map(source => ({ label: source.source_id, source })),
+        { title: '选择自有来源', canPickMany: false }, cancellation.token);
+      check();
+      if (!source) return;
+      const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id }, cancellation.token);
+      check();
+      if (query === undefined) return;
+      let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision: string | undefined;
+      while (!selected) {
+        const page = await gateway.request<PluginSourceCatalogDTO>('/api/gateway/service-plugins/source-catalog',
+          { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }), signal: controller.signal });
+        check();
+        if (page.gateway_id !== target.gateway_id || page.source_id !== source.source.source_id) {
+          throw new Error('插件来源目录回执不属于原 Gateway 或 source_id');
+        }
+        if (revision !== undefined && page.catalog_revision !== revision) {
+          throw new Error(`插件目录分页期间版本已变化：${revision} → ${page.catalog_revision}；请重新查询`);
+        }
+        revision = page.catalog_revision;
+        const items = page.items.map(artifact => ({ label: `${artifact.package_id}@${artifact.package_version}`,
+          description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : '纯声明插件包', artifact }));
+        const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: '下一页', description: '', artifact: undefined }] : [])],
+          { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false }, cancellation.token);
+        check();
+        if (!choice) return;
+        if (choice.artifact) selected = choice.artifact;
+        else cursor = page.next_cursor;
+      }
+      if (!revision) throw new Error('插件来源目录缺少 catalog_revision');
+      acquisition = { source_id: source.source.source_id, catalog_revision: revision, artifact: selected,
+        development_directory: false, path: '' };
+    } else {
+      const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: pluginGatewayLabel(target),
+        placeHolder: type.kind === 'directory' ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
+          value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null }, cancellation.token);
+      check();
+      if (!path) return;
+      acquisition = { path, development_directory: type.kind === 'directory', artifact: undefined };
+    }
+    check();
+    await runPluginInstallation(target, acquisition, notifications, async () => {
+      // 受理前核最后一次资格；受理后只追踪原操作，不撤销或重放安装。
+      check();
+      const operationId = generateUuid();
+      let operation: PluginInstallOperationDTO;
+      try {
+        operation = requireInstallationOwner(target, operationId, await gateway.request<PluginInstallOperationDTO>(
+          '/api/gateway/service-plugins/install',
+          { method: 'POST', body: JSON.stringify({ ...target, ...acquisition, operation_id: operationId }) }));
+      } catch (error) {
+        if (error instanceof GatewayRequestError && error.status >= 400 && error.status < 500 && error.status !== 408) throw error;
+        // 明确拒绝保留原原因；响应未确认时仅查询原操作，不能另发安装。
+        try { operation = await readInstallation(target, operationId); }
+        catch (queryError) {
+          throw new Error(`安装响应未确认：${errorsText(error)}。原操作查询失败：${errorsText(queryError)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`);
+        }
+      }
+      await observeInstallation(progress, notifications, target, operationId, operation);
+    });
+  } finally {
+    releaseAuth(); releaseContext(); cancellation.dispose(); controller.abort();
+  }
 }
 
 function installationKey(target: PluginTarget, acquisition: Omit<InstallPluginRequest, keyof PluginTarget | 'operation_id'>): string {
@@ -701,11 +748,12 @@ async function observeInstallation(progress: IProgressService, notifications: IN
     .catch(error => notifications.error(`取消未确认，请查询原操作 ${operationId}：${errorsText(error)}`)); });
 }
 
-export async function installServicePluginPackage(accessor: ServicesAccessor): Promise<void> {
+export async function installServicePluginPackage(accessor: ServicesAccessor, explicitTarget?: PluginTarget): Promise<void> {
   const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
   const progress = accessor.get(IProgressService);
+  const frozen = explicitTarget ? { ...explicitTarget } : undefined;
   await workspaceContext.ensureReady();
-  const target = managementGateway('extensions');
+  const target = frozen ?? managementGateway('extensions');
   await installPackageFromView(quickInput, notifications, progress,
     { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id });
 }
