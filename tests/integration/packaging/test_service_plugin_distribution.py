@@ -83,6 +83,11 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
             provider["api_key"] = "distribution-plugin-unused-key"
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config), encoding="utf-8")
+    (workspace / "distribution-debug.mjs").write_text(
+        "const state = { counter: 1 };\nstate.counter += 2;\nstate.counter += 3;\n"
+        "console.log('distribution-debug-result', state.counter);\nsetInterval(() => {}, 1000);\n",
+        encoding="utf-8",
+    )
     # 公共装具会初始化开发版 Home；发行验收必须从发行物自己的初始化入口建新 Home。
     home = runtime / "distribution-home"
     empty_path = runtime / "empty-path"
@@ -324,8 +329,57 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         latest = exchange("GET", f"/api/v1/resources/{resource['resource_id']}").raise_for_status().json()["data"]
         exchange("POST", f"/api/v1/resources/{resource['resource_id']}/stop",
             {"expected_revision": latest["owner_revision"]}).raise_for_status()
-        bind([], workspace=True)
+        # 同一发行包的 Debug 插件也必须在空 PATH 下真实启动目标，不能只验管理 ready。
+        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+            "plugin_id": "debugging", "enabled": True}], workspace=True)
         require_exited({"terminal": terminal})
+        debug_plugin = states()["debugging"]
+        deadline = time.monotonic() + 30
+        while debug_plugin["state"] != "ready":
+            assert debug_plugin["state"] != "failed", debug_plugin
+            assert time.monotonic() < deadline, debug_plugin
+            time.sleep(0.1)
+            debug_plugin = states()["debugging"]
+        owner = {"session_id": session["session_id"], "thread_id": session["thread_id"]}
+        configured = exchange("POST", "/api/v1/debug/node/configurations", {**owner,
+            "name": "源码外发行 Debug", "script_path": "distribution-debug.mjs", "working_directory": ".",
+            "breakpoints": [{"path": "distribution-debug.mjs", "line": 2}]}).raise_for_status().json()["data"]
+        start = {**owner, "path": "distribution-debug.mjs", "configuration_id": configured["active_configuration_id"]}
+        run = exchange("POST", "/api/v1/debug/node/start", start).raise_for_status().json()["data"]
+        assert run["status"] == "paused" and run["call_stack"][0]["line"] == 2, run
+        assert run["debugger_binding"]["instance_id"] == debug_plugin["instance"]["instance_id"]
+        assert Path(psutil.Process(run["pid"]).exe()).resolve() == node.resolve()
+        evaluated = exchange("POST", "/api/v1/debug/node/action", {**owner, "action": "evaluate",
+            "params": {"expression": "state.counter += 10"}}).raise_for_status().json()["data"]
+        assert evaluated["run_id"] == run["run_id"] and evaluated["last_evaluation"]["value"] == "11"
+        stepped = exchange("POST", "/api/v1/debug/node/action", {**owner, "action": "step_over"}).raise_for_status().json()["data"]
+        assert stepped["run_id"] == run["run_id"] and stepped["call_stack"][0]["line"] == 3
+        exchange("POST", "/api/v1/debug/node/action", {**owner, "action": "continue"}).raise_for_status()
+        deadline = time.monotonic() + 10
+        while True:
+            observed = exchange("GET", f"/api/v1/debug/node?{urlencode(owner)}").raise_for_status().json()["data"]
+            if "distribution-debug-result 16" in observed["output"]:
+                break
+            assert time.monotonic() < deadline, observed
+            time.sleep(0.1)
+        stopped = exchange("POST", "/api/v1/debug/node/action", {**owner, "action": "stop"}).raise_for_status().json()["data"]
+        assert stopped["status"] == "exited" and not psutil.pid_exists(run["pid"]), stopped
+        restarted = exchange("POST", "/api/gateway/service-plugins/restart", {"gateway_id": gateway_id,
+            "package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "debugging",
+            "workspace_id": workspace_id, "revision": debug_plugin["revision"]}).raise_for_status().json()["data"]
+        assert restarted["state"] == "ready"
+        assert restarted["instance"]["instance_id"] != debug_plugin["instance"]["instance_id"]
+        require_exited({"debugging": debug_plugin})
+        second_run = exchange("POST", "/api/v1/debug/node/start", start).raise_for_status().json()["data"]
+        assert second_run["status"] == "paused" and second_run["run_id"] != run["run_id"]
+        assert second_run["debugger_binding"]["instance_id"] == restarted["instance"]["instance_id"]
+        second_stop = exchange("POST", "/api/v1/debug/node/action", {**owner, "action": "stop"}).raise_for_status().json()["data"]
+        assert second_stop["status"] == "exited" and not psutil.pid_exists(second_run["pid"]), second_stop
+        evidence.append({"debug_runs": [run["run_id"], second_run["run_id"]],
+            "debug_pids_exited": [run["pid"], second_run["pid"]],
+            "debug_instances": [debug_plugin["instance"]["instance_id"], restarted["instance"]["instance_id"]]})
+        bind([], workspace=True)
+        require_exited({"debugging": restarted})
         uninstall("boxteam.developer-tools", "0.1.0")
         if os.environ.get("BOXTEAM_TEST_DISTRIBUTION_WORKBENCH") == "1":
             result_path = context.artifacts_dir / "workbench.json"
