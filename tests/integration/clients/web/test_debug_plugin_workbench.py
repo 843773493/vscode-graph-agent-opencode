@@ -10,6 +10,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
+from zipfile import ZIP_STORED, ZipFile
 
 import commentjson
 import psutil
@@ -117,6 +118,16 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
     )
     gateway_home = context.boxteam_home_for_node(request.node.nodeid)
     copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
+    # 复用已准备原件构造确切新版，不重新下载／编译；安装与换绑仍走产品入口。
+    upgraded_manifest = commentjson.loads((prepared_developer_tools_package / "plugin.jsonc").read_text(encoding="utf-8"))
+    upgraded_manifest["version"] = "0.2.0"
+    upgraded_archive = context.artifacts_dir / "developer-tools-0.2.0.zip"
+    with ZipFile(upgraded_archive, "w", compression=ZIP_STORED) as archive:
+        archive.writestr("plugin.jsonc", json.dumps(upgraded_manifest))
+        for path in sorted(prepared_developer_tools_package.rglob("*")):
+            relative = path.relative_to(prepared_developer_tools_package).as_posix()
+            if path.is_file() and relative not in {"plugin.jsonc", ".boxteam-plugin.json"}:
+                archive.write(path, relative)
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=port,
         boxteam_home=gateway_home, artifacts_dir=context.artifacts_dir / "gateway",
         asgi_app="tests.support.e2e_control.gateway_app:app",
@@ -129,7 +140,7 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
             result = subprocess.run(command, cwd=context.project_root, timeout=195, check=False, capture_output=True, text=True,
                 env={**os.environ, **debug_model.environment, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                     "BOXTEAM_DEBUG_UI_INPUT": json.dumps({"baseUrl": base_url, "artifacts": str(context.artifacts_dir),
-                        "modelInteractions": _model_interactions()})})
+                        "modelInteractions": _model_interactions(), "upgradedPackage": str(upgraded_archive)})})
         (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
         (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}), encoding="utf-8")
@@ -137,6 +148,13 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         receipt = json.loads((context.artifacts_dir / "debug-ui.json").read_text(encoding="utf-8"))
         assert receipt["phase"] == "complete" and receipt["pageErrors"] == []
         assert receipt["initialBreakpoint"] and receipt["stepOver"] and receipt["agentSharedRun"] and receipt["actualExit"]
+        assert receipt["staleLaunch"]["status"] == 400 and receipt["staleLaunch"]["ownerIdle"]
+        assert receipt["staleLaunch"]["newVersion"] == "0.2.0"
+        assert not psutil.pid_exists(receipt["staleLaunch"]["oldPluginPid"])
+        assert not psutil.pid_exists(receipt["instance"]["process_id"])
+        assert len(receipt["uninstalled"]) == 2
+        for version in ("0.1.0", "0.2.0"):
+            assert not (gateway_home / "plugins/packages/boxteam.developer-tools" / version).exists()
         assert isinstance(receipt["pid"], int) and not psutil.pid_exists(receipt["pid"]), receipt
         assert not psutil.pid_exists(receipt["parallelThread"]["pid"]), receipt
     finally:

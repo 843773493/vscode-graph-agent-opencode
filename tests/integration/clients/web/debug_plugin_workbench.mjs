@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { testControl } from '../../../support/e2e_control/browser_client.mjs';
+import { installPlugin } from '../../../support/plugin_package.mjs';
 
 const input = JSON.parse(process.env.BOXTEAM_DEBUG_UI_INPUT);
 const result = { phase: 'initialization', pageErrors: [], dap: [] };
@@ -43,15 +44,6 @@ try {
     });
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
-  // 当前发布合同使用浏览器自己的 Cookie jar；不让 Bun HTTP 装具处理 Set-Cookie。
-  await page.evaluate(async () => {
-    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
-    const response = await fetch('/api/gateway/users/guest', { method: 'POST',
-      headers: { 'X-Local-Token': credential.data.token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tracking: { test: true } }) });
-    if (!response.ok) throw new Error('创建测试游客失败：' + await response.text());
-  });
-  await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   const api = async (path, options = {}, owner) => page.evaluate(async ({ path, options, owner }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
@@ -144,6 +136,64 @@ try {
   await sessionRow(owner).dblclick();
   await expect(threadPane.getByTestId('composer-input')).toBeVisible();
   await threadPane.getByTestId('composer-input').click();
+  result.phase = 'stale-launch-after-version-change';
+  const originalPlugin = ready;
+  const originalDeclaration = (await api(`/api/v1/debug/node/debugger-contributions?workspace_id=${owner.workspaceId}`, {}, owner)).debuggers[0];
+  await installPlugin(api, { gateway_id: owner.gatewayId, path: input.upgradedPackage });
+  let releaseStaleConfiguration, enterStaleConfiguration;
+  const staleBarrier = new Promise(resolve => { releaseStaleConfiguration = resolve; });
+  const staleEntered = new Promise(resolve => { enterStaleConfiguration = resolve; });
+  const stalePattern = url => url.pathname === '/api/v1/debug/node/configurations'
+    && url.searchParams.get('session_id') === owner.sessionId && url.searchParams.get('thread_id') === owner.threadId;
+  const delayStaleConfiguration = async route => { enterStaleConfiguration(); await staleBarrier; await route.continue(); };
+  await page.route(stalePattern, delayStaleConfiguration);
+  // 原命令可由 DebugService 报错后返回 false，也可拒绝；业务入口的明确拒绝才是准入证据。
+  const staleLaunching = command('boxteam.debug.start').then(value => ({ value }), error => ({ error: String(error) }));
+  try {
+    await Promise.race([staleEntered, staleLaunching.then(() => { throw new Error('旧启动没有进入冻结声明后的配置读取'); })]);
+    const current = await api(sourcePath, {}, owner), changed = JSON.parse(current.jsonc);
+    changed.plugins.runtime.entries[0].package_version = '0.2.0';
+    const saved = await api(sourcePath, { method: 'PUT', body: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
+      source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(changed), base_file_digest: current.file_digest,
+      base_layer_revision: current.layer_revision, base_layer_digest: current.layer_digest,
+      expected_active_revision: current.active_revision, expected_active_digest: current.active_digest,
+      idempotency_key: 'debug-ui-switch-while-resolving' } }, owner);
+    assert.equal(saved.edit.state, 'active');
+    await expect.poll(async () => {
+      const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
+      ready = snapshot.plugins.find(item => item.binding.plugin_id === 'debugging' && item.binding.workspace_id === owner.workspaceId);
+      if (ready?.state === 'failed') throw new Error(`新版Debug插件启动失败: ${JSON.stringify(ready)}`);
+      return [ready?.state, ready?.binding.package_version];
+    }, { timeout: 45_000 }).toEqual(['ready', '0.2.0']);
+    assert.notEqual(ready.instance.instance_id, originalPlugin.instance.instance_id);
+    const rejected = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/debug/node/start');
+    releaseStaleConfiguration();
+    await expect(quick.getByText('UI shared Node', { exact: true })).toBeVisible();
+    await quick.getByText('UI shared Node', { exact: true }).click();
+    const response = await rejected;
+    assert.equal(response.status(), 400);
+    const sent = response.request().postDataJSON(), failure = await response.json();
+    assert.equal(sent.debugger_registration_id, originalDeclaration.registration_id);
+    assert.equal(sent.session_id, owner.sessionId); assert.equal(sent.thread_id, owner.threadId);
+    assert.equal(failure.request_id, response.headers()['x-request-id']);
+    assert(JSON.stringify(failure).includes('冻结的 Node Debug 插件注册已失效'));
+    const launchError = page.locator('.monaco-dialog-box');
+    await expect(launchError).toContainText('冻结的 Node Debug 插件注册已失效');
+    await launchError.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(launchError).not.toBeVisible();
+    const outcome = await staleLaunching;
+    assert.equal(outcome.error, undefined, '用户关闭错误对话框后，原命令应正常结清');
+    const unchanged = await state();
+    assert.equal(unchanged.status, 'idle'); assert.equal(unchanged.run_id ?? null, null);
+    assert.equal((await otherState()).status, 'idle');
+    assert.equal(result.dap.length, 0, '被拒绝的旧声明不能创建目标或打开DAP');
+    result.staleLaunch = { status: response.status(), request: sent, failure, outcome, ownerIdle: true,
+      newVersion: ready.binding.package_version, oldPluginPid: originalPlugin.instance.process_id };
+    result.instance = ready.instance;
+  } finally {
+    releaseStaleConfiguration();
+    await page.unroute(stalePattern, delayStaleConfiguration);
+  }
   result.phase = 'debug-start';
   let releaseConfiguration;
   const configurationBarrier = new Promise(resolve => { releaseConfiguration = resolve; });
@@ -372,6 +422,28 @@ try {
   await expect.poll(async () => (await state()).status, { timeout: 15_000 }).toBe('exited');
   assert.equal(lostEvaluationRequests, 1, '连接断开及后续操作不得重放有副作用的求值');
   result.finalState = await state(); result.actualExit = true;
+  result.phase = 'unbind-and-uninstall';
+  const finalSource = await api(sourcePath, {}, owner), finalDocument = JSON.parse(finalSource.jsonc);
+  finalDocument.plugins.runtime.entries = [];
+  const unbound = await api(sourcePath, { method: 'PUT', body: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
+    source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(finalDocument), base_file_digest: finalSource.file_digest,
+    base_layer_revision: finalSource.layer_revision, base_layer_digest: finalSource.layer_digest,
+    expected_active_revision: finalSource.active_revision, expected_active_digest: finalSource.active_digest,
+    idempotency_key: 'debug-ui-unbind-after-actual-exit' } }, owner);
+  assert.equal(unbound.edit.state, 'active');
+  await expect.poll(async () => {
+    const snapshot = await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: owner.gatewayId } });
+    return snapshot.plugins.some(item => item.binding.package_id === 'boxteam.developer-tools'
+      && item.binding.plugin_id === 'debugging' && item.binding.workspace_id === owner.workspaceId);
+  }, { timeout: 15_000 }).toBe(false);
+  result.uninstalled = [];
+  for (const version of ['0.1.0', '0.2.0']) {
+    const removed = await api('/api/gateway/service-plugins/uninstall', { method: 'POST', body: {
+      gateway_id: owner.gatewayId, package_id: 'boxteam.developer-tools', package_version: version,
+    } });
+    assert.deepEqual(removed, { package_id: 'boxteam.developer-tools', package_version: version, uninstalled: true });
+    result.uninstalled.push(removed);
+  }
   assert.equal(result.pageErrors.length, 0, result.pageErrors.join('\n'));
   result.phase = 'complete';
 } catch (error) {
