@@ -32,6 +32,7 @@ from tests.integration.gateway.test_terminal_plugin_lifecycle import (
     _receive_output,
     _wait_for_plugin,
 )
+from tests.support.paths import chromium_temporary_environment
 from tests.support.plugin_package import install_plugin
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import terminate_process, wait_for_http_ok
@@ -156,7 +157,9 @@ def distribution_gateway(request: pytest.FixtureRequest) -> Iterator[tuple[httpx
                 terminate_process(process, timeout_seconds=150, stdin_eof=True)
 
 
-def test_relocated_distribution_completes_service_plugin_lifecycle(distribution_gateway) -> None:
+def test_relocated_distribution_completes_service_plugin_lifecycle(
+    distribution_gateway, request: pytest.FixtureRequest,
+) -> None:
     client, context, distribution, home = distribution_gateway
     evidence: list[dict[str, object]] = []
     gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
@@ -324,6 +327,28 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(distribution_
         bind([], workspace=True)
         require_exited({"terminal": terminal})
         uninstall("boxteam.developer-tools", "0.1.0")
+        if os.environ.get("BOXTEAM_TEST_DISTRIBUTION_WORKBENCH") == "1":
+            result_path = context.artifacts_dir / "workbench.json"
+            temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
+            environment = {**os.environ, "HOME": str(temporary),
+                "XDG_CACHE_HOME": str(temporary / "cache"),
+                "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
+                    "application": str(distribution / manifest["application_root"]),
+                    "chromium": str(distribution / manifest["chromium_executable"]),
+                    "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
+                        for version in ("1.0.0", "2.0.0")],
+                    "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png")})}
+            command = [str(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
+            with chromium_temporary_environment(temporary) as browser_environment:
+                browser = subprocess.run(command, env=environment | browser_environment,
+                    capture_output=True, text=True, timeout=180, check=False)
+            (context.artifacts_dir / "browser.stdout.raw").write_text(browser.stdout, encoding="utf-8")
+            (context.artifacts_dir / "browser.stderr.raw").write_text(browser.stderr, encoding="utf-8")
+            assert browser.returncode == 0, f"源码外 Workbench 插件闭环失败：{result_path}；{browser.stderr}"
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            assert result["phase"] == "complete" and not result["pageErrors"] and not result["externalRequests"]
+            assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])
+            assert not (home / "plugins/packages/distribution.probe").exists()
         context.write_result("passed", {"target": target, "exchanges": len(evidence)})
     finally:
         (context.artifacts_dir / "lifecycle.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -66,6 +66,7 @@ def test_offline_launcher_completes_service_plugin_lifecycle(offline_distributio
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "BOXTEAM_TEST_RUNTIME_ASSET": "/inputs/runtime.tgz",
         "BOXTEAM_TEST_PREPARED_LAUNCHER": "/inputs/launcher",
+        "BOXTEAM_TEST_DISTRIBUTION_WORKBENCH": os.environ.get("BOXTEAM_TEST_DISTRIBUTION_WORKBENCH", "0"),
         "BOXTEAM_TEST_RUN_ID": f"offline-launcher-{uuid4().hex}",
     }.items():
         command.extend(["--env", f"{name}={value}"])
