@@ -378,9 +378,25 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         evidence.append({"debug_runs": [run["run_id"], second_run["run_id"]],
             "debug_pids_exited": [run["pid"], second_run["pid"]],
             "debug_instances": [debug_plugin["instance"]["instance_id"], restarted["instance"]["instance_id"]]})
-        bind([], workspace=True)
+        bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
+            "plugin_id": "browser", "enabled": True}], workspace=True)
         require_exited({"debugging": restarted})
-        uninstall("boxteam.developer-tools", "0.1.0")
+        deadline = time.monotonic() + 30
+        while True:
+            browser_plugin = states()["browser"]
+            if browser_plugin["state"] == "ready":
+                break
+            assert browser_plugin["state"] != "failed" and time.monotonic() < deadline, browser_plugin
+            time.sleep(0.1)
+        browser_resource = exchange("POST", "/api/v1/resources/browsers", {**owner,
+            "retention_scope": "workspace", "title": "源码外发行 Browser", "url": "about:blank"}).raise_for_status().json()["data"]
+        operated = exchange("POST", f"/api/v1/resources/{browser_resource['resource_id']}/browser-operation", {
+            "expected_revision": browser_resource["owner_revision"], "thread": browser_resource["source_thread"],
+            "action": "navigate", "payload": {"type": "url", "url": "data:text/html,<title>distribution-browser-api</title>"},
+        }).raise_for_status().json()["data"]["browser"]
+        assert operated["metadata"]["pages"][0]["title"] == "distribution-browser-api"
+        attach = client.get("/api/gateway/attach/browser/index.html").raise_for_status()
+        assert 'src="./main.js"' in attach.text
         if os.environ.get("BOXTEAM_TEST_DISTRIBUTION_WORKBENCH") == "1":
             result_path = context.artifacts_dir / "workbench.json"
             temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
@@ -399,6 +415,8 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                 "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
                     "application": str(distribution / manifest["application_root"]),
                     "chromium": str(distribution / manifest["chromium_executable"]),
+                    "browserResource": {"resourceId": browser_resource["resource_id"], "workspaceId": workspace_id,
+                        "gatewayId": gateway_id, "instanceId": browser_plugin["instance"]["instance_id"]},
                     "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
                         for version in ("1.0.0", "2.0.0")],
                     "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
@@ -413,11 +431,20 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             assert browser.returncode == 0, f"源码外 Workbench 插件闭环失败：{result_path}；{browser.stderr}"
             result = json.loads(result_path.read_text(encoding="utf-8"))
             assert result["phase"] == "complete" and not result["pageErrors"] and not result["externalRequests"]
+            assert result["browserAttachment"]["reconnected"] and result["browserAttachment"]["connections"] == 2
             assert all(not psutil.pid_exists(pid) for pid in result["exitedPids"])
             assert not (home / "plugins/packages/distribution.probe").exists()
             if electron_asset:
                 assert len(result["native"]["launches"]) == len(result["native"]["exits"]) == 2
                 assert not result["native"]["storageErrors"]
+        latest_browser = exchange("GET", f"/api/v1/resources/{browser_resource['resource_id']}").raise_for_status().json()["data"]
+        stopped_browser = exchange("POST", f"/api/v1/resources/{browser_resource['resource_id']}/stop", {
+            "expected_revision": latest_browser["owner_revision"],
+        }).raise_for_status().json()["data"]
+        assert stopped_browser["status"] == "closed"
+        bind([], workspace=True)
+        require_exited({"browser": browser_plugin})
+        uninstall("boxteam.developer-tools", "0.1.0")
         context.write_result("passed", {"target": target, "exchanges": len(evidence)})
     finally:
         (context.artifacts_dir / "lifecycle.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

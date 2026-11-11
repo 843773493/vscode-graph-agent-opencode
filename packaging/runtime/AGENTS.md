@@ -102,19 +102,17 @@ out/tests/packaging/runtime/
 输入与观察先分开，同一运行ID、平台和场景连接两者；场景名说明默认目录、独立下载根、缓存、续传或故障目的。`result.json`保存准确命令、cwd、5秒子进程上限及真实退出原因；外层测试仍需进程外内存与超时保护。现场不是可发布runtime或可复用业务工作区；复查原件时不在原目录重跑以覆盖归档状态。
 
 
-`application-sources.mjs`统一Linux与Windows runtime的源码复制清单，显式接收项目根和application目录，不从文件位置推导根目录；复制`app/`、`configs/`、`resources/`、terminal/browser服务端与各自protocol、`terminal/shared/`终端服务端相对导入模块、`src/shared/`跨进程协议与服务端日志模块、共享protocol及`pyproject.toml`，过滤任意层级的`__pycache__`和`.pyc`。`application-sources.test.mjs`验证最小源码树的文件字节、中文和空格路径、源树不变及过滤；快照键统一使用`/`，真实读写路径仍遵循宿主规则，同一已读快照供相关断言复用。Windows依赖接线测试继续执行真实复制至依赖owner边界。测试不下载、安装依赖或执行发行构建。
+`application-sources.mjs`统一Linux与Windows runtime的源码复制清单，显式接收项目根和application目录，不从文件位置推导根目录；复制`app/`、`configs/`、`resources/`、Terminal／Browser attach客户端与各自protocol、`terminal/shared/`客户端相对导入模块、`src/shared/`跨进程协议与服务端日志模块、共享protocol及`pyproject.toml`，过滤任意层级的`__pycache__`和`.pyc`。`application-sources.test.mjs`验证最小源码树的文件字节、中文和空格路径、源树不变及过滤；快照键统一使用`/`，真实读写路径仍遵循宿主规则，同一已读快照供相关断言复用。Windows依赖接线测试继续执行真实复制至依赖owner边界。测试不下载、安装依赖或执行发行构建。
 
 ```text
 out/tests/packaging/runtime/application-sources/
 ├── workspace/<run_id>/
-│   ├── source-integrity-and-bytecode-filter/  最小源码树与复制结果
-│   └── terminal-import-closure/              终端依赖闭包的源码与staging
+│   └── source-integrity-and-bytecode-filter/  最小源码树与复制结果
 └── artifacts/<run_id>/
-    ├── source-integrity-and-bytecode-filter/  源树前后快照与复制结果快照
-    └── terminal-import-closure/              stdout.raw、stderr.raw、result.json
+    └── source-integrity-and-bytecode-filter/  源树前后快照与复制结果快照
 ```
 
-先按输入与观察结果分层，再用同一运行ID和场景连接两者；运行和场景目录独占创建，正式fixture及结果保留，子进程原始结果先落盘再判断成功。只有终端闭包场景复制真实终端模块并执行Node import，不启动终端、业务服务或安装依赖；本机通过不能替代Windows/macOS原生验证。
+先按输入与观察结果分层，再用同一运行ID和场景连接两者；运行和场景目录独占创建，正式fixture及结果保留，子进程原始结果先落盘再判断成功。不复制插件服务端；真实服务从完整插件 ZIP 运行，应用目录只保留 Gateway attach 资产、协议与 Launcher 共享日志模块。源码外页面和业务验证由正式发行集成测试完成，本机通过不能替代 Windows/macOS 原生验证。
 
 `verification/verify-linux-x64.mjs`与`verification/verify-windows-x64.mjs`共用`verification-readiness.mjs`，各入口显式传入Launcher、健康URL、认证头及原有60/180秒预算；Windows便携版使用自己的Launcher句柄。请求、重试与迟到响应共用单调期限，状态码探针取消未消费正文及传输，失败保留最后原因，成功交付前复核进程退出码和终止信号；观测超时不表示产品已停止或回滚。Windows停止等待、产品API验收与进程终止仍归各自验证入口，不混入就绪owner。
 

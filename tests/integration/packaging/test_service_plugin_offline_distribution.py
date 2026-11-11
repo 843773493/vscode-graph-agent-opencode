@@ -47,7 +47,8 @@ def test_offline_launcher_completes_service_plugin_lifecycle(offline_distributio
     inner_output = project / "out/tests/integration/packaging/test_service_plugin_distribution"
     inner_output.mkdir(parents=True, exist_ok=True)
     command = ["docker", "create", "--name", f"boxteam-plugin-offline-{uuid4().hex}",
-        "--pull", "never", "--network", "none", "--init", "--memory", "4g", "--pids-limit", "256",
+        # Browser 服务和操作 Workbench 的 Chromium 同时运行，线程也计入 PID 限额。
+        "--pull", "never", "--network", "none", "--init", "--memory", "4g", "--pids-limit", "512",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "--ulimit", "data=4294967296:4294967296", "--workdir", "/verification"]
     for source, target, writable in (

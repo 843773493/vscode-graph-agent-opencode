@@ -37,8 +37,8 @@ export function copyApplicationSources(projectRoot, applicationRoot) {
   );
   for (const service of ["terminal", "browser"]) {
     cpSync(
-      path.join(projectRoot, "src", "workspace-services", service, "server"),
-      path.join(applicationRoot, "src", "workspace-services", service, "server"),
+      path.join(projectRoot, "src", "workspace-services", service, "client"),
+      path.join(applicationRoot, "src", "workspace-services", service, "client"),
       copyOptions,
     );
     cpSync(
@@ -47,11 +47,6 @@ export function copyApplicationSources(projectRoot, applicationRoot) {
       copyOptions,
     );
   }
-  cpSync(
-    path.join(projectRoot, "src", "workspace-services", "terminal", "client"),
-    path.join(applicationRoot, "src", "workspace-services", "terminal", "client"),
-    copyOptions,
-  );
   cpSync(
     path.join(projectRoot, "src", "workspace-services", "terminal", "shared"),
     path.join(applicationRoot, "src", "workspace-services", "terminal", "shared"),

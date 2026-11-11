@@ -82,6 +82,58 @@ try {
   const active = result.initialization[1].data.active_workspace;
   assert.equal(active.gateway_id, result.initialization[0].data.gateway_id);
   assert.equal(active.workspace_id, result.initialization[2].data.workspace_id);
+  result.phase = 'browser-attach';
+  const attachment = input.browserResource;
+  assert.equal(attachment.gatewayId, active.gateway_id);
+  assert.equal(attachment.workspaceId, active.workspace_id);
+  const browserSockets = [];
+  page.on('websocket', socket => {
+    if (!new URL(socket.url()).pathname.includes('/services/socket/browser')) return;
+    const observation = { path: new URL(socket.url()).pathname, binaryFrames: 0, input: [], replies: [] };
+    browserSockets.push(observation);
+    result.browserTransports = browserSockets;
+    socket.on('framesent', frame => {
+      if (typeof frame.payload !== 'string') return;
+      const message = JSON.parse(frame.payload);
+      if (message.type === 'pointer') observation.input.push(message);
+    });
+    socket.on('framereceived', frame => {
+      if (Buffer.isBuffer(frame.payload)) observation.binaryFrames++;
+      else {
+        const message = JSON.parse(frame.payload);
+        if (['error', 'operationAck'].includes(message.type)) observation.replies.push(message);
+      }
+    });
+  });
+  const attachUrl = new URL('/api/gateway/attach/browser/index.html', input.baseUrl);
+  attachUrl.search = new URLSearchParams({ browserId: attachment.resourceId, workspaceId: attachment.workspaceId,
+    target_gateway_id: attachment.gatewayId }).toString();
+  await page.goto(attachUrl.href, { waitUntil: 'domcontentloaded' });
+  const attachToggle = page.locator('#attach-toggle');
+  await expect(attachToggle).toHaveAttribute('aria-label', '断开浏览器');
+  await page.locator('#address-input').fill('data:text/html,<title>distribution-browser-page</title>'
+    + '<style>html,body{margin:0;width:100%;height:100%;background:rgb(0,128,0)}</style>'
+    + '<body onclick="document.body.style.background=\'rgb(0,0,128)\'">release</body>');
+  await page.locator('#address-input').press('Enter');
+  const pixel = () => page.locator('#screen-canvas').evaluate(canvas =>
+    Array.from(canvas.getContext('2d').getImageData(100, 100, 1, 1).data).slice(0, 3));
+  const greenFrame = async () => { const [red, green, blue] = await pixel(); return red < 20 && green > 110 && green < 150 && blue < 20; };
+  await expect.poll(greenFrame, { timeout: 30_000 }).toBe(true);
+  await page.locator('#screen-canvas').click({ position: { x: 100, y: 100 } });
+  const blueFrame = async () => { const [red, green, blue] = await pixel(); return red < 20 && green < 20 && blue > 110 && blue < 150; };
+  await expect.poll(blueFrame).toBe(true);
+  await attachToggle.click();
+  await expect(attachToggle).toHaveAttribute('aria-label', '连接浏览器');
+  await page.locator('#screen-canvas').evaluate(canvas => canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height));
+  await attachToggle.click();
+  await expect(attachToggle).toHaveAttribute('aria-label', '断开浏览器');
+  await expect.poll(() => browserSockets[1]?.binaryFrames ?? 0).toBeGreaterThan(0);
+  await expect.poll(blueFrame).toBe(true);
+  assert.equal(browserSockets.length, 2);
+  assert.ok(browserSockets.every(({ path }) => path.includes(`/instances/${attachment.instanceId}/`)));
+  result.browserAttachment = { ...attachment, pixel: await pixel(), reconnected: true, connections: browserSockets.length };
+  await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   const target = { gateway_id: active.gateway_id };
   const slots = async () => Object.fromEntries((await api('/api/gateway/service-plugins/status', target)).plugins
     .filter(item => item.binding.package_id === 'distribution.probe').map(item => [item.binding.plugin_id, item]));
@@ -195,6 +247,7 @@ try {
   await page.screenshot({ path: input.screenshot, fullPage: true });
 } catch (error) {
   result.error = String(error?.stack ?? error);
+  if (page && !page.isClosed()) await page.screenshot({ path: input.screenshot, fullPage: true });
   throw error;
 } finally {
   try { await closeNative(); await browser?.close(); }

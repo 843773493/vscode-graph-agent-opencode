@@ -52,8 +52,8 @@ const SOFT_PROTECTION_LEASE_MS = 5 * 60_000;
 const PROTECTION_INSPECTION_RETRY_MS = 5_000;
 const STREAM_RELAX_DELAY_MS = 5_000;
 const STREAM_PROFILES = Object.freeze({
-  interactive: Object.freeze({ quality: 65, everyNthFrame: 2 }),
-  relaxed: Object.freeze({ quality: 50, everyNthFrame: 4 }),
+  interactive: Object.freeze({ quality: 65 }),
+  relaxed: Object.freeze({ quality: 50 }),
 });
 
 function navigationFailure({ browserId, pageId, requestedUrl, actualUrl, stage, error }) {
@@ -1964,7 +1964,6 @@ export class BrowserSession extends EventEmitter {
       quality: settings.quality,
       maxWidth: this.record.viewport?.width || DEFAULT_VIEWPORT.width,
       maxHeight: this.record.viewport?.height || DEFAULT_VIEWPORT.height,
-      everyNthFrame: settings.everyNthFrame,
     });
     this.streaming = true;
     this.streamProfile = profile;

@@ -143,9 +143,9 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   fs.writeFileSync(path.join(projectRoot, "pyproject.toml"), "fixture");
   for (const relative of ["app", "configs", "resources", "src/shared", "src/clients/web", "src/clients/workbench",
     "src/workspace-services/protocol",
-    "src/workspace-services/terminal/server", "src/workspace-services/terminal/protocol",
+    "src/workspace-services/terminal/protocol",
     "src/workspace-services/terminal/shared", "src/workspace-services/terminal/client",
-    "src/workspace-services/browser/server", "src/workspace-services/browser/protocol",
+    "src/workspace-services/browser/client", "src/workspace-services/browser/protocol",
     "packages/launcher", "packaging/runtime", "scripts/plugins"]) {
     fs.mkdirSync(path.join(projectRoot, relative), { recursive: true });
     fs.writeFileSync(path.join(projectRoot, relative, "fixture.txt"), relative);

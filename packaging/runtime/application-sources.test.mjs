@@ -1,15 +1,12 @@
 import { expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  cpSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { copyApplicationSources } from "./application-sources.mjs";
 
@@ -68,7 +65,10 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
     ["src/workspace-services/terminal/server/__pycache__/cached.pyc", Buffer.from("ignored")],
     ["src/workspace-services/terminal/protocol/终端 protocol.proto", Buffer.from("terminal protocol")],
     ["src/workspace-services/terminal/shared/终端 shared.js", Buffer.from("terminal shared")],
-    ["src/workspace-services/browser/server/browser server.js", Buffer.from("browser")],
+    ["src/workspace-services/browser/server/browser server.js", Buffer.from("插件专属服务端")],
+    ["src/workspace-services/browser/client/index.html", Buffer.from("browser attach")],
+    ["src/workspace-services/browser/client/main.js", Buffer.from("browser entry")],
+    ["src/workspace-services/browser/client/browserInputEvents.js", Buffer.from("browser input")],
     ["src/workspace-services/browser/protocol/browser protocol.proto", Buffer.from("browser protocol")],
     ["src/workspace-services/protocol/shared protocol.proto", Buffer.from("shared protocol")],
     ["node_modules/@xterm/xterm/css/xterm.css", Buffer.from("static asset 0")],
@@ -98,7 +98,8 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
   }
   const expected = files
     .filter(([relative]) =>
-      !relative.split("/").includes("__pycache__") && !relative.endsWith(".pyc"),
+      !relative.split("/").includes("__pycache__") && !relative.endsWith(".pyc") &&
+      !/^src\/workspace-services\/(terminal|browser)\/server\//.test(relative),
     )
     .map(([relative, contents]) => ({
       path: relative,
@@ -110,83 +111,4 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
   expect(
     stagedFiles.some(({ path: relative }) => relative.includes("__pycache__")),
   ).toBe(false);
-});
-
-test("staging复制后可加载终端会话模块的真实相对依赖", () => {
-  const directories = createScenarioDirectories("terminal-import-closure");
-  const repositoryRoot = process.cwd();
-  const projectRoot = path.join(directories.workspace, "终端闭包源码");
-  const applicationRoot = path.join(directories.workspace, "终端闭包staging", "application");
-  for (const relative of [
-    "app",
-    "configs",
-    "resources",
-    "src/workspace-services/browser/server",
-    "src/workspace-services/browser/protocol",
-  ]) {
-    const directory = path.join(projectRoot, relative);
-    mkdirSync(directory, { recursive: true });
-    writeFileSync(path.join(directory, "fixture.txt"), relative);
-  }
-  for (const relative of [
-    "resources/logging",
-    "src/shared",
-    "src/workspace-services/terminal/client",
-    "src/workspace-services/terminal/server",
-    "src/workspace-services/terminal/protocol",
-    "src/workspace-services/terminal/shared",
-    "src/workspace-services/protocol",
-  ]) {
-    cpSync(
-      path.join(repositoryRoot, relative),
-      path.join(projectRoot, relative),
-      { recursive: true },
-    );
-  }
-  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/xterm/css/xterm.css')), { recursive: true });
-  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/xterm/css/xterm.css'), path.join(projectRoot, 'node_modules/@xterm/xterm/css/xterm.css'));
-  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/xterm/lib/xterm.js')), { recursive: true });
-  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/xterm/lib/xterm.js'), path.join(projectRoot, 'node_modules/@xterm/xterm/lib/xterm.js'));
-  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/addon-fit/lib/addon-fit.js')), { recursive: true });
-  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/addon-fit/lib/addon-fit.js'), path.join(projectRoot, 'node_modules/@xterm/addon-fit/lib/addon-fit.js'));
-  mkdirSync(path.dirname(path.join(projectRoot, 'node_modules/@xterm/addon-search/lib/addon-search.js')), { recursive: true });
-  cpSync(path.join(repositoryRoot, 'node_modules/@xterm/addon-search/lib/addon-search.js'), path.join(projectRoot, 'node_modules/@xterm/addon-search/lib/addon-search.js'));
-  mkdirSync(path.dirname(path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.css')), { recursive: true });
-  cpSync(path.join(repositoryRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.css'), path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.css'));
-  mkdirSync(path.dirname(path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf')), { recursive: true });
-  cpSync(path.join(repositoryRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf'), path.join(projectRoot, 'src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf'));
-  writeFileSync(path.join(projectRoot, "pyproject.toml"), "fixture\n");
-  mkdirSync(applicationRoot, { recursive: true });
-  copyApplicationSources(projectRoot, applicationRoot);
-
-  const terminalSessionUrl = pathToFileURL(path.join(
-    applicationRoot,
-    "src/workspace-services/terminal/server/terminalSession.js",
-  )).href;
-  const importScript = `
-    const loaded = await import(${JSON.stringify(terminalSessionUrl)});
-    const names = ["TerminalSession", "resolveTerminalCwd"];
-    if (names.some((name) => typeof loaded[name] !== "function")) {
-      throw new Error("terminalSession缺少预期导出");
-    }
-    console.log(names.join(","));
-  `;
-  const result = spawnSync(
-    "node",
-    ["--input-type=module", "--eval", importScript],
-    { cwd: repositoryRoot, encoding: "utf8", timeout: 5000 },
-  );
-  // 先保存原始进程结果；解析或断言失败也保留现场。
-  writeFileSync(path.join(directories.artifacts, "stdout.raw"), result.stdout ?? "", { flag: "wx" });
-  writeFileSync(path.join(directories.artifacts, "stderr.raw"), result.stderr ?? "", { flag: "wx" });
-  writeFileSync(path.join(directories.artifacts, "result.json"), `${JSON.stringify({
-    command: ["node", "--input-type=module", "--eval", importScript], cwd: repositoryRoot,
-    status: result.status, signal: result.signal, error: result.error?.message,
-  }, null, 2)}\n`, { flag: "wx" });
-  if (result.error || result.status !== 0) {
-    throw new Error(`staging终端模块import失败: exit=${result.status} signal=${result.signal ?? "none"}\n${result.stderr ?? ""}`, {
-      cause: result.error,
-    });
-  }
-  expect(result.stdout.trim()).toBe("TerminalSession,resolveTerminalCwd");
 });

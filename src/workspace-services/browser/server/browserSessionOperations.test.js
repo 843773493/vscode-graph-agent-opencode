@@ -1071,6 +1071,14 @@ describe("浏览器统一操作队列", () => {
     expect(boostCount).toBe(1);
   });
 
+  test.each(["interactive", "relaxed"])("%s 画面档位不丢弃静态页面的唯一重绘", async (profile) => {
+    const { browser, cdpCalls } = liveSession();
+    await browser.startScreencast(profile);
+    const started = cdpCalls.find(({ method }) => method === "Page.startScreencast");
+    expect(started.params.everyNthFrame ?? 1).toBe(1);
+    expect(started.params.quality).toBe(profile === "interactive" ? 65 : 50);
+  });
+
   test("降档切换尚未完成时的用户输入最终保留交互档", async () => {
     const browser = session();
     browser.streaming = true;
