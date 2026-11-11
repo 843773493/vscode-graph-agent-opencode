@@ -271,7 +271,9 @@ export function selectContract() {
 export async function symbolContract() {
   const calls = [], queried = Promise.withResolvers();
   const registration = WorkspaceSymbolProviderRegistry.register({ provideWorkspaceSymbols(query) { calls.push(query); queried.resolve(); return []; } });
-  const provider = new WorkspaceSymbolsQuickAccess({}, {}, {}, { getValue: () => ({}) }, {}, {});
+  const provider = new WorkspaceSymbolsQuickAccess({}, {}, {}, { getValue: () => ({}) }, {}, {},
+    { getWorkspace: () => ({ folders: ['workspace-a', 'workspace-b'].map(workspaceId => ({ uri: workspaceFileUri({ ...owner, workspaceId },
+      `boxteam://workspace/${workspaceId}/resources/files/root`, `boxteam://workspace/${workspaceId}/resources/files/root`) })) }) });
   const changes = new Emitter(), accepts = new Emitter(), token = new CancellationTokenSource();
   const picker = { value: '#needle', items: [], activeItems: [], keyMods: { alt: false, ctrlCmd: false },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None };
@@ -286,7 +288,7 @@ export async function symbolContract() {
     await new Promise(resolve => setTimeout(resolve, 250));
     const errorLabel = picker.items[0].label;
     lifetime.pop().dispose();
-    lifetime.push(provider.provide(picker, token.token, { searchOwners: [owner, { ...owner, workspaceId: 'workspace-b' }] }));
+    lifetime.push(provider.provide(picker, token.token, { searchOwners: [owner, { ...owner, workspaceId: 'workspace-c' }] }));
     await new Promise(resolve => setTimeout(resolve, 250));
     const multiLabel = picker.items[0].label, multiPlaceholder = picker.placeholder;
     const scopedCalls = [...calls];

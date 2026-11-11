@@ -25,3 +25,5 @@ Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显�
 `#` 的明确工作区范围必须等于原 IWorkspaceContextService 的完整窗口工作区集合，确认后才调用原 WorkspaceSymbolProviderRegistry。部分范围和没有 Provider 时显示具体原因，不查其它目标后过滤，不恢复旧用户宿主。原排序、接受、resolve 和取消继续由原 SymbolsQuickAccessProvider 持有。
 
 明确范围沿原 getWorkspaceSymbols 的可选失败回调保留成功候选并报告具体原因；取消后不发布迟到错误。原无范围查询、公开符号命令和未传回调的消费者保持原宽容语义，不复制聚合或维护第二份符号索引。原聚合器公布逐 Provider 结果，增量与最终结果共用原去重和评分；原 Picker 的逐次 token 管输入、关闭及重试取消，失败按钮只重读对应 Provider，不重查成功分支。
+
+默认 Quick Access 的 `search.quickOpen.includeSymbols` 与 `#` 共用明确范围符号查询、原 Provider、评分及单分支重试；默认入口保留原全局符号过滤，附在文件组后。两组结果共用查询 token 和加载状态，文件限定／调用方 delegate／行列定位不启动符号查询。接受和侧开沿原 resolve 与修饰键，并固定发起编辑器组；不复制符号打开链。

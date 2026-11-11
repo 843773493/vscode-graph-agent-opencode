@@ -33,7 +33,7 @@ export async function quickAccessControllerContract({ action, canPickMany }) {
   }
   lifetime.add(Registry.as(Extensions.Quickaccess).registerQuickAccessProvider({ prefix, ctor: Provider }));
   const controller = lifetime.add(new QuickAccessController({ createQuickPick: () => picker },
-    { createInstance: ctor => new ctor() }, { contextMatchesRules: () => true }, {}));
+    { createInstance: ctor => new ctor() }, { contextMatchesRules: () => true, getContextKeyValue: () => undefined }, {}));
   const options = { canPickMany, preserveValue: true, enabledProviderPrefixes: [prefix], providerOptions: { fileSearchDelegate: {} } };
   try {
     const pending = action === 'show' ? controller.show(prefix, options) : controller.pick(prefix, options);

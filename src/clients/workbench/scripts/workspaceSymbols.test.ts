@@ -58,7 +58,7 @@ const Scope = new Function('SymbolsQuickAccessProvider', 'WorkspaceSymbolProvide
   (uri: URI) => { const [, workspaceId] = uri.path.split('/'); return { gatewayId: uri.authority, workspaceId }; },
   toDisposable, prepareQuery, pieceToQuery, original.coalesceWorkspaceSymbols, original.getWorkspaceSymbols, ThemeIcon, Codicon, { NO_ACTION: 0 }, CancellationTokenSource,
 ) as new () => { workspaceContextService: object; delayer: object; configurationService: object; labelService: object;
-  picker: { items: Pick[]; activeItems: Pick[]; busy: boolean }; settled: Promise<void>; provide(picker: object, token: CancellationToken, options: object): { dispose(): void }; _getPicks(query: string, disposable: DisposableStore, token: CancellationToken, options: object): Promise<Pick[]> };
+  picker: { items: Pick[]; activeItems: Pick[]; busy: boolean }; settled: Promise<void>; getScopedSymbolPicks(query: string, options: object, token: CancellationToken, progress: (picks: Pick[], busy: boolean) => void, pickOptions?: object): Promise<void>; provide(picker: object, token: CancellationToken, options: object): { dispose(): void }; _getPicks(query: string, disposable: DisposableStore, token: CancellationToken, options: object): Promise<Pick[]> };
 const a = { gatewayId: 'g', workspaceId: 'a' }, b = { gatewayId: 'g', workspaceId: 'b' };
 function fixture() {
   const scope = new Scope();
@@ -236,4 +236,202 @@ test('真实原Picker输入、按钮和关闭共用逐次token，首轮结算不
     lifetime.dispose(); outer.dispose(); registrations.forEach(registration => registration.dispose());
     [change, accept, itemButton, separatorButton].forEach(event => event.dispose());
   }
+});
+
+const accessPath = join(root, 'src/search/quickAccess.ts');
+const accessSource = ts.createSourceFile(accessPath, await readFile(accessPath, 'utf8'), ts.ScriptTarget.Latest, true);
+const accessClass = accessSource.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'WorkspaceQuickAccess')! as ts.ClassDeclaration;
+const accessScript = ts.transpile(`class WorkspaceQuickAccess extends PickerQuickAccessProvider {
+  constructor() { super(''); }
+  ${accessClass.members.filter(node => !ts.isConstructorDeclaration(node)).map(node => node.getText(accessSource)).join('\n')}
+}`);
+// 真实默认Picker及符号owner共用一次查询；联邦搜索是受控服务边界，不复制其网络协议。
+function mixedFixture(options: object = {}, includeSymbols = true) {
+  const change = new Emitter<void>(), accept = new Emitter<object>(), itemButton = new Emitter<object>(), hide = new Emitter<object>();
+  let branchProgress!: (branches: object[]) => void, branchBusy!: (value: boolean) => void;
+  let branchToken!: CancellationToken, branchDisposed = false;
+  const opened: object[] = [];
+  const Mixed = new Function('PickerQuickAccessProvider', 'DisposableStore', 'MutableDisposable', 'CancellationTokenSource', 'toDisposable',
+    'workspaceContext', 'PickerEditorState', 'extractRangeFromFilter', 'rankResourcePicks', 'WorkspaceSymbolsQuickAccess',
+    'queryFederatedSearchBranches', 'QuickInputHideReason', 'getCodeEditor', 'TriggerAction', 'Codicon', 'ThemeIcon', 'GroupDirection',
+    accessScript + '\nreturn WorkspaceQuickAccess;')(
+    Picker, DisposableStore, MutableDisposable, CancellationTokenSource, toDisposable,
+    { getSnapshot: () => ({ gatewayId: 'g' }), subscribe: () => () => {} }, class {},
+    (value: string) => /:\d+$/.test(value) ? { filter: value.replace(/:\d+$/, ''), range: {} } : undefined,
+    (items: object[]) => items, Scope,
+    (_owners: object[], _categories: string[], _filter: string, disposables: DisposableStore, token: CancellationToken,
+      _cache: object, _map: object, progress: typeof branchProgress, busy: typeof branchBusy) => {
+      branchProgress = progress; branchBusy = busy; branchToken = token;
+      disposables.add(toDisposable(() => { branchDisposed = true; }));
+      busy(true);
+      return [];
+    }, { Gesture: 1 }, () => undefined, { NO_ACTION: 0 }, Codicon, ThemeIcon, { RIGHT: 1, DOWN: 2 },
+  );
+  const scope = new Mixed();
+  const group = { id: 7 };
+  scope.groups = { activeGroup: group, getGroup: (id: number) => id === 7 ? group : undefined,
+    findGroup: () => ({ id: 8 }) };
+  scope.history = { getHistory: () => [] };
+  scope.configuration = { getValue: (key: string) => key === 'search.quickOpen.includeSymbols' ? includeSymbols : undefined };
+  scope.editors = { openEditor: async (input: object, editorGroup: number) => { opened.push({ input, group: editorGroup }); } };
+  let symbols: ReturnType<typeof fixture> | undefined;
+  scope.instantiation = { createInstance: (ctor: object) => {
+    if (ctor === Scope) {
+      symbols = fixture();
+      (symbols as unknown as { editorService: object }).editorService = scope.editors;
+      return symbols;
+    }
+    return { dispose() {} };
+  } };
+  scope.quickChat = { enabled: false };
+  scope.watchIdentity = () => {}; // 身份通知为具名宿主边界；本装具验证符号查询与接受生命周期。
+  scope.quickInput = {};
+  scope.notifications = { error: (error: unknown) => { throw error; } };
+  const picker = { value: '', items: [] as (Pick & { id: string; type?: string; accept?: (mods: object, event: object) => Promise<void> })[],
+    activeItems: [] as Pick[], selectedItems: [] as Pick[], busy: false, buttons: [], keyMods: {},
+    onDidChangeValue: change.event, onDidAccept: accept.event, onDidTriggerItemButton: itemButton.event,
+    onDidTriggerSeparatorButton: (() => toDisposable(() => {})), onDidTriggerButton: (() => toDisposable(() => {})),
+    onDidHide: hide.event, onDidChangeActive: (() => toDisposable(() => {})) };
+  const outer = new CancellationTokenSource();
+  const lifetime = scope.provide(picker, outer.token, { searchOwners: [a, b], ...options });
+  return { picker, opened, input(value: string) { picker.value = value; change.fire(); },
+    branches(label: string, busy: boolean) {
+      branchBusy(busy);
+      branchProgress([{ category: '文件', picks: [{ id: 'file', label, accept() {} }], status: { id: 'file-state', label: '文件完成' } }]);
+    }, get branchToken() { return branchToken; }, get branchDisposed() { return branchDisposed; },
+    get symbols() { return symbols; },
+    accept(pick: Pick) { picker.selectedItems = [pick]; },
+    dispose() { lifetime.dispose(); outer.dispose(); [change, accept, itemButton, hide].forEach(event => event.dispose()); } };
+}
+
+test('默认列表沿同一符号链增量合并，保留原文件与活动身份，重试只读失败Provider', async () => {
+  let release!: (symbols: Symbol[]) => void, retries = 0, successes = 0;
+  const tokens: CancellationToken[] = [];
+  const fast = { provideWorkspaceSymbols: (_query: string, token: CancellationToken) => {
+    successes++; tokens.push(token);
+    return [{ name: 'needle', kind: SymbolKind.Class, location: { uri: URI.parse('boxteam-file://g/a/root/main.ts'), range: new Range(3, 2, 3, 5) } },
+      { name: 'needleLocal', kind: SymbolKind.Method, containerName: 'Container', location: { uri: URI.parse('boxteam-file://g/a/root/local.ts') } }];
+  } };
+  const slow = { provideWorkspaceSymbols: (_query: string, token: CancellationToken) => {
+    tokens.push(token);
+    if (++retries === 1) throw new Error('slow failed');
+    return new Promise<Symbol[]>(resolve => { release = resolve; });
+  } };
+  const registrations = [fast, slow].map(provider => original.WorkspaceSymbolProviderRegistry.register(provider));
+  const f = mixedFixture();
+  try {
+    f.input('needle');
+    await f.symbols!.settled;
+    expect(f.picker.items.filter(pick => pick.symbol).map(pick => pick.label)).toEqual(['needle']);
+    f.branches('needle file', false);
+    expect(f.picker.busy).toBe(false);
+    const symbol = f.picker.items.find(pick => pick.symbol)!;
+    f.picker.activeItems = [symbol];
+    const failure = f.picker.items.find(pick => pick.label.includes('slow failed'))!;
+    const retry = failure.trigger!();
+    expect(f.picker.busy).toBe(true);
+    expect(f.picker.items.some(pick => pick.id === 'file')).toBe(true);
+    expect(f.picker.activeItems[0]?.symbol).toBe(symbol.symbol);
+    release([]); await retry;
+    expect(f.picker.busy).toBe(false);
+    expect(successes).toBe(1); expect(retries).toBe(2);
+    const current = f.picker.items.find(pick => pick.symbol)!;
+    await current.accept!({ alt: true, ctrlCmd: false }, { inBackground: true });
+    expect(f.opened).toEqual([{ input: { resource: symbol.symbol!.location.uri,
+      options: { preserveFocus: true, pinned: true, selection: new Range(3, 2, 3, 2) } }, group: 8 }]);
+    f.input('needle:4');
+    expect(f.picker.items.some(pick => pick.symbol)).toBe(false);
+    expect(f.picker.items.some(pick => pick.id === 'file')).toBe(true);
+    expect(successes).toBe(1); expect(retries).toBe(2);
+    f.dispose();
+    expect(tokens.every(token => token.isCancellationRequested)).toBe(true);
+    expect(f.branchDisposed).toBe(true);
+  } finally { f.dispose(); registrations.forEach(registration => registration.dispose()); }
+});
+
+test('默认列表两组busy独立结算，新输入与关闭取消原查询并丢弃迟到符号', async () => {
+  const queries: { token: CancellationToken; resolve: (symbols: Symbol[]) => void }[] = [];
+  const registration = original.WorkspaceSymbolProviderRegistry.register({ provideWorkspaceSymbols: (_query, token) =>
+    new Promise<Symbol[]>(resolve => { queries.push({ token, resolve }); }) });
+  const f = mixedFixture();
+  try {
+    f.input('old'); await Promise.resolve(); await Promise.resolve();
+    const oldBranch = f.branchToken;
+    f.branches('old file', false);
+    expect(f.picker.busy).toBe(true);
+    f.input('new'); await Promise.resolve(); await Promise.resolve();
+    expect(oldBranch.isCancellationRequested).toBe(true);
+    expect(queries[0]!.token.isCancellationRequested).toBe(true);
+    queries[0]!.resolve([{ name: 'late', kind: SymbolKind.Class, location: { uri: URI.parse('boxteam-file://g/a/root/late.ts') } }]);
+    queries[1]!.resolve([]); await f.symbols!.settled;
+    expect(f.picker.busy).toBe(true);
+    f.branches('new file', false);
+    expect(f.picker.busy).toBe(false);
+    expect(f.picker.items.some(pick => pick.label === 'late')).toBe(false);
+    f.dispose();
+    expect(queries[1]!.token.isCancellationRequested).toBe(true);
+    expect(f.branchToken.isCancellationRequested).toBe(true);
+  } finally { f.dispose(); registration.dispose(); }
+});
+
+test('文件限定、接收回调、行列定位、关闭设置均零符号查询，部分范围只显示原因', async () => {
+  let calls = 0;
+  const registration = original.WorkspaceSymbolProviderRegistry.register({ provideWorkspaceSymbols: () => { calls++; return []; } });
+  try {
+    for (const options of [{ filesOnly: true }, { handleAccept() {} }, { range: true }, { off: true }, { searchOwners: [a] }]) {
+      const f = mixedFixture(options, !('off' in options));
+      try {
+        f.input('range' in options ? 'needle:4' : 'needle');
+        await f.symbols?.settled;
+        expect(calls).toBe(0);
+        expect(f.picker.items.some(pick => pick.label.includes('完整窗口工作区'))).toBe('searchOwners' in options);
+      } finally { f.dispose(); }
+    }
+  } finally { registration.dispose(); }
+});
+
+test('默认符号确认关闭后原resolve仍完成，新查询和关闭取消不误杀已接受打开', async () => {
+  let release!: (symbol: Symbol) => void;
+  const symbol = { name: 'needle', kind: SymbolKind.Class, location: { uri: URI.parse('boxteam-file://g/a/root/main.ts') } };
+  let resolveToken!: CancellationToken;
+  const provider = { provideWorkspaceSymbols: () => [symbol], resolveWorkspaceSymbol: (_symbol: Symbol, token: CancellationToken) => {
+    resolveToken = token;
+    return new Promise<Symbol>(resolve => { release = resolve; });
+  } };
+  const registration = original.WorkspaceSymbolProviderRegistry.register(provider);
+  const f = mixedFixture();
+  try {
+    f.input('needle'); await f.symbols!.settled;
+    const pick = f.picker.items.find(pick => pick.symbol)!;
+    f.accept(pick); f.dispose();
+    const opening = pick.accept!({ alt: false, ctrlCmd: false }, { inBackground: false });
+    expect(resolveToken.isCancellationRequested).toBe(false);
+    release(symbol); await opening;
+    expect(f.opened).toHaveLength(1);
+    expect(f.branchToken.isCancellationRequested).toBe(true);
+  } finally { f.dispose(); registration.dispose(); }
+});
+
+test('明确范围符号确认沿原调用token完成resolve，关闭仍取消未结算查询', async () => {
+  let queryToken!: CancellationToken, actionToken!: CancellationToken;
+  const symbol = { name: 'needle', kind: SymbolKind.Class, location: { uri: URI.parse('boxteam-file://g/a/root/main.ts') } };
+  const registration = original.WorkspaceSymbolProviderRegistry.register({
+    provideWorkspaceSymbols: (_query, token) => { queryToken = token; return [symbol]; },
+    resolveWorkspaceSymbol: async (_symbol: Symbol, token: CancellationToken) => { actionToken = token; return symbol; },
+  });
+  const scope = fixture(), outer = new CancellationTokenSource(), opened: object[] = [];
+  (scope as unknown as { editorService: object }).editorService = { openEditor: async (input: object) => { opened.push(input); } };
+  const picker = { value: '#needle', items: [] as Pick[], activeItems: [] as Pick[], selectedItems: [] as Pick[], keyMods: {},
+    onDidChangeValue: () => toDisposable(() => {}), onDidAccept: () => toDisposable(() => {}),
+    onDidTriggerItemButton: () => toDisposable(() => {}), onDidTriggerSeparatorButton: () => toDisposable(() => {}) };
+  const lifetime = scope.provide(picker, outer.token, { searchOwners: [a, b] });
+  try {
+    await scope.settled;
+    const pick = picker.items[0] as Pick & { accept(mods: object, event: object): Promise<void> };
+    picker.selectedItems = [pick]; lifetime.dispose();
+    await pick.accept({ alt: false, ctrlCmd: false }, { inBackground: false });
+    expect(queryToken.isCancellationRequested).toBe(true);
+    expect(actionToken.isCancellationRequested).toBe(false);
+    expect(opened).toHaveLength(1);
+  } finally { lifetime.dispose(); outer.dispose(true); registration.dispose(); }
 });

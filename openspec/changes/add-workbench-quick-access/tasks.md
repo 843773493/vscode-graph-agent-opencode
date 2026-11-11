@@ -111,6 +111,7 @@
 - [x] 10.1 为 Thread 注册原 Outline creator，使用 quickPickDataSource、preview／reveal／captureViewState；披露历史覆盖并补取缺页，取消只恢复对应组展示态。
 - [x] 10.2 保留文本 `:`／`::`／`@`／`@:` 语义；`#` 及 includeSymbols 仅接实际可限定根的符号服务，未具备时明确未启用，不伪造符号或查全局后过滤。
   - 2026-11-11 明确范围符号增量与单分支重试：原聚合器公布逐Provider结果，增量与最终结果共用原去重／评分／接受；快分支先出，失败按钮只重试原Provider。原Picker逐次token覆盖输入、关闭及在途重试，成功兄弟与活动符号保持，不访问部分窗口范围。真实原Picker／聚合／评分和项目子类的6项定向检查（37断言）、167份实际转换源码类型及规定正式Web构建通过，严格OpenSpec校验通过；语言Provider及窗口服务为DI，不冒充页面／远端语言宿主验收。默认混合列表includeSymbols仍TODO。最小复审无第二索引、持久状态、同义调度或fallback；准确命令、指纹、原件及边界见 `out/tests/temp/2026/11/11/workspace_symbols_stream/artifacts/verification.json`，实现提交b36783b92。
+  - 2026-11-11 默认列表符号接通：search.quickOpen.includeSymbols 与 # 共用明确窗口范围、原Provider／聚合／评分／失败单分支重试及resolve；文件、会话与符号渐进合并且busy独立结算，保留活动身份、发起组及侧开，追加行列不重查名称。filesOnly／delegate／handleAccept／正文及行列入口零符号查询；确认关闭后resolve仍可完成，关闭／新输入取消列表并丢弃迟到结果。11项原Picker合同（76断言）、50项Chromium原组件合同（577断言）、171份实际转换源码类型及规定正式Web构建通过，严格OpenSpec校验通过。语言Provider／窗口服务／联邦查询为具名DI，未冒充完整产品页、真实远端语言宿主或Windows／Electron；默认includeSymbols TODO已完成。准确命令、失败归因、指纹、最小复审及保留原件见 `out/tests/temp/2026/11/11/default_workspace_symbols/artifacts/verification.json`。
 - [x] 10.3 核对 `edt active `／`edt `／`edt mru ` 中 Thread／文件／Diff 的名称、类型、组、dirty 与关闭语义；同目标多组副本仍可准确选择。
 - [x] 10.4 让 `view ` 发现并聚焦已有会话导航与工作区面板，保留原视图位置和归属；验证文本与 Thread 切换、大纲预览取消和未挂载历史。
 
