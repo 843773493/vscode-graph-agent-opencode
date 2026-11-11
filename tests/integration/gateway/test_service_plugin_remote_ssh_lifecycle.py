@@ -14,6 +14,7 @@ import threading
 import time
 import zipfile
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -147,7 +148,9 @@ def _plugin_archive(version: str) -> bytes:
     source = '''
 import json, os, sys
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
+import asyncio
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from app.core.logging_config import configure_application_logging
 from app.runtime.plugin_commands import plugin_command_router
 import uvicorn
@@ -160,6 +163,15 @@ app.include_router(plugin_command_router({}, shutdown=shutdown))
 async def echo(request: Request):
     return {'instance_id': identity['instance_id'], 'package_version': identity['package_version'],
             'process_id': os.getpid(), 'request_id': request.headers.get('X-Request-ID')}
+@app.get('/services/echo/stream')
+async def echo_stream(request: Request):
+    async def frames():
+        yield json.dumps({'instance_id': identity['instance_id'],
+                          'request_id': request.headers.get('X-Request-ID')}) + '\\n'
+        while True:
+            yield 'still-open\\n'
+            await asyncio.sleep(0.05)
+    return StreamingResponse(frames(), media_type='application/x-ndjson')
 server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1',
     port=int(os.environ['BOXTEAM_PLUGIN_PORT']), log_config=None))
 server.run()
@@ -565,6 +577,52 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         assert result["instance_id"] == instance_id and result["request_id"] == request_id, result
         return result
 
+    def open_relay_stream(
+        instance_id: str,
+        request_id: str,
+        first_frame: threading.Event,
+    ) -> list[str]:
+        path = (f"/api/gateway/service-plugins/{_PACKAGE_ID}/{_PLUGIN_ID}/instances/"
+                f"{instance_id}/services/echo/stream?package_version=1.0.0")
+        lines: list[str] = []
+        with client_a.stream("GET", path, headers={
+            "X-Request-ID": request_id,
+            "X-BoxTeam-Target-Gateway-Id": gateway_b,
+            "X-BoxTeam-Gateway-Connection-Id": connection_id or "",
+        }, timeout=httpx.Timeout(30, read=5)) as response:
+            record(httpx.Response(
+                status_code=response.status_code,
+                headers=response.headers,
+                request=response.request,
+            ), request_id)
+            assert response.status_code == 200, response.read().decode("utf-8", errors="replace")
+            for line in response.iter_lines():
+                lines.append(line)
+                if line.startswith("{"):
+                    first_frame.set()
+        return lines
+
+    def open_relay_management_stream(request_id: str, first_frame: threading.Event) -> list[str]:
+        lines: list[str] = []
+        with client_a.stream(
+            "POST",
+            "/api/gateway/service-plugins/configuration-schemas/events",
+            json={"gateway_id": gateway_b, "gateway_connection_id": connection_id},
+            headers={"X-Request-ID": request_id},
+            timeout=httpx.Timeout(30, read=5),
+        ) as response:
+            record(httpx.Response(
+                status_code=response.status_code,
+                headers=response.headers,
+                request=response.request,
+            ), request_id)
+            assert response.status_code == 200, response.read().decode("utf-8", errors="replace")
+            for line in response.iter_lines():
+                lines.append(line)
+                if line.startswith("data:"):
+                    first_frame.set()
+        return lines
+
     def installation_inventory(client: httpx.Client, remote: bool) -> list[dict[str, JsonValue]]:
         if remote:
             response = relay("POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_b})
@@ -635,6 +693,59 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         assert echo(client_b, remote=False, instance_id=instance_id, version="1.0.0")["instance_id"] == instance_id
         publish_policy(capabilities)
 
+        # 撤销 send 后，已建立的业务流结束。
+        stream_started = threading.Event()
+        revoked_business_stream_closed = False
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            stream_request_id = f"remote-plugin-revoked-stream-{len(evidence)}"
+            stream = executor.submit(open_relay_stream, instance_id, stream_request_id, stream_started)
+            assert stream_started.wait(timeout=15), "Relay 业务流未收到首帧"
+            publish_policy(capabilities - {"send"})
+            deadline = time.monotonic() + 10
+            while not stream.done() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert stream.done(), "撤销 send 后旧 Relay 业务流仍未关闭"
+            revoked_lines = stream.result(timeout=1)
+            assert any(json.loads(line).get("request_id") == stream_request_id
+                       for line in revoked_lines if line.startswith("{"))
+            revoked_business_stream_closed = True
+            publish_policy(capabilities)
+
+        # 重建同一连接时，旧业务流和管理订阅都必须随原连接代次终止；
+        # 原在途请求不能透明切到新隧道，后续请求再解析新路由。
+        business_started, management_started = threading.Event(), threading.Event()
+        retired_business_stream_closed = False
+        retired_management_stream_closed = False
+        new_route_served_after_reconnect = False
+        business_request_id = f"remote-plugin-retired-business-{len(evidence)}"
+        management_request_id = f"remote-plugin-retired-management-{len(evidence)}"
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            old_business = executor.submit(
+                open_relay_stream, instance_id, business_request_id, business_started,
+            )
+            old_management = executor.submit(
+                open_relay_management_stream, management_request_id, management_started,
+            )
+            assert business_started.wait(timeout=15), "旧 Relay 业务流未收到首帧"
+            assert management_started.wait(timeout=15), "旧 Relay 管理订阅未收到快照"
+            reconnect_request_id = f"remote-plugin-reconnect-{len(evidence)}"
+            reconnected = client_a.post(
+                f"/api/gateway/remote-gateways/{connection_id}/reconnect",
+                headers={"X-Request-ID": reconnect_request_id},
+            )
+            record(reconnected, reconnect_request_id)
+            assert reconnected.status_code == 200, reconnected.text
+            assert reconnected.json()["data"]["items"]
+            business_lines = old_business.result(timeout=10)
+            management_lines = old_management.result(timeout=10)
+            retired_business_stream_closed = True
+            retired_management_stream_closed = True
+            assert any(json.loads(line).get("request_id") == business_request_id
+                       for line in business_lines if line.startswith("{"))
+            assert "event: snapshot" in management_lines
+            assert echo(client_a, remote=True, instance_id=instance_id, version="1.0.0")["instance_id"] == instance_id
+            new_route_served_after_reconnect = True
+
         install(artifacts["1.1.0"])
         unchanged, = [item for item in relayed_status().plugins if item.binding.package_id == _PACKAGE_ID]
         assert unchanged.binding.package_version == "1.0.0" and unchanged.instance is not None
@@ -687,6 +798,10 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
             "request_ids_preserved": True,
             "gateway_a_installation_empty": True,
             "revoked_request_status": denied.status_code,
+            "revoked_business_stream_closed": revoked_business_stream_closed,
+            "retired_business_stream_closed": retired_business_stream_closed,
+            "retired_management_stream_closed": retired_management_stream_closed,
+            "new_route_served_after_reconnect": new_route_served_after_reconnect,
             "evidence": evidence,
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     finally:

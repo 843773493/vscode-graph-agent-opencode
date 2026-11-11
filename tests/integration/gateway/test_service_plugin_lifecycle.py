@@ -24,6 +24,7 @@ _PLUGIN_SOURCE = '''
 import asyncio, json, os, sys
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import uvicorn
 from app.core.logging_config import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware
@@ -34,6 +35,18 @@ async def shutdown(): server.should_exit = True
 app = FastAPI()
 app.add_middleware(TraceMiddleware)
 app.include_router(plugin_command_router({}, shutdown=shutdown))
+reject_warning = False
+@app.post('/services/probe/reject-logging')
+async def reject_logging(request: Request):
+    global reject_warning
+    reject_warning = (await request.json())['enabled']
+    return {'enabled': reject_warning}
+@app.middleware('http')
+async def apply_logging(request: Request, call_next):
+    if reject_warning and request.method == 'POST' and request.url.path == '/internal/runtime-logging':
+        if (await request.json())['level'] == 'warning':
+            return JSONResponse({'detail': 'controlled plugin logging rejection'}, status_code=409)
+    return await call_next(request)
 @app.get('/services/probe/value')
 async def value(request: Request):
     return {**json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE']),
@@ -438,6 +451,49 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             candidate_ref = pending_status["candidate_ref"]
             assert isinstance(candidate_ref, str)
 
+            # 先让已接管的真实插件拒绝候选日志应用，失败候选不能关闭原实例。
+            rejection_path = (f"/api/gateway/service-plugins/launcher.lifecycle/probe/instances/"
+                f"{instance_id_before}/services/probe/reject-logging?package_version=1.0.0")
+            assert _json_request(client, "POST", rejection_path, {"enabled": True}) == {"enabled": True}
+            failed_restart = _json_request(client, "POST", "/api/gateway/runtime/restart-development")["data"]
+            assert isinstance(failed_restart, dict)
+            assert failed_restart["previous_process_id"] == initial_gateway_pid
+            failed_candidate = _wait_for(client, "/api/gateway/config/reload-status",
+                lambda value: isinstance(value.get("data"), dict)
+                and value["data"].get("state") == "recovery_required",
+                process=launcher)["data"]
+            assert isinstance(failed_candidate, dict)
+            assert failed_candidate["candidate_ref"] == candidate_ref
+            assert failed_candidate["active_revision"] == document["active_revision"]
+            assert failed_candidate["last_error"], failed_candidate
+            # recovery_required 是配置终态；辅助命令仍需完成候选进程的退出与输出结算。
+            helper_pid = failed_restart["helper_process_id"]
+            assert isinstance(helper_pid, int)
+            try:
+                helper = psutil.Process(helper_pid)
+            except psutil.NoSuchProcess:
+                helper = None
+            helper_deadline = time.monotonic() + 60
+            while helper is not None and _same_process(helper):
+                assert time.monotonic() < helper_deadline, "失败候选的辅助命令尚未退出"
+                time.sleep(0.1)
+            still_active = _json_request(client, "GET", health_path)["data"]
+            assert isinstance(still_active, dict) and still_active["process_id"] == initial_gateway_pid
+            for previous in (before_handoff, workspace_before):
+                previous_binding = previous["binding"]
+                assert isinstance(previous_binding, dict)
+                actual = _wait_for_plugin(client, gateway_id, launcher,
+                    plugin_id=previous_binding["plugin_id"], workspace_id=previous_binding["workspace_id"])
+                assert actual["instance"] == previous["instance"]
+                call_plugin(actual)
+            assert logging_state() == initial_logging
+            assert _json_request(client, "GET", skills_path)["data"] == original_skills
+            assert _json_request(client, "POST", rejection_path, {"enabled": False}) == {"enabled": False}
+            retried = _json_request(client, "POST",
+                f"/api/gateway/config/retry-restart?candidate_ref={candidate_ref}")["data"]
+            assert isinstance(retried, dict) and retried["state"] == "pending_restart"
+            assert retried["candidate_ref"] == candidate_ref
+
             restart = _json_request(client, "POST", "/api/gateway/runtime/restart-development")
             restart_data = restart["data"]
             assert isinstance(restart_data, dict)
@@ -532,6 +588,8 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
                 "plugin_pid": plugin_pid,
                 "plugin_instance_id": instance_id,
                 "candidate_ref": candidate_ref,
+                "failed_candidate": failed_candidate,
+                "retry": retried,
                 "launcher_stop_returncode": stopped.returncode,
                 "plugin_exited": True,
                 "workspace_preserved_instance": workspace_after["instance"],
