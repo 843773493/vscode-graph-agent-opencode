@@ -7,6 +7,7 @@ import { parse as parseJsonc } from 'jsonc-parser';
 const input = JSON.parse(process.env.BOXTEAM_PLUGIN_UI_FIXTURE);
 const result = { phase: 'initialization', pageErrors: [], externalRequests: [], configOwners: [], configWrites: [],
   privateInputWrites: [], installed: false, uninstalled: false, exitedPids: [], runtimeVersions: [] };
+result.activationTimings = [];
 const pluginRequests = [];
 const managementReads = [];
 let privateInputRequestCount = 0;
@@ -112,9 +113,12 @@ try {
   };
   const installButton = view.getByRole('button', { name: '安装插件包', exact: true });
   await installButton.click();
+  await expect(quick).toContainText(`插件安装 · 原生 Gateway ${active.gateway_id}`);
   await pick('ZIP 文件');
   await inputQuick(input.packagePath);
   await expect(view).toContainText('ui.preference-probe@1.0.0', { timeout: 30_000 });
+  await expect(page.locator('.notifications-toasts')).toContainText(
+    `已在 原生 Gateway ${active.gateway_id} 安装 ui.preference-probe@1.0.0`);
   const search = view.getByRole('searchbox', { name: '搜索已安装插件包' });
   await search.fill('不存在的插件包');
   await expect(view.locator('.service-plugin-package')).toBeHidden();
@@ -135,26 +139,46 @@ try {
     await packageRowFor('1.0.0').getByRole('button', { name, exact: true }).click();
     await expect(view.locator('.service-plugin-details')).toBeVisible();
   };
-  const enable = async (name, sourceKey, confirmLabel) => {
+  const enable = async (name, sourceKey, confirmLabel, scope = 'bound') => {
     await openPlugin(name);
-    const toggle = view.getByRole('button', { name: '启用此范围', exact: true });
-    await expect(toggle).toHaveText('启用此范围');
+    const enableLabel = scope === 'defaults' ? '设为新建时启用' : '启用此范围';
+    const disableLabel = scope === 'defaults' ? '设为新建时停用' : '停用此范围';
+    const toggle = view.getByRole('button', { name: enableLabel, exact: true });
+    await expect(toggle).toHaveText(enableLabel);
+    const activationStarted = performance.now();
     await toggle.click();
     await pick(sourceKey);
     await pick(confirmLabel);
     await expect(quick).not.toBeVisible();
-    await expect(view.getByRole('button', { name: '停用此范围', exact: true })).toBeVisible();
+    await expect(view.getByRole('button', { name: disableLabel, exact: true })).toBeVisible();
+    if (scope !== 'defaults') {
+      const pluginId = name.split(' · ').at(-1);
+      let slot = await runtimeSlot(pluginId, sourceKey === 'workspace_root_mutable_override' ? active.workspace_id : undefined);
+      if (!slot.declarative) {
+        // 配置保存不等于异步工作区交接已就绪，沿原15秒交互期限观察真实状态。
+        await expect.poll(async () => {
+          slot = await runtimeSlot(pluginId, sourceKey === 'workspace_root_mutable_override' ? active.workspace_id : undefined);
+          return slot.state;
+        }, { timeout: 15_000 }).toBe('ready');
+        result.activationTimings.push({ pluginId, scope: slot.binding.workspace_id ? 'workspace' : 'gateway',
+          gatewayId: active.gateway_id, workspaceId: slot.binding.workspace_id ?? null,
+          packageVersion: slot.binding.package_version, instanceId: slot.instance.instance_id,
+          state: slot.state, milliseconds: performance.now() - activationStarted,
+          boundary: '真实开关点击起，含自动操作确认／来源预检／CAS／就绪及浏览器完整状态读取；单次样本不外推启动p95' });
+      }
+    }
   };
-  const unbind = async (name, sourceKey, confirmLabel, workspaceId = active.workspace_id) => {
+  const unbind = async (name, sourceKey, confirmLabel, workspaceId = active.workspace_id, scope = 'bound') => {
     const before = await runtimeSlot(name.includes('gateway-preference') ? 'gateway-preference' : 'workspace-preference',
       sourceKey === 'workspace_root_mutable_override' ? workspaceId : undefined);
     if (before?.instance) result.exitedPids.push(before.instance.process_id);
     await openPlugin(name);
-    await view.locator('.service-plugin-details button').filter({ hasText: '解除此范围绑定' }).click();
+    const unbindLabel = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
+    await view.getByRole('button', { name: unbindLabel, exact: true }).click();
     await pick(sourceKey);
     await pick(confirmLabel);
     await expect(quick).not.toBeVisible();
-    await expect(view.getByRole('button', { name: '解除此范围绑定', exact: true })).toHaveCount(0);
+    await expect(view.getByRole('button', { name: unbindLabel, exact: true })).toHaveCount(0);
   };
 
   const runtimeSlot = async (pluginId, workspaceId) => {
@@ -203,6 +227,7 @@ try {
   const referencedUninstall = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/gateway/service-plugins/uninstall');
   await view.getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await expect(quick).toContainText(active.gateway_id);
   await pick('卸载整包');
   const rejection = await referencedUninstall;
   const rejectionBody = await rejection.json();
@@ -343,7 +368,7 @@ try {
       assert.equal(result.sourceUpdate.status, 'succeeded');
       assert.equal(result.sourceUpdate.artifact.digest, input.sourceArtifact.digest);
     } else { await pick('ZIP 文件'); await inputQuick(path); }
-    await expect(view.locator('.service-plugin-package')).toHaveCount(path === input.versionPaths[0] ? 2 : 3);
+    await expect(view.locator('.service-plugin-package')).toHaveCount(index + 2);
   }
   assert.equal((await gatewaySource()).jsonc, beforeInstall.jsonc);
   assert.deepEqual(await api('/api/gateway/service-plugins/status', { method: 'POST', body: { gateway_id: active.gateway_id } }), beforeInstallRuntime);
@@ -381,6 +406,44 @@ try {
   assert.equal((await gatewaySource()).jsonc, beforeInvalid.jsonc);
   assert.equal((await runtimeSlot('gateway-preference')).binding.package_version, '1.0.0');
   result.invalidVersionKeptBinding = true;
+  result.phase = 'failed-version-and-explicit-retry';
+  const beforeFailedSwitch = await runtimeSlot('gateway-preference');
+  await openVersion('3.0.0');
+  await view.getByRole('button', { name: '切换到此版本（保留开关）', exact: true }).click();
+  await pick('gateway_mutable_override');
+  const failedVersionSave = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
+  await pick('确认保存 Gateway 插件绑定');
+  assert.equal((await failedVersionSave).status(), 200);
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('配置：启用 @3.0.0');
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：failed');
+  await expect(view.getByLabel('插件运行失败原因')).toContainText('启动实例失败');
+  await expect(view.getByLabel('插件运行失败原因')).toContainText('ready 身份');
+  result.failedVersion = await runtimeSlot('gateway-preference');
+  assert.equal(result.failedVersion.binding.package_version, '3.0.0');
+  assert.equal(result.failedVersion.binding.enabled, true);
+  assert.equal(result.failedVersion.state, 'failed');
+  assert.equal(result.failedVersion.instance, null);
+  const oldBinding = beforeFailedSwitch.binding, oldInstance = beforeFailedSwitch.instance;
+  await api(`/api/gateway/service-plugins/${oldBinding.package_id}/${oldBinding.plugin_id}/instances/${oldInstance.instance_id}/services/echo/value?package_version=${oldBinding.package_version}`,
+    {}, true, 409);
+  result.exitedPids.push(oldInstance.process_id);
+  await view.getByRole('button', { name: '查看实例日志', exact: true }).click();
+  await expect(view.getByLabel('插件实例日志')).toContainText('Uvicorn running');
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
+  await expect(view.getByLabel('插件运行失败原因')).toContainText('启动实例失败');
+  const afterFailedReads = await runtimeSlot('gateway-preference');
+  assert.deepEqual(afterFailedReads, result.failedVersion, '刷新与状态读取不能回滚旧版或自动重试');
+  const explicitlyRetried = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
+  await view.getByRole('button', { name: '重启实例', exact: true }).click();
+  assert.equal((await explicitlyRetried).status(), 200);
+  result.explicitRetry = await runtimeSlot('gateway-preference');
+  assert.equal(result.explicitRetry.binding.package_version, '3.0.0');
+  await callRuntime(result.explicitRetry);
+  await expect(view.getByLabel('插件配置与运行版本')).toContainText('实际：ready @3.0.0');
+  await expect(view.getByLabel('插件运行失败原因')).toHaveCount(0);
+  await switchVersion('1.0.0', true);
   await openVersion('1.0.0');
   await view.getByRole('button', { name: '停用此范围', exact: true }).click();
   await pick('gateway_mutable_override'); await pick('确认保存 Gateway 插件绑定');
@@ -435,7 +498,7 @@ try {
   result.declarativeSkillLoop = true;
   await view.getByLabel('插件管理范围').selectOption('gateway');
   result.phase = 'explicit-version-switch';
-  for (const version of ['1.1.0', '2.0.0']) {
+  for (const version of ['1.1.0', '2.0.0', '3.0.0']) {
     await packageRowFor(version).getByRole('button', { name: '卸载整个包', exact: true }).click();
     await pick('卸载整包');
     await expect(packageRowFor(version)).toHaveCount(0);
@@ -507,7 +570,7 @@ try {
     '/api/gateway/config/sources/gateway_mutable_override']);
   const existingBeforeDefaults = await runtimeSlot('workspace-preference', active.workspace_id);
   const gatewayBeforeDefaults = await runtimeSlot('gateway-preference');
-  await enable('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  await enable('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 新建工作区默认模板', 'defaults');
   result.configOwners.push('defaults');
   assert.deepEqual(new Set(result.configOwners), new Set(['gateway', 'workspace', 'defaults']));
   assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, existingBeforeDefaults.instance.instance_id);
@@ -538,7 +601,7 @@ try {
   assert.equal((await runtimeSlot('workspace-preference', active.workspace_id)).instance.instance_id, existingBeforeDefaults.instance.instance_id);
   result.defaultsCreatedIndependentInstance = true;
 
-  await unbind('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 插件绑定');
+  await unbind('工作区偏好 · workspace-preference', 'gateway_mutable_override', '确认保存 Gateway 新建工作区默认模板', undefined, 'defaults');
   assert.equal((await runtimeSlot('workspace-preference', created.workspace_id)).instance.instance_id, createdRuntime.instance.instance_id);
   const later = await createWorkspace(input.laterWorkspacePath, 'Plugin Defaults Cleared');
   assert.deepEqual((await workspaceSource(later.workspace_id)).effective.plugins.runtime.entries, []);
@@ -603,8 +666,19 @@ try {
   result.stoppedSettingsWithoutRuntimeRequests = true;
   result.phase = 'uninstall';
   const packageRow = view.locator('section').filter({ hasText: 'ui.preference-probe@1.0.0' }).first();
+  const uninstalled = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
   await packageRow.getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await expect(quick).toContainText(active.gateway_id);
   await pick('卸载整包');
+  const uninstallResponse = await uninstalled;
+  assert.equal(uninstallResponse.status(), 200);
+  const uninstallReceipt = await uninstallResponse.json();
+  assert.equal(uninstallReceipt.data.uninstalled, true);
+  assert.equal(uninstallReceipt.data.package_id, 'ui.preference-probe');
+  assert.equal(uninstallReceipt.data.package_version, '1.0.0');
+  await expect(page.locator('.notifications-toasts')).toContainText(
+    `已从 原生 Gateway ${active.gateway_id} 卸载 ui.preference-probe@1.0.0`);
   await expect(view).toContainText('尚无插件包', { timeout: 30_000 });
   assert.equal(await runtimeSlot('gateway-preference'), undefined);
   assert.equal(await runtimeSlot('workspace-preference', active.workspace_id), undefined);

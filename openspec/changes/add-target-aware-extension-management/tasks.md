@@ -150,7 +150,8 @@
 - [ ] 7.4 在原命令／Quick Input／Opener 接入自有插件管理与状态，迁齐 ext／MCP／设置入口及来源提示；需要重开资源时只消费原寻址 owner 的正式地址，不自造 grammar。
   - 2026-11-10 旧Gallery引导收口：持续复用同一Luna max，删除测试欢迎页的扩展搜索、新手引导外部键位包探测／安装及聊天输入中的安装聊天扩展补全；保留测试原能力、主题选择及Agent／MCP补全。仅迁齐原sourceTransform接点，不建替代市场或兼容桥。最终定向4项通过、136份实际转换源码类型零诊断及正式79扩展Web构建通过；早期解析与未用声明失败原件均保留。主线程复审未混入并行图片认证修改；本片未称三个入口逐项真实浏览器验收，7.4／8组全范围仍保留。准确命令、指纹及全部原件见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/legacy-extension-entry-*-final.*`。
   - 2026-11-10 旧详情入口清理：同一 sourceTransform 迁齐通知／状态栏／Issue Quick Access、快捷键来源、设置、profile、账户偏好、聊天及语言选择等15个固定上游路径，删除已退役 extension.open／_extensions.manage 与旧详情点击；来源文本、原通知动作、Issue Reporter、profile选择、账户偏好、语言切换与有效MCP配置入口保留，不建兼容桥。Luna max 持续复审修复精确锚点及未用声明，44项短验／266断言、132份实际转换源码类型零诊断；复用同源码正式79扩展构建及真实插件管理页面1 passed／116.22秒，未将这条页面流程称作15入口逐项交互验收。已不再注册的旧 Extensions 内部字符串未按关键词扩大删除，真实平台与全部旧交互未验。原始输出、指纹见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/extension-details-typecheck-v1.receipt`，产品原件见范围管理切片。
-- [ ] 7.5 真实页面验证无公网源零请求、本地多插件包安装、当前 Gateway／当前工作区插件开关与重启及新建默认值、部分失败批量操作和整包引用冲突卸载；保存与实际启动状态分开，焦点不改投。
+- [x] 7.5 真实页面验证无公网源零请求、本地多插件包安装、当前 Gateway／当前工作区插件开关与重启及新建默认值、部分失败批量操作和整包引用冲突卸载；保存与实际启动状态分开，焦点不改投。
+  - 2026-11-11 管理完整失败／重试闭环：沿原真实Gateway／Backend／正式Workbench安装同包Python／Node／纯Skill，安装3.0不改旧绑定，页面显式切版后真实插件首次ready身份失败，保留已提交3.0／enabled和failed原因及日志；旧实例访问409，刷新不回滚、不自动重试，只有页面显式restart创建第二次并ready。继续切回旧版、两scope独立重启、模板实际创建、关闭仍引用拒卸载、全部解绑及物理卸载，原参数保留；最终单项1 passed／205.85秒，批量首轮已通过不重复长跑。三次真实开关点击至ready完整耗时为3712.75／3765.40／4248.91ms，含确认、预检、CAS、交接和状态读取，单次样本不外推启动p95。结合9.6二十次暖命令p95及零附带发现／探活证据，10.12当前交互预算内完成；7.5本项Linux页面范围完成，Windows／真实SSH页面／Electron仍归9组未验。相关Pyright零诊断、Ruff／JS解析通过，同源码正式构建由产品fixture完成；最小复审只扩原装具，不新增生产状态／恢复器。首次计时把starting当ready的装具错误保留原件并修正为原期限内观察真实状态。准确命令、源码指纹及收据见 `out/tests/temp/2026/11/11/plugin_management_failure_loop/artifacts/verification.json`。
   - 2026-11-10 Workbench完整运行闭环：原单包场景升级为同包Python Gateway／Node Workspace真实插件，经页面安装、三范围CAS绑定、实际业务调用、启用／关闭态显式切版、刷新保留原实例、独立重启、停用仍引用409、解绑及卸载，核全部旧PID退出与物理版本目录删除；原批量部分失败、目标冻结、默认值只写模板及未知保存查询断言保持。精确完整Git归档2 passed／205.19秒，零pageErrors、单包零外部请求；暴露并修复reload时Gateway尚未就绪，以及await后使用失效ServicesAccessor两处真实缺陷。140份转换源码类型检查、正式Workbench构建、11项／55断言命令反例、两份Python类型零诊断、Ruff与语法通过，同源码构建复用。最小复审只复用原workspaceContext屏障，无新账本／fallback；Gateway范围页面显式restart、Windows／真实SSH／Electron和源码外发行未由本片完整验收，7.5宽项保持未勾选。tree、源码指纹、原件和失败归因见 `out/tests/temp/2026/11/10/plugin_management_loop/artifacts/ui-verification.json`。
 
 ## 8. 旧体系物理删除与发行
@@ -218,7 +219,7 @@
 - [x] 10.10 整包卸载按D7仅核原四类引用并复用删除互斥；关闭但未解除绑定仍阻塞，自身可释放投影先结清，完整封存正文／未绑定参数不占引用；未知来源拒绝且不启动Backend或后台扫描，解除后只删对应包版本，用户配置／快捷键／历史保留。
   - 2026-11-11 原四类卸载引用收口：active／pending、关闭未解绑、模板／未结创建、真实读取lease及未核退出均沿原owner与删除互斥；未知工作区owner明确拒绝且不启动Backend。实际解除后只删对应版本，用户配置、Skill封存和业务回执保留。复用 `plugin_distribution_loop/artifacts/pending-uninstall-verification.json`、`read-lease-verification.json`、`unbind-stop-proof-verification.json`、`workspace-update-uninstall-verification.json` 及 `legacy_host_boundary_luna_max/artifacts/workspace-uninstall-pth-followup-receipt.txt`（均在 `out/tests/temp/2026/11/10/`）。本项完成，无扫描器或引用账本。
 - [ ] 10.11 最小真实 Gateway／Workbench 场景覆盖纯声明插件、同包 Python／Node 插件、多目标同ID、独立启停／部分失败／旧回执、窗口释放及整包卸载；不把旧宿主证据当新合同验收。
-- [ ] 10.12 记录 UI 开启至实际可用及普通暖命令总耗时，沿原交互预算；schema 导出／hash 放注册变化边界，调用无重复审计／探活，插件关闭调用零启动。
+- [x] 10.12 记录 UI 开启至实际可用及普通暖命令总耗时，沿原交互预算；schema 导出／hash 放注册变化边界，调用无重复审计／探活，插件关闭调用零启动。
 
 ## 11. 源码调试插件与原版 Debug UI
 

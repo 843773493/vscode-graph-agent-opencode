@@ -84,6 +84,18 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{plugin_gateway_port}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "ui-plugin-package.zip"
+    version_start_count = context.artifacts_dir / "failed-version-start-count.txt"
+    # 故障由真实插件首次 ready 回执触发，显式重启复用同一不可变包。
+    python_entry = PYTHON_PLUGIN.replace(
+        "mode = sys.argv[1] if len(sys.argv) > 1 else ''",
+        "mode = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "if mode == 'bad-ready-once':\n"
+        "    from pathlib import Path\n"
+        f"    count_path = Path({str(version_start_count)!r})\n"
+        "    count = int(count_path.read_text()) if count_path.exists() else 0\n"
+        "    count_path.write_text(str(count + 1))\n"
+        "    mode = 'bad-ready' if count == 0 else ''",
+    )
     manifest = {
         "manifest_version": 1, "package_id": "ui.preference-probe", "version": "1.0.0", "name": "UI 配置验证包",
         "extension_contract_version": 1,
@@ -124,7 +136,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         with ZipFile(path, "w") as archive:
             archive.writestr("plugin.jsonc", json.dumps(package, ensure_ascii=False))
             if scenario == "single":
-                archive.writestr("entry.py", PYTHON_PLUGIN)
+                archive.writestr("entry.py", python_entry)
                 archive.writestr("local_module.py", "VALUE = 1\n")
                 archive.writestr("entry.mjs", NODE_PLUGIN)
                 archive.writestr("guides/ui/SKILL.md", "---\nname: ui-package-guide\n"
@@ -134,13 +146,15 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     version_paths = []
     incompatible_packages = []
     if scenario == "single":
-        for version in ("1.1.0", "2.0.0"):
+        for version in ("1.1.0", "2.0.0", "3.0.0"):
             candidate = copy.deepcopy(manifest)
             candidate["version"] = version
             if version == "2.0.0":
                 for plugin in candidate["plugins"]:
                     if "configuration" in plugin["contributes"]:
                         plugin["contributes"]["configuration"]["properties"]["label"] = {"type": "number"}
+            if version == "3.0.0":
+                candidate["plugins"][0]["entrypoint"].append("bad-ready-once")
             path = context.artifacts_dir / f"ui-plugin-package-{version}.zip"
             write_package(path, candidate)
             version_paths.append(str(path))
@@ -238,7 +252,14 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                 {"path": "/catalog", "query": {"query": ["ui.preference-probe"]}},
                 {"path": "/plugin.zip", "query": {}},
             ]
-            assert result["runtimeVersions"] == ["1.1.0", "1.0.0"]
+            assert result["runtimeVersions"] == ["1.1.0", "1.0.0", "1.0.0"]
+            assert result["failedVersion"]["binding"]["package_version"] == "3.0.0"
+            assert result["failedVersion"]["state"] == "failed"
+            assert result["failedVersion"]["instance"] is None
+            assert result["explicitRetry"]["instance"]["package_version"] == "3.0.0"
+            assert version_start_count.read_text(encoding="utf-8") == "2", "只允许首次失败及用户显式重启两次创建"
+            assert len(result["activationTimings"]) == 3
+            assert all(item["milliseconds"] > 0 and item["state"] == "ready" for item in result["activationTimings"])
             assert result["closedBindingBlockedUninstall"]
             assert result["defaultsCreatedIndependentInstance"] and result["clearedDefaultsOnlyAffectFuture"]
             assert result["createdWorkspaceBlockedUninstall"]

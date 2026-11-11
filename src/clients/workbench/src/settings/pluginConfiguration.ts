@@ -286,9 +286,13 @@ export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeo
   if (jsonc === document.jsonc) return;
   check();
   const intent = owner.intent(source.source_key!, jsonc, sourceBaseline(document));
-  const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : enabled === 'preserve'
-    ? `切换至 ${binding.package_version}，保留原开关` : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
-  const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数' : '插件绑定';
+  const change = privateParameter ? '修改秘密参数' : editParameters ? '修改参数' : scope === 'defaults'
+    ? enabled === 'preserve' ? `新建工作区默认切换至 ${binding.package_version}，保留原开关`
+      : enabled === null ? '从新建工作区默认模板解除绑定' : enabled ? '在新建工作区默认模板中启用' : '在新建工作区默认模板中停用'
+    : enabled === 'preserve' ? `切换至 ${binding.package_version}，保留原开关`
+      : enabled === null ? '解除绑定' : enabled ? '启用' : '停用';
+  const confirmation = privateParameter ? '插件秘密参数' : editParameters ? '插件参数'
+    : scope === 'defaults' ? '新建工作区默认模板' : '插件绑定';
   let preflight: Awaited<ReturnType<typeof owner.preflight>>;
   try { preflight = await owner.preflight(intent); }
   catch (error) {
