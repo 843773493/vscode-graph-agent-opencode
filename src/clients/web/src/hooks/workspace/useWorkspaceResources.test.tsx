@@ -10,6 +10,7 @@ import type { DispatchWorkspaceResourceAction, WorkspaceResourceActionSource } f
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const renderers: ReactTestRenderer[] = [];
 const restores: Array<() => void> = [];
+const runResourceAction: DispatchWorkspaceResourceAction = (action, source, thread) => source.run(action, thread);
 
 afterEach(() => {
   for (const renderer of renderers.splice(0)) act(() => renderer.unmount());
@@ -33,7 +34,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function mount(kind: WorkspaceConnectionKind = "terminal", dispatch?: DispatchWorkspaceResourceAction) {
+async function mount(kind: WorkspaceConnectionKind = "terminal", dispatch: DispatchWorkspaceResourceAction = runResourceAction) {
   let current!: ReturnType<typeof useWorkspaceResources>;
   let poll = () => {};
   Object.defineProperty(globalThis, "window", { configurable: true, value: {

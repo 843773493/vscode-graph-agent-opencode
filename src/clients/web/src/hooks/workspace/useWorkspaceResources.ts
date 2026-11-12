@@ -6,7 +6,7 @@ import { errorMessage } from "../../utils/errorMessage";
 import { settleWorkspaceResourceOperation, type DispatchWorkspaceResourceAction } from "./resourceActions";
 
 export function useWorkspaceResources(apiPort: number, workspaceId: string | null, kind: WorkspaceConnectionKind, enabled: boolean,
-  dispatchControl?: DispatchWorkspaceResourceAction) {
+  dispatchControl: DispatchWorkspaceResourceAction) {
   const [items, setItems] = useState<WorkspaceResourceDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
@@ -84,7 +84,6 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
   }, [apiPort, replace, scope, workspaceId, kind]);
   const control = useCallback(async (resource: WorkspaceResourceDTO, action: ResourceAction, thread?: ResourceThreadRef) => {
     const run = (selected: ResourceAction, ref?: ResourceThreadRef) => mutate(() => controlWorkspaceResource(apiPort, workspaceId!, resource, selected, ref));
-    if (!dispatchControl) return run(action, thread);
     const result = await dispatchControl(action, { workspaceKey: workspaceId!, resource, run }, thread);
     // 原组件只在写入确已执行时消费完整回执；命令取消不伪造资源。
     if (!result) throw new Error(t("resources.errors.operationCancelled"));
