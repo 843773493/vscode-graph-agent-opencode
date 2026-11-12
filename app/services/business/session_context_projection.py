@@ -5,7 +5,10 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 
-from app.abstractions.session_context import SessionContextCursorError
+from app.abstractions.session_context import (
+    AgentContextState,
+    SessionContextCursorError,
+)
 from app.prompting.validation import internal_prompt_metadata
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
@@ -80,6 +83,22 @@ def sessions_revision(sessions: list[SessionDTO]) -> str:
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def context_revision(state: AgentContextState) -> str:
+    # checkpoint_id 只用于 Saver 定位；revision 必须反映查询实际看到的内容。
+    payload = {
+        "records": state["records"],
+        "raw_message_count": state["raw_message_count"],
+        "compacted": state["compacted"],
+        "compaction_cutoff": state["compaction_cutoff"],
+    }
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # 逐段摘要，避免把全部历史再合并成一份字符串和 bytes。
+    for chunk in encoder.iterencode(payload):
+        digest.update(chunk.encode("utf-8"))
+    return f"content:{digest.hexdigest()}"
 
 
 def record_role(record: dict[str, object]) -> str | None:

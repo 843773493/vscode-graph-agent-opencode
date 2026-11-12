@@ -16,6 +16,7 @@ from app.abstractions.session_context import (
     SessionLookupProtocol,
 )
 from app.core.phase_observer import observe_phase
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
@@ -32,6 +33,7 @@ from app.services.business.session_context_assembly_query_service import (
 )
 from app.services.business.session_context_projection import (
     SessionContextReadSnapshot,
+    context_revision,
     is_effective_user,
     project_record_items,
     public_session_data,
@@ -629,21 +631,7 @@ class SessionContextQueryService:
             session.session_id,
             session.thread_id,
         )
-        encoded = json.dumps(
-            {
-                "records": state["records"],
-                "raw_message_count": state["raw_message_count"],
-                "compacted": state["compacted"],
-                "compaction_cutoff": state["compaction_cutoff"],
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        # checkpoint_id 只用于 Saver 定位，不能作为查询 revision：同一份
-        # 有效快照可能通过不同查询入口返回，而 checkpoint id 不表示投影内容。
-        # revision 必须由查询面实际看到的快照计算，保证 read/search 可以复用。
-        revision = f"content:{hashlib.sha256(encoded).hexdigest()}"
+        revision = await run_sync_shielded(context_revision, state)
         return _SessionContextSnapshot(
             resource_identity=resource.resource_identity,
             uri=resource.uri,
