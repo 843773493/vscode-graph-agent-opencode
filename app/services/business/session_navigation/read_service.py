@@ -258,9 +258,12 @@ class SessionCatalogReadService:
             if node.parent_node_id is not None
         }
         nodes = []
+        default_provider_by_agent: dict[str, str | None] = {}
         for node in visible_catalog_nodes:
             check()
-            nodes.append(self._to_catalog_node(node, visible_parent_ids_with_children))
+            nodes.append(self._to_catalog_node(
+                node, visible_parent_ids_with_children, default_provider_by_agent,
+            ))
         nodes_by_id = {node.node_id: node for node in nodes}
         all_nodes_by_id = dict(nodes_by_id)
         for catalog_node in catalog_nodes:
@@ -316,15 +319,24 @@ class SessionCatalogReadService:
         self,
         node: SessionCatalogNodeProjection,
         visible_parent_ids_with_children: set[str],
+        default_provider_by_agent: dict[str, str | None],
     ) -> SessionCatalogNodeDTO:
-        session = (
-            self._session_service.project_catalog_session(node)
-            if isinstance(node, SessionCatalogSessionProjection)
-            else None
-        )
         session_projection = (
             node if isinstance(node, SessionCatalogSessionProjection) else None
         )
+        session = None
+        if session_projection is not None:
+            if (
+                session_projection.current_provider_id is None
+                and session_projection.current_agent_id in default_provider_by_agent
+            ):
+                session_projection = replace(
+                    session_projection,
+                    current_provider_id=default_provider_by_agent[session_projection.current_agent_id],
+                )
+            session = self._session_service.project_catalog_session(session_projection)
+            if session_projection.current_provider_id is None:
+                default_provider_by_agent[session.current_agent_id] = session.current_provider_id
         return SessionCatalogNodeDTO(
             node_id=node.node_id,
             kind=node.kind,
