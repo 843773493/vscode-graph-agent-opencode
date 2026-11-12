@@ -18,6 +18,7 @@ from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root, load_runtime_log_contract
 from app.core.path_utils import get_gateway_root
 from app.core.runtime_observation import RuntimeObservation
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -310,6 +311,59 @@ async def _logging_process_diagnostics(
         )))
 
 
+def _collect_logs(
+    workspace_candidates: list[_LogCandidate], *, selected_workspace_id: str | None,
+    selected_log_id: str | None, tail_lines: int,
+) -> tuple[list[_LogCandidate], str | None, list[GatewayDiagnosticLogDTO]]:
+    """在 worker 中完成目录枚举、文件元数据及选中日志的有界读取。"""
+    if selected_workspace_id is None:
+        known_workspace_files = {
+            candidate.log_path.name
+            for candidate in workspace_candidates
+            if candidate.log_path is not None
+        }
+        gateway_candidates = _candidate_gateway_logs(known_workspace_files, selected_log_id=selected_log_id)
+    else:
+        gateway_candidates = [_launcher_log_candidate()]
+    candidates = _scope_log_candidates(
+        gateway_candidates,
+        workspace_candidates,
+        selected_workspace_id,
+    )
+    if selected_log_id is not None and not any(
+        candidate.log_id == selected_log_id for candidate in candidates
+    ):
+        error = LookupError(f"诊断日志不存在: {selected_log_id}")
+        raise LookupError(failure_detail(error, stage="gateway-diagnostic-log", label="诊断日志不存在")) from error
+    if selected_log_id is None:
+        preferred_log_candidates = (
+            [
+                candidate
+                for candidate in candidates
+                if candidate.workspace_id == selected_workspace_id
+            ]
+            if selected_workspace_id is not None
+            else [
+                candidate
+                for candidate in candidates
+                if candidate.source == "gateway"
+            ]
+        )
+        selected_log_id = next(
+            (
+                candidate.log_id
+                for candidate in preferred_log_candidates
+                if candidate.log_path is not None and candidate.log_path.exists()
+            ),
+            preferred_log_candidates[0].log_id if preferred_log_candidates else None,
+        )
+    log_results = [
+        _read_log(candidate, tail_lines, include_tail=candidate.log_id == selected_log_id)
+        for candidate in candidates
+    ]
+    return candidates, selected_log_id, log_results
+
+
 async def collect_gateway_diagnostics(
     registry: GatewayWorkspaceRegistry,
     *,
@@ -367,56 +421,10 @@ async def collect_gateway_diagnostics(
         for target in local_workspace_targets
         for candidate in _workspace_candidates(target, registry)
     ]
-    if selected_workspace_id is None:
-        known_workspace_files = {
-            candidate.log_path.name
-            for candidate in workspace_candidates
-            if candidate.log_path is not None
-        }
-        gateway_candidates = _candidate_gateway_logs(known_workspace_files, selected_log_id=selected_log_id)
-    else:
-        gateway_candidates = [_launcher_log_candidate()]
-    candidates = _scope_log_candidates(
-        gateway_candidates,
-        workspace_candidates,
-        selected_workspace_id,
+    candidates, selected_log_id, log_results = await run_sync_shielded(
+        _collect_logs, workspace_candidates, selected_workspace_id=selected_workspace_id,
+        selected_log_id=selected_log_id, tail_lines=tail_lines,
     )
-    if selected_log_id is not None and not any(
-        candidate.log_id == selected_log_id for candidate in candidates
-    ):
-        error = LookupError(f"诊断日志不存在: {selected_log_id}")
-        raise LookupError(failure_detail(error, stage="gateway-diagnostic-log", label="诊断日志不存在")) from error
-    if selected_log_id is None:
-        preferred_log_candidates = (
-            [
-                candidate
-                for candidate in candidates
-                if candidate.workspace_id == selected_workspace_id
-            ]
-            if selected_workspace_id is not None
-            else [
-                candidate
-                for candidate in candidates
-                if candidate.source == "gateway"
-            ]
-        )
-        selected_log_id = next(
-            (
-                candidate.log_id
-                for candidate in preferred_log_candidates
-                if candidate.log_path is not None and candidate.log_path.exists()
-            ),
-            preferred_log_candidates[0].log_id if preferred_log_candidates else None,
-        )
-    log_results = []
-    for candidate in candidates:
-        is_selected = candidate.log_id == selected_log_id
-        log_dto = _read_log(
-            candidate,
-            tail_lines,
-            include_tail=is_selected,
-        )
-        log_results.append(log_dto)
     processes = await _logging_process_diagnostics(registry, selected_workspace_id, candidates, service_plugins)
     observed = observation.status() if observation is not None else None
     plugin_observations = await service_plugins.observation_status(selected_workspace_id) if service_plugins else []

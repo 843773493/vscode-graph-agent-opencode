@@ -72,7 +72,7 @@ class _Cursor(BaseModel):
     unavailable: bool = False
 
 
-def _sources(
+async def _sources(
     registry: GatewayWorkspaceRegistry, scope: GatewayDiagnosticLogQueryScopeDTO,
 ) -> tuple[list[_Source], str, bool]:
     targets = sorted((target for target in registry.targets() if target.connection_kind == "local"),
@@ -86,7 +86,8 @@ def _sources(
         grouped.setdefault(candidate.log_path or candidate.log_id, []).append(candidate)
     source_limit = False
     if scope.source == "gateway":
-        candidates = _candidate_gateway_logs(
+        candidates = await run_sync_shielded(
+            _candidate_gateway_logs,
             {candidate.log_path.name for candidate in candidates if candidate.log_path is not None},
             max_entries=_MAX_GATEWAY_LOG_ENTRIES + 1,
         )
@@ -191,9 +192,9 @@ def _query(
 async def query_diagnostic_logs(
     registry: GatewayWorkspaceRegistry, request: GatewayDiagnosticLogQueryRequest, *, gateway_id: str,
 ) -> GatewayDiagnosticLogQueryResultDTO:
-    sources, version, limited = _sources(registry, request.scope)
+    sources, version, limited = await _sources(registry, request.scope)
     result = await run_sync_shielded(_query, request, gateway_id, sources, version, limited)
-    if _sources(registry, request.scope)[1] != version:
+    if (await _sources(registry, request.scope))[1] != version:
         raise RuntimeLogQueryError("stale_runtime_log_cursor", "sources_changed", "查询期间运行日志来源已变化")
     return result
 
@@ -204,7 +205,7 @@ async def locate_diagnostic_log(
     reference = request.reference
     if reference.gateway_id != gateway_id:
         raise RuntimeLogQueryError("stale_runtime_log_reference", "owner_mismatch", "运行日志命中属于其它 Gateway")
-    sources, _, _ = _sources(registry, request.scope)
+    sources, _, _ = await _sources(registry, request.scope)
     source = next((item for item in sources if item.candidate.log_id == reference.log_id), None)
     if source is None or source.candidate.log_path is None:
         raise RuntimeLogQueryError("stale_runtime_log_reference", "source_unavailable", "运行日志来源已移除或不属于明确范围")
