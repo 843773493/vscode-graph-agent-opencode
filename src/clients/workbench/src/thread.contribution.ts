@@ -8,6 +8,7 @@ import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
 import { ThreadOutlineCreator } from './search/threadOutline.js';
+import './threadCacheActions.js';
 
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
   EditorPaneDescriptor.create(ThreadPane, ThreadPane.ID, 'Thread'), [new SyncDescriptor(ThreadInput), new SyncDescriptor(UnavailableThreadInput)],
