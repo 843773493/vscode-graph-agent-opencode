@@ -336,7 +336,7 @@ class SessionContextQueryService:
         total_matches: int,
     ) -> SessionContextSearchMatchDTO | None:
         low = 0
-        high = len(match.preview)
+        high = min(len(match.preview), request.max_chars)
         best: SessionContextSearchMatchDTO | None = None
         while low <= high:
             length = (low + high) // 2

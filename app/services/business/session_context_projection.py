@@ -299,7 +299,8 @@ def _largest_fitting_chunk(
             f"total={len(serialized)}"
         )
     low = char_offset + 1
-    high = len(serialized)
+    # JSON 响应不会短于分片正文，无需序列化超过响应预算的候选片段。
+    high = min(len(serialized), char_offset + request.max_chars)
     best: tuple[SessionContextItemDTO, int | None] | None = None
     while low <= high:
         end = (low + high) // 2
