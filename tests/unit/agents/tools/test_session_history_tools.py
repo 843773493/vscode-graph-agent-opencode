@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.abstractions.session_context import (
     SessionContextCursorError,
     SessionContextRevisionChangedError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
 from app.agents.model_tool_schema import export_model_tool_json_schema
@@ -137,10 +138,13 @@ async def test_local_search_keeps_current_workspace_query(history_context):
 
 @pytest.mark.parametrize("remote", [False, True])
 @pytest.mark.parametrize("enveloped", [False, True])
-async def test_invalid_regex_tool_keeps_typed_error_and_original_request_identity(
-    history_context, monkeypatch: pytest.MonkeyPatch, remote: bool, enveloped: bool,
+@pytest.mark.parametrize("error", [
+    SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0"),
+    SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果"),
+])
+async def test_context_input_tool_keeps_typed_error_and_original_request_identity(
+    history_context, monkeypatch: pytest.MonkeyPatch, remote: bool, enveloped: bool, error,
 ) -> None:
-    error = SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0")
     query = AsyncMock(side_effect=error)
     service = history_context.workspace_session_context_client if remote else history_context.session_context_query_service
     monkeypatch.setattr(service, "search_resource_context" if remote else "search_context", query)

@@ -1088,3 +1088,8 @@ Gateway 地址及路由短验 25 passed、公开结构 96 passed、认证与顺�
 368项最终URI／地址合同、135项公开协议／路由合同、13项模型233断言（含原URI对象与JSON恢复往返）、174份真实转换源码类型、79扩展正式构建、Ruff、协议生成一致性及OpenSpec严格校验通过。正式Gateway／Backend／Workbench完整页1 passed／109.74秒：真实执行生成v1／v2，实际剪贴板复制、关闭并经Quick Open重开只发一次更改集GET，原分屏／只读／草稿／恢复断言保持，pageErrors为空。182条console诊断包括原关闭／fetch及具名损坏恢复故障，不宣称零console错误。
 
 首轮原Thread恢复面板的正常GET被计入打开阶段，先结清该读取后保留原单次断言；第二轮发现把完整源URI编码进单段会被VS Code URI对象展开斜杠，已删除该未提交草案并统一为层级suffix，不留兼容分支。原始结果和最终命令、源码指纹、最小充分复审见 `out/tests/temp/2026/11/12/diff_uri/artifacts/verification.json`；正式页面见 `out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-c94dc84e3bf5/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Python环境无pyright命令，未安装；Ruff与受影响后端合同通过。此片不代替所有媒体URI重开、跨机器／Windows／Electron及宽任务完整矩阵，2.2／2.3继续未勾选。仅本地提交，不同步或push。
+
+### 2026-11-12：上下文最小预算拒绝与内部错误归属（16.18 部分）
+
+- 原上下文 owner 对无法容纳最小命中身份的字符预算给出 `context_search_budget_too_small`／`minimum_result_exceeds_budget`；精确、统一、relay 与 Agent 工具沿原错误出口保留归属和 request_id。统一搜索移除将任意 ValueError 伪装为可重试409的兜底。
+- 457项定向检查、Ruff通过；13文件Pyright与冻结de1de56ab基线均20诊断，无新增。真实双Backend／Gateway通过产品创建Session，精确及统一API预算拒绝和双owner SSE均通过；完整测试随后停在既有缺失目录断言（预期unknown_resource，原owner自43cdedfcce已返回file_not_found），后续阶段未验。本片不据此完成16.18。命令、源码指纹、原件和退出码：`out/tests/temp/2026/11/12/context_search_budget/artifacts/verification.json`。

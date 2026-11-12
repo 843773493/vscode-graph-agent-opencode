@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app.abstractions.session_context import (
     SessionContextCursorError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
 from app.core.trace_middleware import (
@@ -266,9 +267,10 @@ class WorkspaceSessionMainPort:
                     if path == "/api/v1/resources/navigation" and isinstance(detail, dict) and detail.get("owner") == "resource_file_operations":
                         raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标文件操作失败", detail=detail)
                     if (path == "/api/v1/context/search" and response.status_code == 400
-                            and isinstance(detail, dict) and detail.get("owner") == SessionContextSearchPatternError.owner
-                            and detail.get("code") == SessionContextSearchPatternError.code
-                            and detail.get("reason") == SessionContextSearchPatternError.reason):
+                            and isinstance(detail, dict) and any(
+                                detail.get("owner") == error_type.owner and detail.get("code") == error_type.code
+                                and detail.get("reason") == error_type.reason
+                                for error_type in (SessionContextSearchPatternError, SessionContextSearchBudgetError))):
                         raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标工作区拒绝上下文查询", detail=detail)
                     if (path in {"/api/v1/context/read", "/api/v1/context/search"} and response.status_code == 400
                             and isinstance(detail, dict) and detail.get("owner") == SessionContextCursorError.owner

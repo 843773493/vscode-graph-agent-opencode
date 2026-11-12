@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from app.abstractions.session_context import (
     SessionContextCursorError,
     SessionContextRevisionChangedError,
+    SessionContextSearchBudgetError,
 )
 from app.api.context import router as context_router
 from app.api.deps import (
@@ -127,6 +128,25 @@ async def test_revision_character_budget_and_deadline_remain_explicit(search_ser
         await search_service.search(request.model_copy(update={"deadline_at": time.time() - 1}), gateway_id=GATEWAY)
     with pytest.raises(SearchContractError, match="Gateway"):
         await search_service.search(request)
+
+
+async def test_insufficient_budget_keeps_original_query_owner_on_both_http_entries(context_http):
+    import httpx
+
+    expected = SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
+    owner = {"resource_identity": workspace_session_inventory_identity(BACKEND_WORKSPACE_ID),
+             "uri": workspace_session_inventory_uri(BACKEND_WORKSPACE_ID, gateway_authority=GATEWAY), "scope": "workspace"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=context_http), base_url="http://test",
+        headers={"X-Request-ID": "req_context_budget", "X-BoxTeam-Gateway-Id": GATEWAY}) as client:
+        responses = [
+            await client.post("/api/v1/context/search", json={**owner, "query": "问题", "max_chars": 256}),
+            await client.post("/api/v1/search", json={"workspace_id": BACKEND_WORKSPACE_ID, "category": "context",
+                "operation": "content", "match_mode": "literal", "query": "问题", "context": {"max_chars": 256}}),
+        ]
+    for response in responses:
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"] == expected.detail()
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req_context_budget"
 
 
 @pytest.mark.parametrize("model", [WorkspaceSearchRequest, FederatedSearchQueryDTO])

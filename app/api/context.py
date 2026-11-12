@@ -9,6 +9,7 @@ from pydantic_core import PydanticSerializationError
 from app.abstractions.session_context import (
     SessionContextCursorError,
     SessionContextRevisionChangedError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
 from app.api.deps import get_request_id, get_session_context_query_service
@@ -95,7 +96,7 @@ async def search_context(
 ):
     try:
         result = await query_service.search_context(payload)
-    except (SessionContextSearchPatternError, SessionContextCursorError) as error:
+    except (SessionContextSearchPatternError, SessionContextSearchBudgetError, SessionContextCursorError) as error:
         raise HTTPException(status_code=400, detail=error.detail()) from error
     except SessionContextRevisionChangedError as error:
         raise session_context_revision_http_error(error) from error

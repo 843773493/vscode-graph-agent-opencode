@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.abstractions.session_context import (
     SessionContextCursorError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
@@ -281,12 +282,13 @@ class GatewaySessionContextClient:
             original_message = detail.get("message") if isinstance(detail, dict) else None
             if (response_type is SessionContextSearchResultDTO and response.status_code == 409 and identity_valid
                     and isinstance(federation, dict) and federation.get("code") == FEDERATION_TARGET_OWNER_REJECTED
-                    and isinstance(detail, dict) and detail.get("owner") == SessionContextSearchPatternError.owner
-                    and detail.get("code") == SessionContextSearchPatternError.code
-                    and detail.get("reason") == SessionContextSearchPatternError.reason and isinstance(original_message, str)):
-                error = SessionContextSearchPatternError(original_message)
-                error.add_note(message)
-                raise error
+                    and isinstance(detail, dict) and isinstance(original_message, str)):
+                for error_type in (SessionContextSearchPatternError, SessionContextSearchBudgetError):
+                    if (detail.get("owner") == error_type.owner and detail.get("code") == error_type.code
+                            and detail.get("reason") == error_type.reason):
+                        error = error_type(original_message)
+                        error.add_note(message)
+                        raise error
             if (response_type in {SessionContextReadResultDTO, SessionContextSearchResultDTO}
                     and response.status_code == 409 and identity_valid
                     and isinstance(federation, dict) and federation.get("code") == FEDERATION_TARGET_OWNER_REJECTED

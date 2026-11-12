@@ -53,6 +53,17 @@ class SessionContextSearchPatternError(ValueError):
         return {"owner": self.owner, "code": self.code, "reason": self.reason, "message": str(self)}
 
 
+class SessionContextSearchBudgetError(ValueError):
+    """原上下文查询的字符预算无法容纳最小命中身份。"""
+
+    owner = "session_context_query"
+    code = "context_search_budget_too_small"
+    reason = "minimum_result_exceeds_budget"
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": self.owner, "code": self.code, "reason": self.reason, "message": str(self)}
+
+
 class SessionContextCursorError(ValueError):
     """原上下文分页器的输入拒绝；读取、搜索和 relay 共用原原因。"""
 

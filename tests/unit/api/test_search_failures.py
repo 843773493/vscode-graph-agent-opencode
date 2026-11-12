@@ -6,7 +6,10 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.abstractions.session_context import SessionContextSearchPatternError
+from app.abstractions.session_context import (
+    SessionContextSearchBudgetError,
+    SessionContextSearchPatternError,
+)
 from app.api import context, search, session_navigation, session_turns
 from app.api.deps import (
     get_session_context_query_service,
@@ -56,9 +59,12 @@ def search_api():
 
 
 @pytest.mark.parametrize("endpoint", ["/api/v1/context/search", "/api/v1/search"])
-def test_invalid_context_regex_keeps_same_owner_detail_on_both_routes(search_api, endpoint):
+@pytest.mark.parametrize("error", [
+    SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0"),
+    SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果"),
+])
+def test_context_input_rejection_keeps_same_owner_detail_on_both_routes(search_api, endpoint, error):
     client, query = search_api
-    error = SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0")
     query.side_effect = error
     payload = {"query": "[", "match_mode": "regex"}
     if endpoint == "/api/v1/search":
@@ -78,6 +84,8 @@ def test_invalid_context_regex_keeps_same_owner_detail_on_both_routes(search_api
     ("file", TimeoutError("本次总期限已到"), 409, "deadline"),
     ("file", ResourceFileOperationError("invalid_encoding", "不是 UTF-8 正文", reason="utf8"), 400, "invalid_encoding"),
     ("llm_request", PermissionError(13, "original request log failure"), 500, None),
+    ("llm_request", ValueError("request log content is corrupt"), 500, None),
+    ("context", ValueError("source-mismatch: session DTO has wrong owner"), 500, None),
 ])
 def test_domain_failures_keep_original_http_ownership(search_api, category, error, status, code):
     client, query = search_api

@@ -10,6 +10,7 @@ from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
     SessionContextCursorError,
     SessionContextMessageSourceProtocol,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
     SessionInformationSourceProtocol,
     SessionLookupProtocol,
@@ -305,7 +306,7 @@ class SessionContextQueryService:
                     total_matches=len(found),
                 )
                 if clipped is None:
-                    raise ValueError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
+                    raise SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
                 matches.append(clipped)
                 budget_truncated = True
             result = self._build_search_result(

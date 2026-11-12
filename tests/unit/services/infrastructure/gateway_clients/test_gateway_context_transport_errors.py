@@ -10,6 +10,7 @@ import pytest
 
 from app.abstractions.session_context import (
     SessionContextCursorError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
     WorkspaceSessionContextAccessError,
 )
@@ -188,10 +189,12 @@ async def test_context_error_codes_require_matching_response_identity(
     ("read", False), ("search", True), ("fork", False), ("inventory", False),
 ], indirect=["context_operation"])
 @pytest.mark.parametrize("mutation", ["valid", "body_id", "header_id", "owner", "code", "reason", "message", "status"])
-async def test_context_pattern_error_rehydrates_only_original_owner_and_request(
+@pytest.mark.parametrize("error_type", [SessionContextSearchPatternError, SessionContextSearchBudgetError])
+async def test_context_input_error_rehydrates_only_original_owner_and_request(
     context_operation: Callable[[], Awaitable[object]], monkeypatch: pytest.MonkeyPatch, mutation: str, expects_pattern: bool,
+    error_type: type[SessionContextSearchPatternError | SessionContextSearchBudgetError],
 ) -> None:
-    original = SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0")
+    original = error_type("原上下文查询拒绝")
     requests: list[httpx.Request] = []
 
     async def respond(_client, method, url, **kwargs):
@@ -210,16 +213,16 @@ async def test_context_pattern_error_rehydrates_only_original_owner_and_request(
             headers={"X-Request-ID": "other" if mutation == "header_id" else request_id} if request_id is not None else {})
 
     monkeypatch.setattr(httpx.AsyncClient, "request", respond)
-    expected_exception = (SessionContextSearchPatternError if mutation == "valid" and expects_pattern
+    expected_exception = (error_type if mutation == "valid" and expects_pattern
                           else RuntimeError if mutation == "status" else WorkspaceSessionContextAccessError)
     with pytest.raises(expected_exception) as caught:
         await context_operation()
     assert type(caught.value) is expected_exception
-    if isinstance(caught.value, SessionContextSearchPatternError):
+    if isinstance(caught.value, (SessionContextSearchPatternError, SessionContextSearchBudgetError)):
         assert caught.value.detail() == original.detail()
         assert f"request_id={requests[0].headers['X-Request-ID']}" in caught.value.__notes__[0]
     else:
-        assert "query 不是有效正则表达式" not in str(caught.value) and "/private/context" not in str(caught.value)
+        assert "原上下文查询拒绝" not in str(caught.value) and "/private/context" not in str(caught.value)
 
 
 @pytest.mark.parametrize("context_operation,expects_cursor", [

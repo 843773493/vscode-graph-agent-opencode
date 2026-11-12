@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.abstractions.session_context import (
     SessionContextCursorError,
     SessionContextRevisionChangedError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
 from app.api.deps import (
@@ -101,7 +102,7 @@ async def search_workspace(
         raise
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
-    except (SessionContextSearchPatternError, SessionContextCursorError) as error:
+    except (SessionContextSearchPatternError, SessionContextSearchBudgetError, SessionContextCursorError) as error:
         raise HTTPException(status_code=400, detail=error.detail()) from error
     except (CatalogCursorError, ThreadSearchCursorError, ThreadCatalogRevisionChangedError) as error:
         raise HTTPException(status_code=409, detail=error.detail()) from error
@@ -139,9 +140,6 @@ async def search_workspace(
         raise
     except TimeoutError as error:
         raise HTTPException(status_code=409, detail={"code": "deadline", "message": str(error)}) from error
-    except ValueError as error:
-        # TODO：随原 owner 的 cursor／revision 异常类型化，细分 owner_rejected 的诊断代码。
-        raise HTTPException(status_code=409, detail={"code": "owner_rejected", "message": str(error)}) from error
     finally:
         disconnected.cancel()
         await asyncio.gather(disconnected, return_exceptions=True)

@@ -10,11 +10,16 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.abstractions.session_context import SessionContextSearchBudgetError
 from app.core.session_catalog_store import SessionCatalogStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.search_federation import MAX_SEARCH_OUTPUT_BYTES
+from app.services.business.session_context_resource import (
+    workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -172,6 +177,37 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                 assert response.num_bytes_downloaded <= MAX_SEARCH_OUTPUT_BYTES
                 observations.append({"request": payload, "events": events, "output_bytes": response.num_bytes_downloaded})
                 return events
+
+            # 命中由上面的产品创建入口产生；预算拒绝不能变成可重试冲突或零匹配。
+            budget_error = SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
+            context_query = {"category": "context", "operation": "content", "query": "Shared Search", "match_mode": "literal",
+                             "context": {"sources": ["session_catalog"], "max_chars": 256}}
+            for endpoint, payload in (
+                ("/api/v1/search", {"workspace_id": workspace_a, **context_query}),
+                ("/api/v1/context/search", {
+                    "resource_identity": str(workspace_session_inventory_identity(workspace_a)),
+                    "uri": workspace_session_inventory_uri(workspace_a, gateway_authority=gateway_id), "scope": "workspace",
+                    "query": "Shared Search", "sources": ["session_catalog"], "max_chars": 256,
+                }),
+            ):
+                request_id = "req_budget_" + ("provider" if endpoint == "/api/v1/search" else "context")
+                rejected = await client.post(endpoint, json=payload,
+                    headers={"X-BoxTeam-Workspace-Id": workspace_a, "X-Request-ID": request_id})
+                observations.append({"endpoint": endpoint, "status": rejected.status_code, "body": rejected.json()})
+                assert rejected.status_code == 400, rejected.text
+                assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"] == request_id
+                assert rejected.json()["detail"] == budget_error.detail()
+            budget_events = await search({"scope": {"mode": "selected", "owners": [owners[workspace_a], owners[workspace_b]]},
+                                          "queries": [context_query]}, "req_context_budget_sse")
+            assert not any(event["type"] == "page" for event in budget_events)
+            assert budget_events[-1]["summary"]["state"] == "incomplete"
+            budget_branches = budget_events[-1]["summary"]["branches"]
+            assert {branch["branch"]["owner"]["workspace_id"] for branch in budget_branches} == {workspace_a, workspace_b}
+            for branch in budget_branches:
+                assert branch["state"] == "failed" and branch["code"] == budget_error.code
+                assert branch["error_owner"] == budget_error.owner and branch["reason"] == budget_error.reason
+                assert branch["message"] == str(budget_error) and branch["http_status"] == 400 and not branch["retryable"]
+                assert branch["cursor"] is None and branch["returned_results"] == 0
 
             query = {"category": "catalog", "query": "ShSe", "limit": 1}
             first = await search({"scope": {"mode": "origin", "origin": owners[workspace_a]}, "queries": [query]}, "req_federation_a")

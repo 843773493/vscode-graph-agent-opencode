@@ -11,6 +11,7 @@ import pytest
 
 from app.abstractions.session_context import (
     SessionContextCursorError,
+    SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
 )
 from app.core.session_control_communication_ledger.observations import (
@@ -243,6 +244,8 @@ async def test_workspace_named_rejection_requires_original_request_identity(
     ("/api/v1/context/search", 409, {"code": "snapshot_changed"}, FEDERATION_TARGET_OWNER_REJECTED, {"owner": "context_revision", "code": "snapshot_changed"}),
     ("/api/v1/context/search", 400, SessionContextSearchPatternError("原正则解析器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
      SessionContextSearchPatternError("原正则解析器拒绝").detail()),
+    ("/api/v1/context/search", 400, SessionContextSearchBudgetError("原字符预算不足").detail(), FEDERATION_TARGET_OWNER_REJECTED,
+     SessionContextSearchBudgetError("原字符预算不足").detail()),
     ("/api/v1/context/read", 400, SessionContextCursorError("position_out_of_bounds", "原读取分页器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
      SessionContextCursorError("position_out_of_bounds", "原读取分页器拒绝").detail()),
     ("/api/v1/context/search", 400, SessionContextCursorError("query_mismatch", "原搜索分页器拒绝").detail(), FEDERATION_TARGET_OWNER_REJECTED,
@@ -273,12 +276,13 @@ async def test_workspace_semantic_rejection_requires_original_request_identity(
 @pytest.mark.parametrize("field,value", [
     ("owner", "another_owner"), ("code", "another_code"), ("reason", "another_reason"),
 ])
-async def test_context_pattern_rejection_does_not_upgrade_unregistered_owner_detail(
-    http_context: _HTTPContext, field: str, value: str,
+@pytest.mark.parametrize("error_type", [SessionContextSearchPatternError, SessionContextSearchBudgetError])
+async def test_context_input_rejection_does_not_upgrade_unregistered_owner_detail(
+    http_context: _HTTPContext, field: str, value: str, error_type,
 ) -> None:
     http_context.status = 400
     http_context.data = {"request_id": REQUEST_ID, "detail": {
-        **SessionContextSearchPatternError("原解析错误").detail(), field: value,
+        **error_type("原查询拒绝").detail(), field: value,
     }}
     with pytest.raises(FederationError) as caught:
         await http_context.port._request(
