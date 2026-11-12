@@ -20,7 +20,7 @@ import portalocker
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from app.core.atomic_fs import fsync_directory, fsync_file
+from app.core.atomic_fs import fsync_directory
 from app.gateway.federation.policy import CAPABILITIES
 from app.gateway.plugins.dependencies import (
     validate_prebuilt_dependencies,
@@ -290,7 +290,6 @@ class PluginPackageStore:
                 stream.write(json.dumps(metadata, ensure_ascii=False, separators=(",", ":")))
                 stream.flush()
                 os.fsync(stream.fileno())
-            _sync_tree(staging)
             def publish() -> None:
                 os.replace(staging, destination)
                 fsync_directory(package_dir)
@@ -560,17 +559,6 @@ def _validate_windows_identity_sibling(parent: Path, identity: str, label: str) 
     for path in parent.iterdir():
         if path.name != identity and path.name.casefold() == identity.casefold():
             raise ValueError(f"{label} 与已有安装目录在 Windows 上大小写折叠后冲突: {path.name} / {identity}")
-
-
-def _sync_tree(root: Path) -> None:
-    directories = [root]
-    for current, child_dirs, files in os.walk(root):
-        directory = Path(current)
-        directories.extend(directory / name for name in child_dirs)
-        for name in files:
-            fsync_file(directory / name)
-    for directory in reversed(directories):
-        fsync_directory(directory)
 
 
 __all__ = ["InstalledPluginPackage", "PluginPackageStore"]
