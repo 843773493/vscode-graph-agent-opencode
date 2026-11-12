@@ -12,10 +12,11 @@ import type { IResourceDiffEditorInput } from '../upstream/src/vs/workbench/comm
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IEditorResolverService } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
 import type { GatewayResourceAddressDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { ThreadInput } from './threadInput.js';
-import { workspaceFileUri } from './workspaceFiles.js';
+import { workspaceFileEditorInput, workspaceFileUri } from './workspaceFiles.js';
 import { workspaceContext } from './workspaceContext.js';
 import { sourceDocumentUri } from './sourceDocuments.js';
 import { ChangeDocuments } from './changeFiles.js';
@@ -38,6 +39,7 @@ export class ResourceOpener extends Disposable implements IOpener {
     @IConfigurationService private readonly configuration: IConfigurationService,
     @ITextModelService private readonly models: ITextModelService,
     @ICommandService private readonly commands: ICommandService,
+    @IEditorResolverService private readonly resolver: IEditorResolverService,
   ) {
     super();
     this._register(opener.registerOpener(this));
@@ -144,13 +146,14 @@ export class ResourceOpener extends Disposable implements IOpener {
         // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
         references.push(await this.models.createModelReference(input.resource));
       }
+      if (!(input instanceof ThreadInput)) input = await workspaceFileEditorInput({ ...input, options: editorOptions }, this.resolver);
       assertAccess();
       const source = this.groups.getGroup(groupId);
       if (!source) throw new Error('发起打开的编辑器组已关闭');
       const direction = preferredSideBySideGroupDirection(this.configuration);
       const group = openToSide ? this.groups.findGroup({ direction }, source) ?? this.groups.addGroup(source, direction) : source;
       if (input instanceof ThreadInput) await this.editors.openEditor(input, editorOptions, group.id);
-      else await this.editors.openEditor({ ...input, options: editorOptions }, group.id);
+      else await this.editors.openEditor(input, group.id);
       return true;
     } finally { for (const reference of references) reference.dispose(); release(); }
   }

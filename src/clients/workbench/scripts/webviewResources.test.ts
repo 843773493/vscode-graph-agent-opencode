@@ -79,22 +79,24 @@ test('原扩展 API 每次读取当前 localResourceRoots，显式空根不会�
   expect(view.asWebviewUri(resource).authority).toEndWith(webviewRootResourceAuthority);
 });
 
-test('HTTP 占位 stat 不作为 Worker validator，业务文件仍沿原条件读取且根拒绝先于读取', async () => {
+test('原 Worker 的 validator、owner MIME 和拒绝根沿同一读取链', async () => {
   const loader = await source('src/vs/workbench/contrib/webview/browser/resourceLoading.ts');
   const executable = ts.transpile(loader.statements.filter(node => !ts.isImportDeclaration(node))
     .map(node => node.getText().replace(/^export /, '')).join('\n'),
   { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext });
+  let metadata: (resource: URI) => Promise<string | undefined> = async () => undefined;
   const load = new Function('IUriIdentityService', 'IFileService', 'ILogService', 'Schemas',
-    'FileOperationError', 'FileOperationResult', 'getWebviewContentMimeType', 'isWindows',
+    'FileOperationError', 'FileOperationResult', 'getWebviewContentMimeType', 'isWindows', 'workspaceFileMimeType',
     `${executable}\nreturn loadLocalResource;`)(
     IUriIdentityService, IFileService, ILogService, Schemas,
-    FileOperationError, FileOperationResult, getWebviewContentMimeType, false) as
+    FileOperationError, FileOperationResult, getWebviewContentMimeType, false, (resource: URI) => metadata(resource)) as
     (accessor: { get: (id: unknown) => unknown }, resource: URI,
     options: { ifNoneMatch: string; roots: readonly URI[] }, token: unknown) =>
     Promise<{ etag?: string; mtime?: number; mimeType?: string; type: number }>;
   const reads: { uri: URI; options: { etag?: string } }[] = [];
+  const errors: unknown[][] = [];
   const services = new Map<unknown, unknown>([
-    [IUriIdentityService, { extUri }], [ILogService, { trace() {}, error() {} }],
+    [IUriIdentityService, { extUri }], [ILogService, { trace() {}, error(...args: unknown[]) { errors.push(args); } }],
     [IFileService, { async readFileStream(uri: URI, options: { etag?: string }) {
       reads.push({ uri, options });
       return { value: undefined, etag: 'observed-version', mtime: 42, size: 10 };
@@ -115,6 +117,18 @@ test('HTTP 占位 stat 不作为 Worker validator，业务文件仍沿原条件�
     { ifNoneMatch: 'old-version', roots: [URI.parse('http://target/extensions/markdown')] }, {});
   expect(denied.type).toBe(2);
   expect(reads).toHaveLength(count);
+  const root = URI.parse('boxteam-file://target/attachment');
+  metadata = async resource => { expect(resource.path).toBe('/attachment/original/content'); return 'audio/wav'; };
+  const media = await load({ get: id => services.get(id) }, URI.joinPath(root, 'original/content'),
+    { ifNoneMatch: 'old-version', roots: [root] }, {});
+  expect(media.mimeType).toBe('audio/wav');
+  const failure = new Error('原件 HEAD 权限已撤销');
+  metadata = async () => { throw failure; };
+  const failed = await load({ get: id => services.get(id) }, URI.joinPath(root, 'original/content'),
+    { ifNoneMatch: 'old-version', roots: [root] }, {});
+  expect(failed.type).toBe(1);
+  expect(reads).toHaveLength(count + 1);
+  expect(errors.at(-1)?.at(-1)).toBe(failure);
 });
 
 test('原 Worker 响应保留真实字体 MIME，不影响脚本与 CSS', async () => {

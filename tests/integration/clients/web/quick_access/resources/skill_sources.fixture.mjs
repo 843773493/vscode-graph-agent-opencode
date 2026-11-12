@@ -102,7 +102,7 @@ export async function skillSourcesContract(mode) {
         try { await provider.provideTextContent(resource); } finally { source.dispose(); }
       }
       return { object: {}, dispose() { released++; } };
-    } }, {});
+    } }, {}, { getAssociationsForResource: () => [] });
   let currentItems = [];
   picker = { value: 'resource ', get items() { return currentItems; }, set items(items) { currentItems = items; this.selectedItems = []; this.activeItems = []; },
     activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' },

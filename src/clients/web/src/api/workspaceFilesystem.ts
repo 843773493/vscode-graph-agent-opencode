@@ -335,6 +335,19 @@ export async function getWorkspaceRawFileBlob(
   } finally { release(); }
 }
 
+/** 与原件 GET 共用 owner 和权限，仅取得 MIME，不下载正文。 */
+export async function getWorkspaceRawFileMimeType(
+  port: number, path: string, workspaceId?: string | null, signal?: AbortSignal,
+): Promise<string> {
+  const { query } = fileTreeLocationQuery(path);
+  const response = await requestGatewayResponse(port, `/api/v1/workspace/files/raw?${query}`, {
+    method: "HEAD", headers: workspaceHeader(workspaceId), signal,
+  });
+  const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+  if (!contentType) throw new Error("原文件响应缺少 MIME 类型");
+  return contentType;
+}
+
 export async function updateWorkspaceFileContent(
   port: number,
   path: string,

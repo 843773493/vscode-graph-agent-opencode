@@ -67,13 +67,14 @@ interface Editor extends Pane {
 }
 const editorMembers = declaration(editorSource, 'ImagePreviewEditor').members.filter(node => !ts.isConstructorDeclaration(node));
 const viewStateGuard = editorSource.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'isImageViewerViewState');
+const metadata = { async read(_resource: URI): Promise<string | undefined> { return undefined; } };
 const Editor = execute<new () => Editor>(`${viewStateGuard?.getText()}
 class ImagePreviewEditor extends EditorPane {
   ${editorMembers.map(node => node.getText()).join('\n')}
 }`, 'ImagePreviewEditor', { EditorPane: Pane, DisposableStore, MutableDisposable, Emitter, RunOnceScheduler,
   toDisposable, FileChangeType: { UPDATED: FileChangeType.UPDATED, ADDED: FileChangeType.ADDED, DELETED: FileChangeType.DELETED },
   ImagePreviewEditorInput: Input, onGatewayTokenInvalidated,
-  isGitLfsPointer: async () => false, getMediaMime: () => 'image/png',
+  isGitLfsPointer: async () => false, getMediaMime: () => 'image/png', workspaceFileMimeType: (resource: URI) => metadata.read(resource),
   localize: (_key: string, value: string, ...args: unknown[]) => value.replace(/\{(\d+)\}/g, (_match, index: string) => String(args[Number(index)])),
 });
 
@@ -86,6 +87,8 @@ function deferred<T>() {
 }
 async function flush() { for (let index = 0; index < 12; index++) await Promise.resolve(); }
 function fixture(scheme = 'boxteam-file') {
+  const head = spyOn(metadata, 'read');
+  cleanup.push(() => head.mockRestore());
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'Image');
   const decodes: Array<ReturnType<typeof deferred<void>>> = [];
   Object.defineProperty(globalThis, 'Image', { configurable: true, value: class {
@@ -116,7 +119,7 @@ function fixture(scheme = 'boxteam-file') {
   cleanup.push(() => { editor.dispose(); viewer.dispose(); changes.dispose(); });
   const input = new Input(URI.parse(`${scheme}://gateway/workspace/root/image.png`));
   const load = (next = input) => editor.setInput(next, undefined, {}, CancellationToken.None);
-  return { editor, viewer, input, load, decodes, read, createUrl, revokeUrl, changes, watches: () => activeWatches };
+  return { editor, viewer, input, load, decodes, read, head, createUrl, revokeUrl, changes, watches: () => activeWatches };
 }
 
 for (const decoding of [false, true]) test(`身份失效撤销原 Pane ${decoding ? '待解码' : '已显示'}图片及 URL`, async () => {
@@ -244,4 +247,42 @@ test('watcher 删除读取失败撤下旧图，后续恢复仍沿原 watcher 重
   expect(f.viewer._image.src).toBe('blob:image-2');
   expect(f.editor._message.label.textContent).toBe('');
   expect(f.editor.fileSize).toBe(1);
+});
+
+test('无扩展名图片 MIME 重读失败撤下旧图，沿原错误显示并允许后续 watcher 重试', async () => {
+  const f = fixture();
+  f.head.mockResolvedValue('image/jpeg');
+  const loading = f.load(new Input(f.input.resource.with({ path: '/workspace/root/content' })));
+  await flush();
+  f.decodes[0]!.resolve();
+  await loading;
+  expect(f.createUrl.mock.calls[0]![0].type).toBe('image/jpeg');
+  f.head.mockRejectedValueOnce(new Error('附件 MIME 读取失败'));
+  f.changes.fire({ contains: () => true });
+  await new Promise(resolve => setTimeout(resolve, 130));
+  expect(f.viewer._image.src).toBe('');
+  expect(f.editor._message.label.textContent).toContain('附件 MIME 读取失败');
+  expect(f.revokeUrl.mock.calls).toEqual([['blob:image-1']]);
+  f.changes.fire({ contains: () => true });
+  await new Promise(resolve => setTimeout(resolve, 130));
+  f.decodes[1]!.resolve();
+  await flush();
+  expect(f.viewer._image.src).toBe('blob:image-2');
+  expect(f.editor._message.label.textContent).toBe('');
+});
+
+test('旧 input 的 MIME 迟到完成不创建 Blob 或覆盖已切换的图片', async () => {
+  const f = fixture(), head = deferred<string>();
+  f.head.mockImplementationOnce(() => head.promise);
+  const old = f.load(new Input(f.input.resource.with({ path: '/workspace/root/content' })));
+  await flush();
+  expect(f.createUrl).not.toHaveBeenCalled();
+  const next = f.load();
+  await flush();
+  f.decodes[0]!.resolve();
+  await next;
+  head.resolve('image/jpeg');
+  await old;
+  expect(f.createUrl).toHaveBeenCalledTimes(1);
+  expect(f.viewer._image.src).toBe('blob:image-1');
 });

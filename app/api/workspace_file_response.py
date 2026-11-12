@@ -57,6 +57,10 @@ class WorkspaceFileResponse(FileResponse):
                     await access.enter_async_context(self.download.admission())
                 with file_access(self.download.uri, "文件传输"):
                     headers = Headers(scope=scope)
+                    if scope["method"] == "HEAD":
+                        # 与原 GET 核验相同的原生读取权限，只打开而不读取正文。
+                        async with await anyio.open_file(self.path, "rb"):
+                            pass
                     if self.preview_owner is not None and scope["method"] == "GET" and "range" not in headers:
                         metadata = self.download.metadata
                         # 只散列身份与 stat 观察值；这是弱校验器，不是正文 hash 或保存 CAS。

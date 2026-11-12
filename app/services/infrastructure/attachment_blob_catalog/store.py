@@ -380,6 +380,19 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
             result = ResourceFileContent(data, mime_type or "application/octet-stream")
         return result
 
+    def file_metadata(self, parsed: ParsedResourceUri) -> tuple[str, str]:
+        """原文件入口只投影 catalog 元数据，不读取正文或自行重建目录。"""
+        attachment_id, children = self._resource_id(parsed.display_uri, session_id=None)
+        self._catalog.require_available_directory(attachment_id)
+        if not children:
+            raise IsADirectoryError("附件原件元数据必须明确指向目录内的文件")
+        version = self._catalog.file_version(attachment_id, "/".join(children))
+        if children[0] in {"original", "preview"} and version is None:
+            raise RuntimeError("附件原件或预览缺少已登记版本")
+        if version is not None:
+            return version.file_name or children[-1], version.mime_type or "application/octet-stream"
+        return children[-1], mimetypes.guess_type(children[-1])[0] or "application/octet-stream"
+
     def describe_reference(self, attachment: AttachmentRef, *, session_id: str | None) -> AttachmentRef:
         attachment_id, children = self._resource_id(attachment.file_id, session_id=session_id)
         with self.access_files(attachment_id):

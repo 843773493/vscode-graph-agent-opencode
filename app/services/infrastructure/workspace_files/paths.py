@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import (
@@ -47,6 +48,8 @@ class AttachmentDirectoryPaths(Protocol):
                               require_directory: bool = False) -> Path: ...
 
     def access_files(self, *attachment_ids: str, for_write: bool = False) -> AbstractContextManager[None]: ...
+
+    def file_metadata(self, parsed: ParsedResourceUri) -> tuple[str, str]: ...
 
     async def settle_working_directory(self, reference: str) -> None: ...
 
@@ -128,6 +131,15 @@ class WorkspaceFilePaths:
         self.workspace, self.workspace_id, self.bindings = workspace, workspace_id, bindings
         self.attachments = attachments
         self.workspace_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root",))
+
+    def file_metadata(self, reference: str) -> tuple[str, str]:
+        parsed = parse_resource_uri(reference, local_gateway_id=get_current_gateway_id())
+        if parsed.kind == "attachments":
+            if self.attachments is None:
+                raise RuntimeError("文件 owner 尚未装配附件目录解析")
+            return self.attachments.file_metadata(parsed)
+        filename = parsed.tail_segments[-1]
+        return filename, mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     @contextmanager
     def access(self, *values: str, for_write: bool = False) -> Iterator[None]:

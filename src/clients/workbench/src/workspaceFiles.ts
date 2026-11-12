@@ -4,12 +4,14 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { encodeHex, VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import { getMediaMime } from '../upstream/src/vs/base/common/mime.js';
+import { extname } from '../upstream/src/vs/base/common/resources.js';
 import { Event, Emitter } from '../upstream/src/vs/base/common/event.js';
 import { toDisposable, IDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import type { IUriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
 import type { IUntypedEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
 import type { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
 import type { IEditorGroup } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import type { IEditorResolverService } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
 import type { IWorkingCopyBackupService } from '../upstream/src/vs/workbench/services/workingCopy/common/workingCopyBackup.js';
 import { newWriteableStream, ReadableStreamEvents } from '../upstream/src/vs/base/common/stream.js';
 import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability, IFileReadStreamOptions, IFileWriteOptions, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult, toFileSystemProviderErrorCode } from '../upstream/src/vs/platform/files/common/files.js';
@@ -17,9 +19,10 @@ import type { WorkspaceFileContentDTO, WorkspaceFileReferencesDTO } from '../../
 import type { WorkspaceFileList } from '../../web/src/types/backend.js';
 import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { AUDIO_PREVIEW_EDITOR_ID, IMAGE_PREVIEW_EDITOR_ID, VIDEO_PREVIEW_EDITOR_ID } from '../upstream/src/vs/workbench/contrib/mediaPreview/common/mediaPreview.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
-import { getWorkspaceFileRoots, getWorkspaceFiles, getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
+import { getWorkspaceFileRoots, getWorkspaceFiles, getWorkspaceRawFileBlob, getWorkspaceRawFileMimeType } from '../../web/src/api/workspaceFilesystem.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { awaitWithAbort } from '../../web/src/utils/abortable.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
@@ -45,7 +48,7 @@ export function workspaceFileSource(resource: URI): WorkspaceOwner & { path: str
   // 原文件选择器用一个尾分隔符表示目录；只消费该段，不折叠内部空段或改写不透明根。
   if (children.at(-1) === '') children.pop();
   // 原媒体 Webview 添加的 version 仅用于绕过浏览器缓存，不是资源版本参数。
-  const mediaCacheQuery = getMediaMime(resource.path) && /^version=\d+$/.test(resource.query);
+  const mediaCacheQuery = (getMediaMime(resource.path) || !extname(resource)) && /^version=\d+$/.test(resource.query);
   if (resource.scheme !== scheme || !resource.authority || !workspaceId || !encodedRoot || (resource.query && !mediaCacheQuery) || resource.fragment) {
     throw new Error('文件编辑器资源缺少稳定身份，或包含旧临时路由；请从原文件入口重新打开');
   }
@@ -104,7 +107,7 @@ export async function canonicalWorkspaceFileResources(resources: readonly URI[],
 }
 
 /** 复用原输入结构；diff／分屏／merge 的所有文件在同次 owner 准入中归一。 */
-export async function canonicalWorkspaceFileInputs(inputs: readonly IUntypedEditorInput[]): Promise<IUntypedEditorInput[]> {
+export async function canonicalWorkspaceFileInputs(inputs: readonly IUntypedEditorInput[], resolver?: IEditorResolverService): Promise<IUntypedEditorInput[]> {
   const resources: URI[] = [];
   function project<T extends IUntypedEditorInput>(input: T, resource: (value: URI) => URI): T {
     if ('original' in input && 'modified' in input) return { ...input, original: project(input.original, resource), modified: project(input.modified, resource) };
@@ -116,11 +119,36 @@ export async function canonicalWorkspaceFileInputs(inputs: readonly IUntypedEdit
   inputs.forEach(input => project(input, value => { resources.push(value); return value; }));
   const canonical = await canonicalWorkspaceFileResources(resources);
   let index = 0;
-  return inputs.map(input => {
+  return Promise.all(inputs.map(async input => {
     let changed = false;
     const projected = project(input, value => { const next = canonical[index++]; changed ||= value !== next; return next; });
-    return changed ? projected : input;
-  });
+    const result = changed ? projected : input;
+    return resolver ? workspaceFileEditorInput(result, resolver) : result;
+  }));
+}
+
+/** 打开和原 resolver 共用 MIME 选择；显式打开方式仍由原调用方决定。 */
+export async function workspaceFileEditorInput<T extends IUntypedEditorInput>(input: T, resolver: IEditorResolverService): Promise<T> {
+  if (!('resource' in input) || input.resource?.scheme !== scheme || input.options?.override || extname(input.resource)
+    || resolver.getAssociationsForResource(input.resource).length) return input;
+  const mime = await workspaceFileMimeType(input.resource);
+  const override = mime?.startsWith('image/') ? IMAGE_PREVIEW_EDITOR_ID : mime?.startsWith('audio/') ? AUDIO_PREVIEW_EDITOR_ID
+    : mime?.startsWith('video/') ? VIDEO_PREVIEW_EDITOR_ID : undefined;
+  return override ? { ...input, options: { ...input.options, override } } : input;
+}
+
+/** 无扩展名原件的 MIME 交文件 owner；不保存跨打开元数据或另建媒体正文链。 */
+export async function workspaceFileMimeType(resource: URI, token?: CancellationToken): Promise<string | undefined> {
+  if (resource.scheme !== scheme || extname(resource)) return undefined;
+  const source = workspaceFileSource(resource), controller = new AbortController();
+  const release = onGatewayTokenInvalidated(0, () => controller.abort(new Error('Gateway 凭据已失效，请重新读取文件')));
+  const cancellation = token?.onCancellationRequested(() => controller.abort());
+  if (token?.isCancellationRequested) controller.abort();
+  try {
+    const mime = await getWorkspaceRawFileMimeType(0, source.path, gatewayWorkspaceKey(source), controller.signal);
+    controller.signal.throwIfAborted();
+    return mime;
+  } finally { cancellation?.dispose(); release(); }
 }
 
 // 原编辑器组可并发恢复同一文件；只串行化恢复事务，不保存 URI 身份事实。

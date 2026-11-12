@@ -105,3 +105,17 @@ include／exclude SHALL 按选定根内相对路径使用原 glob 合同，exclu
 #### Scenario: 图片变化与旧保存基线独立
 - **WHEN** 原 owner 的版本观察值随图片修改而变化，watch 通知刷新或用户再次打开
 - **THEN** 取得新字节和 validator 并更新显示；未保存文本、文件保存 revision 与工作副本备份不被媒体缓存或校验推进，媒体内部 version 参数不成为业务版本
+
+### Requirement: 原文件响应头沿同一 owner 提供 MIME
+
+既有原文件 raw 入口 SHALL 同时支持 HEAD 和 GET，使用相同的身份、路径、权限与附件目录准入。HEAD SHALL 返回与 GET 一致的 MIME、原下载名称和字节长度，不传输正文、不推进文本保存 revision，也不建立另一份媒体元数据缓存。附件 original／preview 的 MIME 与名称 SHALL 来自原附件 catalog，不能根据固定物理名 `content` 猜测；derived 与普通文件保持原文件 owner 的 MIME 合同。必要的工作副本重建继续由原附件 owner 负责，不将 HEAD 作为复制引用或浏览候选的前置动作。
+
+#### Scenario: 无扩展名附件按真实媒体类型重开
+
+- **WHEN** 用户复制附件的规范 URI，关闭后从 Quick Open 重开图片、音频或视频原件
+- **THEN** 读取原 owner 的响应头后选择原媒体编辑器；图片 Blob 与隔离 Webview 响应保留相同 MIME，原件字节和 Gateway／工作区归属保持，不能按 `content` 后缀落入文本编辑器
+
+#### Scenario: 只读响应头不传输正文
+
+- **WHEN** 调用者对原 raw 入口发起 HEAD
+- **THEN** 返回同一原件 MIME、名称和字节长度、当前 request_id 及空正文；错误继续明确返回，不能借错误或缺少 MIME 假报成功

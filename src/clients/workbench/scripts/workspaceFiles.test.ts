@@ -7,7 +7,9 @@ import { VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
 import { NullLogService } from '../upstream/src/vs/platform/log/common/log.js';
 import { UriIdentityService } from '../upstream/src/vs/platform/uriIdentity/common/uriIdentityService.js';
 import { gateway, GatewayRequestError } from '../src/agentApi.js';
-import { installBackendFiles, workspaceFileUri, workspaceFileSource } from '../src/workspaceFiles.js';
+import { installBackendFiles, workspaceFileUri, workspaceFileSource, workspaceFileEditorInput, workspaceFileMimeType } from '../src/workspaceFiles.js';
+import type { IEditorResolverService } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
+import { AUDIO_PREVIEW_EDITOR_ID, IMAGE_PREVIEW_EDITOR_ID, VIDEO_PREVIEW_EDITOR_ID } from '../upstream/src/vs/workbench/contrib/mediaPreview/common/mediaPreview.js';
 import * as fileEvents from '../../web/src/api/stream/workspaceFileEvents.js';
 import * as fileApi from '../../web/src/api/workspaceFilesystem.js';
 import { CancellationToken, CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
@@ -67,6 +69,51 @@ describe('后端文件目录根和稳定投影', () => {
     expect(workspaceFileSource(media.with({ query: 'version=123' })).path).toBe(root + '/video.mp4');
     expect(() => workspaceFileSource(media.with({ query: 'revision=123' }))).toThrow();
     expect(() => workspaceFileSource(media.with({ fragment: 'L2' }))).toThrow();
+    const content = workspaceFileUri(owner, root + '/content', root);
+    expect(workspaceFileSource(content.with({ query: 'version=123' })).path).toBe(root + '/content');
+    expect(() => workspaceFileSource(workspaceFileUri(owner, root + '/code.ts', root).with({ query: 'version=123' }))).toThrow();
+  });
+
+  test('无扩展名原件按完整 owner 的 HEAD MIME 选择原媒体编辑器，保留用户打开方式', async () => {
+    const attachmentRoot = root.replace('/files/root', '/attachments/att_media');
+    const resource = workspaceFileUri(owner, attachmentRoot + '/original/content', attachmentRoot);
+    const resolver = { getAssociationsForResource: () => [] } as unknown as IEditorResolverService;
+    const head = spyOn(fileApi, 'getWorkspaceRawFileMimeType');
+    try {
+      for (const [mime, override] of [['image/png', IMAGE_PREVIEW_EDITOR_ID], ['audio/wav', AUDIO_PREVIEW_EDITOR_ID],
+        ['video/mp4', VIDEO_PREVIEW_EDITOR_ID]] as const) {
+        head.mockResolvedValueOnce(mime);
+        const input = { resource, options: { pinned: true, preserveFocus: true } };
+        expect(await workspaceFileEditorInput(input, resolver)).toEqual({ ...input, options: { ...input.options, override } });
+        expect(head.mock.calls.at(-1)?.slice(0, 3)).toEqual([0, attachmentRoot + '/original/content', ownerKey]);
+      }
+      const before = head.mock.calls.length;
+      for (const input of [{ resource, options: { override: 'default' } },
+        { resource: workspaceFileUri(owner, root + '/photo.png', root) }, { resource: URI.file('/content') }]) {
+        expect(await workspaceFileEditorInput(input, resolver)).toBe(input);
+      }
+      const associated = { resource };
+      expect(await workspaceFileEditorInput(associated, { getAssociationsForResource: () => [{ viewType: 'user.editor' }] } as unknown as IEditorResolverService)).toBe(associated);
+      expect(head).toHaveBeenCalledTimes(before);
+      head.mockResolvedValueOnce('application/octet-stream');
+      expect(await workspaceFileEditorInput(associated, resolver)).toBe(associated);
+      head.mockRejectedValueOnce(new Error('原件权限不足'));
+      await expect(workspaceFileEditorInput(associated, resolver)).rejects.toThrow('原件权限不足');
+    } finally { head.mockRestore(); }
+  });
+
+  test('HEAD 在身份撤销或取消后不能返回旧 MIME', async () => {
+    const resource = workspaceFileUri(owner, root + '/content', root), token = new CancellationTokenSource();
+    const head = spyOn(fileApi, 'getWorkspaceRawFileMimeType').mockImplementation(async () => {
+      invalidateGatewayToken(0);
+      return 'image/png';
+    });
+    try {
+      await expect(workspaceFileMimeType(resource)).rejects.toThrow('凭据已失效');
+      head.mockImplementation(async () => { token.cancel(); return 'audio/wav'; });
+      await expect(workspaceFileMimeType(resource, token.token)).rejects.toThrow();
+      expect((head.mock.calls.at(-1)?.[3] as AbortSignal).aborted).toBe(true);
+    } finally { head.mockRestore(); token.dispose(); }
   });
 
   test('目录和二进制 stat 只 describe，缺失和权限错误由原服务返回', async () => {

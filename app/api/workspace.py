@@ -347,6 +347,11 @@ async def get_workspace_file_content(
     return APIResponse(data=result, request_id=request_id)
 
 
+@router.head(
+    "/files/raw",
+    response_class=FileResponse,
+    summary="读取工作区原始文件响应头，不传输正文",
+)
 @router.get(
     "/files/raw",
     response_class=FileResponse,

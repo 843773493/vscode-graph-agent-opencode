@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import codecs
 import heapq
-import mimetypes
 import os
 import shutil
 import stat
@@ -460,9 +459,8 @@ class WorkspaceService:
                 raise ValueError(f"暂不支持下载符号链接: {display_path}")
             metadata = physical.stat()
         if stat.S_ISREG(metadata.st_mode):
-            media_type, _ = mimetypes.guess_type(target.name)
-            return PreparedFileDownload(target, display_path, target.name,
-                                        media_type or "application/octet-stream", metadata,
+            filename, media_type = self.file_paths.file_metadata(display_path)
+            return PreparedFileDownload(target, display_path, filename, media_type, metadata,
                                         admission=lambda: self.file_paths.admit(display_path))
         if not archive_directory:
             error = IsADirectoryError(f"工作区路径不是文件: {display_path}")

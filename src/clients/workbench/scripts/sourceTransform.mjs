@@ -236,9 +236,14 @@ export class AgentPluginService extends Disposable implements IAgentPluginServic
         'return asWebviewUri(resource, this.#remoteInfo, this.#options.localResourceRoots ?? getDefaultLocalResourceRoots(this.#extension, this.#workspace));');
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/webview/browser/resourceLoading.ts')) {
+      contents = `import { workspaceFileMimeType } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
+      contents = replaceOnce(contents, 'const mime = getWebviewContentMimeType(requestUri); // Use the original path for the mime',
+        'let mime = getWebviewContentMimeType(requestUri);');
       // 原 Fetch Provider 的 stat 是零值占位，不能据此让 Worker 永久命中；HTTP 文件沿 fetch 自身再验证。
       contents = replaceOnce(contents, 'const readOptions: { etag?: string; position?: number; length?: number } = { etag: options.ifNoneMatch };',
-        'const isHttpResource = resourceToLoad.scheme === Schemas.http || resourceToLoad.scheme === Schemas.https;\nconst readOptions: { etag?: string; position?: number; length?: number } = { etag: isHttpResource ? undefined : options.ifNoneMatch };');
+        'mime = await workspaceFileMimeType(requestUri, token) ?? mime;\nconst isHttpResource = resourceToLoad.scheme === Schemas.http || resourceToLoad.scheme === Schemas.https;\nconst readOptions: { etag?: string; position?: number; length?: number } = { etag: isHttpResource ? undefined : options.ifNoneMatch };');
+      contents = replaceOnce(contents, 'logService.error(`Webview.loadLocalResource - Error using fileReader. requestUri=${requestUri}, resourceToLoad=${resourceToLoad}`);',
+        'logService.error(`Webview.loadLocalResource - Error using fileReader. requestUri=${requestUri}, resourceToLoad=${resourceToLoad}`, err);');
       contents = replaceOnce(contents, 'new WebviewResourceResponse.StreamSuccess(result.value, result.etag, result.mtime, mime, result.size)',
         'new WebviewResourceResponse.StreamSuccess(result.value, isHttpResource ? undefined : result.etag, isHttpResource ? undefined : result.mtime, mime, result.size)');
     }
@@ -267,7 +272,7 @@ export class AgentPluginService extends Disposable implements IAgentPluginServic
     }
     if (path === join(upstream, 'src/vs/workbench/services/editor/browser/editorResolverService.ts')) {
       const entry = 'async resolveEditor(editor: IUntypedEditorInput, preferredGroup: PreferredGroup | undefined): Promise<ResolvedEditor> {';
-      contents = replaceOnce(contents, entry, `${entry}\n[editor] = await canonicalWorkspaceFileInputs([editor]);`);
+      contents = replaceOnce(contents, entry, `${entry}\n[editor] = await canonicalWorkspaceFileInputs([editor], this);`);
       contents = `import { canonicalWorkspaceFileInputs } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/services/textfile/common/textFileEditorModel.ts')) {
@@ -325,6 +330,13 @@ ${entry}`);
 ${entry}`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts')) {
+      contents = `import { workspaceFileMimeType } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
+      contents = replaceOnce(contents, "const mimeType = getMediaMime(input.resource.path) ?? '';", "const mimeType = await workspaceFileMimeType(input.resource) ?? getMediaMime(input.resource.path) ?? '';\nif (!this._isCurrentLoad(loadId, input)) return;");
+      // 重载的 MIME 和正文共用原错误展示；失败不能留下旧图或成为未处理拒绝。
+      contents = replaceOnce(contents, 'content = await this._fileService.readFile(input.resource);',
+        'content = await this._fileService.readFile(input.resource);\nawait this._showImage(loadId, input, content, viewState);');
+      contents = replaceOnce(contents, '\n\t\tawait this._showImage(loadId, input, content, viewState);\n\t}\n\n\tprivate _isCurrentLoad',
+        '\n\t}\n\n\tprivate _isCurrentLoad');
       contents = `import { onGatewayTokenInvalidated } from ${JSON.stringify(resolve(root, '../web/src/api/http.js'))};\n` + contents;
       // 身份撤销沿原 input 释放 watcher、解码与 URL；旧 input 不能自动重读或恢复旧图。
       const watch = 'this._inputDisposables.add(this._fileService.onDidFilesChange(onDidFilesChange));';

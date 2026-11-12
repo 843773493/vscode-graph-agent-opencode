@@ -11,6 +11,7 @@ import { workspaceContext } from '../src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import type { IOpenerService } from '../upstream/src/vs/platform/opener/common/opener.js';
 import type { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import type { IEditorResolverService } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
 import type { IEditorGroupsService } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import type { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import type { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
@@ -120,7 +121,8 @@ describe('来源打开沿原模型引用核验', () => {
         { openEditor } as unknown as IEditorService,
         { activeGroup: { id: 9 }, getGroup, findGroup: () => undefined, addGroup } as unknown as IEditorGroupsService,
         { getValue: () => 'right' } as unknown as IConfigurationService,
-        { createModelReference } as unknown as ITextModelService, {} as ICommandService);
+        { createModelReference } as unknown as ITextModelService, {} as ICommandService,
+        { getAssociationsForResource: () => [] } as unknown as IEditorResolverService);
       const options = { boxteamTargetGroup: 7, openToSide: true, editorOptions: { pinned: true, preserveFocus: true,
         selection: { startLineNumber: 4, startColumn: 2 } } };
       try {

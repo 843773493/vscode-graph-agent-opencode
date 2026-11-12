@@ -70,7 +70,7 @@ export async function agentSpecContract(mode) {
     return { object: {}, dispose() { released += 1; } }; } };
   const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) },
     { openEditor: async (input, id) => opened.push({ source: sourceDocumentSource(input.resource), options: input.options, group: id }) },
-    groups, configuration, models, {});
+    groups, configuration, models, {}, { getAssociationsForResource: () => [] });
   const notifications = { error: cause => errors.push(String(cause)) };
   const picker = { value: 'resource ag', items: [], activeItems: [], selectedItems: [], buttons: [],
     keyMods: { alt: mode === 'side' || mode.startsWith('open-'), ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event,
@@ -168,7 +168,7 @@ export async function resourceOpenTargetContract(mode) {
   }, { activeGroup: { id: 7 }, getGroup: id => ({ id }), findGroup: () => undefined,
     addGroup: () => { addedGroups++; return { id: 8 }; } }, { getValue: () => 'right' }, {
     createModelReference: async () => { throw new Error('文件或Thread不得先读取只读来源'); },
-  }, {});
+  }, {}, { getAssociationsForResource: () => [] });
   try {
     try { await opener.open(uri, { boxteamResourceOwner: owner, openToSide: true, editorOptions: { pinned: true } }); }
     catch (cause) { errors.push(String(cause)); }

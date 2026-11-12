@@ -187,7 +187,7 @@ export async function configurationUriContract(mode) {
     { activeGroup: group, getGroup: () => mode === 'closed-group' ? undefined : group,
       findGroup: () => undefined, addGroup: () => { addedGroups++; return { id: 8 }; } },
     { getValue: () => 'right' }, { createModelReference: async resource => { references.push(String(resource)); throw new Error('不得走普通来源正文读取'); } },
-    { executeCommand: async (id, request) => { commands.push({ id, request }); } });
+    { executeCommand: async (id, request) => { commands.push({ id, request }); } }, { getAssociationsForResource: () => [] });
   try {
     const opened = opener.open(mode === 'gateway' ? gatewayUri : mode === 'remote' ? remoteFixture.referenceUri : uri, {
       ...(mode === 'remote' ? {} : { boxteamResourceOwner: owner }), boxteamTargetGroup: 7,
