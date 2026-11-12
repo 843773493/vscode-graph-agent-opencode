@@ -97,13 +97,14 @@ export async function getWorkspaceFiles(
   path = "",
   workspaceId?: string | null,
   signal?: AbortSignal,
-  cursor?: string | null,
+  options: { cursor?: string | null; complete?: boolean } = {},
 ): Promise<WorkspaceFileList> {
   const location = decodeFileTreePath(path);
   const query = new URLSearchParams();
   if (location.path) query.set("path", location.path);
   query.set("scope", location.scope);
-  if (cursor) query.set("cursor", cursor);
+  if (options.cursor) query.set("cursor", options.cursor);
+  if (options.complete) query.set("complete", "true");
   const suffix = query.toString();
   const workspaceFileList = unwrapApiData(await requestJson<APIResponse<WorkspaceFileList>>(
     port,

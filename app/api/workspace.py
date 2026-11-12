@@ -294,6 +294,7 @@ async def list_workspace_files(
         max_length=2048,
         description="继续读取同一目录下一页的游标",
     ),
+    complete: bool = Query(default=False, description="完整读取单层目录；不能与 limit 或 cursor 同时使用"),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
@@ -304,6 +305,7 @@ async def list_workspace_files(
             scope=scope,
             limit=limit,
             cursor=cursor,
+            complete=complete,
         )
     except WorkspaceFileOperationConflictError as error:
         raise state_conflict_http_error(error) from error

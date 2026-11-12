@@ -191,8 +191,11 @@ class WorkspaceService:
         scope: WorkspaceFileScope = "workspace",
         limit: int | None = None,
         cursor: str | None = None,
+        complete: bool = False,
     ) -> WorkspaceFileListDTO:
-        resolved_limit = (
+        if complete and (limit is not None or cursor is not None):
+            raise ValueError("完整目录读取不能同时指定分页上限或游标")
+        resolved_limit = None if complete else (
             self._config_service.get_workspace_file_default_limit()
             if limit is None
             else limit
@@ -228,7 +231,7 @@ class WorkspaceService:
             path=display_path,
             items=items,
             truncated=next_cursor is not None,
-            limit=resolved_limit,
+            limit=len(items) if resolved_limit is None else resolved_limit,
             next_cursor=next_cursor,
             directory_key=key,
             directory_revision=revision,
@@ -249,7 +252,7 @@ class WorkspaceService:
         target_path: Path,
         display_path: str,
         scope: WorkspaceFileScope,
-        limit: int,
+        limit: int | None,
         cursor_key: tuple[bool, str, str] | None,
     ) -> tuple[list[WorkspaceFileNodeDTO], tuple[bool, str, str] | None, str]:
         def entry_key(entry: dict) -> tuple[bool, str, str]:
@@ -282,17 +285,14 @@ class WorkspaceService:
             # 普通 POSIX 成员只拼接本次已解析的父目录；链接及 Windows reparse point 仍完整解析。
             resolved_directory = Path(os.path.realpath(target_path))
             # 分页 revision 仍消费全部公开成员；响应模型只为当前页构造。
-            entries = heapq.nsmallest(
-                limit + 1,
-                observed_entries(directory_entries),
-                key=entry_key,
-            )
+            entries = (sorted(observed_entries(directory_entries), key=entry_key) if limit is None
+                       else heapq.nsmallest(limit + 1, observed_entries(directory_entries), key=entry_key))
             if Path(os.path.realpath(target_path)) != resolved_directory:
                 raise WorkspaceFileOperationConflictError("目录扫描期间路径发生改变，请重新读取目录")
         page = entries[:limit]
         next_cursor = (
             entry_key(page[-1])
-            if len(entries) > limit and page
+            if limit is not None and len(entries) > limit and page
             else None
         )
         return (

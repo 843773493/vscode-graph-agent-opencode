@@ -234,7 +234,7 @@ describe("文件树管理 API", () => {
       FILESYSTEM_HOME,
       FILE_SELECTION,
       undefined,
-      "opaque-cursor",
+      { cursor: "opaque-cursor" },
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files");

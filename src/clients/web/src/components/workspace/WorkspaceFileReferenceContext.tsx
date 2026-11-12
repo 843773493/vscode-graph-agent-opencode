@@ -82,7 +82,7 @@ async function findUniqueWorkspaceFilePath(
           directory.path,
           workspaceId,
           undefined,
-          cursor,
+          { cursor },
         );
       } catch (error: unknown) {
         // 会话运行时目录可能在递归查找期间被创建、压缩或回收；已经消失的

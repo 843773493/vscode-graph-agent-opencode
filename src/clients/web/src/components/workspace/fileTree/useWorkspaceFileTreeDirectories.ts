@@ -124,7 +124,7 @@ export function useWorkspaceFileTreeDirectories({
             path,
             workspaceId,
             controller.signal,
-            cursor,
+            { cursor },
           );
           if (directoryRequestsRef.current.get(path)?.controller !== controller) {
             return false;

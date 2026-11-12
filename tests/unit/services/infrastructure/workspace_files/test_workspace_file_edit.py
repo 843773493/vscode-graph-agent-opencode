@@ -319,6 +319,7 @@ async def test_directory_listing_cursor_reads_every_page(
     workspace_file_service: tuple[WorkspaceService, Path, Path],
 ) -> None:
     workspace_service, workspace_root, _ = workspace_file_service
+    workspace_service._config_service.get_workspace_file_default_limit.return_value = 2
     page_root = workspace_root / "pages"
     page_root.mkdir()
     for name in ["c.txt", "a.txt", "d.txt", "b.txt", "e.txt"]:
@@ -334,6 +335,10 @@ async def test_directory_listing_cursor_reads_every_page(
     assert first.next_cursor is not None
     assert second.next_cursor is not None
     assert third.next_cursor is None
+    complete = await workspace_service.list_files(path="pages", complete=True)
+    assert [item.name for item in complete.items] == ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]
+    assert complete.directory_revision == first.directory_revision
+    assert not complete.truncated and complete.next_cursor is None
 
 
 @pytest.mark.asyncio
