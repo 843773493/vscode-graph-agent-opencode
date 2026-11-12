@@ -7,6 +7,7 @@ import { ITelemetryService } from '../upstream/src/vs/platform/telemetry/common/
 import { IThemeService } from '../upstream/src/vs/platform/theme/common/themeService.js';
 import { IStorageService } from '../upstream/src/vs/platform/storage/common/storage.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { Dimension } from '../upstream/src/vs/base/browser/dom.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
@@ -45,6 +46,7 @@ export class ThreadPane extends EditorPane {
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
     @IInstantiationService private readonly instantiation: IInstantiationService,
     @INotificationService private readonly notifications: INotificationService,
+    @ICommandService private readonly commands: ICommandService,
   ) { super(ThreadPane.ID, group, telemetry, themes, storage); }
 
   protected override createEditor(parent: HTMLElement): void {
@@ -65,7 +67,7 @@ export class ThreadPane extends EditorPane {
     this.root.dataset.threadId = input.owner.threadId; this.root.dataset.sessionId = input.owner.sessionId;
     this.root.dataset.workspaceId = input.owner.workspaceId;
     this.conversation = new ChatSurface(this.root, input, this.editors, this.isVisible(), (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
-      this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications);
+      this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications, this.commands);
     if (options?.boxteamMessage) this.conversation.revealMessage(options.boxteamMessage);
     if (options?.boxteamRequestLog) this.conversation.revealRequestLog(options.boxteamRequestLog);
     if (options?.boxteamTrace) this.conversation.revealTrace(options.boxteamTrace);

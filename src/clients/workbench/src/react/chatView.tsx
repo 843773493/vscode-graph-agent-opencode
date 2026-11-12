@@ -1,4 +1,3 @@
-import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTraceNavigation } from '../../../web/src/hooks/runtime/useTraceNavigation.js';
 import { useRequestLogNavigation } from '../../../web/src/hooks/runtime/useRequestLogNavigation.js';
@@ -33,9 +32,9 @@ import { threadHistoryCache, type ThreadHistoryOwner } from '../../../web/src/st
 import type { SessionTurnTimeline } from '../../../web/src/state/session/turnTimeline.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import { CachedThreadHistory } from './cachedThreadHistory.js';
-import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
-import { useSessionForkDialog } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
-import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
+import type { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
+import { sessionActionCommands } from '../search/sessionActions.js';
 import type { InternalDisplayProvenance } from '../../../web/src/types/backend.js';
 import type { LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
@@ -46,8 +45,9 @@ interface ThreadViewportController extends TurnViewportController {
   capturePresentation(): () => void;
 }
 
-function ThreadConversation({ input, seed, active, editors, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady, toolbar }: {
+function ThreadConversation({ input, seed, active, editors, commands, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady, toolbar }: {
   input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; onUpdate: () => void;
+  commands: ICommandService;
   onFileOpenMenu: FileOpenMenuHandler;
   onError: (message: string) => void;
   navigation?: SearchNavigation;
@@ -91,17 +91,10 @@ function ThreadConversation({ input, seed, active, editors, onUpdate, onFileOpen
       },
     } : undefined);
   }, [content.switchContentView, onError, onViewportReady, outlinePreview, requestLogNavigation, state.contentView, traceNavigation]);
-  const fork = useSessionForkDialog({ apiPort: 0,
-    sessionsByWorkspace: new Map([[owner.workspaceKey, state.currentSession ? [state.currentSession] : []]]),
-    forkSessionContext: runtime.lifecycle.forkSessionContext,
-    readSessionSelectionIntent: () => runtime.selectionIntentRef.current,
-    invalidateSessionCatalog: () => { void content.refreshSessionResources(owner.sessionId, { force: true }); },
-    onForkCreated: async (_source, result) => {
-      const target = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
-      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, workspaceKey: gatewayWorkspaceKey(target), workspaceId: result.session.workspace_id,
-        sessionId: result.session.session_id, threadId: result.thread_id, title: result.session.title }), { pinned: true });
-    },
-  });
+  const fork = (source: SessionForkSourceSelection) => {
+    void commands.executeCommand(sessionActionCommands.fork, { owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId },
+      sessionId: owner.sessionId, source }).catch(cause => onError(String(cause)));
+  };
   useEffect(() => { if (state.status) console.info('会话状态：', state.status); }, [state.status]);
   useEffect(() => {
     if (state.contentView !== 'changes' && state.contentView !== 'resources') return;
@@ -153,7 +146,7 @@ function ThreadConversation({ input, seed, active, editors, onUpdate, onFileOpen
         onRetryHistory={history.refreshTurnHistory} onReplayTurn={actions.replayTurn} onOpenChanges={openChanges}
         onForkConversation={point => {
           if (point.workspaceId !== owner.workspaceKey || point.sessionId !== owner.sessionId || point.threadId !== owner.threadId) throw new Error('消息分支来源与当前 Thread 不一致');
-          void fork.forkSession(owner.workspaceKey, owner.sessionId, point);
+          fork(point);
         }}
         onOpenChildReport={source => {
           if (source.source_session_id !== owner.sessionId || !source.source_thread_id || !source.source_execution_id) throw new Error('报告来源不属于当前会话的精确子线程执行');
@@ -183,13 +176,12 @@ function ThreadConversation({ input, seed, active, editors, onUpdate, onFileOpen
         }, () => { stopResize.current = null; });
       }} /> : null}
       <ResourceView input={input} runtime={runtime} editors={editors} active={active} attachment={input.selectedAttachment ?? null} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
-        reportRequest={reportRequest} onForkThread={(threadId, point) => { void fork.forkSession(owner.workspaceKey, owner.sessionId, { ...point, threadId }); }} /></div>
-    <SessionContextForkDialog state={fork.forkDialog} onCancel={fork.closeForkDialog} onSubmit={fork.submitForkDialog} onSelectionChange={fork.updateForkDialogSelection} />
+        reportRequest={reportRequest} onForkThread={(threadId, point) => fork({ ...point, threadId })} /></div>
     </WorkspaceFileReferenceProvider>
   </ComposerContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, active, editors, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; active: boolean; editors: IEditorService; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
+function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; active: boolean; editors: IEditorService; commands: ICommandService; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -241,7 +233,7 @@ function ChatView({ input, active, editors, onUpdate, onFileOpenMenu, onError, n
     </button>
   </header>;
   return <>{cacheError ? <p role="alert">{cacheError}</p> : null}
-    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} toolbar={toolbar} />
+    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} commands={commands} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} toolbar={toolbar} />
       : <div className="native-thread-conversation">{toolbar}{cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? `会话同步失败：${error}` : null} onRetry={retry} />
         : error ? <p role="alert">会话初始化失败：{error}</p> : <p role="status">正在恢复会话…</p>}</div>}</>;
 }
@@ -255,7 +247,8 @@ export class ChatSurface {
   private previewGeneration = 0;
   constructor(container: HTMLElement, private readonly input: ThreadInput, private readonly editors: IEditorService, visible: boolean,
     private readonly onFileOpenMenu: FileOpenMenuHandler,
-    private readonly notifications: INotificationService) {
+    private readonly notifications: INotificationService,
+    private readonly commands: ICommandService) {
     this.surface = new ReactSurface(container, [...productStyles, viewStyle]);
     this.active = visible; this.render();
   }
@@ -295,5 +288,5 @@ export class ChatSurface {
   dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.draft = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => this.render();
   private readonly onError = (message: string) => this.notifications.error(`${this.input.owner.title} (${this.input.owner.sessionId}/${this.input.owner.threadId})：${message}`);
-  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
+  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} commands={this.commands} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
 }

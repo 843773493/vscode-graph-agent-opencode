@@ -133,7 +133,7 @@ async function federatedBranchContract(mode, category, diagnostic) {
       const sessions = picker.items.filter(item => item.sessionTarget), folder = picker.items.find(item => item.id?.startsWith('folder:'));
       if (mode === 'session-selection') { picker.selectedItems = [sessions[1]]; accepts.fire({ inBackground: false }); }
       else {
-        const tooltip = mode === 'session-delete' ? '永久删除会话' : '重命名会话';
+        const tooltip = mode === 'session-delete' ? '永久删除会话' : mode === 'session-fork' ? '创建上下文分支' : '重命名会话';
         buttons.fire({ item: sessions[1], button: sessions[1].buttons.find(button => button.tooltip === tooltip) });
       }
       return { calls, commands, errors, requests: connections.map(connection => connection.request),

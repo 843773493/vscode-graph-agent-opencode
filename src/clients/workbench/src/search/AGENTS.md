@@ -20,7 +20,7 @@ Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显�
 
 `workspace ` 只调用原 Gateway 登记发现 API，沿原导航 cursor 有界续查；浏览、范围选择和取消不启动、连接或激活目标。工作区切换、连接与启动分别注册一个具名 Action／Command，Gateway 菜单和 Quick Access 共用它们；执行前固定并重新核验完整 owner，最终交原导航 runtime 和 Backend 完整组确认，不新增业务状态机。
 
-会话重命名与删除由 `sessionActions` 的同一 Action／Command 交原导航对话框、确认与目录 outbox；导航菜单和 Session 候选按钮不另建 writer。显式 Session 优先于发起 Thread 所属 Session，仍不明确时用原 `session ` Provider 只选择，不先读取 main Thread 或打开详情。命令重解稳定 owner、核验 ready 状态及权威会话标题；原确认前身份失效拒绝写入，已受理操作继续由原 owner 结算，不重放、不把排队回执说成物理删除完成。
+会话重命名、上下文分支与删除由 `sessionActions` 的同一 Action／Command 交原导航对话框、确认与生命周期 writer；导航菜单和 Session 候选按钮不另建 writer。显式 Session／分支快照优先于发起 Thread，发起 child 的分支保留精确 Thread，仍不明确时用原 `session ` Provider 只选择，不先读取 main Thread 或打开详情。命令重解稳定 owner、核验 ready 状态及权威会话标题；原确认前身份失效拒绝写入，已受理操作继续由原 owner 结算，不重放、不把排队回执说成物理删除完成。
 
 运行日志与 Gateway 自有日志使用同一联邦客户端的 `runtime_log` 查询；每个 Gateway 的每种明确来源各一条分支，同时选择时保留两者。工作区只筛选关联进程，共享文件不按工作区重复查询。原行引用仅作具名诊断定位动作，不新造资源 URI，接受后交给原 Gateway 诊断视图精确读取。
 

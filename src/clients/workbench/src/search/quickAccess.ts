@@ -452,10 +452,12 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, sessionTarget: target, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),
       buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),
-        ...(manage ? [{ iconClass: ThemeIcon.asClassName(Codicon.edit), tooltip: '重命名会话' }, { iconClass: ThemeIcon.asClassName(Codicon.trash), tooltip: '永久删除会话' }] : [])],
+        ...(manage ? [{ iconClass: ThemeIcon.asClassName(Codicon.edit), tooltip: '重命名会话' },
+          { iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: '创建上下文分支' },
+          { iconClass: ThemeIcon.asClassName(Codicon.trash), tooltip: '永久删除会话' }] : [])],
       trigger: (index, mods) => {
         if (side && index === 0) { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; }
-        if (manage) { action(index === Number(side) ? 'rename' : 'delete'); return TriggerAction.CLOSE_PICKER; }
+        if (manage) { action((['rename', 'fork', 'delete'] as const)[index - Number(side)]); return TriggerAction.CLOSE_PICKER; }
         return TriggerAction.NO_ACTION;
       },
       accept: selection ? () => {} : (mods, event) => this.report(open(mods, event.inBackground)) };

@@ -112,7 +112,6 @@ export function useSessionCatalogActions({
 
   const { forkSession, ...forkDialogActions } = useSessionForkDialog({
     apiPort,
-    sessionsByWorkspace,
     forkSessionContext,
     readSessionSelectionIntent,
     onForkCreated,

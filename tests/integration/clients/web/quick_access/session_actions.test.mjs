@@ -70,7 +70,7 @@ test('原 writer 已接受后不因凭据变化撤销或自动重放', async () 
   expect(result.completedBeforeOwner).toBe(false); expect(result.calls).toHaveLength(1); expect(result.errors).toEqual([]);
 });
 
-for (const mode of ['session-selection', 'session-rename', 'session-delete']) test(`${mode} 沿真实Provider保持同名跨Gateway身份和原按钮`, async () => {
+for (const mode of ['session-selection', 'session-rename', 'session-fork', 'session-delete']) test(`${mode} 沿真实Provider保持同名跨Gateway身份和原按钮`, async () => {
   const result = await exercise(mode, 'sessionPickerContract');
   expect(result.errors).toEqual([]); expect(result.requests).toHaveLength(1);
   expect(result.requests[0].queries.map(query => query.category)).toEqual(['catalog']);
@@ -81,8 +81,18 @@ for (const mode of ['session-selection', 'session-rename', 'session-delete']) te
     expect(result.commands).toEqual([]); expect(result.candidates.every(item => item.buttons.length === 0)).toBe(true);
     expect(result.folder).toEqual({ hasAccept: false, pickable: false });
   } else {
-    expect(result.commands).toEqual([{ id: `boxteam.session.${mode === 'session-delete' ? 'delete' : 'rename'}`, target }]);
-    expect(result.candidates[1].buttons).toEqual(['在侧边打开', '重命名会话', '永久删除会话']);
+    expect(result.commands).toEqual([{ id: `boxteam.session.${mode === 'session-delete' ? 'delete' : mode === 'session-fork' ? 'fork' : 'rename'}`, target }]);
+    expect(result.candidates[1].buttons).toEqual(['在侧边打开', '重命名会话', '创建上下文分支', '永久删除会话']);
     expect(result.folder.hasAccept).toBe(true);
   }
+});
+
+for (const mode of ['fork-origin', 'fork-explicit']) test(`${mode} 分支命令保持精确child和显式展示快照`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toEqual([]); expect(result.picks).toEqual([]);
+  expect(result.calls).toEqual([{ action: 'fork', sessionId: `ses_${'c'.repeat(32)}`, title: '权威会话标题',
+    workspaceKey: key(mode === 'fork-origin' ? 'b' : 'a'),
+    source: mode === 'fork-origin' ? { threadId: `thr_${'d'.repeat(32)}` }
+      : { threadId: 'explicit-child', itemId: 'explicit-item', sourceViewId: 'explicit-view', sourceViewRevision: 7 } }]);
+  expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces', `/api/v1/sessions/ses_${'c'.repeat(32)}`]);
 });

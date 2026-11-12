@@ -51,10 +51,10 @@ export async function sessionActionContract(mode) {
       return mode === 'pick-folder' ? [{ id: 'folder', label: '目录' }] : [{ sessionTarget: { owner: owners[0], sessionId } }];
     } },
   };
-  const view = { async runSessionAction(action, id, title, workspaceKey, assertAccess) {
+  const view = { async runSessionAction(action, id, title, workspaceKey, assertAccess, source) {
     if (mode === 'late-view') await new Promise(resolve => { releaseView = resolve; });
     assertAccess();
-    calls.push({ action, sessionId: id, title, workspaceKey });
+    calls.push({ action, sessionId: id, title, workspaceKey, ...(source ? { source } : {}) });
     if (mode === 'accepted') await new Promise(resolve => { releaseWrite = resolve; });
   } };
   const services = new Map([[IQuickInputService, quick], [IEditorService, { activeEditor }], [IViewsService, { openView: async () => view }]]);
@@ -64,12 +64,12 @@ export async function sessionActionContract(mode) {
     if (!services.has(service)) throw new Error(`会话命令请求了未声明服务 ${service}`);
     return services.get(service);
   } };
-  const explicit = { owner: { ...owners[0] }, sessionId };
+  const explicit = { owner: { ...owners[0] }, sessionId, ...(mode === 'fork-explicit' ? { source: { threadId: 'explicit-child', itemId: 'explicit-item', sourceViewId: 'explicit-view', sourceViewRevision: 7 } } : {}) };
   let completed = false;
   try {
-    const command = CommandsRegistry.getCommand(sessionActionCommands[mode === 'rename' ? 'rename' : 'delete']);
+    const command = CommandsRegistry.getCommand(sessionActionCommands[mode.startsWith('fork') ? 'fork' : mode === 'rename' ? 'rename' : 'delete']);
     const pending = Promise.resolve(command.handler(accessor,
-      ['explicit', 'mutation', 'rename', 'wrong-session', 'wrong-workspace', 'accepted'].includes(mode) ? explicit : undefined))
+      ['explicit', 'mutation', 'rename', 'wrong-session', 'wrong-workspace', 'accepted', 'fork-explicit'].includes(mode) ? explicit : undefined))
       .catch(cause => errors.push(String(cause))).finally(() => { completed = true; });
     synchronous = false;
     if (mode.startsWith('late-') || mode === 'mutation') {

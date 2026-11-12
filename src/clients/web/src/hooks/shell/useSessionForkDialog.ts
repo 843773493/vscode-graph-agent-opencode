@@ -1,7 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSessionForkSourcePoint } from "../../api/session/sessions";
 import type {
-  Session,
   SessionForkMode,
   SessionForkRequest,
   SessionForkResult,
@@ -28,14 +27,13 @@ export interface SessionForkDialogState {
 
 export type SessionForkDialogSelection = Pick<SessionForkDialogState, "mode" | "anchorMode" | "targetContainerUri">;
 
-interface SessionForkSourceSelection {
+export interface SessionForkSourceSelection {
   threadId?: string; turnId?: string; itemId?: string;
   sourceViewId?: string; sourceViewRevision?: number;
 }
 
 export interface SessionForkDialogInput {
   apiPort: number;
-  sessionsByWorkspace: ReadonlyMap<string, Session[]>;
   forkSessionContext: (workspaceId: string, sourceSessionId: string, request: SessionForkRequest) => Promise<SessionForkResult>;
   readSessionSelectionIntent: () => number;
   onForkCreated?: (workspaceId: string, result: SessionForkResult, selectionIntent: number) => Promise<void>;
@@ -45,7 +43,6 @@ export interface SessionForkDialogInput {
 /** 管理 fork 来源读取、复制范围选择和提交对话框的状态流。 */
 export function useSessionForkDialog({
   apiPort,
-  sessionsByWorkspace,
   forkSessionContext,
   readSessionSelectionIntent,
   onForkCreated,
@@ -53,25 +50,35 @@ export function useSessionForkDialog({
 }: SessionForkDialogInput) {
   const [forkDialog, setForkDialog] = useState<SessionForkDialogState | null>(null);
   const dialogRequestVersion = useRef(0);
+  // 命令只在原对话框存续期间持有身份检查，不复制 fork 状态或提交链。
+  const command = useRef<{ assertAccess?: () => void; complete: () => void }>();
+  useEffect(() => () => {
+    dialogRequestVersion.current += 1;
+    command.current?.complete();
+  }, []);
 
   const forkSession = async (
     workspaceId: string,
     sourceSessionId: string,
     sourceSelection: SessionForkSourceSelection = {},
+    invocation?: { title: string; assertAccess: () => void },
   ) => {
+    if (forkDialog?.submitting) throw new Error("上下文分支正在提交，请等待原操作结算");
+    invocation?.assertAccess();
+    command.current?.complete();
+    const closed = new Promise<void>((complete) => { command.current = { assertAccess: invocation?.assertAccess, complete }; });
     const requestVersion = ++dialogRequestVersion.current;
     setForkDialog({
       sourceWorkspaceId: workspaceId, sourceSessionId,
-      sourceTitle: sessionsByWorkspace.get(workspaceId)
-        ?.find((session) => session.session_id === sourceSessionId)?.title ?? null,
+      sourceTitle: invocation?.title ?? null,
       sourceThreadId: sourceSelection.threadId, sourceAnchorItemId: sourceSelection.itemId ?? null,
       mode: "view_prefix_fork", anchorMode: "inclusive", targetContainerUri: "",
       idempotencyKey: crypto.randomUUID(), sourcePoint: null, frozenRequest: null,
       loading: true, submitting: false, error: null,
     });
-    try {
-      const sourcePoint = await getSessionForkSourcePoint(apiPort, sourceSessionId, sourceSelection, workspaceId);
+    void getSessionForkSourcePoint(apiPort, sourceSessionId, sourceSelection, workspaceId).then((sourcePoint) => {
       if (dialogRequestVersion.current !== requestVersion) return;
+      command.current?.assertAccess?.();
       if (sourceSelection.sourceViewId !== undefined && (
         sourcePoint.source_view_id !== sourceSelection.sourceViewId
         || sourceSelection.itemId !== undefined && sourcePoint.anchor_item_id !== sourceSelection.itemId
@@ -81,12 +88,13 @@ export function useSessionForkDialog({
         sourceAnchorItemId: sourcePoint.anchor_item_id ?? null,
         targetContainerUri: sourcePoint.child_container_uri, loading: false,
       } : null);
-    } catch (error) {
+    }).catch((error: unknown) => {
       if (dialogRequestVersion.current !== requestVersion) return;
       setForkDialog((currentDialog) => currentDialog
         ? { ...currentDialog, loading: false, error: errorMessage(error) }
         : null);
-    }
+    });
+    await closed;
   };
 
   const updateForkDialogSelection = async (selectionChange: Partial<SessionForkDialogSelection>) => {
@@ -97,6 +105,7 @@ export function useSessionForkDialog({
     const requestVersion = ++dialogRequestVersion.current;
     setForkDialog(nextDialog);
     try {
+      command.current?.assertAccess?.();
       const sourcePoint = await getSessionForkSourcePoint(apiPort, previousDialog.sourceSessionId, {
         threadId: previousDialog.sourceThreadId,
         itemId: nextDialog.mode === "view_prefix_fork" ? previousDialog.sourceAnchorItemId ?? undefined : undefined,
@@ -105,6 +114,7 @@ export function useSessionForkDialog({
         mode: nextDialog.mode, anchorMode: nextDialog.anchorMode,
       }, previousDialog.sourceWorkspaceId);
       if (dialogRequestVersion.current !== requestVersion) return;
+      command.current?.assertAccess?.();
       if (sourcePoint.source_uri !== frozenSourcePoint.source_uri
         || sourcePoint.source_view_id !== frozenSourcePoint.source_view_id
         || nextDialog.mode !== "view_prefix_fork" && sourcePoint.source_view_revision !== frozenSourcePoint.source_view_revision
@@ -125,6 +135,8 @@ export function useSessionForkDialog({
     if (forkDialog?.submitting) return;
     dialogRequestVersion.current += 1;
     setForkDialog(null);
+    command.current?.complete();
+    command.current = undefined;
   };
 
   const submitForkDialog = async (request: SessionForkRequest) => {
@@ -134,9 +146,11 @@ export function useSessionForkDialog({
         || forkDialog.sourcePoint.resource_mode !== forkDialog.mode
         || forkDialog.sourcePoint.resource_anchor_mode !== forkDialog.anchorMode))) return;
     const submittedDialog = forkDialog;
-    const frozenRequest = submittedDialog.frozenRequest ?? request;
-    setForkDialog({ ...submittedDialog, frozenRequest, submitting: true, error: null });
+    let frozenRequest = submittedDialog.frozenRequest;
     try {
+      command.current?.assertAccess?.();
+      frozenRequest ??= request;
+      setForkDialog({ ...submittedDialog, frozenRequest, submitting: true, error: null });
       const forkOperation = forkSessionContext(submittedDialog.sourceWorkspaceId, submittedDialog.sourceSessionId, frozenRequest);
       const selectionIntent = readSessionSelectionIntent();
       const forkResult = await forkOperation;
@@ -150,6 +164,8 @@ export function useSessionForkDialog({
             `${resource.owner_reference!.resource_id}：${resource.reason ?? "原 owner 尚未核实"}`).join("；")}` });
       } else {
         setForkDialog(null);
+        command.current?.complete();
+        command.current = undefined;
       }
     } catch (error) {
       setForkDialog({ ...submittedDialog, frozenRequest, submitting: false, error: errorMessage(error) });

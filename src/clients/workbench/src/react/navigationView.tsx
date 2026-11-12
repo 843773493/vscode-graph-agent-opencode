@@ -38,6 +38,7 @@ import type { CatalogRevealRequest } from '../../../web/src/hooks/sessionResourc
 import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHandlers } from '../search/workspaceActions.js';
 import { sessionActionCommands, type SessionAction, type SessionActionHandlers } from '../search/sessionActions.js';
+import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
 
 function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, configuration, catalogReveal, diagnosticLocation }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
@@ -174,9 +175,10 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   const copySession = useSessionInformationClipboard(0);
   const copyWorkspace = useWorkspaceInformationClipboard(state.gatewayWorkspaces);
   useEffect(() => {
-    bindSessionActions({ rename: actions.openRenameDialog, delete: actions.removeSession });
+    bindSessionActions({ rename: actions.openRenameDialog, delete: actions.removeSession,
+      fork: (id, title, key, assertAccess, source) => actions.forkSession(key, id, source, { title, assertAccess }) });
     return () => bindSessionActions();
-  }, [bindSessionActions, actions.openRenameDialog, actions.removeSession]);
+  }, [bindSessionActions, actions.openRenameDialog, actions.removeSession, actions.forkSession]);
   const runSessionAction = (action: SessionAction, sessionId: string, _title: string, workspaceKey: string) => {
     void commands.executeCommand(sessionActionCommands[action], { owner: workspaceOwnerFromKey(workspaceKey), sessionId })
       .catch(cause => reportError(String(cause)));
@@ -186,7 +188,8 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       currentSessionWorkspaceId={state.currentSessionWorkspaceId}
       onSelectSession={id => { if (state.activeGatewayWorkspaceId) void openSession(state.activeGatewayWorkspaceId, id).catch(cause => reportError(String(cause))); }}
       onRenameSession={(...args) => runSessionAction('rename', ...args)} onDeleteSession={(...args) => runSessionAction('delete', ...args)} onSetSessionParent={actions.changeSessionParent}
-      onForkSessionContext={actions.forkSession} onStatusChange={setStatus} onError={reportError} onOpenDiagnostic={(title, detail) => setDiagnostic({ title, detail })}
+      onForkSessionContext={(workspaceKey, sessionId) => commands.executeCommand(sessionActionCommands.fork, { owner: workspaceOwnerFromKey(workspaceKey), sessionId })}
+      onStatusChange={setStatus} onError={reportError} onOpenDiagnostic={(title, detail) => setDiagnostic({ title, detail })}
       isOpen workspaceName={state.workspaceName ?? ''} gatewayWorkspaces={state.gatewayWorkspaces} gatewayWorkspacesStale={state.gatewayWorkspacesStale}
       activeGatewayWorkspaceId={state.activeGatewayWorkspaceId} removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
       workspaceSwitching={state.workspaceSwitching} onActivateWorkspace={activateWorkspace} onSetWorkspaceParent={runtime.setWorkspaceParent}
@@ -259,11 +262,11 @@ export class NavigationSurface {
     await this.workspaceActions[action](workspaceKey);
   }
   revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void { this.render(undefined, request); }
-  async runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void): Promise<void> {
+  async runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
     if (!this.sessionActions) await (this.sessionActionsReady ??= new DeferredPromise<SessionActionHandlers>()).p;
     assertAccess();
     if (!this.sessionActions) throw new Error('会话导航已关闭，原动作尚未执行');
-    await this.sessionActions[action](sessionId, title, workspaceKey, assertAccess);
+    await this.sessionActions[action](sessionId, title, workspaceKey, assertAccess, source);
   }
   revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
     this.reveal?.abort(new Error('文件夹定位已被新的导航替换'));

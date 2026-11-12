@@ -13,20 +13,22 @@ import { workspaceContext } from '../workspaceContext.js';
 import type { ResourcePick } from './quickAccessPicks.js';
 import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { chooseSearchOwners } from './quickAccessScope.js';
+import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
 
-export const sessionActionCommands = { rename: 'boxteam.session.rename', delete: 'boxteam.session.delete' } as const;
+export const sessionActionCommands = { rename: 'boxteam.session.rename', fork: 'boxteam.session.fork', delete: 'boxteam.session.delete' } as const;
 export type SessionAction = keyof typeof sessionActionCommands;
-export interface SessionActionTarget { owner: WorkspaceOwner; sessionId: string }
+export interface SessionActionTarget { owner: WorkspaceOwner; sessionId: string; source?: SessionForkSourceSelection }
 export type SessionActionHandlers = Record<SessionAction,
-  (sessionId: string, title: string, workspaceKey: string, assertAccess: () => void) => Promise<void>>;
+  (sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection) => Promise<void>>;
 
 /** 命令只选择并核验目标；确认、对话框、outbox 和完成对账仍由原导航 owner 持有。 */
 async function runSessionAction(accessor: ServicesAccessor, action: SessionAction, supplied?: SessionActionTarget): Promise<void> {
   const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService), views = accessor.get(IViewsService);
   const initial = workspaceContext.getSnapshot(), origin = editors.activeEditor;
   if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载');
-  let target = supplied ? { owner: { ...supplied.owner }, sessionId: supplied.sessionId }
-    : origin instanceof ThreadInput ? { owner: { gatewayId: origin.owner.gatewayId, workspaceId: origin.owner.workspaceId }, sessionId: origin.owner.sessionId } : undefined;
+  let target: SessionActionTarget | undefined = supplied ? { ...supplied, owner: { ...supplied.owner }, source: supplied.source ? { ...supplied.source } : undefined }
+    : origin instanceof ThreadInput ? { owner: { gatewayId: origin.owner.gatewayId, workspaceId: origin.owner.workspaceId }, sessionId: origin.owner.sessionId,
+      source: { threadId: origin.owner.threadId } } : undefined;
   let invalidated = false;
   const releaseToken = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const releaseGateway = workspaceContext.subscribe(() => {
@@ -60,11 +62,11 @@ async function runSessionAction(accessor: ServicesAccessor, action: SessionActio
     const view = await views.openView<SessionNavigation>('boxteam.sessions', false);
     assertAccess();
     if (!view) throw new Error('会话导航不可用');
-    await view.runSessionAction(action, target.sessionId, session.title, workspaceKey, assertAccess);
+    await view.runSessionAction(action, target.sessionId, session.title, workspaceKey, assertAccess, action === 'fork' ? target.source : undefined);
   } finally { releaseToken(); releaseGateway(); }
 }
 
-for (const [action, title] of [['rename', '重命名会话…'], ['delete', '永久删除会话…']] as const) registerAction2(class extends Action2 {
+for (const [action, title] of [['rename', '重命名会话…'], ['fork', '创建上下文分支…'], ['delete', '永久删除会话…']] as const) registerAction2(class extends Action2 {
   constructor() { super({ id: sessionActionCommands[action], title: { value: title, original: title }, f1: true }); }
   run(accessor: ServicesAccessor, target?: SessionActionTarget): Promise<void> { return runSessionAction(accessor, action, target); }
 });

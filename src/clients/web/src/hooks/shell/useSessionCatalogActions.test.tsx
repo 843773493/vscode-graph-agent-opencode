@@ -442,6 +442,112 @@ describe("上下文分支候选与冻结重试", () => {
     resource_mode: "view_prefix_fork", resource_anchor_mode: "inclusive", ...overrides,
   });
 
+  const forkRequest = (): SessionForkRequest => ({
+    idempotency_key: "command-fork", source_uri: sourcePointFixture().source_uri,
+    source_view_id: "view-source", source_view_revision: 9, anchor_item_id: "item-source",
+    mode: "view_prefix_fork", anchor_mode: "inclusive", target_container_uri: sourcePointFixture().child_container_uri,
+    creation_kind: "new_child_thread", relationship: "detached", resources: [],
+  });
+
+  test("命令沿原对话框等待取消，权威标题与精确child不依赖目录缓存", async () => {
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockResolvedValue(sourcePointFixture());
+    spies.push(read);
+    const mounted = mountHook(); await mounted.mount();
+    let completed = false;
+    await act(async () => {
+      void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", { threadId: "tid-source" },
+        { title: "命令读取的权威标题", assertAccess() {} }).then(() => { completed = true; });
+    });
+    expect(completed).toBe(false);
+    expect(mounted.hook().forkDialog!.sourceTitle).toBe("命令读取的权威标题");
+    expect(read.mock.calls[0]).toEqual([8014, "ses-source", { threadId: "tid-source" }, workspaceKey("ws-source")]);
+    await act(async () => { mounted.hook().closeForkDialog(); });
+    expect(completed).toBe(true); expect(mounted.hook().forkDialog).toBeNull();
+  });
+
+  test("来源仍在读取时取消立即释放命令，迟到回执不重新显示", async () => {
+    let finish!: (point: SessionForkSourcePoint) => void;
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    spies.push(read);
+    const mounted = mountHook(); await mounted.mount();
+    let completed = false;
+    await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source").then(() => { completed = true; }); });
+    expect(mounted.hook().forkDialog!.loading).toBe(true);
+    await act(async () => { mounted.hook().closeForkDialog(); });
+    expect(completed).toBe(true); expect(mounted.hook().forkDialog).toBeNull();
+    await act(async () => { finish(sourcePointFixture()); });
+    expect(mounted.hook().forkDialog).toBeNull();
+  });
+
+  test("提交前身份失效留在原对话框，不冻结未接受请求或调用writer", async () => {
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockResolvedValue(sourcePointFixture());
+    spies.push(read);
+    const submitted: SessionForkRequest[] = [];
+    const mounted = mountHook({ forkSessionContext: async (_workspace, _source, request) => {
+      submitted.push(request); throw new Error("不应调用writer");
+    } });
+    await mounted.mount();
+    let invalidated = false;
+    await act(async () => {
+      void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", {}, { title: "来源", assertAccess() {
+        if (invalidated) throw new Error("访问凭据已改变");
+      } });
+    });
+    invalidated = true;
+    await act(async () => { await mounted.hook().submitForkDialog(forkRequest()); });
+    expect(submitted).toEqual([]);
+    expect(mounted.hook().forkDialog!.error).toBe("访问凭据已改变");
+    expect(mounted.hook().forkDialog!.frozenRequest).toBeNull();
+    await act(async () => { mounted.hook().closeForkDialog(); });
+  });
+
+  test("owner接受后身份改变不撤销或重放，等待原回执并拒绝替换和关闭", async () => {
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockResolvedValue(sourcePointFixture());
+    spies.push(read);
+    let finish!: (result: SessionForkResult) => void;
+    const submitted: SessionForkRequest[] = [], opened: SessionForkResult[] = [];
+    const mounted = mountHook({ forkSessionContext: async (_workspace, _source, request) => {
+      submitted.push(request); return new Promise(resolve => { finish = resolve; });
+    }, onForkCreated: async (_workspace, result) => { opened.push(result); } });
+    await mounted.mount();
+    let invalidated = false, completed = false;
+    await act(async () => {
+      void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", {}, { title: "来源", assertAccess() {
+        if (invalidated) throw new Error("访问凭据已改变");
+      } }).then(() => { completed = true; });
+    });
+    let pending!: Promise<void>;
+    const request = forkRequest();
+    await act(async () => { pending = mounted.hook().submitForkDialog(request); });
+    invalidated = true;
+    await act(async () => { mounted.hook().closeForkDialog(); });
+    expect(mounted.hook().forkDialog!.submitting).toBe(true); expect(completed).toBe(false);
+    await expect(mounted.hook().forkSession(workspaceKey("ws-other"), "other")).rejects.toThrow("正在提交");
+    const result = { thread_id: "published-child", resources: [] } as unknown as SessionForkResult;
+    await act(async () => { finish(result); await pending; });
+    expect(submitted).toEqual([request]); expect(opened).toEqual([result]);
+    expect(completed).toBe(true); expect(mounted.hook().forkDialog).toBeNull();
+  });
+
+  test("来源读取迟到时保留身份错误，取消后不重新显示旧对话框", async () => {
+    let finish!: (point: SessionForkSourcePoint) => void;
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    spies.push(read);
+    const mounted = mountHook(); await mounted.mount();
+    let invalidated = false, completed = false;
+    await act(async () => {
+      void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", {}, { title: "来源", assertAccess() {
+        if (invalidated) throw new Error("访问凭据已改变");
+      } }).then(() => { completed = true; });
+    });
+    invalidated = true;
+    await act(async () => { finish(sourcePointFixture()); });
+    expect(mounted.hook().forkDialog!.error).toBe("访问凭据已改变");
+    expect(mounted.hook().forkDialog!.sourcePoint).toBeNull(); expect(completed).toBe(false);
+    await act(async () => { mounted.hook().closeForkDialog(); });
+    expect(completed).toBe(true); expect(mounted.hook().forkDialog).toBeNull();
+  });
+
   test("首次消息点击使用展示快照与来源 owner，409 不改取活动 head", async () => {
     const read = spyOn(sessionApi, "getSessionForkSourcePoint")
       .mockRejectedValue(new HttpRequestError(409, "source-mismatch: 展示快照已失效",
@@ -450,7 +556,7 @@ describe("上下文分支候选与冻结重试", () => {
     const mounted = mountHook({ activeSessionId: "ses-other", activeGatewayWorkspaceId: workspaceKey("ws-other") });
     await mounted.mount();
     const selection = { threadId: "tid-source", turnId: "turn-source", sourceViewId: "view-display", sourceViewRevision: 8 };
-    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", selection); });
+    await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", selection); });
     expect(read.mock.calls).toEqual([[8014, "ses-source", selection, workspaceKey("ws-source")]]);
     expect(mounted.hook().forkDialog!.sourcePoint).toBeNull();
     expect(mounted.hook().forkDialog!.error).toContain("展示快照已失效");
@@ -473,7 +579,7 @@ describe("上下文分支候选与冻结重试", () => {
       throw new Error("目标暂时不可达");
     } });
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source", {
+    await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source", {
       threadId: "tid-source", itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     let pendingOld!: Promise<void>;
@@ -517,7 +623,7 @@ describe("上下文分支候选与冻结重试", () => {
     spies.push(read);
     const mounted = mountHook();
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source", {
+    await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source", {
       itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "full_rollout_copy" }); });
@@ -543,7 +649,7 @@ describe("上下文分支候选与冻结重试", () => {
       throw new Error("保留原请求");
     } });
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source"); });
+    await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source"); });
     const request: SessionForkRequest = {
       idempotency_key: mounted.hook().forkDialog!.idempotencyKey, source_uri: sourcePointFixture().source_uri,
       source_view_id: "view-source", source_view_revision: 9, anchor_item_id: null,
@@ -567,7 +673,7 @@ describe("上下文分支候选与冻结重试", () => {
     spies.push(read);
     const mounted = mountHook({});
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", {
+    await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", {
       threadId: "tid-source", itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     expect(mounted.hook().forkDialog!.error).toBeNull();
@@ -615,13 +721,13 @@ describe("上下文分支候选与冻结重试", () => {
     }, onForkCreated: async (_workspace, created) => { opened.push(created); } });
     try {
       await mounted.mount();
-      await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source"); });
+      await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source"); });
       const checkbox = () => mounted.renderer().root.findByProps({ "aria-label": "关联终端 term-live" });
       expect(checkbox().props.checked).toBe(false);
       await act(async () => { mounted.renderer().root.findByType("form").props.onSubmit({ preventDefault() {} }); });
       expect(submitted[0]!.resources).toEqual([]);
       await act(async () => { mounted.hook().closeForkDialog(); });
-      await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source"); });
+      await act(async () => { void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source"); });
       await act(async () => { checkbox().props.onChange({ target: { checked: true } }); });
       await act(async () => { mounted.renderer().root.findByType("form").props.onSubmit({ preventDefault() {} }); });
       const selected = submitted[1]!;
