@@ -40,6 +40,7 @@ export class ThreadHistoryCache {
   async read(owner: ThreadHistoryOwner, scopeKey: string): Promise<SessionTurnTimeline | null> {
     const key = snapshotKey(owner);
     let cached = this.memory.get(key);
+    const source = cached ? "memory" : "indexeddb";
     if (!cached) {
       let reading = this.reads.get(key);
       if (!reading) {
@@ -55,11 +56,22 @@ export class ThreadHistoryCache {
     }
     // 读取数据库期间可能已有更晚的后端快照到达，不能用迟到读取覆盖它。
     const snapshot = this.memory.get(key) ?? cached;
-    if (!snapshot) return null;
-    if (snapshot.version !== 1 || snapshotKey(snapshot.owner) !== key || snapshot.timeline.threadId !== owner.threadId) {
+    if (!snapshot) {
+      console.debug("会话历史展示缓存未命中", { owner, source });
+      return null;
+    }
+    if (snapshot.version !== 1) {
+      // 镜像可由 canonical history 重建；只失效此条，草稿及其它恢复记录不参与淘汰。
+      await this.remove(owner);
+      console.warn("会话历史展示缓存格式已失效，将重新同步", { owner, version: snapshot.version });
+      return null;
+    }
+    if (snapshotKey(snapshot.owner) !== key || snapshot.timeline.threadId !== owner.threadId) {
       throw new Error("浏览器历史缓存版本或 Thread 归属不一致");
     }
     this.rememberSnapshot(key, snapshot);
+    console.debug("会话历史展示缓存命中，等待权威同步", { owner, source, savedAt: snapshot.savedAt,
+      bytes: snapshot.bytes, projectionEpoch: snapshot.timeline.projectionEpoch, historyViewRevision: snapshot.timeline.historyViewRevision });
     return { ...snapshot.timeline, scopeKey, restoredFromCache: true };
   }
 
@@ -114,7 +126,7 @@ export class ThreadHistoryCache {
       } catch (error) {
         // 保留失败快照，允许用户在原生窗口中重试关闭，而不是把失败伪装成已持久化。
         if (this.memory.get(key) === pending.snapshot && !this.pending.has(key)) this.pending.set(key, pending);
-        console.error("保存会话历史缓存失败", error);
+        console.error("保存会话历史缓存失败", pending.snapshot.owner, error);
         pending.onError(error);
         return { error };
       } finally {
@@ -135,6 +147,7 @@ export class ThreadHistoryCache {
     this.pending.delete(key);
     this.memory.delete(key);
     await updateBrowserViewCache<HistorySnapshot>(key, indexKey(owner), () => undefined, { entries: MAX_ENTRIES, bytes: MAX_BYTES });
+    console.debug("已清除会话历史展示缓存", { owner });
   }
 
   private rememberSnapshot(key: string, snapshot: HistorySnapshot): void {

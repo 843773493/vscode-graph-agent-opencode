@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { ThreadHistoryCache, type ThreadHistoryOwner } from './threadHistoryCache';
+import { browserViewKey, readBrowserView, updateBrowserView } from './browserViewStore';
 import { applyTurnBootstrap, applyTurnHistoryPage, beginTurnBootstrap, createSessionTurnTimeline, upsertTurns } from './session/turnTimeline';
 import { bootstrap, HISTORY_SOURCE_BINDING, SESSION_ID, THREAD_ID, WORKSPACE_ID, turnDetail } from '../hooks/sessionTurnHistory/testFixtures';
 
@@ -91,6 +92,31 @@ describe('独立于 Tab 的会话历史镜像', () => {
     await cache.flush(target);
     expect(await cache.read(target, 'scope')).toBeNull();
     expect(await new ThreadHistoryCache().read(target, 'scope')).toBeNull();
+  });
+
+  test('未知镜像版本只失效当前条目，保留其它历史和草稿，并允许权威快照重建', async () => {
+    const target = owner('history-format-upgrade'), other = { ...target, threadId: 'other-thread' };
+    const writer = new ThreadHistoryCache();
+    writer.remember(target, history(), failure);
+    writer.remember(other, { ...history(), threadId: other.threadId }, failure);
+    await writer.flushAll();
+    const key = browserViewKey(target.gatewayId, 'thread-history', target.workspaceId, target.sessionId, target.threadId);
+    const index = browserViewKey(target.gatewayId, 'thread-history-v1');
+    await updateBrowserView(key, current => ({ ...current as object, version: 99 }));
+    await updateBrowserView(`draft:${key}`, () => '保留草稿');
+    const diagnostics = spyOn(console, 'warn');
+    try {
+      const reader = new ThreadHistoryCache();
+      expect(await reader.read(target, 'scope')).toBeNull();
+      expect(await readBrowserView(key)).toBeUndefined();
+      expect(await readBrowserView<Record<string, unknown>>(index)).not.toHaveProperty(key);
+      expect(await readBrowserView(`draft:${key}`)).toBe('保留草稿');
+      expect((await reader.read(other, 'other-scope'))?.threadId).toBe(other.threadId);
+      expect(diagnostics).toHaveBeenCalledWith('会话历史展示缓存格式已失效，将重新同步', { owner: target, version: 99 });
+      reader.remember(target, history(), failure);
+      await reader.flushAll();
+      expect((await new ThreadHistoryCache().read(target, 'rebuilt'))?.turnsById).toEqual(history().turnsById);
+    } finally { diagnostics.mockRestore(); }
   });
 
   test('清除期间尚未完成的磁盘读取不能重新交付或恢复旧镜像，其它 Thread 不受影响', async () => {
