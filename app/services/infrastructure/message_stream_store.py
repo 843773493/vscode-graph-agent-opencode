@@ -990,18 +990,28 @@ class MessageStreamStore:
             ) from error
         return threads
 
-    def _load_state(self, session_id: str, turn_stream_id: str) -> dict[str, Any]:
-        cached = self._states.get(turn_stream_id)
-        if cached is not None:
-            self._touch_cached_state(turn_stream_id, cached)
+    async def _load_state(self, session_id: str, turn_stream_id: str) -> dict[str, Any]:
+        async with self._lock_for(turn_stream_id):
+            cached = self._states.get(turn_stream_id)
+            if cached is None:
+                await self._load_state_from_disk(session_id, turn_stream_id)
+                cached = self._states[turn_stream_id]
+            else:
+                self._touch_cached_state(turn_stream_id, cached)
             return copy.deepcopy(cached)
-        return self._load_state_from_disk(session_id, turn_stream_id)
 
-    def _load_state_from_disk(
+    async def _load_state_from_disk(self, session_id: str, turn_stream_id: str) -> None:
+        # 调用方持有原 Turn 锁；worker 完整校验后，缓存只在事件循环中统一发布。
+        state, event_ids = await run_sync_shielded(self._read_state_from_disk, session_id, turn_stream_id)
+        self._touch_cached_state(turn_stream_id, state)
+        self._event_ids[turn_stream_id] = event_ids
+        self._event_ids_loaded.add(turn_stream_id)
+
+    def _read_state_from_disk(
         self,
         session_id: str,
         turn_stream_id: str,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
         path = self._stream_path(session_id, turn_stream_id)
         records = self._read_records(
             path,
@@ -1083,10 +1093,7 @@ class MessageStreamStore:
             thread_id=str(state["thread_id"]),
             turn_id=str(state["turn_id"]),
         )
-        self._touch_cached_state(turn_stream_id, state)
-        self._event_ids[turn_stream_id] = event_ids
-        self._event_ids_loaded.add(turn_stream_id)
-        return copy.deepcopy(state)
+        return state, event_ids
 
     def _load_event_ids_from_disk(
         self, session_id: str, turn_stream_id: str, *, thread_id: str, turn_id: str,
@@ -1146,7 +1153,7 @@ class MessageStreamStore:
                 )
                 await writer.commit("stream.opened", {"status": "open"})
                 return writer
-        state = self._load_state(session_id, resolved_stream_id)
+        state = await self._load_state(session_id, resolved_stream_id)
         if (state["session_id"], state["thread_id"], state["turn_id"]) != (session_id, thread_id, turn_id):
             raise MessageStreamError(
                 "消息流关联键不匹配: "
@@ -1182,7 +1189,7 @@ class MessageStreamStore:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: session_id={session_id} turn_id={turn_id}"
             )
-        state = self._load_state(session_id, resolved_stream_id)
+        state = await self._load_state(session_id, resolved_stream_id)
         if (state["session_id"], state["thread_id"], state["turn_id"]) != (session_id, thread_id, turn_id):
             raise MessageStreamError(
                 "消息流关联键不匹配: "
@@ -1469,7 +1476,7 @@ class MessageStreamStore:
             self._terminal_state_sizes.pop(turn_stream_id, None)
             self._event_ids.pop(turn_stream_id, None)
             self._event_ids_loaded.discard(turn_stream_id)
-            self._load_state_from_disk(session_id, turn_stream_id)
+            await run_cleanup_shielded(lambda: self._load_state_from_disk(session_id, turn_stream_id))
             raise
         self._touch_cached_state(turn_stream_id, next_state)
         self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
@@ -1640,7 +1647,7 @@ class MessageStreamStore:
         validate_thread_id(thread_id)
         reconciled = 0
         for turn_id, stream_id in self._read_index(session_id).get(thread_id, {}).items():
-            state = self._load_state(session_id, stream_id)
+            state = await self._load_state(session_id, stream_id)
             if state.get("job_id") != job_id:
                 continue
             if (state.get("session_id"), state.get("thread_id"), state.get("turn_id")) != (session_id, thread_id, turn_id):
@@ -1710,7 +1717,9 @@ class MessageStreamStore:
             for path in sorted(stream_dir.glob("*.jsonl")):
                 turn_stream_id = path.stem
                 try:
-                    state = self._load_state_from_disk(str(node.node_id), turn_stream_id)
+                    async with self._lock_for(turn_stream_id):
+                        await self._load_state_from_disk(str(node.node_id), turn_stream_id)
+                        state = self._states[turn_stream_id]
                 except MessageStreamNotFoundError:
                     # 创建中断留下的空日志没有已提交事件，保持原有跳过行为。
                     logger.info("启动恢复跳过空消息流: session_id=%s turn_stream_id=%s", node.node_id, turn_stream_id)

@@ -1690,13 +1690,17 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_event_read_settles_before_following_append(
+@pytest.mark.parametrize("operation", ["events", "cold_open"])
+async def test_cancelled_stream_read_settles_before_following_append(
     message_stream_store: MessageStreamStoreCase, monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
-    store, _, session_id = message_stream_store
+    store, resolver, session_id = message_stream_store
     writer = await store.open(session_id=session_id, thread_id=store._path_resolver.main_thread_id(session_id),
                               turn_id="job_cancelled_read")
     path = store._stream_path(session_id, writer.turn_stream_id)
+    if operation == "cold_open":
+        store = MessageStreamStore(path_resolver=resolver)
     entered, release = threading.Event(), threading.Event()
     original_open = Path.open
 
@@ -1707,16 +1711,24 @@ async def test_cancelled_event_read_settles_before_following_append(
         return original_open(target, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", blocked_open)
-    reader = asyncio.create_task(store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id))
+    reader = asyncio.create_task(
+        store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) if operation == "events"
+        else store.open_existing(session_id=session_id, thread_id=writer.thread_id, turn_id=writer.turn_id)
+    )
+
+    async def append():
+        reopened = await store.open_existing(session_id=session_id, thread_id=writer.thread_id, turn_id=writer.turn_id)
+        return await reopened.commit("block.delta", {
+            "block_id": "block_read", "operation": "append", "text": "后续内容",
+        })
+
     following = None
     try:
         assert await asyncio.to_thread(entered.wait, 2)
         reader.cancel()
         await asyncio.sleep(0)
         reader.cancel()
-        following = asyncio.create_task(writer.commit("block.delta", {
-            "block_id": "block_read", "operation": "append", "text": "后续内容",
-        }))
+        following = asyncio.create_task(append())
         await asyncio.sleep(0.02)
         assert not reader.done() and not following.done()
     finally:
