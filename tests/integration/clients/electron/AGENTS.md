@@ -6,7 +6,7 @@
 
 `readonly_documents.mjs` 通过真实 Agent 的 write_file 建立更改，从原会话资源打开 Diff；核对分屏共享、只读、实际关窗重启后的 Diff／来源恢复及独立 profile 隔离。正文继续来自原内容 Provider，只观察实际读取，不预写变更集或浏览器存储；统一 model_stream 的工具调用和后续响应必须在原始模型记录中配对。
 
-`launch.mjs` 为规范文件与 Webview 场景共用真实 ASAR 启动、同 profile／来源重启、正常关窗及日志释放；每个调用方显式传入自己的运行上下文。`test_webview_resource_cache.py` 复用原 Webview 的 CSS／字体／更新／定向淘汰断言，同时以 CDP 核原图片首次正文和全部后续304的零正文、相同归属及独立request_id；不预写缓存或手动flush。
+`launch.mjs` 为规范文件与 Webview 场景共用真实 ASAR 启动、同 profile／来源重启、正常关窗及日志释放；每个调用方显式传入自己的运行上下文。`test_webview_resource_cache.py` 复用原 Webview 的 CSS／字体／更新／定向淘汰、已缓存文件删除失败及恢复断言，同时以 CDP 核原图片首次正文和全部后续304的零正文、相同归属及独立request_id；不预写缓存或手动flush。
 
 `test_localization.py` 与 Web 共用真实语言选择和重载业务场景，使用英语系统参数启动源码外 ASAR，核默认中文、偏好写入失败、取消、原命令双向重载、Thread 草稿及 dirty 分屏；语言重载期间只持有一个 main 实例，随后正常关窗并以同来源／profile 重启。第三个 Thread 经真实 Composer 接受执行，以 model_stream 的原调用身份与响应屏障核两次重载期间同一 Job 保持运行、一次模型调用及释放后完成；原生证据不由 Web 页面结果代替，也不覆盖 Windows 或 macOS。
 

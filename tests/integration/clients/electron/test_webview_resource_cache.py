@@ -26,6 +26,9 @@ from tests.integration.clients.web.quick_access.test_webview_resource_cache impo
     assert_webview_result,
     prepare_webview_files,
 )
+from tests.integration.clients.web.quick_access.test_webview_resource_cache import (
+    metadata_web_assets as metadata_web_assets,  # noqa: PLC0414
+)
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )

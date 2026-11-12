@@ -77,7 +77,7 @@ def electron_service_ports(request: pytest.FixtureRequest) -> Iterator[TestFileP
 
 
 @pytest.fixture(scope="module")
-def packaged_electron(request: pytest.FixtureRequest, electron_service_ports: TestFilePortBlock) -> Path:
+def packaged_electron(request: pytest.FixtureRequest) -> Path:
     if sys.platform != "linux":
         pytest.fail("便携 Electron 原生回归当前仅验收 Linux；Windows/macOS 尚待各自平台验收")
     if shutil.which("xvfb-run") is None:
@@ -96,6 +96,8 @@ def packaged_electron(request: pytest.FixtureRequest, electron_service_ports: Te
             "boundary": "仅复用显式指定的不可变包；不代表本轮重新构建或发行验收",
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return executable
+    # 真实打包前保留后续服务端口；复用包不占用调用方根本不会使用的固定端口。
+    request.getfixturevalue("electron_service_ports")
     runtime = context.runtime_root_for_node(request.node.nodeid)
     output = runtime / "package"
     temporary = runtime / "tmp"

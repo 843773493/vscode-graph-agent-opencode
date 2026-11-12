@@ -1,5 +1,5 @@
 // Integration：原 Markdown 扩展及隔离 Webview，真实 Gateway／FileService，无响应替身。
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
@@ -179,6 +179,44 @@ export async function runWebviewResourceCache({ run, launch }) {
     expect(raw(retainedUri)).toHaveLength(beforeEviction.retained);
     expect(await inspectCache()).toEqual(expect.arrayContaining(retained));
     result.eviction = { removed, retained, restored: (await inspectCache()).filter(item => removed.includes(item.url)) };
+    result.phase = 'deleted-cached-resource';
+    const savedStyle = await readFile(style, 'utf8');
+    const cachedStyle = (await inspectCache()).find(item => item.url.includes('/webview-cache/style.css'));
+    expect(cachedStyle?.etag).toBeTruthy();
+    const beforeDeletion = raw(cssUri).length;
+    try {
+      await unlink(style);
+      const rejected = page.waitForResponse(response => response.status() === 404
+        && new URL(response.url()).pathname.endsWith('/resources/navigation')
+        && response.request().postDataJSON()?.uri === cssUri);
+      await command('markdown.preview.refresh');
+      const rejection = await rejected;
+      const rejectedHeaders = await rejection.allHeaders();
+      const rejectedBody = await rejection.json();
+      expect(rejectedHeaders['x-request-id']).toBeTruthy();
+      expect(rejectedBody.request_id).toBe(rejectedHeaders['x-request-id']);
+      expect(rejectedBody.detail).toMatchObject({ code: 'file_not_found', reason: 'not_found' });
+      await expect.poll(() => result.responses.some(item => item.phase === 'deleted-cached-resource'
+        && item.url.includes('/webview-cache/style.css') && item.fromServiceWorker && item.status === 404)).toBe(true);
+      await expect(probe()).not.toHaveCSS('color', 'rgb(61, 72, 83)');
+      await expect(probe()).toHaveCSS('background-color', 'rgb(90, 91, 92)');
+      expect(raw(cssUri)).toHaveLength(beforeDeletion);
+      const afterDeletion = await inspectCache();
+      expect(afterDeletion).toContainEqual(cachedStyle);
+      result.deletion = { cached: cachedStyle, rejection: { status: rejection.status(),
+        headers: selectedHeaders(rejectedHeaders), body: rejectedBody },
+        cachedAfterFailure: afterDeletion.find(item => item.url === cachedStyle.url),
+        rawReadsBefore: beforeDeletion, rawReadsAfter: raw(cssUri).length };
+    } finally {
+      await writeFile(style, savedStyle + '\n.cache-probe { color: rgb(101, 112, 123); }\n');
+    }
+    result.phase = 'restored-cached-resource';
+    await command('markdown.preview.refresh');
+    await expect(probe()).toHaveCSS('color', 'rgb(101, 112, 123)');
+    await expect.poll(() => raw(cssUri).length).toBeGreaterThan(beforeDeletion);
+    await expect.poll(async () => (await inspectCache()).some(item => item.url === cachedStyle.url
+      && item.etag && item.etag !== cachedStyle.etag && item.bytes > cachedStyle.bytes)).toBe(true);
+    result.deletion.restored = (await inspectCache()).find(item => item.url === cachedStyle.url);
     expect(result.pageErrors).toEqual([]);
     result.phase = 'complete';
   } catch (error) {

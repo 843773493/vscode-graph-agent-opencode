@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -31,8 +32,16 @@ from tests.support.paths import chromium_temporary_environment
 
 
 @pytest.fixture(autouse=True)
-def metadata_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = os.getenv("BOXTEAM_WEBVIEW_CACHE_ASSETS")
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with (assets / "out/main.js").open("rb") as main:
+        fingerprint = hashlib.file_digest(main, "sha256").hexdigest()
+    (context.artifacts_dir / "assets.json").write_text(json.dumps({
+        "assets": str(assets), "main_sha256": fingerprint, "prepared": bool(prepared),
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 
 async def prepare_webview_files(
@@ -69,6 +78,11 @@ def assert_webview_result(result_path: Path) -> dict:
     assert len(result["eviction"]["removed"]) == len(result["eviction"]["restored"]) == 2
     assert any("/webview-cache/retained.css" in entry["url"] for entry in result["eviction"]["retained"])
     assert result["restart"]["before"] == result["restart"]["after"]
+    deletion = result["deletion"]
+    assert deletion["cached"] == deletion["cachedAfterFailure"]
+    assert deletion["rawReadsBefore"] == deletion["rawReadsAfter"]
+    assert deletion["rejection"]["status"] == 404
+    assert deletion["restored"]["etag"] != deletion["cached"]["etag"]
     return result
 
 
