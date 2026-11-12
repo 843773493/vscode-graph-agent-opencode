@@ -17,6 +17,8 @@ from .trace_cursor import (
 )
 from .trace_index_compaction import _AnyEvent
 
+_TRACE_STREAM_BATCH_BYTES = 512 * 1024
+
 
 def parse_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> list[Event]:
     """逐行解析 trace，并保留格式损坏优先于事件协议错误的归因顺序。"""
@@ -51,7 +53,7 @@ def parse_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> list[Ev
     return events
 
 
-def _read_trace_suffix(
+def _read_trace_batch(
     *,
     session_id: str,
     file: Path,
@@ -60,7 +62,9 @@ def _read_trace_suffix(
     with file.open("rb") as stream:
         stream.seek(offset)
         raw_records: list[tuple[dict[str, object], bytes, int, int]] = []
-        while line := stream.readline():
+        batch_end = offset + _TRACE_STREAM_BATCH_BYTES
+        # 按完整事件行分批；单条大事件仍完整读取，不改变其解析和游标。
+        while offset < batch_end and (line := stream.readline()):
             line_start = offset
             offset = stream.tell()
             stripped = line.strip()
@@ -102,7 +106,7 @@ async def stream_trace_records(
                 )
             if file_size > offset:
                 offset, raw_records = await run_sync_shielded(
-                    _read_trace_suffix,
+                    _read_trace_batch,
                     session_id=session_id,
                     file=file,
                     offset=offset,
@@ -124,6 +128,8 @@ async def stream_trace_records(
                             line=line,
                         ),
                     )
+                # 尚有积压时立即读取下一批，不进入等待新事件的轮询。
+                continue
 
         async with condition:
             try:
