@@ -11175,6 +11175,39 @@ export declare type TurnAttachmentDTO = Message<"boxteam.workspace.v2.TurnAttach
 export declare const TurnAttachmentDTOSchema: GenMessage<TurnAttachmentDTO>;
 
 /**
+ * 精确 Thread 的受管附件目录；只投影原 catalog 元数据，不读取或重建原件。
+ *
+ * @generated from message boxteam.workspace.v2.ThreadAttachmentListDTO
+ */
+export declare type ThreadAttachmentListDTO = Message<"boxteam.workspace.v2.ThreadAttachmentListDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnAttachmentDTO items = 3;
+   */
+  items: TurnAttachmentDTO[];
+
+  /**
+   * @generated from field: optional string next_after = 4;
+   */
+  nextAfter?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadAttachmentListDTO.
+ * Use `create(ThreadAttachmentListDTOSchema)` to create a new message.
+ */
+export declare const ThreadAttachmentListDTOSchema: GenMessage<ThreadAttachmentListDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.TurnBaseDTO
  */
 export declare type TurnBaseDTO = Message<"boxteam.workspace.v2.TurnBaseDTO"> & {

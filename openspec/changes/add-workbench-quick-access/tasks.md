@@ -1031,3 +1031,9 @@
 - 规范配置 URI 经唯一寻址 parser 与原来源目录匹配后，进入同一 JSONC 命令、模型与 CAS writer；远端引用仍由该 parser 按目标 Gateway 归一。inline 来源只查目标 Gateway 和同 Gateway 的明确发起工作区，缺失或歧义明确失败，不猜 source_key。打开前冻结编辑器组和选项，凭据变化拒绝迟到打开。
 - Provider／Opener 合同37项244断言、原来源回归56项416断言及172份实际转换源码类型检查通过。真实Gateway／Backend／Workbench／Chromium 1 passed／95.73秒，覆盖Gateway与Workspace配置URI、侧开、只读及原CAS冲突／未知保存零重放；pageErrors为空。最终正式79扩展构建通过，远端解析另经真实A/B parser入口核对。
 - 最小复审保留原parser、来源目录、命令与writer，无第二配置映射、正文缓存或语法实现。真实跨机／Windows／Electron配置URI页面未验，2.2与11.2保持未完成；准确指纹、命令及原件见 `out/tests/temp/2026/11/11/config_uri_opener/artifacts/verification.json` 和 `web-build-final-01/`。
+
+### 2026-11-12：Thread 附件快速访问（11.2 部分）
+
+- 原附件 catalog 以单 SQL 返回精确 SessionThread 的原件元数据与有界续页；不扫描历史正文、不读取或重建原件。`resource ` 仅在发起 Thread 的工作区入选时发现附件，显式续页，关闭与身份失效取消读取；接受冻结原附件引用，复用同一 Thread 附件预览及 MIME，展示态随原 ThreadInput 复制与恢复。
+- 43项客户端合同／321条断言、6项后端入口与 catalog 检查、172份实际转换源码类型检查和协议生成一致性通过。真实 Gateway／Backend／Workbench／Chromium 1 passed／81.83秒，产品消息入口生成101个附件，核100+1分页、owner／request_id、浏览筛选取消与分页零原件读取、文本及PDF接受、侧开和刷新恢复；正式79扩展构建通过。
+- 后置Python媒体页断言按精确file_id所在页严格推导1或2次读取，并核第二页after等于原next_after；两分支使用保存原件补验，未为纯断言修正重复长页面。精确候选后端通过，候选客户端3项受HEAD既有认证fixture错配影响、候选生成检查受HEAD既有未登记SSE DTO阻断；当前共享树对应检查已通过，不将他人的修复夹入本片。未验Windows／真实远端／Electron，11.2保持未完成；命令、源码指纹、原输出与适用边界见 `out/tests/temp/2026/11/11/attachment_resource_quick_access/artifacts/verification.json` 和 `page/commands-and-evidence.txt`。

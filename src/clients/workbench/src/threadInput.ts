@@ -5,12 +5,14 @@ import { IInstantiationService } from '../upstream/src/vs/platform/instantiation
 import { gateway, type ThreadOwner } from './agentApi.js';
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
 import type { WebUiLayoutSettings } from '../../web/src/types/backend.js';
+import type { TurnAttachmentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 export type ThreadResourceTab = 'files' | 'changes' | 'tasks' | 'connections' | 'debug';
 interface ThreadViewState {
   resourcesVisible: boolean;
   resourceTab: ThreadResourceTab;
   selectedChangesetId?: string;
+  selectedAttachment?: TurnAttachmentDTO;
   resourceRatio: number;
   filePreviewLayout: WebUiLayoutSettings;
   fileTreeExpandedPaths: string[];
@@ -40,6 +42,7 @@ export class ThreadInput extends EditorInput {
   resourcesVisible = false;
   resourceTab: ThreadResourceTab = 'files';
   selectedChangesetId?: string;
+  selectedAttachment?: TurnAttachmentDTO;
   resourceRatio = 0.42;
   filePreviewLayout: WebUiLayoutSettings = {};
   fileTreeExpandedPaths: string[] = [];
@@ -79,7 +82,7 @@ export class ThreadInput extends EditorInput {
     return input;
   }
   getViewState(): ThreadViewState {
-    return { resourcesVisible: this.resourcesVisible, resourceTab: this.resourceTab, selectedChangesetId: this.selectedChangesetId, resourceRatio: this.resourceRatio,
+    return { resourcesVisible: this.resourcesVisible, resourceTab: this.resourceTab, selectedChangesetId: this.selectedChangesetId, selectedAttachment: this.selectedAttachment, resourceRatio: this.resourceRatio,
       filePreviewLayout: this.filePreviewLayout, fileTreeExpandedPaths: this.fileTreeExpandedPaths };
   }
   restoreViewState(viewState: object | undefined): void {
@@ -87,6 +90,7 @@ export class ThreadInput extends EditorInput {
     this.resourcesVisible = state?.resourcesVisible ?? false;
     this.resourceTab = state?.resourceTab ?? 'files';
     this.selectedChangesetId = state?.selectedChangesetId;
+    this.selectedAttachment = state?.selectedAttachment;
     this.resourceRatio = state?.resourceRatio ?? 0.42;
     this.filePreviewLayout = state?.filePreviewLayout ?? {};
     this.fileTreeExpandedPaths = state?.fileTreeExpandedPaths ?? [];

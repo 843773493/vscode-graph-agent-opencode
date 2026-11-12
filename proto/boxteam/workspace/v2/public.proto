@@ -2559,6 +2559,14 @@ message TurnAttachmentDTO {
   optional string directory_uri = 5;
 }
 
+// 精确 Thread 的受管附件目录；只投影原 catalog 元数据，不读取或重建原件。
+message ThreadAttachmentListDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  repeated TurnAttachmentDTO items = 3;
+  optional string next_after = 4;
+}
+
 message TurnBaseDTO {
   string turn_id = 1;
   string job_id = 2;

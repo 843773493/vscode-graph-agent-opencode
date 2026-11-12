@@ -44,6 +44,15 @@ class TurnAttachmentDTO(BaseModel):
     directory_uri: AttachmentDirectoryURI | None = None
 
 
+class ThreadAttachmentListDTO(BaseModel):
+    """原附件 catalog 的有界目录投影，不包含正文或可变工作副本。"""
+
+    session_id: str
+    thread_id: str
+    items: list[TurnAttachmentDTO]
+    next_after: str | None = None
+
+
 class TurnUserMessageDTO(BaseModel):
     """一次执行 Turn 所消费的用户可见消息。"""
 

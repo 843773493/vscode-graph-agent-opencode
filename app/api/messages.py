@@ -44,6 +44,7 @@ from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestPolicyUpdateRequest,
 )
+from app.schemas.internal_v2.turn import ThreadAttachmentListDTO
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
@@ -334,6 +335,29 @@ async def list_messages(
         # 内部历史DTO损坏属于服务端故障，不把输入原文翻成cursor冲突。
         raise
     except ValueError as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/threads/{thread_id}/attachments", response_model=APIResponse[ThreadAttachmentListDTO],
+            summary="列出精确 Thread 的受管附件元数据")
+async def list_thread_attachments(
+    session_id: CanonicalSessionId,
+    thread_id: CanonicalThreadId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    after: str = Query(default="", pattern=r"^(?:att_[0-9a-f]{32})?$"),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> APIResponse[ThreadAttachmentListDTO]:
+    try:
+        async with session_service.session_read_admission(session_id):
+            resolved = await session_service.resolve_thread(session_id, thread_id)
+            result = await attachment_store.list_thread_attachments(session_id, resolved, after=after, limit=limit)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 

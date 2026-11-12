@@ -182,6 +182,22 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
         ).fetchone()
         return None if row is None else AttachmentFileVersion(**dict(row))
 
+    def thread_originals(self, session_id: str, thread_id: str, *, after: str, limit: int) -> tuple[tuple[AttachmentFileVersion, str], ...]:
+        """一次查询原关联和原件元数据；已释放工作副本仍保留历史来源。"""
+        rows = self._connected().execute(
+            "SELECT f.*,d.availability FROM attachment_directory_associations a "
+            "JOIN attachment_directories d ON d.attachment_id=a.attachment_id "
+            "JOIN attachment_directory_files f ON f.attachment_id=a.attachment_id AND f.role='original' "
+            "WHERE a.session_id=? AND a.thread_id=? AND a.attachment_id>? "
+            "ORDER BY a.attachment_id LIMIT ?", (session_id, thread_id, after, limit),
+        )
+        originals = []
+        for row in rows:
+            values = dict(row)
+            availability = values.pop("availability")
+            originals.append((AttachmentFileVersion(**values), availability))
+        return tuple(originals)
+
     def publish_file_version(self, version: AttachmentFileVersion) -> None:
         """原件与预览都是不可变版本；同一登记位置出现不同内容必须报错。"""
         with self.write_transaction() as connection:

@@ -15,7 +15,7 @@ import { useThreadSessionRuntime, type ThreadSessionSeed } from '../../../web/sr
 import { getSession, listAgents } from '../../../web/src/api.js';
 import { ensureGatewayUserAccess } from '../../../web/src/api/gateway/userAccess.js';
 import { browserGatewayId, getBrowserUiSettings } from '../../../web/src/hooks/settings/browserUiSettings.js';
-import type { AttachmentRef, Session } from '../../../web/src/types/backend.js';
+import type { Session } from '../../../web/src/types/backend.js';
 import { gateway } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -58,7 +58,6 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   const messageNavigation = navigation?.kind === 'message' ? navigation.match : undefined;
   const requestLogNavigation = navigation?.kind === 'request' ? navigation.match : undefined;
   const traceNavigation = navigation?.kind === 'trace' ? navigation.match : undefined;
-  const [attachment, setAttachment] = useState<AttachmentRef | null>(null);
   const [reportRequest, setReportRequest] = useState<InternalDisplayProvenance | null>(null);
   const [resourceRatio, setResourceRatio] = useState(input.resourceRatio);
   const stopResize = useRef<(() => void) | null>(null);
@@ -163,7 +162,9 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
           setReportRequest(source); input.resourcesVisible = true; input.resourceTab = 'connections'; onUpdate();
         }}
         onOpenAttachment={(_sessionId, value) => {
-          setAttachment(value); input.resourcesVisible = true; input.resourceTab = 'files'; onUpdate();
+          input.selectedAttachment = { file_id: value.file_id, directory_uri: value.directory_uri,
+            name: value.name ?? undefined, content_type: value.content_type ?? undefined };
+          input.resourcesVisible = true; input.resourceTab = 'files'; onUpdate();
         }}
         onRemovePending={actions.removePendingRequest} onChangePendingPolicy={actions.updatePendingRequestPolicy} />
       <PendingQueueBar conversations={runtime.conversations} onClear={actions.clearPendingRequests}
@@ -183,7 +184,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
           input.resourceRatio = ratios.workspace_preview; setResourceRatio(ratios.workspace_preview);
         }, () => { stopResize.current = null; });
       }} /> : null}
-      <ResourceView input={input} runtime={runtime} editors={editors} active={active} attachment={attachment} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
+      <ResourceView input={input} runtime={runtime} editors={editors} active={active} attachment={input.selectedAttachment ?? null} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
         reportRequest={reportRequest} onForkThread={(threadId, point) => { void fork.forkSession(owner.workspaceKey, owner.sessionId, { ...point, threadId }); }} /></div>
     <SessionContextForkDialog state={fork.forkDialog} onCancel={fork.closeForkDialog} onSubmit={fork.submitForkDialog} onSelectionChange={fork.updateForkDialogSelection} />
     </WorkspaceFileReferenceProvider>

@@ -4289,6 +4289,18 @@ class TurnAttachmentDTO(_message.Message):
     directory_uri: str
     def __init__(self, file_id: _Optional[str] = ..., name: _Optional[str] = ..., content_type: _Optional[str] = ..., availability: _Optional[str] = ..., directory_uri: _Optional[str] = ...) -> None: ...
 
+class ThreadAttachmentListDTO(_message.Message):
+    __slots__ = ("session_id", "thread_id", "items", "next_after")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    thread_id: str
+    items: _containers.RepeatedCompositeFieldContainer[TurnAttachmentDTO]
+    next_after: str
+    def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[TurnAttachmentDTO, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
+
 class TurnBaseDTO(_message.Message):
     __slots__ = ("turn_id", "job_id", "session_id", "ordinal", "revision", "status", "created_at", "updated_at", "completed_at", "source_view_id", "source_view_revision")
     TURN_ID_FIELD_NUMBER: _ClassVar[int]

@@ -44,6 +44,7 @@ from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.turn import ThreadAttachmentListDTO, TurnAttachmentDTO
 from app.services.infrastructure.attachment_blob_catalog.catalog import (
     CATALOG_DATABASE_NAME,
     AttachmentBlobCatalog,
@@ -181,6 +182,17 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
 
     def _parse_canonical_attachment_id(self, session_id: str, file_id: str, *, thread_id: str | None = None) -> str:
         return self._resource_id(file_id, session_id=session_id, thread_id=thread_id, canonical=True)[0]
+
+    async def list_thread_attachments(self, session_id: str, thread_id: str, *, after: str = "", limit: int = 100) -> ThreadAttachmentListDTO:
+        # 调用方的 Session 读取准入覆盖 worker；只读 catalog 快照不再反向取得上传 holder。
+        rows = await run_sync_shielded(self._catalog.thread_originals, session_id, thread_id, after=after, limit=limit + 1)
+        page = rows[:limit]
+        return ThreadAttachmentListDTO(session_id=session_id, thread_id=thread_id, items=[
+            TurnAttachmentDTO(file_id=self.reference(version.attachment_id), directory_uri=self.directory_uri(version.attachment_id),
+                              name=version.file_name, content_type=version.mime_type,
+                              availability="unavailable" if availability == "tombstoned" else "available")
+            for version, availability in page
+        ], next_after=page[-1][0].attachment_id if len(rows) > limit else None)
 
     async def persist_inline(self, session_id: str, attachments: Sequence[AttachmentRef], *, thread_id: str, message_id: str) -> list[AttachmentRef]:
         if not message_id or ":" in message_id:

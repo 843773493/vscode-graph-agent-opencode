@@ -2600,6 +2600,14 @@ export interface TurnAttachmentDTO {
   directory_uri?: string | undefined;
 }
 
+/** 精确 Thread 的受管附件目录；只投影原 catalog 元数据，不读取或重建原件。 */
+export interface ThreadAttachmentListDTO {
+  session_id: string;
+  thread_id: string;
+  items: TurnAttachmentDTO[];
+  next_after?: string | undefined;
+}
+
 export interface TurnBaseDTO {
   turn_id: string;
   job_id: string;
@@ -19952,6 +19960,52 @@ export const TurnAttachmentDTO: MessageFns<TurnAttachmentDTO> = {
     message.content_type = object.content_type ?? undefined;
     message.availability = object.availability ?? undefined;
     message.directory_uri = object.directory_uri ?? undefined;
+    return message;
+  },
+};
+
+function createBaseThreadAttachmentListDTO(): ThreadAttachmentListDTO {
+  return { session_id: "", thread_id: "", items: [], next_after: undefined };
+}
+
+export const ThreadAttachmentListDTO: MessageFns<ThreadAttachmentListDTO> = {
+  fromJSON(object: any): ThreadAttachmentListDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => TurnAttachmentDTO.fromJSON(e))
+        : [],
+      next_after: isSet(object.next_after) ? globalThis.String(object.next_after) : undefined,
+    };
+  },
+
+  toJSON(message: ThreadAttachmentListDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => TurnAttachmentDTO.toJSON(e));
+    }
+    if (message.next_after !== undefined) {
+      obj.next_after = message.next_after;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadAttachmentListDTO>, I>>(base?: I): ThreadAttachmentListDTO {
+    return ThreadAttachmentListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadAttachmentListDTO>, I>>(object: I): ThreadAttachmentListDTO {
+    const message = createBaseThreadAttachmentListDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.items = object.items?.map((e) => TurnAttachmentDTO.fromPartial(e)) || [];
+    message.next_after = object.next_after ?? undefined;
     return message;
   },
 };

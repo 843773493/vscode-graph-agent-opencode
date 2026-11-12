@@ -23,3 +23,5 @@ Provider 合同区分单次 provide 的本地筛选与重新打开的当前发�
 配置合同运行真实 ResourceQuickAccess 与配置 API，命令宿主只捕获冻结的来源和编辑器选项；验证同 Gateway 去重、工作区隔离、取消、分支权限及零提前正文读取。完整打开、侧开、原 JSONC writer 保存、只读、冲突和草稿恢复由 `test_settings_source_editor.py` 的正式 Workbench 页面覆盖，不把合同装具当产品验收。
 
 变更合同运行原 Provider，HTTP 与编辑器宿主为具名装具；核明确 Session、入选工作区、摘要零正文、冻结 child／组／changeset 与取消。正式 `test_change_documents.py` 通过产品执行生成更改，经 resource 目录选择后进入原面板／Diff／补丁；不预写 changeset 或浏览器展示态。
+
+附件合同复用原 Provider，核精确 Thread、独立上传、显式分页及关闭后的迟到结果；浏览零原件读取。正式附件页面通过消息产品入口生成文本与非文本附件，接受后进入原预览，分屏／刷新沿原展示态，不预写历史或浏览器存储。

@@ -10,7 +10,7 @@ import { IConfigurationService } from '../../upstream/src/vs/platform/configurat
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IOpenerService } from '../../upstream/src/vs/platform/opener/common/opener.js';
-import { PickerQuickAccessProvider, type IPickerQuickAccessItem } from '../../upstream/src/vs/platform/quickinput/browser/pickerQuickAccess.js';
+import { PickerQuickAccessProvider, TriggerAction, type IPickerQuickAccessItem } from '../../upstream/src/vs/platform/quickinput/browser/pickerQuickAccess.js';
 import { Extensions, type IQuickAccessRegistry } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
@@ -18,7 +18,7 @@ import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../u
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
-import type { ResourceNavigationResultDTO, SessionChangesetListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { ResourceNavigationResultDTO, SessionChangesetListDTO, ThreadAttachmentListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
 import type { GatewaySkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/skill_sources.js';
 import { listWorkspaceResources, type ResourceAction, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
@@ -137,6 +137,23 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       };
       return item;
     };
+    const threadResourceAccept = (owner: WorkspaceOwner, viewState: Partial<ReturnType<ThreadInput['getViewState']>>): SourcePick['accept'] => (mods, event) => {
+      this.report((async () => {
+        this.assertAccess(run);
+        const source = this.groups.getGroup(run.group), thread = run.thread!;
+        if (!source) throw new Error('发起打开的编辑器组已关闭');
+        const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
+          || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
+        const direction = preferredSideBySideGroupDirection(this.configuration);
+        const destination = mods.alt || pinned && mods.ctrlCmd
+          ? this.groups.findGroup({ direction }, source) ?? this.groups.addGroup(source, direction) : source;
+        await this.editors.openEditor(new ThreadInput({ ...owner, workspaceKey: gatewayWorkspaceKey(owner),
+          sessionId: thread.session_id, threadId: thread.thread_id, title: thread.thread_id }), {
+          pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground,
+          viewState: { resourcesVisible: true, ...viewState },
+        }, destination.id);
+      })());
+    };
     const configurationPicks = async (target: SourceTarget, name: string): Promise<SourcePick[]> => {
       run.signal.throwIfAborted();
       const owner = new ConfigurationSourceOwner(target), result = await owner.list(run.signal);
@@ -175,6 +192,49 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           const key = gatewayWorkspaceKey(target);
           const configuration = limiter.queue(() => configurationPicks({ gateway_id: target.gateway_id, workspace_id: target.workspace_id }, target.name))
             .catch(cause => failed(owner, '配置 ', cause));
+          const attachmentPicks = async (after = ''): Promise<SourcePick[]> => {
+            const thread = run.thread!;
+            run.signal.throwIfAborted();
+            const result = await gateway.request<ThreadAttachmentListDTO>(
+              `/api/v1/sessions/${encodeURIComponent(thread.session_id)}/threads/${encodeURIComponent(thread.thread_id)}/attachments?${new URLSearchParams({ limit: '100', after })}`,
+              { signal: run.signal }, key);
+            if (result.session_id !== thread.session_id || result.thread_id !== thread.thread_id) throw new Error('附件目录响应不属于发起 Thread');
+            const picks: SourcePick[] = result.items.map(attachment => {
+              const label = attachment.name ?? attachment.file_id, frozen = { ...attachment };
+              return { id: JSON.stringify([owner.gatewayId, owner.workspaceId, thread.session_id, thread.thread_id, 'attachment', attachment.file_id]),
+                label: attachment.availability === 'unavailable' ? `${label}（来源不可用）` : label, filterLabel: label, resourceId: attachment.file_id,
+                description: `附件 · ${target.name} · ${attachment.content_type ?? 'application/octet-stream'}`,
+                detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${thread.thread_id} · ${attachment.file_id}`,
+                accept: attachment.availability === 'unavailable' ? undefined : threadResourceAccept(owner, { resourceTab: 'files', selectedAttachment: frozen }),
+              };
+            });
+            if (result.next_after) {
+              let nextPage: Promise<TriggerAction> | undefined;
+              const continuation: SourcePick = { id: `${key}/attachments/after/${result.next_after}`, label: '更多附件…',
+                description: '当前列表只包含已返回页；继续读取同一 Thread 的元数据',
+                buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: '读取下一页附件' }],
+                trigger: () => nextPage ??= (async () => {
+                  try {
+                    run.signal.throwIfAborted();
+                    this.assertAccess(run);
+                    const next = await attachmentPicks(result.next_after!);
+                    run.signal.throwIfAborted();
+                    this.assertAccess(run);
+                    run.discovery = Promise.resolve([...(await run.discovery!).filter(item => item.id !== continuation.id), ...next]);
+                    return TriggerAction.REFRESH_PICKER;
+                  } catch (cause) {
+                    nextPage = undefined;
+                    if (!run.signal.aborted) this.notifications.error(cause instanceof Error ? cause.message : String(cause));
+                    return TriggerAction.NO_ACTION;
+                  }
+                })(),
+              };
+              picks.push(continuation);
+            }
+            return picks;
+          };
+          const attachments = run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
+            ? limiter.queue(() => attachmentPicks()).catch(cause => failed(owner, '附件 ', cause)) : Promise.resolve([]);
           const changes = run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
             ? limiter.queue(async () => {
               const thread = run.thread!;
@@ -187,23 +247,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
                 label: changeset.label, filterLabel: changeset.label, resourceId: changeset.changeset_id,
                 description: `会话变更 · ${target.name} · ${changeset.summary?.files ?? 0} 个文件`,
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${changeset.changeset_id}`,
-                accept: (mods, event) => {
-                  this.report((async () => {
-                    this.assertAccess(run);
-                    const group = this.groups.getGroup(run.group);
-                    if (!group) throw new Error('发起打开的编辑器组已关闭');
-                    const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
-                      || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
-                    const direction = preferredSideBySideGroupDirection(this.configuration);
-                    const destination = mods.alt || pinned && mods.ctrlCmd
-                      ? this.groups.findGroup({ direction }, group) ?? this.groups.addGroup(group, direction) : group;
-                    await this.editors.openEditor(new ThreadInput({ ...owner, workspaceKey: key, sessionId: thread.session_id,
-                      threadId: thread.thread_id, title: thread.thread_id }), {
-                      pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground,
-                      viewState: { resourcesVisible: true, resourceTab: 'changes', selectedChangesetId: changeset.changeset_id },
-                    }, destination.id);
-                  })());
-                },
+                accept: threadResourceAccept(owner, { resourceTab: 'changes', selectedChangesetId: changeset.changeset_id }),
               } satisfies SourcePick));
             }).catch(cause => failed(owner, '变更 ', cause)) : Promise.resolve([]);
           const agents = limiter.queue(async () => {
@@ -257,7 +301,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
-          return (await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, changes, ...runtime])).flat();
+          return (await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, attachments, changes, ...runtime])).flat();
         } catch (cause) { return failed(owner, '', cause); }
       }));
       const gatewayResults = await Promise.all(gatewayConfigurations);
