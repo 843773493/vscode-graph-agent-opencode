@@ -8,6 +8,7 @@ from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
 from app.core.job_event_bus import EventType
 from app.core.phase_observer import observe_phase
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
@@ -66,7 +67,7 @@ async def _child_outcome(runtime: PersistentTaskRuntime, state: GenerationAction
 
 async def _terminal_error(runtime: PersistentTaskRuntime, session_id: str, job_id: str, outcome: str) -> str:
     async with runtime._sessions.session_read_admission(session_id):
-        for event in reversed(runtime.trace.read_events(session_id)):
+        for event in reversed(await run_sync_shielded(runtime.trace.read_events, session_id)):
             if event.job_id == job_id and isinstance(event, JobFailedEvent):
                 detail = f": {event.payload.error}" if event.payload.error else ""
                 code = f" (code: {event.payload.code})" if event.payload.code else ""
