@@ -23,10 +23,12 @@ import type {
   WorkspaceNavigationTree,
 } from "../../types/backend";
 import {
+  buildCatalogProjection,
   projectCatalogBranch,
   projectCatalogBreadcrumb,
   projectPendingCatalogChildren,
   type CatalogProjectedNode,
+  type CatalogProjection,
 } from "../../state/session/sessionCatalogProjection";
 import {
   catalogOutboxOperationIsTerminal,
@@ -1282,7 +1284,7 @@ export function useSessionResourceExplorer({
       );
       const outbox = handle.driver.current();
       const projected = outbox
-        ? projectCatalogBreadcrumb(breadcrumb, { confirmedNodes: breadcrumb.items, outbox }, currentSessionId)
+        ? projectCatalogBreadcrumb(breadcrumb, buildCatalogProjection({ confirmedNodes: breadcrumb.items, outbox }), currentSessionId)
         : breadcrumb;
       deletedCurrentSession = projected.items.some(
         (item) => item.node_id === folderId,
@@ -1421,12 +1423,20 @@ export function useSessionResourceExplorer({
       }
       confirmedByWorkspace.set(workspaceId, nodes);
     }
+    const projectionsByWorkspace = new Map<string, CatalogProjection>();
+    for (const [workspaceId, nodes] of confirmedByWorkspace) {
+      const outbox = readCatalogOutbox(workspaceId);
+      if (outbox) {
+        projectionsByWorkspace.set(workspaceId, buildCatalogProjection({
+          confirmedNodes: [...nodes.values()], outbox,
+        }));
+      }
+    }
     const projected = new Map<string, ProjectedCatalogBranchState>();
     for (const [key, branch] of branches) {
       const workspaceId = key.slice(0, key.indexOf(":"));
-      const outbox = readCatalogOutbox(workspaceId);
-      const confirmedNodes = [...(confirmedByWorkspace.get(workspaceId)?.values() ?? [])];
-      if (outbox && branch.catalog_revision !== undefined) {
+      const nodes = projectionsByWorkspace.get(workspaceId);
+      if (nodes && branch.catalog_revision !== undefined) {
         const page: SessionCatalogPage = {
           revision: branch.revision,
           catalog_revision: branch.catalog_revision,
@@ -1436,7 +1446,7 @@ export function useSessionResourceExplorer({
           total: branch.total,
           consistency_warning: branch.consistency_warning,
         };
-        const projection = projectCatalogBranch(page, { confirmedNodes, outbox });
+        const projection = projectCatalogBranch(page, nodes);
         projected.set(key, {
           ...branch,
           ...projection,
@@ -1454,15 +1464,14 @@ export function useSessionResourceExplorer({
     }
     for (const [workspaceId, confirmedNodes] of confirmedByWorkspace) {
       const outbox = readCatalogOutbox(workspaceId);
-      if (!outbox) continue;
+      const nodes = projectionsByWorkspace.get(workspaceId);
+      if (!outbox || !nodes) continue;
       for (const operation of outbox.operations) {
         if (operation.kind !== "create_folder") continue;
         const nodeId = operation.created_node_id ?? operation.client_operation_id;
         if (confirmedNodes.has(nodeId)) continue;
         projected.set(branchKey(workspaceId, nodeId), {
-          ...projectPendingCatalogChildren(nodeId, {
-            confirmedNodes: [...confirmedNodes.values()], outbox,
-          }),
+          ...projectPendingCatalogChildren(nodeId, nodes),
           revision: "", total: null, cursor: null, consistency_warning: null,
           local_pending: true, loading: false, error: null,
         });

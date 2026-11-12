@@ -73,6 +73,8 @@ interface EffectiveNode {
   createdByOperationId: string | null;
 }
 
+export type CatalogProjection = ReadonlyMap<string, EffectiveNode>;
+
 /** 会话节点在投影中的唯一 ID：confirmed 用 node_id，本地新建用 canonical ID 或 client_ref。 */
 function effectiveNodeId(operation: CatalogOutboxOperation): string {
   return operation.created_node_id ?? operation.client_operation_id;
@@ -104,9 +106,10 @@ function confirmedNodeToProjected(node: SessionCatalogNode): CatalogProjectedNod
  * 把 confirmed 镜像与 outbox 按 `client_sequence` 重放成一张有效节点表。
  *
  * 这是本模块唯一的节点状态合成点：分支、面包屑与搜索都只消费它，避免三处各写
- * 一份 pending 归并而在某条路径上产生重复 node 或漏掉移动。
+ * 一份 pending 归并而在某条路径上产生重复 node 或漏掉移动。同一轮工作区更新的
+ * 所有分支共用这张表，不按分支重复重放与校验。
  */
-function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, EffectiveNode> {
+export function buildCatalogProjection(input: CatalogProjectionInput): CatalogProjection {
   const table = new Map<string, EffectiveNode>();
   const deletingRoots = new Set<string>();
   for (const node of input.confirmedNodes) {
@@ -282,10 +285,9 @@ function assertParentChainsAreAcyclic(
  */
 export function projectCatalogBranch(
   page: SessionCatalogPage,
-  input: CatalogProjectionInput,
+  live: CatalogProjection,
 ): CatalogBranchProjection {
   const parentNodeId = page.parent_node_id ?? null;
-  const live = buildEffectiveNodes(input);
   const confirmedChildren = page.items.map((item) => item.node_id);
   const items: CatalogProjectedNode[] = [];
   const locallyRemoved: string[] = [];
@@ -328,9 +330,8 @@ export function projectCatalogBranch(
 /** 未提交父 Folder 只有本地子项投影，没有后端页、revision 或 total。 */
 export function projectPendingCatalogChildren(
   parentNodeId: string,
-  input: CatalogProjectionInput,
+  live: CatalogProjection,
 ): Pick<CatalogBranchProjection, "parent_node_id" | "items" | "pending_node_ids" | "locally_removed_node_ids"> {
-  const live = buildEffectiveNodes(input);
   const parent = live.get(parentNodeId);
   if (!parent || parent.confirmed || parent.node.client_ref === null) {
     throw new Error(`本地父 Folder 不存在或已经提交: ${parentNodeId}`);
@@ -367,10 +368,9 @@ export function projectCatalogBreadcrumb(
     catalog_revision: number;
     items: readonly SessionCatalogNode[];
   },
-  input: CatalogProjectionInput,
+  live: CatalogProjection,
   nodeId: string,
 ): CatalogBreadcrumbProjection {
-  const live = buildEffectiveNodes(input);
   const chain: CatalogProjectedNode[] = [];
   let cursor: string | null = nodeId;
   while (cursor !== null) {
@@ -418,14 +418,13 @@ export function projectCatalogSearch(
     cursor: string | null;
     total: number;
   },
-  input: CatalogProjectionInput,
+  live: CatalogProjection,
   query: string,
 ): CatalogSearchProjection {
   const normalized = query.trim().toLocaleLowerCase();
   if (normalized === "") {
     throw new Error("会话目录搜索关键字不能为空");
   }
-  const live = buildEffectiveNodes(input);
   const pendingMatches = [...live.values()]
     .filter((entry) => entry.node.pending_state !== null
       && entry.node.name.toLocaleLowerCase().includes(normalized))
@@ -441,7 +440,6 @@ export function projectCatalogSearch(
 }
 
 /** 本地 pending 节点在计数展示中的唯一口径：单独报告，不并入后端 total。 */
-export function catalogPendingNodeCount(input: CatalogProjectionInput): number {
-  const live = buildEffectiveNodes(input);
+export function catalogPendingNodeCount(live: CatalogProjection): number {
   return [...live.values()].filter((entry) => entry.node.pending_state !== null).length;
 }

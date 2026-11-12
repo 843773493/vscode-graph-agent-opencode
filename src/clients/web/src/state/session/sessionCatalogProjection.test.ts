@@ -11,6 +11,7 @@ import {
   type CatalogOutbox,
 } from "./sessionCatalogOutbox";
 import {
+  buildCatalogProjection,
   catalogPendingNodeCount,
   projectCatalogBranch,
   projectCatalogBreadcrumb,
@@ -92,10 +93,10 @@ describe("会话目录 pending 投影：改名", () => {
       { kind: "rename_node", targetNodeId: "cnode_1", name: "新名" },
       { baseCatalogRevision: 3, expectedRevision: 3 },
     ));
-    const projection = projectCatalogBranch(confirmed, {
+    const projection = projectCatalogBranch(confirmed, buildCatalogProjection({
       confirmedNodes: confirmed.items,
       outbox,
-    });
+    }));
     expect(projection.items.map((item) => item.name)).toEqual(["新名"]);
     expect(projection.revision).toBe("rev-3");
     expect(projection.catalog_revision).toBe(confirmed.catalog_revision);
@@ -115,7 +116,7 @@ describe("会话目录 pending 投影：改名", () => {
       { kind: "rename_node", targetNodeId: "cnode_1", name: "新名" },
       { baseCatalogRevision: 3, expectedRevision: 3 },
     ));
-    projectCatalogBranch(confirmed, { confirmedNodes: confirmed.items, outbox });
+    projectCatalogBranch(confirmed, buildCatalogProjection({ confirmedNodes: confirmed.items, outbox }));
     expect(confirmed.items[0].name).toBe("旧名");
   });
 });
@@ -136,8 +137,9 @@ describe("会话目录 pending 投影：移动不制造重复 node", () => {
       { kind: "move_node", targetNodeId: "cnode_1", parentNodeId: "cnode_target" },
       { baseCatalogRevision: 3, expectedRevision: 3 },
     ));
-    const source = projectCatalogBranch(sourcePage, { confirmedNodes, outbox });
-    const target = projectCatalogBranch(targetPage, { confirmedNodes, outbox });
+    const projection = buildCatalogProjection({ confirmedNodes, outbox });
+    const source = projectCatalogBranch(sourcePage, projection);
+    const target = projectCatalogBranch(targetPage, projection);
     expect(source.items.map((item) => item.node_id)).toEqual([]);
     expect(source.locally_removed_node_ids).toEqual(["cnode_1"]);
     expect(target.items.map((item) => item.node_id)).toEqual(["cnode_1"]);
@@ -153,7 +155,7 @@ describe("会话目录 pending 投影：移动不制造重复 node", () => {
       { kind: "move_node", targetNodeId: "cnode_1", parentNodeId: "cnode_target" },
       { baseCatalogRevision: 3, expectedRevision: 3 },
     ));
-    const target = projectCatalogBranch(targetPage, { confirmedNodes, outbox });
+    const target = projectCatalogBranch(targetPage, buildCatalogProjection({ confirmedNodes, outbox }));
     expect(target.total).toBe(42);
     expect(target.cursor).toBe("cursor-abc");
     expect(target.revision).toBe("rev-3");
@@ -166,8 +168,9 @@ describe("会话目录 pending 投影：移动不制造重复 node", () => {
       { kind: "move_node", targetNodeId: "cnode_1", parentNodeId: "cnode_unloaded" },
       { baseCatalogRevision: 3, expectedRevision: 3 },
     ));
-    const source = projectCatalogBranch(sourcePage, { confirmedNodes, outbox });
-    const target = projectCatalogBranch(targetPage, { confirmedNodes, outbox });
+    const projection = buildCatalogProjection({ confirmedNodes, outbox });
+    const source = projectCatalogBranch(sourcePage, projection);
+    const target = projectCatalogBranch(targetPage, projection);
     expect(source.items.map((item) => item.node_id)).toEqual([]);
     // 目标分支尚未加载，pending 目标 node 不出现在任何已加载分支。
     expect(target.items.map((item) => item.node_id)).toEqual([]);
@@ -185,9 +188,9 @@ describe("会话目录提交回执与权威分支对账", () => {
     outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("update"), {
       kind, state: "committed", committed_catalog_revision: 4,
     })]);
-    const stale = projectCatalogBranch(page(kind === "move_node" ? [] : [original], parent), {
+    const stale = projectCatalogBranch(page(kind === "move_node" ? [] : [original], parent), buildCatalogProjection({
       confirmedNodes: [original], outbox,
-    });
+    }));
     expect(stale.items).toHaveLength(1);
     expect(stale.items[0].pending_state).toBe("committed");
     expect(stale.items[0].node_revision).toBe(1);
@@ -195,7 +198,7 @@ describe("会话目录提交回执与权威分支对账", () => {
     const refreshed = { ...page([node({ ...original, node_revision: 2,
       name: kind === "rename_node" ? "更新后的名称" : original.name })], parent), catalog_revision: 4 };
     outbox = pruneReconciledCatalogOutbox(outbox, refreshed.catalog_revision);
-    const confirmed = projectCatalogBranch(refreshed, { confirmedNodes: refreshed.items, outbox });
+    const confirmed = projectCatalogBranch(refreshed, buildCatalogProjection({ confirmedNodes: refreshed.items, outbox }));
     expect(confirmed.items[0].pending_state).toBeNull();
     expect(confirmed.items[0].node_revision).toBe(2);
     expect(confirmed.items[0].parent_node_id).toBe(parent);
@@ -212,10 +215,10 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
       { kind: "create_folder", name: "新文件夹", parentNodeId: "cnode_root" },
       { baseCatalogRevision: 0 },
     ));
-    const projection = projectCatalogBranch(confirmed, {
+    const projection = projectCatalogBranch(confirmed, buildCatalogProjection({
       confirmedNodes: confirmed.items,
       outbox,
-    });
+    }));
     expect(projection.items.map((item) => item.node_id)).toEqual([opId("f")]);
     expect(projection.items[0].node_revision).toBeNull();
     expect(projection.items[0].state).toBeNull();
@@ -242,10 +245,10 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
       kind: "create_folder",
       created_node_id: "cnode_new",
     })]);
-    const projection = projectCatalogBranch(confirmed, {
+    const projection = projectCatalogBranch(confirmed, buildCatalogProjection({
       confirmedNodes: confirmed.items,
       outbox,
-    });
+    }));
     expect(projection.items.map((item) => item.node_id)).toEqual(["cnode_new"]);
     expect(projection.items[0].client_ref).toBe(opId("f"));
     expect(projection.items[0].folder_id).toBeNull();
@@ -256,29 +259,29 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
     outbox = addCatalogOutboxIntent(outbox, opId("child"), {
       kind: "create_folder", name: "子文件夹", parentCreatedByOperationId: parent.createdBy,
     }, { baseCatalogRevision: 0 });
-    expect(projectPendingCatalogChildren("cnode_new", { confirmedNodes: [], outbox }).items
+    expect(projectPendingCatalogChildren("cnode_new", buildCatalogProjection({ confirmedNodes: [], outbox })).items
       .map((item) => [item.name, item.parent_node_id])).toEqual([["子文件夹", "cnode_new"]]);
 
     outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("f"), {
       kind: "create_folder", state: "committed", created_node_id: "cnode_new",
       committed_catalog_revision: 4, receipt_revision: 2,
     })]);
-    const beforeConfirmed = projectCatalogBranch(confirmed, { confirmedNodes: [], outbox });
+    const beforeConfirmed = projectCatalogBranch(confirmed, buildCatalogProjection({ confirmedNodes: [], outbox }));
     expect(beforeConfirmed.items[0].client_ref).toBe(opId("f"));
     expect(beforeConfirmed.items[0].folder_id).toBeNull();
     expect(beforeConfirmed.items[0].pending_state).toBe("committed");
-    expect(projectPendingCatalogChildren("cnode_new", { confirmedNodes: [], outbox }).items)
+    expect(projectPendingCatalogChildren("cnode_new", buildCatalogProjection({ confirmedNodes: [], outbox })).items)
       .toHaveLength(1);
     expect(catalogOutboxParentCreation(outbox, opId("f")))
       .toEqual({ parentNodeId: "cnode_new", createdBy: null });
     const committed = page([node({
       node_id: "cnode_new", folder_id: "cnode_new", name: "新文件夹",
     })], "cnode_root");
-    const afterConfirmed = projectCatalogBranch(committed, { confirmedNodes: committed.items, outbox });
+    const afterConfirmed = projectCatalogBranch(committed, buildCatalogProjection({ confirmedNodes: committed.items, outbox }));
     expect(afterConfirmed.items.map((item) => item.node_id)).toEqual(["cnode_new"]);
     expect(afterConfirmed.items[0].client_ref).toBeNull();
     expect(afterConfirmed.items[0].folder_id).toBe("cnode_new");
-    expect(() => projectPendingCatalogChildren("cnode_new", { confirmedNodes: committed.items, outbox }))
+    expect(() => projectPendingCatalogChildren("cnode_new", buildCatalogProjection({ confirmedNodes: committed.items, outbox })))
       .toThrow("本地父 Folder 不存在或已经提交");
   });
 
@@ -296,10 +299,10 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
     const committed = page([
       node({ node_id: "cnode_new", name: "新文件夹", parent_node_id: "cnode_root" }),
     ], "cnode_root");
-    const projection = projectCatalogBranch(committed, {
+    const projection = projectCatalogBranch(committed, buildCatalogProjection({
       confirmedNodes: committed.items,
       outbox,
-    });
+    }));
     expect(projection.items.map((item) => item.node_id)).toEqual(["cnode_new"]);
     expect(projection.items.length).toBe(1);
   });
@@ -319,11 +322,12 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
       { kind: "move_node", targetNodeId: "ses_1", parentCreatedByOperationId: opId("f") },
       { baseCatalogRevision: 0, expectedRevision: 1 },
     );
-    const source = projectCatalogBranch(rootPage, { confirmedNodes, outbox });
+    const projection = buildCatalogProjection({ confirmedNodes, outbox });
+    const source = projectCatalogBranch(rootPage, projection);
     // 源分支：session 已被 pending 移走，只留 pending Folder。
     expect(source.items.map((item) => item.node_id)).toEqual([opId("f")]);
     const folderPage = page([], opId("f"));
-    const target = projectCatalogBranch(folderPage, { confirmedNodes, outbox });
+    const target = projectCatalogBranch(folderPage, projection);
     expect(target.items.map((item) => item.node_id)).toEqual(["ses_1"]);
     expect(target.items[0].parent_node_id).toBe(opId("f"));
   });
@@ -344,13 +348,14 @@ describe("会话目录 pending 投影：删除", () => {
       { kind: "delete_folder", targetNodeId: "cnode_f", recursive: true },
       { baseCatalogRevision: 3 },
     ));
-    const root = projectCatalogBranch(rootPage, { confirmedNodes, outbox });
-    const child = projectCatalogBranch(childPage, { confirmedNodes, outbox });
+    const projection = buildCatalogProjection({ confirmedNodes, outbox });
+    const root = projectCatalogBranch(rootPage, projection);
+    const child = projectCatalogBranch(childPage, projection);
     expect(root.items.map((item) => item.node_id)).toEqual(["cnode_f"]);
     expect(root.items[0].state).toBe("deleting");
     expect(root.items[0].pending_state).toBe("pending_local");
     expect(child.items.map((item) => item.node_id)).toEqual([]);
-    expect(catalogPendingNodeCount({ confirmedNodes, outbox })).toBe(1);
+    expect(catalogPendingNodeCount(projection)).toBe(1);
   });
 
   test("pending 删除会话显示 deleting 状态，不关闭同层其它节点", () => {
@@ -364,10 +369,10 @@ describe("会话目录 pending 投影：删除", () => {
       { kind: "delete_session", targetNodeId: "ses_a" },
       { baseCatalogRevision: 3 },
     ));
-    const projection = projectCatalogBranch(rootPage, {
+    const projection = projectCatalogBranch(rootPage, buildCatalogProjection({
       confirmedNodes: rootPage.items,
       outbox,
-    });
+    }));
     expect(projection.items.map((item) => item.node_id)).toEqual(["ses_a", "ses_b"]);
     expect(projection.items[0].state).toBe("deleting");
     expect(projection.items[0].pending_state).toBe("pending_local");
@@ -394,7 +399,7 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
     ];
     const breadcrumb = projectCatalogBreadcrumb(
       { revision: "rev-3", catalog_revision: 3, items: confirmedNodes },
-      { confirmedNodes, outbox },
+      buildCatalogProjection({ confirmedNodes, outbox }),
       "ses_1",
     );
     expect(breadcrumb.items.map((item) => item.node_id)).toEqual([
@@ -412,7 +417,7 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
     const outbox = createCatalogOutbox(PARTITION);
     const breadcrumb = projectCatalogBreadcrumb(
       { revision: "rev-3", catalog_revision: 3, items: confirmedNodes },
-      { confirmedNodes, outbox },
+      buildCatalogProjection({ confirmedNodes, outbox }),
       "cnode_missing_child",
     );
     expect(breadcrumb.items.map((item) => item.node_id)).toEqual(["cnode_root"]);
@@ -433,7 +438,7 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
     );
     const search = projectCatalogSearch(
       { revision: "rev-3", catalog_revision: 3, cursor: "cursor-abc", total: 5 },
-      { confirmedNodes: [], outbox },
+      buildCatalogProjection({ confirmedNodes: [], outbox }),
       "报告",
     );
     expect(search.items.map((item) => item.name)).toEqual(["季度报告"]);
@@ -447,7 +452,7 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
   test("空搜索关键字必须响亮失败", () => {
     expect(() => projectCatalogSearch(
       { revision: "rev-3", catalog_revision: 3, cursor: null, total: 0 },
-      { confirmedNodes: [], outbox: createCatalogOutbox(PARTITION) },
+      buildCatalogProjection({ confirmedNodes: [], outbox: createCatalogOutbox(PARTITION) }),
       "   ",
     )).toThrow("会话目录搜索关键字不能为空");
   });
@@ -456,10 +461,10 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
 describe("会话目录投影的契约守卫", () => {
   test("confirmed 镜像出现重复 node_id 时必须响亮失败", () => {
     const duplicated = page([node({ node_id: "dup" }), node({ node_id: "dup" })]);
-    expect(() => projectCatalogBranch(duplicated, {
+    expect(() => projectCatalogBranch(duplicated, buildCatalogProjection({
       confirmedNodes: duplicated.items,
       outbox: createCatalogOutbox(PARTITION),
-    })).toThrow("confirmed 镜像出现重复 node_id: dup");
+    }))).toThrow("confirmed 镜像出现重复 node_id: dup");
   });
 
   test("pending 造成祖先环时投影必须响亮失败", () => {
@@ -467,9 +472,9 @@ describe("会话目录投影的契约守卫", () => {
       node({ node_id: "a", parent_node_id: "b" }),
       node({ node_id: "b", parent_node_id: "a" }),
     ];
-    expect(() => projectCatalogBranch(page([], null), {
+    expect(() => projectCatalogBranch(page([], null), buildCatalogProjection({
       confirmedNodes,
       outbox: createCatalogOutbox(PARTITION),
-    })).toThrow("pending 投影包含祖先环");
+    }))).toThrow("pending 投影包含祖先环");
   });
 });
