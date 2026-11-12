@@ -116,6 +116,15 @@ describe('后端文件目录根和稳定投影', () => {
     } finally { head.mockRestore(); token.dispose(); }
   });
 
+  test('关联未创建的无扩展名目标仍打开原未保存文本，零 HEAD', async () => {
+    const input = { resource: workspaceFileUri(owner, root + '/future', root), forceUntitled: true, contents: '未保存草稿' };
+    const head = spyOn(fileApi, 'getWorkspaceRawFileMimeType').mockRejectedValue(new Error('目标尚未创建'));
+    try {
+      expect(await workspaceFileEditorInput(input, { getAssociationsForResource: () => [] } as unknown as IEditorResolverService)).toBe(input);
+      expect(head).not.toHaveBeenCalled();
+    } finally { head.mockRestore(); }
+  });
+
   test('目录和二进制 stat 只 describe，缺失和权限错误由原服务返回', async () => {
     const files = fileService();
     const discovery = spyOn(gateway, 'workspaces').mockRejectedValue(new Error('文件I/O不应枚举工作区'));

@@ -129,7 +129,8 @@ export async function canonicalWorkspaceFileInputs(inputs: readonly IUntypedEdit
 
 /** 打开和原 resolver 共用 MIME 选择；显式打开方式仍由原调用方决定。 */
 export async function workspaceFileEditorInput<T extends IUntypedEditorInput>(input: T, resolver: IEditorResolverService): Promise<T> {
-  if (!('resource' in input) || input.resource?.scheme !== scheme || input.options?.override || extname(input.resource)
+  if (!('resource' in input) || input.resource?.scheme !== scheme || ('forceUntitled' in input && input.forceUntitled)
+    || input.options?.override || extname(input.resource)
     || resolver.getAssociationsForResource(input.resource).length) return input;
   const mime = await workspaceFileMimeType(input.resource);
   const override = mime?.startsWith('image/') ? IMAGE_PREVIEW_EDITOR_ID : mime?.startsWith('audio/') ? AUDIO_PREVIEW_EDITOR_ID
