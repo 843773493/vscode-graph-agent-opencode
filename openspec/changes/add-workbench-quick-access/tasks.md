@@ -165,6 +165,7 @@
 - [ ] 13.1 复用原资源／命令历史及输入记忆配置，按身份隔离；从历史移除、关闭 Tab 和删除业务资源相互独立，不持久化 token／临时 endpoint。
 - [ ] 13.2 为实际变化的编辑器／历史格式实施一次显式版本迁移，保留可核验身份、每组视图及既有草稿／working-copy 恢复，之后只写新格式。
 - [ ] 13.3 对缺失身份、已删资源和损坏／未知版本提供明确反馈和展示记录移除，不清空全部存储、不扫描磁盘重建或猜同名目标。
+  - 2026-11-12 只读来源／更改恢复子链：原 TextResource serializer 保留损坏 JSON、未知版本及无身份记录的原件和具体原因，原 EditorPlaceholder 只关闭选中展示记录；正常引用继续原输入工厂，服务故障保持原错误，不建立恢复数据库或重复历史清理。9项真实 resolver／EditorGroupModel 合同206断言、172份实际转换源码类型、正式79扩展Web构建及真实Gateway／Backend／Chromium页面通过（1 passed／95.31秒）；产品先生成更改与正常组状态，再只破坏一条来源记录，核两次恢复、零来源读取、相邻Diff保留及单独移除。原关闭join／导航取消诊断和前四次失败原件如实保留，不宣称console零错误；未验Windows／真实远端／Electron，整项仍未完成。准确命令、源码指纹与最小复审见 `out/tests/temp/2026/11/12/readonly_recovery/artifacts/verification.json`。
   - Thread恢复子链：未知版本、缺失owner、损坏JSON及非对象记录复用原v2不可恢复输入保留原件，重复保存不丢记录、不使整组恢复失败；ThreadPane通过原createEditorOpenError显示具体拒绝，解路由失败保留原Error及精确原因。8项新增反证先全部失败，修正后12项／178断言通过；真实Gateway／正式Workbench组合1 passed／87.48秒，产品先生成会话、草稿及分屏后才注入三条展示记录故障，核两次恢复、原生编辑器列表选择、关闭不删会话／草稿、未知Gateway与重复登记零错误目标读取，pageErrors为空。51份转换源码完整类型检查及同批正式构建通过，最终源码前后不变；原计数装具错误、原生泛化提示和旧文案失败均保留，未放宽身份或原件断言。准确命令、指纹、失败／通过及正式产物见 `out/tests/temp/2026/11/05/thread_recovery/artifacts/verification.json`；其它资源类型与Electron仍待验收，整项不勾选。
 - [ ] 13.4 验证 Web 浏览器存储与 Electron 固定 profile 中重启、route 更换、Gateway／凭据变化和不可恢复旧记录，旧候选及动作立即失效，不新增 IPC。
 

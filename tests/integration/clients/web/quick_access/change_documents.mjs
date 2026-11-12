@@ -9,8 +9,8 @@ const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!base || !output || !screenshot) throw new Error('只读模型验收缺少隔离目标或产物目录');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_change_documents.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], reads: [], sources: [], mcpReads: [], changesetLists: [], reviews: [],
-  boundary: '真实Gateway／后端／正式Workbench；模型协议采用model_stream；产品执行创建文件和更改，无预写历史、缓存或HTTP响应替身' };
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], consoleErrors: [], reads: [], sources: [], mcpReads: [], changesetLists: [], reviews: [],
+  boundary: '真实Gateway／后端／正式Workbench；模型协议采用model_stream；产品创建更改及编辑器状态，仅恢复故障阶段改坏一条真实只读编辑器记录' };
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
@@ -20,6 +20,7 @@ try {
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
+  page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push({ phase: result.phase, text: message.text() }); });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (path.endsWith('/changesets')) result.changesetLists.push({ phase: result.phase, path,
@@ -185,6 +186,87 @@ try {
   await assertDiff(0); await expect(text().locator('.view-lines')).toContainText('只读来源模型验收');
   expect(result.sources.filter(read => read.phase === result.phase)).toHaveLength(1);
   result.sourceRestored = true;
+  result.readonlyRecovery = [];
+  for (const mode of ['unknown-version', 'broken-json']) {
+    result.phase = 'persist-source-before-' + mode;
+    await reload();
+    await expect(text().locator('.view-lines')).toContainText('只读来源模型验收');
+    // 产品已提交正常组状态；离开产品文档后，仅在具名存储故障边界破坏这条来源记录。
+    const storageUrl = new URL('/__readonly_recovery_storage__', base).href;
+    await page.route(storageUrl, route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>恢复故障注入</title>' }));
+    await page.goto(storageUrl);
+    const corruption = await page.evaluate(async mode => {
+      const read = request => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+      });
+      const matches = [];
+      for (const info of await indexedDB.databases()) {
+        if (!info.name.startsWith('vscode-web-state-db-')) continue;
+        const db = await read(indexedDB.open(info.name));
+        try {
+          const store = db.transaction('ItemTable').objectStore('ItemTable');
+          const [keys, values] = await Promise.all([read(store.getAllKeys()), read(store.getAll())]);
+          for (let index = 0; index < keys.length; index++) {
+            if (typeof values[index] !== 'string' || !values[index].includes('"editorpart.state"')) continue;
+            const state = JSON.parse(values[index]);
+            const changed = [];
+            const visit = value => {
+              if (!value || typeof value !== 'object') return;
+              if (Array.isArray(value.editors)) {
+                for (const editor of value.editors) {
+                  if (editor.id !== 'workbench.editors.resourceEditorInput') continue;
+                  const stored = JSON.parse(editor.value);
+                  if (stored.resource?.scheme !== 'boxteam-source') continue;
+                  const replacement = mode === 'unknown-version' ? JSON.stringify({ ...stored, version: 42 }) : '{"version":1,';
+                  changed.push({ original: editor.value, replacement }); editor.value = replacement;
+                }
+              }
+              for (const child of Object.values(value)) visit(child);
+            };
+            visit(state['editorpart.state']);
+            if (changed.length) matches.push({ database: info.name, key: keys[index], changed, value: JSON.stringify(state) });
+          }
+        } finally { db.close(); }
+      }
+      if (matches.length !== 1 || matches[0].changed.length !== 1) throw new Error(`预期唯一正常来源记录，实际${JSON.stringify(matches)}`);
+      const match = matches[0], db = await read(indexedDB.open(match.database));
+      try {
+        await new Promise((resolve, reject) => {
+          const transaction = db.transaction('ItemTable', 'readwrite');
+          transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error ?? new Error('恢复故障写入中止'));
+          transaction.objectStore('ItemTable').put(match.value, match.key);
+        });
+      } finally { db.close(); }
+      return { mode, database: match.database, key: match.key, ...match.changed[0] };
+    }, mode);
+    await page.unroute(storageUrl);
+    result.phase = 'recover-' + mode;
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    const placeholder = groups.nth(1).locator('.monaco-editor-pane-placeholder').filter({ visible: true });
+    const reason = mode === 'unknown-version' ? '不支持的只读文档恢复版本：42' : '只读文档恢复 JSON 损坏';
+    await expect(placeholder).toContainText(reason);
+    await assertDiff(0);
+    expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+    result.phase = 'retain-' + mode;
+    await reload();
+    await expect(placeholder).toContainText(reason);
+    await assertDiff(0);
+    expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+    await placeholder.getByRole('button', { name: '移除此展示记录', exact: true }).click();
+    await expect(placeholder).toHaveCount(0);
+    result.phase = 'removed-' + mode;
+    await reload();
+    await expect(page.locator('.editor-placeholder-label-container').filter({ hasText: reason })).toHaveCount(0);
+    await assertDiff(0);
+    expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+    result.readonlyRecovery.push({ ...corruption, retainedAcrossReload: true, removedOnlyDisplayRecord: true, sourceReads: 0 });
+    await command('workbench.action.focusSecondEditorGroup');
+    await command('workbench.action.quickOpen', source);
+    await page.locator('.quick-input-widget').getByText('打开链接', { exact: true }).click();
+    await expect(text()).toHaveCount(1);
+    await expect(text().locator('.view-lines')).toContainText('只读来源模型验收');
+  }
   await verifyEditorNavigation({ page, command, owner, fileUri: file.file_path, result });
   await verifyViewNavigation({ page, command, owner, result });
   await command('workbench.action.closeAllEditors');

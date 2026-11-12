@@ -41,6 +41,14 @@ from tests.support.terminal_plugin import (
 )
 
 
+@pytest.fixture
+def change_document_web_assets(request: pytest.FixtureRequest) -> Path:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
+    return assets
+
+
 @pytest.fixture(scope="module")
 def change_document_backend(
     request: pytest.FixtureRequest,
@@ -105,7 +113,7 @@ def change_document_backend(
 async def test_diff_and_source_models_share_references_and_restore(
     request: pytest.FixtureRequest,
     change_document_backend: tuple[str, Path, ModelStreamReplay, Path, Callable[[], None]],
-    web_workbench_assets: Path,
+    change_document_web_assets: Path,
     prepared_developer_tools_package: Path,
 ) -> None:
     backend, workspace, replay, boxteam_home, close_backend = change_document_backend
@@ -133,7 +141,7 @@ async def test_diff_and_source_models_share_references_and_restore(
     copy_prepared_developer_tools_package(prepared_developer_tools_package, boxteam_home)
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace, default_backend_url=backend,
         port=ports.port(20), boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
+        extra_env={"BOXTEAM_WEB_ASSETS": str(change_document_web_assets)})
     command = ["node", "tests/integration/clients/web/quick_access/change_documents.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
@@ -161,6 +169,9 @@ async def test_diff_and_source_models_share_references_and_restore(
                     "changesetBrowseOnly", "changesetOpened"):
             assert result[key], key
         assert result["pageErrors"] == []
+        assert [item["mode"] for item in result["readonlyRecovery"]] == ["unknown-version", "broken-json"]
+        assert all(item["retainedAcrossReload"] and item["removedOnlyDisplayRecord"] and item["sourceReads"] == 0
+                   for item in result["readonlyRecovery"])
         assert result["existingWorkspaceViews"] == ["terminal", "output", "automation", "ports", "mcp", "browser"]
         assert (workspace / "diff-history.txt").read_text(encoding="utf-8") == after
     finally:

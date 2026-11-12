@@ -5,6 +5,7 @@ import './resourceOpener.js';
 import './composerActions.js';
 import './changeFiles.js';
 import { installReadonlyDocumentSerialization } from './readonlyDocuments.js';
+import './readonlyDocuments.contribution.js';
 import './search/nameModes.js';
 import './search/workspaceQuickAccess.js';
 import './automation/contribution.js';

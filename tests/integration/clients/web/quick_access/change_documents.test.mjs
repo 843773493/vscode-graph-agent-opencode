@@ -11,7 +11,13 @@ const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, '
 const upstream = './src/clients/workbench/upstream/src/vs/';
 await build({ stdin: { contents: `
 export { ChangeDocuments } from './src/clients/workbench/src/changeFiles.js';
-export { changeFileUri, changeFileSource, normalizeReadonlyInput, ReadonlyDocumentSerializer } from './src/clients/workbench/src/readonlyDocuments.js';
+export { changeFileUri, changeFileSource, normalizeReadonlyInput, ReadonlyDocumentSerializer, UnavailableReadonlyDocumentInput } from './src/clients/workbench/src/readonlyDocuments.js';
+export { ThreadInput, ThreadSerializer } from './src/clients/workbench/src/threadInput.js';
+export { TextResourceEditorInput } from '${upstream}workbench/common/editor/textResourceEditorInput.js';
+export { EditorGroupModel } from '${upstream}workbench/common/editor/editorGroupModel.js';
+export { EditorExtensions, EditorsOrder } from '${upstream}workbench/common/editor.js';
+export { Registry } from '${upstream}platform/registry/common/platform.js';
+export { ITextEditorService } from '${upstream}workbench/services/textfile/common/textEditorService.js';
 export { gateway } from './src/clients/workbench/src/agentApi.js';
 export { installSessionApiFetchMock, unwrapSessionApiFetch } from './src/clients/web/src/api/session/sessionApiFetchMock.js';
 export { TextModelResolverService } from '${upstream}workbench/services/textmodelResolver/common/textModelResolverService.js';
@@ -105,7 +111,7 @@ test('同一快照不受选择键／标题／Thread改变影响，owner、范围
   receipt.checks.push('稳定身份往返；版本／阶段／Gateway／Workspace／Session隔离；旧不完整记录明确失败');
 });
 
-test('旧展示引用一次迁为同一模型身份，保留原输入；缺失身份和未知恢复格式明确拒绝', () => {
+test('旧展示引用一次迁为同一模型身份，保留原输入；缺失身份和未知恢复格式保留错误记录', () => {
   const source = { owner: { ...owner, routeId: 'retired-route', title: '旧显示名', threadId: 'old-child' },
     changesetId: 'all', filePath: file.file_path, editId: file.latest_edit_id, phase: 'after' };
   const old = { resource: m.URI.from({ scheme: 'boxteam-change', authority: owner.workspaceId,
@@ -118,9 +124,84 @@ test('旧展示引用一次迁为同一模型身份，保留原输入；缺失�
   const invalid = { ...old, resource: old.resource.with({ query: JSON.stringify({ ...source, owner: { workspaceId: owner.workspaceId } }) }) };
   expect(() => m.normalizeReadonlyInput(invalid)).toThrow('缺少可核验的稳定身份');
   const serializer = new m.ReadonlyDocumentSerializer();
-  expect(() => serializer.deserialize({}, JSON.stringify({ version: 2 }))).toThrow('不支持的只读文档恢复版本');
-  expect(() => serializer.deserialize({}, JSON.stringify({ version: 1, resource: m.URI.parse('untitled:/example').toJSON() }))).toThrow('不是项目资源');
-  receipt.checks.push('旧引用收敛同一身份且不改原件；只写新格式；未知版本／无稳定身份明确拒绝');
+  expect(serializer.deserialize({}, JSON.stringify({ version: 2 })).reason).toContain('不支持的只读文档恢复版本');
+  expect(serializer.deserialize({}, JSON.stringify({ version: 1, resource: m.URI.parse('untitled:/example').toJSON() })).reason).toContain('不是项目资源');
+  receipt.checks.push('旧引用收敛同一身份且不改原件；只写新格式；未知版本／无稳定身份保留为错误记录');
+});
+
+test('损坏引用保留原件且重复恢复不嵌套，不调用文件／路由服务', () => {
+  const serializer = new m.ReadonlyDocumentSerializer();
+  const records = [
+    ['{"version":1,', 'JSON 损坏'], ['null', '必须是对象'], ['[]', '必须是对象'],
+    [JSON.stringify({ version: 9, name: '未来版本' }), '不支持的只读文档恢复版本'],
+    [JSON.stringify({ version: 1 }), '缺少资源身份'],
+    [JSON.stringify({ version: 1, resource: { scheme: 'boxteam-source', path: '/missing-owner' } }), '缺少完整归属'],
+    [JSON.stringify({ version: 1, resource: uri().with({ path: '/bad-change' }).toJSON() }), '缺少稳定身份'],
+    [JSON.stringify({ version: 1, resource: uri().with({ path: '/%FF' }).toJSON() }), 'URI error'],
+  ];
+  for (const [serialized, reason] of records) {
+    let input = serializer.deserialize({}, serialized);
+    const original = serialized === '{"version":1,' ? serialized : JSON.parse(serialized);
+    for (let round = 0; round < 3; round++) {
+      expect(input).toBeInstanceOf(m.UnavailableReadonlyDocumentInput);
+      expect(input.resource).toBeUndefined(); expect(input.stored).toEqual(original);
+      expect(input.reason).toContain(reason); expect(input.getName()).toBeTruthy();
+      expect(serializer.canSerialize(input)).toBe(true);
+      input = serializer.deserialize({}, serializer.serialize(input));
+    }
+  }
+  receipt.checks.push('坏JSON／未知版本／无owner／非法编码的原件保留、三次恢复不嵌套、无服务访问');
+});
+
+test('原编辑器组保留坏记录及相邻Thread，移除一条后其余顺序和原件仍能恢复', () => {
+  const instantiation = new m.InstantiationService(new m.ServiceCollection(), true);
+  const registry = m.Registry.as(m.EditorExtensions.EditorFactory);
+  const registrations = [registry.registerEditorSerializer(m.TextResourceEditorInput.ID, m.ReadonlyDocumentSerializer),
+    registry.registerEditorSerializer(m.ThreadInput.ID, m.ThreadSerializer)];
+  instantiation.invokeFunction(accessor => registry.start(accessor));
+  const configuration = { onDidChangeConfiguration: m.Event.None, getValue: key => key.endsWith('openPositioning') ? 'right' : true };
+  const thread = new m.ThreadInput({ ...owner, workspaceKey: '', threadId: 'exact-child', title: '正常Thread' });
+  const stored = { id: 17, editors: [
+    { id: m.TextResourceEditorInput.ID, value: '{"version":1,' },
+    { id: thread.typeId, value: new m.ThreadSerializer().serialize(thread) },
+    { id: m.TextResourceEditorInput.ID, value: JSON.stringify({ version: 9, name: '未来只读文档' }) },
+  ], mru: [0, 1, 2], sticky: 0 };
+  const group = new m.EditorGroupModel(stored, instantiation, configuration);
+  let restored;
+  try {
+    expect(group.count).toBe(3); expect(group.activeEditor).toBeInstanceOf(m.UnavailableReadonlyDocumentInput);
+    const inputs = group.getEditors(m.EditorsOrder.SEQUENTIAL);
+    expect(inputs[1].owner).toMatchObject({ ...owner, threadId: 'exact-child' });
+    expect(inputs[2].getName()).toBe('未来只读文档');
+    expect(group.serialize().editors).toHaveLength(3);
+    group.closeEditor(inputs[0]);
+    restored = new m.EditorGroupModel(group.serialize(), instantiation, configuration);
+    expect(restored.count).toBe(2);
+    expect(restored.getEditors(m.EditorsOrder.SEQUENTIAL).map(input => input.getName())).toEqual(['正常Thread', '未来只读文档']);
+    expect(restored.getEditors(m.EditorsOrder.SEQUENTIAL)[1].stored).toEqual({ version: 9, name: '未来只读文档' });
+    receipt.checks.push('真实EditorGroupModel恢复3条含坏记录；关闭仅移除指定展示记录，余项及精确child保留');
+  } finally {
+    restored?.dispose(); group.dispose(); thread.dispose();
+    for (const registration of registrations) registration.dispose();
+    instantiation.dispose();
+  }
+});
+
+test('有效来源恢复只交原工厂，工厂本身失败保留原错误而不转为坏记录', () => {
+  const serializer = new m.ReadonlyDocumentSerializer();
+  const resource = m.URI.from({ scheme: 'boxteam-source', authority: owner.gatewayId,
+    path: `/${owner.workspaceId}/${encodeURIComponent(file.file_path)}/说明.md` });
+  const calls = [], restored = {};
+  const instantiation = { invokeFunction: callback => callback({ get: service => {
+    expect(service).toBe(m.ITextEditorService);
+    return { createTextEditor: input => { calls.push(input); return restored; } };
+  } }) };
+  const serialized = JSON.stringify({ version: 1, resource: resource.toJSON(), name: '原来源', description: '原展示信息' });
+  expect(serializer.deserialize(instantiation, serialized)).toBe(restored);
+  expect(calls).toEqual([{ resource, label: '原来源', description: '原展示信息' }]);
+  const original = new Error('原输入工厂故障');
+  expect(() => serializer.deserialize({ invokeFunction() { throw original; } }, serialized)).toThrow(original);
+  receipt.checks.push('有效引用交原TextEditorService；下游基础设施错误不被误判为恢复记录损坏');
 });
 
 test('并发两侧与多引用只读一次变更集，释放一份仍可用，最后释放后重开真实读取', async () => {

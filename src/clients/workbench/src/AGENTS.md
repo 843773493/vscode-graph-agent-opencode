@@ -23,3 +23,5 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 引用与选定正文粘贴由 `composerActions` 的独立原 Action／Command 处理；来源在发起时捕获，接收者使用发起 Thread 或明确选择的可见 Thread。通过原 `ThreadPane.threadTarget` 捕获原 Composer writer，关闭、切换与身份失效明确拒绝，不维护最近 Thread 注册表、不另写草稿存储，也不伪装上传附件或启动执行。
 
 Thread 发起的文件引用通过原 Quick Access 的只选择／多选模式取得未打开文件；先捕获草稿与工作区，再选择来源。勾选后取消不解析引用、不写草稿；接受后由唯一 URI owner 逐项解析，全部成功才一次追加原草稿。选择过程不打开编辑器、不读正文，不给混合打开列表增加附加修饰键。
+
+只读来源／更改的损坏恢复记录沿原 TextResource serializer 保留原件及明确原因，使用原 EditorPlaceholder 和组关闭移除展示记录；没有可核验资源身份时不得发起路由或正文读取。正常引用仍交原 TextEditorService，工厂／服务故障不得误判成记录损坏，也不建立第二恢复存储。

@@ -79,3 +79,5 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 `language_analysis.test.mjs` 编译真实 OutlineModelService、LRU、语言 Provider registry 和取消令牌；仅文本模型与异步符号源为受控依赖。核旧版本取消／迟到不删除新缓存、同版本在途共享及模型移除／owner隔离；不将此装具称为真实 Worker，产品语言回归另由 `test_language_models.py` 证明。
 
 `target_settings.test.mjs` 编译真实设置 Command、原 JSONC AST／scanner 与配置来源 API；仅 Quick Input、通知及 HTTP 回执是服务边界，覆盖取消、只读、注释保留、409 显式重新预检、未知保存仅查原幂等键、pending 操作及身份失效。`test_target_settings.py` 经正式 Workbench、真实 Gateway 与 A/B 工作区，从原命令面板进入；注释预备也通过来源 API，核导航切换后的冻结目标保存、真实 source_saved／layer_imported／pending_restart 提示、原 active CAS 丢弃候选及删除本层覆盖。模型回放仅供启动且要求零调用；不预写配置文件或浏览器存储，不代替完整 Settings Editor、Backend 重启健康证明或原生客户端验收。
+
+只读恢复故障验收先经产品生成更改、来源及正常编辑器组状态；离开产品文档后，只改坏该组中一条来源序列化记录，分别注入未知版本和损坏 JSON。核重复刷新保留错误、零来源读取、相邻 Diff 正常恢复，以及原占位按钮只移除展示记录；新打开继续通过 Quick Open 的规范 URI Opener。该明确存储故障注入不代表正常业务预写状态，不代替 Electron 或所有资源删除场景。
