@@ -21,6 +21,7 @@ export const actionTitleKeys = [
   'workbench.resource.copyUri', 'workbench.resource.attachToChat',
   'workbench.resource.selectSourcesForChat', 'workbench.resource.pasteSelectionToChat',
   'workbench.resource.focus', 'workbench.thread.clearHistoryCache',
+  'workbench.managementTarget.selectExtensions', 'workbench.managementTarget.selectMcp', 'workbench.managementTarget.selectSettings',
   'tasks.action.details', 'tasks.action.history', 'tasks.action.edit', 'tasks.action.pause',
   'tasks.action.resume', 'tasks.action.check', 'tasks.action.checkOnly', 'tasks.action.terminate',
   'tasks.action.update',

@@ -1,10 +1,10 @@
 # 目录用途
 
-保存固定上游提供的中文 Workbench NLS 翻译输入及来源许可。
+保存固定上游提供的中文 Workbench NLS 翻译输入、项目补译及来源许可。
 
 # 可修改内容
 
-固定版本上游的 Workbench 及实际内置扩展语言包 JSON、其许可与来源说明。
+固定版本上游的 Workbench 及实际内置扩展语言包 JSON、项目核心界面的补译、其许可与来源说明。
 
 # 不可修改内容
 
@@ -12,4 +12,4 @@
 
 # 规范
 
-输入按 Workbench 模块 ID 和 NLS key 匹配；版本与 SHA 必须显式登记，构建不联网获取。
+输入按 Workbench 模块 ID 和 NLS key 匹配；固定输入的版本与 SHA 必须显式登记，构建不联网获取。`zh-cn-upstream-main.json` 保留上游原件；核心缺项只在 `zh-cn-project.json` 按明确模块和 key 补译，英文仍由固定上游源码提供，构建核对有效调用与占位符。不增加运行期覆盖规则。

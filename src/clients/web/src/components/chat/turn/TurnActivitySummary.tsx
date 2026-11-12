@@ -1,4 +1,4 @@
-import { t } from "../../../../../shared/core/i18n/index.js";
+import { formatNumber, t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { MessageSearchLocationContext } from "../messageSearchLocation";
 import type { ConversationView } from "../../../types/frontend";
@@ -33,8 +33,12 @@ export function ForkItemButtons({ item, onForkItem }: {
 
 export function formatActivityDuration(durationMs: number | null | undefined): string {
   if (durationMs === null || durationMs === undefined) return t("chat.activity.durationUnknown");
-  if (durationMs < 1000) return t("chat.activity.ms", durationMs);
-  return t("chat.activity.seconds", (durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1));
+  if (durationMs < 1000) return t("chat.activity.ms", formatNumber(durationMs));
+  const fractionDigits = durationMs >= 10_000 ? 0 : 1;
+  return t("chat.activity.seconds", formatNumber(durationMs / 1000, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }));
 }
 
 export function activityStatsPreview(
@@ -42,7 +46,7 @@ export function activityStatsPreview(
 ): string {
   if (!stats) return t("chat.activity.statsPending");
   const values = [formatActivityDuration(stats.duration_ms)];
-  values.push(t("chat.activity.items", stats.item_count));
+  values.push(t("chat.activity.items", formatNumber(stats.item_count)));
   return values.join(" · ");
 }
 

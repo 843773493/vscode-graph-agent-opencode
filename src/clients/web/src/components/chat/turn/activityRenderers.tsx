@@ -15,6 +15,14 @@ function activityLabel(activity: MessageStreamActivity): string {
   return t("chat.activity.running");
 }
 
+export function activityKindLabel(kind: string): string {
+  const key = kind === "context.compaction" ? "chat.activity.kind.contextCompaction"
+    : kind === "approval.wait" ? "chat.activity.kind.approvalWait"
+      : kind === "subagent.run" ? "chat.activity.kind.subagentRun"
+        : kind === "resource.operation" ? "chat.activity.kind.resourceOperation" : undefined;
+  return key ? t(key) : kind;
+}
+
 function compactionLabel(activity: MessageStreamActivity): string {
   if (activity.status === "waiting") return t("chat.compaction.waiting");
   if (activity.status === "stopping") return t("chat.compaction.stopping");
@@ -81,7 +89,7 @@ function renderKnownActivity(
 }
 
 function genericActivityRenderer(activity: MessageStreamActivity): React.ReactNode {
-  const label = `${activityLabel(activity)} ${activity.kind}`;
+  const label = `${activityLabel(activity)} ${activityKindLabel(activity.kind)}`;
   return (
     <>
       <span>{label}</span>

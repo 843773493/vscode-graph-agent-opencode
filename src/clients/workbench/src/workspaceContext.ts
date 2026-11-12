@@ -5,6 +5,7 @@ import { listGatewayWorkspaces } from '../../web/src/gatewayApi.js';
 import { errorMessage } from '../../web/src/utils/errorMessage.js';
 import { browserGatewayId } from '../../web/src/hooks/settings/browserUiSettings.js';
 import { gatewayWorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { t } from '../../shared/core/i18n/index.js';
 
 interface WorkspaceSnapshot {
   gatewayId: string | null;
@@ -24,9 +25,9 @@ export const workspaceContext = {
   getSnapshot: () => snapshot,
   ownerFor(workspaceKey: string, workspaceId: string) {
     const target = snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === workspaceKey);
-    if (!snapshot.gatewayId || !target) throw new Error('工作区登记信息尚不可用，无法确定编辑器归属');
+    if (!snapshot.gatewayId || !target) throw new Error(t('navigation.catalog.editorOwnerMissing'));
     const owner = gatewayWorkspaceOwner(target);
-    if (owner.workspaceId !== workspaceId) throw new Error('工作区路由归属已改变，停止打开编辑器');
+    if (owner.workspaceId !== workspaceId) throw new Error(t('workbench.panel.ownerChanged'));
     return { ...owner, workspaceKey };
   },
   subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -56,7 +57,7 @@ export const workspaceContext = {
     if (current.loading || current.error || !current.gatewayId) await this.refresh();
     const ready = this.getSnapshot();
     if (ready.error) throw new Error(ready.error);
-    if (!ready.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
+    if (!ready.gatewayId) throw new Error(t('workbench.resource.gatewayNotLoaded'));
     return ready;
   },
 };

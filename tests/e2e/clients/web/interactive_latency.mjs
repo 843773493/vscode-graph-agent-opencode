@@ -7,10 +7,13 @@ import { observePage } from '../../../harness/js/browser-performance.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
+const locale = process.env.BOXTEAM_TEST_DISPLAY_LOCALE ?? 'zh-cn';
+if (!['zh-cn', 'en'].includes(locale)) throw new Error(`未知显示语言：${locale}`);
 if (!baseUrl || !resultPath) throw new Error('延迟验收缺少隔离 Gateway 或产物目录');
 const run = TestRunContext.fromTestFile('tests/e2e/clients/web/test_interactive_latency.py');
 const perf = new Perf(run);
 const result = { classification: 'E2E', phase: 'startup', pageErrors: [], forbiddenExecutions: [],
+  locale, externalTranslationRequests: [],
   samples: [], navigationMs: [], sessionOpenMs: [], fileOpenMs: [],
   boundary: '真实 Workbench/Gateway/Backend；无模型请求、HTTP 替身、浏览器缓存预写；目录32会话/128文件，非深历史验收' };
 let page, failure, token, route;
@@ -51,7 +54,7 @@ try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Chromium', () => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 1000 } });
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   const observer = await observePage(page, perf, context);
@@ -80,7 +83,10 @@ try {
     observations.push({ kind: 'request-failed', url: request.url(), error: request.failure() });
   });
   page.on('request', request => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) pending.set(request, performance.now());
+    const url = new URL(request.url());
+    if (/^https?:$/.test(url.protocol) && url.origin !== new URL(baseUrl).origin
+      && /locale|nls|l10n|i18n|gallery|marketplace|vsix/i.test(url.href)) result.externalTranslationRequests.push(url.href);
+    if (url.pathname.startsWith('/api/')) pending.set(request, performance.now());
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(new URL(request.url()).pathname)) {
       result.forbiddenExecutions.push(request.url());
     }
@@ -90,6 +96,22 @@ try {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   result.startupMs = performance.now() - startup;
+  const pickerStart = performance.now();
+  await command('workbench.action.configureLocale');
+  const languagePicker = page.locator('.quick-input-widget');
+  await expect(languagePicker).toBeVisible();
+  await expect(languagePicker).toContainText('English');
+  result.languagePickerMs = performance.now() - pickerStart;
+  if (locale === 'en') {
+    await languagePicker.locator('.monaco-list-row').filter({ hasText: 'English' }).click();
+    const dialog = page.locator('.monaco-dialog-box[role="dialog"]');
+    await expect(dialog).toBeVisible();
+    const reloadStarted = performance.now();
+    await Promise.all([page.waitForEvent('domcontentloaded'), dialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click()]);
+    await expect(page.getByRole('button', { name: 'Refresh resource tree', exact: true })).toBeVisible({ timeout: 30_000 });
+    result.languageReloadMs = performance.now() - reloadStarted;
+  } else await page.keyboard.press('Escape');
+  await expect(page.locator('html')).toHaveAttribute('lang', locale === 'en' ? 'en' : 'zh-CN');
   token = await page.evaluate(async () => (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token);
   const health = (await api('/api/gateway/health')).body;
   route = (await api('/api/gateway/workspaces')).body.active_workspace;
@@ -218,6 +240,7 @@ try {
   expect(result.domNodes).toBeLessThan(20_000);
   expect(result.pageErrors).toEqual([]);
   expect(result.forbiddenExecutions).toEqual([]);
+  expect(result.externalTranslationRequests).toEqual([]);
   result.phase = 'passed';
 } catch (error) {
   failure = error;

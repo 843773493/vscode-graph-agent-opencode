@@ -35,6 +35,7 @@ clients/web/
 - 只参与会话或导航行为的附加工作区使用空模板；确需文件内容时，通过 `template_items` 只复制断言依赖的条目，避免复制无关资源
 - 性能测试必须输出机器可读 JSON，并在断言失败时保留截图
 - `test_interactive_latency.py`／`interactive_latency.mjs` 验真实Gateway下32会话目录导航、两个空历史Session打开和128KiB普通文件打开；API至少20个暖样本，不自动重跑。500ms API p95、1500ms单次、1000/2000ms导航组合与2000ms可用UI为独立断言，矩阵300秒只防进程挂死。数据准备／启动单列，不减掉交互内部校验。小目录场景不代替128Turn深历史或Electron验收。
+  两种显示语言使用各自隔离工作区与 Home，英文只从原语言 Quick Pick 切换并重载，不预写偏好。语言选择器、冷启动／重载单列，翻译外网请求必须为零；显式复用本批不可变产物时保留版本与主包指纹。
 - 指标必须同时覆盖响应时间、数据传输量和页面节点规模，不能只依赖固定等待时间
 - 浏览器必须连接本测试启动的隔离 Gateway，不得复用开发环境端口
 - 使用 fork deadline watchdog 的 browser driver 在 POSIX 由 owner 设置 `start_new_session=True`；Windows 由外置 Python watchdog 校验 matrix runner 祖先并按进程树回收

@@ -92,8 +92,10 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 只读恢复故障验收先经产品生成更改、来源及正常编辑器组状态；离开产品文档后，只改坏该组中一条来源序列化记录，分别注入未知版本和损坏 JSON。核重复刷新保留错误、零来源读取、相邻 Diff 正常恢复，以及原占位按钮只移除展示记录；新打开继续通过 Quick Open 的规范 URI Opener。该明确存储故障注入不代表正常业务预写状态，不代替 Electron 或所有资源删除场景。
 
-`test_localization` 经过真实 Gateway／Workspace 与正式 Workbench，英文浏览器在无偏好时默认中文，语言只经原 Quick Pick／清除命令改变；多 Thread 草稿、脏文件及分屏从产品入口生成，核取消重载、双向重载恢复、插件管理双语和零模型／翻译外网调用。`BOXTEAM_LOCALIZATION_WEB_ASSETS` 可显式复用本批已成功构建的不可变产物，收据保留路径、版本及主包指纹；未设置时沿公共构建 fixture。端口、Home、工作区及进程监督仍沿本测试 owner，不使用开发实例，不以页面通过代替 Electron 或后台执行不中断验收。
+`test_localization` 经过真实 Gateway／Workspace 与正式 Workbench，英文浏览器在无偏好时默认中文，语言只经原 Quick Pick／清除命令改变；多 Thread 草稿、脏文件及分屏从产品入口生成，核取消重载、双向重载恢复、插件管理双语和晚创建 Markdown 的本地翻译。第三个 Thread 经 Composer 接受实际执行，复用 model_stream 的精确调用身份与响应屏障，核两次语言重载期间同一 Job 保持运行、一次模型调用及释放后的原文回复；只在本组 fixture 选择既有受控 ASGI 装配，不改变通用 metadata fixture。`BOXTEAM_LOCALIZATION_WEB_ASSETS` 可显式复用本批已成功构建的不可变产物，收据保留路径、版本及主包指纹；未设置时沿公共构建 fixture。端口、Home、工作区及进程监督仍沿本测试 owner，不使用开发实例，不以页面通过代替 Electron 验收。
 
 `localization_scenario.mjs` 只共享这组语言业务步骤；Web 与真实 Electron 分别创建自己的运行 owner、工作区、端口及客户端。原生入口额外核同窗口重载和正常关窗恢复，不由 Web 页面结果代替。
+
+同一语言场景只拒绝下一次真实展示 IndexedDB 写入，核具体原因和零重载，随后恢复原写入。脏文件取消经用户设置入口关闭 hotExit，再拒绝原 beforeunload，不能把 Application scope 设置写入工作区来假定生效；图片和 Markdown 均经原 Opener 与原预览控件验证双语。不新增生产测试 hook，不预写恢复状态。
 
 `bootstrap_localization.test.mjs` 使用实际 bootstrap、浏览器动态模块及当前完整词典，只有 main 求值观察器、具名资源503与Storage读取失败是显式替身。`locale_service.test.mjs` 经正式源码转换运行实际语言服务及宿主方法，在对话框、Storage写入与展示提交依赖注入取消／失败，核原错传播及零shutdown；两者不替代真实Gateway页面、原生Electron或完整发行验收。

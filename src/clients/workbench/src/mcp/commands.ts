@@ -7,7 +7,7 @@ import { WorkspaceMcpService } from './service.js';
 import { WorkspaceMcpServer } from './server.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { managementGateway } from '../managementTarget.js';
+import { managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { addMcpConfiguration } from './addConfiguration.js';
@@ -52,7 +52,7 @@ export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, c
       controller.signal.throwIfAborted();
     };
     try {
-      await addMcpConfiguration(selected, selected.name, quickInput, notifications, assertAccess, controller.signal, configUri);
+      await addMcpConfiguration(selected, managementTargetDisplayName(selected), quickInput, notifications, assertAccess, controller.signal, configUri);
     } finally { releaseUser(); releaseContext(); controller.abort(); }
   } catch (cause) { notifications.error(mcpConfigurationErrorMessage(cause)); }
 }

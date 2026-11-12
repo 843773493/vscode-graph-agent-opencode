@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -21,11 +22,24 @@ from tests.support.processes.gateway import close_gateway_process, start_gateway
 from tests.support.workspaces import prepare_test_workspace
 
 
+@pytest.fixture
+def latency_assets(request: pytest.FixtureRequest) -> Path:
+    prepared = os.getenv('BOXTEAM_LOCALIZATION_WEB_ASSETS')
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue('web_workbench_assets')
+    assert (assets / 'out/main.js').is_file() and (assets / 'version.json').is_file(), assets
+    return assets
+
+
+@pytest.fixture(scope='module', params=['zh-cn', 'en'])
+def display_locale(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 @pytest.fixture(scope="module")
-def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
+def e2e_workspace_root_path(request: pytest.FixtureRequest, display_locale: str) -> str:
     scope = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = prepare_test_workspace(
-        workspace_root=scope.output_root / "workspace",
+        workspace_root=scope.output_root / 'workspace' / display_locale,
         template_root=scope.project_root / "tests/fixtures/workspaces/default_test_workspace",
         template_items=(".boxteam/workspace-identity.json",),
     )
@@ -58,7 +72,8 @@ async def test_navigation_session_and_file_have_total_latency_budgets(
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
     latency_gateway_port: int,
-    web_workbench_assets: Path,
+    latency_assets: Path,
+    display_locale: str,
 ) -> None:
     """无模型、无响应替身；真实正文可用才停表，不测占位加载框。"""
     assert Path(e2e_workspace_config_path).is_file()
@@ -78,6 +93,9 @@ async def test_navigation_session_and_file_have_total_latency_budgets(
     (scope.artifacts_dir / "source.json").write_text(json.dumps({
         "head": head.strip(),
         "sha256": {path: hashlib.sha256((scope.project_root / path).read_bytes()).hexdigest() for path in source_files},
+        'assets': str(latency_assets),
+        'version': json.loads((latency_assets / 'version.json').read_text(encoding='utf-8')),
+        'main_sha256': hashlib.sha256((latency_assets / 'out/main.js').read_bytes()).hexdigest(),
     }, indent=2) + "\n", encoding="utf-8")
     gateway = await asyncio.to_thread(
         start_gateway_process,
@@ -85,18 +103,21 @@ async def test_navigation_session_and_file_have_total_latency_budgets(
         port=latency_gateway_port,
         boxteam_home=scope.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=scope.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
+        extra_env={"BOXTEAM_WEB_ASSETS": str(latency_assets)},
     )
-    command = ["node", "tests/e2e/clients/web/interactive_latency.mjs"]
+    command = [sys.executable, str(scope.project_root / 'app/runtime' / ('windows_job.py' if sys.platform == 'win32' else 'posix_job.py')),
+        '--memory-limit-kb', '4194304', '--timeout-seconds', '120', '--',
+        "node", "tests/e2e/clients/web/interactive_latency.mjs"]
     try:
         with chromium_temporary_environment(scope.runtime_root_for_node(request.node.nodeid) / "chromium") as temporary:
             process = await asyncio.to_thread(
                 subprocess.run, command, cwd=scope.project_root,
                 env={**os.environ, **temporary,
+                     'BOXTEAM_TEST_DISPLAY_LOCALE': display_locale,
                      "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
-                capture_output=True, text=True, timeout=120, check=False,
+                capture_output=True, text=True, timeout=135, check=False,
             )
         (scope.artifacts_dir / "browser.stdout.raw").write_text(process.stdout, encoding="utf-8")
         (scope.artifacts_dir / "browser.stderr.raw").write_text(process.stderr, encoding="utf-8")
@@ -111,5 +132,6 @@ async def test_navigation_session_and_file_have_total_latency_budgets(
         assert len(result["navigationMs"]) == 20
         assert len(result["sessionOpenMs"]) == 6
         assert len(result["fileOpenMs"]) == 6
+        assert result['locale'] == display_locale and result['externalTranslationRequests'] == []
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

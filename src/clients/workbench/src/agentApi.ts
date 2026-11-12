@@ -3,6 +3,7 @@ import type { Session, SessionMainThread } from '../../web/src/types/protocol.js
 import type { APIResponse, GatewayWorkspaceList, GatewayWorkspace } from '../../web/src/types/backend.js';
 import { requestJson, unwrapApiDataOrNull, workspaceHeader } from '../../web/src/api/http.js';
 import { requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { t } from '../../shared/core/i18n/index.js';
 export { HttpRequestError as GatewayRequestError } from '../../web/src/api/http.js';
 
 export type WorkspaceTarget = GatewayWorkspace;
@@ -43,7 +44,7 @@ class GatewayClient {
 
   async assertWorkspace(owner: Pick<ThreadOwner, 'workspaceKey' | 'workspaceId'>): Promise<void> {
     const workspace = await this.request<{ workspace_id: string }>('/api/v1/workspace', {}, owner.workspaceKey);
-    if (workspace.workspace_id !== owner.workspaceId) throw new Error('Gateway 路由对应的工作区已改变，停止操作');
+    if (workspace.workspace_id !== owner.workspaceId) throw new Error(t('workbench.panel.ownerChanged'));
   }
 
   async sessions(workspaceKey: string): Promise<Session[]> {
@@ -59,7 +60,7 @@ class GatewayClient {
 
   async mainThread(workspaceKey: string, sessionId: string): Promise<SessionMainThread> {
     const result = await this.request<SessionMainThread>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/main-thread`, {}, workspaceKey);
-    if (result.session_id !== sessionId || !result.thread_id) throw new Error('会话主 Thread 响应 owner 不匹配');
+    if (result.session_id !== sessionId || !result.thread_id) throw new Error(t('workbench.session.mainThreadOwnerMismatch'));
     return result;
   }
 

@@ -18,6 +18,7 @@ export function transformSettingsEditor(root, path, contents, replaceOnce) {
   const editor = JSON.stringify(resolve(root, 'src/settings/editor.js'));
   const scope = JSON.stringify(resolve(root, 'src/settings/scope.js'));
   if (path === paths[0]) {
+    const i18n = JSON.stringify(resolve(root, '../shared/core/i18n/index.js'));
     contents = `import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
 import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
@@ -25,6 +26,7 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { parseSettingsLocation, prepareSettingsPane, settingsEditorIdentity, type SourceSettings } from ${editor};
 import { ITargetSettingsContext, type TargetSettingsLocation } from ${scope};
 import type { SourceDocument } from ${JSON.stringify(resolve(root, 'src/settings/sourceOwner.js'))};
+import { t } from ${i18n};
 ` + contents;
     contents = section(contents, 'export class SettingsEditor2Input extends EditorInput {', 'const PreferencesEditorIcon =', `export class SettingsEditor2Input extends EditorInput {
   static readonly ID: string = 'workbench.input.settings2';
@@ -68,7 +70,7 @@ import type { SourceDocument } from ${JSON.stringify(resolve(root, 'src/settings
     return super.matches(other) || other instanceof SettingsEditor2Input && isEqual(this.resource, other.resource);
   }
   override get typeId(): string { return SettingsEditor2Input.ID; }
-  override getName(): string { return this.location ? '设置 · ' + this.location.name : nls.localize('settingsEditor2InputName', 'Settings'); }
+  override getName(): string { return this.location ? t('workbench.settings.editorName', this.location.name) : nls.localize('settingsEditor2InputName', 'Settings'); }
   override getDescription(): string | undefined { return this.location ? this.location.gateway_id + ' · ' + (this.location.workspace_id ?? 'Gateway') + ' · ' + this.location.source_key : undefined; }
   override getIcon(): ThemeIcon { return SettingsEditorIcon; }
   override async resolve(services?: IInstantiationService): Promise<Settings2EditorModel> {

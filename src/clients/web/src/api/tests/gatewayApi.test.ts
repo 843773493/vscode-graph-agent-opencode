@@ -14,6 +14,9 @@ import {
 import { createSessionConnection } from "../gateway/sessionConnections";
 import { requestJson } from "../../api";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from "../http";
+import { setLocaleResources } from "../../../../shared/core/i18n/index.js";
+import english from "../../../../shared/core/i18n/messages/en.json";
+import chinese from "../../../../shared/core/i18n/messages/zh-cn.json";
 
 const WORKSPACE_UUID = "00000000-0000-4000-8000-000000000001";
 const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: WORKSPACE_UUID });
@@ -23,6 +26,7 @@ const DIRECTORY_URI = "boxteam://gateway/gateway_0000000000007000800000000000000
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setLocaleResources("zh-cn", chinese);
 });
 describe("Gateway API 超时常量收敛", () => {
   /** 捕获 createRequestAbortState 注册的超时毫秒数，不改动真实计时。 */
@@ -372,10 +376,11 @@ describe("Gateway UI 资源列表载荷校验", () => {
 
 describe("Gateway 背景图上传的前置校验", () => {
   /** 安装只记录请求次数的 fetch 桩：任何业务请求都算作「已经发出去」。 */
-  function stubCountingFetch(): { businessRequests: () => number } {
-    let business = 0;
+  function stubCountingFetch(): { requests: () => number; businessRequests: () => number } {
+    let requests = 0, business = 0;
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
+        requests += 1;
         const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "ui-asset-token" } });
@@ -396,18 +401,24 @@ describe("Gateway 背景图上传的前置校验", () => {
       },
       { preconnect: originalFetch.preconnect },
     );
-    return { businessRequests: () => business };
+    return { requests: () => requests, businessRequests: () => business };
   }
 
-  test("空文件在发请求前以中文错误失败", async () => {
+  test("空文件在发请求前返回所选语言的错误", async () => {
     const fetchStub = stubCountingFetch();
     const empty = new File([], "bg.png", { type: "image/png" });
 
-    await expect(uploadGatewayUiAsset(49_950, empty)).rejects.toThrow("背景图片内容为空");
-    expect(fetchStub.businessRequests()).toBe(0);
+    for (const [locale, messages, expected] of [
+      ["zh-cn", chinese, "背景图片内容为空"],
+      ["en", english, "The background image is empty"],
+    ] as const) {
+      setLocaleResources(locale, messages);
+      await expect(uploadGatewayUiAsset(49_950, empty)).rejects.toThrow(expected);
+    }
+    expect(fetchStub.requests()).toBe(0);
   });
 
-  test("超过 20 MiB 的图片在发请求前失败并报出实际上限", async () => {
+  test("超过 20 MiB 的图片返回所选语言的上限提示且不发请求", async () => {
     const fetchStub = stubCountingFetch();
     const oversized = new File(
       [new Uint8Array(21 * 1024 * 1024)],
@@ -415,14 +426,19 @@ describe("Gateway 背景图上传的前置校验", () => {
       { type: "image/png" },
     );
 
-    await expect(uploadGatewayUiAsset(49_951, oversized)).rejects.toThrow(
-      "背景图片 21.0 MiB 超过 20 MiB 限制",
-    );
-    expect(fetchStub.businessRequests()).toBe(0);
+    for (const [locale, messages, expected] of [
+      ["zh-cn", chinese, "背景图片为 21.0 MiB，超过 20 MiB 限制"],
+      ["en", english, "The background image is 21.0 MiB, exceeding the 20 MiB limit"],
+    ] as const) {
+      setLocaleResources(locale, messages);
+      await expect(uploadGatewayUiAsset(49_951, oversized)).rejects.toThrow(expected);
+    }
+    expect(fetchStub.requests()).toBe(0);
   });
 
   test("恰好 20 MiB 的图片仍然放行并发出请求", async () => {
     const fetchStub = stubCountingFetch();
+    setLocaleResources("zh-cn", chinese);
     const exact = new File(
       [new Uint8Array(20 * 1024 * 1024)],
       "bg.png",

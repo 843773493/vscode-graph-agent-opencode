@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
-import { t } from "../../../../../shared/core/i18n/index.js";
+import { formatNumber, t } from "../../../../../shared/core/i18n/index.js";
 import {
   deleteGatewayUiAsset,
   listGatewayUiAssets,
@@ -179,7 +179,7 @@ export default function GatewayThemeSettings({
           {assets === null ? (error ? null : <p>{t("gateway.theme.loadingAssets")}</p>) : assets.length === 0 ? <p>{t("gateway.theme.noLocalAssets")}</p> : assets.map((asset) => (
             <article key={asset.asset_id}>
               <img src={asset.url} alt="" />
-              <div><strong>{asset.original_filename}</strong><small>{(asset.size / 1024).toFixed(1)} KiB{background.image === new URL(asset.url, window.location.href).href ? ` · ${t("gateway.theme.inUse")}` : ""}</small></div>
+              <div><strong>{asset.original_filename}</strong><small>{formatNumber(asset.size / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} KiB{background.image === new URL(asset.url, window.location.href).href ? ` · ${t("gateway.theme.inUse")}` : ""}</small></div>
               <button type="button" disabled={busy} onClick={() => void useAsset(asset)}>{t("gateway.theme.use")}</button>
               <button type="button" disabled={busy || background.image === new URL(asset.url, window.location.href).href} onClick={() => void removeAsset(asset.asset_id)}>{t("gateway.theme.delete")}</button>
             </article>

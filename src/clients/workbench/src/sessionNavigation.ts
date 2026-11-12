@@ -19,6 +19,7 @@ import type { GatewayDiagnosticLogLocateRequest } from '../../web/src/types/prot
 import type { WorkspaceAction } from './search/workspaceActions.js';
 import type { SessionAction } from './search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../web/src/hooks/shell/useSessionForkDialog.js';
+import { t } from '../../shared/core/i18n/index.js';
 
 /** 原版视图只管理布局；完整导航及菜单复用既有 React 产品。 */
 export class SessionNavigation extends ViewPane {
@@ -45,19 +46,19 @@ export class SessionNavigation extends ViewPane {
   }
   override focus(): void { this.surface?.focus(); }
   runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void): Promise<void> {
-    if (!this.surface) throw new Error('工作区导航尚未挂载');
+    if (!this.surface) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
     return this.surface.runWorkspaceAction(action, workspaceKey, assertAccess);
   }
   revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void {
-    if (!this.surface) throw new Error('Gateway 诊断视图尚未挂载');
+    if (!this.surface) throw new Error(t('quickAccess.gatewayDiagnosticsUnavailable'));
     this.surface.revealDiagnosticLog(request);
   }
   runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
-    if (!this.surface) throw new Error('会话导航尚未挂载');
+    if (!this.surface) throw new Error(t('workbench.sessionAction.navigationUnavailable'));
     return this.surface.runSessionAction(action, sessionId, title, workspaceKey, assertAccess, source);
   }
   revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
-    if (!this.surface) throw new Error('会话导航尚未挂载');
+    if (!this.surface) throw new Error(t('quickAccess.sessionNavigationUnavailable'));
     return this.surface.revealFolder(target, nodeId, focus);
   }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }

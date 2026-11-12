@@ -5,7 +5,13 @@
 `i18n/vscode-language-pack-zh-hans/translations/main.i18n.json`，固定提交：
 `62d5443b567022539ba6e8565b0f43f5f6b3682b`（2026-10-19）。该文件按模块 ID 和
 NLS key 匹配；上游版本与本项目固定的 Code OSS 1.145.0 不同，未匹配条目会作为缺译报告，
-不会据版本号假定已完整覆盖。许可见本目录 `LICENSE.txt`。
+不会据版本号假定已完整覆盖。原件 SHA-256 为
+`fddc7f462766e4dc2ca13e06ff8c7200a9ee1d224f0584750a9d877a89b0c303`。
+许可见本目录 `LICENSE.txt`。
+
+`zh-cn-project.json` 是本项目对固定 Code OSS 核心交付界面的补译，按模块 ID 和 NLS key
+登记，英文原文仍取该固定源码。构建合并为同一份语言资源并检查有效调用和占位符；
+它不修改上述上游原件，也不增加运行期翻译服务。
 
 此中文（简体）语言包为 VS Code 提供本地化界面。
 

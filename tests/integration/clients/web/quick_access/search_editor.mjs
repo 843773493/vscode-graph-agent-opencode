@@ -15,9 +15,22 @@ export async function verifySearchEditors({ page, command, result, fileUri, owne
 
   result.phase = 'search-editor-from-transferred-view';
   const beforeTransfer = result.searches.length;
-  await command('search.action.openInEditor');
   const editors = page.locator('.search-editor');
-  await expect(editors).toHaveCount(1);
+  const transfer = result.editorTransfer = { consoleErrors: [], actionResolved: false };
+  const observeTransferError = message => {
+    if (message.type() === 'error') transfer.consoleErrors.push(message.text());
+  };
+  page.on('console', observeTransferError);
+  try {
+    transfer.visibleSearchView = await page.locator('.search-view').isVisible();
+    transfer.activeViewResults = await page.evaluate(async () => {
+      const value = await globalThis.workbench.commands.executeCommand('search.action.getSearchResults');
+      return { available: value !== undefined, value: value ?? null };
+    });
+    await command('search.action.openInEditor');
+    transfer.actionResolved = true;
+    await expect(editors).toHaveCount(1);
+  } finally { page.off('console', observeTransferError); }
   const a = editors.first();
   await expect(a.locator('.boxteam-search-scope')).toContainText('home');
   await expect(lines(a)).toContainText('dirtyword');

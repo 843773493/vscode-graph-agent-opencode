@@ -1,0 +1,251 @@
+{
+  "contents": {
+    "vs/platform/files/browser/indexedDBFileSystemProvider": {
+      "fileNotExists": "文件不存在",
+      "fileIsDirectory": "文件是目录",
+      "fileNotDirectory": "文件不是目录",
+      "dirIsNotEmpty": "目录不为空",
+      "fileExceedsStorageQuota": "文件超过可用存储配额",
+      "internal": "IndexedDB 文件系统提供程序发生内部错误。({0})"
+    },
+    "vs/workbench/services/search/browser/searchService": {
+      "errorSearchText": "无法使用 Web Worker 搜索文本",
+      "errorSearchFile": "无法使用 Web Worker 搜索文件"
+    },
+    "vs/workbench/contrib/preferences/browser/keyboardLayoutPicker": {
+      "status.workbench.keyboardLayout": "键盘布局",
+      "keyboardLayout": "布局：{0}",
+      "displayLanguage": "定义浏览器环境中 VS Code 使用的键盘布局。",
+      "doc": "打开 VS Code，在命令面板中运行“开发人员: 检查按键映射(JSON)”。",
+      "keyboard.chooseLayout": "更改键盘布局",
+      "layoutPicks": "键盘布局 ({0})",
+      "configureKeyboardLayout": "配置键盘布局",
+      "autoDetect": "自动检测",
+      "pickKeyboardLayout": "选择键盘布局",
+      "fail.createSettings": "无法创建“{0}”({1})。"
+    },
+    "vs/workbench/browser/parts/editor/editor.contribution": {
+      "diffView": "差异视图",
+      "diffView.inline": "内联",
+      "diffView.sideBySide": "并排",
+      "diffView.automaticSideBySide": "自动（当前为并排）",
+      "diffView.automaticInline": "自动（当前为内联）",
+      "diffView.inlineTemporary": "内联（临时）"
+    },
+    "vs/workbench/contrib/mediaPreview/browser/mediaPreview.contribution": {
+      "mediaPreviewConfigurationTitle": "媒体预览",
+      "mediaPreview.video.autoPlay": "自动以静音方式播放视频。",
+      "mediaPreview.video.loop": "自动循环播放视频。",
+      "imagePreviewEditor": "图片预览",
+      "imagePreview.displayName": "图片预览",
+      "videoPreview.displayName": "视频预览",
+      "audioPreview.displayName": "音频预览"
+    },
+    "vs/workbench/contrib/search/browser/search.common.contribution": {
+      "exclude": "配置在全文搜索和快速打开的文件搜索中排除文件和文件夹的 [glob 模式](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options)。若要从快速打开的最近打开列表中排除文件，模式必须是绝对模式（例如 `**/node_modules/**`）。继承 `#files.exclude#` 设置中的所有 glob 模式。",
+      "exclude.boolean": "用于匹配文件路径的 glob 模式。设置为 true 或 false 以启用或禁用该模式。",
+      "exclude.when": "对匹配文件的同级文件进行额外检查。使用 \\$(basename) 表示匹配的文件名。",
+      "useIgnoreFiles": "控制搜索文件时是否使用 `.gitignore` 和 `.ignore` 文件。",
+      "useGlobalIgnoreFiles": "控制搜索文件时是否使用全局 gitignore 文件（例如 `$HOME/.config/git/ignore`）。需要启用 {0}。",
+      "useParentIgnoreFiles": "控制搜索文件时是否使用父目录中的 `.gitignore` 和 `.ignore` 文件。需要启用 {0}。",
+      "search.ripgrep.maxThreads": "搜索使用的线程数。设置为 0 时由引擎自动决定。",
+      "search.followSymlinks": "控制搜索时是否跟随符号链接。",
+      "search.smartCase": "搜索模式全部为小写时忽略大小写，否则区分大小写。",
+      "search.maxResults": "控制搜索结果的最大数量。可设为 `null`（空）以返回不限数量的结果。",
+      "searchSortOrder.default": "按文件夹和文件名的字母顺序排列结果。",
+      "searchSortOrder.filesOnly": "按文件名的字母顺序排列结果，忽略文件夹顺序。",
+      "searchSortOrder.type": "按文件扩展名的字母顺序排列结果。",
+      "searchSortOrder.modified": "按文件最后修改时间降序排列结果。",
+      "searchSortOrder.countDescending": "按每个文件中的结果数量降序排列结果。",
+      "searchSortOrder.countAscending": "按每个文件中的结果数量升序排列结果。",
+      "search.sortOrder": "控制搜索结果的排序顺序。"
+    },
+    "vs/workbench/contrib/mediaPreview/browser/mediaPreviewStatusBar": {
+      "imagePreview.zoomFit": "完整图片",
+      "imagePreview.zoomPercent": "{0}%",
+      "imagePreview.zoomStatus": "图片缩放",
+      "imagePreview.zoomStatusAriaLabel": "图片缩放：{0}",
+      "imagePreview.selectZoomLevel": "选择缩放级别",
+      "imagePreview.dimensionsStatus": "图片尺寸",
+      "imagePreview.dimensionsStatusAriaLabel": "图片尺寸：{0}",
+      "mediaPreview.fileSizeStatus": "媒体文件大小",
+      "mediaPreview.fileSizeStatusAriaLabel": "文件大小：{0}"
+    },
+    "vs/workbench/contrib/mediaPreview/browser/mediaPlayerEditorInput": {
+      "audioPreview.gitLfs": "音频文件存储在 Git LFS 中，无法预览。",
+      "audioPreview.loadError": "加载音频文件时出错。",
+      "videoPreview.gitLfs": "视频文件存储在 Git LFS 中，无法预览。",
+      "videoPreview.loadError": "加载视频文件时出错。",
+      "mediaPreview.openInTextEditor": "在文本编辑器中打开"
+    },
+    "vs/workbench/contrib/mediaPreview/browser/mediaPreviewActions": {
+      "imagePreview": "图片预览",
+      "imagePreview.zoomIn": "放大",
+      "imagePreview.zoomOut": "缩小",
+      "imagePreview.selectZoomLevel": "选择缩放级别",
+      "imagePreview.selectZoomLevelPlaceholder": "选择缩放级别",
+      "imagePreview.copyImage": "复制",
+      "imagePreview.reopenAsText": "重新打开为源文本",
+      "imagePreview.reopenAsPreview": "重新打开为图片预览"
+    },
+    "vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor": {
+      "mediaPreview.openInTextEditor": "在文本编辑器中打开",
+      "imagePreview.ariaLabel": "图片预览：{0}",
+      "imagePreview.gitLfs": "图片存储在 Git LFS 中，无法预览。",
+      "imagePreview.readFailed": "无法读取图片：{0}",
+      "imagePreview.loadError": "加载图片时出错。"
+    },
+    "vs/workbench/contrib/mediaPreview/browser/activeMediaPreview": {
+      "activeImagePreview": "活动编辑器或活动差异编辑器中具有焦点的一侧是否为图片预览"
+    },
+    "vs/workbench/browser/parts/editor/editorAddTabControl": {
+      "addTab": "添加标签页",
+      "ariaLabelAddTab": "添加标签页"
+    },
+    "vs/workbench/contrib/search/browser/anythingQuickAccess": {
+      "invalidQuickOpenLink": "无效链接",
+      "invalidQuickOpenLinkDescription": "输入有效链接以从快速打开中打开。",
+      "quickOpenLinkNotOpened": "无法打开链接。可能不支持此链接，或打开操作已取消。",
+      "openLinkToSide": "在侧边打开 ({0})",
+      "openLinkToBottom": "在下方打开 ({0})",
+      "openQuickOpenLink": "打开链接",
+      "openQuickOpenLinkWith": "打开链接",
+      "openQuickOpenLinkDefault": "默认"
+    },
+    "vs/workbench/contrib/preferences/browser/settingsSearchMenu": {
+      "expAssignmentSettingsSearch": "ExP 分配",
+      "expAssignmentSettingsSearchTooltip": "显示已分配 ExP 实验处理的设置"
+    },
+    "vs/workbench/contrib/preferences/browser/settingsTreeModels": {
+      "agentSandbox.allowNetwork.label": "允许出站连接",
+      "agentSandbox.allowUnsandboxedCommands.label": "允许绕过沙盒",
+      "agentSandbox.mcpServers.label": "沙盒 MCP 服务器",
+      "agentSandbox.lspServers.label": "沙盒 LSP 服务器",
+      "agentSandbox.authenticateGit.label": "验证 git 身份",
+      "agentSandbox.authenticateGh.label": "验证 gh 身份",
+      "agentSandbox.userConfiguredPaths.label": "用户配置的路径"
+    },
+    "vs/workbench/contrib/preferences/browser/settingsTree": {
+      "setting.deprecationMessageSeverity.info": "信息",
+      "setting.deprecationMessageSeverity.warning": "警告"
+    },
+    "vs/workbench/browser/parts/editor/editorGroupWatermark": {
+      "watermark.chatIcon": "编辑器水印中用于打开聊天的图标。",
+      "watermark.commandsIcon": "编辑器水印中用于显示所有命令的图标。",
+      "watermark.quickOpenIcon": "编辑器水印中用于转到文件的图标。",
+      "watermark.openFileIcon": "编辑器水印中用于打开文件的图标。",
+      "watermark.openFolderIcon": "编辑器水印中用于打开文件夹的图标。",
+      "watermark.openFileFolderIcon": "编辑器水印中用于打开文件或文件夹的图标。",
+      "watermark.openRecentIcon": "编辑器水印中用于打开最近工作区的图标。",
+      "watermark.newFileIcon": "编辑器水印中用于创建文件的图标。",
+      "watermark.findInFilesIcon": "编辑器水印中用于在文件中查找的图标。",
+      "watermark.terminalIcon": "编辑器水印中用于切换终端的图标。",
+      "watermark.debugIcon": "编辑器水印中用于开始调试的图标。",
+      "watermark.settingsIcon": "编辑器水印中用于打开设置的图标。",
+      "watermark.shortcuts": "编辑器快捷键",
+      "watermark.shortcutAriaLabel": "{0} ({1})"
+    },
+    "vs/workbench/browser/parts/editor/editorTypePicker": {
+      "editorType.openToSide": "{0}（在侧边打开）"
+    },
+    "vs/workbench/browser/parts/editor/breadcrumbs": {
+      "showInUntitledFiles": "控制是否在无标题文件中显示痕迹导航。"
+    },
+    "vs/workbench/services/localization/browser/localeService": {
+      "relaunchDisplayLanguageMessage": "若要更改显示语言，{0} 需要重新加载",
+      "relaunchDisplayLanguageDetail": "按“重新加载”按钮刷新页面，并将显示语言设为 {0}。",
+      "reload": "重新加载(&&R)",
+      "clearDisplayLanguageMessage": "若要更改显示语言，{0} 需要重新加载",
+      "clearDisplayLanguageDetail": "按“重新加载”按钮以使用简体中文。"
+    },
+    "vs/workbench/services/dialogs/browser/fileDialogService": {
+      "pickFolderAndOpen": "无法打开文件夹，请尝试将文件夹添加到工作区。",
+      "pickWorkspaceAndOpen": "无法打开工作区，请尝试将文件夹添加到工作区。",
+      "openRemote": "打开远程(&&O)...",
+      "learnMore": "了解详细信息(&&L)",
+      "openFiles": "打开文件(&&F)...",
+      "unsupportedBrowserMessage": "不支持打开本地文件夹",
+      "unsupportedBrowserDetail": "你的浏览器不支持打开本地文件夹。\n可以打开单个文件或远程存储库。"
+    },
+    "vs/workbench/browser/workbench.contribution": {
+      "modernUIFrostedGlass": "为菜单、命令面板及其他弹出窗口添加柔和的模糊背景。可用于 Agent 窗口以及启用了 {0} 的编辑器窗口。始终遵循操作系统辅助功能中的降低透明度设置及 {1}。高对比度主题或不支持此效果时使用纯色背景。如遇显示或性能问题，可关闭此选项。操作系统自身的菜单和对话框保持原样。",
+      "modernUIFrostedGlassOpacity": "控制毛玻璃背景的透明程度，范围为 50% 到 100%。数值越低，越能看见后方模糊的内容；数值越高，背景越不透明。文字和控件保持原样。需要启用 {0}，且不会覆盖操作系统或 VS Code 中的降低透明度设置。",
+      "modernUIEditorTabStyle.connected": "通过外边框和弧形边缘将活动标签页与编辑器区域连接。",
+      "modernUIEditorTabStyle.pill": "将编辑器标签页显示为独立的圆角胶囊。",
+      "modernUIEditorTabStyle": "控制启用 {0} 时编辑器标签页的样式，以及 Agent 窗口中聊天和侧边面板标签页的样式。高对比度主题保留明确的选中和焦点边框。"
+    },
+    "vs/workbench/browser/actions/layoutActions": {
+      "layoutDensityDefaultIcon": "表示默认布局密度",
+      "layoutDensityCompactIcon": "表示紧凑布局密度",
+      "layoutDensityDefault": "默认",
+      "layoutDensityCompact": "紧凑",
+      "layoutDensity": "布局密度"
+    },
+    "vs/editor/common/config/editorConfigurationSchema": {
+      "hideOriginalLineNumbers": "控制是否在内联差异中隐藏原始行号。设为 null 时使用编辑器默认值：紧凑多差异编辑器中隐藏，其他差异编辑器中显示。",
+      "diffEditor.experimental.verifyDiffSampleRate": "检查计算出的差异是否正确并通过遥测报告结果的概率，取值为 0 到 1。"
+    },
+    "vs/editor/browser/widget/codeEditor/codeEditorWidget": {
+      "cursors.maximumLinked": "光标数量已限制为 {0}。进行较大修改时，可考虑使用{1}或提高编辑器的多光标数量上限。",
+      "cursors.findAndReplaceLink": "查找和替换"
+    },
+    "vs/editor/common/editorContextKeys": {
+      "diffEditorTemporaryInlineMode": "手动调整差异编辑器大小后，是否临时启用了内联模式",
+      "diffEditorAutomaticRenderSideBySide": "差异编辑器的自动布局是否会采用并排显示"
+    },
+    "vs/workbench/services/dialogs/browser/simpleFileDialog": {
+      "remoteFileDialog.multiSelectPlaceholder": "文件夹路径（按空格键选择项目）"
+    },
+    "vs/workbench/services/editor/browser/openWithEditorPicker": {
+      "promptOpenWith.updateDefaultDiffPlaceHolder": "为“{0}”选择新的默认编辑器（仅差异）",
+      "promptOpenWith.updateDefaultPlaceHolder": "为“{0}”选择新的默认编辑器",
+      "promptOpenWith.placeHolder": "选择用于“{0}”的编辑器",
+      "promptOpenWith.currentlyActive": "活动",
+      "promptOpenWith.currentDefault": "默认",
+      "promptOpenWith.currentDefaultAndActive": "活动且默认",
+      "promptOpenWith.configureDefault": "配置“{0}”的默认编辑器...",
+      "promptOpenWith.configureDefaultDiff": "配置“{0}”的默认编辑器（仅差异）..."
+    },
+    "vs/editor/common/config/editorOptions": {
+      "fullwidthCharacterWidth.font": "使用字体定义的宽度呈现全角字符。",
+      "fullwidthCharacterWidth.twoCells": "将全角字符居中呈现在恰好两个字符单元格中。仅适用于禁用字体连字的等宽字体。不适用于包含多个码点的全角字符或 GPU 呈现。此选项会影响行呈现性能。",
+      "fullwidthCharacterWidth": "控制呈现全角字符时使用的宽度。",
+      "occurrencesHighlightFromAllProviders": "控制是否合并所有匹配提供程序在单个文档中的突出显示。启用后，仅在没有其他提供程序匹配时使用基于单词的基本突出显示。",
+      "selectedTextMatchMode.findOptions": "使用查找控件的区分大小写和全字匹配设置。",
+      "selectedTextMatchMode.caseSensitive": "区分大小写匹配出现位置，不受查找控件影响。",
+      "selectedTextMatchMode.caseInsensitive": "忽略大小写匹配出现位置，不受查找控件影响。",
+      "selectedTextMatchMode": "控制选择下一个、上一个或所有出现位置以及突出显示选择匹配项时，如何匹配选中的文本。`caseSensitive` 和 `caseInsensitive` 不受查找控件影响，匹配子字符串。选择为空时始终执行区分大小写的全字搜索。",
+      "wordWrapIndicator": "控制是否在已换行行的换行列呈现指示符。仅在启用 `#editor.wordWrap#` 时生效。"
+    },
+    "vs/workbench/contrib/format/browser/formatActionsNone": {
+      "no.provider.available": "此工作台没有可用于“{0}”文件的格式化程序。"
+    },
+    "vs/workbench/browser/actions/layoutDensityActions": {
+      "layoutDensityDefault": "默认",
+      "layoutDensityCompact": "紧凑"
+    },
+    "vs/workbench/contrib/localHistory/browser/localHistoryCommands": {
+      "confirmDeleteMultipleMessage": "要删除 {0} 条本地历史记录吗？"
+    },
+    "vs/workbench/contrib/localization/common/localizationsActions": {
+      "currentDisplayLanguage": "当前",
+      "boxteamConfigureLocaleDescription": "选择简体中文或英语作为工作台显示语言。"
+    },
+    "vs/workbench/contrib/webview/browser/webviewElement": {
+      "fatalErrorMessageWithExtension": "加载“{0}”提供的 Webview 时出错：{1}"
+    },
+    "vs/editor/browser/widget/diffEditor/features/hideUnchangedRegionsFeature": {
+      "diff.hiddenLines.collapse": "折叠未更改的行",
+      "diff.hiddenLines.expand": "显示 {0} 个隐藏行",
+      "diff.hiddenLines.breadcrumb": "转到 {0}"
+    },
+    "vs/workbench/contrib/codeEditor/browser/diffEditorAccessibilityHelp": {
+      "msg6": "使用编辑器标题区域“更多操作”菜单中的“差异视图”，选择内联、并排或自动布局。",
+      "compactHiddenLines": "在紧凑差异视图中，使用 Tab 键聚焦隐藏行的展开控件，再按 Enter 或空格键展开或折叠未更改的行。痕迹导航是用于显示对应符号的独立按钮。"
+    },
+    "vs/editor/browser/widget/multiDiffEditor/diffEditorItemTemplate": {
+      "binaryFileChanged": "二进制文件已更改",
+      "openBinaryDiff": "打开差异"
+    }
+  }
+}

@@ -161,8 +161,8 @@ function removePluginUninstallFallback(path, source, replaceOnce) {
   return source.slice(0, fallback.getStart(file))
     + `if (source === AICustomizationSources.plugin) {
 			await dialogService.info(
-				localize('cannotDeletePluginItem', "Cannot Delete Plugin Item"),
-				localize('cannotDeletePluginItemDetail', "This item is provided by a plugin package and cannot be deleted individually.")
+				localize('workbench.chatCustomization.pluginItemDeleteBlocked', "Cannot Delete Plugin Item"),
+				localize('workbench.chatCustomization.pluginItemDeleteBlockedDetail', "This item is provided by a plugin package and cannot be deleted individually.")
 			);
 			return;
 		}`

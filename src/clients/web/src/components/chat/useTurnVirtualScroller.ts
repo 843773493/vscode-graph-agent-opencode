@@ -1,5 +1,6 @@
 import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import React from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
   advanceTranscriptVirtualIndex,
@@ -217,9 +218,7 @@ export function useTurnVirtualScroller({
       setShowJumpToLatest(true);
       if (scroller.scrollTop <= 2) {
         void loadOlderMessagesRef.current().catch((error: unknown) => {
-          onViewStateRestoreStatus?.(
-            `加载更早历史失败: ${errorMessage(error)}`,
-          );
+          onViewStateRestoreStatus?.(t("chat.history.loadOlderFailed", errorMessage(error)));
         });
       }
     };
@@ -418,18 +417,14 @@ export function useTurnVirtualScroller({
   const handleStartReached = React.useCallback(() => {
     if (!userRequestedOlderRef.current || anchorRef.current) return;
     void loadOlderMessages().catch((error: unknown) => {
-      onViewStateRestoreStatus?.(
-        `加载更早历史失败: ${errorMessage(error)}`,
-      );
+      onViewStateRestoreStatus?.(t("chat.history.loadOlderFailed", errorMessage(error)));
     });
   }, [anchorRef, loadOlderMessages, onViewStateRestoreStatus]);
 
   const handleEndReached = React.useCallback(() => {
     if (anchorRef.current) return;
     void loadNewerMessages().catch((error: unknown) => {
-      onViewStateRestoreStatus?.(
-        `加载更新历史失败: ${errorMessage(error)}`,
-      );
+      onViewStateRestoreStatus?.(t("chat.history.loadNewerFailed", errorMessage(error)));
     });
   }, [anchorRef, loadNewerMessages, onViewStateRestoreStatus]);
 

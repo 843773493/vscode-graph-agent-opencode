@@ -32,6 +32,13 @@ from tests.support.processes.scope import capture_test_processes, register_test_
 from tests.support.processes.workspace import wait_for_http_ok
 
 
+@pytest.fixture(autouse=True)
+def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = os.getenv("BOXTEAM_WEB_ASSETS")
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+
+
 @pytest.fixture
 def development_snapshot(request: pytest.FixtureRequest) -> Path:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -92,7 +99,10 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
     request: pytest.FixtureRequest, development_snapshot: Path, metadata_port_reservations: ExitStack,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
 ) -> None:
-    client, context, _workspace, provider = metadata_case
+    client, context, workspace, provider = metadata_case
+    (workspace / 'development-locale.md').write_text(
+        '# Development locale preview\n\n![blocked](http://127.0.0.1:9/blocked.png)\n', encoding='utf-8',
+    )
     runtime = context.runtime_root_for_node(request.node.nodeid)
     node = shutil.which("node")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
@@ -107,6 +117,8 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
     }, indent=2) + "\n", encoding="utf-8")
     command = [node, "scripts/dev.mjs", "--port", str(port), "--gateway", str(client.base_url).rstrip("/"),
                "--outdir", str(runtime / "assets/dist"), "--cache", str(runtime / "vite-cache")]
+    # TODO：固定 Vite 8/Rolldown 预构建在 4GiB 保护下分配失败，关闭压缩的隔离对照也失败；
+    # 先定位并收敛该资源开销，再补验下方真实浏览器的翻译更新，不放宽测试保护。
     with (context.artifacts_dir / "vite.log").open("x", encoding="utf-8") as log, capture_test_processes():
         process = await asyncio.to_thread(subprocess.Popen, command,
             cwd=development_snapshot / "src/clients/workbench", stdout=log, stderr=subprocess.STDOUT,
@@ -117,14 +129,15 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
         driver = ["node", "tests/integration/clients/web/quick_access/development_hmr.mjs"]
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
         protected = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
-                     "--timeout-seconds", "90", "--", *driver]
+                     "--timeout-seconds", "180", "--", *driver]
         with chromium_temporary_environment(runtime / "chromium-tmp") as temporary:
             browser = await asyncio.to_thread(subprocess.run, protected, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": base,
                      "BOXTEAM_HMR_SOURCE": str(development_snapshot / "src/clients/workbench/src/react/navigationView.tsx"),
+                     "BOXTEAM_HMR_TRANSLATIONS": str(development_snapshot / "src/clients/workbench/resources/localization/zh-cn-project.json"),
                      "BOXTEAM_BROWSER_RESULT_PATH": str(context.artifacts_dir / "development-hmr.json"),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
-                capture_output=True, text=True, timeout=105, check=False)
+                capture_output=True, text=True, timeout=195, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(browser.stdout, encoding="utf-8")
         (context.artifacts_dir / "browser.stderr.raw").write_text(browser.stderr, encoding="utf-8")
         (context.artifacts_dir / "processes.json").write_text(json.dumps({

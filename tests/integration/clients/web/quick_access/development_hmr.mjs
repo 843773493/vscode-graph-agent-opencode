@@ -1,4 +1,4 @@
-// Integration：完整源码副本、产品 Vite 入口和真实 Gateway；只改原导航的观测属性。
+// Integration：完整源码副本、产品 Vite 入口和真实 Gateway；只改副本的观测属性与翻译。
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ const required = name => {
 };
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_development_hmr.py');
 const result = { classification: 'Integration', phase: 'prepare', routeStubs: [],
-  boundary: '独占完整源码副本的原 React 导航观测属性；产品 Vite／Gateway；不代替发行或 Electron',
+  boundary: '独占完整源码副本的原 React 导航观测属性及 NLS 补译；产品 Vite／Gateway；不代替发行或 Electron',
   pageErrors: [], consoleErrors: [], failedResponses: [], websocket: [], initialization: [], changes: [], scripts: [] };
 let page, failure;
 try {
@@ -75,6 +75,42 @@ try {
   expect(scriptPaths.filter(path => path === '/out/main.js')).toHaveLength(0);
   expect(scriptPaths.filter(path => path === '/@vite/client')).toHaveLength(1);
   expect(scriptPaths.filter(path => path === '/src/bootstrap.ts')).toHaveLength(1);
+  result.phase = 'translation-update';
+  const command = id => page.evaluate(id => globalThis.workbench.commands.executeCommand(id), id);
+  const quick = page.locator('.quick-input-widget');
+  const owner = result.initialization.find(item => item.path === '/api/gateway/workspaces').data.active_workspace;
+  const previewUri = `boxteam://${owner.gateway_id}/workspace/${owner.workspace_id}/resources/files/root/development-locale.md`;
+  await page.evaluate(uri => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', uri), previewUri);
+  await quick.locator(`[data-quick-input-id="link:${previewUri}"]`).click();
+  await command('markdown.showPreview');
+  const preview = page.frameLocator('iframe.webview:visible').frameLocator('iframe#active-frame');
+  await expect(preview.locator('h1')).toHaveText('Development locale preview');
+  await expect(preview.locator('#code-csp-warning')).toHaveText('已禁用此文档中的部分内容');
+  await expect(preview.locator('#code-csp-warning')).toHaveAttribute('aria-label', '已禁用内容安全警告');
+  result.developmentPreviewLocalized = true;
+  await command('workbench.action.closeActiveEditor');
+  await command('workbench.action.configureLocale');
+  await expect(quick).toBeVisible();
+  const originalPlaceholder = await quick.locator('input').first().getAttribute('placeholder');
+  await page.keyboard.press('Escape');
+  const translations = required('BOXTEAM_HMR_TRANSLATIONS');
+  const translationBefore = await readFile(translations, 'utf8');
+  const messages = JSON.parse(translationBefore);
+  const updatedPlaceholder = '选择显示语言 · 开发更新验收';
+  expect(originalPlaceholder).not.toBe(updatedPlaceholder);
+  messages.contents['vs/workbench/contrib/localization/common/localizationsActions'].chooseLocale = updatedPlaceholder;
+  const translationAfter = JSON.stringify(messages, null, 2) + '\n';
+  result.changes.push({ source: translations, before: createHash('sha256').update(translationBefore).digest('hex'),
+    after: createHash('sha256').update(translationAfter).digest('hex') });
+  // 原配置依赖变化自动重建语言资产并重载页面；不清缓存、不手工刷新。
+  await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 120000 }), writeFile(translations, translationAfter)]);
+  await expect(page.locator('.native-session-navigation')).toHaveAttribute('data-hmr-acceptance', 'version-2', { timeout: 45000 });
+  await command('workbench.action.configureLocale');
+  await expect(quick.locator('input').first()).toHaveAttribute('placeholder', updatedPlaceholder);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  expect(await page.evaluate(() => localStorage.getItem('vscode.nls.locale'))).toBeNull();
+  result.translationUpdate = { originalPlaceholder, updatedPlaceholder };
+  await page.keyboard.press('Escape');
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';
 } catch (error) {

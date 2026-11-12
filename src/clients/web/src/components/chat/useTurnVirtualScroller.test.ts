@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { VirtuosoHandle } from "react-virtuoso";
+import { setLocaleResources } from "../../../../shared/core/i18n/index.js";
+import english from "../../../../shared/core/i18n/messages/en.json";
+import chinese from "../../../../shared/core/i18n/messages/zh-cn.json";
 import type { ConversationView } from "../../types/frontend";
 import type { ChatTranscriptItem } from "./transcriptItems";
 import type { TurnMessageLocationDTO, TurnToolResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
@@ -24,7 +27,10 @@ afterEach(() => {
   restoreGlobalDescriptor("window", windowDescriptor);
   restoreGlobalDescriptor("HTMLElement", elementDescriptor);
   restoreGlobalDescriptor("ResizeObserver", observerDescriptor);
+  setLocaleResources("zh-cn", chinese);
 });
+
+setLocaleResources("zh-cn", chinese);
 
 function turn(id: string, ordinal: number, pending = false): Extract<ChatTranscriptItem, { kind: "turn" }> {
   return { kind: "turn", key: id, conversation: {
@@ -41,7 +47,8 @@ function deferred() {
 }
 
 function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | void> = async () => {}, mountOnScroll = true,
-  messageTarget?: { dataset: { messageItemId?: string; toolResultItemId?: string }; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number } }) {
+  messageTarget?: { dataset: { messageItemId?: string; toolResultItemId?: string }; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number } },
+  historyLoaders: { hasOlderMessages?: boolean; hasNewerMessages?: boolean; loadOlderMessages?: () => Promise<void>; loadNewerMessages?: () => Promise<void> } = {}) {
   let items = initial;
   let scopeKey = "workspace/session/thread";
   let viewState: { turn_anchor: string | null; scroll_offset: number; follow_latest: boolean } | null = null;
@@ -102,8 +109,10 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   } });
   function Harness() {
     current = useTurnVirtualScroller({
-      items, scopeKey, onLoadAroundTurn: loader, onLoadNewerMessages: async () => {}, onLoadOlderMessages: async () => {},
-      hasNewerMessages: false, hasOlderMessages: false, loadingNewerMessages: false, loadingOlderMessages: false,
+      items, scopeKey, onLoadAroundTurn: loader, onLoadNewerMessages: historyLoaders.loadNewerMessages ?? (async () => {}),
+      onLoadOlderMessages: historyLoaders.loadOlderMessages ?? (async () => {}),
+      hasNewerMessages: historyLoaders.hasNewerMessages ?? false, hasOlderMessages: historyLoaders.hasOlderMessages ?? false,
+      loadingNewerMessages: false, loadingOlderMessages: false,
       historyLoading: false, viewState, onViewStateChange: (position) => positions.push(position),
       onViewStateRestoreStatus: (message) => statuses.push(message),
       onViewportReady,
@@ -224,6 +233,32 @@ describe("Turn 虚拟列表滚动跟随", () => {
 });
 
 describe("正式轮次定位与位置恢复", () => {
+  test("英语定位与历史加载失败保留原错误详情", async () => {
+    setLocaleResources("en", english);
+    const backendCause = new Error("history index checksum mismatch");
+    const harness = navigationHarness([turn("turn-1200", 1200)], async () => { throw backendCause; }, true, undefined, {
+      hasOlderMessages: true,
+      hasNewerMessages: true,
+      loadOlderMessages: async () => { throw backendCause; },
+      loadNewerMessages: async () => { throw backendCause; },
+    });
+
+    act(() => harness.state().navigateToTurn("turn-1200"));
+    harness.settle();
+    expect(harness.state().navigation?.message).toBe("Located turn 1,200");
+
+    await act(async () => harness.state().navigateToTurn("missing-turn"));
+    expect(harness.state().navigation?.message).toBe("Unable to jump to the specified turn: history index checksum mismatch");
+
+    harness.userScroll(0, "wheel");
+    await act(async () => { await Promise.resolve(); });
+    expect(harness.statuses.at(-1)).toBe("Failed to load earlier history: history index checksum mismatch");
+
+    act(() => harness.state().handleEndReached());
+    await act(async () => { await Promise.resolve(); });
+    expect(harness.statuses.at(-1)).toBe("Failed to load newer history: history index checksum mismatch");
+  });
+
   test("工具命中先揭示限高详情内部的位置，再对齐聊天视口", async () => {
     const reference = { category: "tool_result" as const, item_id: "result-a", content_hash: "v1", start_codepoint: 1, end_codepoint: 2 };
     const message: TurnMessageLocationDTO = { turn_id: "turn-2", role: "tool", content: "正文", reference };

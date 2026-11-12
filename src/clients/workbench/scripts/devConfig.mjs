@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react-swc';
 import { workbenchDependencies } from './devDependencies.mjs';
 import compression from 'compression';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -31,7 +31,8 @@ export default async function () {
   const version = await loadJSON(join(assetsRoot, 'version.json'));
   const product = await loadJSON(join(root, 'upstream/product.json'));
   const extensions = await loadJSON(join(assetsRoot, 'builtin-extensions.json'));
-  const transformSource = sourceTransform(root, { ...product, ...version, quality: 'stable' }, extensions);
+  const localizationAssets = await loadJSON(join(assetsRoot, 'localization-assets.json'));
+  const transformSource = sourceTransform(root, { ...product, ...version, quality: 'stable' }, extensions, new Map(), localizationAssets);
   const dependencies = await workbenchDependencies(root, transformSource);
   const assets = createWorkbenchServer({ root: assetsRoot });
   const { promise: ready, resolve: markReady, reject: markFailed } = Promise.withResolvers();
@@ -46,6 +47,16 @@ export default async function () {
         name: 'boxteam-workbench-source',
         enforce: 'pre',
         async configResolved(config) {
+          // 翻译输入和转换配置一样沿 Vite 原重启链生效，不能只更新 JSON 模块留下旧 NLS。
+          const localizationRoot = join(root, 'resources/localization');
+          config.configFileDependencies.push(...[
+            join(root, '../shared/core/i18n/messages/en.json'),
+            join(root, '../shared/core/i18n/messages/zh-cn.json'),
+            join(localizationRoot, 'zh-cn-upstream-main.json'),
+            join(localizationRoot, 'zh-cn-project.json'),
+            ...(await readdir(join(localizationRoot, 'extensions'))).filter(name => name.endsWith('.i18n.json'))
+              .map(name => join(localizationRoot, 'extensions', name)),
+          ].map(file => file.replaceAll('\\', '/')));
           // Vite 只把 optimizer 插件名计入缓存；转换实现和内置元数据变化必须使旧预构建失效。
           const hash = createHash('sha256').update(JSON.stringify({ version, product, extensions }));
           for (const file of [...config.configFileDependencies].sort()) hash.update(await readFile(file));

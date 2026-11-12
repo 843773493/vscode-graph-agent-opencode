@@ -7,6 +7,7 @@ export async function workbenchDependencies(root, transformSource) {
   const upstream = join(root, 'upstream/src');
   const application = join(root, 'src');
   const shared = resolve(root, '../web/src');
+  const sharedCore = resolve(root, '../shared/core');
   const dependencyId = path => '@boxteam/code-oss/' + relative(upstream, path).replaceAll('\\', '/');
   const isUpstream = path => path.startsWith(upstream + '/') || path.startsWith(upstream + '\\');
   const imports = (source, file) => ts.preProcessFile(source).importedFiles
@@ -39,7 +40,7 @@ export async function workbenchDependencies(root, transformSource) {
         if (!isUpstream(importer) || (!id.startsWith('.') && !isAbsolute(id))) return;
         const file = resolve(dirname(importer), id);
         // 上游反向引用的业务模块保留真实源码身份，不固化到依赖包。
-        if (file.startsWith(application) || file.startsWith(shared)) {
+        if (file.startsWith(application) || file.startsWith(shared) || file.startsWith(sharedCore)) {
           const resolved = await this.resolve(id, importer, { skipSelf: true });
           if (!resolved) this.error('业务源码无法解析：' + id);
           const target = resolved.id;

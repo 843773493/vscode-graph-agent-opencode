@@ -7,7 +7,7 @@ const result = await runLocalization({
   run: TestRunContext.fromTestFile('tests/integration/clients/electron/test_localization.py'),
   async launch(options) {
     let page;
-    const host = await launchElectron({ ...options, extraArgs: ['--lang=en-US'],
+    const host = await launchElectron({ ...options, extraArgs: ['--lang=en-US'], observeWillPreventUnload: true,
       usePage(next) { page = next; options.usePage(next); },
     });
     return { ...host, async leave() {

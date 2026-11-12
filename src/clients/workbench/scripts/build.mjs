@@ -58,6 +58,9 @@ const immutableAssets = new Set();
 const localizationDirectory = join(root, 'resources/localization/extensions');
 const translationPath = join(root, 'resources/localization/zh-cn-upstream-main.json');
 const translationSource = await readFile(translationPath);
+const projectTranslationPath = join(root, 'resources/localization/zh-cn-project.json');
+const projectTranslationSource = await readFile(projectTranslationPath);
+const projectTranslations = parseUniqueJson(projectTranslationPath, projectTranslationSource.toString('utf8')).contents;
 const availableLocalizationAssets = {};
 const availableExtensionLocalizationHashes = {};
 const localizationSources = new Map();
@@ -72,7 +75,7 @@ for (const name of localizationFiles) {
   availableExtensionLocalizationHashes[id] = createHash('sha256').update(source).digest('hex');
   localizationSources.set(id, source);
 }
-const nlsBuildHash = createHash('sha256').update(commit).update(englishCatalog).update(chineseCatalog).update(translationSource);
+const nlsBuildHash = createHash('sha256').update(commit).update(englishCatalog).update(chineseCatalog).update(translationSource).update(projectTranslationSource);
 for (const [id, source] of [...localizationSources].sort(([left], [right]) => left.localeCompare(right))) nlsBuildHash.update(id).update(source);
 async function hashScripts(directory = join(root, 'scripts')) {
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
@@ -106,6 +109,13 @@ for (const id of extensionIds) {
 await writeFile(join(dist, 'localization-assets.json'), JSON.stringify(localizationAssets));
 const transform = sourceTransform(root, { ...product, version: upstreamPackage.version, commit, quality: 'stable' }, extensions, nlsCollector, localizationAssets);
 const inject = buildSourcePlugin(root, transform);
+if (values['assets-only']) {
+  // Vite 按需转换主程序；先沿同一转换器提取注入文案，才能在启动前供应完整资源。
+  for (const path of transformedSourcePaths.filter(path => path.startsWith('src/'))) {
+    const source = join(upstream, path);
+    await transform(source, await readFile(source, 'utf8'));
+  }
+}
 await writeFile(join(dist, 'builtin-extensions.json'), JSON.stringify(extensions));
 const workers = [
   'vs/editor/common/services/editorWebWorkerMain',
@@ -161,14 +171,24 @@ for (const id of extensionIds) {
 }
 const missing = [];
 const localizedWorkbenchMessages = { ...translationFile.contents };
-const productMessagesByIdentity = new Map();
+for (const [moduleId, translations] of Object.entries(projectTranslations)) {
+  for (const [key, translated] of Object.entries(translations)) {
+    const identity = `${moduleId}#${key}`;
+    const original = nlsCollector.get(identity);
+    if (original === undefined) {
+      if (!values['assets-only']) throw new Error(`项目补译没有有效 NLS 调用：${identity}`);
+    } else if (typeof translated !== 'string' || placeholders(translated) !== placeholders(original)) {
+      throw new Error(`项目补译占位符不匹配：${identity}`);
+    }
+  }
+  localizedWorkbenchMessages[moduleId] = { ...localizedWorkbenchMessages[moduleId], ...translations };
+}
 for (const [identity, original] of nlsCollector) {
   const separator = identity.indexOf('#');
   const key = identity.slice(separator + 1);
   if (!key.startsWith('workbench.') || !Object.hasOwn(englishMessages, key)) continue;
   if (englishMessages[key] !== original) throw new Error(`Workbench NLS original 与产品 catalog 不匹配：${identity}`);
   const translated = chineseMessages[key];
-  productMessagesByIdentity.set(identity, translated);
   const moduleId = identity.slice(0, separator);
   localizedWorkbenchMessages[moduleId] = { ...localizedWorkbenchMessages[moduleId], [key]: translated };
 }
@@ -178,7 +198,7 @@ for (const [identity, original] of nlsCollector) {
   const extension = /^extensions\/([^/]+)/.exec(moduleId)?.[1];
   const translated = extension
     ? extensionTranslations[`vscode.${extension}`]?.[original]
-    : productMessagesByIdentity.get(identity) ?? translationFile.contents?.[moduleId]?.[identity.slice(separator + 1)];
+    : localizedWorkbenchMessages[moduleId]?.[identity.slice(separator + 1)];
   if (typeof translated !== 'string') missing.push({ identity, reason: 'missing-translation' });
   else if (placeholders(translated) !== placeholders(original)) missing.push({ identity, reason: 'placeholder-mismatch' });
 }

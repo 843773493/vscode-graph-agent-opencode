@@ -20158,7 +20158,7 @@
 			"chooseLocale": "选择显示语言",
 			"clearDisplayLanguage": "清除显示语言首选项",
 			"configureLocale": "配置显示语言",
-			"boxteamConfigureLocaleDescription": "选择简体中文或英语作为工作台显示语言。",
+			"configureLocaleDescription": "根据已安装的语言包更改 VS Code 的区域设置。常用语言包括法语、中文、西班牙语、日语、德语、朝鲜语等。",
 			"installed": "已安装",
 			"moreInfo": "详细信息"
 		},

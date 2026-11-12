@@ -1,4 +1,5 @@
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "./api/workspaceIdentity";
+import { formatNumber, t } from "../../shared/core/i18n/index.js";
 import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
 import type {
   AddManagedGatewayWorkspaceRequest,
@@ -573,19 +574,19 @@ export async function listGatewayUiAssets(port: number): Promise<GatewayUiAsset[
 /**
  * Gateway 背景图资源的上限，与后端 app/gateway/theme/assets.py 的 MAX_UI_ASSET_BYTES 一致。
  * 后端会先读完整个请求体再校验，数百 MB 的图片必然失败却要先传输一遍；空文件同样注定被拒。
- * 因此在发请求前按同一上限拦住并给出可读中文错误，绝不把注定失败的载荷发出去。
+ * 因此在发请求前按同一上限拦住并给出可读错误，绝不把注定失败的载荷发出去。
  */
 const MAX_GATEWAY_UI_ASSET_BYTES = 20 * 1024 * 1024;
 
 function assertUiAssetSize(file: File): void {
   if (file.size === 0) {
-    throw new Error("背景图片内容为空");
+    throw new Error(t("gateway.theme.assetEmpty"));
   }
   if (file.size > MAX_GATEWAY_UI_ASSET_BYTES) {
     const limitMiB = MAX_GATEWAY_UI_ASSET_BYTES / 1024 / 1024;
-    throw new Error(
-      `背景图片 ${(file.size / 1024 / 1024).toFixed(1)} MiB 超过 ${limitMiB} MiB 限制`,
-    );
+    throw new Error(t("gateway.theme.assetTooLarge",
+      formatNumber(file.size / 1024 / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+      formatNumber(limitMiB)));
   }
 }
 

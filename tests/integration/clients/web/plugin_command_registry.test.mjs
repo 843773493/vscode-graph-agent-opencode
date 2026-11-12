@@ -11,6 +11,9 @@ const testFile = 'tests/integration/clients/web/plugin_command_registry.test.mjs
 const run = await TestRunContext.fromTestFile(testFile).prepare();
 const root = resolve('src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
+const localeMessages = Object.fromEntries(await Promise.all(['en', 'zh-cn'].map(async locale => [
+  locale, JSON.parse(await readFile(`src/clients/shared/core/i18n/messages/${locale}.json`, 'utf8')),
+])));
 const files = [testFile, ...[
   'src/extensions/pluginCommandRegistry.ts', 'scripts/pluginCommandTransform.mjs', 'scripts/sourceTransform.mjs',
   'upstream/src/vs/platform/actions/common/actions.ts', 'upstream/src/vs/platform/action/common/action.ts',
@@ -22,7 +25,9 @@ const files = [testFile, ...[
   'upstream/src/vs/base/common/lifecycle.ts', 'upstream/src/vs/base/common/event.ts',
 ].map(path => `src/clients/workbench/${path}`),
   'src/clients/web/src/types/protocol_generated/boxteam/gateway/v2/plugin_commands.ts',
-  'src/clients/web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.ts'];
+  'src/clients/web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.ts',
+  'src/clients/shared/core/i18n/index.ts', 'src/clients/shared/core/i18n/messages/en.json',
+  'src/clients/shared/core/i18n/messages/zh-cn.json'];
 const sourceFingerprints = Object.fromEntries(await Promise.all(files.map(async path => [
   path, createHash('sha256').update(await readFile(path)).digest('hex'),
 ])));
@@ -36,6 +41,7 @@ async function bundle(platform, filename) {
     stdin: { contents: `
 export { PluginCommandContributions, pluginCommandId, pluginGatewayContextKey, pluginWorkspaceContextKey,
   pluginCommandPaletteContext, pluginCommandPaletteActions } from './src/clients/workbench/src/extensions/pluginCommandRegistry.ts';
+export { setLocaleResources } from './src/clients/shared/core/i18n/index.ts';
 export { CommandsRegistry } from './src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 export { MenuId, MenuRegistry, isIMenuItem } from './src/clients/workbench/upstream/src/vs/platform/actions/common/actions.js';
 export { MenuItemAction } from './src/clients/workbench/upstream/src/vs/platform/actions/common/actions.js';
@@ -64,7 +70,9 @@ export { NullLogService } from './src/clients/workbench/upstream/src/vs/platform
     } }, buildSourcePlugin(root, transform)],
   });
   await writeFile(join(run.artifactsDir, filename.replace(/\.mjs$/, '.meta.json')), JSON.stringify(built.metafile));
-  return await import(pathToFileURL(outfile).href);
+  const module = await import(pathToFileURL(outfile).href);
+  module.setLocaleResources('zh-cn', localeMessages['zh-cn']);
+  return module;
 }
 
 const m = await bundle('linux', 'plugin-command-registry-linux.mjs');
@@ -90,6 +98,26 @@ function publication(target, { revision, version, title, enablement, location, w
 function snapshot(target, item) {
   return { gateway_id: target.gateway_id, workspace_id: target.workspace_id, publications: [item] };
 }
+
+test('插件命令校验从bundle内共享setLocaleResources读取真实双语资源并保留条件详情', () => {
+  const registry = new m.PluginCommandContributions(() => ({ gatewayId: a.gateway_id, workspaceId: a.workspace_id }), async () => undefined);
+  const invalid = publication(a, { revision: 'localized-validation', version: '1.0.0', title: 'Localized validation',
+    location: 'editor/title', key: 'ctrl+[KeyL]' });
+  invalid.menus[0].when = 'privateContext';
+  try {
+    for (const [locale, expected] of [
+      ['en', 'The plugin condition uses unpublished context keys: privateContext'],
+      ['zh-cn', '插件条件使用未公布的上下文键：privateContext'],
+    ]) {
+      m.setLocaleResources(locale, localeMessages[locale]);
+      expect(() => registry.replace(a, snapshot(a, invalid))).toThrow(expected);
+    }
+    checks.push('bundled registry 使用显式注入的真实中英文 catalog，且错误保留未公布的原 context key');
+  } finally {
+    m.setLocaleResources('zh-cn', localeMessages['zh-cn']);
+    registry.dispose();
+  }
+});
 
 function context(target, values = {}) {
   const all = { [m.pluginGatewayContextKey]: target.gateway_id, [m.pluginWorkspaceContextKey]: target.workspace_id, ...values };
@@ -184,7 +212,7 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
     itemA1b.binding.package_version = '1.0.1';
     registry.replace(a, snapshot(a, itemA1b));
     expect(m.CommandsRegistry.getCommand(id)?.handler).toBe(dispatcher);
-    expect(() => dispatcher({}, firstA.pluginCommandArgs[0], 'old-version')).toThrow('已经失效');
+    expect(() => dispatcher({}, firstA.pluginCommandArgs[0], 'old-version')).toThrow('原插件命令绑定或注册已失效，请重新选择');
     expect(executions.some(item => item.args.includes('old-version'))).toBe(false);
 
     const itemA2 = publication(a, { revision: 'a-r2', version: '2.0.0', title: 'A command updated', enablement: 'editorHasSelection',
@@ -202,7 +230,7 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
     expect(m.CommandsRegistry.getCommand(id)?.handler).toBe(dispatcher);
     selectedOwner = { gatewayId: b.gateway_id, workspaceId: b.workspace_id };
     const beforeStale = executions.length;
-    expect(() => dispatcher({}, firstA.pluginCommandArgs[0], 'stale')).toThrow('已经失效');
+    expect(() => dispatcher({}, firstA.pluginCommandArgs[0], 'stale')).toThrow('原插件命令绑定或注册已失效，请重新选择');
     expect(executions).toHaveLength(beforeStale);
     expect(executions.some(item => item.args.includes('stale'))).toBe(false);
 
@@ -214,7 +242,7 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
       const action = sourceFor(m.MenuId.EditorContext, id, a.workspace_id);
       latestA = action.pluginCommandArgs[0];
       expect(action?.precondition.evaluate(context(a, { editorHasSelection: true, resourceExtname: '.md' }))).toBe(false);
-      expect(() => dispatcher({}, action.pluginCommandArgs[0], 'blocked')).toThrow('尚不可执行');
+      expect(() => dispatcher({}, action.pluginCommandArgs[0], 'blocked')).toThrow(`插件命令尚不可执行：${error ?? state}`);
     }
 
     registry.remove(a);
@@ -223,12 +251,12 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
     expect(sourceFor(m.MenuId.EditorContext, id, b.workspace_id)?.title).toBe('B command');
     selectedOwner = { gatewayId: b.gateway_id, workspaceId: b.workspace_id };
     const beforeRemovedSource = executions.length;
-    expect(() => dispatcher({}, latestA, 'removed-A-frozen')).toThrow('已经失效');
+    expect(() => dispatcher({}, latestA, 'removed-A-frozen')).toThrow('原插件命令绑定或注册已失效，请重新选择');
     expect(executions).toHaveLength(beforeRemovedSource);
     expect(await m.CommandsRegistry.getCommand(id).handler({}, 'only-B')).toBe(b.workspace_id);
     expect(executions.at(-1)).toMatchObject({ target: b, title: 'B command', args: ['only-B'] });
     selectedOwner = { gatewayId: a.gateway_id, workspaceId: a.workspace_id };
-    expect(() => m.CommandsRegistry.getCommand(id).handler({}, 'removed-A')).toThrow('缺少唯一明确');
+    expect(() => m.CommandsRegistry.getCommand(id).handler({}, 'removed-A')).toThrow(`命令 ${id} 缺少唯一明确的插件目标`);
     checks.push('单dispatcher、目标菜单/标题/启用条件隔离、同快照幂等、无效快照预校验原子性、声明更新和冻结参数失效、不可执行状态及单目标释放');
   } finally {
     registry.dispose();
@@ -252,7 +280,7 @@ test('已有产品命令占用插件命令ID时在发布前拒绝并保留原命
   item.keybindings[0].command_id = contributionId;
 
   try {
-    expect(() => registry.replace(target, snapshot(target, item))).toThrow('插件命令不能覆盖已有入口');
+    expect(() => registry.replace(target, snapshot(target, item))).toThrow(`插件命令不能覆盖已有入口：${id}`);
     expect(m.CommandsRegistry.getCommand(id)?.handler).toBe(originalHandler);
     expect(await m.CommandsRegistry.getCommand(id).handler({}, 'still-original')).toBe('original-command');
     expect(calls).toEqual([['still-original']]);
@@ -359,7 +387,7 @@ test('实际MenuItemAction.run给插件传冻结source，普通菜单保留resou
     const beforeRemoved = activations.length;
     const legacyReadsBeforeRemove = legacyReads.length;
     registry.remove(a);
-    await expect(run.run('editor-context')).rejects.toThrow('已经失效');
+    await expect(run.run('editor-context')).rejects.toThrow('原插件命令绑定或注册已失效，请重新选择');
     expect(executions).toHaveLength(1);
     expect(await commandService.executeCommand(id, 'still-B')).toBe(b.workspace_id);
     expect(executions.at(-1).source.target.workspace_id).toBe(b.workspace_id);
@@ -493,7 +521,7 @@ test('真实转换CommandService对自有命令绕过旧宿主发现，首次调
 });
 
 afterAll(async () => {
-  const status = checks.length === 7 ? 'passed' : 'failed';
+  const status = checks.length === 8 ? 'passed' : 'failed';
   const evidence = {
     boundary: '真实 PluginCommandContributions、原 CommandsRegistry/MenuRegistry/KeybindingsRegistry、sourceTransform 后的上游源码；平台模块值为显式 Linux/macOS/Windows 构建装具。未经过浏览器、Gateway、工作区后端或真实多目标网络。',
     upstreamCommit: pinnedUpstreamCommit,

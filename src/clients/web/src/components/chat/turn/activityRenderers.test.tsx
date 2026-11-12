@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   ActivityRendererRegistry,
   activityRendererRegistry,
+  activityKindLabel,
 } from "./activityRenderers";
 import type { MessageStreamActivity } from "../../../state/messageStream/index";
 
@@ -24,6 +25,14 @@ function activity(
 }
 
 describe("Activity Renderer", () => {
+  test("已知 Activity kind 只翻译展示名称，未知协议值保持原样", () => {
+    expect(activityKindLabel("context.compaction")).toBe("上下文压缩");
+    expect(activityKindLabel("approval.wait")).toBe("审批");
+    expect(activityKindLabel("subagent.run")).toBe("子 Agent 执行");
+    expect(activityKindLabel("resource.operation")).toBe("工作区资源操作");
+    expect(activityKindLabel("provider.private")).toBe("provider.private");
+  });
+
   test("未知 kind 使用通用状态，不投影成模型文本或工具", () => {
     const result = activityRendererRegistry.render(activity("provider.private"));
     expect(result).toBeTruthy();

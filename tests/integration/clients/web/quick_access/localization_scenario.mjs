@@ -1,24 +1,26 @@
 import { writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { expect } from 'playwright/test';
-import { writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
+import { writeUserSettings, writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
+import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`显示语言验收缺少 ${name}`); return value; };
 export async function runLocalization({ run, launch }) {
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
-const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], modelRequests: [],
+const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], consoleErrors: [], modelRequests: [],
   externalTranslationRequests: [], localeRequests: [], receipts: [], reloads: [], timings: [],
   boundary: '真实 Gateway／Workspace 与正式 Workbench。语言只经原 Quick Pick／清除命令更改；Thread、草稿、脏文件和分屏从产品生成，不预写语言、缓存或恢复状态。' };
-let page, failure;
+let page, failure, executionCallId;
 try {
   const host = await launch({ run, result, usePage(next) {
     page = next;
   page.setDefaultTimeout(15_000);
   page.on('pageerror', error => result.pageErrors.push(String(error)));
+  page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push({ phase: result.phase, text: message.text() }); });
   page.on('framenavigated', frame => { if (frame === page.mainFrame()) result.reloads.push({ phase: result.phase, url: frame.url() }); });
   page.on('request', request => {
     const url = new URL(request.url());
-    if (/locale|nls|l10n|i18n/i.test(url.pathname)) result.localeRequests.push({ phase: result.phase, url: url.href });
+    if (/locali[sz]ation|locale|nls|l10n|i18n/i.test(url.href)) result.localeRequests.push({ phase: result.phase, url: url.href });
     if (/^https?:$/.test(url.protocol) && url.origin !== new URL(page.url()).origin && /locale|nls|l10n|i18n|gallery|marketplace|vsix/i.test(url.href)) {
       result.externalTranslationRequests.push(url.href);
     }
@@ -47,6 +49,47 @@ try {
     await command('workbench.view.explorer');
     await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('html')).toHaveAttribute('lang', locale);
+  };
+  const verifyLateMarkdownPreview = async (locale, expectedWarning, expectedLabel, resourceLocale, hasBundle) => {
+    result.phase = `late-markdown-preview-${locale}`;
+    const uri = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root/locale-preview.md`;
+    await open(uri);
+    await command('markdown.showPreview');
+    const preview = page.frameLocator('iframe.webview:visible').frameLocator('iframe#active-frame');
+    await expect(preview.locator('h1')).toHaveText('Markdown locale preview');
+    const warning = preview.locator('#code-csp-warning');
+    await expect(warning).toBeVisible({ timeout: 30_000 });
+    await expect(warning).toHaveText(expectedWarning);
+    await expect(warning).toHaveAttribute('aria-label', expectedLabel);
+    const allMarkdownBundles = result.localeRequests.filter(item => item.url.includes('/localization/extensions/vscode.markdown-language-features-'));
+    const markdownBundle = allMarkdownBundles.find(item => item.phase === resourceLocale);
+    expect(Boolean(markdownBundle), `${resourceLocale} 的 Markdown 扩展 bundle 身份不匹配`).toBe(hasBundle);
+    if (markdownBundle) expect(new URL(markdownBundle.url).origin).toBe(new URL(base).origin);
+    result.markdownPreviews ??= [];
+    result.markdownPreviews.push({ locale, warning: await warning.textContent(), markdownBundle: markdownBundle?.url ?? null });
+    await command('workbench.action.closeActiveEditor');
+    const sourceTab = groups.last().getByRole('tab', { name: /locale-preview\.md/ });
+    await expect(sourceTab).toBeVisible();
+    await sourceTab.click();
+    await command('workbench.action.closeActiveEditor');
+    await expect(page.locator('iframe.webview:visible')).toHaveCount(0);
+  };
+  const verifyImagePreview = async locale => {
+    result.phase = `image-preview-${locale}`;
+    await open(`boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root/assets/test.jpg`);
+    const viewer = page.locator('.image-preview-editor:visible .image-viewer');
+    await expect(viewer).toHaveClass(/ready/);
+    const label = locale === 'en' ? 'Image Preview: test.jpg' : '图片预览：test.jpg';
+    await expect(viewer).toHaveAttribute('aria-label', label);
+    expect(await viewer.locator('img').evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
+    await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('imagePreview.selectZoomLevel'); });
+    await expect(quick.locator('input').first()).toHaveAttribute('placeholder', locale === 'en' ? 'Select zoom level' : '选择缩放级别');
+    const fit = locale === 'en' ? 'Whole Image' : '完整图片';
+    await quick.locator('.monaco-list-row').filter({ hasText: fit }).click();
+    await expect(quick).not.toBeVisible();
+    result.imagePreviews ??= [];
+    result.imagePreviews.push({ locale, label, fit });
+    await command('workbench.action.closeActiveEditor');
   };
   const verifyPluginLanguage = async locale => {
     await command('workbench.view.extensions');
@@ -154,14 +197,101 @@ try {
   await expect(editor(groups.last()).locator('.view-lines')).toContainText('未保存的正文 {0}');
   result.cancelPreserved = true;
 
+  result.phase = 'start-background-execution';
+  const runningSession = await api('/api/v1/sessions', owner, { title: '语言重载中的执行' });
+  const runningThread = await api(`/api/v1/sessions/${runningSession.session_id}/main-thread`, owner);
+  const runningIdentity = { ...owner, sessionId: runningSession.session_id, threadId: runningThread.thread_id };
+  const planned = await testControl({ action: 'plan_model', session_id: runningIdentity.sessionId, thread_id: runningIdentity.threadId,
+    interactions: JSON.parse(required('BOXTEAM_LOCALIZATION_MODEL_INTERACTIONS')) });
+  expect(planned).toHaveLength(1);
+  executionCallId = planned[0];
+  await testControl({ action: 'arm', operation_id: executionCallId, phase: 'model.response_ready' });
+  await open(threadUri(runningIdentity));
+  await pane(runningIdentity).getByTestId('composer-input').fill('语言切换时继续执行，不要重放');
+  const acceptance = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === `/api/v1/sessions/${runningIdentity.sessionId}/threads/${runningIdentity.threadId}/messages`);
+  await pane(runningIdentity).getByTestId('composer-send').click();
+  const acceptedResponse = await acceptance;
+  expect(acceptedResponse.status()).toBe(200);
+  const acceptedPayload = await acceptedResponse.json();
+  expect(acceptedPayload.request_id).toBe(acceptedResponse.headers()['x-request-id']);
+  const accepted = acceptedPayload.data;
+  expect(accepted.thread_id).toBe(runningIdentity.threadId);
+  await testControl({ action: 'acknowledged', operation_id: executionCallId, phase: 'model.response_ready' });
+  const runningBefore = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
+  expect(runningBefore.status).toBe('running');
+  result.backgroundExecution = { ...runningIdentity, ...accepted, modelCallId: executionCallId, acceptanceRequestId: acceptedPayload.request_id };
+
   result.phase = 'english-via-original-reload';
   await chooseLanguage('English');
+  // 只拒绝真实展示存储的下一次写入；语言选择及宿主重载仍沿原链路。
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.put;
+    globalThis.localizationCommitFailure = { writes: [] };
+    IDBObjectStore.prototype.put = function(value, key) {
+      if (this.transaction.db.name.startsWith('vscode-web-state-db-')) {
+        IDBObjectStore.prototype.put = original;
+        globalThis.localizationCommitFailure.writes.push({ database: this.transaction.db.name, store: this.name, key });
+        this.transaction.abort();
+        throw new Error('language reload view commit denied /home/alice {0}');
+      }
+      return original.call(this, value, key);
+    };
+  });
+  const beforeCommitFailure = result.reloads.length;
+  await reloadDialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click();
+  await expect(page.locator('.notifications-toasts')).toContainText('language reload view commit denied /home/alice {0}');
+  expect(result.reloads.length).toBe(beforeCommitFailure);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  result.commitFailure = await page.evaluate(() => globalThis.localizationCommitFailure);
+  expect(result.commitFailure.writes).toHaveLength(1);
+  await expect(pane(runningIdentity).getByTestId('composer-input')).toBeVisible();
+
+  result.phase = 'cancel-dirty-reload';
+  await writeUserSettings({ page, command }, { 'files.hotExit': 'off' });
+  await open(file);
+  await chooseLanguage('English');
+  const beforeDirtyCancellation = result.reloads.length;
+  // Electron 由原生宿主处理 beforeunload；Web 沿真实 dialog dismiss。
+  // TODO：原生 run-2d0ecc047c9a 在第二组 dirty 断言失败，尚未核验下方新增的主进程事件观察；补验时保留双组断言。
+  if (host.willPreventUnloadEvents) {
+    const before = await host.willPreventUnloadEvents();
+    await reloadDialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click();
+    await expect.poll(host.willPreventUnloadEvents).toHaveLength(before.length + 1);
+    result.dirtyReloadDialog = { willPreventUnload: await host.willPreventUnloadEvents() };
+    expect(result.dirtyReloadDialog.willPreventUnload.at(-1).defaultPrevented).toBe(false);
+    expect(result.reloads.length).toBe(beforeDirtyCancellation);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+    for (const group of await groups.all()) await expect(group.getByRole('tab', { name: /locale\.txt/ })).toHaveClass(/dirty/);
+  } else {
+    const dialogShown = page.waitForEvent('dialog');
+    const clicking = reloadDialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click();
+    const dialog = await dialogShown;
+    expect(dialog.type()).toBe('beforeunload');
+    result.dirtyReloadDialog = { type: dialog.type(), message: dialog.message() };
+    await dialog.dismiss();
+    await clicking;
+    expect(result.reloads.length).toBe(beforeDirtyCancellation);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+    for (const group of await groups.all()) await expect(group.getByRole('tab', { name: /locale\.txt/ })).toHaveClass(/dirty/);
+  }
+  await writeUserSettings({ page, command }, { 'files.hotExit': 'onExitAndWindowClose' });
+  result.dirtyCancellationPreserved = true;
+
+  await chooseLanguage('English');
   started = performance.now();
+  result.phase = 'english-reload';
   await Promise.all([page.waitForEvent('domcontentloaded'),
     reloadDialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click()]);
   await ready('en');
   result.timings.push({ operation: 'reload-en', elapsedMs: performance.now() - started });
+  const runningAfter = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
+  expect(runningAfter.status).toBe('running');
+  expect(runningAfter.job_id).toBe(runningBefore.job_id);
+  result.backgroundExecution.survivedEnglishReload = true;
   await verifyPluginLanguage('en');
+  await verifyLateMarkdownPreview('en', 'Some content has been disabled in this document', 'Content Disabled Security Warning', 'english-reload', false);
+  await verifyImagePreview('en');
   result.englishReloaded = true;
   await showLanguagePicker();
   await expect(quick.locator('input').first()).toHaveAttribute('placeholder', 'Select Display Language');
@@ -191,19 +321,34 @@ try {
   });
   await expect(reloadDialog).toBeVisible();
   started = performance.now();
+  result.phase = 'chinese-reload';
   await Promise.all([page.waitForEvent('domcontentloaded'),
     reloadDialog.getByRole('button', { name: /Reload/ }).click()]);
   await ready('zh-CN');
   result.timings.push({ operation: 'reload-zh-cn', elapsedMs: performance.now() - started });
   await verifyPluginLanguage('zh-cn');
+  await verifyLateMarkdownPreview('zh-CN', '已禁用此文档中的部分内容', '已禁用内容安全警告', 'late-markdown-preview-zh-CN', true);
+  await verifyImagePreview('zh-cn');
   expect(await page.evaluate(() => localStorage.getItem('vscode.nls.locale'))).toBeNull();
   await verifyRecovered('发送消息'); result.clearedToChinese = true;
   const after = await api('/api/gateway/workspaces');
   expect(after.active_workspace).toEqual(listing.active_workspace);
   for (const identity of identities) expect((await api(`/api/v1/sessions/${identity.sessionId}/main-thread`, owner)).thread_id).toBe(identity.threadId);
-  // 这里只证明原工作区与Thread身份；运行中的后台任务另有验收，不能由零模型场景推断。
   result.backendIdentitiesPreserved = true;
-  expect(result.pageErrors).toEqual([]); expect(result.externalTranslationRequests).toEqual([]); expect(result.modelRequests).toEqual([]);
+  expect((await api(`/api/v1/jobs/${accepted.job_id}`, owner)).status).toBe('running');
+  result.backgroundExecution.survivedChineseReload = true;
+  await testControl({ action: 'release', operation_id: executionCallId, phase: 'model.response_ready' });
+  await expect.poll(async () => {
+    const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
+    if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));
+    return job.status;
+  }, { timeout: 30_000 }).toBe('completed');
+  await open(threadUri(runningIdentity));
+  await expect(pane(runningIdentity).locator(`.chat-turn[data-turn-id="${accepted.turn_id}"]`)
+    .getByText('语言切换后执行完成 /home/alice/{0}', { exact: true })).toBeVisible();
+  expect(result.modelRequests).toHaveLength(1);
+  result.backgroundExecution.completedOnce = true;
+  expect(result.pageErrors).toEqual([]); expect(result.externalTranslationRequests).toEqual([]);
   if (host.leave && host.restore) {
     result.phase = 'native-close-and-restart';
     // 语言重载必须留在原 renderer 所属窗口，不能重启 main 或后台服务。
@@ -221,10 +366,15 @@ try {
   result.phase = 'complete';
 } catch (error) {
   failure = error; result.error = error instanceof Error ? error.stack : String(error);
+  if (page) result.frames = page.frames().map(frame => ({ name: frame.name(), url: frame.url() }));
   if (page) await page.screenshot({ path: join(dirname(output), 'failure.png') }).catch(cause => { result.screenshotError = String(cause); });
 } finally {
-  try { await run.close(); }
-  finally { await writeFile(output, JSON.stringify(result, null, 2) + '\n'); }
+  try {
+    if (executionCallId) await testControl({ action: 'release', operation_id: executionCallId, phase: 'model.response_ready' });
+  } finally {
+    try { await run.close(); }
+    finally { await writeFile(output, JSON.stringify(result, null, 2) + '\n'); }
+  }
 }
 if (failure) throw failure;
 return result;

@@ -1,4 +1,5 @@
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { t } from '../../shared/core/i18n/index.js';
 import { Sequencer } from '../upstream/src/vs/base/common/async.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encodeHex, VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
@@ -395,7 +396,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
       if (error instanceof GatewayRequestError && error.status === 409) {
         // 重读以确认权威状态，但不替换用户尚未保存的文本或其基线。
         const latest = await this.content(resource);
-        throw new FileOperationError(`后端文件已变化（${latest.revision}），请比较或重新读取后再保存。${error.message}`, FileOperationResult.FILE_MODIFIED_SINCE);
+        throw new FileOperationError(t('workbench.files.revisionConflict', latest.revision, error.message), FileOperationResult.FILE_MODIFIED_SINCE);
       }
       throw error;
     }

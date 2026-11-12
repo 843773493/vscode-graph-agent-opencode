@@ -6,7 +6,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { createManagementTargetLifecycle, managementGateway } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
 import { configureServicePlugin } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -81,7 +81,7 @@ registerAction2(class extends Action2 {
       selected = explicit ? { ...explicit } : (await quickInput.pick(initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({
         label: workspace.name, description: `${workspace.gateway_id} · ${workspace.status}`, detail: workspace.workspace_id,
         owner: gatewayWorkspaceOwner(workspace),
-      })), { title: t('workbench.settings.pickTarget'), prompt: t('workbench.settings.targetPrompt', target.name, target.gateway_id),
+      })), { title: t('workbench.settings.pickTarget'), prompt: t('workbench.settings.targetPrompt', managementTargetDisplayName(target), target.gateway_id),
         placeHolder: t('workbench.settings.pickTargetHint') }, cancellation.token))?.owner;
       if (!selected) return;
       check();

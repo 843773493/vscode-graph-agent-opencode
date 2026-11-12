@@ -11,6 +11,7 @@ import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiat
 import { KeybindingsRegistry } from '../../upstream/src/vs/platform/keybinding/common/keybindingsRegistry.js';
 import type { PluginCommandPublication, PluginCommandRegistration, PluginContributionTarget, PluginCommandSnapshotDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/plugin_commands.js';
 import type { PluginCommandContribution } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { t } from '../../../shared/core/i18n/index.js';
 
 export const pluginGatewayContextKey = 'boxteam.pluginGateway';
 export const pluginWorkspaceContextKey = 'boxteam.pluginWorkspace';
@@ -59,9 +60,9 @@ function condition(value?: string): ContextKeyExpression | undefined {
   if (value == null) return undefined;
   const parser = new Parser({ regexParsingWithErrorRecovery: false });
   const expression = parser.parse(value);
-  if (!expression || parser.lexingErrors.length || parser.parsingErrors.length) throw new Error('插件条件表达式无效：' + value);
+  if (!expression || parser.lexingErrors.length || parser.parsingErrors.length) throw new Error(t('plugins.commandConditionInvalid', value));
   const unknown = expression.keys().filter(key => !pluginCommandContextKeys.has(key));
-  if (unknown.length) throw new Error('插件条件使用未公布的上下文键：' + unknown.join(', '));
+  if (unknown.length) throw new Error(t('plugins.commandUnknownContext', unknown.join(', ')));
   return expression;
 }
 
@@ -69,7 +70,7 @@ function keybinding(value?: string) {
   if (value == null) return undefined;
   const binding = KeybindingParser.parseKeybinding(value);
   if (!binding || binding.chords.some(chord => chord instanceof KeyCodeChord && chord.keyCode === KeyCode.Unknown
-    || chord instanceof ScanCodeChord && chord.scanCode === ScanCode.None)) throw new Error('插件快捷键无效：' + value);
+    || chord instanceof ScanCodeChord && chord.scanCode === ScanCode.None)) throw new Error(t('plugins.commandKeybindingInvalid', value));
   return binding;
 }
 
@@ -98,12 +99,12 @@ export class PluginCommandContributions implements IDisposable {
     private readonly execute: (accessor: ServicesAccessor, source: FrozenPluginCommand, args: unknown[]) => Promise<unknown>) { }
 
   replace(target: PluginContributionTarget, snapshot: PluginCommandSnapshotDTO): void {
-    if (snapshot.gateway_id !== target.gateway_id || (snapshot.workspace_id ?? undefined) !== target.workspace_id) throw new Error('插件快照目标不符');
+    if (snapshot.gateway_id !== target.gateway_id || (snapshot.workspace_id ?? undefined) !== target.workspace_id) throw new Error(t('plugins.commandSnapshotTargetMismatch'));
     const targetKey = pluginTargetKey(target), previous = this.targets.get(targetKey) ?? new Map<string, Publication>();
     // 工作区快照也带 Gateway 声明；该部分只由唯一 Gateway 订阅发布，避免重复句柄。
     const selected = snapshot.publications.filter(item => (item.binding?.workspace_id ?? undefined) === target.workspace_id);
     const candidates = selected.map(item => this.prepare(target, item));
-    if (new Set(candidates.map(item => item.key)).size !== candidates.length) throw new Error('插件快照重复绑定');
+    if (new Set(candidates.map(item => item.key)).size !== candidates.length) throw new Error(t('plugins.commandDuplicateBinding'));
     this.targets.set(targetKey, previous);
     for (const [key, entry] of previous) if (!candidates.some(item => item.key === key)) {
       entry.handles.dispose(); previous.delete(key);
@@ -141,24 +142,24 @@ export class PluginCommandContributions implements IDisposable {
 
   private prepare(target: PluginContributionTarget, publication: PluginCommandPublication) {
     const binding = publication.binding;
-    if (!binding?.enabled || (binding.workspace_id ?? undefined) !== target.workspace_id) throw new Error('插件声明缺少启用绑定或目标不符');
+    if (!binding?.enabled || (binding.workspace_id ?? undefined) !== target.workspace_id) throw new Error(t('plugins.commandBindingInvalid'));
     const key = JSON.stringify([binding.package_id, binding.plugin_id]);
     const scope = ContextKeyExpr.and(ContextKeyExpr.equals(pluginGatewayContextKey, target.gateway_id),
       target.workspace_id ? ContextKeyExpr.equals(pluginWorkspaceContextKey, target.workspace_id) : undefined)!;
-    if (new Set(publication.commands.map(command => command.id)).size !== publication.commands.length) throw new Error('插件命令声明重复');
+    if (new Set(publication.commands.map(command => command.id)).size !== publication.commands.length) throw new Error(t('plugins.commandDuplicateDeclaration'));
     const ids = new Set(publication.commands.map(command => command.id));
     for (const entries of [publication.menus, publication.keybindings]) {
-      if (new Set(entries.map(item => item.id)).size !== entries.length) throw new Error('插件贡献声明重复');
+      if (new Set(entries.map(item => item.id)).size !== entries.length) throw new Error(t('plugins.commandDuplicateContribution'));
     }
     const registrations = new Map(publication.registrations.map(registration => [registration.command_id, registration]));
-    if (registrations.size !== publication.registrations.length || publication.registrations.some(reg => !ids.has(reg.command_id))) throw new Error('插件命令注册不属于声明');
+    if (registrations.size !== publication.registrations.length || publication.registrations.some(reg => !ids.has(reg.command_id))) throw new Error(t('plugins.commandRegistrationMismatch'));
     const menus = publication.menus.map(menu => {
       const menuId = pluginCommandMenus.get(menu.location);
-      if (!menuId || !ids.has(menu.command_id)) throw new Error('插件菜单位置或引用未开放：' + menu.location);
+      if (!menuId || !ids.has(menu.command_id)) throw new Error(t('plugins.commandMenuInvalid', menu.location));
       return { ...menu, menuId, condition: condition(menu.when) };
     });
     const keybindings = publication.keybindings.map(rule => {
-      if (!ids.has(rule.command_id)) throw new Error('插件快捷键引用未声明命令');
+      if (!ids.has(rule.command_id)) throw new Error(t('plugins.commandKeybindingCommandMissing'));
       const parsed = new Map([rule.key, rule.mac, rule.win, rule.linux].map(value => [value, keybinding(value)]));
       return { ...rule, condition: condition(rule.when),
         parsed: parsed.get(isMacintosh ? rule.mac ?? rule.key : isWindows ? rule.win ?? rule.key : rule.linux ?? rule.key) };
@@ -168,9 +169,9 @@ export class PluginCommandContributions implements IDisposable {
       instance_id: publication.instance_id, binding: Object.freeze({ ...binding }) });
     const commands = publication.commands.map(command => {
       const id = pluginCommandId(binding.package_id, binding.plugin_id, command.id);
-      if (CommandsRegistry.getCommand(id) && !this.dispatchers.has(id)) throw new Error('插件命令不能覆盖已有入口：' + id);
+      if (CommandsRegistry.getCommand(id) && !this.dispatchers.has(id)) throw new Error(t('plugins.commandEntryConflict', id));
       const registration = registrations.get(command.id);
-      if (registration && registration.handler !== command.handler) throw new Error('插件处理者与声明不符');
+      if (registration && registration.handler !== command.handler) throw new Error(t('plugins.commandHandlerMismatch'));
       const source = new PluginCommandSource(frozenTarget, frozenPublication, Object.freeze({ id: command.id, title: command.title }),
         registration && Object.freeze({ ...registration }));
       const available = publication.state === 'ready' && !!publication.instance_id && !!registration;
@@ -192,7 +193,7 @@ export class PluginCommandContributions implements IDisposable {
         const owner = frozen ? undefined : this.owner(accessor);
         const candidates = frozen ? [frozen] : [...sources].filter(item => item.target.gateway_id === owner!.gatewayId
           && (!item.target.workspace_id || item.target.workspace_id === owner!.workspaceId));
-        if (candidates.length !== 1) throw new Error('命令缺少唯一明确的插件目标：' + id);
+        if (candidates.length !== 1) throw new Error(t('plugins.commandTargetAmbiguous', id));
         this.assertCurrent(candidates[0]);
         return this.execute(accessor, candidates[0], args);
       });
@@ -208,9 +209,9 @@ export class PluginCommandContributions implements IDisposable {
 
   assertCurrent(source: FrozenPluginCommand): void {
     const binding = source.publication.binding!, id = pluginCommandId(binding.package_id, binding.plugin_id, source.command.id);
-    if (!this.dispatchers.get(id)?.sources.has(source as PluginCommandSource)) throw new Error('原插件命令绑定或注册已经失效，请重新选择');
+    if (!this.dispatchers.get(id)?.sources.has(source as PluginCommandSource)) throw new Error(t('plugins.commandBindingExpired'));
     if (source.publication.state !== 'ready' || !source.publication.instance_id || !source.registration) {
-      throw new Error('插件命令尚不可执行：' + (source.publication.error ?? source.publication.state));
+      throw new Error(t('plugins.commandUnavailable', source.publication.error ?? source.publication.state));
     }
   }
 

@@ -110,7 +110,7 @@ describe('独立于 Tab 的会话历史镜像', () => {
       expect(await reader.read(target, 'scope')).toBeNull();
       expect(await readBrowserView(key)).toBeUndefined();
       expect(await readBrowserView<Record<string, unknown>>(index)).not.toHaveProperty(key);
-      expect(await readBrowserView(`draft:${key}`)).toBe('保留草稿');
+      expect(await readBrowserView<string>(`draft:${key}`)).toBe('保留草稿');
       expect((await reader.read(other, 'other-scope'))?.threadId).toBe(other.threadId);
       expect(diagnostics).toHaveBeenCalledWith('会话历史展示缓存格式已失效，将重新同步', { owner: target, version: 99 });
       reader.remember(target, history(), failure);

@@ -12,7 +12,7 @@ const required = name => {
   return value;
 };
 
-export async function launchElectron({ run, result, usePage, extraArgs = [], observe = (_label, operation) => operation() }) {
+export async function launchElectron({ run, result, usePage, extraArgs = [], observeWillPreventUnload = false, observe = (_label, operation) => operation() }) {
   const runtime = required('BOXTEAM_ELECTRON_RUNTIME'), artifacts = required('BOXTEAM_ELECTRON_ARTIFACTS');
   const cwd = join(runtime, 'launch-directory'), emptyPath = join(runtime, 'empty-path'), home = join(runtime, 'profile');
   await mkdir(cwd, { recursive: true });
@@ -73,6 +73,7 @@ export async function launchElectron({ run, result, usePage, extraArgs = [], obs
     });
     page.on('dialog', async dialog => {
       native.dialogs.push({ launch: number, type: dialog.type(), message: dialog.message() });
+      if (observeWillPreventUnload && dialog.type() === 'beforeunload') return;
       if (dialog.type() === 'beforeunload') await dialog.accept();
       else await dialog.dismiss();
     });
@@ -82,11 +83,25 @@ export async function launchElectron({ run, result, usePage, extraArgs = [], obs
     if (origin) assert.equal(nextOrigin, origin);
     else origin = nextOrigin;
     launch.url = page.url();
+    if (observeWillPreventUnload) {
+      await instance.evaluate(({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        contents.__boxteamTestWillPreventUnload = [];
+        contents.on('will-prevent-unload', event => {
+          contents.__boxteamTestWillPreventUnload.push({ defaultPrevented: event.defaultPrevented });
+        });
+      });
+    }
     assert.deepEqual(await page.evaluate(() => ({ require: typeof globalThis.require, process: typeof globalThis.process })),
       { require: 'undefined', process: 'undefined' });
   };
   await open();
   return { baseUrl: origin,
+    async willPreventUnloadEvents() {
+      if (!observeWillPreventUnload || !current) throw new Error('Electron will-prevent-unload observation is unavailable');
+      native.willPreventUnload = await current.evaluate(({ BrowserWindow }) => [...BrowserWindow.getAllWindows()[0].webContents.__boxteamTestWillPreventUnload]);
+      return native.willPreventUnload;
+    },
     async reload() { await close(current); await open(); },
     async leave() { await close(current); },
     async restore() { await open(); },

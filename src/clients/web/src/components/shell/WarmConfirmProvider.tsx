@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import WarmActionDialog from "../overlays/WarmActionDialog";
 
 interface WarmConfirmOptions {
@@ -63,14 +64,14 @@ export default function WarmConfirmProvider({ children }: { children: ReactNode 
       {children}
       <WarmActionDialog
         open={active !== null}
-        title={active?.title ?? "请确认"}
+        title={active?.title ?? t("dialogs.confirmTitle")}
         description={active?.message}
-        confirmText={active?.confirmText ?? "确认"}
+        confirmText={active?.confirmText ?? t("dialogs.confirm")}
         danger={active?.danger ?? false}
         onClose={closeActive}
         onConfirm={async () => {
           if (!active) {
-            throw new Error("确认目标已失效");
+            throw new Error(t("dialogs.targetExpired"));
           }
           confirmedIdRef.current = active.id;
           active.resolve(true);

@@ -4,7 +4,7 @@ import type { ConversationView } from "../../../types/frontend";
 import type { MessageStreamActivity } from "../../../state/messageStream/index";
 import type { TimelineItem } from "../../../state/timeline/timelineTypes";
 import { historicalBoundaryStatus } from "../../../state/timeline/chatResponseGroups";
-import { activityRendererRegistry } from "./activityRenderers";
+import { activityKindLabel, activityRendererRegistry } from "./activityRenderers";
 import MarkdownContent from "../MarkdownContent";
 import type { ChatTurnActions } from "./useChatTurnActions";
 
@@ -256,7 +256,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
           <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
           <span>{t("chat.status.processingActivity")}</span>
           <span className="chat-working-detail">
-            {activityKind ? t("chat.status.activityUnavailableNamed", activityKind) : t("chat.status.activityUnavailable")}
+            {activityKind ? t("chat.status.activityUnavailableNamed", activityKindLabel(activityKind)) : t("chat.status.activityUnavailable")}
           </span>
         </div>
       </>

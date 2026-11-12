@@ -10,7 +10,7 @@ import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWrit
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
-import { createManagementTargetLifecycle, managementGateway } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument, type SourceTarget } from './sourceOwner.js';
 
@@ -368,7 +368,7 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
   try {
     const scope = await quickInput.pick([{ label: t('plugins.gatewayParameters'), scope: 'gateway' as const },
       { label: t('plugins.workspaceParameters'), scope: 'workspace' as const }],
-    { title: t('plugins.settingsTitle', target.name, target.gateway_id), canPickMany: false }, token);
+    { title: t('plugins.settingsTitle', managementTargetDisplayName(target), target.gateway_id), canPickMany: false }, token);
     check();
     if (!scope) return;
     const workspace = scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput, token) : undefined;

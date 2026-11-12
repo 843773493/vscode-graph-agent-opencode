@@ -6,6 +6,7 @@ import { IWorkbenchLayoutService, Parts } from '../upstream/src/vs/workbench/ser
 import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { ViewContainerLocation } from '../upstream/src/vs/workbench/common/views.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
+import { t } from '../../shared/core/i18n/index.js';
 import { workspaceContext } from './workspaceContext.js';
 
 interface PanelState { visible: boolean; id: string; size?: { width: number; height: number } }
@@ -102,7 +103,7 @@ export class WorkspacePanelState extends Disposable {
         if (selectedRoute && this.appliedRoute === selectedRoute) this.openMcpAfterRestore = false;
         await this.views.openView('boxteam.mcp.view', true);
       }
-    }).catch((cause: unknown) => this.notifications.error(`恢复工作区底部面板失败：${String(cause)}`));
+    }).catch((cause: unknown) => this.notifications.error(t('workbench.panel.restoreFailed', String(cause))));
   }
 
   override dispose(): void { this.disposed = true; this.save(); super.dispose(); }

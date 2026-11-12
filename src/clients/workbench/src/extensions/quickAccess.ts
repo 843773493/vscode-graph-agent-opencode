@@ -10,7 +10,7 @@ import { IViewsService } from '../../upstream/src/vs/workbench/services/views/co
 import type { PluginInventoryResultDTO, PluginTarget } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gateway } from '../agentApi.js';
-import { managementGateway } from '../managementTarget.js';
+import { managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { ServicePluginPackagesView } from './servicePluginManagement.js';
 
@@ -39,7 +39,7 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
     const query: PluginQuery = { target: { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id },
       entryGatewayId: workspaceContext.getSnapshot().gatewayId, controller: new AbortController(), invalidated: false };
     this.query = query;
-    picker.placeholder = `${this instanceof InstallPluginQuickAccessProvider ? t('plugins.installCustomPackage') : t('plugins.findInstalled')} · ${target.name} · ${target.gateway_id}`;
+    picker.placeholder = `${this instanceof InstallPluginQuickAccessProvider ? t('plugins.installCustomPackage') : t('plugins.findInstalled')} · ${managementTargetDisplayName(target)} · ${target.gateway_id}`;
     const invalidate = () => {
       query.invalidated = true;
       access.cancel();

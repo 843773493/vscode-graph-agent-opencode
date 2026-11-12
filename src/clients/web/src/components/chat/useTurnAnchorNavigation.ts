@@ -1,5 +1,6 @@
 import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import { StaleTurnReferenceHttpError } from "../../api/session/sessionTurnHistory";
+import { formatNumber, t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { errorMessage } from "../../utils/errorMessage";
@@ -103,7 +104,7 @@ export function useTurnAnchorNavigation({
     setLocated(undefined);
     if (anchor.restoring) {
       scrollToLatest();
-      currentRef.current.onViewStateRestoreStatus?.("历史位置已失效，已回到会话尾部：" + message);
+      currentRef.current.onViewStateRestoreStatus?.(t("chat.turnNavigation.restoreFailed", message));
     }
     setNavigation({ scopeKey: anchor.scopeKey, turnId: anchor.turnId, phase: "error", message });
   }, [scrollToLatest]);
@@ -119,24 +120,25 @@ export function useTurnAnchorNavigation({
     };
     anchorRef.current = anchor;
     if (!anchor.turnId) {
-      failAnchor(anchor, "请输入轮次 ID");
+      failAnchor(anchor, t("chat.turnNavigation.emptyTurnId"));
       return;
     }
     const loaded = !message && !tool && currentRef.current.items.some((item) => isTargetTurn(item, anchor.turnId));
     anchor.loading = !loaded;
     setNavigation({ scopeKey, turnId: anchor.turnId, phase: loaded ? "positioning" : "loading",
-      message: loaded ? "正在定位轮次…" : "正在读取指定轮次…" });
+      message: loaded ? t("chat.turnNavigation.positioning") : t("chat.turnNavigation.loading") });
     if (loaded) return;
     void onLoadAroundTurn(anchor.turnId, anchor.controller.signal, message, tool?.item_id).then((located) => {
       if (anchorRef.current !== anchor || anchor.controller.signal.aborted || currentRef.current.scopeKey !== scopeKey) return;
-      if (message && (!located || !("reference" in located))) { failAnchor(anchor, "后端未返回已核验的消息原文"); return; }
-      if (tool && (!located || !("item_id" in located) || located.item_id !== tool.item_id)) { failAnchor(anchor, "后端未返回指定工具结果身份"); return; }
+      if (message && (!located || !("reference" in located))) { failAnchor(anchor, t("chat.turnNavigation.messageMissing")); return; }
+      if (tool && (!located || !("item_id" in located) || located.item_id !== tool.item_id)) { failAnchor(anchor, t("chat.turnNavigation.toolResultMissing")); return; }
       setLocated(located ? { scopeKey, value: located } : undefined);
       anchor.loading = false;
-      setNavigation({ scopeKey, turnId: anchor.turnId, phase: "positioning", message: "正在定位轮次…" });
+      setNavigation({ scopeKey, turnId: anchor.turnId, phase: "positioning", message: t("chat.turnNavigation.positioning") });
     }, (error: unknown) => {
       failAnchor(anchor, (message || tool) && error instanceof StaleTurnReferenceHttpError
-        ? tool ? "工具结果已不属于当前历史，请重新查找" : "消息命中已过期，请重新搜索" : "无法跳到指定轮次：" + errorMessage(error));
+        ? tool ? t("chat.turnNavigation.staleToolResult") : t("chat.turnNavigation.staleMessage")
+        : t("chat.turnNavigation.failed", errorMessage(error)));
     });
   }, [cancelAnchor, failAnchor, followsLatestRef, onLoadAroundTurn, scopeKey, setShowJumpToLatest]);
 
@@ -145,7 +147,7 @@ export function useTurnAnchorNavigation({
     if (!anchor || anchor.loading || anchor.scopeKey !== currentRef.current.scopeKey) return;
     const index = currentRef.current.items.findIndex((item) => isTargetTurn(item, anchor.turnId));
     if (index < 0) {
-      failAnchor(anchor, "当前会话线程中未找到指定轮次：" + anchor.turnId);
+      failAnchor(anchor, t("chat.turnNavigation.notFound", anchor.turnId));
       return;
     }
     const scroller = scrollerRef.current;
@@ -177,7 +179,10 @@ export function useTurnAnchorNavigation({
     const target = currentRef.current.items[index];
     const ordinal = target.kind === "turn" ? target.conversation.turnOrdinal : undefined;
     setNavigation({ scopeKey: anchor.scopeKey, turnId: anchor.turnId, phase: "located",
-      message: anchor.tool ? "已定位工具结果" : anchor.message ? "已定位消息原文" : ordinal === undefined ? "已定位指定轮次" : "已定位第 " + ordinal + " 轮" });
+      message: anchor.tool ? t("chat.turnNavigation.locatedToolResult")
+        : anchor.message ? t("chat.turnNavigation.locatedMessage")
+          : ordinal === undefined ? t("chat.turnNavigation.locatedTurn")
+            : t("chat.turnNavigation.locatedOrdinal", formatNumber(ordinal)) });
     currentRef.current.onViewStateChange?.({ turn_anchor: anchor.turnId, scroll_offset: anchor.offset, follow_latest: false });
   }, [failAnchor, scrollerRef, streamRef]);
 
@@ -197,7 +202,7 @@ export function useTurnAnchorNavigation({
     const anchor = anchorRef.current;
     if (!anchor || anchor.loading || anchor.located || typeof window === "undefined") return;
     const timer = window.setTimeout(() => {
-      failAnchor(anchor, "指定轮次已加载，但无法在聊天视口中完成定位，请重试");
+      failAnchor(anchor, t("chat.turnNavigation.positioningFailed"));
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [failAnchor, navigation]);
@@ -222,7 +227,7 @@ export function useTurnAnchorNavigation({
     } else {
       if (!messageNavigation.reference) {
         cancelAnchor();
-        setNavigation({ scopeKey, turnId: messageNavigation.turn_id, phase: "error", message: "消息命中缺少位置引用，请重新查询" });
+        setNavigation({ scopeKey, turnId: messageNavigation.turn_id, phase: "error", message: t("chat.turnNavigation.messageReferenceMissing") });
         return;
       }
       navigateToTurn(messageNavigation.turn_id, 0, false, messageNavigation.reference);
