@@ -251,25 +251,27 @@ async def test_new_missing_id_never_borrows_previous_position(source_owner: Sour
     assert saved.edit is not None and saved.edit.state == "pending_restart"
 
 
-async def test_only_v1_missing_id_that_would_rewrite_file_is_rejected(source_owner: SourceOwner) -> None:
+async def test_legacy_connection_source_requires_explicit_migration_without_writes(source_owner: SourceOwner) -> None:
     case = source_owner
     case.path.write_text(json.dumps({"config_version": 4, "workspaces": [_connection()]}))
     load_gateway_config(config_path=case.path, local_config_path=case.local, schema_path=case.service.config.schema_path, state_store=case.store)
     text = json.dumps({"config_version": 1, "workspaces": [_connection(explicit=False)]})
-    case.path.write_text(text)
-    before = case.snapshot()
-    document = case.service.get_source_document(source_key=SOURCE)
-    assert document.source_effective["workspaces"] == [_connection()]
     request = case.request(text + "\n// v1\n")
-    with pytest.raises(ConfigConflictError, match="不兼作版本迁移入口"):
+    before = case.snapshot()
+    with pytest.raises(ValueError, match="migrate-runtime-config"):
         case.service.preflight_source_edit(source_key=SOURCE, request=request)
-    with pytest.raises(ConfigConflictError, match="不兼作版本迁移入口"):
+    with pytest.raises(ValueError, match="migrate-runtime-config"):
         await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert case.snapshot() == before
     request = case.request(json.dumps({"config_version": 1, "workspaces": [_connection()]}))
     saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert saved.edit is not None and saved.edit.state == "pending_restart"
     assert case.path.read_text() == request.jsonc
+    case.path.write_text(text)
+    before = case.snapshot()
+    with pytest.raises(ValueError, match="migrate-runtime-config"):
+        case.service.get_source_document(source_key=SOURCE)
+    assert case.snapshot() == before
 
 
 async def test_same_key_concurrency_and_watcher_apply_once(source_owner: SourceOwner) -> None:

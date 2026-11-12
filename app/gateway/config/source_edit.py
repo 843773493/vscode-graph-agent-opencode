@@ -26,7 +26,9 @@ from app.schemas.gateway.config import (
     GatewayConfigSourceOriginDTO,
     GatewayConfigSourcePreflightDTO,
 )
-from app.services.infrastructure.config.plugin_private_inputs import private_input_references
+from app.services.infrastructure.config.plugin_private_inputs import (
+    private_input_references,
+)
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.source_document import (
     parse_source_text,
@@ -44,7 +46,6 @@ from app.services.infrastructure.config.state import (
 from configs.plugin_parameters import plugin_parameters
 from configs.runtime import merge_json_objects, read_jsonc_object
 
-from .connection_ids import _connection_id_record
 from .loader import load_gateway_config
 from .values import _GATEWAY_SOURCE_LAYER_AUTHORITY, GatewayConfig
 
@@ -170,20 +171,7 @@ class GatewaySourceEditMixin:
         file = self._check_source_edit(source_key, request, accepted)
         original = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
         text = restore_source_text(request.jsonc, original)
-        payloads: dict[str, dict[str, object]] = {}
-        candidate = self._source_config(overrides={source_key: parse_source_text(text)}, payloads=payloads)
-        user_payload = payloads["gateway_mutable_override"]
-        workspaces = user_payload.get("workspaces")
-        if user_payload.get("config_version", 1) == 1 and isinstance(workspaces, list) and any(
-            isinstance(item, dict) and item.get("connection_id") is None for item in workspaces
-        ):
-            record = _connection_id_record(cast("GatewayConfigReloadService", self)._state_store)
-            migration = record.payload.get("migration") if record is not None else None
-            if not isinstance(migration, dict) or migration.get("state") != "rolled_back":
-                raise ConfigConflictError(
-                    "Gateway v1 来源的 workspaces[].connection_id 缺失会触发原 loader 改写文件；"
-                    "请先沿原迁移入口完成迁移或补齐 connection_id，来源 writer 不兼作版本迁移入口"
-                )
+        candidate = self._source_config(overrides={source_key: parse_source_text(text)})
         verify_stable_config_file(file)
         return text, candidate
 
