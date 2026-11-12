@@ -26,8 +26,8 @@ class ContentMatch:
 
 def content_matches(
     uri: str, content: str, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str],
-    monotonic: Callable[[], float],
-) -> Iterator[ContentMatch]:
+    monotonic: Callable[[], float], skip_matches: int = 0,
+) -> Iterator[ContentMatch | None]:
     options = request.search_options or ResourceNavigationSearchOptions()
 
     def check_deadline() -> None:
@@ -65,20 +65,25 @@ def content_matches(
             if not options.all_matches and row == last_line:
                 continue
             last_line = row
-            line = line_content(row)
-            column = begin - starts[row]
-            start = max(0, column - request.max_snippet_bytes // 8)
-            raw = line[start:].encode("utf-8")
-            snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
-            match = ResourceNavigationMatchDTO(uri=uri, line=row + 1, column=column + 1,
-                end_line=end_row + 1, end_column=end - starts[end_row] + 1,
-                utf16_column=utf16_column(begin, row), utf16_end_column=utf16_column(end, end_row),
-                snippet_start_utf16_column=utf16_column(starts[row] + start, row),
-                text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
-            context = tuple(context_line(index) for index in (
-                *range(max(0, row - options.context_lines), row),
-                *range(end_row + 1, min(len(starts), end_row + options.context_lines + 1)),
-            ))
-            yield ContentMatch(match, context)
+            # 续页仍核对原匹配位置，已交付项不再构造片段、上下文和 DTO。
+            if skip_matches:
+                skip_matches -= 1
+                yield None
+            else:
+                line = line_content(row)
+                column = begin - starts[row]
+                start = max(0, column - request.max_snippet_bytes // 8)
+                raw = line[start:].encode("utf-8")
+                snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
+                match = ResourceNavigationMatchDTO(uri=uri, line=row + 1, column=column + 1,
+                    end_line=end_row + 1, end_column=end - starts[end_row] + 1,
+                    utf16_column=utf16_column(begin, row), utf16_end_column=utf16_column(end, end_row),
+                    snippet_start_utf16_column=utf16_column(starts[row] + start, row),
+                    text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
+                context = tuple(context_line(index) for index in (
+                    *range(max(0, row - options.context_lines), row),
+                    *range(end_row + 1, min(len(starts), end_row + options.context_lines + 1)),
+                ))
+                yield ContentMatch(match, context)
             if not options.all_matches and not options.is_multiline:
                 break

@@ -479,11 +479,9 @@ class ResourceNavigation:
         consumed = 0
         truncated = False
         reason = None
-        for hit in self._content_matches(node.uri, content, request, deadline, pattern):
-            if hit is None:
-                continue
+        for hit in self._content_matches(node.uri, content, request, deadline, pattern, skip_matches=offset):
             consumed += 1
-            if consumed <= offset:
+            if hit is None:
                 continue
             additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts}
             candidate = ResourceNavigationResultDTO(node=node, entries=(node,), matches=(*matches, hit.match),
@@ -600,7 +598,7 @@ class ResourceNavigation:
                 included = request.query in "/".join(child.tail_segments[1:])
             if included and request.operation == "search" and request.search_mode != "content":
                 included = self._file_included(name, request)
-            hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern, is_private) if (
+            hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern, is_private, skip_matches=skipped) if (
                 request.operation == "search" and request.search_mode == "content" and is_file
             ) else iter((None,))
             child_node = None
@@ -622,17 +620,15 @@ class ResourceNavigation:
     def _file_matches(
         self, root: Path, parsed: ParsedResourceUri, child: ParsedResourceUri, metadata: FileObservation,
         request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-        is_private: Callable[[Path, Path], bool] | None,
+        is_private: Callable[[Path, Path], bool] | None, *, skip_matches: int = 0,
     ) -> Iterator[ContentMatch | None]:
         name = "/".join(child.tail_segments[len(parsed.tail_segments):]) or child.tail_segments[-1]
         if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
-            yield None
             return
         file = self._contained(root, child.tail_segments[1:], child, is_private)
         data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
         # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
         if b"\0" in data:
-            yield None
             return
         if len(data) > request.max_bytes:
             raise ResourceFileOperationError("output_limit_exceeded", "搜索文件超过读取上限，请缩小过滤或增加 max_bytes", reason="file_byte_limit")
@@ -640,23 +636,18 @@ class ResourceNavigation:
             content = data.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
-        yield from self._content_matches(child.display_uri, content, request, deadline, pattern)
+        yield from self._content_matches(child.display_uri, content, request, deadline, pattern, skip_matches=skip_matches)
 
     def _content_matches(
         self, uri: str, content: str, request: ResourceNavigationRequest,
-        deadline: float, pattern: regex.Pattern[str] | None,
+        deadline: float, pattern: regex.Pattern[str] | None, *, skip_matches: int = 0,
     ) -> Iterator[ContentMatch | None]:
         if pattern is None:
             raise ValueError("内容搜索缺少已编译查询")
-        found = False
         try:
-            for hit in content_matches(uri, content, request, deadline, pattern, time.monotonic):
-                found = True
-                yield hit
+            yield from content_matches(uri, content, request, deadline, pattern, time.monotonic, skip_matches)
         except TimeoutError as error:
             raise ResourceFileOperationError("output_limit_exceeded", "文件内容匹配超过本次总期限", reason="deadline") from error
-        if not found:
-            yield None
 
     @staticmethod
     def _stat(path: Path) -> tuple[int, ...]:
