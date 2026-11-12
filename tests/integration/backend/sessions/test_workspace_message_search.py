@@ -114,6 +114,10 @@ async def test_unified_provider_preserves_literal_body_cursor_and_original_error
 async def test_workspace_search_discovers_exact_children_and_resumes_canonical_positions(
     runtime_case: RuntimeCase, history_client: httpx.AsyncClient, search_history, workspace_query,
 ) -> None:
+    catalog = runtime_case.runner.container.session_catalog.resolver.catalog_store
+    for index in range(65):
+        catalog.create_folder(f"ses_00000000000070008000{index:012x}",
+                              runtime_case.runner.container.workspace_id, None, f"Folder {index}")
     session_id, _base, main, child, cold, _contents, accepted = search_history
     saver = runtime_case.runner.saver
     cold_root = saver._storage.storage.root(session_id, thread_id=cold)

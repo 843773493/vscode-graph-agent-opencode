@@ -26,7 +26,7 @@ from app.services.infrastructure.rollout_history.message_search import (
     MessageSearchBudget,
 )
 
-MAX_SCANNED_NODES = 64
+MAX_SESSION_PAGES = 64
 MAX_SCANNED_THREADS = 16
 
 
@@ -88,15 +88,12 @@ async def search_workspace_messages(
         raise WorkspaceMessageSearchCursorError("position_out_of_bounds", "工作区消息搜索 cursor 目录位置越界")
     items: list[WorkspaceMessageMatchDTO] = []
     scanned_sessions: set[str] = set()
-    scanned_nodes = scanned_threads = 0
+    session_pages = scanned_threads = 0
     reason = None
     while state.node_offset < len(snapshot.items):
         admission.check()
         if len(items) >= request.limit:
             reason = "result_limit"
-            break
-        if scanned_nodes >= MAX_SCANNED_NODES:
-            reason = "scan_limit"
             break
         if scanned_threads >= MAX_SCANNED_THREADS:
             reason = "thread_limit"
@@ -105,8 +102,12 @@ async def search_workspace_messages(
             reason = "deadline"
             break
         node = snapshot.items[state.node_offset]
-        scanned_nodes += 1
         if node.session is not None:
+            # Folder 保留目录游标坐标，不消耗 Thread 来源的读取名额。
+            if session_pages >= MAX_SESSION_PAGES:
+                reason = "scan_limit"
+                break
+            session_pages += 1
             # 同一控制库 revision 保护当前 Session 的 keyset，正文续页仍由原历史 owner 核验。
             async with asyncio.timeout(admission.remaining()):
                 revision, rows, has_more = await sessions.thread_name_page(
