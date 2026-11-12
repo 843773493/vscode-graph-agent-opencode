@@ -58,7 +58,7 @@ registerAction2(class AttachResourceReference extends Action2 {
     const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService);
     const active = editors.activeEditor;
     const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(active, { supportSideBySide: SideBySideEditor.PRIMARY });
-    if (resource && supportsResourceReference(resource)) {
+    if (resource && supportsResourceReference(resource) && (supplied || !(active instanceof ThreadInput))) {
       await appendToThread(accessor, () => resourceReference(resource));
       return;
     }

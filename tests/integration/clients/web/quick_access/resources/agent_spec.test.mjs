@@ -29,6 +29,21 @@ async function exercise(mode) {
   } finally { await page.close(); }
 }
 const parses = result => result.requests.filter(item => item.path.endsWith('/parse'));
+test('来源候选直接复制原规范引用，不打开、不读正文且保留选择器', async () => {
+  const result = await exercise('copy');
+  expect(result.errors).toEqual([]);
+  expect(result.rows.every(row => row.copy)).toBe(true);
+  expect(parses(result)).toHaveLength(1);
+  expect(parses(result)[0].body.resource_gateway_id).toBe(`gateway_${'b'.repeat(32)}`);
+  expect(result.copied).toEqual([`boxteam://gateway_${'b'.repeat(32)}/workspace/019a0000-0000-7000-8000-000000000001/resources/agent-spec/root/AGENTS.md`]);
+  expect(result.hidden).toBe(false); expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
+});
+for (const mode of ['copy-mismatch', 'copy-identity', 'copy-gateway']) test(`${mode}拒绝把错误或迟到的引用写入剪贴板`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors.join('')).toMatch(/归属不匹配|身份|凭据/);
+  expect(result.copied).toEqual([]); expect(result.references).toEqual([]); expect(result.opened).toEqual([]);
+  expect(parses(result)).toHaveLength(1);
+});
 test('同名来源按完整owner区分，候选／高亮零正文读取与激活', async () => {
   const result = await exercise('browse');
   expect(result.rows).toHaveLength(2); expect(result.rows[0].id).not.toBe(result.rows[1].id);

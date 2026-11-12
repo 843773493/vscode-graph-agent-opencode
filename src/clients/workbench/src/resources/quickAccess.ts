@@ -31,6 +31,8 @@ import { chooseSearchOwners } from '../search/quickAccessScope.js';
 import type { SearchInvocationOptions } from '../search/target.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
+import { COPY_RESOURCE_URI } from '../resourceActions.js';
+import { sourceDocumentUri } from '../sourceDocuments.js';
 import { resourceActionCommand, resourceFocusCommand } from './runtimeActions.js';
 import { openWorkspaceMcpServerCommand } from '../mcp/commands.js';
 import { ConfigurationSourceOwner, type SourceTarget } from '../settings/sourceOwner.js';
@@ -129,15 +131,23 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     const pick = (owner: WorkspaceOwner, uri: string, label: string, description: string, available = true, errorCode?: string): SourcePick => {
       const item: SourcePick = { id: `${gatewayWorkspaceKey(owner)}/${uri}`, label: available ? label : `${label}（来源不可用）`,
         filterLabel: label, description, detail: `${owner.gatewayId} · ${owner.workspaceId} · ${uri}${errorCode ? ` · ${errorCode}` : ''}` };
-      if (available) item.accept = (mods, event) => {
-        this.assertAccess(run);
-        const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
-          || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
-        const openOptions: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
-          boxteamResourceOwner: { ...owner }, boxteamTargetGroup: run.group, openToSide: mods.alt || pinned && mods.ctrlCmd,
-          editorOptions: { pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground } };
-        this.report(this.opener.open(uri, openOptions));
-      };
+      if (available) {
+        item.buttons = [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }];
+        item.trigger = () => {
+          this.assertAccess(run);
+          this.report(this.commands.executeCommand(COPY_RESOURCE_URI, sourceDocumentUri(owner, uri)));
+          return TriggerAction.NO_ACTION;
+        };
+        item.accept = (mods, event) => {
+          this.assertAccess(run);
+          const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
+            || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
+          const openOptions: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
+            boxteamResourceOwner: { ...owner }, boxteamTargetGroup: run.group, openToSide: mods.alt || pinned && mods.ctrlCmd,
+            editorOptions: { pinned: mods.ctrlCmd || event.inBackground || pinned, preserveFocus: event.inBackground } };
+          this.report(this.opener.open(uri, openOptions));
+        };
+      }
       return item;
     };
     const continuePage = (id: string, label: string, description: string, read: () => Promise<SourcePick[]>): SourcePick => {

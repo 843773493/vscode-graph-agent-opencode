@@ -44,6 +44,13 @@ export async function runtimeActionContract(mode) {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, body, gateway: headers.get('X-BoxTeam-Target-Gateway-Id'), query: new URL(url, location.href).search });
     if (path === '/api/gateway/config/sources' || path === '/api/v1/config/sources') return ok({ sources: [] });
+    // 此装具不准备附件或执行历史，但仍消费原 Provider 的精确 Thread 目录合同。
+    if (path === `/api/v1/sessions/${thread.session_id}/threads/${thread.thread_id}/attachments`) {
+      return ok({ ...thread, items: [], next_after: null });
+    }
+    if (path === `/api/v1/sessions/${thread.session_id}/threads/${thread.thread_id}/tool-results`) {
+      return ok({ ...thread, items: [], source_view_id: null, source_view_revision: 0, next_after: null });
+    }
     if (path === `/api/v1/sessions/${thread.session_id}/changesets`) return ok({ session_id: thread.session_id, items: [] });
     if (path === '/api/gateway/workspaces') {
       if (mode === 'freeze' && releaseRoutes === undefined && requests.some(item => item.phase === 'command')) return new Promise(resolve => { releaseRoutes = () => resolve(ok({ items: targets })); });

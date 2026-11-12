@@ -21,6 +21,20 @@ class GatewayResourceAddressRequest(_message.Message):
     resource_gateway_id: str
     def __init__(self, uri: _Optional[str] = ..., local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ...) -> None: ...
 
+class GatewayThreadAddressRequest(_message.Message):
+    __slots__ = ("local_gateway_id", "resource_gateway_id", "workspace_id", "session_id", "thread_id")
+    LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    local_gateway_id: str
+    resource_gateway_id: str
+    workspace_id: str
+    session_id: str
+    thread_id: str
+    def __init__(self, local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
+
 class GatewayResourceAddressDTO(_message.Message):
     __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri")
     URI_FIELD_NUMBER: _ClassVar[int]

@@ -18,6 +18,7 @@ try {
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('来源页面Chromium', () => browser.close());
   page = await browser.newPage({ viewport: { width: 1700, height: 1100 } });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   page.setDefaultTimeout(15_000);
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   page.on('request', request => {
@@ -80,6 +81,16 @@ try {
   await quick.getByRole('button', { name: '选择来源所属工作区', exact: true }).click();
   await expect(quick).toContainText('选择快速访问搜索范围'); await page.keyboard.press('Escape');
   await expect(candidate(a)).toBeVisible(); await page.keyboard.press('Escape'); expect(currentReads()).toEqual([]); result.scopeCancel = true;
+  await phase('copy-unopened');
+  const tabsBeforeCopy = await page.locator('.tab').count();
+  await show(b);
+  await candidate(b).getByRole('button', { name: '复制资源 URI', exact: true }).click();
+  await expect.poll(() => result.receipts.some(item => item.phase === result.phase && item.path === '/api/gateway/resource-addresses/parse')).toBe(true);
+  const copyReceipt = result.receipts.find(item => item.phase === result.phase && item.path === '/api/gateway/resource-addresses/parse');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copyReceipt.data.reference_uri);
+  expect(copyReceipt.data.gateway_id).toBe(b.gateway_id); expect(copyReceipt.data.scope_id).toBe(b.workspace_id);
+  expect(currentReads()).toEqual([]); await expect(page.locator('.tab')).toHaveCount(tabsBeforeCopy);
+  await expect(input).toBeFocused(); await page.keyboard.press('Escape'); result.copyUnopened = true;
   await phase('open-B'); await show(a);
   await quick.getByRole('button', { name: '选择来源所属工作区', exact: true }).click();
   await quick.locator('.monaco-list-row').filter({ hasText: a.workspace_id }).getByRole('checkbox').uncheck();

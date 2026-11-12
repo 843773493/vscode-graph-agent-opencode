@@ -166,7 +166,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "GatewayManagementDirectoryDTO", "GatewayManagementTargetDTO",
         "GatewayDirectoryListDTO", "NativeDirectoryBindRequest",
         "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
-        "GatewayResourceAddressRequest", "GatewayResourceAddressDTO",
+        "GatewayResourceAddressRequest", "GatewayThreadAddressRequest", "GatewayResourceAddressDTO",
         "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest",
         "CreateFederationManagedWorkspaceRequest",
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",

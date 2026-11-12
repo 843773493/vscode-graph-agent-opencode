@@ -57,6 +57,51 @@ def test_session_and_child_keep_explicit_owner_without_reading_resources(
     )
 
 
+@pytest.mark.parametrize("gateway_id", [GATEWAY, REMOTE])
+def test_thread_identity_creates_reference_without_registry_or_history(
+    address_client: TestClient, gateway_id: str,
+) -> None:
+    workspace_id = "019a0000-0000-7000-8000-000000000001"
+    response = address_client.post("/api/gateway/resource-addresses/thread", json={
+        "local_gateway_id": GATEWAY, "resource_gateway_id": gateway_id,
+        "workspace_id": workspace_id, "session_id": SESSION, "thread_id": THREAD,
+    }, headers={"X-Request-ID": "copy-exact-thread"})
+    assert response.status_code == 200
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "copy-exact-thread"
+    data = response.json()["data"]
+    assert data == {
+        "uri": thread_resource_uri(workspace_id, SESSION, THREAD,
+                                   gateway_authority=gateway_id if gateway_id != GATEWAY else None),
+        "reference_uri": thread_resource_uri(workspace_id, SESSION, THREAD, gateway_authority=gateway_id),
+        "gateway_id": gateway_id, "scope": "workspace", "scope_id": workspace_id,
+        "kind": "session", "file_root_uri": None, "session_id": SESSION, "thread_id": THREAD,
+    }
+
+
+@pytest.mark.parametrize("field,value", [
+    ("workspace_id", "../workspace"), ("session_id", "missing-session"),
+    ("thread_id", "missing-thread"), ("resource_gateway_id", "gateway-invalid"),
+    ("uri", "boxteam://unregistered"),
+])
+def test_thread_identity_rejects_invalid_or_extra_fields(
+    address_client: TestClient, field: str, value: str,
+) -> None:
+    body = {"local_gateway_id": GATEWAY, "resource_gateway_id": REMOTE,
+            "workspace_id": "019a0000-0000-7000-8000-000000000001",
+            "session_id": SESSION, "thread_id": THREAD, field: value}
+    assert address_client.post("/api/gateway/resource-addresses/thread", json=body).status_code == 422
+
+
+def test_thread_reference_keeps_source_gateway_guard_and_auth(address_client: TestClient) -> None:
+    body = {"local_gateway_id": REMOTE, "resource_gateway_id": GATEWAY,
+            "workspace_id": "019a0000-0000-7000-8000-000000000001",
+            "session_id": SESSION, "thread_id": THREAD}
+    assert address_client.post("/api/gateway/resource-addresses/thread", json=body).status_code == 409
+    body["local_gateway_id"] = GATEWAY
+    assert address_client.post("/api/gateway/resource-addresses/thread", json=body,
+                               headers={"X-Local-Token": "invalid"}).status_code == 401
+
+
 def test_file_root_comes_from_same_uri_owner(address_client: TestClient) -> None:
     root = resource_display_uri(scope="workspace", scope_id=WORKSPACE, kind="files", tail_segments=("root",))
     uri = root + "/%E6%96%87%E4%BB%B6%40%3A7.txt"

@@ -1046,3 +1046,9 @@
 真实产品执行生成历史的后端检查 3 passed；导航与附件／变更合同 87 passed／391 断言，最终导航状态简化后补验 56 passed／250 断言。172 份实际 sourceTransform 源码类型检查、协议生成一致性、公开 OpenAPI 导出和新增 proto 格式／breaking 检查通过；完整 Workbench 页面、Windows、真实远端及 Electron 工具结果入口尚未验收，11.2 保持未勾选。原始输出位于 `out/tests/temp/2026/11/12/tool_result_resource_quick_access/artifacts/`。本次按用户要求在工作区统一提交／同步边界收口，完整页面验收仍待后续继续。
 
 收口补验：相同产品源码的正式 Workbench 构建通过（79 个内置 Web 扩展）；新增 Provider 短合同在按原 owner 限定混合来源行后 7 passed／44 断言，验证精确 child、固定 view 续页、取消与 typed 接受。完整页面仍未运行；短合同不替代真实页面。原件位于 `out/tests/integration/clients/web/quick_access/resources/test_tool_results/artifacts/2026/11/12/tool_results_slice/`，失败原件及 `rerun-01/` 均保留。
+
+### 2026-11-12：精确 Thread 与未打开来源的复制引用（2.3、12.1 部分）
+
+原复制命令现接受精确 Thread 编辑器及候选，将已有 Gateway／工作区／Session／Thread 身份交唯一 URI owner 生成既有规范引用；复制不查目录、历史或资源存在性，不启动目标。AGENTS／Skill 的 `resource ` 候选按钮也直接复用同一命令，不先打开或读取正文，保持选择器与输入焦点。活动 Thread 发起的文件多选仍沿原 Composer 入口，不因新增 Thread 引用能力改为引用自身。
+
+Gateway 地址及路由短验 25 passed、公开结构 96 passed、认证与顺序 4 passed；来源复制合同 19 passed／140 断言，Skill／配置来源 63 项及运行资源 29 项通过，各批有重叠不相加。扩大消费者检查发现运行装具缺少此前新增的附件／工具结果空目录回执、路由顺序测试仍引用已删除辅助代理；迁齐后保留原身份、revision、动作及取消断言复验通过。172 份实际转换源码类型、规定 Web 构建（79 个内置扩展）、协议生成一致性与相关 Ruff 通过。Python Pyright 可执行文件不可用，未改环境；完整 Thread／来源页面正由独立测试切片验证，本记录不将其计为通过。Windows、真实远端 Gateway、Electron 与固定版本／Diff 引用尚未由本片验收，宽任务继续未勾选。准确命令、指纹、失败原件及最小实现复审见 `out/tests/temp/2026/11/12/thread_resource_reference/artifacts/verification.json`。本次仅本地提交，不同步或 push。

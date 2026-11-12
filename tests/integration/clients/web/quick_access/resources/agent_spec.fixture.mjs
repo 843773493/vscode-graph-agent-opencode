@@ -1,5 +1,7 @@
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
+import { IClipboardService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/clipboard/common/clipboardService.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { ResourceOpener } from '../../../../../../src/clients/workbench/src/resourceOpener.js';
 import { sourceDocumentSource } from '../../../../../../src/clients/workbench/src/sourceDocuments.js';
@@ -13,8 +15,8 @@ const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(3
 const uri = `boxteam://workspace/${owners[0].workspaceId}/resources/agent-spec/root/AGENTS.md`;
 
 export async function agentSpecContract(mode) {
-  const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
-  const requests = [], opened = [], references = [], errors = [], shows = [], choices = [];
+  const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), itemButtons = new Emitter(), cancellation = new CancellationTokenSource();
+  const requests = [], opened = [], references = [], errors = [], shows = [], choices = [], copied = [];
   let releaseRead, releaseParse, aborted = false, released = 0, addedGroups = 0;
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
     name: `来源 ${index}`, status: mode === 'stopped' && index === 1 ? 'stopped' : 'ready' }));
@@ -44,10 +46,10 @@ export async function agentSpecContract(mode) {
     }
     if (path === '/api/gateway/resource-addresses/parse') {
       const owner = owners.find(item => item.gatewayId === body.resource_gateway_id) ?? owners[0];
-      const result = () => ok({ gateway_id: mode === 'mismatch' ? owners[0].gatewayId : owner.gatewayId,
+      const result = () => ok({ gateway_id: ['mismatch', 'copy-mismatch'].includes(mode) ? owners[0].gatewayId : owner.gatewayId,
         scope: 'workspace', scope_id: owner.workspaceId, kind: 'agent-spec', uri,
         reference_uri: `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/agent-spec/root/AGENTS.md` });
-      if (mode === 'freeze') return new Promise(resolve => { releaseParse = () => resolve(result()); });
+      if (['freeze', 'copy-identity', 'copy-gateway'].includes(mode)) return new Promise(resolve => { releaseParse = () => resolve(result()); });
       return result();
     }
     throw new Error(`非预期来源请求: ${method} ${path}`);
@@ -67,9 +69,15 @@ export async function agentSpecContract(mode) {
   const notifications = { error: cause => errors.push(String(cause)) };
   const picker = { value: 'resource ag', items: [], activeItems: [], selectedItems: [], buttons: [],
     keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event,
-    onDidAccept: accepts.event, onDidTriggerButton: buttons.event, onDidTriggerItemButton: Event.None,
+    onDidAccept: accepts.event, onDidTriggerButton: buttons.event, onDidTriggerItemButton: itemButtons.event,
     onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
-  const provider = new ResourceQuickAccess(quick, opener, groups, configuration, notifications, {}, {});
+  const commands = { executeCommand(id, ...args) {
+    return CommandsRegistry.getCommand(id).handler({ get(service) {
+      if (service === IClipboardService) return { writeText: async text => { copied.push(text); } };
+      throw new Error(`复制不应读取其它宿主服务：${service}`);
+    } }, ...args);
+  } };
+  const provider = new ResourceQuickAccess(quick, opener, groups, configuration, notifications, commands, {});
   const options = mode === 'no-owner' ? { searchOwnerError: '发起来源未明确' } : { searchOwners: owners };
   const lifetime = provider.provide(picker, cancellation.token, options);
   const until = async predicate => {
@@ -85,6 +93,16 @@ export async function agentSpecContract(mode) {
       await until(() => !picker.busy && picker.items.length > 0);
       if (mode === 'scope-cancel') {
         buttons.fire(picker.buttons[0]); await until(() => shows.length);
+      } else if (mode.startsWith('copy')) {
+        const item = picker.items[1];
+        itemButtons.fire({ item, button: item.buttons[0] });
+        if (['copy-identity', 'copy-gateway'].includes(mode)) {
+          await until(() => releaseParse);
+          if (mode === 'copy-identity') invalidateGatewayToken(0);
+          else workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+          releaseParse();
+        }
+        await until(() => copied.length || errors.length);
       } else if (!['browse', 'stopped', 'unsupported', 'no-owner'].includes(mode)) {
         picker.activeItems = [picker.items[1]];
         picker.selectedItems = picker.activeItems;
@@ -98,10 +116,11 @@ export async function agentSpecContract(mode) {
         await until(() => opened.length || errors.length);
       }
     }
-    return { requests, opened, references, errors, shows, choices, aborted, released, addedGroups,
-      rows: picker.items.map(item => ({ id: item.id, label: item.label, highlights: item.highlights, selectable: !!item.accept })) };
+    return { requests, opened, references, errors, shows, choices, copied, hidden: !!picker.hidden, aborted, released, addedGroups,
+      rows: picker.items.map(item => ({ id: item.id, label: item.label, highlights: item.highlights, selectable: !!item.accept,
+        copy: !!item.buttons?.some(button => button.tooltip === '复制资源 URI') })) };
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); opener.dispose();
-    changes.dispose(); accepts.dispose(); buttons.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous);
+    changes.dispose(); accepts.dispose(); buttons.dispose(); itemButtons.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
 }

@@ -2,12 +2,28 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.canonical_params import (
+    CanonicalGatewayId,
+    CanonicalSessionId,
+    CanonicalThreadId,
+    CanonicalWorkspaceId,
+)
+
 
 class GatewayResourceAddressRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     uri: str = Field(min_length=1)
     local_gateway_id: str = Field(min_length=1)
     resource_gateway_id: str | None = Field(default=None, min_length=1)
+
+
+class GatewayThreadAddressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    local_gateway_id: CanonicalGatewayId
+    resource_gateway_id: CanonicalGatewayId
+    workspace_id: CanonicalWorkspaceId
+    session_id: CanonicalSessionId
+    thread_id: CanonicalThreadId
 
 
 class GatewayResourceAddressDTO(BaseModel):

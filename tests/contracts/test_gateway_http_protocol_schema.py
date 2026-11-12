@@ -49,9 +49,11 @@ def test_resource_address_http_projection_uses_descriptor_and_fresh_message_root
     gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    operation = gateway_openapi["paths"]["/api/gateway/resource-addresses/parse"]["post"]
-    assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/GatewayResourceAddressRequest")
-    assert {"GatewayResourceAddressRequest", "GatewayResourceAddressDTO"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    for action, model in (("parse", "GatewayResourceAddressRequest"), ("thread", "GatewayThreadAddressRequest")):
+        operation = gateway_openapi["paths"][f"/api/gateway/resource-addresses/{action}"]["post"]
+        assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/" + model)
+        assert model in openapi.GATEWAY_HTTP_JSON_DESCRIPTORS
+    assert "GatewayResourceAddressDTO" in openapi.GATEWAY_HTTP_JSON_DESCRIPTORS
     openapi.assert_gateway_http_schemas(gateway_openapi)
 
     # 模拟本轮 proto 新增、旧 Python 绑定尚不存在的消息，不能跳过结构校验。

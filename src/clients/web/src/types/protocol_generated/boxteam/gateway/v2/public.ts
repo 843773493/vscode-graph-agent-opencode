@@ -18,6 +18,15 @@ export interface GatewayResourceAddressRequest {
   resource_gateway_id?: string | undefined;
 }
 
+/** 从精确 Thread 编辑器身份生成规范引用；不查询历史或提供访问资格。 */
+export interface GatewayThreadAddressRequest {
+  local_gateway_id: string;
+  resource_gateway_id: string;
+  workspace_id: string;
+  session_id: string;
+  thread_id: string;
+}
+
 export interface GatewayResourceAddressDTO {
   uri: string;
   gateway_id: string;
@@ -971,6 +980,55 @@ export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressReq
     message.uri = object.uri ?? "";
     message.local_gateway_id = object.local_gateway_id ?? "";
     message.resource_gateway_id = object.resource_gateway_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayThreadAddressRequest(): GatewayThreadAddressRequest {
+  return { local_gateway_id: "", resource_gateway_id: "", workspace_id: "", session_id: "", thread_id: "" };
+}
+
+export const GatewayThreadAddressRequest: MessageFns<GatewayThreadAddressRequest> = {
+  fromJSON(object: any): GatewayThreadAddressRequest {
+    return {
+      local_gateway_id: isSet(object.local_gateway_id) ? globalThis.String(object.local_gateway_id) : "",
+      resource_gateway_id: isSet(object.resource_gateway_id) ? globalThis.String(object.resource_gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+    };
+  },
+
+  toJSON(message: GatewayThreadAddressRequest): unknown {
+    const obj: any = {};
+    if (message.local_gateway_id !== "") {
+      obj.local_gateway_id = message.local_gateway_id;
+    }
+    if (message.resource_gateway_id !== "") {
+      obj.resource_gateway_id = message.resource_gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayThreadAddressRequest>, I>>(base?: I): GatewayThreadAddressRequest {
+    return GatewayThreadAddressRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayThreadAddressRequest>, I>>(object: I): GatewayThreadAddressRequest {
+    const message = createBaseGatewayThreadAddressRequest();
+    message.local_gateway_id = object.local_gateway_id ?? "";
+    message.resource_gateway_id = object.resource_gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

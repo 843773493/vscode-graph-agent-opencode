@@ -17,6 +17,15 @@ message GatewayResourceAddressRequest {
   optional string resource_gateway_id = 3;
 }
 
+// 从精确 Thread 编辑器身份生成规范引用；不查询历史或提供访问资格。
+message GatewayThreadAddressRequest {
+  string local_gateway_id = 1;
+  string resource_gateway_id = 2;
+  string workspace_id = 3;
+  string session_id = 4;
+  string thread_id = 5;
+}
+
 message GatewayResourceAddressDTO {
   string uri = 1;
   string gateway_id = 2;

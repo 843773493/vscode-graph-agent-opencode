@@ -71,7 +71,7 @@ async def test_discover_and_open_workspace_agents(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
-    assert all(result[key] for key in ("browseOnly", "scopeCancel", "originalOpen", "readOnly", "sideAndOwner",
+    assert all(result[key] for key in ("browseOnly", "scopeCancel", "copyUnopened", "originalOpen", "readOnly", "sideAndOwner",
                                       "explicitOwner", "deletedSource"))
     assert result["forbiddenWrites"] == []
     with provider.control._condition:

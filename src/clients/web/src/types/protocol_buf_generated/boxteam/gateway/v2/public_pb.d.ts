@@ -45,6 +45,44 @@ export declare type GatewayResourceAddressRequest = Message<"boxteam.gateway.v2.
 export declare const GatewayResourceAddressRequestSchema: GenMessage<GatewayResourceAddressRequest>;
 
 /**
+ * 从精确 Thread 编辑器身份生成规范引用；不查询历史或提供访问资格。
+ *
+ * @generated from message boxteam.gateway.v2.GatewayThreadAddressRequest
+ */
+export declare type GatewayThreadAddressRequest = Message<"boxteam.gateway.v2.GatewayThreadAddressRequest"> & {
+  /**
+   * @generated from field: string local_gateway_id = 1;
+   */
+  localGatewayId: string;
+
+  /**
+   * @generated from field: string resource_gateway_id = 2;
+   */
+  resourceGatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 3;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 4;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 5;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayThreadAddressRequest.
+ * Use `create(GatewayThreadAddressRequestSchema)` to create a new message.
+ */
+export declare const GatewayThreadAddressRequestSchema: GenMessage<GatewayThreadAddressRequest>;
+
+/**
  * @generated from message boxteam.gateway.v2.GatewayResourceAddressDTO
  */
 export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v2.GatewayResourceAddressDTO"> & {
