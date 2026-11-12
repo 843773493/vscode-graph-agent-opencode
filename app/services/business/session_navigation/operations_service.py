@@ -125,6 +125,7 @@ class SessionCatalogOperationsService:
         self._worker_state = "stopped"
         self._worker_error: BaseException | None = None
         self._worker_ready = asyncio.Event()
+        self._wake = asyncio.Event()
 
     # ------------------------------------------------------------------
     # 进程内唯一执行 owner
@@ -306,6 +307,7 @@ class SessionCatalogOperationsService:
                 intents=request.intents,
                 now=now,
             )
+        self._wake.set()
         created_node_ids = {
             record.operation_id: record.reserved_node_id
             for record in records
@@ -342,6 +344,7 @@ class SessionCatalogOperationsService:
                 intents=[command],
                 now=utc_now_text(),
             )
+        self._wake.set()
         return records[0]
 
     async def await_terminal(
@@ -618,7 +621,7 @@ async def run_worker(
     *,
     poll_interval_seconds: float = 0.5,
 ) -> None:
-    """以轮询方式持续排空队列的后台 worker（进程内唯一 owner）。
+    """入队唤醒并定期检查持久队列的后台 worker（进程内唯一 owner）。
 
     持有跨进程 workspace owner lock 直至 worker 退出；拿到锁后递增 durable
     owner generation，再恢复旧 ``running`` 并按 FIFO 排空。其它进程等待 owner
@@ -634,7 +637,12 @@ async def run_worker(
         logger.info("导航 queue worker 恢复完成并开始排空: workspace_id=%s", service._workspace_id)
         service._worker_ready.set()
         while True:
+            # 先清通知再读权威队列，读取期间的新入队仍能唤醒后续等待。
+            service._wake.clear()
             outcomes = await service.drain_once()
             if outcomes:
                 continue
-            await asyncio.sleep(poll_interval_seconds)
+            try:
+                await asyncio.wait_for(service._wake.wait(), timeout=poll_interval_seconds)
+            except TimeoutError:
+                pass
