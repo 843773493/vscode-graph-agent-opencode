@@ -791,15 +791,6 @@ class ResourceNavigation:
                     scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
                     tail_segments=(parsed.tail_segments[0], *child_parts),
                 )
-                # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
-                entry_path = root.joinpath(*child_parts)
-                # 分类阶段允许被排除的断链／循环链接；实际访问仍按原入口严格核验。
-                child_path = Path(os.path.realpath(child))
-                if subtrees and _entry_identity(entry_path, child_path) in subtrees:
-                    continue
-                # 私有筛选与后续归属判定消费同一次实际路径解析。
-                if is_private is not None and is_private(child, child_path):
-                    continue
                 if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"} and (
                     request.search_options is None or request.search_options.ignore_mode == "default"
                 ):
@@ -809,6 +800,15 @@ class ResourceNavigation:
                     self._glob_pattern(pattern).match(name) or self._glob_pattern(pattern).match(name + "/")
                     for pattern in request.search_options.exclude_globs
                 ):
+                    continue
+                # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
+                entry_path = root.joinpath(*child_parts)
+                # 名称已排除的节点不解析实际路径；实际访问仍按原入口严格核验。
+                child_path = Path(os.path.realpath(child))
+                if subtrees and _entry_identity(entry_path, child_path) in subtrees:
+                    continue
+                # 私有筛选与后续归属判定消费同一次实际路径解析。
+                if is_private is not None and is_private(child, child_path):
                     continue
                 if scope is not None and scope.excludes(child_parts, child.is_dir()):
                     continue
