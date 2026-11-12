@@ -29,6 +29,10 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -47,12 +51,27 @@ def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
 async def prepare_webview_files(
     client: httpx.AsyncClient, context: TestRunContext, workspace: Path,
 ) -> dict[str, str]:
+    target = prepare_default_test_workspace(
+        workspace_root=workspace.with_name("webview-cache-target"),
+        template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
+        fresh_identity=True,
+    )
+    install_test_workspace_config(
+        workspace_root=target, config_path=workspace / ".boxteam/workspace.jsonc",
+        schema_path=context.project_root / "configs/workspace_schema.jsonc",
+    )
+    registered = await client.post("/api/gateway/managed-workspaces", json={
+        "root_path": str(target), "name": "Webview Cache Target",
+    })
+    assert registered.status_code == 200, registered.text
+    assert registered.headers["X-Request-ID"] == registered.json()["request_id"]
     current = await metadata_data(client, "/api/gateway/workspaces")
-    owner = current["active_workspace"]
+    owner = next(item for item in current["items"] if item["name"] == "Webview Cache Target")
+    assert owner["workspace_id"] != current["active_workspace"]["workspace_id"]
     client.headers.update({"X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
                            "X-BoxTeam-Workspace-Id": owner["workspace_id"]})
     roots = await metadata_data(client, "/api/v1/workspace/files/roots")
-    directory = workspace / "webview-cache"
+    directory = target / "webview-cache"
     directory.mkdir()
     (directory / "preview.md").write_text(
         '# 原 Webview 缓存\n\n<link rel="stylesheet" href="./style.css">\n\n'
@@ -83,6 +102,10 @@ def assert_webview_result(result_path: Path) -> dict:
     assert deletion["rawReadsBefore"] == deletion["rawReadsAfter"]
     assert deletion["rejection"]["status"] == 404
     assert deletion["restored"]["etag"] != deletion["cached"]["etag"]
+    disconnection = result["disconnection"]
+    assert disconnection["rejection"]["status"] == 503
+    assert disconnection["cachedBefore"] == disconnection["cachedDuring"] == disconnection["cachedAfter"]
+    assert disconnection["rawReadsBefore"] == disconnection["rawReadsWhileDisconnected"] == disconnection["rawReadsAfterReconnect"]
     return result
 
 

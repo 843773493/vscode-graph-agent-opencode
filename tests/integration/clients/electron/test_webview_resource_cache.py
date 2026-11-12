@@ -47,6 +47,7 @@ async def test_packaged_electron_image_and_webview_restart_cache(
 ) -> None:
     client, context, workspace, provider = metadata_case
     fixture = await prepare_webview_files(client, context, workspace)
+    workspace = Path(fixture["directory"]).parent
     image = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
     )

@@ -217,6 +217,70 @@ export async function runWebviewResourceCache({ run, launch }) {
     await expect.poll(async () => (await inspectCache()).some(item => item.url === cachedStyle.url
       && item.etag && item.etag !== cachedStyle.etag && item.bytes > cachedStyle.bytes)).toBe(true);
     result.deletion.restored = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    const runtime = async action => {
+      const receipt = await page.evaluate(async ({ fixture, action }) => {
+        const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+        let body;
+        if (action === 'stop') {
+          const workspaces = await (await fetch('/api/gateway/workspaces?check_health=false', {
+            headers: { 'X-Local-Token': credential.data.token },
+          })).json();
+          const target = workspaces.data.items.find(item => item.gateway_id === fixture.gatewayId
+            && item.workspace_id === fixture.workspaceId);
+          // 保留原预览及文件 watcher，使用完整组强制停机主动结清它持有的流。
+          body = { expected_backend_generation: target.backend_generation,
+            expected_workspace_ids: target.affected_workspace_ids, desired_workspace_ids: [] };
+        }
+        const endpoint = action === 'stop' ? 'restart-force' : 'start';
+        const response = await fetch(`/api/gateway/workspaces/${fixture.workspaceId}/runtime/${endpoint}`, {
+          method: 'POST', headers: { 'X-Local-Token': credential.data.token,
+            'Content-Type': 'application/json',
+            'X-BoxTeam-Target-Gateway-Id': fixture.gatewayId, 'X-BoxTeam-Workspace-Id': fixture.workspaceId },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        return { status: response.status, requestId: response.headers.get('X-Request-ID'), body: await response.json() };
+      }, { fixture, action });
+      (result.lifecycle ??= []).push({ action, ...receipt });
+      expect(receipt.status, JSON.stringify(receipt)).toBe(200);
+      expect(receipt.requestId).toBeTruthy();
+      expect(receipt.body.request_id).toBe(receipt.requestId);
+      expect(receipt.body.data.status).toBe(action === 'stop' ? 'stopped' : 'started');
+      return receipt;
+    };
+    result.phase = 'disconnected-cached-resource';
+    const beforeDisconnect = raw(cssUri).length;
+    const cachedBeforeDisconnect = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    const stopped = await runtime('stop');
+    const unavailable = page.waitForResponse(response => response.status() === 503
+      && new URL(response.url()).pathname.endsWith('/resources/navigation')
+      && response.request().postDataJSON()?.uri === cssUri);
+    await command('markdown.preview.refresh');
+    const rejection = await unavailable;
+    const rejectionBody = await rejection.json(), rejectionHeaders = await rejection.allHeaders();
+    expect(rejectionHeaders['x-request-id']).toBeTruthy();
+    expect(rejectionBody.request_id).toBe(rejectionHeaders['x-request-id']);
+    expect(rejectionBody.detail).toContain(fixture.workspaceId);
+    await expect.poll(() => result.responses.some(item => item.phase === 'disconnected-cached-resource'
+      && item.url === cachedStyle.url && item.fromServiceWorker && item.status === 404)).toBe(true);
+    await expect(probe()).not.toHaveCSS('color', 'rgb(101, 112, 123)');
+    expect(raw(cssUri)).toHaveLength(beforeDisconnect);
+    const cachedWhileDisconnected = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    expect(cachedWhileDisconnected).toEqual(cachedBeforeDisconnect);
+    result.disconnection = { stopped, cachedBefore: cachedBeforeDisconnect, cachedDuring: cachedWhileDisconnected,
+      rejection: { status: rejection.status(), headers: selectedHeaders(rejectionHeaders), body: rejectionBody },
+      rawReadsBefore: beforeDisconnect, rawReadsWhileDisconnected: raw(cssUri).length };
+    result.phase = 'reconnected-cached-resource';
+    result.disconnection.started = await runtime('start');
+    await command('markdown.preview.refresh');
+    await expect(probe()).toHaveCSS('color', 'rgb(101, 112, 123)');
+    await expect.poll(() => result.responses.some(item => item.phase === 'reconnected-cached-resource'
+      && item.url === cachedStyle.url && item.fromServiceWorker && item.status === 200)).toBe(true);
+    expect(result.requests.some(item => item.phase === 'reconnected-cached-resource' && item.body
+      && JSON.parse(item.body).uri === cssUri && JSON.parse(item.body).operation === 'describe')).toBe(true);
+    expect(raw(cssUri)).toHaveLength(beforeDisconnect);
+    result.disconnection.cachedAfter = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    expect(result.disconnection.cachedAfter).toEqual(cachedBeforeDisconnect);
+    result.disconnection.rawReadsAfterReconnect = raw(cssUri).length;
     expect(result.pageErrors).toEqual([]);
     result.phase = 'complete';
   } catch (error) {
