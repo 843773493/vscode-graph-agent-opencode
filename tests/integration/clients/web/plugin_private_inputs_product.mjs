@@ -36,17 +36,17 @@ try {
   });
   await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
-  const api = (path, options = {}) => page.evaluate(async ({ path, options }) => {
+  const api = (path, options = {}, expectedStatus = 200) => page.evaluate(async ({ path, options, expectedStatus }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
     const response = await fetch(path, { ...options, headers: { 'X-Local-Token': credential.data.token,
       'Content-Type': 'application/json', ...(options.headers ?? {}) },
       body: options.body && JSON.stringify(options.body) });
     const envelope = await response.json();
-    if (!response.ok || (envelope.request_id && envelope.request_id !== response.headers.get('X-Request-ID'))) {
+    if (response.status !== expectedStatus || (envelope.request_id && envelope.request_id !== response.headers.get('X-Request-ID'))) {
       throw new Error(`${path}: ${response.status} ${JSON.stringify(envelope)}`);
     }
     return Object.hasOwn(envelope, 'data') ? envelope.data : envelope;
-  }, { path, options });
+  }, { path, options, expectedStatus });
   const health = await api('/api/gateway/health');
   const workspaces = await api('/api/gateway/workspaces');
   await api('/api/v1/workspace');
@@ -107,6 +107,13 @@ try {
     assert.equal(configReceipt.data.edit.source_saved, true);
     await expect(quick).not.toBeVisible();
   };
+  const sourceIntent = (document, jsonc) => ({
+    gateway_id: health.gateway_id, source_key: document.source_key, jsonc,
+    ...(document.workspace_id ? { workspace_id: document.workspace_id } : {}),
+    base_file_digest: document.file_digest, base_layer_revision: document.layer_revision,
+    base_layer_digest: document.layer_digest, expected_active_revision: document.active_revision,
+    expected_active_digest: document.active_digest, idempotency_key: crypto.randomUUID(),
+  });
   result.phase = 'install';
   const sourceGateway = 'gateway_mutable_override', sourceWorkspace = 'workspace_root_mutable_override';
   await enable('gateway', 'Gateway 私有输入探针 · gateway-probe', sourceGateway, '确认保存 Gateway 插件绑定');
@@ -292,6 +299,61 @@ try {
   assert.equal(clearedValue.credential_digest, digest(workspaceSecret));
   assert(result.configWrites.every(item => !item.containsSecret));
   result.structured_private_cleared = true;
+
+  result.phase = 'replacement-cas-conflict';
+  result.replacementConflicts = [];
+  for (const [scope, plugin, name, source, sourcePath, privateSuffix] of [
+    ['gateway', 'gateway-probe', 'Gateway 私有输入探针 · gateway-probe', sourceGateway,
+      `/api/gateway/config/sources/${sourceGateway}`, '/service-plugins/private-inputs'],
+    ['workspace', 'workspace-probe', '工作区私有输入探针 · workspace-probe', sourceWorkspace,
+      `/api/v1/workspaces/${active.workspace_id}/config/sources/${sourceWorkspace}`, '/config/plugin-private-inputs'],
+  ]) {
+    const headers = scope === 'workspace' ? { 'X-BoxTeam-Workspace-Id': active.workspace_id } : {};
+    const before = await api(sourcePath, { headers });
+    const reference = before.effective.plugins.configuration.values['product.private-inputs'][plugin].credential;
+    const field = await openSecret(scope, name, source);
+    await field.fill(`conflicting-${scope}-private-sentinel`); await field.press('Enter');
+    await expect(quick).toContainText('确认目标、来源与秘密参数');
+    // 另一客户端通过同一产品 writer 提交新来源，不能替测试预写磁盘或改 CAS。
+    const concurrent = await api(sourcePath, { method: 'PUT', headers,
+      body: sourceIntent(before, `${before.jsonc}\n// concurrent ${scope} edit\n`) });
+    assert.equal(concurrent.edit.source_saved, true);
+    const latest = await api(sourcePath, { headers });
+    const privateCount = privateWriteCount, writeCount = configWriteCount;
+    const privatePromise = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith(privateSuffix));
+    const preflightPromise = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith(`/config/sources/${source}/preflight`));
+    await pick('确认保存秘密');
+    const privateResponse = await privatePromise, preflightResponse = await preflightPromise;
+    assert.equal(privateResponse.status(), 200); assert.equal(preflightResponse.status(), 409);
+    const prepared = (await privateResponse.json()).data;
+    assert.notEqual(prepared.version, reference.version);
+    const rejected = await preflightResponse.json();
+    assert.equal(rejected.request_id, preflightResponse.headers()['x-request-id']);
+    assert(!JSON.stringify(rejected).includes(`conflicting-${scope}-private-sentinel`));
+    await expect(page.locator('.notification-list-item').filter({ hasText: '未提交' }).last()).toContainText('CAS');
+    const after = await api(sourcePath, { headers });
+    assert.equal(after.jsonc, latest.jsonc);
+    assert.equal(after.file_digest, latest.file_digest);
+    assert.deepEqual(after.effective.plugins.configuration.values['product.private-inputs'][plugin].credential, reference);
+    assert.equal(privateWriteCount - privateCount, 1);
+    assert.equal(configWriteCount - writeCount, 0);
+    const plaintext = `plaintext-${scope}-private-sentinel`;
+    const invalid = parseJsonc(after.jsonc);
+    invalid.plugins.configuration.values['product.private-inputs'][plugin].credential = plaintext;
+    const refusal = await api(`${sourcePath}/preflight`, { method: 'POST', headers,
+      body: sourceIntent(after, JSON.stringify(invalid)) }, scope === 'gateway' ? 422 : 409);
+    assert.match(refusal.detail, /writeOnly/);
+    assert(!JSON.stringify(refusal).includes(plaintext));
+    const unchanged = await api(sourcePath, { headers });
+    assert.equal(unchanged.jsonc, latest.jsonc);
+    assert.equal(unchanged.active_digest, after.active_digest);
+    result.replacementConflicts.push({ scope, request_id: rejected.request_id,
+      prepared_version: prepared.version, retained_version: reference.version,
+      private_writes: 1, source_writes: 0, concurrent_source_preserved: true,
+      plaintext_rejected: true, plaintext_request_id: refusal.request_id });
+  }
   result.gateway_rebuilt = true; result.workspace_rebuilt = true; result.phase = 'complete';
   await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {

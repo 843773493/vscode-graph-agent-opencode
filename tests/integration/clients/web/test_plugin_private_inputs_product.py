@@ -167,6 +167,9 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
         assert result["instance_logs_gateway"] and result["instance_logs_workspace"] and result["stopped_instance_logs"]
         assert result["structured_private_input"] and result["structured_private_cleared"]
         assert result["private_source_inheritance"]
+        assert {item["scope"] for item in result["replacementConflicts"]} == {"gateway", "workspace"}
+        assert all(item["private_writes"] == 1 and item["source_writes"] == 0
+                   and item["concurrent_source_preserved"] for item in result["replacementConflicts"])
         private_directory = context.boxteam_home_for_node(request.node.nodeid) / "credentials/plugins"
         assert (private_directory / f"{result['cleared_overlay']['lower']['version']}.json").is_file()
         assert not (private_directory / f"{result['cleared_overlay']['upper']['version']}.json").exists()
