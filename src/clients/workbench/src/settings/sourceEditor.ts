@@ -24,7 +24,7 @@ export function configSourceEditorUri(target: SourceTarget, sourceKey: string): 
     path: '/' + [target.workspace_id ? 'workspace' : 'gateway', target.workspace_id ?? '-', sourceKey + '.jsonc'].map(encodeURIComponent).join('/') });
 }
 
-function sourceLocation(resource: URI): { target: SourceTarget; sourceKey: string } {
+export function sourceLocation(resource: URI): { target: SourceTarget; sourceKey: string } {
   const parts = resource.path.slice(1).split('/').map(decodeURIComponent);
   if (resource.scheme !== configSourceScheme || !resource.authority || resource.query || resource.fragment || parts.length !== 3
     || !['gateway', 'workspace'].includes(parts[0]) || !parts[1] || !parts[2].endsWith('.jsonc') || parts[2] === '.jsonc'

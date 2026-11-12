@@ -32,8 +32,10 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-    web_workbench_assets: Path,
 ) -> None:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "设置来源 UI 验收需要真实 Chromium"
     workspace_root = Path(integration_workspace_root_path)
@@ -57,7 +59,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
         port=ports.port(20), boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
-        artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
+        artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(assets)})
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
             health = client.get("/api/gateway/health").raise_for_status().json()["data"]
@@ -87,5 +89,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         assert result["plugin_schema_saved_without_runtime"] and result["form_and_json_share_draft"]
         assert result["resource_browse_only"] and result["resource_open_and_save"] and result["resource_readonly"]
         assert result["configuration_uri_opened"]
+        assert len(result["configurationReferences"]) == 2
+        assert result["logicalConfigurationReferenceRejected"] is True
     finally:
         close_gateway_process(gateway)

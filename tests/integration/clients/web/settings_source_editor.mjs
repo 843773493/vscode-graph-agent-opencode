@@ -305,6 +305,42 @@ try {
   await expect(text).not.toContainText('URI 打开仍只读');
   assert.equal(result.writes.length, readonlyBefore, '配置 URI 打开不得绕过原来源 writer');
   result.configuration_uri_opened = true;
+  result.phase = 'configuration-resource-reference';
+  result.configurationReferences = [];
+  for (const [source, gatewayScope] of [[inline, true], [workspaceInline, false]]) {
+    const parsed = await api('/api/gateway/resource-addresses/parse', { method: 'POST',
+      body: { uri: source.uri, local_gateway_id: health.gateway_id, resource_gateway_id: health.gateway_id } });
+    await showSources(source.source_key, gatewayScope);
+    const discoveries = result.sourceDiscoveries.length, reads = result.sourceReads.length;
+    await resourceSource(source.source_key, gatewayScope).hover();
+    await resourceSource(source.source_key, gatewayScope).getByRole('button', { name: '复制资源 URI', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(parsed.reference_uri);
+    await expect(quick).toBeVisible();
+    await expect(quick.locator('input').first()).toBeFocused();
+    assert.equal(result.sourceDiscoveries.length, discoveries, '候选复制复用已发现 URI，不重查目录');
+    assert.equal(result.sourceReads.length, reads, '候选复制不得读取正文');
+    await page.keyboard.press('Escape');
+    await openConfigurationUri(source.uri, source.source_key);
+    const openedReads = result.sourceReads.length, openedDiscoveries = result.sourceDiscoveries.length;
+    await page.evaluate(() => navigator.clipboard.writeText('等待当前配置来源引用'));
+    await command('boxteam.resource.copyUri');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), parsed.reference_uri);
+    assert.equal(result.sourceReads.length, openedReads, '编辑器复制只查原来源目录，不读取正文');
+    assert.equal(result.sourceDiscoveries.length, openedDiscoveries + 1);
+    result.configurationReferences.push({ sourceKey: source.source_key, gatewayScope, uri: parsed.reference_uri });
+  }
+  await showSources('gateway_mutable_override', true);
+  assert.equal(await resourceSource('gateway_mutable_override', true).getByRole('button', { name: '复制资源 URI', exact: true }).count(), 0);
+  await resourceSource('gateway_mutable_override', true).click();
+  await expect(tab).toContainText('gateway_mutable_override.jsonc');
+  await expect(text).toBeVisible();
+  const logicalCopy = await page.evaluate(async () => {
+    try { await globalThis.workbench.commands.executeCommand('boxteam.resource.copyUri'); return { copied: true }; }
+    catch (error) { return { error: String(error) }; }
+  });
+  assert.match(logicalCopy.error, /没有可复制的规范 URI/);
+  assert.equal(result.writes.length, readonlyBefore);
+  result.logicalConfigurationReferenceRejected = true;
   const status = command('boxteam.settings.sourceStatus');
   await expect(quick).toBeVisible(); await expect(quick).toContainText('来源层');
   await page.keyboard.press('Escape'); await status;

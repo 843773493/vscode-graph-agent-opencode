@@ -203,6 +203,16 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
         return [{ id: JSON.stringify([target.gateway_id, target.workspace_id, 'configuration', source.source_key]),
           label, filterLabel: label, description: `配置来源 · ${name} · ${source.layer} · ${source.presence}`,
           detail: `${target.gateway_id}${target.workspace_id ? ` · ${target.workspace_id}` : ' · Gateway'}${source.uri ? ` · ${source.uri}` : ''}`,
+          ...(source.uri ? {
+            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }],
+            trigger: () => {
+              this.assertAccess(run);
+              this.report(this.commands.executeCommand(COPY_RESOURCE_URI, URI.parse(source.uri!), {
+                gatewayId: target.gateway_id, workspaceId: target.workspace_id,
+              }));
+              return TriggerAction.NO_ACTION;
+            },
+          } : {}),
           accept: (mods, event) => {
             this.assertAccess(run);
             const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false

@@ -1,6 +1,10 @@
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
+import { IClipboardService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/clipboard/common/clipboardService.js';
 import { ResourceOpener } from '../../../../../../src/clients/workbench/src/resourceOpener.js';
+import { COPY_RESOURCE_URI, resourceReference } from '../../../../../../src/clients/workbench/src/resourceActions.js';
+import { configSourceEditorUri } from '../../../../../../src/clients/workbench/src/settings/sourceEditor.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
@@ -9,8 +13,8 @@ import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../.
 
 // 实际 Provider 与 HTTP 客户端；命令宿主边界只捕获冻结参数，真实编辑与保存另由页面验证。
 export async function configurationSourcesContract(mode) {
-  const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter();
-  const cancellation = new CancellationTokenSource(), requests = [], commands = [], errors = [];
+  const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter();
+  const cancellation = new CancellationTokenSource(), requests = [], commands = [], errors = [], clipboard = [];
   const gatewayId = `gateway_${'a'.repeat(32)}`;
   const targets = [1, 2].map(index => ({ gateway_id: gatewayId, workspace_id: `019a0000-0000-7000-8000-00000000000${index}`,
     name: `配置目标 ${index}`, status: 'ready' }));
@@ -20,10 +24,14 @@ export async function configurationSourcesContract(mode) {
   let releaseRead, aborted = false, maximum = 0, active = 0;
   installSessionApiFetchMock(async ({ path, init, method }) => {
     const headers = new Headers(init.headers), workspaceId = headers.get('X-BoxTeam-Workspace-Id');
-    requests.push({ path, method, gatewayId: headers.get('X-BoxTeam-Target-Gateway-Id'), workspaceId });
+    const body = init.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ path, method, body, gatewayId: headers.get('X-BoxTeam-Target-Gateway-Id'), workspaceId });
     active++; maximum = Math.max(maximum, active);
     try {
       if (path === '/api/gateway/workspaces') return ok({ items: targets });
+      if (path === '/api/gateway/resource-addresses/parse') return ok({ uri: body.uri,
+        reference_uri: body.uri.replace('boxteam://', `boxteam://${body.resource_gateway_id}/`),
+        gateway_id: body.resource_gateway_id, scope: 'inline', scope_id: 'probe', kind: 'config' });
       if (path === '/api/gateway/config/sources' || path === '/api/v1/config/sources') {
         if (mode === 'failure' && workspaceId === owners[0].workspaceId) return Response.json({ detail: '配置读取权限已撤销', request_id: 'source-denied' },
           { status: 403, headers: { 'X-Request-ID': 'source-denied' } });
@@ -49,10 +57,16 @@ export async function configurationSourcesContract(mode) {
   });
   const picker = { value: 'resource mutable', items: [], activeItems: [], selectedItems: [], buttons: [],
     keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event, onDidAccept: accepts.event,
-    onDidTriggerButton: Event.None, onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() {} };
+    onDidTriggerButton: Event.None, onDidTriggerItemButton: buttons.event, onDidTriggerSeparatorButton: Event.None, hide() {} };
   const groups = { activeGroup: { id: 7 } };
   const provider = new ResourceQuickAccess({}, {}, groups, { getValue: () => mode !== 'no-preview' },
-    { error: cause => errors.push(String(cause)) }, { executeCommand: async (id, request) => commands.push({ id, request }) }, {});
+    { error: cause => errors.push(String(cause)) }, { executeCommand: async (id, request, owner) => {
+      commands.push({ id, request, ...(owner ? { owner } : {}) });
+      if (id === COPY_RESOURCE_URI) return CommandsRegistry.getCommand(id).handler({ get(service) {
+        if (service === IClipboardService) return { writeText: async text => clipboard.push(text) };
+        throw new Error('配置复制不应取得其它宿主服务');
+      } }, request, owner);
+    } }, {});
   const lifetime = provider.provide(picker, cancellation.token, { searchOwners: owners });
   const until = async predicate => { for (let i = 0; i < 300; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
     throw new Error('配置来源合同未收敛'); };
@@ -63,7 +77,16 @@ export async function configurationSourcesContract(mode) {
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
     } else {
       await until(() => !picker.busy && picker.items.length);
-      if (mode === 'browse') {
+      if (mode.startsWith('copy-')) {
+        picker.value = 'resource inline'; changes.fire(picker.value); await until(() => !picker.busy);
+        const item = picker.items.find(item => mode === 'copy-gateway'
+          ? item.description?.includes('配置来源 · Gateway ·') : item.detail?.includes(owners[1].workspaceId));
+        if (!item) throw new Error('配置来源复制候选缺失');
+        const button = item.buttons?.find(button => button.tooltip === '复制资源 URI');
+        if (!button) throw new Error('正式配置 URI 没有复制按钮');
+        buttons.fire({ item, button });
+        await until(() => clipboard.length || errors.length);
+      } else if (mode === 'browse') {
         const count = requests.length;
         picker.value = 'resource inline'; changes.fire(picker.value); await until(() => !picker.busy);
         picker.value = 'resource mutable'; changes.fire(picker.value); await until(() => !picker.busy);
@@ -77,12 +100,43 @@ export async function configurationSourcesContract(mode) {
         await until(() => commands.length || errors.length);
       }
     }
-    return { requests, commands, errors, aborted, maximum, owners,
-      rows: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, selectable: !!item.accept })) };
+    return { requests, commands, errors, clipboard, aborted, maximum, owners,
+      rows: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, selectable: !!item.accept,
+        buttons: item.buttons?.map(button => button.tooltip) ?? [] })) };
   } finally {
-    lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose();
+    lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
+}
+
+/** 已打开配置的复制只经过原目录和 grammar，正文与编辑器宿主不参与。 */
+export async function configurationReferenceContract(mode) {
+  const previous = workspaceContext.getSnapshot(), gatewayId = `gateway_${'a'.repeat(32)}`;
+  const target = { gateway_id: `gateway_${'b'.repeat(32)}`, ...(mode === 'gateway' ? {} : { workspace_id: '019a0000-0000-7000-8000-000000000002' }) };
+  const uri = 'boxteam://inline/probe/resources/config/workspace_inline';
+  const requests = [];
+  workspaceContext.publish({ ...previous, gatewayId });
+  const ok = data => Response.json({ code: 0, data, request_id: 'config-reference' }, { headers: { 'X-Request-ID': 'config-reference' } });
+  installSessionApiFetchMock(({ path, method, init }) => {
+    const body = init.body ? JSON.parse(String(init.body)) : undefined, headers = new Headers(init.headers);
+    requests.push({ path, method, body, gatewayId: headers.get('X-BoxTeam-Target-Gateway-Id'), workspaceId: headers.get('X-BoxTeam-Workspace-Id') });
+    if (path.endsWith('/config/sources')) {
+      if (mode === 'identity-list') invalidateGatewayToken(0);
+      return ok({ sources: [{ source_key: 'formal-key', ...(mode === 'logical' ? {} : { uri }) }] });
+    }
+    if (path.endsWith('/parse')) {
+      if (mode === 'identity-parse') invalidateGatewayToken(0);
+      return ok({ uri, reference_uri: uri.replace('boxteam://', `boxteam://${target.gateway_id}/`),
+        gateway_id: mode === 'wrong-owner' ? gatewayId : target.gateway_id,
+        scope: mode === 'wrong-scope' ? 'workspace' : 'inline', scope_id: 'probe', kind: mode === 'wrong-kind' ? 'files' : 'config' });
+    }
+    throw new Error(`配置复制不应读取正文或写入：${method} ${path}`);
+  });
+  try {
+    let reference, error;
+    try { reference = await resourceReference(configSourceEditorUri(target, 'formal-key')); } catch (cause) { error = String(cause); }
+    return { requests, reference, error, target, uri };
+  } finally { unwrapSessionApiFetch(); workspaceContext.publish(previous); }
 }
 
 /** 原 Opener、配置来源 API 与命令分派；HTTP 和编辑器是明确装具边界。 */

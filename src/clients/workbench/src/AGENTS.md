@@ -22,6 +22,8 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 
 文件、来源文档及精确 Thread 的复制引用共用 `resourceActions` 的原 Action／Command，编辑器菜单、文件菜单与 Quick Access 不另写复制逻辑。规范引用由 Gateway 唯一 URI owner 提供，包含明确 Gateway；Thread 只交付已有稳定身份，不查历史或启动目标。复制不打开资源、不读取正文、不固定版本或激活来源。
 
+配置候选复制直接使用原来源目录已公布的 URI；已打开的来源编辑器只还原原 target／source_key 并重读该目录元数据。不从文件名生成规范地址，不读取配置正文或保存；没有 URI 的逻辑来源明确拒绝复制，仍保留原设置编辑能力。
+
 引用与选定正文粘贴由 `composerActions` 的独立原 Action／Command 处理；来源在发起时捕获，接收者使用发起 Thread 或明确选择的可见 Thread。通过原 `ThreadPane.threadTarget` 捕获原 Composer writer，关闭、切换与身份失效明确拒绝，不维护最近 Thread 注册表、不另写草稿存储，也不伪装上传附件或启动执行。
 
 Thread 发起的文件引用通过原 Quick Access 的只选择／多选模式取得未打开文件；先捕获草稿与工作区，再选择来源。勾选后取消不解析引用、不写草稿；接受后由唯一 URI owner 逐项解析，全部成功才一次追加原草稿。选择过程不打开编辑器、不读正文，不给混合打开列表增加附加修饰键。

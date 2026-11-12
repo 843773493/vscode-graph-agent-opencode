@@ -21,6 +21,7 @@
 - [ ] 2.2 在原 opener／resolver 接入规范资源 URI 的唯一解析与编辑器投影，覆盖精确 child、文本、媒体、Diff 和只读资源；位置和版本使用独立参数。
   - 2026-11-12 统一原 Opener 身份生命周期：解析、重解目标、main查询和只读模型取得共用一次凭据监听与最终准入，拒绝迟到打开并释放引用，不增加HTTP／健康探测／重试。原实现三个身份反例先失败，修改后来源／配置44项292断言、文件／Session／child等30项215断言及最终受影响8项54断言通过；172份实际转换类型、正式79扩展Web构建和真实Gateway／Workbench双工作区来源页面通过（1 passed／42.63秒）。原组／预览／侧开／后台和删除来源行为保留；身份变化为具名宿主合同，未代替真实撤权、Windows／远端／Electron，整项仍未完成。准确命令、指纹、原始输出及最小复审见 `out/tests/temp/2026/11/12/resource_open_lifetime/artifacts/verification.json`。
 - [ ] 2.3 清点需要复制引用或重开的对象，已有规范 URI 直接复用，确有模板缺口时由唯一寻址 owner 登记并迁齐消费者；命令与瞬时状态不造 URI。
+  - 2026-11-12 配置来源复制复用同一资源 Command／URI parser：候选直接使用原目录 URI，已打开 JSONC 只按原 target／source_key 查目录，不读正文；无 URI 的逻辑来源不展示复制按钮，显式命令明确拒绝，编辑仍保留。配置／Thread合同41项251断言、最终配置／Skill合同73项470断言通过，172份实际转换类型及79扩展正式构建通过。真实Gateway／Backend／Workbench页面1 passed／73.09秒，核两类来源候选／编辑器复制、焦点保持、零正文新增读取及逻辑来源拒绝，原CAS／未知保存／草稿恢复继续通过；pageErrors为空，原console错误保留。最小复审及独立只读审查未发现确定缺陷，无新模板或映射；命令、源码指纹及失败归因见 `out/tests/temp/2026/11/12/config_resource_reference/artifacts/verification.json`。仅Linux本机页面，Windows／远端／Electron及Diff／固定版本继续未完成，整项不勾选。
 - [ ] 2.4 验证原编辑器组、预览／固定、侧边／后台打开、目标组及视图恢复，文件树单击仍在会话资源内预览，多种打开方式由明确动作触发。
 - [ ] 2.5 用同名跨工作区、route 改变／被复用、main／child、只读与不可文本资源的真实打开入口验证目标隔离，不能只测投影函数。
 

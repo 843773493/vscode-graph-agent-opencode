@@ -35,8 +35,39 @@ test('配置发现只读目录，同Gateway只查一次，逻辑层无URI仍可�
   expect(lists(result)).toHaveLength(3); expect(lists(result).filter(item => item.path.startsWith('/api/gateway'))).toHaveLength(1);
   expect(result.rows).toHaveLength(3); expect(new Set(result.rows.map(item => item.id)).size).toBe(3);
   expect(result.rows.every(item => item.selectable && item.label === 'mutable.jsonc')).toBe(true);
+  expect(result.rows.every(item => item.buttons.length === 0)).toBe(true);
   expect(result.requests.every(item => item.method === 'GET')).toBe(true); expect(result.maximum).toBeLessThanOrEqual(3);
 });
+for (const mode of ['copy-workspace', 'copy-gateway']) test(`${mode}候选使用同一复制命令和已有URI，不重读目录或正文`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toEqual([]); expect(result.commands).toHaveLength(1);
+  expect(result.commands[0].id).toBe('boxteam.resource.copyUri');
+  expect(result.commands[0].owner).toEqual({ gatewayId: result.owners[1].gatewayId,
+    ...(mode === 'copy-workspace' ? { workspaceId: result.owners[1].workspaceId } : {}) });
+  expect(result.clipboard).toEqual([`boxteam://${result.owners[1].gatewayId}/inline/probe/resources/config/workspace_inline`]);
+  expect(lists(result)).toHaveLength(3);
+  expect(result.requests.filter(item => item.method !== 'GET').map(item => item.path)).toEqual(['/api/gateway/resource-addresses/parse']);
+  expect(result.rows).toHaveLength(3);
+});
+
+for (const mode of ['workspace', 'gateway']) test(`${mode}已打开配置从正式目录取得URI，保持冻结owner`, async () => {
+  const result = await exercise(mode, 'configurationReferenceContract');
+  expect(result.error).toBeUndefined();
+  expect(result.reference).toBe(result.uri.replace('boxteam://', `boxteam://${result.target.gateway_id}/`));
+  expect(result.requests).toHaveLength(2);
+  expect(result.requests[0].gatewayId).toBe(result.target.gateway_id);
+  expect(result.requests[0].workspaceId).toBe(result.target.workspace_id ?? null);
+  expect(result.requests[1].body).toEqual({ uri: result.uri, local_gateway_id: `gateway_${'a'.repeat(32)}`, resource_gateway_id: result.target.gateway_id });
+});
+for (const [mode, message] of [['logical', '没有可复制的规范 URI'], ['wrong-owner', '归属不匹配'],
+  ['wrong-scope', '归属不匹配'], ['wrong-kind', '归属不匹配'], ['identity-list', '凭据已改变'], ['identity-parse', '凭据已改变']]) {
+  test(`${mode}配置复制明确拒绝，不回退正文或其它来源`, async () => {
+    const result = await exercise(mode, 'configurationReferenceContract');
+    expect(result.reference).toBeUndefined(); expect(result.error).toContain(message);
+    expect(result.requests).toHaveLength(['logical', 'identity-list'].includes(mode) ? 1 : 2);
+    expect(result.requests.every(item => item.path.endsWith('/sources') || item.path.endsWith('/parse'))).toBe(true);
+  });
+}
 for (const mode of ['open', 'side', 'pinned', 'background', 'no-preview']) test(`${mode}配置打开交原命令并冻结目标和发起组`, async () => {
   const result = await exercise(mode);
   expect(result.errors).toEqual([]); expect(result.commands).toHaveLength(1);

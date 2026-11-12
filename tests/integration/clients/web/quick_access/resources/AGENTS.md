@@ -20,6 +20,8 @@ Provider 合同区分单次 provide 的本地筛选与重新打开的当前发�
 
 `agent_spec` 合同同时运行真实规范 URI Opener／HTTP 客户端，在解析、路由、main Thread 和模型取得的具名服务边界改变身份，核迟到打开拒绝、引用释放及零空分屏；正常文件／精确 child／Session 保留同一打开选项。不把这些宿主边界当真实身份撤销产品验收。
 
+配置复制合同执行同一资源 Command／URI parser 和正式来源目录客户端，分别核候选直接复用 URI、编辑器只查原目录、无 URI 逻辑来源拒绝，以及身份失效；HTTP 回执与剪贴板宿主为具名装具，完整 JSONC 页面继续负责真实 Gateway 接线及原保存回归。
+
 运行资源合同实际调用 Provider、Command 及原 HTTP 客户端，显式宿主／回执装具不能冒充真实 Gateway。正式运行资源页面通过产品 API 创建 Session、终端与 Browser，核独立 stop／detach／delete、所选 revision 冲突、原底部面板按钮和明确工作区；不预写账本或触发模型执行。
 
 同页右侧 Session 场景在真实 GET 前通过原 promote 发布新版，不替换响应；验证旧版本拒绝、原 loader 刷新后解除精确 Thread 关联。强制刷新卸载资源行后重新展开；结束 Browser 预览再进入独立 B 管理场景，避免 attach 页重建期间的焦点切换干扰。
