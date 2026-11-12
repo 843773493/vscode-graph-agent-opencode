@@ -141,7 +141,7 @@ async def test_next_append_recovers_incomplete_trace_transaction(
     assert [event.event_id for event in store.read_events(session_id)] == [
         "evt_cutpoint_next"
     ]
-    assert [event.event_id for event in store.read_message_events(session_id)] == [
+    assert [event.event_id for event in store.iter_message_events(session_id)] == [
         "evt_cutpoint_next"
     ]
     assert not (session_dir / "logs" / "traces" / "events.jsonl").read_bytes().startswith(
@@ -245,7 +245,7 @@ async def test_non_indexed_append_recovers_incomplete_trace_transaction(
         "evt_non_indexed_next",
         "evt_indexed_after_non_indexed",
     ]
-    assert [event.event_id for event in store.read_message_events(session_id)] == [
+    assert [event.event_id for event in store.iter_message_events(session_id)] == [
         "evt_indexed_after_non_indexed"
     ]
 

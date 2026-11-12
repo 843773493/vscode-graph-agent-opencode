@@ -85,7 +85,7 @@ async def test_store_appends_message_trace_for_key_events(
     all_events = store.read_events(session_id)
     assert len(all_events) == 5
 
-    message_events = store.read_message_events(session_id)
+    message_events = store.iter_message_events(session_id)
     assert [e.type for e in message_events] == ["job_created", "text_end", "tool_call_start", "tool_call_end"]
 
     message_file = session_dir / "logs" / "traces" / "messages.jsonl"

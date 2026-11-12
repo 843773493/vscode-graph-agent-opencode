@@ -308,17 +308,6 @@ class TraceEventStore:
             return locate_trace_event(self._trace_file(reference.session_id), reference,
                 event_threads=lambda events: self.event_threads(reference.session_id, events))
 
-    def read_message_events(
-        self,
-        session_id: str,
-        tail_limit: int | None = None,
-    ) -> list[Event]:
-        return self._read_file_events(
-            session_id,
-            self._message_trace_file(session_id),
-            tail_limit=tail_limit,
-        )
-
     def capture_turn_migration_snapshot(
         self,
         session_id: str,

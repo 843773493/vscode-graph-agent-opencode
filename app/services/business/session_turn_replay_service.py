@@ -52,7 +52,7 @@ class PreparedMessageDispatcher(Protocol):
 
 
 class FailedJobTraceReader(Protocol):
-    def read_message_events(self, session_id: str) -> Iterable[object]: ...
+    def iter_message_events(self, session_id: str) -> Iterable[object]: ...
 
 
 class SessionTurnReplayService:
@@ -248,7 +248,7 @@ class SessionTurnReplayService:
     def _trace_has_failed_job(self, session_id: str, message_id: str) -> bool:
         job_message_ids: dict[str, str] = {}
         terminal_statuses: dict[str, str] = {}
-        for event in self._trace_event_store.read_message_events(session_id):
+        for event in self._trace_event_store.iter_message_events(session_id):
             event_type = getattr(event, "type", None)
             job_id = getattr(event, "job_id", None)
             payload = getattr(event, "payload", None)

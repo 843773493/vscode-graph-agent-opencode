@@ -62,7 +62,7 @@ async def test_indexed_trace_append_recovers_once_per_event(
         assert batch.event_cursor == event.event_id
         assert [entry.event.event_id for entry in batch.events] == [event.event_id]
     assert len(store.read_events(session_id)) == 3
-    assert len(store.read_message_events(session_id)) == 3
+    assert len(list(store.iter_message_events(session_id))) == 3
 
 
 @pytest.mark.asyncio
