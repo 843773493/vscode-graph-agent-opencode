@@ -20,5 +20,6 @@
 - 只被单个路由组使用的辅助函数留在该组文件内；被多个路由组共同使用的辅助函数放入 `_shared.py`。
 - 新增路由模块必须同步登记进 `app/gateway/route_registry.py` 的 `ROUTE_MODULES`，并保持拆分前的相对注册顺序。
 - 路由模块不得反向 import `app.gateway.main`（该模块只负责应用装配）。
+- SSH 连接列表及添加前的配置解析共用受保护 worker 执行同步文件读取和 `ssh -G`；取消须等读取结束，不在事件循环等待子进程。注册、发布和端口转发对账仍由原异步 owner 执行，不增加缓存或重试。
 - 工作区 reconnect 的普通错误响应和新写入 connection_error 共用 `app/core/failures.py`；完整原异常及次错只留诊断和原因链，保持原 404/409/502、取消传播及发布后不回退的合同。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

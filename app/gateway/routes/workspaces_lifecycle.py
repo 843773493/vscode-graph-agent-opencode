@@ -23,6 +23,7 @@ from app.core.backend_identity import validate_backend_id
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -159,7 +160,7 @@ async def list_ssh_connections(
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     try:
-        options = await asyncio.to_thread(list_ssh_connection_options, registry)
+        options = await run_sync_shielded(list_ssh_connection_options, registry)
     except (OSError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
     return APIResponse(
@@ -263,7 +264,7 @@ async def add_remote_gateway(
     port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     try:
-        connection = resolve_ssh_connection_request(payload, registry)
+        connection = await run_sync_shielded(resolve_ssh_connection_request, payload, registry)
     except (LookupError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     try:
