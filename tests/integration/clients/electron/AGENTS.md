@@ -10,6 +10,8 @@
 
 `test_localization.py` 与 Web 共用真实语言选择和重载业务场景，使用英语系统参数启动源码外 ASAR，核默认中文、偏好写入失败、取消、原命令双向重载、Thread 草稿及 dirty 分屏；语言重载期间只持有一个 main 实例，随后正常关窗并以同来源／profile 重启。第三个 Thread 经真实 Composer 接受执行，以 model_stream 的原调用身份与响应屏障核两次重载期间同一 Job 保持运行、一次模型调用及释放后完成；原生证据不由 Web 页面结果代替，也不覆盖 Windows 或 macOS。
 
+`test_thread_cache_cleanup.py` 与 Web 共用产品执行生成的历史、原文件保存及历史／备份、明确 Thread 镜像清理和分屏恢复场景；原生通过正常 BrowserWindow.close 后同 profile 重启，不能以 renderer 刷新代替。包 fixture 可显式复用 `BOXTEAM_TEST_PACKAGED_ELECTRON` 指定的不可变产物，登记 ASAR 摘要；未指定仍沿真实打包入口，不把复用包算作本轮发行验收。
+
 # 可修改内容
 
 - Linux 原生 Electron 的产物构建、窗口操作、独立 profile、固定页面来源和缓存恢复验收。

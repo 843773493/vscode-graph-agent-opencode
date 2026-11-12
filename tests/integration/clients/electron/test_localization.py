@@ -36,20 +36,9 @@ from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 
 
-@pytest.fixture(scope="module")
-def localization_electron(request: pytest.FixtureRequest) -> Path:
-    executable = os.environ.get("BOXTEAM_TEST_PACKAGED_ELECTRON")
-    if executable is not None:
-        path = Path(executable)
-        assert path.is_file() and os.access(path, os.X_OK), f"既有 Electron 产物无效：{path}"
-        assert (path.parent / "resources/app.asar").is_file(), f"缺少打包 ASAR：{path}"
-        return path
-    return request.getfixturevalue("packaged_electron")
-
-
 async def test_packaged_electron_builtin_languages_and_renderer_reload(
     request: pytest.FixtureRequest,
-    localization_electron: Path,
+    packaged_electron: Path,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
     localization_execution_interaction: str,
 ) -> None:
@@ -73,7 +62,7 @@ async def test_packaged_electron_builtin_languages_and_renderer_reload(
         exit_code = await asyncio.to_thread(_run_process, command, cwd=context.project_root,
             log=artifacts / "driver.log", timeout=255, environment={**os.environ, **temporary, **provider.environment,
                 "BOXTEAM_LOCALIZATION_MODEL_INTERACTIONS": localization_execution_interaction,
-                "BOXTEAM_ELECTRON_EXECUTABLE": str(localization_electron),
+                "BOXTEAM_ELECTRON_EXECUTABLE": str(packaged_electron),
                 "BOXTEAM_ELECTRON_GATEWAY": str(client.base_url).rstrip("/"),
                 "BOXTEAM_ELECTRON_RUNTIME": str(runtime), "BOXTEAM_ELECTRON_ARTIFACTS": str(artifacts),
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path)})

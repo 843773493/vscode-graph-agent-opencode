@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -112,14 +113,23 @@ async def test_closed_resources_survive_history_reload_without_deleting_business
     assert calls == {}, "浏览历史和编辑草稿不得触发模型调用"
 
 
-async def test_clear_thread_history_cache_preserves_business_and_recovery(
+@dataclass(frozen=True)
+class ThreadCacheCleanupCase:
+    context: TestRunContext
+    gateway_url: str
+    provider: ModelStreamReplay
+    recovery_file: Path
+    root_uri: str
+    threads: list[dict[str, str]]
+
+
+@pytest.fixture
+async def cache_cleanup_case(
     request: pytest.FixtureRequest,
     history_cache_case: tuple[httpx.AsyncClient, TestRunContext, ModelStreamReplay],
     browser_backend: tuple[str, Path, ModelStreamReplay],
-) -> None:
+) -> ThreadCacheCleanupCase:
     client, context, provider = history_cache_case
-    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
-    assert chromium, "历史缓存清理验收需要 Chromium"
     health = await metadata_data(client, "/api/gateway/health")
     targets = await metadata_data(client, "/api/gateway/workspaces")
     owner = targets["active_workspace"]
@@ -130,7 +140,7 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
     recovery_file = browser_backend[1] / "cache-protected.txt"
     recovery_file.write_text("原始磁盘正文\n", encoding="utf-8")
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
-    identities = []
+    identities: list[dict[str, str]] = []
     for label in ("A", "B"):
         response = await client.post("/api/v1/sessions", json={"title": f"缓存清理 {label}"})
         assert response.status_code == 200, response.text
@@ -155,13 +165,25 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
                     break
                 await asyncio.sleep(0.1)
         identities.append({**owner, "session_id": session_id, "thread_id": thread_id, "answer": answer})
+    return ThreadCacheCleanupCase(context, str(client.base_url).rstrip("/"), provider,
+                                  recovery_file, roots["workspace_uri"], identities)
+
+
+async def test_clear_thread_history_cache_preserves_business_and_recovery(
+    request: pytest.FixtureRequest,
+    cache_cleanup_case: ThreadCacheCleanupCase,
+) -> None:
+    case = cache_cleanup_case
+    context = case.context
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "历史缓存清理验收需要 Chromium"
     output = context.artifacts_dir / "thread-cache-cleanup.json"
     command = ["node", "tests/integration/clients/web/quick_access/thread_cache_cleanup.mjs"]
     with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
         completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
-            env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
-                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_CACHE_THREADS": json.dumps(identities),
-                 "BOXTEAM_CACHE_FILE_ROOT_URI": roots["workspace_uri"],
+            env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": case.gateway_url,
+                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_CACHE_THREADS": json.dumps(case.threads),
+                 "BOXTEAM_CACHE_FILE_ROOT_URI": case.root_uri,
                  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
             capture_output=True, text=True, timeout=150, check=False)
     (context.artifacts_dir / "cache-browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
@@ -170,6 +192,10 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
         "command": command, "exit_code": completed.returncode,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert_cache_cleanup_result(output, case)
+
+
+def assert_cache_cleanup_result(output: Path, case: ThreadCacheCleanupCase) -> dict:
     result = json.loads(output.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in ("commandDiscoverable", "cancelPreserved", "capturedOwnerCleared",
@@ -177,8 +203,9 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
     assert result["forbiddenWrites"] == []
     assert all(result[key] for key in ("automaticLocalHistory", "manualLocalHistory", "timelineOwnerPreserved",
                                       "localHistoryPreserved", "dirtyBackupRestored", "splitViewsRestored"))
-    assert recovery_file.read_text(encoding="utf-8").startswith("已保存的历史正文\n")
-    assert "尚未保存的正文" not in recovery_file.read_text(encoding="utf-8")
-    with provider.control._condition:
-        calls = [count for key, count in provider.control._counters.items() if key.startswith("model_call/")]
+    assert case.recovery_file.read_text(encoding="utf-8").startswith("已保存的历史正文\n")
+    assert "尚未保存的正文" not in case.recovery_file.read_text(encoding="utf-8")
+    with case.provider.control._condition:
+        calls = [count for key, count in case.provider.control._counters.items() if key.startswith("model_call/")]
     assert sorted(calls) == [1, 1], "清理、打开和恢复不得新增模型调用"
+    return result

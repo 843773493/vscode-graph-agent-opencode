@@ -96,6 +96,8 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 `localization_scenario.mjs` 只共享这组语言业务步骤；Web 与真实 Electron 分别创建自己的运行 owner、工作区、端口及客户端。原生入口额外核同窗口重载和正常关窗恢复，不由 Web 页面结果代替。
 
+`thread_cache_cleanup.mjs` 共享明确 Thread 镜像清理与受保护恢复业务步骤，产品执行状态由 `cache_cleanup_case` 通过真实消息入口生成。Web 沿原展示提交与刷新，Electron 沿正常关窗与同 profile 重启；两者分别核文件历史、dirty 备份、分屏视图、草稿、设置及其它 Thread 保留，不预写历史或恢复状态。
+
 同一语言场景只拒绝下一次真实展示 IndexedDB 写入，核具体原因和零重载，随后恢复原写入。脏文件取消经用户设置入口关闭 hotExit，再拒绝原 beforeunload，不能把 Application scope 设置写入工作区来假定生效；图片和 Markdown 均经原 Opener 与原预览控件验证双语。不新增生产测试 hook，不预写恢复状态。
 
 `bootstrap_localization.test.mjs` 使用实际 bootstrap、浏览器动态模块及当前完整词典，只有 main 求值观察器、具名资源503与Storage读取失败是显式替身。`locale_service.test.mjs` 经正式源码转换运行实际语言服务及宿主方法，在对话框、Storage写入与展示提交依赖注入取消／失败，核原错传播及零shutdown；两者不替代真实Gateway页面、原生Electron或完整发行验收。

@@ -1,23 +1,25 @@
 // Integration：由真实执行生成历史，再经正式工作台清理镜像；只读 IndexedDB 核对结果。
 import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { readSavedSettings, writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
 
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`历史缓存验收缺少 ${name}`); return value; };
+export async function runThreadCacheCleanup({ run, launch }) {
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
-const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_recent_history.py');
 const identities = JSON.parse(required('BOXTEAM_CACHE_THREADS'));
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], forbiddenWrites: [],
   boundary: '真实 Gateway、产品执行、model_stream 精确回放及正式 Workbench；不预写历史、草稿或缓存，不替换响应。' };
-let page, failure;
+let page, quick, groups, failure;
 const checkpoint = async phase => { result.phase = phase; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
 try {
-  const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'] });
-  run.addCleanup('历史缓存 Chromium', () => browser.close());
-  page = await browser.newPage({ viewport: { width: 1700, height: 1000 } });
+  const host = await launch({ run, result, usePage(next) {
+  page = next;
+  quick = page.locator('.quick-input-widget');
+  groups = page.locator('.editor-group-container');
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
@@ -26,6 +28,8 @@ try {
       result.forbiddenWrites.push({ phase: result.phase, method: request.method(), path });
     }
   });
+  } });
+  await page.setViewportSize({ width: 1700, height: 1000 });
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
     await globalThis.workbench.commands.executeCommand(id, ...args);
   }, { id, args });
@@ -58,10 +62,9 @@ try {
         ? [{ key: String(key), text: new TextDecoder().decode(values[index]) }] : []);
     } finally { db.close(); }
   });
-  await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' }); await ready();
+  await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
   await writeWorkspaceSettings({ page, command }, { 'files.autoSave': 'off', 'editor.fontSize': 17 });
   const savedSettings = await readSavedSettings(page);
-  const quick = page.locator('.quick-input-widget');
   const open = async target => {
     const uri = `boxteam://${target.gateway_id}/workspace/${target.workspace_id}/resources/session/${target.session_id}/threads/${target.thread_id}`;
     await command('workbench.action.quickOpen', uri);
@@ -79,7 +82,6 @@ try {
     path: `/${target.workspace_id}/${encodeURIComponent(root)}/cache-protected.txt`,
   }).toString(), { target: a, root: required('BOXTEAM_CACHE_FILE_ROOT_URI') });
   await command('_workbench.open', fileUri, [undefined, { pinned: true }]);
-  const groups = page.locator('.editor-group-container');
   const editor = group => group.locator('.editor-instance .monaco-editor').filter({ visible: true });
   // Go To 接受可视列；ASCII 行让下方的列断言直接对应模型列，避免全角字符的宽度换算。
   const savedBody = '已保存的历史正文\n' + Array.from({ length: 160 }, (_, index) => `recovery line ${index + 1}`).join('\n');
@@ -193,7 +195,11 @@ try {
   await checkpoint('normal-reload-and-authoritative-rebuild');
   await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   result.savedBeforeReloadEditorViews = await Promise.all([editorViewMetrics(0), editorViewMetrics(1)]);
-  await page.reload({ waitUntil: 'domcontentloaded' }); await ready();
+  await host.reload();
+  await page.setViewportSize({ width: 1700, height: 1000 });
+  await ready();
+  await expect(groups.getByRole('tab', { name: /cache-protected\.txt/ })).toHaveCount(2);
+  for (const group of await groups.all()) await expect(group.getByRole('tab', { name: /cache-protected\.txt/ })).toHaveClass(/dirty/);
   expect(await readSavedSettings(page)).toEqual(savedSettings); result.settingsRestored = true;
   for (const [index, target] of identities.entries()) {
     await open(target); await expect(pane(target).getByTestId('composer-input')).toHaveValue(`保留草稿 ${index}`);
@@ -227,8 +233,30 @@ finally {
     try { if (page) await page.screenshot({ path: output.replace(/\.json$/, '.failure.png'), fullPage: true }); }
     catch (cause) { result.screenshotError = String(cause); }
   }
-  try { await writeFile(output, JSON.stringify(result, null, 2) + '\n'); }
-  finally { await run.close(); }
+  // 原生退出回执由 owner 清理写入，先结清后保存，不能漏掉最后一次实际退出。
+  try { await run.close(); }
+  catch (cause) {
+    result.cleanupError = String(cause);
+    failure = failure ? new AggregateError([failure, cause], '历史缓存验收及关闭均失败') : cause;
+  }
+  await writeFile(output, JSON.stringify(result, null, 2) + '\n');
 }
 if (failure) throw failure;
 console.log(JSON.stringify({ phase: result.phase, output }));
+return result;
+}
+
+async function launchChromium({ run, usePage }) {
+  const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  run.addCleanup('历史缓存 Chromium', () => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1700, height: 1000 } });
+  usePage(page);
+  return { baseUrl: required('BOXTEAM_BROWSER_BASE_URL'),
+    async reload() { await page.reload({ waitUntil: 'domcontentloaded' }); },
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  await runThreadCacheCleanup({ run: TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_recent_history.py'), launch: launchChromium });
+}

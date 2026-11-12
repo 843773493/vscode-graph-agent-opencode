@@ -83,6 +83,19 @@ def packaged_electron(request: pytest.FixtureRequest, electron_service_ports: Te
     if shutil.which("xvfb-run") is None:
         pytest.fail("便携 Electron 原生回归需要 xvfb-run")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    prepared = os.environ.get("BOXTEAM_TEST_PACKAGED_ELECTRON")
+    if prepared is not None:
+        executable = Path(prepared)
+        asar = executable.parent / "resources/app.asar"
+        assert executable.is_file() and os.access(executable, os.X_OK), f"既有 Electron 产物无效：{executable}"
+        assert asar.is_file(), f"缺少打包 ASAR：{asar}"
+        with asar.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        (context.artifacts_dir / "package-verification.json").write_text(json.dumps({
+            "prepared_executable": str(executable), "asar_sha256": digest,
+            "boundary": "仅复用显式指定的不可变包；不代表本轮重新构建或发行验收",
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return executable
     runtime = context.runtime_root_for_node(request.node.nodeid)
     output = runtime / "package"
     temporary = runtime / "tmp"
