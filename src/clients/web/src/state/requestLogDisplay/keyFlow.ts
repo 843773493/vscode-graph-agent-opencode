@@ -41,7 +41,8 @@ function* collectToolResultMessages(
     const type = typeof message.type === "string" ? message.type : "";
     const role = typeof message.role === "string" ? message.role : "";
     const toolName = typeof message.name === "string" ? message.name : "";
-    if (!toolName || (type !== "tool" && role !== "tool")) {
+    if ((toolName !== "skill_load" && toolName !== EXTENSION_TOOL_INVOKER_NAME)
+        || (type !== "tool" && role !== "tool")) {
       continue;
     }
     const resultText = stringifyContent(message.content, { includeReasoning: false });
