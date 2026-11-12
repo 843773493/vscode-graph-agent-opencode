@@ -4,6 +4,8 @@ import io
 import json
 import logging
 import os
+import re
+import stat
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -68,6 +70,15 @@ class ProcessLogOwnership:
         if not isinstance(payload, dict) or payload.get("version") != 1:
             raise RuntimeError("进程日志所有权记录非法")
         return payload
+
+    def writer_is_alive(self) -> bool:
+        """调用方持有 guard，核对本路径的原写入者；不把未知归属当作已退出。"""
+        previous = self.read()
+        if previous is None:
+            return False
+        if previous.get("path") != str(self.path):
+            raise RuntimeError(f"日志所有权路径不匹配: {self.path}")
+        return _previous_writer_is_alive(previous)
 
     def write(self, payload: dict[str, object]) -> None:
         temporary = self.record_path.with_name(self.record_path.name + f".{uuid4().hex}.tmp")
@@ -244,6 +255,20 @@ def _windows_log_has_open_handles(path: Path) -> bool:
     raise RuntimeError("Windows 文件共享证明只能在目标平台执行")
 
 
+def _log_family_snapshot(files: set[Path]) -> dict[Path, tuple[int, int, int, int]]:
+    """只取设备、inode、长度和修改时间；读取日志造成的 atime 变化不影响回收。"""
+    snapshot = {}
+    for file in sorted(files):
+        try:
+            metadata = file.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError(f"受管日志必须是普通文件: {file}")
+        snapshot[file] = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+    return snapshot
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessLogStore:
     root: Path
@@ -251,6 +276,76 @@ class ProcessLogStore:
 
     def path_for(self, role: str, instance: str | int | None = None) -> Path:
         return self.contract.path_for(self.root, role, instance)
+
+    def prune_inactive(self, *, max_bytes: int) -> int:
+        """按实例整组回收超预算的旧日志；活动及本轮发生变化的文件保留。"""
+        if max_bytes < 0:
+            raise ValueError("旧实例日志预算不能小于零")
+        groups: dict[Path, set[Path]] = {}
+        for role, parts in self.contract.paths.items():
+            if "{instance}" not in parts[-1]:
+                continue
+            directory = self.root.joinpath(*parts[:-1])
+            if directory.is_symlink():
+                raise RuntimeError(f"日志目录不允许是符号链接: {directory}")
+            if not directory.exists():
+                continue
+            pattern = re.compile(re.escape(parts[-1]).replace(
+                r"\{instance\}", r"(?P<instance>[A-Za-z0-9][A-Za-z0-9_-]*)",
+            ) + r"(?:\.[1-9][0-9]*)?")
+            for entry in directory.iterdir():
+                if match := pattern.fullmatch(entry.name):
+                    base = self.path_for(role, match["instance"]).absolute()
+                    groups.setdefault(base, set()).add(entry.absolute())
+
+        # 未超预算就不读取 owner、不核实进程，也不创建额外的 guard 文件。
+        discovered_bytes = 0
+        for files in groups.values():
+            discovered_bytes += sum(item[2] for item in _log_family_snapshot(files).values())
+            if discovered_bytes > max_bytes:
+                break
+        else:
+            return 0
+
+        inactive: list[tuple[int, Path, dict[Path, tuple[int, int, int, int]]]] = []
+        total = 0
+        for base, files in groups.items():
+            files.update({base, *(base.with_name(f"{base.name}.{index}")
+                for index in range(1, self.contract.archives + 1))})
+            owner = ProcessLogOwnership(base, "")
+            try:
+                with owner.guard():
+                    if owner.writer_is_alive():
+                        continue
+                    snapshot = _log_family_snapshot(files)
+            except portalocker.exceptions.LockException:
+                # 原 owner 正在交付或轮转，不与其争抢本轮回收。
+                continue
+            if snapshot:
+                total += sum(item[2] for item in snapshot.values())
+                inactive.append((max(item[3] for item in snapshot.values()), base, snapshot))
+
+        removed = 0
+        for _, base, snapshot in sorted(inactive, key=lambda item: (item[0], str(item[1]))):
+            if total <= max_bytes:
+                break
+            owner = ProcessLogOwnership(base, "")
+            try:
+                with owner.guard():
+                    if owner.writer_is_alive():
+                        continue
+                    if _log_family_snapshot(groups[base]) != snapshot:
+                        continue
+                    # 最后删除归属正文；稳定的 guard inode 不删除，避免制造两个锁域。
+                    for file in snapshot:
+                        file.unlink()
+                        removed += 1
+                    owner.record_path.unlink(missing_ok=True)
+            except portalocker.exceptions.LockException:
+                continue
+            finally:
+                total -= sum(item[2] for item in snapshot.values())
+        return removed
 
     def open(self, role: str, instance: str | int | None = None) -> ProcessLogFile:
         log_path = self.path_for(role, instance)
@@ -266,8 +361,7 @@ class ProcessLogStore:
             ownership = ProcessLogOwnership(log_path.absolute(), uuid4().hex)
             stage = "ownership"
             with ownership.guard():
-                previous = ownership.read()
-                if previous is not None and _previous_writer_is_alive(previous):
+                if ownership.writer_is_alive():
                     raise RuntimeError("进程日志仍有活动写入者，拒绝重开或轮转")
                 stage = "rotate"
                 self._rotate_if_needed(log_path)

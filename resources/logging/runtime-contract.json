@@ -14,6 +14,7 @@
     "ssh-port-forward": ["ssh", "ssh-port-forward-{instance}.log"]
   },
   "rotation": {"max_bytes": 67108864, "archives": 3},
+  "retention": {"inactive": {"max_bytes": 1073741824}},
   "record": {
     "required_fields": ["timestamp", "level", "service", "pid", "runtime_instance_id", "message"],
     "context_fields": ["workspace_id", "session_id", "thread_id", "request_id", "job_id", "turn_id", "execution_id"],

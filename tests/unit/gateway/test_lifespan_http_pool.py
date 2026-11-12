@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ class _LifespanCase:
     transports: list[_TrackedTransport]
     events: list[str]
     channel_owner: Mock
+    retired_log: Path
 
 
 @pytest.fixture
@@ -80,7 +82,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     registry.targets.return_value = ()
     registry.close.side_effect = lambda **kwargs: drain("registry")
     config = GatewayConfig(
-        payload={"logging": {"runtime": {"level": "info", "pretty": True}}, "plugins": {},
+        payload={"logging": {"runtime": {"level": "info", "pretty": True}, "retention": {"inactive_max_bytes": 0}}, "plugins": {},
             "telemetry": {"runtime": {"enabled": False, "sample_ratio": 1, "sample_buffer_limit": 256}},
             "statistics": {"runtime": {"enabled": False, "collection_interval_ms": 5000}}},
         revision="pool-lifecycle-config", default_workspace_skill_groups=[],
@@ -100,6 +102,10 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(gateway_lifespan, "runtime_logging_state",
         lambda: SimpleNamespace(runtime_instance_id="pool-runtime"))
     monkeypatch.setattr(gateway_lifespan, "_gateway_root", lambda: tmp_path)
+    monkeypatch.setattr(gateway_lifespan, "get_runtime_log_root", lambda: tmp_path / "logs")
+    store = gateway_lifespan.ProcessLogStore(tmp_path / "logs")
+    with store.open("backend", 1) as stream:
+        stream.write("retired instance")
     monkeypatch.setattr(gateway_lifespan, "GatewayStateStore", Mock(return_value=state))
     monkeypatch.setattr(gateway_lifespan, "load_or_create_gateway_id", Mock(return_value="gateway_pool"))
     monkeypatch.setattr(gateway_lifespan, "load_gateway_config", Mock(return_value=config))
@@ -138,7 +144,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(gateway_lifespan, "_restore_managed_local_runtimes", AsyncMock())
     monkeypatch.setattr(gateway_lifespan, "_should_preserve_gateway_generation_for_handoff", Mock(return_value=False))
     monkeypatch.setattr(gateway_lifespan.httpx, "AsyncClient", client_factory)
-    return _LifespanCase(FastAPI(), clients, transports, events, channel_owner)
+    return _LifespanCase(FastAPI(), clients, transports, events, channel_owner, store.path_for("backend", 1))
 
 
 @pytest.mark.asyncio
@@ -168,6 +174,9 @@ async def test_gateway_pool_stays_open_until_all_consumers_drain(lifespan_case: 
         after_http_startup = state["after_http_startup"]
         assert after_http_startup is not None
         await after_http_startup()
+        async with asyncio.timeout(2):
+            while lifespan_case.retired_log.exists():
+                await asyncio.sleep(0.01)
         assert not lifespan_case.clients[0].is_closed
     assert all(client.is_closed for client in lifespan_case.clients)
     assert all(transport.close_calls == 1 for transport in lifespan_case.transports)

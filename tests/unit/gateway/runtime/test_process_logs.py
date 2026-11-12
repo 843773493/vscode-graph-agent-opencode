@@ -63,6 +63,36 @@ def test_process_log_store_appends_and_restricts_permissions(tmp_path: Path) -> 
         assert log_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_prune_inactive_counts_archives_and_keeps_active_and_newer_instances(tmp_path: Path) -> None:
+    store = ProcessLogStore(tmp_path)
+    paths = []
+    for role, instance, modified in (("backend", 1, 1), ("browser", 2, 2), ("backend", 3, 3)):
+        with store.open(role, instance) as stream:
+            stream.write("data")
+        file = store.path_for(role, instance)
+        os.utime(file, (modified, modified))
+        paths.append(file)
+    archive = paths[0].with_name(paths[0].name + ".1")
+    archive.write_text("old!")
+    os.utime(archive, (1, 1))
+    unrelated = paths[0].with_name("notes.log")
+    unrelated.write_text("not managed")
+    with store.open("gateway") as fixed, store.open("backend", 4) as active:
+        fixed.write("fixed log")
+        active.write("active log")
+        fixed.flush()
+        active.flush()
+        assert store.prune_inactive(max_bytes=8) == 2
+        assert not paths[0].exists() and not archive.exists()
+        assert all(file.read_text() == "data" for file in paths[1:])
+        assert store.path_for("gateway").read_text() == "fixed log"
+        assert store.path_for("backend", 4).read_text() == "active log"
+        assert unrelated.read_text() == "not managed"
+        active.write(" continues")
+    assert store.path_for("backend", 4).read_text() == "active log continues"
+    assert paths[0].with_name(paths[0].name + ".owner.lock").exists()
+
+
 def test_process_log_store_uses_private_windows_acl(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -460,6 +490,7 @@ def test_active_writer_prevents_rotation_and_detach_preserves_ownership(logged_p
     path = store.path_for("backend", 12345)
     inode = path.stat().st_ino
     managed.detach()
+    assert store.prune_inactive(max_bytes=0) == 0
     with pytest.raises(RuntimeError, match="活动写入者"):
         store.open("backend", 12345)
     assert path.stat().st_ino == inode and path.read_text() == "active\n"
@@ -496,10 +527,14 @@ def test_dead_root_does_not_release_descendant_writer(logged_process, tmp_path: 
 def test_interrupted_spawn_is_not_assumed_to_be_idle(tmp_path: Path) -> None:
     store = ProcessLogStore(tmp_path)
     stream = store.open("backend", 12345)
+    stream.write("pending spawn")
     stream.begin_spawn()
     stream.close()
     with pytest.raises(RuntimeError, match="日志交付曾中断"):
         store.open("backend", 12345)
+    with pytest.raises(RuntimeError, match="日志交付曾中断"):
+        store.prune_inactive(max_bytes=0)
+    assert store.path_for("backend", 12345).read_text() == "pending spawn"
     stream.release_ownership()
 
 

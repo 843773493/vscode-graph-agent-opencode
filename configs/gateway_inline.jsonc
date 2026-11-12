@@ -10,7 +10,8 @@
     "runtime": {
       "level": "info",
       "pretty": true
-    }
+    },
+    "retention": {} // 可选 inactive_max_bytes 覆盖共享日志合同的旧实例总预算。
   }, // load_gateway_config 与 gateway_schema 校验配置版本。
   "telemetry": {
     "runtime": {"enabled": false, "sample_ratio": 1, "sample_buffer_limit": 256}

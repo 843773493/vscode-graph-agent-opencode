@@ -53,6 +53,7 @@ runtime/
 - 日志消费者从 prepare 到最终配置结算持有原 registry 的拓扑锁；共享 Backend 按实际实例确认，不按挂载工作区重复应用。逐进程发送前先登记副作用，超时后查询实际状态再补偿，不能把结果未知当作未生效。
 - 新受管进程通过 `BOXTEAM_RUNTIME_LOGGING` 接收已验证的 revision、level 与 pretty；该值在生命周期锁内从当前 Gateway 配置 owner 读取，不能缓存等待启动前的旧候选。它只交付启动设置，不构成第二个运行期配置来源。
 - 子进程日志在打开／轮转前核对同路径的写入归属；交付中断不能当作空闲。detach 只关闭当前 Gateway 的描述符，存活进程组继续保留归属。完整关闭后才释放；接管通过受认证的进程状态核对实际描述符和文件身份，不重开日志。
+- 旧实例回收只处理共享合同定义的实例日志及其归档；未超预算不核进程。超预算后沿原 owner guard 核实退出，按整组最后修改时间从旧到新删除；删除前复核归属和文件快照，保留活动、锁忙及发生变化的组。归属不明须报告错误，不删除稳定的 guard inode，不将固定日志或无关文件纳入回收。
 - 辅助服务入口缺失只向普通生命周期响应及持久错误发布 service、stage 和异常类型，安装目录位置完整记录在 Gateway 诊断日志，不进入普通注册表投影。
 - Gateway 把 `runtime.workspace.default_skill_groups` 作为环境变量传给受管 Workspace，并仅观察自身 `${BOXTEAM_HOME}/skills`，向认证且已登记的本机 Workspace 发布无路径的原始 Skill 快照；Skill 语义、工具注册和 Agent 业务逻辑由 Workspace 运行时负责。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

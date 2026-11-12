@@ -56,6 +56,7 @@ app/gateway/
 - Gateway 负责路由、目标生命周期、透明转发及联邦搜索的范围／跨目标查询编排；领域匹配和索引仍归工作区原 owner。
 - Gateway 自有控制面持久化数据位于 `${BOXTEAM_HOME:-~/.boxteams}/state/gateway/`；产品诊断日志按共享合同归 `${BOXTEAM_HOME:-~/.boxteams}/state/logs/`。
 - 诊断入口在事件循环取得工作区来源快照；目录枚举、日志元数据和选中正文读取复用 `run_sync_shielded` 交给 worker，避免旧实例文件累积时阻塞其他 Gateway 请求。
+- 旧实例日志维护由 lifespan 持有唯一后台任务，启动后及每小时从当前配置读取预算，在受保护 worker 中执行；失败立即记录，关闭等待正在执行的维护结算。空间维护不进入普通请求。
 - `workspaces.json` 必须保存重启后重建目标所需的来源信息；SSH 工作区须保存主机、端口、用户、远端路径和私钥路径等重连参数，临时 `backend_url` 不能作为重连权威来源。
 - 注册表写入必须原子替换并限制为当前用户可读写；私钥文件内容不得复制进注册表。
 - 恢复目标失败时应保留明确的 `connection_error` 供 API 和前端观察，不得伪装为已连接。

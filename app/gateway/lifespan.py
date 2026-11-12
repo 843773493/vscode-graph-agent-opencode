@@ -74,6 +74,7 @@ from app.gateway.runtime.logging_consumer import (
     logging_progress_recorder,
 )
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.runtime.service_plugins.runtime import plugin_runtime_lifespan
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import (
@@ -96,6 +97,25 @@ from app.schemas.runtime_observation import RuntimeObservationSettings
 from app.services.infrastructure.config.state import build_secret_binding_summary
 
 logger = logging.getLogger(__name__)
+
+
+async def _prune_process_logs_periodically(config: Callable[[], GatewayConfig]) -> None:
+    store = ProcessLogStore(get_runtime_log_root())
+    while True:
+        logging_config = cast(dict[str, object], config().payload["logging"])
+        retention = cast(dict[str, int], logging_config.get("retention", {}))
+        removed = await run_sync_shielded(
+            store.prune_inactive,
+            max_bytes=retention.get("inactive_max_bytes", store.contract.inactive_max_bytes),
+        )
+        if removed:
+            logger.info("清理已停止实例日志: removed=%s", removed)
+        await asyncio.sleep(3600)
+
+
+def _report_process_log_prune_failure(task: asyncio.Task[None]) -> None:
+    if not task.cancelled() and (error := task.exception()) is not None:
+        logger.error("旧实例日志回收失败", exc_info=(type(error), error, error.__traceback__))
 
 
 @asynccontextmanager
@@ -458,9 +478,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         pending = None
         pending_promotion_committed = False
         pending_consumer_result: GatewayRuntimeConsumerApplyResult | None = None
+        log_prune_task: asyncio.Task[None] | None = None
         try:
             await app.state.federation_channel_owner.start()
             await gateway_config_reload.start()
+            log_prune_task = asyncio.create_task(
+                _prune_process_logs_periodically(lambda: gateway_config_reload.config),
+                name="gateway-process-log-prune",
+            )
+            log_prune_task.add_done_callback(_report_process_log_prune_failure)
             await app.state.session_catalog_search_service.start()
             catalog_search_started = True
             app.state.attach_frontend_urls = {}
@@ -796,6 +822,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                 await app.state.session_catalog_search_service.stop()
             logger.info("Gateway 正在关闭 HTTP 连接池")
             shutdown_errors: list[Exception] = []
+            if log_prune_task is not None:
+                log_prune_task.cancel()
+                try:
+                    await log_prune_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as error:
+                    shutdown_errors.append(error)
+                    logger.exception("Gateway 停止日志回收任务失败")
             try:
                 await plugin_installations.close()
             except Exception as error:

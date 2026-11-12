@@ -298,6 +298,7 @@ def gateway_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/resources/skill_sources/sources/**", "immediate_read", "current"),
             ConfigPolicyRule("/plugins", "immediate_read", "current"),
             ConfigPolicyRule("/plugins/**", "immediate_read", "current"),
+            ConfigPolicyRule("/logging/retention/**", "immediate_read", "current"),
             ConfigPolicyRule("/logging/runtime/**", "immediate_read", "current"),
             ConfigPolicyRule("/telemetry/**", "immediate_read", "current"),
             ConfigPolicyRule("/statistics/**", "immediate_read", "current"),

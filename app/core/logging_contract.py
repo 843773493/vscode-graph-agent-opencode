@@ -18,6 +18,7 @@ class RuntimeLogContract:
     paths: Mapping[str, tuple[str, ...]]
     max_bytes: int
     archives: int
+    inactive_max_bytes: int
     levels: Mapping[str, int]
     default_level: str
     default_pretty: bool
@@ -52,6 +53,7 @@ def load_runtime_log_contract(project_root: Path | None = None) -> RuntimeLogCon
         paths={role: tuple(parts) for role, parts in payload["paths"].items()},
         max_bytes=payload["rotation"]["max_bytes"],
         archives=payload["rotation"]["archives"],
+        inactive_max_bytes=payload["retention"]["inactive"]["max_bytes"],
         levels=payload["record"]["levels"],
         default_level=payload["record"]["defaults"]["level"],
         default_pretty=payload["record"]["defaults"]["pretty"],

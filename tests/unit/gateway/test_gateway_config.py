@@ -536,7 +536,7 @@ def test_load_gateway_config_merges_local_override_and_records_sources(
     local_config_path.write_text(
         json.dumps(
             {
-                "logging":{"runtime":{"level":"warning"}},
+                "logging":{"runtime":{"level":"warning"},"retention":{"inactive_max_bytes":1234}},
             }
         ),
         encoding="utf-8",
@@ -548,6 +548,8 @@ def test_load_gateway_config_merges_local_override_and_records_sources(
     )
 
     assert result.payload["logging"]["runtime"]["level"] == "warning"
+    assert result.payload["logging"]["retention"]["inactive_max_bytes"] == 1234
+    assert gateway_config_policy().activation_scope_for(("/logging/retention/inactive_max_bytes",)) == "current"
     assert result.source_paths == (
         Path("configs/gateway_inline.jsonc").resolve(),
         config_path,

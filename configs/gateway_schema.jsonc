@@ -12,6 +12,7 @@
     { "pattern": "/resources/skill_sources/sources/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/plugins", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/plugins/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/logging/retention/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/logging/runtime/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/telemetry/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/statistics/**", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -91,6 +92,13 @@
       "additionalProperties": false,
       "required": ["runtime"],
       "properties": {
+        "retention": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"inactive_max_bytes": {
+            "type": "integer", "minimum": 0,
+            "description": "已停止实例日志及归档的字节总预算，缺省采用共享日志合同，超出时先删除最旧实例；活动或无法核实归属的实例保留。启动后台维护及每小时检查，可由用户配置覆盖；0 回收全部可确认的旧实例日志。"
+          }}
+        },
         "runtime": {
           "type": "object",
           "additionalProperties": false,
