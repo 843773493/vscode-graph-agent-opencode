@@ -25,3 +25,5 @@ Provider 合同区分单次 provide 的本地筛选与重新打开的当前发�
 变更合同运行原 Provider，HTTP 与编辑器宿主为具名装具；核明确 Session、入选工作区、摘要零正文、冻结 child／组／changeset 与取消。正式 `test_change_documents.py` 通过产品执行生成更改，经 resource 目录选择后进入原面板／Diff／补丁；不预写 changeset 或浏览器展示态。
 
 附件合同复用原 Provider，核精确 Thread、独立上传、显式分页及关闭后的迟到结果；浏览零原件读取。正式附件页面通过消息产品入口生成文本与非文本附件，接受后进入原预览，分屏／刷新沿原展示态，不预写历史或浏览器存储。
+
+Thread 引用页面经产品消息及 fork 创建 main／child，再从最近候选复制精确 URI；Composer 沿原文件多选只加入未打开文件的引用。核实际剪贴板、原 request_id、零额外正文读取和零新增执行；跨 Gateway 与错误归属由具名 HTTP／宿主合同装具验证，不把本机页面称为真实远端验收。
