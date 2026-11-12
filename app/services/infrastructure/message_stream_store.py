@@ -117,6 +117,7 @@ class MessageStreamTerminalError(MessageStreamError):
 class MessageStreamRecord:
     event: dict[str, Any]
     checkpoint: dict[str, Any]
+    applied_event: dict[str, Any] | None = None
 
 
 class MessageStreamSubscription:
@@ -504,11 +505,12 @@ class MessageStreamStore:
         """构成唯一的 event_id 幂等查找表。
 
         保留窗口裁剪会物理移除旧事件记录；显式 event_id 的已应用事实由
-        ``*.applied-event-ids.json`` 单独持久化，必须与保留日志合并，否则旧
+        ``*.applied-event-ids.json`` 在裁剪时归档，必须与保留日志合并，否则旧
         id 会被遗忘并静默重复应用副作用。保留记录是权威正文，优先采用。
         """
         event_ids = {
-            str(record.event["event_id"]): record.event for record in records
+            str(record.event["event_id"]): record.applied_event or record.event
+            for record in records
         }
         for event_id, event in self._read_applied_event_ids_file(
             session_id,
@@ -719,9 +721,24 @@ class MessageStreamStore:
                         raise MessageStreamError(
                             f"消息流日志包含重复 event_id: {context}"
                         )
+                    applied_event = raw.get("applied_event")
+                    if applied_event is not None:
+                        if not isinstance(applied_event, dict):
+                            raise MessageStreamError(f"消息流幂等事件必须是对象: {context}")
+                        self._validate_event_record(
+                            applied_event,
+                            context=context,
+                            expected_session_id=expected_session_id,
+                            expected_thread_id=expected_thread_id,
+                            expected_turn_id=expected_turn_id,
+                            expected_turn_stream_id=expected_turn_stream_id,
+                        )
+                        if self._event_for_log(applied_event) != event:
+                            raise MessageStreamError(f"消息流幂等事件与展示事件不一致: {context}")
                     yield MessageStreamRecord(
                         event=event,
                         checkpoint=checkpoint,
+                        applied_event=applied_event,
                     )
                     seen_event_ids.add(event_id)
                     previous_event_seq = event_seq
@@ -840,16 +857,23 @@ class MessageStreamStore:
         temp_path.replace(index_path)
 
     @staticmethod
-    def _encode_event(event: Mapping[str, Any]) -> bytes:
-        bounded_event = {
+    def _event_for_log(event: Mapping[str, Any]) -> dict[str, Any]:
+        return {
             **dict(event),
             "payload": bound_json_value(
                 event.get("payload", {}),
                 max_bytes=MESSAGE_STREAM_EVENT_MAX_PAYLOAD_BYTES,
             ),
         }
+
+    @classmethod
+    def _encode_record(cls, record: MessageStreamRecord) -> bytes:
+        raw: dict[str, Any] = {"event": cls._event_for_log(record.event), "checkpoint": {}}
+        if record.applied_event is not None:
+            # 展示正文仍有界；显式重试必须保留原事件，不能把截断后的正文当作输入。
+            raw["applied_event"] = record.applied_event
         return json.dumps(
-            {"event": bounded_event, "checkpoint": {}},
+            raw,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8") + b"\n"
@@ -867,30 +891,38 @@ class MessageStreamStore:
         retained: deque[tuple[MessageStreamRecord, int]] = deque()
         retained_bytes = 0
         records_before = 0
+        archived = self._read_applied_event_ids_file(
+            session_id, turn_stream_id, thread_id=thread_id, turn_id=turn_id,
+        )
+        archive_changed = False
         for record in self._iter_records(
             path, expected_session_id=session_id, expected_turn_stream_id=turn_stream_id,
         ):
             records_before += 1
-            encoded_size = len(self._encode_event(record.event))
+            encoded_size = len(self._encode_record(record))
             retained.append((record, encoded_size))
             retained_bytes += encoded_size
             while len(retained) > 1 and retained_bytes > MESSAGE_STREAM_RETAINED_BYTES:
-                _, removed_size = retained.popleft()
+                removed, removed_size = retained.popleft()
                 retained_bytes -= removed_size
+                if removed.applied_event is not None:
+                    archived[str(removed.applied_event["event_id"])] = removed.applied_event
+                    archive_changed = True
         retained_records = [record for record, _ in retained]
+        # 先发布被移出日志的幂等事实；失败时原日志仍完整，可以沿同一恢复入口重试。
+        if archive_changed:
+            self._write_applied_event_ids_file(session_id, turn_stream_id, archived)
         temp_path = path.with_name(f".{path.name}.compact.tmp")
         with temp_path.open("wb") as stream:
             for record in retained_records:
-                stream.write(self._encode_event(record.event))
+                stream.write(self._encode_record(record))
             stream.flush()
             os.fsync(stream.fileno())
         temp_path.replace(path)
-        self._event_ids[turn_stream_id] = self._event_ids_from_records(
-            session_id,
-            turn_stream_id,
-            retained_records,
-            thread_id=thread_id,
-            turn_id=turn_id,
+        self._event_ids[turn_stream_id] = archived
+        self._event_ids[turn_stream_id].update(
+            (str(record.event["event_id"]), record.applied_event or record.event)
+            for record in retained_records
         )
         self._event_ids_loaded.add(turn_stream_id)
         logger.warning(
@@ -906,19 +938,11 @@ class MessageStreamStore:
         self,
         session_id: str,
         path: Path,
-        encoded: bytes,
         turn_stream_id: str,
-        state: Mapping[str, Any],
-        event: Mapping[str, Any] | None = None,
+        record: MessageStreamRecord,
     ) -> None:
         """在线程中完成事件追加，确保 fsync 不阻塞消息流事件循环。"""
-        # 先验证裁剪后仍需保留的幂等事实，失败不能先追加一个新事件。
-        entries = self._read_applied_event_ids_file(
-            session_id,
-            turn_stream_id,
-            thread_id=str(state["thread_id"]),
-            turn_id=str(state["turn_id"]),
-        ) if event is not None else None
+        encoded = self._encode_record(record)
         path.parent.mkdir(parents=True, exist_ok=True)
         needs_compaction = (
             path.is_file()
@@ -929,22 +953,14 @@ class MessageStreamStore:
             stream.flush()
             # 事件日志是消息流的崩溃恢复边界；fanout 必须在这里之后。
             os.fsync(stream.fileno())
-        if event is not None and entries is not None:
-            # 调用方显式 event_id 的已应用事实必须独立于保留窗口持久化，否则
-            # 日志被裁剪后无法区分「已应用」与「从未出现」，会静默重放副作用。
-            entries[str(event["event_id"])] = dict(event)
-            self._write_applied_event_ids_file(
-                session_id,
-                turn_stream_id,
-                entries,
-            )
         if needs_compaction:
             # 先让当前事件成为恢复事实，再写入同序号快照，最后才能裁剪旧
             # 事件；否则后台快照尚未执行时，裁剪可能移除 stream.opened。
-            self._write_state_snapshot(session_id, turn_stream_id, state)
+            self._write_state_snapshot(session_id, turn_stream_id, record.checkpoint)
             self._compact_stream_log(
                 session_id, path, turn_stream_id,
-                thread_id=str(state["thread_id"]), turn_id=str(state["turn_id"]),
+                thread_id=str(record.checkpoint["thread_id"]),
+                turn_id=str(record.checkpoint["turn_id"]),
             )
 
     @staticmethod
@@ -1446,21 +1462,20 @@ class MessageStreamStore:
         next_state["snapshot_seq"] = next_seq
         # checkpoint 只供进程内订阅者使用；磁盘只追加 event，并把最新状态
         # 原子写入单独快照，避免每个事件重复复制整个 blocks/tool_executions。
-        record = MessageStreamRecord(event=event, checkpoint=next_state)
+        record = MessageStreamRecord(
+            event=event, checkpoint=next_state,
+            # 自动ID无需跨保留窗口记忆；显式ID随同一条日志提交，裁剪时再归档。
+            applied_event=event if event_id is not None else None,
+        )
         session_id = str(state["session_id"])
         path = self._stream_path(session_id, turn_stream_id)
-        encoded = self._encode_event(event)
         try:
             append_task = asyncio.create_task(asyncio.to_thread(
                 self._append_durable_event,
                 session_id,
                 path,
-                encoded,
                 turn_stream_id,
-                next_state,
-                # 只有调用方显式指定的 event_id 才需要跨保留窗口记忆；自动生成
-                # 的 evt_* 不会被重放，写入侧车只会让文件无界增长。
-                event if event_id is not None else None,
+                record,
             ))
             try:
                 await asyncio.shield(append_task)

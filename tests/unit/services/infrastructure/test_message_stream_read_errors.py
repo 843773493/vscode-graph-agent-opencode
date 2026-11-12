@@ -183,6 +183,9 @@ async def test_applied_events_reject_invalid_owner_before_publishing_recovery(
     log = store._stream_path(session, writer.turn_stream_id)
     assert (event["event_id"] not in log.read_text()) is compact
     sidecar = store._applied_event_ids_path(session, writer.turn_stream_id)
+    if not compact:
+        # 未裁剪事件仍在主日志中；独立注入一份损坏归档以验证完整恢复边界。
+        sidecar.write_text(json.dumps({event["event_id"]: event}), encoding="utf-8")
     original = sidecar.read_bytes()
     raw = json.loads(original)
     value = raw[event["event_id"]]
@@ -222,38 +225,6 @@ async def test_applied_events_reject_invalid_owner_before_publishing_recovery(
 
 
 @pytest.mark.asyncio
-async def test_warm_append_rejects_foreign_applied_event_before_touching_log(
-    message_stream_store: MessageStreamStoreCase,
-) -> None:
-    store, resolver, session = message_stream_store
-    thread = resolver.main_thread_id(session)
-    writer = await store.open(session_id=session, thread_id=thread, turn_id="turn_warm_applied")
-    event = await writer.commit("block.delta", {
-        "block_id": "block_warm", "operation": "append", "text": "ORIGINAL",
-    }, block_id="block_warm", event_id="evt_warm_original")
-    await asyncio.gather(*store._snapshot_tasks.values())
-    sidecar = store._applied_event_ids_path(session, writer.turn_stream_id)
-    original = sidecar.read_bytes()
-    raw = json.loads(original)
-    raw[event["event_id"]]["thread_id"] = "/private/foreign-warm-owner"
-    sidecar.write_text(json.dumps(raw), encoding="utf-8")
-    originals = {p: p.read_bytes() for p in sidecar.parent.iterdir() if p.is_file()}
-    try:
-        with pytest.raises(MessageStreamError, match="artifact=applied_event_ids"):
-            await writer.commit("block.delta", {
-                "block_id": "block_warm", "operation": "append", "text": "NEW",
-            }, block_id="block_warm", event_id="evt_warm_new")
-        assert {p: p.read_bytes() for p in originals} == originals
-    finally:
-        sidecar.write_bytes(original)
-    writer = await store.open_existing(session_id=session, thread_id=thread, turn_id=writer.turn_id)
-    accepted = await writer.commit("block.delta", {
-        "block_id": "block_warm", "operation": "append", "text": "NEW",
-    }, block_id="block_warm", event_id="evt_warm_new")
-    assert accepted["event_seq"] == event["event_seq"] + 1
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["completed", "lost", "resumed"])
 @pytest.mark.parametrize("fault", ["state_identity", "state_sequence", "applied_owner"])
 async def test_startup_recovery_uses_full_cold_validation_before_any_publication(
@@ -278,6 +249,8 @@ async def test_startup_recovery_uses_full_cold_validation_before_any_publication
     expected = await store.get_state(writer.turn_stream_id)
     state_path = store._state_path(session, writer.turn_stream_id)
     applied_path = store._applied_event_ids_path(session, writer.turn_stream_id)
+    if fault == "applied_owner":
+        applied_path.write_text(json.dumps({first["event_id"]: first}), encoding="utf-8")
     target = applied_path if fault == "applied_owner" else state_path
     original = target.read_bytes()
     raw = json.loads(original)

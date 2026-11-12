@@ -23,6 +23,7 @@ from app.services.infrastructure.message_stream_store import (
     MessageStreamCursorGoneError,
     MessageStreamError,
     MessageStreamNotFoundError,
+    MessageStreamRecord,
     MessageStreamStore,
     MessageStreamTerminalError,
 )
@@ -1342,7 +1343,8 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
 
     def append_with_failure(*args: object) -> None:
         nonlocal injected
-        event = args[-1]
+        record = args[-1]
+        event = record.event if isinstance(record, MessageStreamRecord) else None
         if (
             not injected
             and isinstance(event, Mapping)
@@ -1761,13 +1763,12 @@ async def test_cancelled_commit_waits_for_fsync_before_next_commit(
     first_fsync = True
 
     def observed_append(
-        owner_session: str, path: Path, encoded: bytes, stream_id: str,
-        state: Mapping[str, object], event: Mapping[str, object] | None = None,
+        owner_session: str, path: Path, stream_id: str, record: MessageStreamRecord,
     ) -> None:
         try:
-            original_append(owner_session, path, encoded, stream_id, state, event)
+            original_append(owner_session, path, stream_id, record)
         finally:
-            if event is not None and event["event_id"] == "evt_cancelled_fsync":
+            if record.event["event_id"] == "evt_cancelled_fsync":
                 append_finished.set()
 
     def blocked_fsync(fd: int) -> None:
@@ -2656,9 +2657,11 @@ async def test_explicit_event_id_idempotence_survives_retention_compaction(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restart_before_compaction", [False, True])
 async def test_explicit_event_id_idempotence_survives_restart_after_compaction(
     message_stream_store: MessageStreamStoreCase,
     monkeypatch: pytest.MonkeyPatch,
+    restart_before_compaction: bool,
 ) -> None:
     """重启后从被裁剪日志重建时，显式 event_id 重放同样必须幂等。"""
     store, resolver, session_id = message_stream_store
@@ -2671,6 +2674,13 @@ async def test_explicit_event_id_idempotence_survives_restart_after_compaction(
         block_id="block_1",
         event_id="evt_stable_restart",
     )
+    if restart_before_compaction:
+        await asyncio.gather(*store._snapshot_tasks.values())
+        store = MessageStreamStore(path_resolver=resolver)
+        writer = await store.open_existing(
+            session_id=session_id, thread_id=resolver.main_thread_id(session_id),
+            turn_id="job_idempotent_restart",
+        )
     for _ in range(30):
         await writer.commit(
             "block.delta",
