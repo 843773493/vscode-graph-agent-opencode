@@ -29,12 +29,17 @@ def content_matches(
     monotonic: Callable[[], float],
 ) -> Iterator[ContentMatch]:
     options = request.search_options or ResourceNavigationSearchOptions()
-    starts = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", content))]
-    astral = [] if content.isascii() else [index for index, character in enumerate(content) if ord(character) > 0xFFFF]
 
     def check_deadline() -> None:
         if monotonic() >= deadline:
             raise TimeoutError("文件内容匹配超过本次总期限")
+
+    check_deadline()
+    # 普通文本在全文中也无命中时，无需建行索引或逐行匹配；正则保留逐行锚点语义。
+    if not options.is_regex and pattern.search(content, timeout=max(0, deadline - monotonic())) is None:
+        return
+    starts = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", content))]
+    astral = [] if content.isascii() else [index for index, character in enumerate(content) if ord(character) > 0xFFFF]
 
     def utf16_column(offset: int, row: int) -> int:
         return offset - starts[row] + 1 + bisect.bisect_left(astral, offset) - bisect.bisect_left(astral, starts[row])
